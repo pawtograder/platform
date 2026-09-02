@@ -1,8 +1,12 @@
 export const dynamic = "force-dynamic";
 
-export const metadata = {
-  title: "Your courses · Pawtograder"
-};
+import { getBranding } from "@/lib/branding";
+
+export async function generateMetadata() {
+  return {
+    title: `Your courses · ${getBranding().name}`
+  };
+}
 
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
@@ -10,12 +14,12 @@ import { termToTermText } from "@/components/ui/semesterText";
 import { fetchUserCoursesWithClasses } from "@/lib/ssr-platform-data";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Card, Flex, Heading, Stack, VStack } from "@chakra-ui/react";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { signOutAction } from "../actions";
 
 export default async function ProtectedPage() {
   const supabase = await createClient();
+  const branding = getBranding();
 
   const claims = await supabase.auth.getClaims();
 
@@ -23,9 +27,11 @@ export default async function ProtectedPage() {
     return redirect("/sign-in?redirect=/course");
   }
 
+  // Prefer the VERIFIED claim over the header. `X-User-ID` is middleware-injected from this same
+  // claim on the happy path, so it is redundant here — but preferring it meant any path that
+  // failed to strip an inbound header could override a verified identity.
   const userId = claims.data.claims.sub;
-  const headerUserId = (await headers()).get("X-User-ID");
-  const effectiveUserId = headerUserId || userId;
+  const effectiveUserId = userId;
   const { data: roleRows, error: rolesError } = await fetchUserCoursesWithClasses(supabase, effectiveUserId);
   if (rolesError) {
     // eslint-disable-next-line no-console -- operational visibility when cache layer fails
@@ -54,8 +60,8 @@ export default async function ProtectedPage() {
         borderBottomColor="border.emphasized"
       >
         <Flex width="100%" height="20" alignItems="center" justifyContent={{ base: "space-between" }}>
-          <Box fontSize="2xl" fontWeight="bold">
-            Pawtograder
+          <Box fontSize="2xl" fontWeight="bold" color="colorPalette.fg">
+            {branding.name}
           </Box>
           <Button onClick={signOutAction}>Sign out</Button>
         </Flex>

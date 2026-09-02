@@ -63,6 +63,10 @@ The `TableController` class manages data caching and loading, scoped to a contex
 
 ### Key Conventions
 
-- `@/*` path alias maps to project root.
+- `@/*` path alias maps to project root. This alias applies only to Next.js/Node.js code; it does **not** work in Deno. Files under `supabase/functions/` are Deno edge functions and must use relative (`./foo.ts`) or URL-based imports, not `@/*`.
 - Copy `.env.local.staging` to `.env.local` for frontend-only dev against staging. Signups disabled on staging; use local Supabase for full dev.
 - Seeded test users have password `change-it`. Include "instructor" in email for instructor role.
+
+## Writing conventions
+
+Apply the rules in [`WRITING.md`](./WRITING.md) to all prose in this repository. The file is derived from the [ai-slop-skill](https://github.com/se-uhd/ai-slop-skill) and can be edited to add project-specific conventions. Run `/ai-slop:review` or `/ai-slop:review-diff` to audit a draft against these rules.

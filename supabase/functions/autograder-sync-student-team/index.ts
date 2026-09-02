@@ -8,7 +8,7 @@ import {
   fetchAllPages
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 //See also autograder-sync-staff-team
 async function handleRequest(req: Request, scope: Sentry.Scope) {
@@ -63,7 +63,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           const resp = await reinviteToOrgTeam(
             classData.github_org!,
             classData.slug! + "-students",
-            user.users.github_username!
+            user.users.github_username!,
+            undefined,
+            { userId: user.user_id }
           );
           if (!resp) {
             await adminSupabase

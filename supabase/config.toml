@@ -321,6 +321,22 @@ entrypoint = "./functions/github-repo-configure-webhook/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/github-repo-configure-webhook/*.html" ]
 
+[functions.github-check-app-installation]
+enabled = true
+verify_jwt = false
+import_map = "./functions/github-check-app-installation/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/github-check-app-installation/index.ts"
+
+[functions.pr-link-confirm]
+enabled = true
+verify_jwt = false
+import_map = "./functions/pr-link-confirm/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/pr-link-confirm/index.ts"
+
 [functions.autograder-create-repos-for-student]
 enabled = true
 verify_jwt = false
@@ -387,6 +403,12 @@ entrypoint = "./functions/assignment-create-all-repos/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/assignment-create-all-repos/*.html" ]
 
+[functions.list-github-orgs]
+enabled = true
+verify_jwt = false
+import_map = "./functions/list-github-orgs/deno.json"
+entrypoint = "./functions/list-github-orgs/index.ts"
+
 [functions.enrollments-add]
 enabled = true
 verify_jwt = false
@@ -430,6 +452,17 @@ entrypoint = "./functions/repository-get-file/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/repository-get-file/*.html" ]
+
+[functions.repository-write-file]
+enabled = true
+verify_jwt = false
+import_map = "./functions/repository-write-file/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/repository-write-file/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/repository-write-file/*.html" ]
 
 [functions.live-meeting-end]
 enabled = true
@@ -638,6 +671,17 @@ entrypoint = "./functions/assignment-create-solution-repo/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/assignment-create-solution-repo/*.html" ]
 
+[functions.assignment-sync-autograder-workflow]
+enabled = true
+verify_jwt = false
+import_map = "./functions/assignment-sync-autograder-workflow/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/assignment-sync-autograder-workflow/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/assignment-sync-autograder-workflow/*.html" ]
+
 [functions.autograder-sync-student-team]
 enabled = true
 verify_jwt = false 
@@ -710,6 +754,12 @@ verify_jwt = false
 import_map = "./functions/exam-extract-template/deno.json"
 entrypoint = "./functions/exam-extract-template/index.ts"
 
+[functions.github-repo-reconciler]
+enabled = true
+verify_jwt = false
+import_map = "./functions/github-repo-reconciler/deno.json"
+entrypoint = "./functions/github-repo-reconciler/index.ts"
+
 [functions.gradebook-column-inserted]
 enabled = true
 verify_jwt = false
@@ -739,6 +789,24 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/discord-discussion-stats-update/deno.json"
 entrypoint = "./functions/discord-discussion-stats-update/index.ts"
+
+[functions.discord-check-bot-installation]
+enabled = true
+verify_jwt = false
+import_map = "./functions/discord-check-bot-installation/deno.json"
+entrypoint = "./functions/discord-check-bot-installation/index.ts"
+
+[functions.discord-list-guilds]
+enabled = true
+verify_jwt = false
+import_map = "./functions/discord-list-guilds/deno.json"
+entrypoint = "./functions/discord-list-guilds/index.ts"
+
+[functions.discord-reconciler]
+enabled = true
+verify_jwt = false
+import_map = "./functions/discord-reconciler/deno.json"
+entrypoint = "./functions/discord-reconciler/index.ts"
 
 [functions.mcp-server]
 enabled = true

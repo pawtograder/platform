@@ -1,0 +1,213 @@
+{{- /*
+PITR DRILL — the only check that actually proves point-in-time recovery.
+
+backup-verify (pg_restore --list) and backup-restore-drill (restore a logical
+dump into a scratch DB) both exercise the *dump* path. PITR is a DIFFERENT
+mechanism: wal-g base backups + continuous WAL archiving (postgres.walg). None
+of the dump jobs replay WAL, so none of them prove PITR.
+
+This CronJob does: it fetches the newest wal-g base backup into a THROWAWAY
+ephemeral volume (never the live PGDATA), replays archived WAL up to a target
+time a few minutes in the past, promotes, and asserts two things:
+  1. a core table restored with a plausible row count  (data came back), and
+  2. (optional) ZERO rows exist newer than the target   (replay stopped AT the
+     target — the property that distinguishes real PITR from "a restore").
+
+SAFETY: the scratch cluster starts with archive_mode=off and a no-op
+archive_command, so it can NEVER wal-push into the live s3Prefix. It fetches
+(reads) WAL only. It binds 127.0.0.1:5433 and is torn down with its ephemeral
+PVC when the Job ends.
+
+Off by default. Enable in prod; schedule clear of the base-backup window.
+*/ -}}
+{{- if and .Values.postgres.enabled .Values.postgres.walg.enabled .Values.backup.pitrDrill.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "backup-pitr-drill") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-pitr-drill") | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.pitrDrill.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.backup.pitrDrill.startingDeadlineSeconds | default 1800 }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: {{ .Values.backup.pitrDrill.activeDeadlineSeconds | default 5400 }}
+      # Delete the finished Job — and with it the pod and the generic ephemeral
+      # scratch PVC (scratchSize, 100Gi by default) — shortly after it ends,
+      # instead of letting successfulJobsHistoryLimit + failedJobsHistoryLimit
+      # (up to 6 Jobs) pin that many full-size volumes. The window still leaves
+      # a failed run's logs inspectable. `dig` (not `| default`) so 0 (delete
+      # immediately) is settable — sprig's `default` would treat 0 as empty.
+      ttlSecondsAfterFinished: {{ dig "ttlSecondsAfterFinished" 3600 .Values.backup.pitrDrill }}
+      template:
+        metadata:
+          labels:
+            {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-pitr-drill") | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+          {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
+          # Run as the postgres uid the supabase image uses (101): pg_ctl refuses
+          # to run as root, and wal-g backup-fetch must own the scratch PGDATA.
+          # Satisfies restricted PodSecurity (rootless, no caps) so the drill
+          # survives if the namespace ever enforces `restricted`.
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            fsGroup: 101
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: pitr-drill
+              image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
+              imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  export PGDATA=/scratch/pgdata
+                  PORT=5433
+                  # Target a few minutes in the PAST so the WAL covering it is
+                  # already archived (archiver lag is seconds). A future/too-recent
+                  # target would make recovery wait for WAL that never arrives.
+                  TARGET=$(date -u -d "{{ .Values.backup.pitrDrill.targetLagMinutes | default 15 }} minutes ago" +'%Y-%m-%d %H:%M:%S+00')
+                  echo "[pitr] recovery target: ${TARGET}"
+
+                  rm -rf "${PGDATA}"; mkdir -p "${PGDATA}"; chmod 700 "${PGDATA}"
+
+                  echo "[pitr] fetching newest base backup"
+                  wal-g backup-fetch "${PGDATA}" LATEST
+
+                  # Hot-standby / recovery requires these params be >= the
+                  # primary's values at backup time, else postgres FATALs with
+                  # "recovery aborted because of insufficient parameter settings".
+                  # The primary sets them via a mounted config we don't use here,
+                  # so the restored in-PGDATA postgresql.conf carries the image
+                  # defaults. Read the primary's actual values from the control
+                  # file (recorded in the base backup) and echo them into
+                  # auto.conf. Control-file labels differ from the GUC names, so
+                  # map explicitly.
+                  CDATA=$(pg_controldata "${PGDATA}")
+                  cd_get() { echo "${CDATA}" | grep -iE "^$1 setting:" | awk -F: '{gsub(/ /,"",$2); print $2}'; }
+                  MAXCONN=$(cd_get "max_connections")
+                  MAXWORKERS=$(cd_get "max_worker_processes")
+                  MAXSENDERS=$(cd_get "max_wal_senders")
+                  MAXPREP=$(cd_get "max_prepared_xacts")
+                  MAXLOCKS=$(cd_get "max_locks_per_xact")
+                  echo "[pitr] primary params from control file: conn=${MAXCONN} workers=${MAXWORKERS} senders=${MAXSENDERS} prep=${MAXPREP} locks=${MAXLOCKS}"
+
+                  # Overrides win over the restored postgresql.conf (auto.conf is
+                  # read last). archive_mode=off is the SAFETY guard — the scratch
+                  # must never wal-push into the live prefix.
+                  cat >> "${PGDATA}/postgresql.auto.conf" <<EOF
+                  restore_command = 'wal-g wal-fetch %f %p'
+                  recovery_target_time = '${TARGET}'
+                  recovery_target_action = 'promote'
+                  archive_mode = off
+                  archive_command = '/bin/true'
+                  port = ${PORT}
+                  listen_addresses = '127.0.0.1'
+                  hot_standby = on
+                  max_connections = ${MAXCONN}
+                  max_worker_processes = ${MAXWORKERS}
+                  max_wal_senders = ${MAXSENDERS}
+                  max_prepared_transactions = ${MAXPREP}
+                  max_locks_per_transaction = ${MAXLOCKS}
+                  EOF
+                  touch "${PGDATA}/recovery.signal"
+
+                  echo "[pitr] starting recovery"
+                  pg_ctl -D "${PGDATA}" -w -t {{ .Values.backup.pitrDrill.startupTimeoutSeconds | default 3600 }} start
+
+                  # Wait for promotion (recovery complete) on the local socket.
+                  export PGHOST=127.0.0.1 PGPORT=${PORT} PGUSER=supabase_admin PGDATABASE={{ .Values.postgres.database }}
+                  for i in $(seq 1 600); do
+                    INREC=$(psql -tAc "select pg_is_in_recovery();" 2>/dev/null || echo t)
+                    [ "${INREC}" = "f" ] && break
+                    sleep 2
+                  done
+                  if [ "${INREC:-t}" != "f" ]; then
+                    echo "[pitr] FATAL: cluster never left recovery (target unreachable / WAL gap)"; exit 1
+                  fi
+                  echo "[pitr] recovered to LSN $(psql -tAc 'select pg_last_wal_replay_lsn();')"
+
+                  # (1) Data actually came back.
+                  TABLE="{{ .Values.backup.pitrDrill.assertTable }}"
+                  MIN="{{ .Values.backup.pitrDrill.assertMinRows }}"
+                  COUNT=$(psql -tAc "select count(*) from ${TABLE};")
+                  echo "[pitr] ${TABLE} rows: ${COUNT} (require >= ${MIN})"
+                  [ "${COUNT}" -ge "${MIN}" ] || { echo "[pitr] FATAL: restore empty/incomplete"; exit 1; }
+
+                  # (2) PITR precision: nothing newer than the target replayed.
+                  {{- if .Values.backup.pitrDrill.recencyTable }}
+                  RT="{{ .Values.backup.pitrDrill.recencyTable }}"
+                  RC="{{ .Values.backup.pitrDrill.recencyColumn }}"
+                  NEWER=$(psql -tAc "select count(*) from ${RT} where ${RC} > timestamptz '${TARGET}';")
+                  echo "[pitr] ${RT} rows newer than target: ${NEWER} (require 0)"
+                  [ "${NEWER}" = "0" ] || { echo "[pitr] FATAL: replay overshot the target — not point-in-time"; exit 1; }
+                  {{- else }}
+                  echo "[pitr] NOTE: recencyTable unset — skipping the point-in-time cutoff assertion (row-count only)"
+                  {{- end }}
+
+                  pg_ctl -D "${PGDATA}" -m immediate stop || true
+                  echo "[pitr] PITR DRILL PASSED (recovered to ${TARGET})"
+              env:
+                - name: PGDATABASE
+                  value: {{ .Values.postgres.database | quote }}
+                {{- include "pawtograder.walg.env" . | nindent 16 }}
+              volumeMounts:
+                - name: scratch
+                  mountPath: /scratch
+                # Parity with the live StatefulSet: the restored cluster's
+                # postgresql.conf references pgsodium_getkey.sh here, and pgsodium
+                # (a shared_preload_library) needs the same root key to decrypt.
+                - name: config
+                  mountPath: /etc/postgresql/pgsodium_getkey.sh
+                  subPath: pgsodium_getkey.sh
+                - name: pgsodium
+                  mountPath: /var/run/secrets/pgsodium
+                  readOnly: true
+          volumes:
+            # Generic ephemeral volume: a PVC is created per run and deleted with
+            # the pod, so a killed drill never leaves a full-size copy behind.
+            - name: scratch
+              ephemeral:
+                volumeClaimTemplate:
+                  metadata:
+                    annotations:
+                      trident.netapp.io/unixPermissions: "0777"
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    storageClassName: {{ .Values.backup.pitrDrill.storageClass | default .Values.postgres.persistence.storageClass | quote }}
+                    resources:
+                      requests:
+                        storage: {{ .Values.backup.pitrDrill.scratchSize | quote }}
+            - name: config
+              configMap:
+                name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-config") }}
+                defaultMode: 0755
+                items:
+                  - key: pgsodium_getkey.sh
+                    path: pgsodium_getkey.sh
+                    mode: 0755
+            - name: pgsodium
+              secret:
+                secretName: {{ .Values.secrets.names.jwt }}
+                defaultMode: 0444
+                items:
+                  - key: PGSODIUM_ROOT_KEY
+                    path: PGSODIUM_ROOT_KEY
+                    mode: 0444
+{{- end }}

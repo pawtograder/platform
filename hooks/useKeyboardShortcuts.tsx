@@ -180,6 +180,12 @@ export function KeyboardShortcutsProvider({ children, courseId }: { children: Re
       // Alt-chord landmark jumps (Alt+letter, no Ctrl/Meta).
       if (e.altKey) {
         if (e.shiftKey) return;
+        // AltGr on international layouts reports altKey=true while the user is
+        // just typing a character — never hijack it (WCAG 2.1.1 / 2.1.4).
+        if (e.getModifierState("AltGraph")) return;
+        // A modal dialog's focus trap reclaims any focus moved outside it, so a
+        // landmark jump would silently do nothing — leave the keystroke alone.
+        if (e.target instanceof HTMLElement && e.target.closest('[role="dialog"], [role="alertdialog"]')) return;
         const k = e.key.toLowerCase();
         const landmark = LANDMARK_TABLE.find((l) => l.key === k);
         if (landmark) {

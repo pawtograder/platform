@@ -3,7 +3,7 @@ import { syncStaffTeam } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 //See also autograder-sync-student-team
 async function handleRequest(req: Request, scope: Sentry.Scope) {
@@ -46,8 +46,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .from("user_roles")
           .select("github_org_confirmed, users(github_username)")
           .eq("class_id", course_id)
-          .in("role", ["instructor", "grader"])
+          .in("role", ["instructor", "grader", "admin"])
           .eq("github_org_confirmed", true)
+          .eq("disabled", false)
           .limit(1000);
         if (staffError) {
           console.error(staffError);
@@ -84,8 +85,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .from("user_roles")
           .select("github_org_confirmed, users(github_username)")
           .eq("class_id", course_id)
-          .in("role", ["instructor", "grader"])
+          .in("role", ["instructor", "grader", "admin"])
           .eq("github_org_confirmed", true)
+          .eq("disabled", false)
           .limit(1000);
         if (staffError) {
           console.error(staffError);

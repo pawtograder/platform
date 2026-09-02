@@ -16,15 +16,20 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { createApiToken, MCPScope, VALID_SCOPES } from "../_shared/MCPAuth.ts";
+import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
+import { describeCause, isDuplicateKey } from "../_shared/ErrorDetail.ts";
+import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
-    dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA")
+    beforeSend: normalizeEventFingerprint,
+    ...sentryIdentity(),
+    dsn: Deno.env.get("SENTRY_DSN")!
   });
 }
 
@@ -36,6 +41,26 @@ const corsHeaders = {
 };
 
 const DEFAULT_EXPIRY_DAYS = 90;
+
+/**
+ * A dependency this request needed was unavailable — not a statement about the caller's permissions.
+ *
+ * The response status here is derived from the thrown message, so a lookup that merely *failed* used
+ * to land on the same branch as a lookup that came back empty: a 502 from PostgREST on the role query
+ * answered the user "MCP tokens are only available to instructors and graders", and a 502 from
+ * auth/v1/user answered "Unauthorized". Both are wrong and both are unactionable — the caller retries
+ * nothing because it was told the answer is no. Instructors saw this during e2e runs while Kong was
+ * returning 502s. Raising this instead maps to 503, which is true and which clients retry.
+ */
+class UpstreamUnavailableError extends Error {
+  constructor(operation: string, cause: unknown) {
+    super(`${operation} is temporarily unavailable: ${describeCause(cause)}`);
+    this.name = "UpstreamUnavailableError";
+    // Retained so the Sentry event keeps the PostgREST code/details/hint, which is what actually
+    // identifies the outage; the message alone only says "invalid response from upstream server".
+    this.cause = cause;
+  }
+}
 
 interface CreateTokenRequest {
   name: string;
@@ -67,6 +92,13 @@ async function authenticateUser(authHeader: string | null) {
     error
   } = await supabase.auth.getUser(token);
 
+  // Only an explicit 4xx from the auth server is a statement about this token. Anything else — a 5xx,
+  // or a transport failure, which @supabase/auth-js reports as AuthRetryableFetchError with `status: 0`
+  // — means we do not know whether the token is good, so say that rather than rejecting a session that
+  // may well be valid.
+  if (error && !(error.status !== undefined && error.status >= 400 && error.status < 500)) {
+    throw new UpstreamUnavailableError("Authentication", error);
+  }
   if (error || !user) {
     throw new Error("Unauthorized");
   }
@@ -89,7 +121,11 @@ async function assertUserIsInstructorOrGrader(
     .in("role", ["instructor", "grader"])
     .limit(1);
 
-  if (error || !roles || roles.length === 0) {
+  // A failed query and an empty result are different answers: only the empty one means "not staff".
+  if (error) {
+    throw new UpstreamUnavailableError("Role lookup", error);
+  }
+  if (!roles || roles.length === 0) {
     throw new Error("MCP tokens are only available to instructors and graders");
   }
 }
@@ -234,11 +270,16 @@ async function handleDelete(authHeader: string | null, body: DeleteTokenRequest)
     });
   }
 
-  // Update token to mark as revoked
+  // Mark as revoked, but only if it is not already. `.is("revoked_at", null)` is what keeps this
+  // idempotent: an unqualified update rewrites the timestamp on every repeat call, so revoking a
+  // second time silently replaced the record of when the credential was FIRST withdrawn — the one
+  // fact a revocation audit trail exists to preserve. A no-op update is not an error here; the
+  // token ends up revoked either way, which is all the caller asked for.
   const { error: updateError } = await supabase
     .from("api_tokens")
     .update({ revoked_at: new Date().toISOString() })
-    .eq("id", token.id);
+    .eq("id", token.id)
+    .is("revoked_at", null);
 
   if (updateError) {
     Sentry.captureException(updateError, {
@@ -257,7 +298,12 @@ async function handleDelete(authHeader: string | null, body: DeleteTokenRequest)
     .from("revoked_token_ids")
     .insert({ token_id: body.token_id });
 
-  if (revokeInsertError) {
+  // A duplicate key here means the id is ALREADY in the revocation list — the exact state this call
+  // set out to reach, reached by an earlier call. Reporting it produced a steady trickle of prod
+  // Sentry issues (`handleDelete`, 23505 on revoked_token_ids) for revokes that succeeded from the
+  // user's point of view and left the token correctly revoked. Every other insert failure still
+  // reports: those leave the fast-lookup table genuinely out of step with api_tokens.
+  if (revokeInsertError && !isDuplicateKey(revokeInsertError)) {
     // Log but don't fail - the token is already marked revoked in api_tokens
     // The revoked_token_ids table is just for fast lookup optimization
     Sentry.captureException(revokeInsertError, {
@@ -274,7 +320,7 @@ async function handleDelete(authHeader: string | null, body: DeleteTokenRequest)
 /**
  * Main handler
  */
-Deno.serve(async (req) => {
+serveWithSentryFlush(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -308,11 +354,13 @@ Deno.serve(async (req) => {
 
     const message = error instanceof Error ? error.message : "Internal server error";
     const status =
-      message === "Unauthorized" || message === "Missing Authorization header"
-        ? 401
-        : message.includes("only available to")
-          ? 403
-          : 500;
+      error instanceof UpstreamUnavailableError
+        ? 503
+        : message === "Unauthorized" || message === "Missing Authorization header"
+          ? 401
+          : message.includes("only available to")
+            ? 403
+            : 500;
 
     return new Response(JSON.stringify({ error: message }), {
       status,

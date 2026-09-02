@@ -6,6 +6,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 import type { RubricWithHierarchy } from "../types.ts";
 import { CLICommandError } from "../errors.ts";
+import { PAGE_SIZE } from "./pagingLimits.ts";
 
 type RubricChildTable = "rubric_check_references" | "rubric_checks" | "rubric_criteria" | "rubric_parts";
 
@@ -59,7 +60,7 @@ export async function fetchRubricWithHierarchy(
 
   if (error) {
     if (error.code === "PGRST116") return null;
-    throw new CLICommandError(`Failed to fetch rubric: ${error.message}`);
+    throw new CLICommandError(`Failed to fetch rubric: ${error.message}`, 500);
   }
   return data as RubricWithHierarchy;
 }
@@ -119,6 +120,7 @@ export async function copyRubricStructure(
         name: sourceRubric.name,
         description: sourceRubric.description,
         cap_score_to_assignment_points: sourceRubric.cap_score_to_assignment_points,
+        hide_unless_assigned: sourceRubric.hide_unless_assigned,
         is_private: sourceRubric.is_private,
         review_round: sourceRubric.review_round
       })
@@ -156,6 +158,7 @@ export async function copyRubricStructure(
         name: sourceRubric.name,
         description: sourceRubric.description,
         cap_score_to_assignment_points: sourceRubric.cap_score_to_assignment_points,
+        hide_unless_assigned: sourceRubric.hide_unless_assigned,
         is_private: sourceRubric.is_private,
         review_round: sourceRubric.review_round
       })
@@ -179,8 +182,13 @@ export async function copyRubricStructure(
         description: part.description,
         ordinal: part.ordinal,
         data: part.data,
-        // Carry over the per-part grading mode (assign-to-student / individual);
-        // otherwise the copy silently downgrades those parts to regular grading.
+        // Carry over every *part* column that changes behavior rather than
+        // appearance: the per-part grading mode (assign-to-student / individual) and
+        // the `data` blob. Omitting either silently downgrades the copy — per-part
+        // grading in particular collapses every group member's grade to the shared
+        // total. The check-level `kpi_category` and the rubric-level
+        // `hide_unless_assigned` matter for the same reason but belong to their own
+        // inserts, below and above.
         is_individual_grading: part.is_individual_grading,
         is_assign_to_student: part.is_assign_to_student
       })
@@ -253,6 +261,7 @@ export async function copyRubricStructure(
             group: check.group,
             max_annotations: check.max_annotations,
             student_visibility: check.student_visibility,
+            kpi_category: check.kpi_category,
             data: check.data
           })
           .select("id")
@@ -303,10 +312,28 @@ export async function copyRubricCheckReferencesForAssignment(
   const sourceToTargetRubric = new Map<number, number>();
   for (const p of rubricIdPairs) sourceToTargetRubric.set(p.sourceRubricId, p.targetRubricId);
 
-  const { data: checkReferences, error: checkReferencesError } = await supabase
-    .from("rubric_check_references")
-    .select("*")
-    .in("rubric_id", sourceRubricIds);
+  // Paged: the row count is references-per-rubric, not rubrics, so a handful of source
+  // rubrics can exceed `max_rows`. A truncated read silently copied only some of the
+  // references into the target class, which is indistinguishable from a rubric that never
+  // had them.
+  const readReferencePages = async () => {
+    type ReferenceRow = Database["public"]["Tables"]["rubric_check_references"]["Row"];
+    const rows: ReferenceRow[] = [];
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const page = await supabase
+        .from("rubric_check_references")
+        .select("*")
+        .in("rubric_id", sourceRubricIds)
+        .order("id", { ascending: true })
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (page.error) return { data: null, error: page.error };
+      const batch = page.data ?? [];
+      rows.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
+    }
+    return { data: rows, error: null };
+  };
+  const { data: checkReferences, error: checkReferencesError } = await readReferencePages();
 
   if (checkReferencesError) {
     const e = checkReferencesError;

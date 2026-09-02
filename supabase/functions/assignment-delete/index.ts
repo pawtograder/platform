@@ -1,9 +1,14 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import {
+  IllegalArgumentError,
+  UserVisibleError,
+  assertUserIsInstructorOrServiceRole,
+  wrapRequestHandler
+} from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { enqueueGithubArchiveRepo, getOctoKit, listCommits } from "../_shared/GitHubWrapper.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import {
   buildAssignmentDeleteArchiveDebugId,
   collectGitHubRepoTargets,
@@ -177,12 +182,6 @@ async function enqueueGitHubRepositoryArchives(classId: number, assignmentId: nu
 }
 
 async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<AssignmentDeleteResponse> {
-  const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
-    global: {
-      headers: { Authorization: req.headers.get("Authorization")! }
-    }
-  });
-
   const { assignment_id, class_id } = (await req.json()) as AssignmentDeleteRequest;
   scope?.setTag("function", "assignment-delete");
   scope?.setTag("assignment_id", assignment_id.toString());
@@ -192,24 +191,14 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
     throw new IllegalArgumentError("assignment_id and class_id are required");
   }
 
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-  if (!user) {
-    throw new SecurityError("User not found");
-  }
-
-  // Check if user is an instructor for this course
-  const { data: userRole } = await supabase
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", user.id)
-    .eq("class_id", class_id)
-    .single();
-
-  if (!userRole || userRole.role !== "instructor") {
-    throw new SecurityError("Only instructors can delete assignments");
-  }
+  // Service-role callers are allowed through, matching
+  // assignment-create-handout-repo and the rest of the internally-invoked
+  // functions. The previous check built an anon client from the forwarded
+  // Authorization header and required auth.getUser() to resolve an instructor —
+  // which a service-role key never does, so `pawtograder assignments delete`
+  // (which invokes this through the admin client) always failed with
+  // "User not found". The CLI does its own instructor check before invoking.
+  await assertUserIsInstructorOrServiceRole(class_id, req.headers.get("Authorization"));
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",

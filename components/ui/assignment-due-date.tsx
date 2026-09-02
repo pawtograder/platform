@@ -1,6 +1,6 @@
 "use client";
 
-import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
+import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/studentAssignmentsList";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
@@ -18,8 +18,9 @@ import { useState } from "react";
 import { Alert } from "./alert";
 import { Button } from "./button";
 import { Skeleton } from "./skeleton";
+import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
-import { toaster, Toaster } from "./toaster";
+import { toaster } from "./toaster";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const { private_profile_id, role } = useClassProfiles();
@@ -37,6 +38,15 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const requireTokensBeforeDueDate = (assignment as Assignment & { require_tokens_before_due_date: boolean })
     .require_tokens_before_due_date;
 
+  // Late tokens only ever move the hard `due_date`: `calculate_final_due_date` adds
+  // `assignment_due_date_exceptions` on top of it, and `suggested_due_date` is a single static
+  // column with no per-student exception mechanism at all. In a course that presents the suggested
+  // date as "Due", calling this control "Extend Due Date" would therefore point at the one date it
+  // cannot move. Name the thing it actually extends instead.
+  const showSuggested = useSuggestedDueDateEmphasisEnabled() && Boolean(assignment.suggested_due_date);
+  const deadlineNoun = showSuggested ? "resubmission deadline" : "due date";
+  const deadlineNounTitle = showSuggested ? "Resubmission Deadline" : "Due Date";
+
   if (!lateTokens || !dueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
@@ -51,7 +61,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   if (hoursExtended && hoursExtended < 0) {
     return (
       <Text fontSize="sm" color="fg.muted">
-        (You may not extend the due date for this assignment as you finalized early)
+        (You may not extend the {deadlineNoun} for this assignment as you finalized early)
       </Text>
     );
   }
@@ -65,7 +75,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   if (lateTokensAppliedToAssignment >= assignment.max_late_tokens) {
     return (
       <Text fontSize="sm" color="fg.muted">
-        (You may not extend the due date for this assignment any further)
+        (You may not extend the {deadlineNoun} for this assignment any further)
       </Text>
     );
   }
@@ -77,7 +87,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
 
   if (isAfter(new TZDate(new Date()), dueDate.dueDate)) {
     if ((assignment as Assignment & { require_tokens_before_due_date: boolean }).require_tokens_before_due_date) {
-      return <Text>(Firm date: You have passed the due date)</Text>;
+      return <Text>(Firm date: You have passed the {deadlineNoun})</Text>;
     }
     return <Text>(Deadline passed: submitting will auto-apply a late token if you have one remaining)</Text>;
   }
@@ -88,15 +98,14 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
         setOpen(details.open);
       }}
     >
-      <Toaster />
       <Dialog.Trigger asChild>
         <Button size="xs" variant="surface" colorPalette="yellow">
-          Extend Due Date
+          Extend {deadlineNounTitle}
         </Button>
       </Dialog.Trigger>
       {requireTokensBeforeDueDate && (
         <Text fontSize="sm" color="fg.muted">
-          Tokens must be applied before the due date.
+          Tokens must be applied before the {deadlineNoun}.
         </Text>
       )}
       <Dialog.Backdrop />
@@ -104,7 +113,9 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
         <Dialog.Content>
           <Dialog.Header>
             <Dialog.Description>
-              <Dialog.Title>Extend Due Date For {assignment.title}</Dialog.Title>
+              <Dialog.Title>
+                Extend {deadlineNounTitle} For {assignment.title}
+              </Dialog.Title>
               {requireTokensBeforeDueDate && (
                 <>
                   You must apply token before <TimeZoneAwareDate date={dueDate.dueDate} format="MMM d, h:mm a" /> - once
@@ -112,16 +123,16 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                 </>
               )}
               The course late policy grants each student {course.late_tokens_per_student} late tokens. Each token
-              extends the due date by 24 hours.{" "}
+              extends the {deadlineNoun} by 24 hours.{" "}
               {requireTokensBeforeDueDate
-                ? "Tokens are not automatically applied - to use them, you must use this form to apply them BEFORE the assignment is due."
-                : "Tokens can be applied before the deadline using this form, or will be automatically applied when you submit after the deadline."}{" "}
+                ? `Tokens are not automatically applied - to use them, you must use this form to apply them BEFORE the ${deadlineNoun} passes.`
+                : `Tokens can be applied before the ${deadlineNoun} using this form, or will be automatically applied when you submit after it.`}{" "}
               You can apply up to {assignment.max_late_tokens} tokens to this assignment. You have already applied{" "}
               {lateTokensAppliedToAssignment} tokens to this assignment.
               {assignment.max_late_tokens > 1 && (
                 <>
                   Note that to apply multiple tokens, you must use this form multiple times, always being sure to extend
-                  the due date before the previous due date passes.
+                  the {deadlineNoun} before the previous one passes.
                 </>
               )}
             </Dialog.Description>
@@ -132,14 +143,14 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
             <Text>You have {lateTokensAppliedToAssignment} late tokens applied to this assignment.</Text>
             {assignment_group_id && (
               <Text>
-                This is a group assignment. You will extend the due date for your whole group, and it is OK if not all
-                group members have enough tokens. However, all group members will have a token deducted.
+                This is a group assignment. You will extend the {deadlineNoun} for your whole group, and it is OK if not
+                all group members have enough tokens. However, all group members will have a token deducted.
               </Text>
             )}
             <Text>
-              You can extend the due date for this assignment by up to{" "}
-              {assignment.max_late_tokens - lateTokensAppliedToAssignment} more tokens. Each token extends the due date
-              by 24 hours.
+              You can extend the {deadlineNoun} for this assignment by up to{" "}
+              {assignment.max_late_tokens - lateTokensAppliedToAssignment} more tokens. Each token extends the{" "}
+              {deadlineNoun} by 24 hours.
             </Text>
             <Alert status="warning" mt={2}>
               <Text>
@@ -169,7 +180,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                   setOpen(false);
                   toaster.create({
                     title: "Late token consumed",
-                    description: "The late token has been consumed and the due date has been extended by 24 hours.",
+                    description: `The late token has been consumed and the ${deadlineNoun} has been extended by 24 hours.`,
                     type: "success"
                   });
                 } catch (err) {
@@ -204,6 +215,7 @@ export function AssignmentDueDate({
 }) {
   const { private_profile_id } = useClassProfiles();
   const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
+  const showSuggestedDueDate = useSuggestedDueDateEmphasisEnabled();
   const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: private_profile_id,
     assignmentGroupId: ourAssignmentGroup?.id
@@ -214,7 +226,11 @@ export function AssignmentDueDate({
   return (
     <DueDateDisplay
       suggestedDueDate={assignment.suggested_due_date}
+      showSuggested={showSuggestedDueDate}
       showDueLabel={showDue}
+      // `dueDateNode` renders it; `dueDate` is the value behind that node, so the component can
+      // tell whether the suggested date actually precedes this student's effective deadline.
+      dueDate={dueDate}
       dueDateNode={
         <Text minWidth={0} data-visual-test="transparent" data-visual-placeholder="date">
           <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" visualPlaceholder="date" />

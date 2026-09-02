@@ -1,0 +1,270 @@
+# Production overlay TEMPLATE — no-ESO variant.
+#
+# Same production posture as values-prod.yaml (guard rails armed, durable
+# Postgres, backups + verify, monitoring), but for a cluster that does NOT run
+# External Secrets Operator or a shared Redis, and where an operator brings
+# their OWN monitoring stack (e.g. a cluster Grafana/Prometheus they manage).
+# This is the shape a Rancher-managed Khoury-style cluster uses.
+#
+# The only substantive differences from values-prod.yaml:
+#   1. Secrets are PRE-CREATED out of band (kubectl / sealed-secrets) instead of
+#      synced by ESO — secrets.externalSecret.enabled=false.
+#   2. Redis runs IN-CHART (redis.provider=internal) instead of a shared Redis.
+#   3. TLS uses an EXISTING wildcard cert Secret instead of a cert-manager issuer.
+# Everything else (durability, backups, guard rails) is identical.
+#
+# Render-time guard rails (templates/validations.yaml) are armed by
+# `global.environment: production`: the chart REFUSES to render with e2e
+# bypasses, secrets.create/autogenerate, seeding, resetOnDrift, floating
+# (-latest) image tags, or an unauthenticated Studio ingress. Note the guard
+# refuses secrets.create/autogenerate but does NOT require ESO — pre-created
+# Secrets satisfy it.
+#
+# ── Operator checklist (things a values file can't do for you) ──────────────
+#  [ ] Replicated storage class for postgres — NOT local-path. On a Khoury-style
+#      NetApp Trident cluster this is `netapp` (set below). Confirm
+#      allowVolumeExpansion=true on the class before term start, or size
+#      postgres.persistence generously up front (Trident's default class ships
+#      with expansion OFF).
+#  [ ] Pre-create the six base Secrets in the release namespace BEFORE install:
+#      pawtograder-jwt, pawtograder-postgres, pawtograder-s3, pawtograder-smtp,
+#      pawtograder-web, pawtograder-edge-functions. sealed-secrets is the natural
+#      fit for a GitOps repo; plain `kubectl create secret` works for a manual
+#      install. The exact key list per Secret is documented in
+#      examples/externalsecrets/ (one manifest per base Secret) and the chart
+#      README's "Required Secrets" section. Generate the JWT bundle with
+#      scripts/GenerateJwtKeys.ts and ESCROW the private key somewhere durable.
+#      pawtograder-redis is owned by the chart (internal Redis) — do NOT create it.
+#  [ ] Production image builds: the web image bakes NEXT_PUBLIC_SUPABASE_URL and
+#      the cluster's ANON_KEY at build time. Build web/edge/migrations via
+#      release-images.yml workflow_dispatch with web_hostname/api_hostname set to
+#      the prod host(s) and namespace set to the prod namespace; the build reads
+#      ANON_KEY live from <namespace>/pawtograder-jwt (needs the CI secret
+#      KUBECONFIG_BASE64 able to reach the prod cluster). Then pin the tags below.
+#  [ ] Wildcard TLS cert Secret present in the release namespace (see Ingress).
+#  [ ] S3 buckets (storage + backups) with versioning; verify the backup-verify
+#      CronJob goes green after the first nightly backup.
+#  [ ] monitoring.prometheusRules.labels set to your Prometheus's ruleSelector,
+#      and your Grafana dashboard sidecar set to watch this namespace
+#      (grafana.sidecar.dashboards.searchNamespace: ALL, or include this NS) —
+#      otherwise the shipped dashboards are silently absent.
+#  [ ] An Alertmanager receiver that pages someone for severity: critical.
+#  [ ] Rehearse the restore + standby-promotion runbooks before term start.
+
+global:
+  environment: production
+  hostname: pawtograder.example.com   # ← your production hostname
+  apiOnSeparateHost: true
+  # priorityClassName: pawtograder-prod   # create the PriorityClass cluster-side
+
+# ----- Network isolation -----------------------------------------------------
+# Default-deny ingress + same-release allow + ingress-controller/monitoring
+# namespace allows. Adjust the selectors to YOUR cluster's ingress controller
+# and monitoring namespaces (they are not ingress-nginx / monitoring on every
+# cluster).
+networkPolicy:
+  enabled: true
+  ingressControllerNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress-nginx   # ← your ingress ctrl namespace
+  monitoringNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring       # ← your monitoring namespace
+
+# ----- Ingress: existing wildcard cert (no cert-manager) ---------------------
+# No cert-manager issuer: the TLS Secret must ALREADY EXIST in the release
+# namespace. On a shared-wildcard cluster it is typically reflected into each
+# namespace (emberstack/reflector) or copied by the cluster operator. Point
+# tls.secretName at that Secret and DO NOT set a cert-manager.io annotation.
+ingress:
+  enabled: true
+  className: nginx        # ← your ingress class (confirm with the cluster op)
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "55m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-connections: "40"
+  tls:
+    enabled: true
+    secretName: pawtograder-wildcard-tls   # ← existing wildcard cert Secret in NS
+
+# ----- Secrets: pre-created (no ESO) -----------------------------------------
+# externalSecret.enabled=false → the chart renders NO ExternalSecrets and simply
+# mounts the pre-existing Secrets named below. Create them out of band before
+# install (see the operator checklist). The prod guard rail refuses
+# create/autogenerate but is satisfied by pre-created Secrets.
+secrets:
+  create: false
+  autogenerate: false
+  names:
+    jwt: pawtograder-jwt
+    postgres: pawtograder-postgres
+    s3: pawtograder-s3
+    smtp: pawtograder-smtp
+    web: pawtograder-web
+    edgeFunctions: pawtograder-edge-functions
+  externalSecret:
+    enabled: false
+
+# ----- Postgres: durable, protected ------------------------------------------
+postgres:
+  persistence:
+    storageClass: netapp   # ← replicated class (Khoury NetApp Trident: netapp)
+    size: 200Gi
+  pdb:
+    enabled: true
+  resources:
+    requests: { cpu: "2", memory: 8Gi }
+    limits: { cpu: "8", memory: 24Gi }
+
+  # WAL-G continuous archiving → PITR. Needs an S3 target (the Khoury MinIO/S3
+  # works). Keep the walg prefix DISTINCT from the nightly-dump bucket path.
+  # If you want a minimal FIRST bring-up, you may set walg.enabled=false AND
+  # replica.enabled=false (the replica requires walg) — but then recovery is
+  # nightly-dump only (~24h RPO). See docs/operations/point-in-time-recovery.md.
+  walg:
+    enabled: true
+    s3Prefix: ""        # ← e.g. s3://pawtograder-prod-backups/walg
+    s3Endpoint: ""      # ← your S3 endpoint (blank = real AWS)
+    region: us-east-1
+    forcePathStyle: true
+    baseBackup:
+      intervalHours: 24
+      keepBackups: 8    # ~8 days of PITR window
+
+  # Streaming standby: warm failover + read scaling. Promotion is MANUAL.
+  replica:
+    enabled: true
+    replicas: 1
+    persistence:
+      storageClass: netapp   # ← per-node class is fine (own volume, other node)
+      size: 200Gi
+
+# ----- Stateless tier ---------------------------------------------------------
+web:
+  replicas: 3
+  image:
+    repository: ghcr.io/pawtograder/web
+    tag: ""             # ← pin per release: vX.Y.Z or <branch>-<sha>
+  e2e:
+    enabled: false
+
+edgeFunctions:
+  policy: per_request
+  # 8, not 16: under per_request this is the cap on concurrent isolates per pod, and each isolate is
+  # admitted with its own memory budget. maxParallelism x edgeFunctions.worker.memoryLimitMb is the
+  # aggregate the runtime will admit, and nothing enforces it -- the runtime's protections are all
+  # per-isolate -- so once it exceeds the container limit the kernel OOM-kills PID 1 and every
+  # in-flight request dies at once (Kong then reports 502).
+  #
+  # The arithmetic has to actually leave headroom, which 8 alone does not: at the chart-default
+  # worker.memoryLimitMb of 256 and the chart-default limits.memory of 2Gi, 8 x 256 MiB is EXACTLY
+  # the container limit, with nothing left for the main.ts demuxer or the Deno runtime -- and the
+  # PawtograderEdgeFunctionsMemoryHigh alert fires at 0.85 of the limit, below the admission budget.
+  # The explicit resources block below raises the limit to 4Gi (matching staging), so the budget is
+  # 50% and a burst has somewhere to go. Keep the three numbers consistent if you change any of them.
+  maxParallelism: 8
+  resources:
+    requests: { cpu: "200m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "4Gi"   }
+  # Mount the same SMTP Secret GoTrue uses, rather than populating a second OpenBao `smtp` bundle.
+  # Without it SMTP_HOST is unset in the functions environment, and the notification processor read
+  # that as "no work found" -- deferring the email queue indefinitely with no error anywhere, which
+  # is why notification email had never worked here.
+  # The Secret provides SMTP_PASS and SMTP_ADMIN_EMAIL; emailTransportConfig.ts accepts those as
+  # well as the older SMTP_PASSWORD / SMTP_FROM names.
+  envFromSecrets:
+    - pawtograder-smtp
+  email:
+    # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
+    enabled: "true"
+  autoscaling:
+    enabled: true
+    minReplicas: 12
+    maxReplicas: 24
+    targetMemoryUtilizationPercentage: 100
+    targetCPUUtilizationPercentage: 200
+  image:
+    repository: ghcr.io/pawtograder/edge-functions
+    tag: ""             # ← pin per release
+  e2e:
+    enabled: false
+    mockGitHub: false
+
+migrations:
+  image:
+    repository: ghcr.io/pawtograder/migrations
+    tag: ""             # ← pin per release
+  resetOnDrift: false
+
+rest:
+  replicas: 3
+realtime:
+  replicas: 3
+auth:
+  replicas: 2
+  enableEmailAutoconfirm: false
+  smtp:
+    enabled: true
+    senderName: "Pawtograder"
+
+# ----- Redis: in-chart (no shared Redis / ESO) -------------------------------
+# provider=internal deploys a single-replica Redis with this release and owns
+# the pawtograder-redis Secret (REDIS_URL[+REDIS_PASSWORD]) that web/edge mount.
+# The data is reconstructable, so persistence stays off. AUTH on: the chart
+# generates the password once and preserves it across upgrades via a lookup of
+# the existing Secret (stable under a server-side helm upgrade / Fleet render).
+redis:
+  provider: internal
+  internal:
+    auth:
+      enabled: true
+    persistence:
+      enabled: false
+
+supavisor:
+  enabled: false
+
+# ----- Object storage ----------------------------------------------------------
+storage:
+  backend: s3
+  s3:
+    endpoint: ""        # ← your S3 endpoint
+    region: us-east-1
+    bucket: pawtograder-prod-storage
+    forcePathStyle: true
+
+# ----- Studio: NOT on the public internet --------------------------------------
+studio:
+  ingressEnabled: false
+
+seed:
+  enabled: false
+
+# ----- Backups + verification ---------------------------------------------------
+backup:
+  enabled: true
+  schedule: "0 4 * * *"
+  retentionDays: 30
+  s3:
+    endpoint: ""        # ← your S3 endpoint
+    region: us-east-1
+    bucket: pawtograder-prod-backups
+  verify:
+    enabled: true
+    schedule: "0 6 * * 1"
+  restoreDrill:
+    enabled: true
+    schedule: "0 8 * * 1"
+
+# ----- Observability -------------------------------------------------------------
+monitoring:
+  enabled: true
+  # REQUIRED: labels your cluster Prometheus's ruleSelector matches, or every
+  # shipped alert is silently inert. kube-prometheus-stack defaults to
+  # `release: <its release name>`. The render fails if left empty.
+  # See docs/operations/monitoring-alerting.md.
+  prometheusRules:
+    labels:
+      release: ""       # ← your Prometheus/kube-prometheus-stack release name

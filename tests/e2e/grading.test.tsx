@@ -167,9 +167,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
-    await page.getByRole("link", { name: assignment!.title }).click();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}`);
 
-    await expect(page.getByText("Self Review Notice")).toBeVisible();
+    await expect(page.getByText(/Self Review Notice|Self Review Now Due/)).toBeVisible();
     // The "Submission Limit for this assignment" alert renders asynchronously
     // after a separate RPC and is now hidden in visual tests (see the
     // data-visual-test="removed" on the alert in page.tsx) so its
@@ -210,8 +210,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
         .eq("rubric_id", selfReviewRubric!.id);
       expect(ra?.length ?? 0).toBeGreaterThan(0);
     }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
-    await page.getByRole("button", { name: "Complete Self Review" }).click();
-    await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await expect(page.getByRole("region", { name: "Self-Review Rubric" })).toBeVisible();
 
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
@@ -271,7 +271,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
 
     await expect(page.getByLabel("Rubric: Self-Review Rubric")).toBeVisible();
     //Make sure that we get a very nice screenshot with a fully-loaded page
@@ -349,6 +349,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     const releaseBtn = page.getByRole("button", { name: /Release \d+ selected submission/ });
     await expect(releaseBtn).toBeEnabled();
     await releaseBtn.click();
+    // Issue 843 adds an instructor warning dialog when selected reviews include
+    // incomplete grading. Continue through it when present.
+    const continueAnywayBtn = page.getByRole("button", { name: "Continue anyway" });
+    if (await continueAnywayBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await continueAnywayBtn.click();
+    }
     // Wait for the release to land in the DB before navigating to the
     // submission page. On webkit the SSR'd submission page sometimes paints
     // before the released flag has propagated, leading to the badge showing
@@ -382,13 +388,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     // Released submissions now default students to the Grade tab; switch to the autograder
     // detail (results) view that this test exercises.
-    await page.getByRole("button", { name: "Autograder Detail" }).click();
+    await page.getByRole("link", { name: "Autograder Detail" }).click();
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
     // Scan the results route here so axe also covers the autograder output view, the Pyret REPL
     // header (aria-controls), the Feedbot Textarea, and any Switch-rendered toggles.
     await expect(page).toHaveURL(/\/results(?:\?.*)?$/);
     await assertStudentPageAccessible(page, "grading results /results route");
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 
     const rubricSidebar = page.locator(`#rubric-${assignment!.grading_rubric_id}`);
@@ -397,7 +403,24 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_2);
     //Scroll grading rubric to top of its container
     await stabilizeRubricSidebar(page, "Grading Rubric");
-    await visualScreenshot(page, "Student can view their grading results", { stabilizeRubric: "Grading Rubric" });
+    // The code file is a scroll container (overflow:auto). Each annotated line's comment thread —
+    // the grading checks on lines 4-5 and the student's line-15 self-review comment — renders as an
+    // async inline block whose height settles at a different moment. The click on the doMath line
+    // above reveals line 15, but as the line-4/5 threads then expand *above* it the container's
+    // scrollTop no longer frames the same content, so the capture lands on a different thread per
+    // run (confirmed flaky: one rep shows the line-15 comment, another the line-4/5 check — a
+    // near-full-content diff). Wait for both async threads to render, then pin the scroll to a
+    // stable anchor (the unique line-15 self-review comment) as the final action before capture.
+    await expect(page.getByRole("region", { name: "Grading checks on line 4" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Grading checks on line 5" })).toBeVisible();
+    const gradingResultsAnchor = page.getByText(SELF_REVIEW_COMMENT_1).first();
+    await expect(gradingResultsAnchor).toBeVisible();
+    await visualScreenshot(page, "Student can view their grading results", {
+      stabilizeRubric: "Grading Rubric",
+      beforeScreenshot: async () => {
+        await gradingResultsAnchor.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
+      }
+    });
     await assertStudentPageAccessible(page, "grading results submission files");
 
     await expect(rubricSidebar).toContainText(`${instructor!.private_profile_name} applied today`);
@@ -410,7 +433,14 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // 8:06 PM applied-at timestamp diff that previously made this flaky is handled
     // by the transparent-text wrap on rubric-sidebar.tsx.
     await expect(page.getByRole("button", { name: "Draft Regrade Request" })).toBeVisible();
-    await visualScreenshot(page, "Student can request a regrade");
+    // Capture the request dialog itself, not the full page. It's a centered modal, so a
+    // full-page screenshot places it at a vertical center that shifts with total page
+    // height (run-to-run thread/scroll variance) — a placement jump, not a content diff.
+    // Scoping to the dialog crops to its own (static) box. Same approach as the resolve
+    // screenshot below.
+    await visualScreenshot(page, "Student can request a regrade", {
+      element: page.getByRole("dialog").filter({ hasText: "Request a Regrade" })
+    });
     await page.getByRole("button", { name: "Draft Regrade Request" }).click();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
@@ -426,6 +456,16 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .click();
     await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+    // Clicking "Open Request" replaces that button with a fresh "Add a comment to continue the
+    // discussion" textbox in the same spot, so the leftover cursor lands on it and paints a
+    // hover border in some runs but not others (confirmed flaky: soak reps split 3-vs-2 on a
+    // ~1056×128 block that is exactly this textbox). Park the cursor off-canvas and drop focus so
+    // the box is captured in its neutral (unhovered, unfocused) state every run. Use a negative
+    // (off-viewport) coordinate rather than (0,0): (0,0) is the top-left corner, which just moves
+    // the hover onto whatever element sits there — a negative point hit-tests to nothing, so no
+    // element is left hovered (Playwright does not clamp the coordinate).
+    await page.mouse.move(-20, -20);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await visualScreenshot(page, "Student can add a comment to open the regrade request", {
       stabilizeRubric: "Grading Rubric"
     });
@@ -441,6 +481,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
       .click();
+    // The full-page capture includes the right-hand review-actions panel, whose completion
+    // status loads asynchronously after this fresh navigation. Until it lands, the panel shows
+    // the actionable "Submission Review Actions / Complete Review" state; once loaded it flips to
+    // the settled "Completed by / Completed at" state. The grading review was completed earlier in
+    // this describe, so the settled state is correct — wait for it so the screenshot does not race
+    // the load (confirmed flaky: soak reps differed by a ~608×500 block in exactly this panel).
+    await expect(page.getByText("Completed by")).toBeVisible();
     await visualScreenshot(page, "Instructors can view the student's regrade request", {
       stabilizeRubric: "Grading Rubric"
     });
@@ -523,7 +570,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       await expect(appealRegion.getByText(REGRADE_RESOLUTION).first()).toBeVisible();
       await expect(appealRegion.getByText(REGRADE_ESCALATION).first()).toBeVisible();
     }
-    await visualScreenshot(page, "Students can appeal their regrade request");
+    // Capture the escalate dialog itself, not the full page. It's a centered modal whose
+    // full-page vertical position shifts with total page height run-to-run (~200px jump,
+    // ~65% full-page diff). Scoping to the dialog crops to its own (static) box.
+    await visualScreenshot(page, "Students can appeal their regrade request", {
+      element: page.getByRole("dialog").filter({ hasText: "Escalate Regrade Request" })
+    });
     await page.getByRole("button", { name: "Escalate Request" }).click();
     // Wait for the escalation to settle before axe runs — otherwise axe races
     // the closing popover / toast and reports transient focus-trap / labeling violations.
@@ -555,6 +607,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
     await expect(region.getByText(REGRADE_RESOLUTION)).toBeVisible();
     await expect(region.getByText(REGRADE_ESCALATION)).toBeVisible();
+    // Same async review-actions panel race as the regrade-request view above: wait for the
+    // settled "Completed by" state so the full-page capture does not race the panel's load.
+    await expect(page.getByText("Completed by")).toBeVisible();
     await visualScreenshot(page, "Instructors can view the student's regrade appeal", {
       stabilizeRubric: "Grading Rubric"
     });
@@ -584,6 +639,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(region.getByText(REGRADE_RESOLUTION)).toBeVisible();
     await expect(region.getByText(REGRADE_ESCALATION)).toBeVisible();
     await expect(region.getByText(REGRADE_FINAL_COMMENT)).toBeVisible();
+    // Same async review-actions panel race: closing the regrade does not un-complete the grading
+    // review, so wait for the settled "Completed by" state before the full-page capture.
+    await expect(page.getByText("Completed by")).toBeVisible();
     await visualScreenshot(page, "Instructors can close the regrade request", { stabilizeRubric: "Grading Rubric" });
   });
   test("Graders assigned to a rubric part see just that rubric part to grade", async ({ page }) => {

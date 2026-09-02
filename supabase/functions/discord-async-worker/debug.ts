@@ -1,7 +1,7 @@
 #!/usr/bin/env -S deno run --allow-net --allow-env --allow-read
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import type { DiscordAsyncEnvelope } from "../_shared/DiscordAsyncTypes.ts";
 

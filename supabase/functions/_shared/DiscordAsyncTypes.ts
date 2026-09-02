@@ -7,9 +7,9 @@ export type DiscordAsyncMethod =
   | "delete_role"
   | "add_member_role"
   | "remove_member_role"
-  | "add_guild_member"
   | "register_commands"
-  | "batch_role_sync";
+  | "batch_role_sync"
+  | "delete_invite";
 
 export type SendMessageArgs = {
   channel_id: string;
@@ -120,15 +120,29 @@ export type RemoveMemberRoleArgs = {
   role_id: string;
 };
 
-export type AddGuildMemberArgs = {
-  guild_id: string;
-  user_id: string;
-  access_token: string; // User's OAuth access token with guilds.join scope
-  nick?: string;
-  roles?: string[]; // Role IDs to assign
-  mute?: boolean;
-  deaf?: boolean;
+/**
+ * Revoke one invite, by code.
+ *
+ * Enqueued by clear_discord_tracking_for_class() when a class moves guilds, disconnects or is
+ * archived. Invites are minted with `max_age = 604800` and `max_uses = 5`, and the partial uniqueness
+ * index on classes.discord_server_id frees the released guild for another course to claim
+ * immediately -- so an invite left live is a former student of one course walking into another
+ * course's server, for up to seven days. The teardown is SQL and cannot call Discord, which is the
+ * whole reason this method exists: the revocation has to be something SQL can ask for.
+ *
+ * `guild_id` is carried for logs and Sentry context only; `DELETE /invites/{code}` takes the code
+ * alone. It is the guild the invite was minted INTO, read from discord_invites.guild_id rather than
+ * from classes -- by the time the teardown runs, the class no longer names that guild.
+ */
+export type DeleteInviteArgs = {
+  invite_code: string;
+  guild_id?: string;
 };
+
+// There is no add_guild_member method. Adding a user to a guild over the REST API requires that
+// user's OAuth token carrying the `guilds.join` scope, and linkDiscordAction requests only
+// `identify email`, so the call could never have been made. Students join through an invite link
+// instead, which is what createGuildInvite and the discord_invites table exist for.
 
 // Args for registering slash commands with Discord
 // No args needed - uses DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN from env
@@ -147,9 +161,9 @@ export type DiscordAsyncArgs =
   | DeleteRoleArgs
   | AddMemberRoleArgs
   | RemoveMemberRoleArgs
-  | AddGuildMemberArgs
   | RegisterCommandsArgs
-  | BatchRoleSyncArgs;
+  | BatchRoleSyncArgs
+  | DeleteInviteArgs;
 
 export type DiscordAsyncEnvelope = {
   method: DiscordAsyncMethod;

@@ -4,10 +4,12 @@
 
 import { Buffer } from "node:buffer";
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
-import { getFileFromRepo } from "../../_shared/GitHubWrapper.ts";
+import { getFileFromRepo, GRADE_WORKFLOW_PATH } from "../../_shared/GitHubWrapper.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveAssignment, resolveClass } from "../utils/resolvers.ts";
+import { classSummary, resolveAssignment, resolveClass } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { pageAll } from "../utils/paging.ts";
 import { CLICommandError } from "../errors.ts";
 import type {
   CLIResponse,
@@ -18,76 +20,95 @@ import type {
   ReposCrossAssignmentCopyPair
 } from "../types.ts";
 
-const PAGE_SIZE = 1000;
-const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
+/** Group ids per `.in()` batch; rows per batch are drained by pageAll. */
+const BATCH = 200;
 
-async function assertUserCanAccessClass(userId: string, classId: number): Promise<void> {
+/**
+ * Repositories for an assignment, excluding those owned by a disabled enrollment.
+ *
+ * The disabled filter is applied in memory rather than as an embedded
+ * `user_roles!inner(disabled)` join. That join was on
+ * `repositories.profile_id -> user_roles.private_profile_id`, and group repos are
+ * inserted with a **null** `profile_id`
+ * (`assignment-create-all-repos/index.ts` never sets one on the group branch), so
+ * an inner join on a null key matched nothing and every group repository was
+ * silently dropped. `repos list` printed "No repositories" for a group
+ * assignment, and `repos sync-grade-workflow` reported success having pushed to
+ * none of them — while the code just below this branches on
+ * `assignment_group_id != null && !profile_id`, i.e. rows the query could never
+ * return.
+ */
+async function fetchRepositoriesForAssignment(
+  classId: number,
+  assignmentId: number
+): Promise<ReposListRepositoryRow[]> {
   const supabase = getAdminClient();
-  const { data, error } = await supabase
-    .from("user_roles")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("class_id", classId)
-    .eq("disabled", false)
-    .in("role", ["instructor", "grader"])
-    .limit(1)
-    .maybeSingle();
 
-  if (error) throw new CLICommandError(`Failed to verify class access: ${error.message}`, 500);
-  if (!data) {
-    throw new CLICommandError("You do not have instructor/grader access to this class", 403);
-  }
-}
+  const rows = await pageAll<ReposListRepositoryRow>(
+    () =>
+      supabase
+        .from("repositories")
+        .select("id, repository, profile_id, assignment_group_id")
+        .eq("assignment_id", assignmentId)
+        .order("id", { ascending: true }),
+    "Failed to fetch repositories"
+  );
 
-async function fetchRepositoriesForAssignment(assignmentId: number): Promise<ReposListRepositoryRow[]> {
-  const supabase = getAdminClient();
-  const out: ReposListRepositoryRow[] = [];
-  let offset = 0;
-  for (;;) {
-    const { data, error } = await supabase
-      .from("repositories")
-      .select(
-        `
-        id,
-        repository,
-        profile_id,
-        assignment_group_id,
-        user_roles!inner(disabled)
-      `
-      )
-      .eq("assignment_id", assignmentId)
-      .eq("user_roles.disabled", false)
-      .order("id", { ascending: true })
-      .range(offset, offset + PAGE_SIZE - 1);
+  const activeProfiles = await pageAll<{ private_profile_id: string }>(
+    () =>
+      supabase
+        .from("user_roles")
+        .select("private_profile_id")
+        .eq("class_id", classId)
+        .eq("disabled", false)
+        .order("id", { ascending: true }),
+    "Failed to load active enrollments"
+  );
+  const active = new Set(activeProfiles.map((r) => r.private_profile_id));
 
-    if (error) {
-      throw new CLICommandError(`Failed to fetch repositories: ${error.message}`, 500);
+  // A group repo has no profile_id, so "is its owner disabled?" has to be asked of
+  // its membership instead. Keeping every null-profile row would have these
+  // commands clone and push to groups whose members have all dropped — work the
+  // equivalent individual filter excludes.
+  const groupIds = [...new Set(rows.map((r) => r.assignment_group_id).filter((id): id is number => id != null))];
+  const groupHasActiveMember = new Set<number>();
+  for (let i = 0; i < groupIds.length; i += BATCH) {
+    const batch = groupIds.slice(i, i + BATCH);
+    const members = await pageAll<{ assignment_group_id: number; profile_id: string }>(
+      () =>
+        supabase
+          .from("assignment_groups_members")
+          .select("assignment_group_id, profile_id")
+          .in("assignment_group_id", batch)
+          .order("id", { ascending: true }),
+      "Failed to load group members"
+    );
+    for (const member of members) {
+      if (active.has(member.profile_id)) groupHasActiveMember.add(member.assignment_group_id);
     }
-    const rows = data ?? [];
-    for (const row of rows) {
-      const r = row as unknown as ReposListRepositoryRow & { user_roles?: { disabled: boolean } | null };
-      out.push({
-        id: r.id,
-        repository: r.repository,
-        profile_id: r.profile_id,
-        assignment_group_id: r.assignment_group_id
-      });
-    }
-    if (rows.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
   }
-  return out;
+
+  return rows.filter((r) => {
+    if (r.assignment_group_id != null) return groupHasActiveMember.has(r.assignment_group_id);
+    if (r.profile_id) return active.has(r.profile_id);
+    // Neither an owner nor a group: nothing to attribute it to.
+    return false;
+  });
 }
 
 async function fetchGroupIdToName(assignmentId: number): Promise<Map<number, string>> {
   const supabase = getAdminClient();
-  const { data, error } = await supabase.from("assignment_groups").select("id, name").eq("assignment_id", assignmentId);
-
-  if (error) {
-    throw new CLICommandError(`assignment_groups: ${error.message}`, 500);
-  }
+  const rows = await pageAll<{ id: number; name: string }>(
+    () =>
+      supabase
+        .from("assignment_groups")
+        .select("id, name")
+        .eq("assignment_id", assignmentId)
+        .order("id", { ascending: true }),
+    "assignment_groups"
+  );
   const map = new Map<number, string>();
-  for (const row of data ?? []) {
+  for (const row of rows) {
     map.set(row.id, row.name);
   }
   return map;
@@ -115,17 +136,22 @@ async function fetchGroupRepresentativeProfiles(groupIds: number[]): Promise<Map
   if (groupIds.length === 0) return map;
   const unique = [...new Set(groupIds)];
   const supabase = getAdminClient();
-  const BATCH = 500;
   for (let i = 0; i < unique.length; i += BATCH) {
     const batch = unique.slice(i, i + BATCH);
-    const { data, error } = await supabase
-      .from("assignment_groups_members")
-      .select("assignment_group_id, profile_id")
-      .in("assignment_group_id", batch);
-    if (error) {
-      throw new CLICommandError(`assignment_groups_members: ${error.message}`, 500);
-    }
-    const sorted = [...(data ?? [])].sort((a, b) => {
+    // Paged within the batch: 500 group ids can return far more than max_rows
+    // member rows, and a truncated read leaves later groups without a
+    // representative profile, which surfaces as a bogus
+    // "could not resolve profile for due date" error per repo.
+    const data = await pageAll<{ assignment_group_id: number; profile_id: string }>(
+      () =>
+        supabase
+          .from("assignment_groups_members")
+          .select("assignment_group_id, profile_id")
+          .in("assignment_group_id", batch)
+          .order("id", { ascending: true }),
+      "assignment_groups_members"
+    );
+    const sorted = [...data].sort((a, b) => {
       const g = a.assignment_group_id - b.assignment_group_id;
       if (g !== 0) return g;
       return a.profile_id.localeCompare(b.profile_id);
@@ -160,15 +186,15 @@ async function handleReposList(ctx: MCPAuthContext, params: Record<string, unkno
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdf);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdf);
-  const repositories = await fetchRepositoriesForAssignment(assignment.id);
+  const repositories = await fetchRepositoriesForAssignment(classData.id, assignment.id);
 
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       assignment: {
         id: assignment.id,
         slug: assignment.slug,
@@ -191,12 +217,22 @@ async function handleSyncGradeWorkflowContext(
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdf);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdf);
   const templateRepo = assignment.template_repo?.trim();
   if (!templateRepo) {
     throw new CLICommandError("Assignment has no template_repo (handout)", 400);
+  }
+  // Refuse rather than fall through to a confusing 404 on the handout: a
+  // no-autograder assignment has no grade.yml by design, and pushing one into
+  // every student repo would re-enable the GitHub Actions runs it exists to avoid.
+  if (assignment.has_autograder === false) {
+    throw new CLICommandError(
+      `Assignment ${assignment.id} has no autograder, so there is no ${GRADE_WORKFLOW_PATH} to sync. ` +
+        `Enable the autograder on the assignment's autograder page first.`,
+      400
+    );
   }
 
   let gradeContent: string;
@@ -213,7 +249,7 @@ async function handleSyncGradeWorkflowContext(
     throw new CLICommandError(`Could not read ${GRADE_WORKFLOW_PATH} from ${templateRepo}: ${msg}`, 400);
   }
 
-  const repositories = await fetchRepositoriesForAssignment(assignment.id);
+  const repositories = await fetchRepositoriesForAssignment(classData.id, assignment.id);
   const gradeYmlBase64 = Buffer.from(gradeContent, "utf8").toString("base64");
 
   return {
@@ -245,7 +281,7 @@ async function handleCrossAssignmentCopyContext(
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdf);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const source = await resolveAssignment(supabase, classData.id, source_assignment);
   const target = await resolveAssignment(supabase, classData.id, target_assignment);
@@ -255,8 +291,8 @@ async function handleCrossAssignmentCopyContext(
   }
 
   const [sourceRepos, targetRepos, sourceGroupNames, targetGroupNames] = await Promise.all([
-    fetchRepositoriesForAssignment(source.id),
-    fetchRepositoriesForAssignment(target.id),
+    fetchRepositoriesForAssignment(classData.id, source.id),
+    fetchRepositoriesForAssignment(classData.id, target.id),
     fetchGroupIdToName(source.id),
     fetchGroupIdToName(target.id)
   ]);

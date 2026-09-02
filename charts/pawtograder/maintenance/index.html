@@ -1,0 +1,122 @@
+<!doctype html>
+<!--
+  Pawtograder maintenance page. Brand-styled, fully self-contained — inlined CSS,
+  no webfonts, no external URLs, no JS — so it renders with zero network deps.
+
+  Background: the bundled 16:9 pixel-art night cityscape (maintenance-mode.png,
+  served by nginx from the image at /maintenance-mode.png), scaled `cover` with
+  `image-rendering: pixelated` so it stays crisp. The art is busy and dark edge
+  to edge (it even has baked-in text), so a dark scrim + a centered translucent
+  card give the message a guaranteed-legible surface instead of sitting on the
+  art. Card type matches the app error boundary's system font stack.
+
+  Served two ways:
+    - chart: templates/maintenance.yaml renders THIS file through Helm's tpl, so
+      the maintenance title/message/eta values below resolve, and the ConfigMap
+      is mounted over the image's baked copy (the PNG stays baked in the image).
+    - image: charts/pawtograder/images/maintenance/Dockerfile bakes it as the
+      standalone fallback.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Auto-retry: the app returns when maintenance.enabled is turned back off. -->
+    <meta http-equiv="refresh" content="{{ .Values.maintenance.retryAfterSeconds | default 120 }}" />
+    <title><!--maint:title-->{{ .Values.maintenance.title | default "We'll be right back" }}<!--/maint:title--> · Pawtograder</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        /* Dark scrim (top layer) over the pixel-art cityscape (bottom layer) on a
+           dark base, so contrast holds regardless of how the viewport crops it. */
+        background:
+          linear-gradient(rgba(10, 14, 25, 0.55), rgba(10, 14, 25, 0.78)),
+          url("/maintenance-mode.png") center / cover no-repeat,
+          #0a0e19;
+        /* Keep the pixel art crisp when scaled up. */
+        image-rendering: pixelated;
+      }
+      .card {
+        background-color: rgba(15, 23, 42, 0.72);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 16px;
+        padding: 2.5rem;
+        max-width: 520px;
+        width: 100%;
+        text-align: center;
+        box-shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.6);
+        /* Card text must render sharp, not pixelated like the background. */
+        image-rendering: auto;
+      }
+      .paw {
+        font-size: 3.5rem;
+        margin-bottom: 0.75rem;
+        line-height: 1;
+      }
+      h1 {
+        font-size: 2.25rem;
+        font-weight: bold;
+        /* near-white on the card: ~15.7:1 vs the card's #0f172a base (WCAG AAA) */
+        color: #f1f5f9;
+        margin: 0 0 1rem 0;
+      }
+      p {
+        font-size: 1.125rem;
+        /* ~11.2:1 vs the card base (WCAG AAA) */
+        color: #cbd5e1;
+        line-height: 1.6;
+        margin: 0 0 1.25rem 0;
+      }
+      .eta {
+        display: inline-block;
+        margin: 0;
+        padding: 0.5rem 1rem;
+        border-radius: 8px;
+        background-color: rgba(148, 163, 184, 0.15);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        /* ~6.6:1 vs the card base (WCAG AA) */
+        color: #94a3b8;
+        font-size: 1rem;
+        font-weight: 600;
+      }
+      @media (max-width: 480px) {
+        .card {
+          padding: 1.75rem;
+        }
+        h1 {
+          font-size: 1.75rem;
+        }
+        p {
+          font-size: 1rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="paw" aria-hidden="true">🐾</div>
+      <h1><!--maint:title-->{{ .Values.maintenance.title | default "We'll be right back" }}<!--/maint:title--></h1>
+      <p>
+        <!--maint:message-->{{ .Values.maintenance.message | default "Pawtograder is down for a short scheduled maintenance window. Your work is safe — the pack is tidying up and we'll be back shortly. This page refreshes on its own." }}<!--/maint:message-->
+      </p>
+      <!--maint:eta-->{{- with .Values.maintenance.eta }}
+      <p class="eta">Expected back by {{ . }}</p>
+      {{- end }}<!--/maint:eta-->
+    </main>
+  </body>
+</html>

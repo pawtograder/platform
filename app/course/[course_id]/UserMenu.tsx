@@ -9,7 +9,7 @@ import { GlobalSearchTrigger } from "@/components/ui/global-search-trigger";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "@/components/ui/link";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -34,6 +34,7 @@ import {
   Menu,
   Portal,
   Text,
+  VisuallyHidden,
   VStack
 } from "@chakra-ui/react";
 import { FiClock, FiCommand } from "react-icons/fi";
@@ -271,7 +272,6 @@ const DropBoxAvatar = ({
         accept="image/jpeg,image/png"
         onChange={handleFileChange}
       />
-      <Toaster />
       <Flex alignItems="center" justifyContent={"center"} flexDirection="column" gap="5px">
         <Box position="relative" width="100px" height="100px">
           <Menu.Root positioning={{ placement: "bottom" }}>
@@ -374,12 +374,12 @@ const ProfileChangesMenu = () => {
   });
 
   useEffect(() => {
-    if (publicProfile) {
-      setPublicAvatarLink(publicProfile?.data.avatar_url);
+    if (publicProfile?.data) {
+      setPublicAvatarLink(publicProfile.data.avatar_url);
     }
-    if (privateProfile) {
-      setPrivateAvatarLink(privateProfile?.data.avatar_url);
-      setName(privateProfile?.data.name ?? "");
+    if (privateProfile?.data) {
+      setPrivateAvatarLink(privateProfile.data.avatar_url);
+      setName(privateProfile.data.name ?? "");
     }
   }, [publicProfile, privateProfile]);
 
@@ -388,8 +388,14 @@ const ProfileChangesMenu = () => {
    * Removes extra files in user's avatar storage bucket.
    */
   const updateProfile = async () => {
-    removeUnusedImages(privateAvatarLink ?? null, publicAvatarLink ?? null);
-    if (publicAvatarLink && publicProfile) {
+    // Only clean up once both profiles are in hand: with either one missing, the
+    // "still in use" links are all we have to compare against, and passing a
+    // half-known pair would delete the other profile's avatar. See
+    // removeUnusedImages.
+    if (privateProfile?.data && publicProfile?.data) {
+      removeUnusedImages(privateAvatarLink ?? null, publicAvatarLink ?? null);
+    }
+    if (publicAvatarLink && publicProfile?.data) {
       const { error } = await supabase
         .from("profiles")
         .update({ avatar_url: publicAvatarLink })
@@ -402,7 +408,7 @@ const ProfileChangesMenu = () => {
         });
       }
     }
-    if (privateAvatarLink && privateProfile) {
+    if (privateAvatarLink && privateProfile?.data) {
       const { error } = await supabase
         .from("profiles")
         .update({ avatar_url: privateAvatarLink })
@@ -416,7 +422,7 @@ const ProfileChangesMenu = () => {
       }
     }
 
-    if (privateProfile) {
+    if (privateProfile?.data) {
       const trimmedName = name?.trim() || "";
       if (trimmedName.length === 0) {
         toaster.error({
@@ -441,12 +447,12 @@ const ProfileChangesMenu = () => {
     invalidate({
       resource: "profiles",
       invalidates: ["list", "detail"],
-      id: publicProfile?.data.id
+      id: publicProfile?.data?.id
     });
     invalidate({
       resource: "profiles",
       invalidates: ["list", "detail"],
-      id: privateProfile?.data.id
+      id: privateProfile?.data?.id
     });
   };
   /**
@@ -478,7 +484,6 @@ const ProfileChangesMenu = () => {
 
   return (
     <>
-      <Toaster />
       <Dialog.Root size={"md"} placement={"center"}>
         <Dialog.Trigger asChild>
           <Button
@@ -536,7 +541,7 @@ const ProfileChangesMenu = () => {
                     </Flex>
                     <Text fontSize="sm" color="fg.muted" mt={6}>
                       Your public avatar will be used on anonymous posts along with your pseudonym, &quot;
-                      {publicProfile?.data.name}&quot;.
+                      {publicProfile?.data?.name}&quot;.
                     </Text>
                   </Flex>
                 </Flex>
@@ -546,13 +551,15 @@ const ProfileChangesMenu = () => {
                   <Button
                     variant="outline"
                     onClick={() => {
-                      setPrivateAvatarLink(privateProfile?.data.avatar_url ?? null);
-                      setPublicAvatarLink(publicProfile?.data.avatar_url ?? null);
-                      setName(privateProfile?.data.name ?? "");
-                      removeUnusedImages(
-                        privateProfile?.data.avatar_url ?? null,
-                        publicProfile?.data.avatar_url ?? null
-                      );
+                      setPrivateAvatarLink(privateProfile?.data?.avatar_url ?? null);
+                      setPublicAvatarLink(publicProfile?.data?.avatar_url ?? null);
+                      setName(privateProfile?.data?.name ?? "");
+                      // As in updateProfile: without both profiles loaded, the
+                      // avatars still in use are unknown and cleanup would take
+                      // the whole directory with it.
+                      if (privateProfile?.data && publicProfile?.data) {
+                        removeUnusedImages(privateProfile.data.avatar_url, publicProfile.data.avatar_url);
+                      }
                     }}
                   >
                     Cancel
@@ -716,6 +723,10 @@ function UserSettingsMenu() {
   const searchParams = useSearchParams();
   const { role: enrollment, isViewingAsStudent } = useClassProfiles();
   const gitHubUsername = enrollment.users.github_username;
+  // Shown for the same reason as the GitHub handle: the Discord link is invisible once made, and a
+  // student with no roles in the course server has no way to tell whether they linked the account at
+  // all. Not a link -- Discord has no public profile URL to point a username at.
+  const discordUsername = enrollment.users.discord_username;
   const { private_profile_id } = useClassProfiles();
   const { data: privateProfile } = useOne<UserProfile>({
     resource: "profiles",
@@ -734,8 +745,8 @@ function UserSettingsMenu() {
       <Drawer.Trigger asChild>
         <IconButton aria-label="Open user menu" variant="ghost" size="sm" borderRadius="full" p={0}>
           <Avatar.Root size="sm" colorPalette="gray">
-            <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-            <Avatar.Image src={sanitizeImageSrc(privateProfile?.data.avatar_url)} alt="" />
+            <Avatar.Fallback name={privateProfile?.data?.name?.charAt(0) ?? "?"} />
+            <Avatar.Image src={sanitizeImageSrc(privateProfile?.data?.avatar_url)} alt="" />
           </Avatar.Root>
         </IconButton>
       </Drawer.Trigger>
@@ -748,12 +759,12 @@ function UserSettingsMenu() {
                 <HStack justifyContent="space-between" alignItems="flex-start" width="100%" pb={2}>
                   <HStack flex={1} minWidth={0}>
                     <Avatar.Root size="sm" colorPalette="gray">
-                      <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-                      <Avatar.Image src={sanitizeImageSrc(privateProfile?.data.avatar_url)} alt="" />
+                      <Avatar.Fallback name={privateProfile?.data?.name?.charAt(0) ?? "?"} />
+                      <Avatar.Image src={sanitizeImageSrc(privateProfile?.data?.avatar_url)} alt="" />
                     </Avatar.Root>
                     <VStack alignItems="flex-start" gap={0} flex={1} minWidth={0}>
                       <Text fontWeight="bold" wordBreak="break-word" lineHeight="1.2">
-                        {privateProfile?.data.name}
+                        {privateProfile?.data?.name}
                       </Text>
                       {gitHubUsername && (
                         <Text fontSize="sm">
@@ -761,6 +772,11 @@ function UserSettingsMenu() {
                           <Link href={`https://github.com/${gitHubUsername}`} target="_blank">
                             {gitHubUsername}
                           </Link>
+                        </Text>
+                      )}
+                      {discordUsername && (
+                        <Text fontSize="sm" wordBreak="break-word">
+                          Discord: {discordUsername}
                         </Text>
                       )}
                     </VStack>
@@ -830,6 +846,39 @@ function ObfuscatedGradesModePicker() {
 function ConnectionStatusIndicator() {
   const status = useAutomaticRealtimeConnectionStatus();
 
+  const statusText = (() => {
+    switch (status?.overall) {
+      case "connected":
+        return "All realtime connections active";
+      case "partial":
+        return "Some realtime connections failed";
+      case "disconnected":
+        return "No realtime connections active";
+      case "connecting":
+        return "Connecting to realtime channels...";
+      case undefined:
+        return "";
+      default:
+        return "Unknown status";
+    }
+  })();
+
+  // Debounce the announced copy: `overall` transits through connecting/partial while
+  // channels join one-by-one (page load, navigation, tab refocus), and a role=status
+  // region announces every text change. Only states that persist get announced, so
+  // transient join cycles never reach screen readers (WCAG 4.1.3 without the spam).
+  const [announcedText, setAnnouncedText] = useState("");
+  useEffect(() => {
+    if (!statusText) {
+      // Status gone (controller teardown) — clear immediately so a remount
+      // never resurrects a stale "connections active" message.
+      setAnnouncedText("");
+      return;
+    }
+    const timer = setTimeout(() => setAnnouncedText(statusText), 3000);
+    return () => clearTimeout(timer);
+  }, [statusText]);
+
   if (!status) {
     return null;
   }
@@ -846,21 +895,6 @@ function ConnectionStatusIndicator() {
         return "yellow.solid";
       default:
         return "gray.muted";
-    }
-  };
-
-  const getStatusText = () => {
-    switch (status.overall) {
-      case "connected":
-        return "All realtime connections active";
-      case "partial":
-        return "Some realtime connections failed";
-      case "disconnected":
-        return "No realtime connections active";
-      case "connecting":
-        return "Connecting to realtime channels...";
-      default:
-        return "Unknown status";
     }
   };
 
@@ -907,7 +941,7 @@ function ConnectionStatusIndicator() {
 
   const tooltipContent = (
     <VStack alignItems="flex-start" gap={1} fontSize="sm">
-      <Text fontWeight="bold">{getStatusText()}</Text>
+      <Text fontWeight="bold">{statusText}</Text>
       <Text fontSize="xs" color="gray.300">
         {status.channels.length} channel{status.channels.length !== 1 ? "s" : ""}
       </Text>
@@ -925,18 +959,30 @@ function ConnectionStatusIndicator() {
   );
 
   return (
-    <Tooltip content={tooltipContent} showArrow>
-      <Box
-        width={3}
-        height={3}
-        borderRadius="full"
-        bg={getStatusColor()}
-        aria-label={`Realtime connection status: ${getStatusText()}`}
-        role="note"
-        cursor="help"
-        flexShrink={0}
-      />
-    </Tooltip>
+    <>
+      <Tooltip content={tooltipContent} showArrow>
+        {/* Focusable so the per-channel tooltip is keyboard-reachable (WCAG 1.4.13). Its
+            accessible name is the UNdebounced status: a user who tabs here wants the current
+            state, and gating the name on the debounce would leave the control named
+            "Realtime connection status:" with no value for the first 3s and for as long as
+            channels keep flapping. */}
+        <Box
+          width={3}
+          height={3}
+          borderRadius="full"
+          bg={getStatusColor()}
+          role="img"
+          aria-label={`Realtime connection status: ${statusText}`}
+          tabIndex={0}
+          cursor="help"
+          flexShrink={0}
+          _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
+        />
+      </Tooltip>
+      {/* Separate polite live region (4.1.3) carrying the debounced copy, so transient
+          join cycles are not announced while the control above stays correctly named. */}
+      <VisuallyHidden role="status">Realtime connection status: {announcedText}</VisuallyHidden>
+    </>
   );
 }
 

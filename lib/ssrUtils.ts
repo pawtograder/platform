@@ -1,7 +1,8 @@
 import "server-only";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { viewAsCookieName } from "@/lib/viewAs";
+import { parseViewAsCookieValue, viewAsCookieName } from "@/lib/viewAs";
+import { classScopedTableTags, courseTag } from "@/lib/next-cache-tags";
 import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import type {
@@ -111,17 +112,36 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
   return client;
 }
 export async function getUserRolesForCourse(course_id: number, user_id: string): Promise<UserRoleData | undefined> {
-  const client = await createClientWithCaching({ revalidate: 60, tags: [`user_roles:${course_id}:${user_id}`] });
+  // The per-user tag is kept for targeted invalidation, but nothing emits it: the `user_roles`
+  // trigger emits the class+role form. Without those two the 60s TTL was the only thing that
+  // ever refreshed a role change.
+  const client = await createClientWithCaching({
+    revalidate: 60,
+    tags: [`user_roles:${course_id}:${user_id}`, ...classScopedTableTags("user_roles", course_id)]
+  });
 
-  const { data: userRole } = await client
+  const { data: userRoles } = await client
     .from("user_roles")
     .select("role, class_id, public_profile_id, private_profile_id")
     .eq("class_id", course_id)
     .eq("user_id", user_id)
-    .eq("disabled", false)
-    .single();
+    .eq("disabled", false);
 
-  return userRole || undefined;
+  if (!userRoles || userRoles.length === 0) {
+    return undefined;
+  }
+
+  // A user may hold more than one non-disabled role in a class — the unique index is on
+  // (user_id, role, class_id), not (user_id, class_id), so e.g. student + grader can coexist.
+  // Resolve to the highest-privilege role (matching the enrollment upgrade logic) instead of
+  // calling `.single()`, which 406s on >1 (and on 0) rows and would lock the user out of a
+  // course they belong to.
+  const roleHierarchy: ReadonlyArray<UserRoleData["role"]> = ["instructor", "grader", "student"];
+  const rank = (role: UserRoleData["role"]) => {
+    const idx = roleHierarchy.indexOf(role);
+    return idx === -1 ? roleHierarchy.length : idx;
+  };
+  return [...userRoles].sort((a, b) => rank(a.role) - rank(b.role))[0];
 }
 
 export type EffectiveCourseIdentity = UserRoleData & {
@@ -138,8 +158,10 @@ export type EffectiveCourseIdentity = UserRoleData & {
  * "view as student" cookie. When the real user is an instructor for the course and the
  * `view_as_<course_id>` cookie names a non-disabled student in that course, the returned
  * role/profile ids are the student's (so server-branching pages render the student view
- * scoped to that student). Staff can also view their own test-assignment submissions as
- * a synthetic student. Otherwise the viewer's real identity is returned unchanged.
+ * scoped to that student). Otherwise the viewer's real identity is returned unchanged.
+ *
+ * The Test Assignment self-preview is deliberately not here: it changes what the UI renders, not
+ * whose data is fetched, so it lives as client state in ClassProfileProvider.
  *
  * Auth/RLS identity is unaffected — the override is purely presentation/scoping. UI read-only
  * gates prevent writes while RLS remains the backstop for cross-profile data access.
@@ -166,21 +188,16 @@ export async function getEffectiveCourseIdentity(
   }
 
   const cookieStore = await cookies();
-  const targetProfileId = cookieStore.get(viewAsCookieName(course_id))?.value;
+  const targetProfileId = parseViewAsCookieValue(cookieStore.get(viewAsCookieName(course_id))?.value);
   if (!targetProfileId) {
     return base;
   }
 
+  // The Test Assignment self-preview is client state, not a cookie: it changes what the UI renders,
+  // not whose data is fetched. A cookie naming the viewer's own profile is therefore not a view-as
+  // target and is ignored here.
   if (targetProfileId === realRole.private_profile_id) {
-    return {
-      role: "student",
-      class_id: realRole.class_id,
-      public_profile_id: realRole.public_profile_id,
-      private_profile_id: realRole.private_profile_id,
-      isViewingAs: true,
-      realRole: realRole.role,
-      viewAsProfileId: realRole.private_profile_id
-    };
+    return base;
   }
 
   if (realRole.role !== "instructor") {
@@ -189,7 +206,7 @@ export async function getEffectiveCourseIdentity(
 
   const client = await createClientWithCaching({
     revalidate: 60,
-    tags: [`user_roles:${course_id}:view_as`]
+    tags: [`user_roles:${course_id}:view_as`, ...classScopedTableTags("user_roles", course_id)]
   });
   const { data: targetRole } = await client
     .from("user_roles")
@@ -216,7 +233,7 @@ export async function getEffectiveCourseIdentity(
 }
 
 export async function getCourse(course_id: number) {
-  const client = await createClientWithCaching({ tags: [`course:${course_id}`] });
+  const client = await createClientWithCaching({ tags: [courseTag(course_id)] });
   const course = await client.from("classes").select("*").eq("id", course_id).eq("archived", false).single();
   return course.data;
 }

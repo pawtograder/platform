@@ -1,7 +1,7 @@
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type {
   ArchiveRepoAndLockArgs,
   CreateRepoArgs,
@@ -14,9 +14,19 @@ import type {
   SyncTeamArgs
 } from "../_shared/GitHubAsyncTypes.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
-import { PrimaryRateLimitError, SecondaryRateLimitError, getCreateContentLimiter } from "../_shared/GitHubWrapper.ts";
+import {
+  PrimaryRateLimitError,
+  SecondaryRateLimitError,
+  NonRetryableGitHubError,
+  NonRetryableRepoError,
+  NonRetryableUserError,
+  getCreateContentLimiter
+} from "../_shared/GitHubWrapper.ts";
+import { beginWorkerRun } from "../_shared/workerRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -41,6 +51,26 @@ function toMsLatency(enqueuedAt: string): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * Resolves the handout SHA to stamp onto a freshly-created student/group repo, scoped to the repo's
+ * own assignment. We intentionally look this up by assignment id (not `template_repo`), because
+ * multiple assignments can legitimately share a handout repo (copied assignments, multi-section
+ * courses) and a reverse lookup by repo would be ambiguous.
+ */
+async function getAssignmentTemplateSha(
+  adminSupabase: SupabaseClient<Database>,
+  assignmentId: number | null | undefined
+): Promise<string | null> {
+  if (assignmentId == null) return null;
+  const { data, error } = await adminSupabase
+    .from("assignments")
+    .select("latest_template_sha")
+    .eq("id", assignmentId)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.latest_template_sha ?? null;
 }
 
 const PGMQ_ARCHIVE_MAX_ATTEMPTS = 3;
@@ -128,12 +158,16 @@ function recordMetric(
       p_status_code: params.status_code,
       p_latency_ms: latency_ms
     });
-    log_result.then((result) => {
-      if (result.error) {
-        console.error(result.error);
-        Sentry.captureException(result.error, scope);
-      }
-    });
+    // Detached: gateway-call logging must not add latency to the call it logs.
+    // Flushed after it settles, since nothing else will be alive to do it.
+    waitUntilWithSentryFlush(
+      log_result.then((result) => {
+        if (result.error) {
+          console.error(result.error);
+          Sentry.captureException(result.error, scope);
+        }
+      })
+    );
   } else {
     // Create new log record (fallback for backward compatibility)
     const log_result = adminSupabase.schema("public").rpc("log_api_gateway_call", {
@@ -144,12 +178,16 @@ function recordMetric(
       p_message_processed_at: new Date().toISOString(),
       p_latency_ms: latency_ms
     });
-    log_result.then((result) => {
-      if (result.error) {
-        console.error(result.error);
-        Sentry.captureException(result.error, scope);
-      }
-    });
+    // Detached: gateway-call logging must not add latency to the call it logs.
+    // Flushed after it settles, since nothing else will be alive to do it.
+    waitUntilWithSentryFlush(
+      log_result.then((result) => {
+        if (result.error) {
+          console.error(result.error);
+          Sentry.captureException(result.error, scope);
+        }
+      })
+    );
   }
 }
 
@@ -737,7 +775,7 @@ export async function processEnvelope(
     switch (envelope.method) {
       case "sync_student_team": {
         const args = envelope.args as SyncTeamArgs;
-        if (args.org === "pawtograder-playground" && args.courseSlug?.startsWith("e2e-ignore-")) {
+        if (shouldSkipRealGithubForE2eFixture({ org: args.org, courseSlug: args.courseSlug })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -763,7 +801,8 @@ export async function processEnvelope(
               data.classes.github_org,
               `${data.classes.slug}-students`,
               data.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -807,7 +846,8 @@ export async function processEnvelope(
               ur.classes.github_org,
               `${ur.classes.slug}-students`,
               ur.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -827,7 +867,7 @@ export async function processEnvelope(
       }
       case "sync_staff_team": {
         const args = envelope.args as SyncTeamArgs;
-        if (args.org === "pawtograder-playground" && args.courseSlug?.startsWith("e2e-ignore-")) {
+        if (shouldSkipRealGithubForE2eFixture({ org: args.org, courseSlug: args.courseSlug })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -835,13 +875,20 @@ export async function processEnvelope(
         if (args.userId) {
           scope.setTag("user_id", args.userId);
           //Make sure that the student has been invited to the org
+          // maybeSingle (not single): on a role DELETE the trigger enqueues this sync with the
+          // removed user_id, so the row is already gone. That must NOT throw — the class-wide
+          // reconcile below is what removes them from the team and has to run regardless. A missing
+          // row simply means "no per-user reinvite to do".
           const { data, error } = await adminSupabase
             .from("user_roles")
             .select("invitation_date, users(github_username), classes(slug, github_org)")
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
-            .in("role", ["instructor", "grader"])
-            .single();
+            .in("role", ["instructor", "grader", "admin"])
+            // Never reinvite a disabled staff member: the disable-triggered sync routes their id here,
+            // and reconcile removes them from the team — reinviting would immediately undo that.
+            .eq("disabled", false)
+            .maybeSingle();
           if (error) throw error;
           if (
             data &&
@@ -854,7 +901,8 @@ export async function processEnvelope(
               data.classes.github_org,
               `${data.classes.slug}-staff`,
               data.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -866,8 +914,9 @@ export async function processEnvelope(
               .from("user_roles")
               .select("users(github_username)")
               .eq("class_id", envelope.class_id || 0)
-              .in("role", ["instructor", "grader"])
+              .in("role", ["instructor", "grader", "admin"])
               .eq("github_org_confirmed", true)
+              .eq("disabled", false)
               .limit(5000);
             if (error) throw error;
             return (data || []).map((s) => s.users!.github_username!).filter(Boolean);
@@ -880,8 +929,11 @@ export async function processEnvelope(
             .select("invitation_date, users(github_username), classes(slug, github_org)")
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
-            .in("role", ["instructor", "grader"])
-            .single();
+            .in("role", ["instructor", "grader", "admin"])
+            // Same as the pre-reconcile lookup: skip disabled staff so we don't reinvite someone the
+            // reconcile just removed.
+            .eq("disabled", false)
+            .maybeSingle();
           if (
             !error &&
             ur &&
@@ -894,7 +946,8 @@ export async function processEnvelope(
               ur.classes.github_org,
               `${ur.classes.slug}-staff`,
               ur.users.github_username,
-              scope
+              scope,
+              { userId: args.userId }
             );
           }
         }
@@ -913,53 +966,94 @@ export async function processEnvelope(
         return true;
       }
       case "create_repo": {
-        const { org, repoName, templateRepo, isTemplateRepo, courseSlug, githubUsernames } =
-          envelope.args as CreateRepoArgs;
-        if (
-          org === "pawtograder-playground" &&
-          (courseSlug?.startsWith("e2e-ignore-") || repoName.startsWith("test-e2e") || repoName.startsWith("e2e-test"))
-        ) {
+        const {
+          org,
+          repoName,
+          templateRepo,
+          isTemplateRepo,
+          courseSlug,
+          githubUsernames,
+          creationMethod,
+          sourceRepo,
+          branchProtection,
+          studentTeamPermission
+        } = envelope.args as CreateRepoArgs;
+        // The e2e-ignore short-circuit avoids hitting real GitHub for the
+        // pawtograder-playground org's e2e test fixtures. When the github stub
+        // is active we WANT the call to fall through (the stub records it for
+        // assertions and returns a fake SHA), so only skip when the stub is
+        // disabled — all handled by shouldSkipRealGithubForE2eFixture.
+        if (shouldSkipRealGithubForE2eFixture({ org, courseSlug, repoName })) {
           //No action, no metrics, no logging
           return true;
         }
         Sentry.addBreadcrumb({ message: `Creating repo ${repoName} for org ${org}`, level: "info" });
         const limiter = getCreateContentLimiter(org);
-        // createRepo patches repo settings after generate (squash merge on, template flag, branch ruleset, …).
+        // createRepo patches repo settings after generate/fork (squash merge on, template flag, branch ruleset, …).
+        const effectiveSource = sourceRepo ?? templateRepo;
         const headSha = await limiter.schedule(() =>
-          github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope)
+          github.createRepo(
+            org,
+            repoName,
+            effectiveSource,
+            {
+              is_template_repo: isTemplateRepo,
+              creation_method: creationMethod ?? "template",
+              branch_protection: branchProtection
+            },
+            scope
+          )
         );
         Sentry.addBreadcrumb({ message: `Repo created ${repoName} for org ${org}, head sha: ${headSha}` });
-        await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
+        await github.syncRepoPermissions(
+          org,
+          repoName,
+          courseSlug,
+          githubUsernames,
+          scope,
+          studentTeamPermission ? { studentTeamPermission } : undefined
+        );
 
         // Update repository record using the repo_id if provided (preferred method)
         try {
-          const { data: latestHandoutCommit, error: latestHandoutCommitError } = await adminSupabase
-            .from("assignments")
-            .select("latest_template_sha")
-            .eq("template_repo", templateRepo)
-            .maybeSingle();
-          if (latestHandoutCommitError) throw latestHandoutCommitError;
+          // Resolve the target repository row first, then read the handout SHA from THIS repo's own
+          // assignment. Looking the SHA up by `template_repo` is ambiguous whenever multiple assignments
+          // share a handout repo (copied assignments, multi-section courses), and the old
+          // `.maybeSingle()` there errored on >1 match — stranding the repo in an infinite requeue.
+          const repoUpdate = {
+            is_github_ready: true,
+            synced_repo_sha: headSha,
+            // Clear any prior failure now that the repo is populated and ready.
+            creation_error: null
+          };
           if (envelope.repo_id) {
             // Direct update using repo_id (more efficient and reliable)
+            const { data: repoRow, error: repoRowError } = await adminSupabase
+              .from("repositories")
+              .select("assignment_id")
+              .eq("id", envelope.repo_id)
+              .maybeSingle();
+            if (repoRowError) throw repoRowError;
+            const syncedHandoutSha = await getAssignmentTemplateSha(adminSupabase, repoRow?.assignment_id);
             const { error: updateError } = await adminSupabase
               .from("repositories")
-              .update({
-                is_github_ready: true,
-                synced_repo_sha: headSha,
-                synced_handout_sha: latestHandoutCommit?.latest_template_sha
-              })
+              .update({ ...repoUpdate, synced_handout_sha: syncedHandoutSha })
               .eq("id", envelope.repo_id);
             if (updateError) throw updateError;
           } else if (envelope.class_id) {
             // Fallback to old method for backward compatibility
             const fullName = `${org}/${repoName}`;
+            const { data: repoRow, error: repoRowError } = await adminSupabase
+              .from("repositories")
+              .select("assignment_id")
+              .eq("class_id", envelope.class_id)
+              .eq("repository", fullName)
+              .maybeSingle();
+            if (repoRowError) throw repoRowError;
+            const syncedHandoutSha = await getAssignmentTemplateSha(adminSupabase, repoRow?.assignment_id);
             const { error: updateError } = await adminSupabase
               .from("repositories")
-              .update({
-                is_github_ready: true,
-                synced_repo_sha: headSha,
-                synced_handout_sha: latestHandoutCommit?.latest_template_sha
-              })
+              .update({ ...repoUpdate, synced_handout_sha: syncedHandoutSha })
               .eq("class_id", envelope.class_id)
               .eq("repository", fullName);
             if (updateError) throw updateError;
@@ -977,6 +1071,50 @@ export async function processEnvelope(
           });
           throw e;
         }
+
+        // Group repos are created with an empty collaborator list (members are added separately), so
+        // this enqueue is the guaranteed handoff from is_github_ready=true to member access.
+        // Individual repos already had their owner granted by the inline syncRepoPermissions above, so
+        // we must NOT resync them here: enqueue_sync_repo_permissions_for_repo re-derives the owner
+        // filtered on github_org_confirmed=true, which would REVOKE an owner who is in the org but not
+        // yet DB-confirmed from the repo we just granted them. So resolve the repo row's
+        // assignment_group_id and only resync group repos.
+        let resyncRepoId: number | null = envelope.repo_id ?? null;
+        let resyncGroupId: number | null = null;
+        if (resyncRepoId) {
+          const { data: repoRow, error: repoLookupError } = await adminSupabase
+            .from("repositories")
+            .select("assignment_group_id")
+            .eq("id", resyncRepoId)
+            .maybeSingle();
+          if (repoLookupError) throw repoLookupError;
+          resyncGroupId = repoRow?.assignment_group_id ?? null;
+        } else if (envelope.class_id) {
+          const { data: repoRow, error: repoLookupError } = await adminSupabase
+            .from("repositories")
+            .select("id, assignment_group_id")
+            .eq("class_id", envelope.class_id)
+            .eq("repository", `${org}/${repoName}`)
+            .maybeSingle();
+          if (repoLookupError) throw repoLookupError;
+          resyncRepoId = repoRow?.id ?? null;
+          resyncGroupId = repoRow?.assignment_group_id ?? null;
+        }
+        // Only group repos need the post-create resync. A failure for a group repo must re-queue the
+        // whole job rather than silently strand members: createRepo and the is_github_ready update are
+        // both idempotent (see the catch above), so the retry is safe. We just marked this repo
+        // is_github_ready, so its row must exist; an unresolved id for a group repo means the handoff
+        // is broken, so fail loudly (retry/DLQ) rather than silently leaving members locked out.
+        if (resyncGroupId != null) {
+          if (!resyncRepoId) {
+            throw new Error(`Could not resolve repository id for ${org}/${repoName} to enqueue permission resync`);
+          }
+          const { error: resyncError } = await adminSupabase.rpc("enqueue_sync_repo_permissions_for_repo", {
+            p_repo_id: resyncRepoId
+          });
+          if (resyncError) throw resyncError;
+        }
+
         recordMetric(
           adminSupabase,
           {
@@ -997,7 +1135,7 @@ export async function processEnvelope(
         if (repoName.startsWith(org + "/")) {
           repoName = repoName.substring(org.length + 1);
         }
-        if (org === "pawtograder-playground" && courseSlug?.startsWith("e2e-ignore-")) {
+        if (shouldSkipRealGithubForE2eFixture({ org, courseSlug })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -1030,7 +1168,7 @@ export async function processEnvelope(
       }
       case "archive_repo_and_lock": {
         const { org, repo } = envelope.args as ArchiveRepoAndLockArgs;
-        if (org === "pawtograder-playground" && repo?.startsWith("e2e-ignore-")) {
+        if (shouldSkipRealGithubForE2eFixture({ org, repoName: repo })) {
           //No action, no metrics, no logging
           return true;
         }
@@ -1135,16 +1273,27 @@ export async function processEnvelope(
         return true;
       }
       case "sync_repo_to_handout": {
-        const { repository_id, repository_full_name, template_repo, from_sha, to_sha } =
-          envelope.args as SyncRepoToHandoutArgs;
+        const {
+          repository_id,
+          repository_full_name,
+          template_repo,
+          from_sha,
+          to_sha,
+          sync_strategy,
+          upstream_repo_full_name
+        } = envelope.args as SyncRepoToHandoutArgs;
 
         scope.setTag("repository_id", String(repository_id));
         scope.setTag("repository", repository_full_name);
         scope.setTag("template_repo", template_repo);
         scope.setTag("to_sha", to_sha);
+        scope.setTag("sync_strategy", sync_strategy ?? "template_pr");
+        if (upstream_repo_full_name) {
+          scope.setTag("upstream_repo_full_name", upstream_repo_full_name);
+        }
 
         Sentry.addBreadcrumb({
-          message: `Syncing ${repository_full_name} to handout SHA ${to_sha}`,
+          message: `Syncing ${repository_full_name} to handout SHA ${to_sha} via ${sync_strategy ?? "template_pr"}`,
           level: "info"
         });
 
@@ -1179,10 +1328,65 @@ export async function processEnvelope(
                 started_at: new Date().toISOString(),
                 msg_id: meta.msg_id,
                 from_sha,
-                to_sha
+                to_sha,
+                sync_strategy: sync_strategy ?? "template_pr"
               }
             })
             .eq("id", repository_id);
+
+          // For fork-based assignments (mode 2 / mode 3) GitHub already knows the
+          // upstream — one call to POST /repos/{owner}/{repo}/merge-upstream
+          // fast-forwards or merges the fork. Skip the PR-based handout-sync
+          // flow entirely on success. Fall back to template_pr if GitHub reports
+          // the branch has diverged or the repo is no longer a fork.
+          if (sync_strategy === "fork_merge_upstream") {
+            const merge = await github.mergeForkUpstream(
+              repository_full_name,
+              "main",
+              upstream_repo_full_name ?? null,
+              scope
+            );
+            if (merge.kind === "synced" || merge.kind === "already_up_to_date") {
+              const { error: updateError } = await adminSupabase
+                .from("repositories")
+                .update({
+                  synced_handout_sha: to_sha,
+                  synced_repo_sha: merge.mergedSha,
+                  desired_handout_sha: to_sha,
+                  sync_data: {
+                    last_sync_attempt: new Date().toISOString(),
+                    status: merge.kind === "synced" ? "merged_via_fork_sync" : "no_changes_needed",
+                    sync_strategy: "fork_merge_upstream",
+                    upstream_repo_full_name: upstream_repo_full_name ?? null,
+                    merge_sha: merge.mergedSha
+                  }
+                })
+                .eq("id", repository_id);
+              if (updateError) throw updateError;
+              recordMetric(
+                adminSupabase,
+                {
+                  method: envelope.method,
+                  status_code: 200,
+                  class_id: envelope.class_id,
+                  debug_id: envelope.debug_id,
+                  enqueued_at: meta.enqueued_at,
+                  log_id: envelope.log_id
+                },
+                scope
+              );
+              return true;
+            }
+            // dirty / not_a_fork → fall through to the template_pr path so the
+            // student can resolve conflicts via PR review.
+            scope.setTag("fork_merge_upstream_fallback", merge.kind);
+            Sentry.addBreadcrumb({
+              message:
+                `fork_merge_upstream returned ${merge.kind} for ${repository_full_name}; ` +
+                `falling back to template_pr sync`,
+              level: "warning"
+            });
+          }
 
           // Get syncedRepoSha - either from DB or fetch first commit if not set
           let syncedRepoSha = currentRepo?.synced_repo_sha;
@@ -2030,6 +2234,17 @@ export async function processEnvelope(
       }
     }
 
+    // A misconfigured template affects every student in an assignment, which would otherwise
+    // create one Sentry issue per repo. Group them into a single issue by method + error type.
+    if (error instanceof NonRetryableRepoError) {
+      scope.setFingerprint(["github-non-retryable-repo", envelope.method]);
+    } else if (error instanceof NonRetryableUserError) {
+      // Same reasoning for unresolvable usernames: a class import can turn up several at once, and
+      // one issue per method is enough. The offending login is on the tag and in the message.
+      scope.setFingerprint(["github-non-retryable-user", envelope.method]);
+      scope.setTag("github_username", error.githubUsername);
+    }
+
     const errorId = Sentry.captureException(error, scope);
     console.log(`Recorded error with ID: ${errorId}`);
 
@@ -2053,6 +2268,56 @@ export async function processEnvelope(
     })();
 
     try {
+      // Deterministic failure about one repo or one person (an empty/missing template repo, a
+      // GitHub login that no longer exists). Retrying will never succeed and this is not a systemic
+      // problem, so record what we can and send the job straight to the DLQ — WITHOUT tripping the
+      // shared circuit breaker or feeding the error-threshold counter (which are reserved for rate
+      // limits / outages that warrant slowing the whole org down).
+      if (error instanceof NonRetryableGitHubError) {
+        scope.setTag("non_retryable_error", error.name);
+        if (error instanceof NonRetryableRepoError) {
+          scope.setTag("non_retryable_repo_error", "true");
+        }
+        const reason = error.message;
+        try {
+          if (envelope.repo_id) {
+            await adminSupabase.from("repositories").update({ creation_error: reason }).eq("id", envelope.repo_id);
+          } else if (envelope.method === "create_repo" && envelope.class_id) {
+            const { org: eo, repoName: ern } = envelope.args as CreateRepoArgs;
+            await adminSupabase
+              .from("repositories")
+              .update({ creation_error: reason })
+              .eq("class_id", envelope.class_id)
+              .eq("repository", `${eo}/${ern}`);
+          }
+        } catch (markErr) {
+          console.error("Failed to record creation_error on repository row:", markErr);
+          Sentry.captureException(markErr, scope);
+        }
+        recordMetric(
+          adminSupabase,
+          {
+            method: envelope.method,
+            status_code: 422,
+            class_id: envelope.class_id,
+            debug_id: envelope.debug_id,
+            enqueued_at: meta.enqueued_at,
+            log_id: envelope.log_id
+          },
+          scope
+        );
+        const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+        if (dlqSuccess) {
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        } else {
+          console.error(`Failed to send non-retryable message ${meta.msg_id} to DLQ, leaving unarchived`);
+          Sentry.captureMessage(`Non-retryable message ${meta.msg_id} not archived due to DLQ failure`, {
+            level: "error"
+          });
+        }
+        return false;
+      }
+
       if (rt.type === "secondary" || rt.type === "primary" || rt.type === "extreme") {
         const retryAfter = rt.retryAfter;
         // Defaults: primary=60s, secondary=180s, extreme=43200s (12h)
@@ -2348,22 +2613,37 @@ export async function runBatchHandler() {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
-  const isRunning = true;
-  while (isRunning) {
-    try {
-      const hasWork = await processBatch(adminSupabase, scope);
-      if (!hasWork) {
-        await new Promise((resolve) => setTimeout(resolve, 15000));
+  // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts for why the old
+  // module-level `started` flag could not work under `edgeFunctions.policy: per_request`.
+  const run = await beginWorkerRun({
+    name: "github_async_worker",
+    scope,
+    idleSleepMs: 15000,
+    errorSleepMs: 5000
+  });
+  scope.setTag("worker_run_mode", run.mode);
+
+  try {
+    while (run.shouldContinue()) {
+      await run.heartbeat();
+      if (!run.shouldContinue()) break;
+      try {
+        const hasWork = await processBatch(adminSupabase, scope);
+        if (!hasWork) {
+          if (!(await run.onIdle())) break;
+        }
+      } catch (e) {
+        Sentry.captureException(e, scope);
+        await run.onError();
       }
-    } catch (e) {
-      Sentry.captureException(e, scope);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
+  } finally {
+    await run.release();
   }
 }
 
 if (import.meta.main) {
-  Deno.serve((req) => {
+  serveWithSentryFlush((req) => {
     const secret = req.headers.get("x-edge-function-secret");
     const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
 
@@ -2389,7 +2669,25 @@ if (import.meta.main) {
 
     if (!started) {
       started = true;
-      EdgeRuntime.waitUntil(runBatchHandler());
+      // Reset on exit so the flag does not stay true for the isolate's whole life, which would
+      // stop the worker restarting even once the underlying fault cleared. Unlike the notification
+      // and gradebook processors, this loop has no consecutive-error cap: batch errors are
+      // captured, delayed 5s, and retried indefinitely. `.catch` is what makes an exit visible --
+      // nothing consumes the promise handed to waitUntil, so a rejection here would otherwise be
+      // an unhandled rejection that never reaches Sentry.
+      waitUntilWithSentryFlush(
+        runBatchHandler()
+          .catch((e) => {
+            const scope = new Sentry.Scope();
+            scope.setTag("function", "github_async_worker");
+            scope.setTag("error_source", "run_batch_handler_startup");
+            Sentry.captureException(e, scope);
+            console.error("[serve] Batch handler exited with an error:", e);
+          })
+          .finally(() => {
+            started = false;
+          })
+      );
     }
 
     return new Response(

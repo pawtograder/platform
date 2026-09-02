@@ -1,6 +1,13 @@
 import * as Sentry from "@sentry/nextjs";
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
+import {
+  channelHostSuffix,
+  currentChannel,
+  hostForChannel,
+  sessionCookieOptions,
+  STABLE_CHANNEL
+} from "@/utils/channels";
 export const updateSession = async (request: NextRequest) => {
   try {
     // Create a new Headers object to inject validated user ID
@@ -17,6 +24,11 @@ export const updateSession = async (request: NextRequest) => {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
+        // Cross-subdomain session: scope the auth cookies to the parent zone so a
+        // session survives a redirect between deployment-channel hosts. Derived
+        // from the channel host suffix; a no-op on local/supabase.com/single-channel
+        // installs (host-only cookies, unchanged). See utils/channels.ts.
+        ...sessionCookieOptions(),
         cookies: {
           getAll() {
             return request.cookies.getAll();
@@ -65,18 +77,79 @@ export const updateSession = async (request: NextRequest) => {
       }
     }
 
+    // A/B deployment channels: send each course to the host running its pinned
+    // channel's build (classes.deployment_channel). Entirely gated on
+    // NEXT_PUBLIC_CHANNEL_HOST_SUFFIX so deployments without channels (local,
+    // supabase.com, single-channel staging/prod) do ZERO extra work — no DB
+    // lookup. Only /course/<id> is course-scoped, so that's the only path where
+    // a channel can be resolved.
+    // Only GET navigations are safe to bounce cross-host: a 307/308 redirect
+    // replays method + body, so a Server Action POST would be re-issued to the
+    // channel host where Next.js's same-origin Origin check rejects it (a failed
+    // or duplicated mutation instead of a clean re-route). A page load that
+    // lands on the wrong host is always a GET, so gating on GET loses nothing.
+    if (channelHostSuffix() && claims?.data?.claims && request.method === "GET") {
+      const courseMatch = request.nextUrl.pathname.match(/^\/course\/(\d+)(?:\/|$)/);
+      if (courseMatch) {
+        const courseId = Number(courseMatch[1]);
+        const { data: cls, error: clsError } = await supabase
+          .from("classes")
+          .select("deployment_channel")
+          .eq("id", courseId)
+          .maybeSingle();
+        // Fail CLOSED: on a transient read error (statement timeout, pool
+        // exhaustion, RLS/role hiccup) we don't know the course's channel, so
+        // stay on the current host rather than falling back to "stable" — that
+        // fallback would bounce a canary user off the canary host mid-session
+        // (and back once the DB recovers), a visible flap. Log it so the glitch
+        // isn't silent.
+        if (clsError) {
+          Sentry.captureException(clsError, {
+            tags: { feature: "deployment-channels" },
+            extra: { courseId, currentChannel: currentChannel() }
+          });
+        } else {
+          const courseChannel = cls?.deployment_channel || STABLE_CHANNEL;
+          if (courseChannel !== currentChannel()) {
+            const targetHost = hostForChannel(courseChannel);
+            if (targetHost && targetHost !== request.nextUrl.host) {
+              const target = new URL(`${request.nextUrl.pathname}${request.nextUrl.search}`, `https://${targetHost}`);
+              return NextResponse.redirect(target);
+            }
+          }
+        }
+      }
+    }
+
     if (request.nextUrl.pathname === "/" && !claims.error && !!claims.data?.claims) {
       return NextResponse.redirect(new URL("/course", request.url));
     }
 
     return response;
-  } catch {
-    // If you are here, a Supabase client could not be created!
-    // This is likely because you have not set up environment variables.
-    // Check out http://localhost:3000 for Next Steps.
+  } catch (e) {
+    // If you are here, a Supabase client could not be created, or the claims/deployment-channel
+    // lookup threw. Historically that meant missing environment variables locally; in production
+    // it is a Supabase incident.
+    //
+    // Fail closed on IDENTITY. This path used to forward `request.headers` verbatim, skipping the
+    // sanitized copy built at the top of the try — so a client-supplied `X-User-ID` survived, and
+    // downstream layouts treat that header as an authenticated identity. It is resolved through a
+    // service-role client (lib/ssrUtils.ts), which means RLS does not catch it either. The header
+    // is only ever legitimate when we set it ourselves from a verified claim.
+    const safeHeaders = new Headers(request.headers);
+    safeHeaders.delete("X-User-ID");
+
+    // Deliberately not a 503. With the header stripped every /course consumer already redirects on
+    // a missing user id, so this degrades to the landing page. The matcher covers /sign-in, / and
+    // /api/*, so refusing outright would turn a transient Supabase blip into a total outage —
+    // including the page users would need next.
+    //
+    // Reported, too: this was a bare `catch {}`, so the exception was swallowed with no Sentry and
+    // no log, which is why nobody knew the path was ever taken.
+    Sentry.captureException(e, { tags: { feature: "middleware-session" } });
     return NextResponse.next({
       request: {
-        headers: request.headers
+        headers: safeHeaders
       }
     });
   }

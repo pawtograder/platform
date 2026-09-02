@@ -2,11 +2,59 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
 import { AutograderCreateReposForStudentRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, isUserInOrg, reinviteToOrgTeam, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import {
+  createRepo,
+  isUserInOrg,
+  NonRetryableRepoError,
+  reinviteToOrgTeam,
+  syncRepoPermissions
+} from "../_shared/GitHubWrapper.ts";
 import { isServiceRoleRequest, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import {
+  resolveRepoCreationStrategy,
+  type AssignmentForRepoCreation,
+  type SourceRepoRow
+} from "../_shared/repoCreationStrategy.ts";
+import type { BranchProtectionConfig } from "../_shared/branchProtection.ts";
+
+function branchProtectionFromAssignment(a: {
+  protect_block_force_push?: boolean | null;
+  protect_require_pull_request?: boolean | null;
+  protect_required_reviewers?: number | null;
+}): BranchProtectionConfig {
+  return {
+    blockForcePush: a.protect_block_force_push ?? true,
+    requirePullRequest: a.protect_require_pull_request ?? false,
+    requiredReviewers: a.protect_required_reviewers ?? 0
+  };
+}
+
+async function fetchSourceAssignmentRepos(
+  adminSupabase: ReturnType<typeof createClient<Database>>,
+  assignment: { repo_mode?: string | null; source_assignment_id?: number | null }
+): Promise<SourceRepoRow[]> {
+  if (assignment.repo_mode !== "fork_from_prior_assignment" || !assignment.source_assignment_id) {
+    return [];
+  }
+  const { data, error } = await adminSupabase
+    .from("repositories")
+    .select("repository, profile_id, assignment_group_id, assignment_groups(name)")
+    .eq("assignment_id", assignment.source_assignment_id)
+    .limit(2000);
+  if (error) {
+    throw new Error(`Error fetching source assignment repositories: ${error.message}`);
+  }
+  return (data ?? []).map((r) => ({
+    repository: r.repository,
+    profile_id: r.profile_id,
+    assignment_group_id: r.assignment_group_id,
+    group_name: r.assignment_groups?.name ?? null
+  }));
+}
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-create-repos-for-student");
@@ -280,13 +328,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           level: "info"
         });
 
+        // reinviteToOrgTeam returns true when it dispatched a fresh org invite (the user is now a
+        // PENDING member) and false when the user is already an active org/team member (in which case
+        // it has already marked the role org-confirmed). Track the intended github_org_confirmed value
+        // so we don't clobber an already-confirmed member back to unconfirmed. null => leave the row
+        // untouched (fatal error), so the student stays eligible for the invitation_date IS NULL backstop.
+        let orgConfirmed: boolean | null = null;
         try {
-          await reinviteToOrgTeam(c.classes.github_org!, c.classes.slug! + "-students", githubUsername!);
+          const inviteSent = await reinviteToOrgTeam(
+            c.classes.github_org!,
+            c.classes.slug! + "-students",
+            githubUsername!,
+            undefined,
+            { userId }
+          );
+          // fresh invite dispatched => pending (false); already a member => confirmed (true).
+          orgConfirmed = !inviteSent;
         } catch (error) {
           // Check if this is a non-fatal error (HTTP 422 - pending invite)
           const isNonFatalError = error && typeof error === "object" && "status" in error && error.status === 422;
 
           if (isNonFatalError) {
+            // A pending invite already exists (HTTP 422) — a sent invite awaiting acceptance: pending.
+            orgConfirmed = false;
             console.log(`Non-fatal error inviting user ${githubUsername} to org ${c.classes.github_org}: ${error}`);
             Sentry.addBreadcrumb({
               category: "autograder-create-repos-for-student",
@@ -295,7 +359,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               data: { error: error.message || String(error) }
             });
           } else {
-            // Log fatal errors to Sentry
+            // Fatal error: leave user_roles untouched so the student stays eligible for automatic
+            // re-invite (autograder-sync-student-team filters on invitation_date IS NULL).
             console.error(`Fatal error inviting user ${githubUsername} to org ${c.classes.github_org}:`, error);
             Sentry.captureException(error, {
               tags: {
@@ -309,11 +374,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               }
             });
           }
-        } finally {
-          // Always update user_roles to persist invitation_date regardless of reinvite outcome
+        }
+        // Persist only when we invited or confirmed membership. Stamp invitation_date in both cases
+        // (an invite was sent, or the user is already a member) so the student isn't re-picked by the
+        // invitation_date IS NULL backstop; a fatal failure leaves the row untouched for retry.
+        if (orgConfirmed !== null) {
           await adminSupabase
             .from("user_roles")
-            .update({ github_org_confirmed: false, invitation_date: new Date().toISOString() })
+            .update({ github_org_confirmed: orgConfirmed, invitation_date: new Date().toISOString() })
             .eq("class_id", c.class_id)
             .eq("user_id", userId);
         }
@@ -353,6 +421,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
   const assignments = allAssignments.filter(
     (a) =>
+      a.repo_mode !== "none" &&
+      a.repo_mode !== "no_submission" &&
       a.template_repo?.includes("/") &&
       ((a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
         a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader")) &&
@@ -379,6 +449,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         console.log(
           `repoName: ${repoName}, template_repo: '${assignment.template_repo}', groupMembership: ${JSON.stringify(groupMembership, null, 2)}, existingRepos: ${JSON.stringify(groupMembership.assignment_groups.repositories, null, 2)}`
         );
+        // Row id of the `repositories` row this iteration is provisioning, used by the
+        // readiness update below. Resolved from the pre-existing row when there is one,
+        // or from the insert when we create it — never reconstructed from `group.name`,
+        // which changes when a group is renamed while `repositories.repository` keeps
+        // the name it was created with.
+        let repoRowId: number | undefined = groupMembership.assignment_groups.repositories[0]?.id;
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
           console.log("Creating repo");
@@ -404,22 +480,99 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             console.error(error);
             throw new UserVisibleError(`Error creating repo: ${error}`);
           }
+          repoRowId = dbRepo!.id;
           try {
-            const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
-            await adminSupabase
-              .from("repositories")
-              .update({
-                synced_repo_sha: headSha || null
+            const sourceRepos = await fetchSourceAssignmentRepos(adminSupabase, assignment);
+            const strategy = resolveRepoCreationStrategy(
+              {
+                id: assignment.id,
+                repo_mode: assignment.repo_mode ?? "template_only_staff",
+                template_repo: assignment.template_repo,
+                source_assignment_id: assignment.source_assignment_id
+              } as AssignmentForRepoCreation,
+              {
+                assignment_group_id: group.id,
+                group_name: group.name,
+                display_name: group.name
+              },
+              sourceRepos
+            );
+            if (strategy.kind !== "create") {
+              throw new UserVisibleError(
+                `Cannot create group repo: ${strategy.kind === "skip" && strategy.reason === "missing_source" ? strategy.error : strategy.kind}`
+              );
+            }
+            // E2E fixtures must never hit real GitHub. Skip createRepo + syncRepoPermissions and mark
+            // the row ready with a fake SHA so the fixture repo doesn't sit stuck (no webhook will
+            // arrive to flip is_github_ready). Stub-record tests still fall through.
+            if (
+              shouldSkipRealGithubForE2eFixture({
+                org: c.classes!.github_org,
+                courseSlug: c.classes!.slug,
+                repoName
               })
+            ) {
+              await adminSupabase
+                .from("repositories")
+                .update({ synced_repo_sha: `e2e-skip-${repoName}`, is_github_ready: true })
+                .eq("id", dbRepo!.id);
+              return assignment;
+            }
+            const headSha = await createRepo(c.classes!.github_org!, repoName, strategy.sourceRepo, {
+              creation_method: strategy.creationMethod,
+              branch_protection: branchProtectionFromAssignment(assignment)
+            });
+            // Sync permissions and mark ready HERE. This branch returns below without
+            // reaching the existing-repo sync further down, so deferring the flag to
+            // that point left every newly created group repo at is_github_ready=false
+            // — and the push-direct submission path skips unready repos, so the
+            // group's real pushes would be ignored until a reconciler happened to fix
+            // it. Sync first, then flag: a permission failure must leave the row
+            // unready, because the reconciler only repairs is_github_ready=false rows.
+            await syncRepoPermissions(
+              c.classes!.github_org!,
+              repoName,
+              c.classes!.slug!,
+              group.assignment_groups_members
+                .filter((m) => m.user_roles)
+                .filter((m) => m.user_roles.users.github_username)
+                .map((m) => m.user_roles.users.github_username!),
+              scope
+            );
+            // ONE checked write for both fields. They were two writes, and the first was
+            // unchecked: if it failed transiently the row still became ready, so the reconciler —
+            // which only requeues unready rows — would never revisit it, leaving synced_repo_sha
+            // null and later handout syncs with no repo-side merge base. Readiness must not be
+            // able to outlive the sha it is supposed to accompany.
+            const { error: readyError } = await adminSupabase
+              .from("repositories")
+              .update({ synced_repo_sha: headSha || null, is_github_ready: true })
               .eq("id", dbRepo!.id);
-            if (error) {
-              console.error(error);
-              throw new UserVisibleError(`Error creating repo: ${error}`);
+            if (readyError) {
+              // Propagate, as the individual-repo branch does. Logging alone let this
+              // callback return and the whole function report is_ok, while the row stayed
+              // is_github_ready=false — so the push-direct guard acknowledged and
+              // discarded every group push until the reconciler repaired it, with no
+              // replay of what was lost.
+              console.error(readyError);
+              Sentry.captureException(readyError, scope);
+              throw new UserVisibleError(
+                `Group repository ${repoName} was created but could not be marked ready ` +
+                  `(${readyError.message}). Please retry: pushes to it would not be recorded until this is fixed.`
+              );
             }
           } catch (e) {
             console.log(`Error creating repo: ${repoName}`);
             console.error(e);
-            await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+            // Keep the row (is_github_ready stays false) instead of deleting it: deleting only the DB
+            // row orphans a possibly-blank GitHub repo, which the next attempt would then adopt.
+            // ONLY a terminal (non-retryable) failure records creation_error — that parks the row and
+            // surfaces it to the instructor, because the reconciler deliberately skips rows with a
+            // creation_error. A transient failure leaves creation_error NULL so the 15-minute
+            // reconciler + self-healing createRepo can auto-repair it.
+            if (e instanceof NonRetryableRepoError) {
+              await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo!.id);
+            }
             errorMessages.push(
               `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
             );
@@ -438,9 +591,78 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .map((m) => m.user_roles.users.github_username!),
             scope
           );
+          // Only NOW is the repo genuinely usable: it exists and its members can
+          // reach it. Consumers that gate on is_github_ready (including the
+          // push-direct submission path for no-autograder assignments) depend on
+          // that meaning.
+          //
+          // Keyed on the row id and with `.select()` so a zero-row match is reported:
+          // a bare `.update()` returns error=null when nothing matched, which would
+          // leave the repo permanently unusable with no signal.
+          if (repoRowId === undefined) {
+            const err = new Error(
+              `Could not resolve the repositories row for ${c.classes!.github_org!}/${repoName} (assignment ${assignment.id}); is_github_ready not set`
+            );
+            console.error(err);
+            Sentry.captureException(err, scope);
+          } else {
+            // Only promote a row whose repo is known to be FULLY created. This branch runs for
+            // an EXISTING is_github_ready=false row, and permission sync can succeed against a
+            // repository a previous attempt created but never finished — one whose contents or
+            // synced_repo_sha were never recorded. Marking that ready is worse than leaving it
+            // alone: is_github_ready=false is exactly what makes the reconciler requeue it, so
+            // promoting suppresses the only thing that would finish the job, while opening the
+            // repo to push-direct ingestion in its incomplete state. synced_repo_sha is written
+            // immediately after createRepo, so its presence is the signal that creation
+            // completed.
+            //
+            // Scoped by that column in the UPDATE itself rather than checked first, so a
+            // concurrent creation finishing in between cannot slip through the gap.
+            const { data: readyRows, error: readyError } = await adminSupabase
+              .from("repositories")
+              .update({ is_github_ready: true })
+              .eq("id", repoRowId)
+              .not("synced_repo_sha", "is", null)
+              .select("id");
+            if (!readyError && (readyRows ?? []).length === 0) {
+              // Distinguishable from a failure: the row exists, it just is not finished. Leave
+              // it unready so the creation worker picks it up, and do NOT report an error to
+              // the student — nothing is wrong yet.
+              const { data: pendingRow } = await adminSupabase
+                .from("repositories")
+                .select("id, synced_repo_sha")
+                .eq("id", repoRowId)
+                .maybeSingle();
+              if (pendingRow && pendingRow.synced_repo_sha === null) {
+                scope?.setTag("repo_not_promoted_incomplete_creation", String(repoRowId));
+                console.log(
+                  `Not marking ${repoName} ready: creation has not completed (synced_repo_sha is null). ` +
+                    `Leaving it for the creation worker.`
+                );
+                return assignment;
+              }
+            }
+            if (readyError || (readyRows ?? []).length === 0) {
+              const failure =
+                readyError ?? new Error(`No repositories row matched id=${repoRowId} when marking it ready`);
+              console.error(failure);
+              Sentry.captureException(failure, scope);
+              // Propagate, as the newly-created branch does. This branch is reached after
+              // permissions have just been repaired on an EXISTING is_github_ready=false
+              // row, so logging alone reported success while the row stayed unready — and
+              // the push-direct guard then acknowledged and discarded every push to it
+              // until a reconciler run, with no replay of what was lost. Throwing lands in
+              // the catch below, which keeps the row unready for the reconciler and tells
+              // the student to retry.
+              throw new Error(
+                `${repoName} could not be marked ready (${failure.message}); pushes to it would not be recorded`
+              );
+            }
+          }
         } catch (e) {
           console.log(`Error syncing repo permissions: ${repoName}`);
           console.error(e);
+          // is_github_ready stays false so the 15-minute reconciler retries.
           errorMessages.push(
             `Error syncing repo permissions: ${repoName}, please ask your instructor to check that this is configured correctly.`
           );
@@ -498,23 +720,70 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       try {
+        const sourceRepos = await fetchSourceAssignmentRepos(adminSupabase, assignment);
+        const strategy = resolveRepoCreationStrategy(
+          {
+            id: assignment.id,
+            repo_mode: assignment.repo_mode ?? "template_only_staff",
+            template_repo: assignment.template_repo,
+            source_assignment_id: assignment.source_assignment_id
+          } as AssignmentForRepoCreation,
+          { profile_id: userProfileID, display_name: githubUsername! },
+          sourceRepos
+        );
+        if (strategy.kind !== "create") {
+          throw new UserVisibleError(
+            `Cannot create individual repo: ${strategy.kind === "skip" && strategy.reason === "missing_source" ? strategy.error : strategy.kind}`
+          );
+        }
         // Demo provisioning can override the per-student template repo so each real-fleet
         // member starts from a canned submission rather than the blank handout. Already
         // gated above to (edge-secret OR service-role) + matching assignment_id.
         const sourceTemplateRepo =
           templateRepoOverride && assignmentId !== undefined && assignment.id === assignmentId
             ? templateRepoOverride
-            : assignment.template_repo;
-        const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, sourceTemplateRepo);
+            : strategy.sourceRepo;
+        // E2E fixtures must never hit real GitHub (see group-repo path above).
+        if (shouldSkipRealGithubForE2eFixture({ org: assignment.classes!.github_org, courseSlug, repoName })) {
+          await adminSupabase
+            .from("repositories")
+            .update({
+              synced_repo_sha: `e2e-skip-${repoName}`,
+              synced_handout_sha: assignment.latest_template_sha,
+              is_github_ready: true
+            })
+            .eq("id", dbRepo!.id);
+          return `e2e-skip-${repoName}`;
+        }
+        const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, sourceTemplateRepo, {
+          creation_method: strategy.creationMethod,
+          branch_protection: branchProtectionFromAssignment(assignment)
+        });
         console.log(`courseSlug: ${courseSlug}`);
         await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
-        await adminSupabase
+        const { error: readyError } = await adminSupabase
           .from("repositories")
           .update({
             synced_repo_sha: new_repo_sha,
-            synced_handout_sha: assignment.latest_template_sha
+            synced_handout_sha: assignment.latest_template_sha,
+            // See the group-repo path above: createRepo + syncRepoPermissions have
+            // both succeeded, so mark the row ready rather than leaving it for a
+            // later reconciler.
+            is_github_ready: true
           })
           .eq("id", dbRepo!.id);
+        if (readyError) {
+          // Do NOT report success: the repo exists on GitHub but the row still reads
+          // is_github_ready=false, and the push-direct webhook guard skips unready
+          // repos — so student pushes would be acknowledged and discarded until the
+          // periodic reconciler repairs the row, with no replay of what was lost.
+          console.error(readyError);
+          Sentry.captureException(readyError, scope);
+          throw new UserVisibleError(
+            `Repository ${repoName} was created but could not be marked ready (${readyError.message}). ` +
+              `Please retry: pushes to it would not be recorded until this is fixed.`
+          );
+        }
 
         return new_repo_sha;
       } catch (e) {
@@ -522,7 +791,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
         );
         console.error(e);
-        await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+        // Keep the row rather than deleting it (see group-repo path above): deleting orphans a
+        // possibly-blank GitHub repo and hides the pending state. Only a terminal (non-retryable)
+        // failure records creation_error to park the row for an instructor; a transient failure
+        // leaves creation_error NULL so the reconciler + self-healing createRepo can auto-repair it.
+        if (e instanceof NonRetryableRepoError) {
+          await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo!.id);
+        }
       }
     });
   await Promise.all(requests);

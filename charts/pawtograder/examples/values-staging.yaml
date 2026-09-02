@@ -20,6 +20,9 @@
 #     on s3.talos.ripley.cloud, with creds in pawtograder-s3.
 
 global:
+  # Activates staging-tier guard rails: refuses secrets.create and
+  # migrations.resetOnDrift at render time (see templates/validations.yaml).
+  environment: staging
   hostname: staging.pawtograder.net
   apiOnSeparateHost: true
   imageRegistry: ""
@@ -44,6 +47,34 @@ ingress:
   tls:
     enabled: true
     secretName: pawtograder-staging-tls
+
+# ----- A/B deployment channel: canary lane ----------------------------------
+# Standing canary channel served at canary.staging.pawtograder.net (its own web
+# + edge-functions build) against the SAME staging data plane. Courses opt in
+# via classes.deployment_channel='canary'; the stable web middleware then
+# redirects those courses here and shares the session cookie across the two
+# hosts. That redirect is baked into the stable image at build time from the
+# CHANNEL_HOST_SUFFIX Actions variable (set on the repo) — without it, stable
+# ignores channels and this lane is simply unreachable via redirect.
+#
+# Pin to a known-good canary tag, NOT canary-latest: the staging auto-deploy
+# (release-images.yml deploy-staging) runs `helm upgrade --wait`, which blocks
+# on these channel pods too, so a broken canary image would turn an ordinary
+# staging deploy red. Roll the canary forward by bumping this pin in a PR.
+channels:
+  - name: canary
+    web:
+      image:
+        tag: canary-055b7e2
+      replicas: 1
+    edgeFunctions:
+      image:
+        tag: canary-055b7e2
+      replicas: 1
+
+# Reflected *.staging.pawtograder.net wildcard cert (cert-manager Certificate
+# `staging-wildcard` in this namespace) — covers every channel host.
+channelWildcardTlsSecret: staging-wildcard-tls
 
 # Secrets come from ExternalSecrets synced out of OpenBao
 # (kv/apps/pawtograder-staging/*). Bootstrap with:
@@ -84,6 +115,30 @@ postgres:
       # (max_connections × per-backend work_mem + shared_buffers +
       # maintenance_work_mem) without burning the whole node.
       memory: 16Gi
+
+  # WAL-G continuous archiving → PITR (recover to any second in the retention
+  # window, not just the nightly dump). Reuses pawtograder-s3 (Ceph at
+  # s3.talos.ripley.cloud); keep the walg prefix DISTINCT from the nightly-dump
+  # bucket path. See docs/operations/point-in-time-recovery.md.
+  walg:
+    enabled: true
+    s3Prefix: s3://pawtograder-staging-backups/walg
+    s3Endpoint: https://s3.talos.ripley.cloud
+    region: us-east-1
+    forcePathStyle: true
+    baseBackup:
+      intervalHours: 24
+      keepBackups: 8   # ~8 days of PITR window
+
+  # Streaming standby replica: warm failover target + read scaling. local-path
+  # is fine (own volume on another node); spreadAcrossNodes keeps it off the
+  # primary's node. Failover is MANUAL — see the PITR runbook.
+  replica:
+    enabled: true
+    replicas: 1
+    persistence:
+      storageClass: local-path
+      size: 100Gi
 
 # ----- Stateless tier: HA-ish, generous resource ceilings ------------------
 auth:
@@ -165,7 +220,14 @@ edgeFunctions:
   # spreads ~1 request/isolate. Together: lifecycle (EarlyDrop) + isolation +
   # capacity = the supabase.com-style resilience.
   policy: per_request
-  maxParallelism: 16
+  # 8, not 16: under per_request this is the cap on concurrent isolates per pod, and each isolate is
+  # admitted with its own memory budget. maxParallelism x worker.memoryLimitMb is what the runtime
+  # will admit and nothing enforces it, so once it exceeds the container limit the kernel OOM-kills
+  # PID 1 and every in-flight request dies at once (Kong then reports 502). At 8 x 256 MiB against
+  # the 4Gi limit set below the budget is 50%, which leaves a burst somewhere to go; 16 would have
+  # admitted the whole limit. Keep maxParallelism, worker.memoryLimitMb and resources.limits.memory
+  # consistent if you change any of them.
+  maxParallelism: 8
   autoscaling:
     enabled: true
     minReplicas: 12
@@ -198,6 +260,15 @@ edgeFunctions:
     # (_shared/HandlerUtils.ts). The secret also carries the frontend
     # NEXT_PUBLIC_BUGSINK_* keys, which are inert in the Deno runtime.
     - pawtograder-sentry
+    # The same Secret GoTrue uses. Without it SMTP_HOST is simply unset in the functions
+    # environment, which is why notification email never sent: the processor read "no SMTP host"
+    # as "no work found" and deferred the queue indefinitely, with no error anywhere.
+    # Note this Secret provides SMTP_PASS and SMTP_ADMIN_EMAIL; emailTransportConfig.ts accepts
+    # those names as well as the older SMTP_PASSWORD / SMTP_FROM.
+    - pawtograder-smtp
+  email:
+    # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
+    enabled: "true"
   e2e:
     enabled: true
     mockGitHub: true
@@ -218,6 +289,18 @@ web:
     - pawtograder-canvas
     - pawtograder-llm
     - pawtograder-sentry
+  # ----- Skinning demo: staging runs as "PawtograderNext" --------------------
+  # Demonstrates the chart's deployment-skinning support. These plain env vars
+  # are read server-side by the web app at request time (lib/branding.ts), so
+  # the SAME ghcr.io/pawtograder/web image is re-branded with no rebuild. The
+  # teal accent + distinct name make staging instantly recognizable vs prod.
+  # Logos keep the bundled defaults here; point logoLight/logoDark at an
+  # absolute https:// URL to swap artwork too.
+  branding:
+    name: "PawtograderNext"
+    description: "PawtograderNext — the next generation of Pawtograder course operations"
+    tagline: "The next generation of your pawsome course companion"
+    colorPalette: "teal"
   # Multiple web replicas → leader flag stays off; if you need workflow
   # metrics on staging, drop web.replicas to 1 and flip this true (see
   # values-preview.yaml for the pattern).
@@ -309,3 +392,10 @@ backup:
 # unauthed (no METRICS_TOKEN set) and is the rate-limiting metrics source.
 monitoring:
   enabled: true
+  # Match the ripley kube-prometheus-stack release name so its ruleSelector
+  # picks up the PrometheusRule the chart ships (backup / ESO / cert alerts).
+  # kps on ripley uses an empty ruleSelector today (matches all), but set the
+  # label explicitly so it keeps working if that selector is ever tightened.
+  prometheusRules:
+    labels:
+      release: kps

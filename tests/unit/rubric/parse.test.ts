@@ -168,7 +168,7 @@ describe("YamlPartsToHydratedParts", () => {
 
 describe("YamlRubricToHydratedRubric", () => {
   it("builds a hydrated rubric with empty parts", () => {
-    const hydrated = YamlRubricToHydratedRubric(
+    const { rubric: hydrated } = YamlRubricToHydratedRubric(
       { name: "Empty", parts: [] },
       { assignment_id: 5, is_private: false, review_round: "self-review" }
     );
@@ -188,7 +188,7 @@ describe("YamlRubricToHydratedRubric", () => {
       "assign_to_student"
     ] as const) {
       const yaml = loadFixtureAsYaml(name);
-      const hydrated = YamlRubricToHydratedRubric(yaml, {
+      const { rubric: hydrated } = YamlRubricToHydratedRubric(yaml, {
         assignment_id: 1,
         is_private: false,
         review_round: "grading-review"
@@ -196,5 +196,58 @@ describe("YamlRubricToHydratedRubric", () => {
       expect(hydrated.name).toBe(yaml.name);
       expect(hydrated.rubric_parts.length).toBe(yaml.parts.length);
     }
+  });
+});
+
+// The YAML path used to absolutize negative points and DISCARD the warnings, so `-5` was persisted
+// as `+5` with no notice anywhere: the editor's second sanitize call ran on already-absolutized
+// values, making its warnings list structurally always empty. Pin the contract that warnings reach
+// the caller.
+describe("YamlRubricToHydratedRubric — negative points", () => {
+  const ctx = { assignment_id: 1, is_private: false, review_round: "grading-review" } as const;
+
+  it("returns no warnings for a clean rubric", () => {
+    const { warnings } = YamlRubricToHydratedRubric({ name: "Clean", parts: [makePart()] }, { ...ctx });
+    expect(warnings).toEqual([]);
+  });
+
+  it("absolutizes a negative check points value AND reports its path", () => {
+    const { rubric, warnings } = YamlRubricToHydratedRubric(
+      {
+        name: "Negative check",
+        parts: [makePart({ criteria: [makeCriteria({ checks: [makeCheck({ points: -5 })] })] })]
+      },
+      { ...ctx }
+    );
+
+    expect(rubric.rubric_parts[0].rubric_criteria![0].rubric_checks![0].points).toBe(5);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0].path).toContain("points");
+  });
+
+  it("reports a negative criterion total_points", () => {
+    const { rubric, warnings } = YamlRubricToHydratedRubric(
+      { name: "Negative total", parts: [makePart({ criteria: [makeCriteria({ total_points: -10 })] })] },
+      { ...ctx }
+    );
+
+    expect(rubric.rubric_parts[0].rubric_criteria![0].total_points).toBe(10);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it("reports every offending path, not just the first", () => {
+    const { warnings } = YamlRubricToHydratedRubric(
+      {
+        name: "Several",
+        parts: [
+          makePart({
+            criteria: [makeCriteria({ checks: [makeCheck({ points: -1 }), makeCheck({ name: "B", points: -2 })] })]
+          })
+        ]
+      },
+      { ...ctx }
+    );
+
+    expect(warnings.length).toBe(2);
   });
 });

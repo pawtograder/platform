@@ -1,0 +1,105 @@
+{{- /*
+Render-time guard rails. This template emits no resources — it exists to
+`fail` a render whose values combination would be dangerous. Severity is
+keyed off global.environment (dev | preview | staging | production):
+
+  any env      — workflowMetricsLeader on multi-replica web (over-counts
+                 gauges + multiplies DB load); Studio ingress without an
+                 auth layer (full DB control behind a bare URL).
+  staging+prod — secrets.create (plaintext key material in helm release
+                 history); migrations.resetOnDrift (wipes schema public +
+                 auth.users + vault.secrets and replays from scratch —
+                 destroys ALL data; only ephemeral dev/preview may opt in,
+                 and migrate.sh independently re-checks the tier at runtime).
+  production   — e2e bypasses (privileged test paths), secrets.autogenerate
+                 (non-recoverable keys), seed.enabled (demo data), floating
+                 or empty image tags (irreproducible / appVersion-fallback
+                 deploys), empty postgres storageClass (cluster default may
+                 be node-local).
+*/ -}}
+{{- $env := .Values.global.environment | default "dev" -}}
+{{- if not (has $env (list "dev" "preview" "staging" "production")) -}}
+{{- fail (printf "global.environment must be one of dev|preview|staging|production (got %q)" $env) -}}
+{{- end -}}
+
+{{- if and .Values.web.enabled .Values.web.workflowMetricsLeader (gt (int .Values.web.replicas) 1) -}}
+{{- fail "web.workflowMetricsLeader requires web.replicas=1 — every leader replica refreshes the DB-backed workflow gauges on each scrape, multiplying DB load and over-counting. Run a dedicated 1-replica metrics leader instead (see values.yaml)." -}}
+{{- end -}}
+
+{{- if and .Values.studio.enabled .Values.studio.ingressEnabled (not .Values.studio.basicAuth.enabled) (not .Values.studio.allowUnauthenticatedIngress) -}}
+{{- fail "studio.ingressEnabled=true without studio.basicAuth.enabled exposes full database control to anyone with the URL. Enable basic-auth, or set studio.allowUnauthenticatedIngress=true to confirm another auth layer (VPN / oauth2-proxy / IP allowlist) fronts this host." -}}
+{{- end -}}
+
+{{- /*
+Monitoring with an externally managed database. Every DB-derived series the chart
+ships comes from the postgres_exporter SIDECAR in the chart-managed Postgres
+StatefulSet, so postgres.enabled=false leaves no collector at all — and the
+`metrics` edge function no longer gathers them, because scraping it once per
+functions pod (32 replicas in prod) cost 77.7% of all database execution time.
+The PawtograderPostgresExporter* self-health rules are gated on postgres.enabled
+too, so nothing would even report the absence. Fail loudly here rather than
+degrade silently.
+
+Guarded any-environment, not just staging/production: this is a configuration
+that does not WORK, like postgres.replica without walg above, rather than one
+that is merely risky in a durable tier. It also cannot fire by accident — it
+needs monitoring.enabled=true (default false) AND postgres.enabled=false
+(default true), both deliberate.
+
+Acknowledgement rather than a hard fail, following studio.allowUnauthenticatedIngress:
+running your own exporter against the external DB is a legitimate setup the chart
+cannot detect.
+*/ -}}
+{{- if and .Values.monitoring.enabled (not .Values.postgres.enabled) (not .Values.monitoring.externalPostgresExporter) -}}
+{{- fail "monitoring.enabled=true with postgres.enabled=false ships NO database metrics collector. pawtograder_vacuum_alert, pawtograder_db_buffer_cache*, pawtograder_db_dead_tuples, pawtograder_db_connections_*, pawtograder_table_sizes_*, pawtograder_replication_*, pawtograder_wal_archiving_* and pg_stat_statements_top all come from the postgres_exporter sidecar inside the chart-managed Postgres StatefulSet, which this mode does not deploy; the metrics edge function no longer collects them either. The PawtograderPostgresExporterQueryFailing/Down alerts are skipped under the same condition, so the absence would be silent. Point your own postgres_exporter at the external database (the queries.yaml ConfigMap still renders, so you can mount it and keep the same metric names), add a ServiceMonitor for it, then set monitoring.externalPostgresExporter=true to confirm. Set monitoring.enabled=false if you do not want DB metrics." -}}
+{{- end -}}
+
+{{- if and .Values.postgres.replica.enabled (not .Values.postgres.walg.enabled) -}}
+{{- fail "postgres.replica.enabled=true requires postgres.walg.enabled=true — the standby uses `wal-g wal-fetch` as its archive fallback when it falls behind the primary's retained pg_wal, and shares the WAL-G config. Enable postgres.walg first." -}}
+{{- end -}}
+
+{{- if has $env (list "staging" "production") -}}
+{{- if .Values.secrets.create -}}
+{{- fail (printf "secrets.create=true renders plaintext secret material into the Helm release (values, history, GitOps repo) — not allowed when global.environment=%s. Use ESO / sealed-secrets / pre-created Secrets." $env) -}}
+{{- end -}}
+{{- if .Values.migrations.resetOnDrift -}}
+{{- fail (printf "migrations.resetOnDrift=true drops schema public and replays migrations from scratch — DESTROYS ALL APPLICATION DATA. Not allowed when global.environment=%s; fix the drifted migration instead." $env) -}}
+{{- end -}}
+{{- if and .Values.postgres.walg.enabled (not .Values.postgres.walg.baseBackup.enabled) -}}
+{{- fail (printf "postgres.walg.enabled=true with postgres.walg.baseBackup.enabled=false ships WAL to S3 forever (archive_command) but never takes a base backup or prunes WAL — S3 grows unbounded and PITR silently cannot restore (wal-g backup-fetch finds no base backup). Not allowed when global.environment=%s. Enable baseBackup, or disable walg." $env) -}}
+{{- end -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled (not .Values.monitoring.prometheusRules.labels) (not .Values.monitoring.prometheusRules.allowUnselectedRules) -}}
+{{- fail (printf "monitoring.prometheusRules.enabled=true with an empty monitoring.prometheusRules.labels ships a PrometheusRule the cluster Prometheus never loads — kube-prometheus-stack's ruleSelector matches `release: <name>`, so with no matching label every backup/ESO/cert alert is inert. Not allowed when global.environment=%s. Set monitoring.prometheusRules.labels to your cluster's ruleSelector (e.g. { release: kube-prometheus-stack }), or set monitoring.prometheusRules.allowUnselectedRules=true to confirm your Prometheus selects all rules." $env) -}}
+{{- end -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled (not .Values.monitoring.prometheusRules.allowUnselectedRules) -}}
+{{- range $k, $v := .Values.monitoring.prometheusRules.labels -}}
+{{- if not $v -}}
+{{- fail (printf "monitoring.prometheusRules.labels.%s is empty — a blank label value matches no ruleSelector, so every shipped alert is silently inert (same failure as leaving labels unset, but it passes the empty-map check). Fill in the value (e.g. %s: kube-prometheus-stack). Not allowed when global.environment=%s." $k $k $env) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- if eq $env "production" -}}
+{{- if or .Values.web.e2e.enabled .Values.edgeFunctions.e2e.enabled .Values.edgeFunctions.e2e.mockGitHub -}}
+{{- fail "web.e2e.enabled / edgeFunctions.e2e.* enable privileged test-only code paths (CSP report-only, e2e helper endpoints, mocked GitHub) — never in production." -}}
+{{- end -}}
+{{- if .Values.secrets.autogenerate -}}
+{{- fail "secrets.autogenerate=true generates non-recoverable key material in-cluster — losing the namespace loses every key (and all encrypted data with it). Production must use ESO / sealed-secrets with keys escrowed in the secret store." -}}
+{{- end -}}
+{{- if .Values.seed.enabled -}}
+{{- fail "seed.enabled=true loads demo classes and canned auth users — never in production." -}}
+{{- end -}}
+{{- range $name, $img := dict "web" .Values.web.image "edgeFunctions" .Values.edgeFunctions.image "migrations" .Values.migrations.image -}}
+{{- $tag := $img.tag | default "" -}}
+{{- if or (eq $tag "latest") (hasSuffix "-latest" $tag) -}}
+{{- fail (printf "%s.image.tag=%q is a floating tag — production deploys must pin an immutable tag (vX.Y.Z or <branch>-<sha>) for traceability and rollback." $name $tag) -}}
+{{- end -}}
+{{- if not $tag -}}
+{{- fail (printf "%s.image.tag is empty — it would silently fall back to Chart.AppVersion (%q), deploying an image nobody chose. Production deploys must pin an immutable tag (vX.Y.Z or <branch>-<sha>)." $name $.Chart.AppVersion) -}}
+{{- end -}}
+{{- end -}}
+{{- if not .Values.postgres.persistence.storageClass -}}
+{{- fail "postgres.persistence.storageClass is empty — it would bind the database PVC to the cluster's DEFAULT StorageClass, which may be node-local (local-path): node loss = data loss. Production must name a replicated storage class explicitly (Ceph RBD, EBS, ...)." -}}
+{{- end -}}
+{{- end -}}

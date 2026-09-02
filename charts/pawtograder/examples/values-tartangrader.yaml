@@ -1,0 +1,56 @@
+# Example skin: "TartanGrader" — a Carnegie-Mellon-flavored rebrand.
+#
+# Demonstrates a FULL deployment skin (name + tagline + custom logos + favicon +
+# accent color) where the artwork is BAKED INTO the web image rather than hosted
+# externally. The referenced assets ship in the repo under
+# `public/branding/tartangrader-*` (served at /branding/*), so they are present
+# in any image built from this tree — no asset hosting required.
+#
+# Usage (layer on top of your real environment overlay):
+#   helm upgrade --install pawtograder ./charts/pawtograder \
+#     -n pawtograder-tartan --create-namespace \
+#     -f charts/pawtograder/examples/values-staging.yaml \
+#     -f charts/pawtograder/examples/values-tartangrader.yaml
+#
+# Branding is read from plain server-side env vars at request time
+# (lib/branding.ts), so the SAME published web image renders this skin purely
+# from these values — no rebuild needed once the assets are in the image.
+
+web:
+  branding:
+    name: "TartanGrader"
+    description: "TartanGrader — autograding woven for Carnegie Mellon Tartans"
+    tagline: "Grading, woven for Tartans"
+    # Baked-in assets (public/branding/*), NOT external URLs:
+    logoLight: "/branding/tartangrader-logo-light.png"
+    logoDark: "/branding/tartangrader-logo-dark.png"
+    favicon: "/branding/tartangrader-favicon.png"
+    # Carnegie Mellon cardinal red ≈ Chakra's "red" palette.
+    colorPalette: "red"
+    # Custom sign-in SSO buttons (replaces the default Microsoft-only button).
+    # Each provider listed here MUST also be enabled in GoTrue below (or via
+    # auth.external.{github,azure,discord}); otherwise the button errors on click.
+    ssoProviders:
+      - provider: google
+        label: "Continue with Google"
+        icon: google
+      - provider: azure
+        label: "Continue with Microsoft"
+        icon: microsoft
+        scopes: "email User.Read"
+      - provider: github
+        label: "Continue with GitHub"
+        icon: github
+
+# GoTrue must have each SSO provider enabled. github/azure use their first-class
+# blocks; google goes through the generic externalProviders list. Client id/secret
+# come from the pawtograder-web Secret (GOOGLE_OAUTH_CLIENT_ID/_SECRET, etc.).
+auth:
+  external:
+    github:
+      enabled: true
+    azure:
+      enabled: true
+  externalProviders:
+    - name: google
+      enabled: true

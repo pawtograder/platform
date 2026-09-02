@@ -2,7 +2,7 @@
 
 import { createClient } from "@/utils/supabase/client";
 import type { CodeSymbol } from "@/supabase/functions/_shared/CodeSymbolParser";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 export type SubmissionFileSymbols = {
   /** submission_file_id -> parsed symbols for that file. */
@@ -27,33 +27,37 @@ const EMPTY: SubmissionFileSymbols = {
 export function useSubmissionFileSymbols(submissionId: number | undefined): SubmissionFileSymbols {
   const [state, setState] = useState<SubmissionFileSymbols>(EMPTY);
 
-  const load = useCallback(async () => {
-    if (submissionId === undefined) {
-      setState({ symbolsByFileId: new Map(), indexedFileIds: new Set(), isLoading: false });
-      return;
-    }
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("submission_file_symbol_index")
-      .select("submission_file_id, symbols")
-      .eq("submission_id", submissionId);
-
-    const symbolsByFileId = new Map<number, CodeSymbol[]>();
-    const indexedFileIds = new Set<number>();
-    if (!error && data) {
-      for (const row of data) {
-        const symbols = (row.symbols as CodeSymbol[] | null) ?? [];
-        symbolsByFileId.set(row.submission_file_id, symbols);
-        indexedFileIds.add(row.submission_file_id);
-      }
-    }
-    setState({ symbolsByFileId, indexedFileIds, isLoading: false });
-  }, [submissionId]);
-
   useEffect(() => {
+    // Guard against a stale fetch: a slow request for a previous submissionId must not
+    // resolve after a newer one and clobber state with the wrong submission's symbols.
+    let cancelled = false;
     setState((prev) => ({ ...prev, isLoading: true }));
-    void load();
-  }, [load]);
+    void (async () => {
+      if (submissionId === undefined) {
+        if (!cancelled) setState({ symbolsByFileId: new Map(), indexedFileIds: new Set(), isLoading: false });
+        return;
+      }
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("submission_file_symbol_index")
+        .select("submission_file_id, symbols")
+        .eq("submission_id", submissionId);
+
+      const symbolsByFileId = new Map<number, CodeSymbol[]>();
+      const indexedFileIds = new Set<number>();
+      if (!error && data) {
+        for (const row of data) {
+          const symbols = (row.symbols as CodeSymbol[] | null) ?? [];
+          symbolsByFileId.set(row.submission_file_id, symbols);
+          indexedFileIds.add(row.submission_file_id);
+        }
+      }
+      if (!cancelled) setState({ symbolsByFileId, indexedFileIds, isLoading: false });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [submissionId]);
 
   return state;
 }

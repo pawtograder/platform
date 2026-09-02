@@ -1,9 +1,9 @@
 import { confirmEmailAction } from "@/app/actions";
 import { FormMessage, Message } from "@/components/form-message";
 import { SubmitButton } from "@/components/ui/submit-button";
-import Logo from "@/components/ui/logo";
+import AuthBrandHeader from "@/components/branding/auth-brand-header";
 import { createClient } from "@/utils/supabase/server";
-import { Box, Container, HStack, Heading, Separator, Stack, Text, VStack } from "@chakra-ui/react";
+import { Box, Container, HStack, Separator, Stack, Text } from "@chakra-ui/react";
 
 type SearchParams = Message & { token_hash?: string };
 export default async function ConfirmEmail(props: { searchParams: Promise<SearchParams> }) {
@@ -20,11 +20,7 @@ export default async function ConfirmEmail(props: { searchParams: Promise<Search
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>
       <Stack gap="6">
-        <VStack gap="2" textAlign="center" mt="4">
-          <Logo width={100} />
-          <Heading size="3xl">Pawtograder</Heading>
-          <Text color="fg.muted">Your pawsome course companion</Text>
-        </VStack>
+        <AuthBrandHeader />
 
         <HStack gap="6" w="100%">
           <Separator flex="1" />

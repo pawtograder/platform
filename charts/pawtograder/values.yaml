@@ -17,6 +17,27 @@
 # deployer's own repo). Keep this file generic.
 
 global:
+  # Deployment environment: dev | preview | staging | production.
+  # templates/validations.yaml keys guard rails off this — a `production`
+  # render refuses e2e bypasses, secrets.create/autogenerate, seeding,
+  # resetOnDrift, floating image tags, and unauthenticated Studio ingress;
+  # staging additionally refuses secrets.create and resetOnDrift. Every
+  # real overlay should declare this explicitly.
+  environment: dev
+
+  # Which branch / PR / CI run produced this deploy. Purely informational: the edge functions stamp
+  # these onto every Sentry event (supabase/functions/_shared/SentryContext.ts) so a record in the
+  # Bugsink "Dev" project can be attributed at a glance instead of by reading a hostname out of a URL
+  # tag. Set per-deploy from CI (`--set global.deploy.branch=...`); every field is optional and an
+  # empty one is simply omitted, so local `helm template` runs and hand-rolled installs need none of
+  # it.
+  deploy:
+    branch: ""
+    pr: ""
+    runId: ""
+    runAttempt: ""
+    commit: ""
+
   # Public hostname users hit. Used to construct site URLs, OAuth redirects,
   # and the JWT issuer claim. MUST match an ingress entry below.
   hostname: pawtograder.example.com
@@ -36,11 +57,108 @@ global:
   tolerations: []
   affinity: {}
 
+  # Default priorityClassName for every pod; per-component
+  # `<component>.priorityClassName` wins. The chart does not create
+  # PriorityClass resources — reference one your cluster defines.
+  priorityClassName: ""
+
+  # Baseline pod/container security contexts applied to every workload.
+  # A component that defines its own `podSecurityContext` /
+  # `containerSecurityContext` key overrides the global wholesale (set {}
+  # to opt out — see postgres, whose entrypoint must chown + su).
+  # Deliberately conservative: no runAsNonRoot/readOnlyRootFilesystem at
+  # the global level because the upstream images differ in what user they
+  # run as; tighten per component in your overlay where you've verified.
+  podSecurityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+
   # Pull secrets attached to every pod's ServiceAccount.
   imagePullSecrets: []
 
   # Common labels stamped onto every resource.
   commonLabels: {}
+
+# -----------------------------------------------------------------------------
+# PodDisruptionBudgets — one per multi-replica component (minAvailable: 1) so
+# drains / autoscaler events can't evict an entire tier at once. Single-replica
+# components are skipped (a PDB there blocks drains outright). Postgres gets
+# its own opt-in below (postgres.pdb) for the same reason.
+# -----------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+
+# -----------------------------------------------------------------------------
+# NetworkPolicies. When enabled:
+#   - default-deny ingress to every pod in the release
+#   - allow all traffic between pods of this release (incl. hook Jobs)
+#   - allow the ingress-controller namespace to reach web / kong / studio
+#   - allow the monitoring namespace to scrape any pod (when monitoring.enabled)
+# Egress is left unrestricted (edge functions + web talk to GitHub, Discord,
+# SMTP, LLM APIs, …). Requires a CNI that enforces NetworkPolicy (cilium,
+# calico, …) — with one that doesn't, the objects are inert.
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
+  # Selects the namespace your ingress controller runs in.
+  ingressControllerNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress-nginx
+  # Selects the namespace Prometheus scrapes from.
+  monitoringNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+  # Extra NetworkPolicyIngressRule entries appended to a release-wide allow
+  # policy (e.g. another namespace that consumes the API in-cluster).
+  extraIngressRules: []
+
+# -----------------------------------------------------------------------------
+# Deployment channels (A/B by course)
+# -----------------------------------------------------------------------------
+# Extra, concurrent web + edge-functions deployments running DIFFERENT image
+# tags against the SAME data plane (Postgres/auth/storage) as the stable
+# release. Each channel is served on its own single-label host
+# (<name>.<global.hostname>, a fixed pattern — the web middleware computes the
+# same host to drive its redirect, so there's no per-channel host override); the
+# app redirects each course to its channel's host based on the
+# classes.deployment_channel column, so one user can use stable + canary courses
+# in the same session. Kong routes a channel host's /functions/v1 to that
+# channel's functions; everything else is shared. Default empty = stable only,
+# no extra objects rendered.
+#
+# Channel image build args matter: the web image for a channel MUST be built with
+# NEXT_PUBLIC_PAWTOGRADER_CHANNEL=<name>, NEXT_PUBLIC_CHANNEL_HOST_SUFFIX set to
+# the zone, and its own channel host as NEXT_PUBLIC_PAWTOGRADER_WEB_URL (so
+# password-reset / signup-confirm / OAuth callbacks land on the channel host, not
+# stable), with the shared NEXT_PUBLIC_SUPABASE_URL — all NEXT_PUBLIC_* bake at
+# build time (see .github/workflows/release-images.yml `channel` input). Channel
+# code must be schema-compatible with the shared DB (expand/contract migrations
+# only). A web/edgeFunctions block without its own image.tag, and an edgeFunctions
+# block without a web block, both fail the render (see *-channels.yaml).
+channels: []
+#  - name: team7
+#    # tls:
+#    #   secretName: team7-tls   # optional override for a dedicated per-channel
+#    #                           # cert; default is the *.<zone> wildcard below
+#    web:
+#      image:
+#        tag: "team7-<sha>"      # REQUIRED; repository/pullPolicy default from web.image
+#      replicas: 1               # 0 idles the channel (kept distinct from absent)
+#    edgeFunctions:
+#      image:
+#        tag: "team7-<sha>"      # REQUIRED; repository/pullPolicy default from edgeFunctions.image
+#      replicas: 1
+
+# Reflected *.<zone> wildcard TLS secret used by every channel Ingress (e.g.
+# "staging-wildcard-tls" for *.staging.pawtograder.net). REQUIRED when channels
+# with `web` are set and ingress.tls.enabled. One wildcard avoids per-channel
+# ACME issuance; provision it once (cert-manager DNS-01 + reflector) like the
+# *.preview.pawtograder.net cert.
+channelWildcardTlsSecret: ""
 
 # -----------------------------------------------------------------------------
 # Secrets
@@ -82,13 +200,13 @@ secrets:
     web: pawtograder-web
     edgeFunctions: pawtograder-edge-functions
 
-  # External Secrets Operator (ESO) wiring for pawtograder-edge-functions.
-  # When enabled, the chart renders an ExternalSecret that pulls one Bao
-  # path per integration "bundle" and dumps each verbatim into the
-  # pawtograder-edge-functions Secret via `dataFrom: extract`. Keys at
-  # each Bao path are stored under their literal env-var names
-  # (GITHUB_APP_ID, DISCORD_BOT_TOKEN, …) so adding a new env var to a
-  # bundle requires no chart change — just rerun the script.
+  # External Secrets Operator (ESO) wiring for the web and edge-functions
+  # integration Secrets. When enabled, the chart renders ExternalSecrets that
+  # pull one Bao path per integration "bundle" and dump each verbatim into
+  # pawtograder-web / pawtograder-edge-functions via `dataFrom: extract`.
+  # Keys at each Bao path are stored under their literal env-var names
+  # (GITHUB_APP_ID, DISCORD_BOT_TOKEN, LTI_KEY_ENCRYPTION_SECRET, …) so adding
+  # a new env var to a bundle requires no chart change — just rerun the script.
   #
   # Provision the upstream Bao paths with
   #   scripts/setup-openbao-edge-functions.sh --bundle <name> ...
@@ -101,7 +219,18 @@ secrets:
   externalSecret:
     enabled: false
     env: ""                       # required when enabled: preview|staging|prod
-    bundles: []                   # subset of: github-app, aws-chime, discord,
+    # Backward-compatible alias for edgeFunctionsBundles. Prefer setting
+    # edgeFunctionsBundles explicitly in new overlays.
+    bundles: []
+    webBundles: []                # usually: web, llm, discord
+                                  #   `discord` belongs here as well as in
+                                  #   edgeFunctionsBundles: DISCORD_APPLICATION_ID
+                                  #   and DISCORD_BOT_TOKEN are read by the Next.js
+                                  #   bot-install routes (app/api/discord/install
+                                  #   and .../install/callback), not only by the
+                                  #   worker. Omitting it makes the install button
+                                  #   answer 500.
+    edgeFunctionsBundles: []      # subset of: github-app, aws-chime, discord,
                                   #   canvas, sis, smtp, mcp, redis, sentry, misc
     storeName: openbao            # ClusterSecretStore name
     storeKind: ClusterSecretStore # or SecretStore for namespace-scoped
@@ -124,6 +253,11 @@ secrets:
       privateJwks: "" # JSON array of private JWKs (GoTrue JWT_KEYS)
       publicJwks: "" # JSON object {"keys":[…]} for verifiers
       realtimeJwks: "" # EC-only JWK Set (Joken can't take oct JWK maps)
+      # The single EC private JWK (not a set) that MCPAuth.ts signs per-user RLS
+      # JWTs with for MCP and the CLI. Must be the same EC entry that appears in
+      # privateJwks, since PostgREST verifies against publicJwks. Optional: leave
+      # empty and MCP/CLI are unavailable; everything else works.
+      signingJwk: ""
       realtimeEncKey: "" # AES-128 (16 bytes exactly) for tenant secrets
       pgMetaCryptoKey: "" # AES-256 base64; pg-meta + Studio share this
       pgsodiumRootKey: "" # 32-byte hex; postgres mounts as file
@@ -143,6 +277,10 @@ secrets:
       # Used only when edgeFunctions.e2e.enabled=true
       endToEndSecret: ""
       edgeFunctionSecret: ""
+      # DB-trigger -> web cache-invalidation secret. Web envFroms pawtograder-e2e
+      # and the migrations Job seeds the vault cache_invalidation_secret from it,
+      # so both sides match. Empty -> invalidation degrades gracefully (off).
+      cacheInvalidationSecret: ""
     smtp:
       host: ""
       port: "587"
@@ -155,7 +293,7 @@ secrets:
       secretKey: ""
 
 # -----------------------------------------------------------------------------
-# PostgreSQL (single primary; replica support deferred to v0.2)
+# PostgreSQL (single primary with optional manual-failover streaming standby)
 # -----------------------------------------------------------------------------
 postgres:
   enabled: true
@@ -167,6 +305,30 @@ postgres:
   # `pawtograder` database name and application role.
   database: postgres
   appRole: pawtograder
+
+  # Give postgres time to checkpoint + flush WAL on shutdown instead of the
+  # 30s default → SIGKILL mid-checkpoint and a long recovery replay on the
+  # next boot.
+  terminationGracePeriodSeconds: 600
+
+  # Voluntary-eviction protection for the single postgres pod. OFF by
+  # default because minAvailable:1 over 1 replica makes `kubectl drain`
+  # hang until you delete the pod manually — enable it in production where
+  # that is exactly the speed bump you want before a DB outage.
+  pdb:
+    enabled: false
+
+  # The supabase/postgres entrypoint starts as root, chowns PGDATA, and
+  # su's to postgres — it needs the default capability set, so the global
+  # drop-ALL containerSecurityContext is opted out here. fsGroup keeps the
+  # PVC group-writable for the supabase/postgres group (gid 102). (An overlay
+  # that runs the pod as uid 101 — e.g. for root-squashed NFS — should set
+  # runAsUser/runAsGroup here too; see examples/values-prod.yaml.)
+  podSecurityContext:
+    fsGroup: 102
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext: {}
 
   # Resources sized for ~600 concurrent realtime users on a single node.
   # Tune in overlay.
@@ -186,6 +348,12 @@ postgres:
     storageClass: "" # e.g. "local-path" or "ceph-rbd"
     size: 50Gi
     accessMode: ReadWriteOnce
+    # Annotations stamped on the PVC (provisioner reads them at create time).
+    # On NetApp Trident + root-squashed NFS, set the volume world-writable so a
+    # non-root (uid 101) postgres can create PGDATA on the fresh mount:
+    #   annotations:
+    #     trident.netapp.io/unixPermissions: "0777"
+    annotations: {}
 
   # postgresql.conf overrides — bumped for Realtime fan-out + supavisor.
   config:
@@ -218,9 +386,117 @@ postgres:
     - pgsodium
     - supabase_vault
 
+  # ---------------------------------------------------------------------------
+  # WAL-G: continuous WAL archiving to S3 (→ point-in-time recovery) and the
+  # base backups PITR + streaming-replica bootstrap build on. Off by default;
+  # single-primary + nightly pg_dump (backup.yaml) is the v0.1 floor. Turn on
+  # in a durable overlay to get PITR (recovery to any second within retention),
+  # not just last-night's dump. See docs/operations/point-in-time-recovery.md.
+  #
+  # The supabase/postgres image ships the `wal-g` binary (its cloud-only
+  # `admin-mgr` wrapper is absent), so the chart calls wal-g directly:
+  #   archive_command = wal-g wal-push %p     (per-segment, from postgres)
+  #   base backup     = wal-g backup-push     (interval, from the sidecar)
+  #   restore         = wal-g backup-fetch / wal-fetch  (runbook / replica)
+  # Config is passed to wal-g via WALG_*/AWS_* env, sourced from the S3 secret
+  # (secrets.names.s3) plus the values below.
+  walg:
+    enabled: false
+    # WALG_S3_PREFIX — where WAL + base backups live. Keep this DISTINCT from
+    # the nightly-dump bucket/prefix (backup.s3) so the two schemes never mix.
+    s3Prefix: "" # e.g. s3://pawtograder-staging-backups/walg
+    # S3 endpoint/region/path-style for the object store (MinIO/Ceph/AWS).
+    # Reuses the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in secrets.names.s3.
+    s3Endpoint: "" # e.g. https://s3.talos.ripley.cloud (blank = real AWS)
+    region: "us-east-1"
+    forcePathStyle: true
+    # brotli|lz4|lzma|zstd — zstd is a good ratio/speed default.
+    compressionMethod: "zstd"
+    # archive_command failure = postgres retries and WAL piles up in pg_wal
+    # (disk-fill risk), so archiving must keep up. archive_timeout forces a
+    # segment switch so idle periods still bound RPO.
+    archiveTimeout: "60s"
+    # Base backups: the sidecar loop cadence and how many full backups to keep.
+    # WAL older than the oldest retained base backup is pruned with it. Sizing:
+    # retention window ≈ baseBackupIntervalHours × keepBackups.
+    baseBackup:
+      enabled: true
+      intervalHours: 24
+      keepBackups: 8
+      # Wait this long after the sidecar starts before the FIRST base backup,
+      # so postgres + archiving are healthy first.
+      initialDelaySeconds: 120
+      resources:
+        requests: { cpu: "50m",  memory: "128Mi" }
+        limits:   { cpu: "1",    memory: "512Mi" }
+
+  # ---------------------------------------------------------------------------
+  # Streaming standby replica. A separate StatefulSet that bootstraps from the
+  # primary via pg_basebackup and streams WAL (hot standby, read-only), with
+  # `wal-g wal-fetch` as the archive fallback if it falls behind the primary's
+  # retained pg_wal. Off by default. Gives read-scaling + a warm failover
+  # target; failover is MANUAL (documented promote runbook), not automatic.
+  # Requires postgres.walg.enabled (the replica needs the archive fallback and
+  # shares the WAL-G config). See docs/operations/point-in-time-recovery.md.
+  replica:
+    enabled: false
+    replicas: 1
+    # Replica gets its own storage (own PVC per pod). local-path is fine here:
+    # a streaming replica on another node with its own volume is the point.
+    persistence:
+      storageClass: ""
+      size: 50Gi
+      accessMode: ReadWriteOnce
+      # Same as postgres.persistence.annotations (e.g. Trident unixPermissions).
+      annotations: {}
+    resources:
+      requests: { cpu: "500m", memory: "2Gi" }
+      limits:   { cpu: "2",    memory: "8Gi" }
+    # Soft anti-affinity to keep the standby off the primary's node (a replica
+    # sharing the primary's node defeats the durability purpose).
+    spreadAcrossNodes: true
+
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+# -----------------------------------------------------------------------------
+# Maintenance page — a tiny static nginx Deployment + Service that returns
+# HTTP 503 + Retry-After with a styled "we'll be right back" body (matching the
+# app's in-app error boundary). Off by default. During a planned-maintenance
+# window the web-host ingress backend is repointed to the `pawtograder-maintenance`
+# Service, then back (see docs/operations/planned-maintenance.md). Enabling this
+# only CREATES the Service; the ingress patch is what reroutes. It reroutes the
+# WEB host only (user-facing "down" banner), so it is not itself a write fence —
+# scaling the writer tiers to 0 remains the real fence.
+# -----------------------------------------------------------------------------
+maintenance:
+  enabled: false
+  # Copy shown on the page. eta is optional (omitted from the page when empty).
+  title: "We'll be right back"
+  message: "Pawtograder is down for a short scheduled maintenance window. Your work is safe — the pack is tidying up and we'll be back shortly. This page refreshes on its own."
+  eta: "" # e.g. "6:15pm ET" — rendered only when set
+  # Retry-After header (seconds) AND the page's auto-refresh interval.
+  retryAfterSeconds: 120
+  # 2 (+ the template's node topology spread): the page fronts the web host during
+  # a node drain, so a single replica on the drained node would leave the ingress
+  # serving 5xx until a replacement schedules.
+  replicas: 2
+  image:
+    # Built by .github/workflows/release-images.yml (build-maintenance), mirrored
+    # into Harbor for Khoury prod. tag "" => chart appVersion (same convention as
+    # the migrations image).
+    repository: dev-harbor.khoury.northeastern.edu/pawtograder/maintenance
+    tag: "" # default: chart appVersion
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  resources:
+    requests: { cpu: "10m", memory: "16Mi" }
+    limits: { cpu: "100m", memory: "64Mi" }
+  # Override the whole page body (raw HTML, rendered through `tpl`). Empty =>
+  # the chart-bundled maintenance/index.html.
+  html: ""
 
 # -----------------------------------------------------------------------------
 # Migrations job — runs `supabase db push`-equivalent against postgres.
@@ -247,13 +523,15 @@ migrations:
   # keep skipping the (now-edited) file and the database drifts forever
   # from the source.
   #
-  # - false (default, REQUIRED for prod): mismatch is a hard error. The
+  # - false (default, REQUIRED for staging/prod): mismatch is a hard error. The
   #   operator must rename the migration to a fresh timestamp, accept the
   #   drift manually, or restore the original file. Data is preserved.
-  # - true (preview / dev only): the migrator drops schema public, truncates
-  #   the migration history, and replays every migration from scratch.
-  #   DESTROYS ALL APPLICATION DATA. Auth/storage/realtime schemas stay
-  #   intact (their services own them); only public is wiped.
+  # - true (dev / preview ONLY): the migrator drops schema public, truncates
+  #   the migration history, clears auth.users + vault.secrets, and replays
+  #   every migration from scratch. DESTROYS ALL DATA. Doubly guarded: the
+  #   render is refused outright on staging/production (templates/validations.yaml),
+  #   and migrate.sh independently refuses unless MIGRATIONS_ENVIRONMENT is
+  #   dev|preview, so the flag can never wipe a durable tier even if it leaks.
   resetOnDrift: false
 
 # -----------------------------------------------------------------------------
@@ -334,6 +612,13 @@ supavisor:
     limits: { cpu: "1", memory: "1Gi" }
   service:
     port: 6543 # transaction-mode pool
+  terminationGracePeriodSeconds: 45
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -376,6 +661,28 @@ auth:
       enabled: false
       redirectUri: "" # default: https://<hostname>/auth/v1/callback
 
+  # Generic external OAuth providers — for any GoTrue provider beyond the three
+  # first-class ones above (google, apple, gitlab, keycloak/OIDC, …). Renders the
+  # standard GOTRUE_EXTERNAL_<NAME>_* env. Use this to back the sign-in buttons
+  # configured in web.branding.ssoProviders. Do NOT also configure github/azure/
+  # discord here (use their dedicated blocks above to avoid duplicate env).
+  #   name            REQUIRED. GoTrue provider name (lowercased), e.g. "google".
+  #                   Uppercased for the env var (GOTRUE_EXTERNAL_GOOGLE_*).
+  #   enabled         Set true to render the provider's env.
+  #   redirectUri     Optional. Default: https://api.<hostname>/auth/v1/callback.
+  #   clientIdKey     Optional web-Secret key for the client id.
+  #                   Default: <NAME>_OAUTH_CLIENT_ID (e.g. GOOGLE_OAUTH_CLIENT_ID).
+  #   clientSecretKey Optional web-Secret key for the client secret.
+  #                   Default: <NAME>_OAUTH_CLIENT_SECRET.
+  #   url             Optional issuer URL (required by some providers, e.g.
+  #                   keycloak): sets GOTRUE_EXTERNAL_<NAME>_URL.
+  externalProviders: []
+  #  - name: google
+  #    enabled: true
+  #  - name: keycloak
+  #    enabled: true
+  #    url: https://sso.example.edu/realms/main
+
   smtp:
     enabled: false
     # adminEmail (the From: address) is read from the smtp Secret key
@@ -403,11 +710,54 @@ auth:
         requests: { cpu: "10m", memory: "16Mi" }
         limits: { memory: "64Mi" }
 
+  # Custom GoTrue transactional email templates (invite / confirmation /
+  # recovery / magic-link / email-change). GoTrue's mailer fetches templates
+  # over http(s) only (no file://), so when enabled the chart runs a tiny
+  # `mail-templates` sidecar in the auth pod that serves the bundled HTML on
+  # 127.0.0.1; gotrue points GOTRUE_MAILER_TEMPLATES_* at it. On any fetch
+  # error gotrue falls back to its built-in defaults.
+  mailer:
+    templates:
+      enabled: false
+      server:
+        image:
+          repository: busybox
+          tag: "1.37"
+          pullPolicy: IfNotPresent
+        # Localhost port the sidecar serves on (must be >1024 for non-root).
+        port: 8081
+        resources:
+          requests: { cpu: "5m", memory: "8Mi" }
+          limits: { memory: "32Mi" }
+      # Per-template raw-HTML overrides. Empty → use the chart-bundled file
+      # under email-templates/. Bodies are Go html/template with GoTrue vars.
+      files:
+        invite: ""
+        confirmation: ""
+        recovery: ""
+        magicLink: ""
+        emailChange: ""
+      # Optional custom subject lines (plain strings). Empty → GoTrue defaults.
+      subjects:
+        invite: ""
+        confirmation: ""
+        recovery: ""
+        magicLink: ""
+        emailChange: ""
+
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
     limits: { cpu: "500m", memory: "512Mi" }
   service:
     port: 9999
+  terminationGracePeriodSeconds: 30
+  preStopSleepSeconds: 5
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -438,6 +788,15 @@ rest:
     limits: { cpu: "1", memory: "512Mi" }
   service:
     port: 3000
+  terminationGracePeriodSeconds: 30
+  # PostgREST's image is a bare static binary (no /bin/sh) — keep 0.
+  preStopSleepSeconds: 0
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -452,6 +811,12 @@ realtime:
     repository: supabase/realtime
     tag: "v2.76.5" # stock supabase docker-compose pin — fixes partition / metrics auth
     pullPolicy: IfNotPresent
+  # The supabase/realtime entrypoint starts as root and `sudo -u nobody`s to
+  # run migrations + the BEAM — so it needs the default capability set and
+  # privilege escalation. Under the global drop-ALL / allowPrivilegeEscalation:
+  # false context, sudo fails ("setresuid: Operation not permitted") and the
+  # pod CrashLoopBackOffs, so opt out here — same as postgres above.
+  containerSecurityContext: {}
   # BEAM clustering — pods discover peers via a headless Service.
   cluster:
     strategy: "Elixir.Cluster.Strategy.Kubernetes.DNS"
@@ -464,6 +829,9 @@ realtime:
     limits: { cpu: "2", memory: "2Gi" }
   service:
     port: 4000
+  # WebSocket draining: give the BEAM time to close channels cleanly on
+  # SIGTERM instead of the 30s default cutting clients off mid-frame.
+  terminationGracePeriodSeconds: 60
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -505,6 +873,14 @@ storage:
     limits: { cpu: "1", memory: "512Mi" }
   service:
     port: 5000
+  terminationGracePeriodSeconds: 45
+  preStopSleepSeconds: 5
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -560,6 +936,10 @@ studio:
     secretName: pawtograder-studio-auth
     realm: "Pawtograder Studio"
     tlsSecretName: ""   # default: same as ingress.tls.secretName
+  # The chart refuses to render studio.ingressEnabled=true without basicAuth
+  # unless you flip this — an explicit "I have another auth layer (VPN,
+  # oauth2-proxy, IP allowlist) in front" acknowledgement.
+  allowUnauthenticatedIngress: false
 
 # -----------------------------------------------------------------------------
 # Edge Functions (Deno)
@@ -639,9 +1019,36 @@ redis:
     # safe for a cache + limiter store.
     maxmemory: "768mb"
     maxmemoryPolicy: "allkeys-lru"
+    # Close client connections idle for this many seconds (0 = never). Non-zero
+    # reaps sockets leaked by clients that open a connection and don't close it,
+    # so they can't accumulate to maxclients ("ERR max number of clients
+    # reached"). ioredis auto-reconnects, so reaping an idle connection is
+    # transparent.
+    timeout: 300
     resources:
       requests: { cpu: "100m", memory: "256Mi" }
       limits: { cpu: "1", memory: "1Gi" }
+    # Per-component hardening (NOT the global fallback): uid 999 must be pinned
+    # here so drop-ALL is safe. The redis:7.4.2-alpine entrypoint only needs root
+    # for its chown + su-exec steps; started directly as the image's redis user
+    # (uid 999) it skips that path entirely, so the full conservative baseline
+    # holds. readOnlyRootFilesystem is safe both ways: persistence-off runs
+    # `--save "" --appendonly no` (writes nothing; a manual BGSAVE would error,
+    # which is acceptable), and persistence-on writes only under /data, which is a
+    # volume mount. To opt out for a custom image whose entrypoint needs more,
+    # override either key (e.g. set it to {}).
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 999
+      runAsGroup: 999
+      fsGroup: 999
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      readOnlyRootFilesystem: true
     nodeSelector: {}
     tolerations: []
 
@@ -652,16 +1059,39 @@ redis:
 edgeFunctions:
   enabled: true
   replicas: 2
+  # Stakater Reloader integration. When enabled, the Deployment is annotated
+  # reloader.stakater.com/auto: "true" so it rolls automatically when a Secret
+  # it references changes. Important here because the edge-functions env comes
+  # from a SealedSecret applied outside helm — a rotation won't change the pod
+  # template, so without Reloader the pods keep the stale value until a manual
+  # restart. Requires the Reloader controller cluster-wide; the annotation is
+  # ignored (harmless) if it is not installed.
+  reloader:
+    enabled: true
   # End-to-end / load-test gates. Pawtograder edge functions check these
   # to enable test-only privileged paths (e2e helpers) and to mock the
   # GitHub integration so k6 runs don't actually call github.com.
   e2e:
     enabled: false
     mockGitHub: false
-  # Names of additional Secrets to envFrom into the edge-runtime pod
-  # (each marked optional, so absent secrets don't block startup). Use for
-  # integration credentials managed by ESO in your overlay.
+  # Names of additional Secrets to envFrom into the edge-runtime pod. Use for
+  # integration credentials managed by ESO in your overlay. Each is mounted
+  # optional: true — a Secret that is missing at pod start is skipped rather
+  # than blocking startup, because envFrom is one-shot and all-or-nothing: one
+  # absent Secret would otherwise put the whole edge tier in
+  # CreateContainerConfigError with no self-heal. A pod that boots before a
+  # Secret has synced therefore runs without those variables until it is
+  # rolled, so keep edgeFunctions.reloader enabled and rely on the consuming
+  # function to report missing config loudly (see edgeFunctions.email.enabled).
   envFromSecrets: []
+  email:
+    # "true" | "false" | "" (unset). Rendered as EMAIL_ENABLED, consumed by
+    # supabase/functions/_shared/emailTransportConfig.ts.
+    #
+    # Unset infers from SMTP_HOST, preserving today's behavior everywhere. "true" makes missing
+    # SMTP config a hard, reported failure instead of an indefinite silent deferral, so set it
+    # wherever email is supposed to work. "false" archives notifications without sending.
+    enabled: ""
   image:
     repository: ghcr.io/pawtograder/edge-functions
     tag: "" # default: chart appVersion
@@ -669,11 +1099,28 @@ edgeFunctions:
   policy: per_worker # per_worker | per_request | oneshot. per_request gives each
                      # request its own isolate (no concurrent co-location → no shared-heap
                      # memory pile-up under bursts); per_worker co-locates for efficiency.
-  # Cap on simultaneous worker isolates (--max-parallelism). Unset, the runtime
-  # derives it from CPU cores, which is low on small pods and forces co-location.
-  # Under per_request this is effectively the max concurrent requests per pod
-  # (excess queue up to request-wait-timeout). Empty = runtime default.
-  maxParallelism: ""
+  # NOTE for the pg_cron-poked background workers (notification-queue-processor,
+  # github/discord-async-worker, gradebook-column-recalculate): they must NOT rely on
+  # module-level state to keep one poll loop per pod, because `per_request` gives every
+  # poke a fresh isolate and resets it. They bound themselves instead — a Redis lease
+  # when REDIS_URL / UPSTASH_* are set, and a wall-clock-bounded drain-and-exit when they
+  # are not. See supabase/functions/_shared/workerRun.ts. Consequences worth knowing:
+  #   * With Redis, ONE pod holds each worker's lease and keeps a resident loop, so that
+  #     pod carries one admission slot per worker for the isolate's life. Latency is the
+  #     loop's own idle interval (10–15s).
+  #   * Without Redis, each poke drains and exits, holding no slot between pokes, and new
+  #     work waits for the next cron tick instead. Safer, slower.
+  # Raising maxParallelism does not substitute for either: an unbounded loop consumes
+  # whatever you give it.
+  # Cap on simultaneous worker isolates (--max-parallelism). Under per_request this
+  # is effectively the max concurrent requests per pod (excess queue up to
+  # request-wait-timeout).
+  #
+  # REQUIRED, and validated by pawtograder.edgeFunctions.assertMemoryBudget: this
+  # is a term in the container memory budget, and unset means "whatever the runtime
+  # infers from CPU count", which cannot be checked at render time. 8 is what
+  # production runs; 8 x worker.memoryLimitMb is the isolate half of the budget.
+  maxParallelism: 8
   verifyJwt: false # all functions in pawtograder set this; auth handled in-function
   # "beforeunload" / EarlyDrop thresholds (% of each per-worker resource limit).
   # When a per_worker isolate crosses the ratio the runtime tells it to finish
@@ -697,6 +1144,99 @@ edgeFunctions:
   # accumulates toward the 256MB cap. cpuHardMs keeps headroom above soft so an
   # in-flight request that crosses 2s can finish rather than being force-cancelled
   # (CPU time excludes async I/O, so 2s of real compute is ample here).
+  # Byte budget for the eszip cache the main.ts demuxer keeps of the bundles it
+  # has served. This is a real term in the container memory budget and it is the
+  # one that is easy to forget: a pod holds one bundle per DISTINCT FUNCTION it
+  # has ever been asked for. Unbounded, that alone exceeded the container limit
+  # and OOM-killed pods after a few days' uptime (2026-08-19).
+  #
+  # Bundle inventory, measured 2026-08-28 from /home/deno/eszips in a running
+  # pod (the earlier "55 bundles, ~2.2GB, 19-59MB" here was stale — it came from
+  # the Dockerfile bundler's own log line, which main.ts still quotes):
+  #   58 bundles, 1390MiB total; min 5.5MiB / median 30.7MiB / max 43.2MiB.
+  # Averaging these is how you get surprised, so size the cache off the MEDIAN:
+  # 512Mi holds ~16 of 58, 256Mi holds ~8.
+  #
+  # The container budget is four terms that must be reconciled together:
+  #   eszipCacheMaxMb + eszipColdLoadHeadroomMb
+  #     + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
+  # At these defaults: 256Mi + 256Mi + (8 x 256Mi) + 90Mi = 2650Mi (~2.6Gi),
+  # which is why the edge tier wants a limit at or above 4Gi. Raise this only
+  # alongside that sum.
+  #
+  # 2026-08-28: 512 -> 256, to make the memory metric mean something again.
+  #
+  # The edge HPA had been pinned at maxReplicas 32 with memory 106% against a
+  # 100% target while CPU sat at 5% of a 200% target — an autoscaler that can
+  # only ever say "already at max" is not autoscaling, and it left no burst
+  # headroom ahead of a ~2k WAU ramp. The cause is a per-pod memory FLOOR that
+  # is load-INDEPENDENT and dominated by this cache:
+  #   ~320Mi Deno host baseline (measured, see resources notes)
+  #    512Mi eszip cache at its cap
+  #   -------
+  #   ~832Mi against prod's 1Gi request  => ~81% before a request is served,
+  #          and measured idle sat higher still (~98%) because a pod keeps
+  #          some isolates resident between requests.
+  #
+  # Confirmed by a natural experiment during the 2026-08-28 deploy: the pods
+  # were recreated, and the SAME fleet under the SAME load went from mean
+  # 1094Mi / 32 replicas pinned (pods aged 8h-2d5h) to mean 504Mi / 12 replicas
+  # (pods <1h). Nothing about traffic changed — only cache warmth. The floor
+  # climbs after every deploy until it crosses the target, then sticks there.
+  #
+  # Halving the cache takes ~256Mi off that floor, so utilization tracks isolate
+  # load rather than cache occupancy. The trade is explicit and cheap: a pod
+  # caches ~8 distinct functions instead of ~16, out of 58. A miss is a LOCAL
+  # read from the image layer at /home/deno/eszips plus an eszip parse — not a
+  # network fetch and not a transpile. main.ts falls back to raw servicePath
+  # (the slow, memory-heavy path) only when a bundle is MISSING from the image,
+  # which is not what eviction causes.
+  #
+  # Isolate sizing, corrected 2026-08-28: an earlier version of this note put the
+  # load-dependent term at 8 x ~20Mi = ~160Mi, reading the "~16-20MB marginal"
+  # figure out of main.ts. That figure describes the marginal cost of an ADDITIONAL
+  # isolate for the SAME function once its module graph is loaded; a real isolate
+  # under production load measures ~116Mi. So the load-dependent band is
+  # 8 x ~116Mi = ~900Mi, and with the cache at 256 a pod runs a ~576Mi floor
+  # (56% of prod's 1Gi request) up to a ~1500Mi loaded peak (146%).
+  #
+  # That makes memory a STRONG scaling signal here — ~900Mi of swing on a ~576Mi
+  # floor. An earlier version of this note concluded the opposite ("structurally
+  # weak signal at any request value") and pointed at pgmq queue depth as the real
+  # fix; that conclusion rested on the ~160Mi figure and is retracted. The problem
+  # was never signal strength. It was that the floor sat inside the HPA's default
+  # 90-110% dead band, which is what autoscaling.targetMemoryUtilizationPercentage
+  # below now addresses.
+  #
+  # NOT changed here: resources.requests.memory. Note the corrected numbers also
+  # retire the argument the earlier note gave for leaving it alone (that a 1.5Gi
+  # request would strand a loaded pod near 48%) — at a ~1500Mi loaded peak, 1.5Gi
+  # would read ~98%, not 48%. The request is simply out of scope for this change:
+  # the target bump below is what was measured and confirmed live, and the request
+  # should be re-set from the idle-vs-loaded band observed on pods that have been
+  # up ~24h on these settings rather than from either version of this arithmetic.
+  # The two are coupled — the target is a percentage OF the request, so moving one
+  # without redoing the band calculation re-wedges the dead band.
+  #
+  # In MiB, matching worker.memoryLimitMb below. (Kept in MiB rather than bytes
+  # because YAML renders a bare 536870912 as 5.36870912e+08 through Helm.)
+  eszipCacheMaxMb: 256
+  # Headroom for bundle bytes the cache accounting does NOT see: a bundle being
+  # read on a cache miss, and one the LRU evicted (or refused as oversized) while
+  # a worker creation still holds a reference to it. Those buffers are real and
+  # concurrent with the cache, so the container budget has to carry them.
+  #
+  # main.ts holds such a reference only for the duration of
+  # EdgeRuntime.userWorkers.create() rather than for the whole request, which is
+  # what keeps this term small — but it is not zero, and a burst of cold requests
+  # for DISTINCT functions right after a pod starts is when it peaks. 256Mi is
+  # roughly four of the largest bundle in the image (58.4MiB when this was
+  # written; re-measured 43.2MiB on 2026-08-28, so the render-time floor of
+  # 64Mi is now conservative — left alone deliberately, it costs nothing).
+  # After warmup the working set is resident and this is not touched at all.
+  # Deliberately NOT reduced alongside eszipCacheMaxMb above: this term covers
+  # COLD reads, and halving the cache makes cold reads more frequent, not less.
+  eszipColdLoadHeadroomMb: 256
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)
@@ -707,9 +1247,25 @@ edgeFunctions:
     # hosted "50% of any resource" rule (~128MB at 256MB). This lets a memory-heavy
     # request finish + return instead of being force-killed at the hard cap.
     lowMemoryMultiplier: 2
+  # The memory LIMIT has to hold the whole budget documented above
+  # (eszipCacheMaxMb + eszipColdLoadHeadroomMb
+  #   + maxParallelism x worker.memoryLimitMb + ~90Mi host), which is asserted at
+  # render time by pawtograder.edgeFunctions.assertMemoryBudget.
+  # 4Gi rather than 2Gi because the documented working configuration does not fit
+  # 2Gi, so the old default was a combination the guardrail now rejects outright.
+  # That was 2906Mi (~2.8Gi) when the cache was 512Mi; at the current 256Mi cache
+  # it is 2650Mi (~2.6Gi), still well past 2Gi. The limit is deliberately NOT
+  # lowered to track the cache: it is the backstop described below, and the slack
+  # is the point.
+  #
+  # This is a backstop, not a target: with the cache bounded, a pod's steady state
+  # is the cache plus admitted isolates, and the headroom exists so the runtime
+  # retires an isolate rather than the kernel killing PID 1 and every request on
+  # it. Limits are not scheduled (requests are), so raising it does not change
+  # placement.
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
-    limits: { cpu: "2", memory: "2Gi" }
+    limits: { cpu: "2", memory: "4Gi" }
   # Horizontal autoscaling. When enabled, a HorizontalPodAutoscaler manages the
   # replica count (and the Deployment's static `replicas` is omitted so the two
   # don't fight). minReplicas should be high enough that a sudden burst spreads
@@ -718,10 +1274,59 @@ edgeFunctions:
     enabled: false
     minReplicas: 2
     maxReplicas: 10
-    targetMemoryUtilizationPercentage: 100
+    # 2026-08-28: 100 -> 80. This is the number that actually explains the
+    # pinning, and it is not "the target was too low".
+    #
+    # The HPA controller applies a default 10% TOLERANCE before acting, so a
+    # target of 100 is really a DEAD BAND of 90-110%, not "above 100 scales up".
+    # Anything landing inside that band moves nothing in either direction. With
+    # the per-pod floor at ~98% of the request, the fleet could never scale DOWN
+    # (that needs <90%), so once an earlier spike had driven it to maxReplicas it
+    # stayed there permanently; and at 109% under load it still would not scale
+    # UP (that needs >110%). Both directions were wedged by the same band.
+    #
+    # Measured band with eszipCacheMaxMb at 256 (see the note on that value):
+    # floor ~576Mi = 56% of prod's 1Gi request, loaded peak ~1500Mi = 146%.
+    # A target of 80 puts the dead band at 72-88%, which sits cleanly BETWEEN
+    # those two -- the floor is below it, so a quiet fleet can scale down; a
+    # loaded pod is above it, so a busy fleet can scale up.
+    #
+    # Confirmed live on the prod fleet, cache already at 256Mi:
+    #   18:46   109%/100%   12 replicas   pinned
+    #   18:48   109%/80%    12 replicas   target changed
+    #   18:49    78%/80%    20 replicas   scaled, then settled at equilibrium
+    #
+    # Changing the target is not a substitute for sizing the request from
+    # measured data -- see the resources note above. The two interact: this
+    # target is expressed as a percentage OF the request, so re-setting the
+    # request without redoing this arithmetic re-wedges the band.
+    targetMemoryUtilizationPercentage: 80
     targetCPUUtilizationPercentage: 200
   service:
     port: 9000
+  # Graceful drain on SIGTERM. edge-runtime intercepts SIGTERM and, up to
+  # --graceful-exit-timeout, stops NEW intake and lets IN-FLIGHT handlers finish
+  # before exiting (verified against v1.74.0: with the flag a 25s request that was
+  # in flight at SIGTERM completed 200 and the process exited right after; at the
+  # 15s default the same request was cut off with "channel closed"). It exits
+  # promptly when idle (~0.3s in the same test), so this is cheap — unlike a fixed
+  # preStop sleep, it only waits as long as there is work.
+  #
+  # Sizing: gracefulExitTimeoutSeconds >= worker.timeoutMs (400s) so the longest
+  # possible in-flight request can finish; preStop is a SHORT endpoint-drop delay
+  # (kong/Service drops the pod before SIGTERM, so no new intake races the drain);
+  # terminationGracePeriodSeconds is only a SIGKILL BACKSTOP — it must exceed
+  # preStop + gracefulExitTimeout so the kubelet never SIGKILLs mid-drain, but the
+  # runtime normally exits well before it.
+  gracefulExitTimeoutSeconds: 410 # --graceful-exit-timeout; >= worker.timeoutMs (400s)
+  preStopSleepSeconds: 10 # short: just lets kong/endpoints drop the pod pre-SIGTERM
+  terminationGracePeriodSeconds: 430 # SIGKILL backstop >= preStop + gracefulExitTimeout
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -751,6 +1356,16 @@ kong:
     limits: { cpu: "2", memory: "6Gi" }
   service:
     port: 8000
+  terminationGracePeriodSeconds: 45
+  preStopSleepSeconds: 10
+  spreadAcrossNodes: true
+  # maxSurge 1 means one extra kong during rollout — budget node memory for
+  # replicas+1 pods (the limit above is deliberately generous).
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -781,11 +1396,83 @@ web:
   # is https://api.<hostname>. Override here for unusual topologies.
   apiUrl: ""
 
+  # ---------------------------------------------------------------------------
+  # Deployment skinning / branding
+  # ---------------------------------------------------------------------------
+  # Re-brand the app for a self-hosted deployment: service name, tagline, logos,
+  # and accent color. These are passed to the web pod as PLAIN env vars (NOT
+  # NEXT_PUBLIC_*) and read server-side at request time (lib/branding.ts), so a
+  # SINGLE published web image can be re-skinned per deployment with NO rebuild.
+  #
+  # Leave a field blank to keep the built-in Pawtograder default for it.
+  #
+  #   name          Product name shown in page titles, headings, and wordmarks.
+  #   description   <meta name="description"> / default site description.
+  #   tagline       Short line under the wordmark on the auth screens.
+  #   logoLight     Logo for light mode. Either a path bundled in the image
+  #                 (e.g. /branding/logo-light.png) or an absolute https:// URL
+  #                 to a custom-hosted asset (rendered with a plain <img>, so no
+  #                 next.config image-host allow-listing is needed).
+  #   logoDark      Logo for dark mode (same rules as logoLight).
+  #   favicon       Browser-tab icon. Bundled path (e.g. /branding/favicon.png)
+  #                 or absolute https:// URL. Default: the bundled /favicon.ico.
+  #   colorPalette  Chakra accent palette. One of: gray, red, orange, yellow,
+  #                 green, teal, blue, cyan, purple, pink. Drives the brand
+  #                 accent (wordmark color + default component palette).
+  #
+  # To AVOID hosting assets externally, "burn" custom logos/favicon into the web
+  # image at build time: drop files into the repo's `public/branding/` directory
+  # (served at /branding/*) before `docker build`, then point logoLight/logoDark/
+  # favicon at those /branding/... paths. See the chart README "Deployment
+  # skinning / branding" section.
+  branding:
+    name: ""
+    description: ""
+    tagline: ""
+    logoLight: ""
+    logoDark: ""
+    favicon: ""
+    colorPalette: ""
+    # Sign-in SSO buttons. A list of providers, each rendered as a button on the
+    # sign-in page in order. Leave empty ([]) to keep the built-in default (a
+    # single Microsoft / Northeastern Login button). Each entry:
+    #   provider  REQUIRED. Supabase/GoTrue OAuth provider id. One of: apple,
+    #             azure, bitbucket, discord, facebook, figma, github, gitlab,
+    #             google, kakao, keycloak, linkedin_oidc, notion, slack_oidc,
+    #             spotify, twitch, workos, zoom.
+    #   label     REQUIRED. Button text, e.g. "Continue with Google".
+    #   icon      Optional icon key: microsoft, github, google, apple, discord,
+    #             gitlab, slack, twitch, linkedin, sso (key), generic (default).
+    #   scopes    Optional space-separated OAuth scopes.
+    #
+    # IMPORTANT: each provider listed here must ALSO be enabled in GoTrue — via
+    # auth.external.{github,azure,discord} or the generic auth.externalProviders
+    # list below — or the button will error on click. See the chart README
+    # "Single sign-on (SSO)" section. To show NO SSO buttons (email-only), set
+    # `BRAND_SSO_PROVIDERS: "[]"` via web.extraEnv.
+    ssoProviders: []
+    #  - provider: azure
+    #    label: "Continue with Microsoft (Northeastern Login)"
+    #    icon: microsoft
+    #    scopes: "email User.Read"
+    #  - provider: google
+    #    label: "Continue with Google"
+    #    icon: google
+
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits: { cpu: "2", memory: "2Gi" }
   service:
     port: 3000
+
+  terminationGracePeriodSeconds: 45
+  preStopSleepSeconds: 10
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
 
   # Extra env vars passed to the Next.js pod. Use this for integration creds
   # that aren't part of the standard secret bundle (e.g. additional LLM keys).
@@ -825,6 +1512,11 @@ ingress:
 auditPartitions:
   enabled: true
   schedule: "0 3 * * *" # nightly
+  # Kill the job if the maintenance function wedges on a lock instead of
+  # letting it run forever; skip the run entirely if it couldn't start
+  # within startingDeadlineSeconds of its slot.
+  activeDeadlineSeconds: 900
+  startingDeadlineSeconds: 1800
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"
@@ -832,6 +1524,10 @@ auditPartitions:
 backup:
   enabled: false
   schedule: "0 4 * * *"
+  # Hard ceiling on a single backup run (dump + upload). Size for your DB —
+  # a run that exceeds this fails LOUDLY rather than hanging forever.
+  activeDeadlineSeconds: 3600
+  startingDeadlineSeconds: 1800
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"
@@ -840,6 +1536,73 @@ backup:
     region: "us-east-1"
     bucket: "pawtograder-backups"
   retentionDays: 14
+  # Restore verification: a second CronJob that downloads the NEWEST backup
+  # object and runs `pg_restore --list` over it — validating the archive's
+  # TOC end-to-end (download integrity + dump structure) without needing a
+  # scratch database. A corrupt or truncated backup fails this job, which
+  # otherwise looks identical to a good one until the day you restore.
+  verify:
+    enabled: true
+    schedule: "0 6 * * 1" # weekly, after Monday's backup
+    activeDeadlineSeconds: 1800
+    startingDeadlineSeconds: 1800
+  # Restore DRILL: the full-restore rehearsal `verify` stops short of. It
+  # restores the newest dump into a throwaway database on the LIVE postgres,
+  # asserts a core table has a plausible row count, then drops the scratch DB.
+  # A dump can `pg_restore --list` cleanly yet still fail to restore — this
+  # catches that. Off by default (it writes to the primary under a unique DB
+  # name); enable in prod and schedule clear of the backup window.
+  restoreDrill:
+    enabled: false
+    schedule: "0 8 * * 1" # weekly, after verify
+    activeDeadlineSeconds: 5400
+    startingDeadlineSeconds: 1800
+    startupTimeoutSeconds: 900 # max wait for the throwaway instance to finish init
+    # Restore runs in a FRESH throwaway postgres instance on its own ephemeral
+    # volume (not the live primary). scratchSize holds a full copy of the restored
+    # DB; storageClass empty → inherit postgres.persistence.storageClass (set a
+    # cheaper class, e.g. netapp-economy, to keep restore I/O off the fast tier).
+    scratchSize: 100Gi
+    storageClass: ""
+    ttlSecondsAfterFinished: 3600 # reclaim the finished Job + its scratch PVC
+    # Core table + minimum row count proving the restore holds real data.
+    # public.classes exists on every install (a live prod DB has >= 1 class).
+    assertTable: "public.classes"
+    assertMinRows: 1
+  # PITR DRILL: the ONLY check that proves point-in-time recovery. verify +
+  # restoreDrill exercise the logical-dump path; this exercises wal-g base
+  # backup + WAL replay. Fetches the newest base backup into a throwaway
+  # ephemeral volume, replays WAL to `targetLagMinutes` in the past, promotes,
+  # and asserts (1) a core table restored with data and (2) — when recencyTable
+  # is set — that NO rows newer than the target replayed (real point-in-time
+  # cutoff). Requires postgres.walg.enabled. Starts archive_mode=off so the
+  # scratch cluster can never wal-push into the live prefix. Off by default.
+  pitrDrill:
+    enabled: false
+    schedule: "0 9 * * 1" # weekly, after restoreDrill (08:00)
+    activeDeadlineSeconds: 5400
+    startingDeadlineSeconds: 1800
+    startupTimeoutSeconds: 3600
+    # Reclaim the finished Job + its full-size ephemeral scratch PVC this many
+    # seconds after completion (0 = delete immediately), so retained Job history
+    # doesn't pin multiple 100Gi scratch volumes.
+    ttlSecondsAfterFinished: 3600
+    # Scratch volume must hold a full copy of PGDATA. Size >= live DB size.
+    scratchSize: 100Gi
+    # StorageClass for the ephemeral scratch PVC. Empty → inherit
+    # postgres.persistence.storageClass. Set to a cheaper/slower class (e.g.
+    # netapp-economy) to keep the drill's restore I/O off the primary's fast tier.
+    storageClass: ""
+    # How far back to target. Must exceed archiver lag (seconds) with margin.
+    targetLagMinutes: 15
+    assertTable: "public.classes"
+    assertMinRows: 1
+    # Optional point-in-time precision check: a table with a monotonic
+    # timestamptz column that sees frequent writes. When set, the drill asserts
+    # ZERO rows newer than the recovery target. Leave empty to skip (row-count
+    # only). e.g. recencyTable "public.audit", recencyColumn "created_at".
+    recencyTable: ""
+    recencyColumn: ""
   # `mc` (MinIO client) is downloaded at runtime because the
   # supabase/postgres image doesn't include it. Pin both URL and
   # SHA256 together; any mismatch fails the job before secrets are
@@ -855,6 +1618,10 @@ serviceAccount:
   create: true
   annotations: {}
   name: ""
+  # No pawtograder workload talks to the Kubernetes API, so the shared SA's
+  # token is not mounted into pods. The secrets-bootstrap hook Job uses its
+  # own dedicated SA and opts back in explicitly.
+  automountToken: false
 
 # -----------------------------------------------------------------------------
 # Monitoring (Prometheus scraping + Grafana dashboards + Loki logs)
@@ -875,6 +1642,140 @@ monitoring:
   enabled: false
   scrapeInterval: 30s
   scrapeTimeout: 10s
+
+  # Per-component ServiceMonitor toggles (all default on). Set one false when a
+  # component doesn't expose a scrapeable /metrics endpoint in your topology, so
+  # Prometheus doesn't flag it perpetually "down". e.g. storage-api serves
+  # /metrics only on its admin app / in multitenant mode; disable it on a
+  # single-tenant deploy.
+  serviceMonitors:
+    storage: true
+
+  # Acknowledge that a postgres_exporter you manage is pointed at an externally
+  # managed database. ONLY relevant with postgres.enabled=false.
+  #
+  # Every DB-derived series this chart ships comes from the postgres_exporter
+  # SIDECAR inside the chart-managed Postgres StatefulSet (see
+  # templates/postgres-statefulset.yaml). With postgres.enabled=false that pod
+  # does not exist, so there is no collector — and the `metrics` edge function
+  # no longer gathers them either, because doing so cost 77.7% of all database
+  # execution time when Prometheus scraped it once per functions pod (32 in
+  # prod). templates/validations.yaml therefore REFUSES
+  # monitoring.enabled=true + postgres.enabled=false unless you set this,
+  # rather than letting vacuum/buffer-cache/dead-tuple metrics vanish silently.
+  #
+  # Setting this true asserts you run your own exporter against the external
+  # database. The queries.yaml ConfigMap still renders, so you can mount it into
+  # your exporter and keep the same metric names the dashboards and alert rules
+  # expect. The chart's own postgres-exporter Service and ServiceMonitor are NOT
+  # rendered when postgres.enabled=false (they would select no pods and sit
+  # permanently "down"), so supply your own ServiceMonitor for your exporter.
+  externalPostgresExporter: false
+
+  # Alerting rules (Prometheus Operator PrometheusRule) for backup failure /
+  # staleness, ExternalSecret sync failure, and TLS cert expiry — the
+  # operational alerts PRODUCTION-READINESS deferred to cluster monitoring.
+  # `labels` must match the cluster Prometheus's ruleSelector (kube-prometheus-
+  # stack's default is `release: <kps-release>`); set it to what your cluster
+  # uses or the rules won't be picked up. See docs/operations/monitoring-alerting.md.
+  prometheusRules:
+    enabled: true
+    labels: {}          # e.g. { release: kube-prometheus-stack }
+    # In staging/production the chart REFUSES to render an enabled PrometheusRule
+    # with empty `labels`, because kube-prometheus-stack's ruleSelector matches
+    # `release: <name>` and an unlabeled rule is silently never loaded (every
+    # alert inert). Set `labels` to your cluster's ruleSelector, or set this to
+    # true to confirm your Prometheus selects all rules and skip the guard.
+    allowUnselectedRules: false
+    backupMaxAgeHours: 36
+    certExpiryWarningDays: 14
+    # Namespaces to watch for expiring cert-manager Certificates. Defaults to the release
+    # namespace, which is what the rule used to hardcode — and why it could never match: the
+    # wildcard TLS Certificate lives in the ingress controller's namespace, so the shipped expiry
+    # alert watched a set containing no certificates at all. Add the ingress namespace here.
+    certNamespaces: []
+    # Notification email queue depth (messages) above which PawtograderNotificationEmailBacklog fires.
+    notificationEmailBacklog: 500
+    # Oldest-message age (seconds) above which PawtograderQueueOldestMessageAging fires, for any
+    # queue. Scale-free, unlike the depth thresholds above, so it needs no per-term retuning.
+    queueOldestSeconds: 1200
+    # Growth in the Discord DLQ over an hour above which PawtograderDiscordDLQGrowing fires.
+    # A rate, not a level: a poison message sits in the DLQ forever, so a level alert would fire
+    # permanently and get silenced.
+    discordDlqGrowthPerHour: 20
+    # Growth in the gradebook row-recalculate DLQ over an hour above which
+    # PawtograderGradebookRecalcDLQGrowing fires. Much lower than the other DLQ thresholds: a message
+    # only lands here after eight backed-off recovery attempts, and each one is a gradebook row whose
+    # stored score is stale with nothing left to recompute it.
+    gradebookRecalcDlqGrowthPerHour: 5
+    # How long a Discord per-guild circuit breaker may stay open before
+    # PawtograderDiscordCircuitBreakerOpen fires. Must stay comfortably BELOW the breaker's shortest
+    # window, which is the 30-minute permission_storm base in open_discord_circuit(): the gauge is
+    # is_open, which goes false as soon as open_until passes, so any value at or above 30m cannot be
+    # satisfied by a first trip and the alert is silent for the whole of the first incident. This was
+    # 45m and never fired on one. Ten minutes is ten or more consecutive scrapes (so a scrape gap
+    # cannot flap it) with 20 minutes of margin left inside the shortest window.
+    discordCircuitOpenFor: 10m
+    # How long the chart-managed Postgres StatefulSet may report ZERO ready
+    # replicas before PawtograderPostgresUnavailable pages (critical).
+    #
+    # This is the alert that covers a wedged primary. It exists because the
+    # liveness probes were removed (see postgres-statefulset.yaml): nothing
+    # restarts a wedged postmaster automatically any more, so the condition has to
+    # page instead. It is keyed on kube-state-metrics, NOT on anything produced
+    # inside the postgres pod — the exporter sidecar and the metrics edge function
+    # both die with the database, which is exactly why the pre-existing critical
+    # rules cannot detect this (they are `metric > threshold` on series that
+    # disappear, so they fail OPEN).
+    #
+    # Must outlast a NORMAL rollout or the chart pages on every deploy: the
+    # StatefulSet legitimately goes not-ready on any config change. Budget is
+    # roughly preStop fast shutdown (seconds) + a possible cold image pull of the
+    # supabase/postgres image (1-3 min) + postgres start and readiness
+    # (initialDelay 10s + up to 3x5s) — call it 3-4 min worst case on a cold node.
+    # 5m clears that with margin and matches the 5m used by
+    # PawtograderPostgresConnectionsSaturated and PawtograderAsyncQueueBacklog.
+    # Raise it if your nodes pull images slowly; lower it only if images are always
+    # warm.
+    postgresUnavailableFor: 5m
+    # Edge-function pod restarts in 30m above which PawtograderEdgeFunctionsRestarting fires.
+    edgeFunctionRestarts30m: 2
+    # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.
+    edgeFunctionMemoryRatio: 0.85
+    # Fraction of a node's ALLOCATABLE memory, used by this release's own pods, above which
+    # PawtograderEdgeFunctionsNodeMemoryHigh fires. Covers the axis every other rule here misses:
+    # the kernel can OOM-kill a pod that is nowhere near its own limit, because the NODE is full.
+    #
+    # Counts only this namespace's usage, so it is a floor on how full the node is, not the whole
+    # picture -- a node filled by another tenant will not fire it. In exchange the rule is scoped to
+    # nodes we actually run on, and depends only on kube-state-metrics + cadvisor, the same
+    # exporters the rest of this rule group already needs.
+    nodeMemoryRatio: 0.85
+    # Postgres connection-budget saturation (used/max_connections), percent.
+    connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
+    connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
+    # Streaming-standby replay lag (bytes) above which PawtograderReplicaLagHigh
+    # fires (only when postgres.replica.enabled). Primary current LSN − standby
+    # replay_lsn; ~0 on a healthy standby. 100 MiB tolerates a bulk write/migration
+    # burst without flapping while still catching a standby that is falling behind.
+    replicationLagBytesWarning: 104857600  # 100 MiB
+
+  # Alertmanager routing SCAFFOLD (templates/alertmanager-config.yaml). Renders a
+  # prometheus-operator AlertmanagerConfig CR that Grafana Alloy's
+  # mimir.alerts.kubernetes syncs into Mimir. Routes by the `severity` label our
+  # rules set; ships placeholder webhook receivers reading URLs from a Secret.
+  # Off by default. Enable, set `labels` to match Alloy's alertmanagerconfig_
+  # selector, create the webhook Secret, and swap receivers for the real channel.
+  alertmanagerConfig:
+    enabled: false
+    labels: {}                       # e.g. { alertmanager: mimir } — match Alloy's selector
+    webhookSecretName: pawtograder-alertmanager
+    groupWait: "30s"
+    groupInterval: "5m"
+    repeatInterval:
+      default: "4h"
+      critical: "1h"
+      warning: "12h"
 
   # postgres_exporter sidecar in the postgres pod. Connects via TCP to
   # localhost:5432 with supabase_admin. The custom queries ConfigMap is
@@ -901,6 +1802,9 @@ monitoring:
     appBusiness:      true
     rateLimiting:     true
     edgeSoak:         true
+    # Depth AND oldest-message age for every pgmq queue, side by side. Depth alone cannot tell a
+    # busy queue from a stalled one, and depth thresholds need retuning each term; age does not.
+    queuesAndWorkers: true
 
   # Logs are NOT deployed by this chart. Log collection (Alloy
   # DaemonSet shipping into a central Loki) is a cluster-level concern
@@ -909,3 +1813,24 @@ monitoring:
   # the web app's stdout; the cluster Alloy joins pod labels and ships
   # to Loki for you. Querying: Grafana Explore → Loki datasource →
   # {namespace="pawtograder-preview-pr-<id>"}.
+
+# -----------------------------------------------------------------------------
+# Tests
+# -----------------------------------------------------------------------------
+# Helm test hooks. `helm test <release>` (and CI after a deploy) runs these; a
+# non-zero exit fails the release. The smoke test is a fast in-cluster serve
+# check (web readiness path + GoTrue /health through Kong) — the automated
+# post-deploy gate PRODUCTION-READINESS §5 tracked as missing. It complements,
+# and does NOT replace, the human smoke checklist in
+# docs/operations/production-install.md (sign-in, gradebook read, realtime).
+tests:
+  smoke:
+    enabled: true
+    # curl + sh, small and dependency-free.
+    image: curlimages/curl:8.11.1
+    # Must cover both checks' worst-case retry budget (2 × 30 × (5s curl + 2s
+    # sleep) ≈ 420s) so a slow-but-recovering rollout isn't killed mid-retry.
+    activeDeadlineSeconds: 480
+    resources:
+      requests: { cpu: "10m", memory: "16Mi" }
+      limits:   { cpu: "100m", memory: "64Mi" }

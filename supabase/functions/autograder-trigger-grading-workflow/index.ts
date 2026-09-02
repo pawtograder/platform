@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AutograderTriggerGradingWorkflowRequest, CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import { GetCommitResponse, getCommit, repoHasFileAtRef, triggerWorkflow } from "../_shared/GitHubWrapper.ts";
 import {

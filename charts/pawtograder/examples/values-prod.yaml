@@ -1,0 +1,296 @@
+# Production overlay TEMPLATE — copy into your deployment repo and fill in
+# the cluster-specific blanks. Unlike values-staging.yaml this file is not
+# deployed from CI in this repo; it documents what a production install of
+# the chart must look like and encodes the decisions staging deliberately
+# skips.
+#
+# Render-time guard rails (templates/validations.yaml) are armed by
+# `global.environment: production` below: the chart will REFUSE to render
+# with e2e bypasses, secrets.create/autogenerate, seeding, resetOnDrift,
+# floating (-latest) image tags, or an unauthenticated Studio ingress.
+#
+# ── Operator checklist (things a values file can't do for you) ──────────────
+#  [ ] Replicated storage class for postgres (Ceph RBD, EBS, …) — NOT
+#      local-path: node loss must not be data loss.
+#  [ ] Production image builds: the web image bakes NEXT_PUBLIC_SUPABASE_URL
+#      and the cluster's ANON_KEY at build time. Build web/edge/migrations via
+#      release-images.yml workflow_dispatch with web_hostname/api_hostname set
+#      to the prod host(s) and namespace set to the prod namespace; the build
+#      reads ANON_KEY live from <namespace>/pawtograder-jwt (needs the CI secret
+#      KUBECONFIG_BASE64 able to reach the prod cluster). Then pin the tags below.
+#  [ ] OpenBao/ESO paths populated for every bundle you enable
+#      (scripts/setup-openbao-edge-functions.sh) + JWT bundle from
+#      scripts/GenerateJwtKeys.ts. Keys ESCROWED — autogenerate is refused.
+#      This template has the chart render ExternalSecrets for the web and
+#      edge-functions integration Secrets; keep `webBundles` /
+#      `edgeFunctionsBundles` below in sync with what you populate.
+#  [ ] S3 buckets (storage + backups) with versioning; verify the
+#      backup-verify CronJob goes green after the first nightly backup.
+#  [ ] monitoring.prometheusRules.labels set to your cluster Prometheus's
+#      ruleSelector (kube-prometheus-stack: `release: <its release name>`) —
+#      the chart's alerts are inert without it, and the render fails if you
+#      leave it blank.
+#  [ ] An Alertmanager receiver that actually pages someone for
+#      severity: critical — the chart ships alert RULES only; routing lives
+#      with the cluster monitoring stack. Fire a test alert end-to-end.
+#      See docs/operations/monitoring-alerting.md.
+#  [ ] PriorityClasses created cluster-side if you set them below.
+#  [ ] Rehearse the restore + standby-promotion runbooks against this
+#      cluster before term start (docs/operations/disaster-recovery.md,
+#      docs/operations/point-in-time-recovery.md) so RTO is measured, not
+#      guessed.
+
+global:
+  environment: production
+  hostname: pawtograder.example.com   # ← your production hostname
+  apiOnSeparateHost: true
+  # Optional but recommended: give the data/gateway tier scheduling priority
+  # over batch work on shared nodes (create the PriorityClass cluster-side).
+  # priorityClassName: pawtograder-prod
+
+# ----- Network isolation -----------------------------------------------------
+# Default-deny ingress + same-release allow + ingress-controller/monitoring
+# namespace allows. Adjust the namespace selectors to your cluster layout.
+networkPolicy:
+  enabled: true
+  ingressControllerNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress-nginx
+  monitoringNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+
+# ----- Ingress ---------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "55m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Coarse per-IP rate limiting at the edge. nginx multiplies limit-rps by
+    # limit-burst-multiplier (default 5) for the burst bucket; tune for your
+    # class sizes — deadline minutes are the design load, not the average.
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-connections: "40"
+  tls:
+    enabled: true
+    secretName: pawtograder-prod-tls
+
+# ----- Secrets: ESO-only ------------------------------------------------------
+secrets:
+  create: false        # refused in production anyway — listed for clarity
+  autogenerate: false  # ditto
+  names:
+    jwt: pawtograder-jwt
+    postgres: pawtograder-postgres
+    s3: pawtograder-s3
+    smtp: pawtograder-smtp
+    web: pawtograder-web
+    edgeFunctions: pawtograder-edge-functions
+  externalSecret:
+    enabled: true
+    env: production
+    # `web` is the web-app bundle: GoTrue OAuth credentials, LTI secrets,
+    # Discord public keys, and other Next.js-only runtime env.
+    # `llm` carries the LLM-hint provider API keys (OPENAI_API_KEY,
+    # ANTHROPIC_API_KEY, ...) read by app/api/llm-hint/route.ts — without it the
+    # LLM-hint route returns 500 "API key is required".
+    # `discord` is listed here AS WELL AS under edgeFunctionsBundles, and both are
+    # required. It carries DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN, which the
+    # Next.js bot-install routes read directly: /api/discord/install uses the
+    # application id as the authorize URL's client_id, and
+    # /api/discord/install/callback uses the bot token to confirm the bot is really
+    # in the guild before recording the claim. Without it here the install button
+    # answers 500 and no course can connect a Discord server -- and the failure
+    # lands after the instructor has already authorized the bot on Discord's own
+    # screen, which is the most confusing place for it to surface. Two ExternalSecret
+    # entries reading one Bao path is deliberate: the alternative is a second copy of
+    # the same two credentials in the `web` bundle, and two copies rotate apart.
+    webBundles:
+      - web
+      - llm
+      - discord
+    # Edge runtime bundles. These all land in pawtograder-edge-functions.
+    # `misc` carries EDGE_FUNCTION_SECRET for DB->edge callbacks plus other
+    # catch-all runtime env. Add aws-chime/sis/smtp/redis only when those paths
+    # are populated and used in this environment.
+    edgeFunctionsBundles:
+      - github-app
+      - discord
+      - canvas
+      - mcp
+      - sentry
+      - misc
+
+# ----- Postgres: durable, protected ------------------------------------------
+postgres:
+  persistence:
+    storageClass: ""    # ← REPLICATED storage class (not local-path)
+    size: 200Gi
+  # Drains stop at the database until an operator acts — that's the point.
+  pdb:
+    enabled: true
+  resources:
+    requests: { cpu: "2", memory: 8Gi }
+    limits: { cpu: "8", memory: 24Gi }
+
+  # WAL-G continuous archiving → PITR: recovery to any second in the retention
+  # window instead of the nightly dump (~24 h RPO without it). This is the
+  # PRIMARY recovery path the runbooks assume — see
+  # docs/operations/point-in-time-recovery.md. Keep the walg prefix DISTINCT
+  # from the nightly-dump bucket path (backup.s3).
+  walg:
+    enabled: true
+    s3Prefix: ""        # ← e.g. s3://pawtograder-prod-backups/walg
+    s3Endpoint: ""      # ← your S3 endpoint (blank = real AWS)
+    region: us-east-1
+    forcePathStyle: true
+    baseBackup:
+      intervalHours: 24
+      keepBackups: 8    # ~8 days of PITR window
+
+  # Streaming standby: warm failover target + read scaling. Promotion is
+  # MANUAL (see the PITR runbook) — do a promotion drill before term start.
+  # The standby's own volume can be node-local; spreadAcrossNodes keeps it
+  # off the primary's node.
+  replica:
+    enabled: true
+    replicas: 1
+    persistence:
+      storageClass: ""  # ← any per-node class is fine (own volume, other node)
+      size: 200Gi
+
+# ----- Stateless tier ---------------------------------------------------------
+# Chart defaults already give every multi-replica tier: PDB (minAvailable 1),
+# zero-downtime rollouts (maxUnavailable 0), soft node-spread, preStop
+# drains, and baseline security contexts. Pin image tags per release.
+web:
+  replicas: 3
+  image:
+    repository: ghcr.io/pawtograder/web
+    tag: ""             # ← pin per release: vX.Y.Z or <branch>-<sha>
+  e2e:
+    enabled: false
+
+edgeFunctions:
+  policy: per_request
+  # 8, not 16: under per_request this is the cap on concurrent isolates per pod, and each isolate is
+  # admitted with its own memory budget. maxParallelism x edgeFunctions.worker.memoryLimitMb is the
+  # aggregate the runtime will admit, and nothing enforces it -- the runtime's protections are all
+  # per-isolate -- so once it exceeds the container limit the kernel OOM-kills PID 1 and every
+  # in-flight request dies at once (Kong then reports 502).
+  #
+  # The arithmetic has to actually leave headroom, which 8 alone does not: at the chart-default
+  # worker.memoryLimitMb of 256 and the chart-default limits.memory of 2Gi, 8 x 256 MiB is EXACTLY
+  # the container limit, with nothing left for the main.ts demuxer or the Deno runtime -- and the
+  # PawtograderEdgeFunctionsMemoryHigh alert fires at 0.85 of the limit, below the admission budget.
+  # The explicit resources block below raises the limit to 4Gi (matching staging), so the budget is
+  # 50% and a burst has somewhere to go. Keep the three numbers consistent if you change any of them.
+  maxParallelism: 8
+  resources:
+    requests: { cpu: "200m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "4Gi"   }
+  # Mount the same SMTP Secret GoTrue uses, rather than populating a second OpenBao `smtp` bundle.
+  # Without it SMTP_HOST is unset in the functions environment, and the notification processor read
+  # that as "no work found" -- deferring the email queue indefinitely with no error anywhere, which
+  # is why notification email had never worked here.
+  # The Secret provides SMTP_PASS and SMTP_ADMIN_EMAIL; emailTransportConfig.ts accepts those as
+  # well as the older SMTP_PASSWORD / SMTP_FROM names.
+  envFromSecrets:
+    - pawtograder-smtp
+  email:
+    # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
+    enabled: "true"
+  autoscaling:
+    enabled: true
+    minReplicas: 12
+    maxReplicas: 24
+    targetMemoryUtilizationPercentage: 100
+    targetCPUUtilizationPercentage: 200
+  image:
+    repository: ghcr.io/pawtograder/edge-functions
+    tag: ""             # ← pin per release
+  e2e:
+    enabled: false
+    mockGitHub: false
+
+migrations:
+  image:
+    repository: ghcr.io/pawtograder/migrations
+    tag: ""             # ← pin per release
+  resetOnDrift: false   # refused in production anyway
+
+rest:
+  replicas: 3
+realtime:
+  replicas: 3
+auth:
+  replicas: 2
+  enableEmailAutoconfirm: false
+  smtp:
+    enabled: true
+    senderName: "Pawtograder"
+
+# Prod Redis should be ESO-backed, not chart-generated, so no Redis password
+# lands in Helm release state. Point this at a managed or cluster-level Redis
+# you operate separately; the chart syncs REDIS_URL into pawtograder-redis and
+# mounts it into web + edge-functions.
+redis:
+  provider: shared
+  shared:
+    path: apps/pawtograder/redis-production
+
+supavisor:
+  enabled: false        # match staging: everything dials postgres directly
+
+# ----- Object storage ----------------------------------------------------------
+storage:
+  backend: s3
+  s3:
+    endpoint: ""        # ← your S3 endpoint
+    region: us-east-1
+    bucket: pawtograder-prod-storage
+    forcePathStyle: true
+
+# ----- Studio: NOT on the public internet --------------------------------------
+# Prefer kubectl port-forward / VPN. If you must expose it, basic-auth is
+# mandatory (the chart refuses to render otherwise) — and pair it with an
+# IP allowlist annotation on the studio ingress.
+studio:
+  ingressEnabled: false
+
+seed:
+  enabled: false        # refused in production anyway
+
+# ----- Backups + verification ---------------------------------------------------
+backup:
+  enabled: true
+  schedule: "0 4 * * *"
+  retentionDays: 30
+  s3:
+    endpoint: ""        # ← your S3 endpoint
+    region: us-east-1
+    bucket: pawtograder-prod-backups
+  verify:
+    enabled: true
+    schedule: "0 6 * * 1"
+  # Weekly full restore into a scratch DB + row-count assertion — the only
+  # automated proof a dump actually RESTORES, not just parses. Runs on the
+  # primary's node budget; schedule it off-peak, after verify.
+  restoreDrill:
+    enabled: true
+    schedule: "0 8 * * 1"
+
+# ----- Observability -------------------------------------------------------------
+monitoring:
+  enabled: true
+  # REQUIRED: labels the cluster Prometheus's ruleSelector matches, or every
+  # shipped alert (backup failure/staleness, WAL-G, ESO sync, cert expiry) is
+  # silently inert. kube-prometheus-stack defaults to `release: <its release
+  # name>`. The chart refuses to render production with this left empty.
+  # See docs/operations/monitoring-alerting.md.
+  prometheusRules:
+    labels:
+      release: ""       # ← your kube-prometheus-stack release name

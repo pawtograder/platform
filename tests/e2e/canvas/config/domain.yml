@@ -1,0 +1,13 @@
+# Canvas needs to know the domain it is served from so it can build correct
+# redirect/launch URLs and set cookies. For the e2e stack we serve on
+# localhost:<CANVAS_HOST_PORT> (default 3001) and Canvas binds to 3000 inside
+# the container. Override via the CANVAS_DOMAIN env var if you front it with a
+# different host/port.
+development:
+  domain: "<%= ENV.fetch('CANVAS_DOMAIN', 'localhost:3001') %>"
+
+test:
+  domain: "<%= ENV.fetch('CANVAS_DOMAIN', 'localhost:3001') %>"
+
+production:
+  domain: "<%= ENV.fetch('CANVAS_DOMAIN', 'localhost:3001') %>"

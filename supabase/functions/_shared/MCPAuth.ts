@@ -11,9 +11,21 @@
 import { create, verify, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "./SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
-// Environment variable names
+// Environment variable names.
+//
+// These two are different kinds of key and are easy to confuse:
+
+/** Raw HMAC-SHA256 secret used to sign and verify our own `mcp_` API tokens. */
 const MCP_JWT_SECRET_ENV = "MCP_JWT_SECRET";
+
+/**
+ * The ES256 private signing JWK (a JSON object), used to mint short-lived
+ * Supabase JWTs for RLS. NOT the HS256 shared secret that
+ * GoTrue/PostgREST/Realtime use — deployments must scope this env var to the
+ * edge runtime accordingly.
+ */
 const SUPABASE_JWT_SECRET_ENV = "JWT_SECRET";
 const SUPABASE_URL_ENV = "SUPABASE_URL";
 const SUPABASE_ANON_KEY_ENV = "SUPABASE_ANON_KEY";
@@ -55,7 +67,7 @@ async function getMcpJwtKey(): Promise<CryptoKey> {
   const secret = Deno.env.get(MCP_JWT_SECRET_ENV);
 
   if (!secret || secret.length < 32) {
-    throw new MCPAuthError(`${MCP_JWT_SECRET_ENV} must be set and at least 32 characters`);
+    throw new MCPConfigError(`${MCP_JWT_SECRET_ENV} must be set and at least 32 characters`);
   }
 
   return await crypto.subtle.importKey(
@@ -74,28 +86,28 @@ async function getSupabaseJwtKey(): Promise<{ key: CryptoKey; kid: string }> {
   const secret = Deno.env.get(SUPABASE_JWT_SECRET_ENV);
 
   if (!secret) {
-    throw new MCPAuthError(
+    throw new MCPConfigError(
       `${SUPABASE_JWT_SECRET_ENV} must be set. Generate with: supabase gen signing-key --algorithm ES256`
     );
   }
 
   if (!secret.startsWith("{")) {
-    throw new MCPAuthError("JWT_SECRET must be a JWK JSON object for ES256 signing");
+    throw new MCPConfigError("JWT_SECRET must be a JWK JSON object for ES256 signing");
   }
 
   const jwkFull = JSON.parse(secret);
   const kid = jwkFull.kid;
 
   if (!kid) {
-    throw new MCPAuthError("JWK must have a 'kid' field");
+    throw new MCPConfigError("JWK must have a 'kid' field");
   }
 
   if (jwkFull.kty !== "EC" || jwkFull.crv !== "P-256") {
-    throw new MCPAuthError("JWK must be an EC key with P-256 curve (ES256)");
+    throw new MCPConfigError("JWK must be an EC key with P-256 curve (ES256)");
   }
 
   if (!jwkFull.d) {
-    throw new MCPAuthError("JWK must include private key component 'd'");
+    throw new MCPConfigError("JWK must include private key component 'd'");
   }
 
   // Create a clean JWK with only the fields needed for import
@@ -151,8 +163,12 @@ export async function verifyApiToken(token: string): Promise<MCPApiTokenPayload 
     token = token.slice(MCP_TOKEN_PREFIX.length);
   }
 
+  // Resolved outside the try: a missing or too-short MCP_JWT_SECRET is a
+  // deployment fault, and swallowing it below would report the caller's token as
+  // invalid (401) for a problem they cannot fix.
+  const key = await getMcpJwtKey();
+
   try {
-    const key = await getMcpJwtKey();
     const payload = (await verify(token, key)) as MCPApiTokenPayload;
 
     // Validate required claims
@@ -190,8 +206,10 @@ export async function isTokenRevoked(tokenId: string): Promise<boolean> {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!supabaseUrl || !serviceRoleKey) {
-    // Fail closed - treat as revoked if we can't check
-    return true;
+    // A deployment fault, not a revoked token. Returning true here reported
+    // "API token has been revoked" (401) to every valid caller and never
+    // reached the config check below, so the misconfiguration was invisible.
+    throw new MCPConfigError("Server configuration error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
   }
 
   const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey);
@@ -203,8 +221,11 @@ export async function isTokenRevoked(tokenId: string): Promise<boolean> {
     .maybeSingle();
 
   if (error) {
-    // Fail closed - treat as revoked if we can't check
-    return true;
+    // Still fail closed — the request is rejected — but as a reportable server
+    // fault rather than a 401 "revoked". A database or permission outage here
+    // rejects every valid token, and reporting it as a revocation made that
+    // invisible to monitoring: a 401 is deliberately not sent to Sentry.
+    throw new MCPAuthError(`Could not verify token revocation status: ${error.message}`, 503);
   }
 
   return !!data;
@@ -255,7 +276,7 @@ export async function createAuthenticatedSupabaseClient(userId: string): Promise
   const anonKey = Deno.env.get(SUPABASE_ANON_KEY_ENV);
 
   if (!supabaseUrl || !anonKey) {
-    throw new MCPAuthError("Server configuration error");
+    throw new MCPConfigError("Server configuration error");
   }
 
   const jwt = await mintSupabaseJwt(userId);
@@ -310,7 +331,7 @@ export async function authenticateMCPRequest(authHeader: string | null): Promise
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
   if (!supabaseUrl || !serviceRoleKey) {
-    throw new MCPAuthError("Server configuration error");
+    throw new MCPConfigError("Server configuration error");
   }
 
   // Check that user has instructor/grader role somewhere
@@ -324,11 +345,11 @@ export async function authenticateMCPRequest(authHeader: string | null): Promise
     .in("role", ["instructor", "grader"]);
 
   if (rolesError) {
-    throw new MCPAuthError("Failed to verify user permissions");
+    throw new MCPAuthError("Failed to verify user permissions", 500);
   }
 
   if (!roles || roles.length === 0) {
-    throw new MCPAuthError("User must be an instructor or grader to use MCP");
+    throw new MCPAuthError("User must be an instructor or grader in at least one class", 403);
   }
 
   // Create authenticated Supabase client
@@ -354,17 +375,46 @@ export function hasScope(context: MCPAuthContext, scope: MCPScope): boolean {
  */
 export function requireScope(context: MCPAuthContext, scope: MCPScope): void {
   if (!hasScope(context, scope)) {
-    throw new MCPAuthError(`Missing required scope: ${scope}`);
+    throw new MCPAuthError(`Missing required scope: ${scope}`, 403);
   }
 }
 
 /**
- * Custom error class for MCP authentication errors
+ * Custom error class for MCP authentication errors.
+ *
+ * Carries the HTTP status it should surface as. Callers previously recovered the
+ * status by substring-matching the message, which quietly mapped
+ * "Invalid or expired API token" to 403 — so the CLI never showed its
+ * re-authenticate hint for the one case it was written for.
+ *
+ * `shouldReport` drives whether the error is worth sending to Sentry: a caller
+ * arriving with an expired or malformed token is expected traffic, not an
+ * incident, and reporting it buries real failures in noise.
  */
 export class MCPAuthError extends Error {
-  constructor(message: string) {
+  readonly status: number;
+
+  constructor(message: string, status: number = 401) {
     super(message);
     this.name = "MCPAuthError";
+    this.status = status;
+  }
+
+  /** Server-side faults (5xx) are ours to fix; client 4xx are not. */
+  get shouldReport(): boolean {
+    return this.status >= 500;
+  }
+}
+
+/**
+ * Server-side misconfiguration (missing/invalid signing keys, missing Supabase
+ * env). Distinct from MCPAuthError so callers report it as 500 rather than
+ * blaming the caller's token for a problem on the server.
+ */
+export class MCPConfigError extends MCPAuthError {
+  constructor(message: string) {
+    super(message, 500);
+    this.name = "MCPConfigError";
   }
 }
 
@@ -379,8 +429,23 @@ export async function updateTokenLastUsed(tokenId: string): Promise<void> {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    await adminSupabase.from("api_tokens").update({ last_used_at: new Date().toISOString() }).eq("token_id", tokenId);
-  } catch {
-    // Non-critical, silently ignore
+    const { error } = await adminSupabase
+      .from("api_tokens")
+      .update({ last_used_at: new Date().toISOString() })
+      .eq("token_id", tokenId);
+    // supabase-js RESOLVES with an { error } instead of throwing, so the previous
+    // bare await could not fail and the catch below could not fire. Callers had a
+    // `.catch()` that captured to Sentry and was therefore dead code: a token
+    // whose last_used_at silently stopped updating looked identical to one that
+    // was never used, which is exactly the signal this column exists to provide.
+    if (error) {
+      Sentry.captureException(error, {
+        tags: { operation: "update_token_last_used", tokenId }
+      });
+    }
+  } catch (e) {
+    // Still non-fatal for the request — the caller has already responded — but no
+    // longer invisible.
+    Sentry.captureException(e, { tags: { operation: "update_token_last_used", tokenId } });
   }
 }

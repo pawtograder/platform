@@ -36,7 +36,7 @@ export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
  * @param config - The parsed YAML object to validate
  * @returns An object with isValid boolean and error message if invalid
  */
-function validatePawtograderConfig(config: unknown): { isValid: boolean; error?: string } {
+export function validatePawtograderConfig(config: unknown): { isValid: boolean; error?: string } {
   if (!config || typeof config !== "object") {
     return { isValid: false, error: "Configuration file is empty or not a valid YAML object" };
   }

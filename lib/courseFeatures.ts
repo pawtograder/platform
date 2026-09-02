@@ -9,7 +9,9 @@ export const COURSE_FEATURES = {
   GRADEBOOK: "gradebook",
   SURVEYS: "surveys",
   POLLS: "polls",
-  GRADEBOOK_WHAT_IF: "gradebook-what-if"
+  GRADEBOOK_WHAT_IF: "gradebook-what-if",
+  SUGGESTED_DUE_DATE: "suggested-due-date",
+  DISCORD_STUDENT_JOIN: "discord-student-join"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -96,6 +98,29 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: false,
     switchLabel: "Allow What-If grade simulations for students",
     ariaLabel: "Enable student gradebook What-If"
+  },
+  {
+    name: COURSE_FEATURES.SUGGESTED_DUE_DATE,
+    title: "Suggested due dates",
+    description:
+      "For mastery/standards grading, where the suggested due date is the date students work to and the due date is the end of the resubmission window. When enabled, students see the suggested due date as the assignment's due date, with the hard deadline beneath it. Staff also get a Suggested Due Date column on Manage Assignments. Assignments with no suggested due date are unaffected.",
+    defaultWhenMissing: false,
+    navAffectsStaff: false,
+    switchLabel: "Present the suggested due date as the due date",
+    ariaLabel: "Enable suggested due date emphasis for this course"
+  },
+  {
+    name: COURSE_FEATURES.DISCORD_STUDENT_JOIN,
+    title: "Student Discord invitations",
+    description:
+      "When enabled, students see their invitation to this course's Discord server on their dashboard, and the sync creates one for any student who has linked a Discord account and is not in the server yet. When disabled, no invitations are created and students are not shown one — role syncing for students already in the server is unaffected. Requires a Discord server to be configured for the course.",
+    // Off unless a course opts in. Before this flag existed no student-facing route to a Discord
+    // invitation existed at all, so defaulting on would newly invite every student of every course
+    // that happens to have a server configured -- a change nobody asked for, made on their behalf.
+    defaultWhenMissing: false,
+    navAffectsStaff: false,
+    switchLabel: "Let students join this course's Discord server",
+    ariaLabel: "Enable student Discord invitations for this course"
   }
 ];
 
@@ -116,8 +141,15 @@ export function courseFeatureEffectiveEnabled(
   name: CourseFeatureName,
   defaultWhenMissing: boolean
 ): boolean {
-  const row = features?.find((f) => f.name === name);
-  return row?.enabled ?? defaultWhenMissing;
+  // `classes.features` is a bare jsonb column with no default and no CHECK, and callers reach it
+  // through a cast. A non-array value would make `.find` throw — inside a Server Component that
+  // takes down the whole page — so treat anything that is not an array as "no entries".
+  const row = Array.isArray(features) ? features.find((f) => f?.name === name) : undefined;
+  // `enabled` is checked for being an actual boolean, not merely truthy. The column is unconstrained
+  // jsonb, so an entry can hold `"false"` — a string, which is truthy — and returning it raw made
+  // this disagree with the SQL side, which falls back to the default for anything that is not a JSON
+  // boolean. A gate that says enabled while the worker refuses to act is worse than either answer.
+  return typeof row?.enabled === "boolean" ? row.enabled : defaultWhenMissing;
 }
 
 export function courseFeatureEnabled(

@@ -11,6 +11,7 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -142,13 +143,93 @@ test.describe("Student grade view", () => {
     await expect(page.getByRole("heading", { name: "Autograder", exact: true })).toBeVisible();
 
     // The "Grade" tab is active in the sub-nav.
-    await expect(page.getByRole("button", { name: "Grade", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Grade", exact: true })).toBeVisible();
 
     // The grading sidebar is dropped on the Grade tab (the ledger replaces it).
     await expect(page.locator("[data-grading-summary-aside]")).toHaveCount(0);
 
+    // Heading hierarchy (WCAG 1.3.1/1.3.2): submission header h1, ledger sections h3,
+    // criterion h4, check names h5 — so screen-reader heading navigation walks the
+    // grading summary in reading order.
+    await expect(page.locator("h1").first()).toContainText(/submission #/i);
+    await expect(page.getByRole("heading", { level: 3, name: "Hand grading" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 4 }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { level: 5 }).first()).toBeVisible();
+
+    await assertStudentPageAccessible(page, "grade ledger released submission");
+
     // No render loop while the page settled.
     expect(updateDepthErrors).toEqual([]);
+  });
+
+  test("results page anchors land focus on the test heading (WCAG 1.3.2/2.4.3)", async ({ page }) => {
+    test.setTimeout(120_000);
+    await loginAsUser(page, student!, course);
+
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submissionId}/results`, {
+      waitUntil: "domcontentloaded"
+    });
+
+    await expect(page.getByRole("heading", { level: 2, name: "Test Results" })).toBeVisible({ timeout: 30_000 });
+
+    // Click the first test's summary-table link; the anchor target is the detail card's
+    // h3 (tabIndex=-1), so focus must land on the heading — not an unlabeled container.
+    const summaryLink = page.locator('a[href^="#test-"]').first();
+    await expect(summaryLink).toBeVisible();
+    const linkedTestId = (await summaryLink.getAttribute("href"))!.slice(1);
+    await summaryLink.click();
+
+    const detailHeading = page.locator(`h3#${linkedTestId}`);
+    await expect(detailHeading).toBeVisible();
+    await expect(detailHeading).toBeFocused();
+
+    await assertStudentPageAccessible(page, "autograder results detail");
+  });
+
+  test("workflow errors are exposed as alerts on the results page (WCAG 3.3.1)", async ({ page }) => {
+    test.setTimeout(120_000);
+
+    const errorAssignment = await insertAssignment({
+      due_date: addDays(new Date(), 1).toUTCString(),
+      class_id: course.id,
+      name: "Grade View Error Assignment",
+      assignment_slug: `e2e-grade-error-${course.id}`
+    });
+    const errorSub = await insertPreBakedSubmission({
+      student_profile_id: student!.private_profile_id,
+      assignment_id: errorAssignment.id,
+      class_id: course.id
+    });
+
+    // Attach a student-visible workflow error to the submission.
+    const { data: repo } = await supabase
+      .from("repositories")
+      .select("id")
+      .eq("repository", errorSub.repository_name)
+      .single();
+    const { error: insertError } = await supabase.from("workflow_run_error").insert({
+      class_id: course.id,
+      submission_id: errorSub.submission_id,
+      repository_id: repo!.id,
+      name: "Autograder configuration mismatch",
+      is_private: false
+    });
+    expect(insertError).toBeNull();
+
+    await loginAsUser(page, student!, course);
+    await page.goto(
+      `/course/${course.id}/assignments/${errorAssignment.id}/submissions/${errorSub.submission_id}/results`,
+      {
+        waitUntil: "domcontentloaded"
+      }
+    );
+
+    // The error surface is a real role="alert" live region announcing the failure.
+    const alert = page.getByRole("alert").filter({ hasText: "Submission Error" });
+    await expect(alert).toBeVisible({ timeout: 30_000 });
+    await expect(alert).toContainText("Autograder configuration mismatch");
+
+    await assertStudentPageAccessible(page, "results page with grader error");
   });
 
   test("defaults to the grade tab once the review is released", async ({ page }) => {

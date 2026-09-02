@@ -9,11 +9,15 @@ metadata:
 spec:
   schedule: {{ .Values.auditPartitions.schedule | quote }}
   concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.auditPartitions.startingDeadlineSeconds | default 1800 }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       backoffLimit: 2
+      # If audit_maintain_partitions() wedges on a lock, fail the job loudly
+      # instead of holding the lock contention open indefinitely.
+      activeDeadlineSeconds: {{ .Values.auditPartitions.activeDeadlineSeconds | default 900 }}
       template:
         metadata:
           labels:

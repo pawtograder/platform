@@ -20,15 +20,15 @@ import {
 import { Controller, FieldErrors, FieldValues } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { summarizeInvalidFields } from "@/lib/assignmentFormErrors";
-import { appendTimezoneOffset } from "@/lib/utils";
+import { calculateLabBasedDueDate } from "@/lib/labDueDate";
+import { appendTimezoneOffset, parseZonedFormDate, toDateTimeLocalValue } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { addMinutes } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
-import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
+import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LuCheck } from "react-icons/lu";
@@ -36,6 +36,7 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
+import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import { useTableControllerTableValues } from "@/lib/TableController";
 
 /**
@@ -80,7 +81,12 @@ function Field({ orientation, ...props }: FieldProps) {
   );
 }
 
-// Helper function to calculate effective due date for a lab section
+// Helper function to calculate effective due date for a lab section.
+// Delegates to lib/labDueDate, the single implementation shared with useAssignmentDueDate,
+// CourseController.calculateEffectiveDueDate and calculate_effective_due_date -- so the deadline
+// this preview promises the instructor is the one students are actually held to. The previous
+// local copy built its timestamps with `new TZDate("<date>T<time>", tz)`, which parses a
+// timezone-less string as UTC and therefore previewed the wrong wall-clock time.
 function calculateLabSectionDueDate(
   labSection: LabSection,
   labSectionMeetings: LabSectionMeeting[],
@@ -88,35 +94,13 @@ function calculateLabSectionDueDate(
   minutesDueAfterLab: number,
   timezone: string
 ): Date | null {
-  // Find the most recent lab section meeting before the assignment's original due date
-  const relevantMeetings = labSectionMeetings
-    .filter((meeting) => {
-      if (meeting.lab_section_id !== labSection.id || meeting.cancelled) {
-        return false;
-      }
-
-      // Combine meeting date with lab section end time
-      const meetingEndTime = new TZDate(meeting.meeting_date + "T" + (labSection.end_time || "23:59:59"), timezone);
-
-      return meetingEndTime <= originalDueDate;
-    })
-    .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
-
-  if (relevantMeetings.length === 0) {
-    return null; // No lab meeting found before due date
-  }
-
-  // Get the most recent lab meeting
-  const mostRecentMeeting = relevantMeetings[0];
-
-  // Combine meeting date with lab section end time
-  const labMeetingEndTime = new TZDate(
-    mostRecentMeeting.meeting_date + "T" + (labSection.end_time || "23:59:59"),
-    timezone
-  );
-
-  // Add the minutes offset
-  return addMinutes(labMeetingEndTime, minutesDueAfterLab);
+  return calculateLabBasedDueDate({
+    meetings: labSectionMeetings.filter((meeting) => meeting.lab_section_id === labSection.id),
+    endTime: labSection.end_time,
+    timeZone: timezone,
+    assignmentDueDate: originalDueDate,
+    minutesDueAfterLab
+  });
 }
 
 function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
@@ -212,17 +196,6 @@ function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignm
 }
 
 function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
-  const { course_id } = useParams();
-  const { data: otherAssignments } = useList({
-    resource: "assignments",
-    queryOptions: { enabled: !!course_id },
-    filters: [
-      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
-      { field: "group_config", operator: "ne", value: "individual" }
-    ],
-    pagination: { pageSize: 1000 }
-  });
-
   const [withGroups, setWithGroups] = useState<boolean>(() => {
     const groupConfig = form.getValues("group_config");
     return groupConfig === "groups" || groupConfig === "both";
@@ -330,24 +303,21 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
                 <Controller
                   name="allow_student_formed_groups"
                   control={control}
-                  rules={{
-                    validate: (v) => {
-                      const gc = getValues("group_config");
-                      if (gc !== "groups" && gc !== "both") return true;
-                      return v === true || v === false ? true : "This is required for group assignments";
-                    }
-                  }}
                   render={({ field }) => (
+                    // The select has no empty option, so an unset value (new
+                    // assignment, or a legacy row with null) must still render a
+                    // concrete choice. Treat anything other than `true` as
+                    // "Instructor only" — matching how the rest of the app reads
+                    // this column (`allow_student_formed_groups !== true`). A null
+                    // value is therefore valid (= instructor-formed), so no
+                    // required validation is needed.
                     <NativeSelectRoot>
                       <NativeSelectField
                         name={field.name}
                         ref={field.ref}
-                        value={field.value === true ? "true" : field.value === false ? "false" : ""}
+                        value={field.value === true ? "true" : "false"}
                         onBlur={field.onBlur}
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          field.onChange(raw === "true" ? true : raw === "false" ? false : null);
-                        }}
+                        onChange={(e) => field.onChange(e.target.value === "true")}
                       >
                         <option value="true">Students can form groups</option>
                         <option value="false">Instructor only</option>
@@ -360,43 +330,17 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
             <Fieldset.Content>
               <Field
                 orientation="horizontal"
-                label="Copy groups from assignment"
-                helperText="Copy groups from another assignment"
-              >
-                <NativeSelectRoot>
-                  <NativeSelectField {...register("copy_groups_from_assignment", { required: false })}>
-                    <option value="">None</option>
-                    {otherAssignments?.data?.map((assignment) => (
-                      <option key={assignment.id} value={assignment.id}>
-                        {assignment.title}
-                      </option>
-                    ))}
-                  </NativeSelectField>
-                </NativeSelectRoot>
-              </Field>
-            </Fieldset.Content>
-            <Fieldset.Content>
-              <Field
-                orientation="horizontal"
                 label="Group formation deadline"
-                helperText="The deadline by which groups must be formed. If set, students will not be able to change groups after this deadline."
+                helperText="Optional: the deadline by which groups must be formed. If set, students will not be able to change groups after this deadline; leave empty for no deadline."
                 errorText={errors.group_formation_deadline?.message?.toString()}
                 invalid={errors.group_formation_deadline ? true : false}
-                required={withGroups}
               >
                 <Controller
                   name="group_formation_deadline"
                   control={control}
-                  rules={{ required: "This is required" }}
+                  rules={{ required: false }}
                   render={({ field }) => {
-                    const hasATimezoneOffset =
-                      field.value &&
-                      (field.value.charAt(field.value.length - 6) === "+" ||
-                        field.value.charAt(field.value.length - 6) === "-");
-                    const localValue =
-                      field.value && hasATimezoneOffset
-                        ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                        : field.value;
+                    const localValue = toDateTimeLocalValue(field.value, timezone);
                     return (
                       <Input
                         type="datetime-local"
@@ -542,8 +486,8 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
           <Field
             orientation="horizontal"
             label="Require self-evaluation"
-            errorText={errors.group_config?.message?.toString()}
-            invalid={errors.group_config ? true : false}
+            errorText={errors.eval_config?.message?.toString()}
+            invalid={errors.eval_config ? true : false}
             required={true}
           >
             <NativeSelectRoot {...register("eval_config", { required: true })}>
@@ -566,8 +510,8 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
                 orientation="horizontal"
                 label="Hours due after this assignment"
                 helperText="The number of hours between this assignment's deadline and when the self-evaluation is due"
-                errorText={errors.min_group_size?.message?.toString()}
-                invalid={errors.min_group_size ? true : false}
+                errorText={errors.deadline_offset?.message?.toString()}
+                invalid={errors.deadline_offset ? true : false}
                 required={withEval}
               >
                 <Input
@@ -606,12 +550,7 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
                   control={control}
                   render={({ field }) => {
                     const raw = field.value as string | null | undefined;
-                    const hasATimezoneOffset =
-                      typeof raw === "string" &&
-                      raw.length >= 6 &&
-                      (raw.charAt(raw.length - 6) === "+" || raw.charAt(raw.length - 6) === "-");
-                    const localValue =
-                      raw && hasATimezoneOffset ? formatInTimeZone(raw, timezone, "yyyy-MM-dd'T'HH:mm") : (raw ?? "");
+                    const localValue = toDateTimeLocalValue(raw, timezone);
                     return (
                       <Input
                         type="datetime-local"
@@ -621,6 +560,417 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
                       />
                     );
                   }}
+                />
+              </Field>
+            </Fieldset.Content>
+          </>
+        )}
+      </CardBody>
+    </CardRoot>
+  );
+}
+
+function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
+  const { course_id } = useParams();
+  const {
+    register,
+    control,
+    watch,
+    formState: { errors }
+  } = form;
+
+  const repoMode = watch("repo_mode") ?? "template_only_staff";
+  const requirePR = watch("protect_require_pull_request") ?? false;
+
+  // Source assignment options for the fork-from-prior mode (issue #700).
+  // Exclude the current assignment when editing to prevent self-references,
+  // and exclude any assignment that doesn't have per-student repos to fork.
+  // We filter the no-repo modes client-side because @refinedev/supabase emits
+  // a malformed PostgREST filter for `operator: "nin"` (missing parens around
+  // the value list), which PostgREST then rejects with a parse error.
+  const currentId = form.getValues("id");
+  const { data: priorAssignments } = useList<Assignment>({
+    resource: "assignments",
+    queryOptions: { enabled: !!course_id && repoMode === "fork_from_prior_assignment" },
+    filters: [{ field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }],
+    pagination: { pageSize: 1000 }
+  });
+  const eligibleSourceAssignments = priorAssignments?.data?.filter(
+    (a) => a.repo_mode !== "none" && a.repo_mode !== "no_submission"
+  );
+
+  // Branch protection only makes sense when a repository is actually created, and
+  // the same is true of the autograder: it runs as a GitHub Actions workflow inside
+  // the student repo, so there is nowhere for it to run without one.
+  const noRepoMode = repoMode === "none" || repoMode === "no_submission";
+  const protectionDisabled = noRepoMode;
+  // PR submissions are ingested by the PR webhook and never produce grader_results,
+  // so PR mode cannot have an autograder either. Both save paths coerce the persisted
+  // value; mirroring it here keeps the checkbox and the fork-agreement warning below
+  // agreeing with what will actually be written.
+  const autograderDisabled = noRepoMode || watch("submission_mode") === "pr";
+  // Shown as unchecked while a no-repo or PR mode is selected, WITHOUT writing the form
+  // value. Forcing the value to false in an effect was a one-way door: flipping repo_mode
+  // to 'none' and back left it false with the checkbox re-enabled and unchecked, silently
+  // turning a mode experiment into a repo-only assignment. Both save paths already coerce
+  // the persisted value, so display is all that is needed here.
+  const autograderChecked = !autograderDisabled && watch("has_autograder") !== false;
+  // fork-from-prior adopts the SOURCE assignment's handout repo and forks each
+  // student's source-assignment repo, so the two assignments share one handout
+  // and cannot disagree about the autograder. Surface the clash here rather than
+  // letting assignment-create-handout-repo reject the save.
+  const sourceAssignmentId = watch("source_assignment_id");
+  const selectedSource =
+    repoMode === "fork_from_prior_assignment" && sourceAssignmentId
+      ? eligibleSourceAssignments?.find((a) => a.id === Number(sourceAssignmentId))
+      : undefined;
+  const forkAutograderMismatch = !!selectedSource && (selectedSource.has_autograder !== false) !== autograderChecked;
+
+  return (
+    <CardRoot>
+      <CardHeader>
+        <CardTitle>Student Repositories</CardTitle>
+      </CardHeader>
+      <CardBody gap="5px">
+        <Fieldset.Content>
+          <Field
+            label="Repository configuration"
+            helperText="How student repositories are created and what they can see of the handout."
+            errorText={errors.repo_mode?.message?.toString()}
+            invalid={errors.repo_mode ? true : false}
+            required={true}
+          >
+            <NativeSelectRoot>
+              <NativeSelectField {...register("repo_mode", { required: true })}>
+                <option value="template_only_staff">Template repo (staff-only) — students get fresh copies</option>
+                <option value="template_with_student_forks">
+                  Template repo (visible to students) — students fork it
+                </option>
+                <option value="fork_from_prior_assignment">
+                  Fork from prior assignment — multi-checkpoint workflow
+                </option>
+                <option value="none">No repository — students upload submission files directly</option>
+                <option value="no_submission">
+                  No submission — graded manually, no artifact (e.g. presentations, oral exams)
+                </option>
+              </NativeSelectField>
+            </NativeSelectRoot>
+          </Field>
+        </Fieldset.Content>
+        {repoMode === "fork_from_prior_assignment" && (
+          <Fieldset.Content>
+            <Field
+              label="Source assignment"
+              helperText="Each student's repository on this assignment will be a fork of their own repository on the chosen source assignment."
+              errorText={errors.source_assignment_id?.message?.toString()}
+              invalid={errors.source_assignment_id ? true : false}
+              required={true}
+            >
+              <NativeSelectRoot>
+                <NativeSelectField
+                  {...register("source_assignment_id", {
+                    required: "Required when forking from a prior assignment",
+                    valueAsNumber: true
+                  })}
+                >
+                  <option value="">Select an assignment...</option>
+                  {eligibleSourceAssignments
+                    ?.filter((a) => a.id !== currentId)
+                    .map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.title}
+                      </option>
+                    ))}
+                </NativeSelectField>
+              </NativeSelectRoot>
+            </Field>
+          </Fieldset.Content>
+        )}
+        <Box mt={3}>
+          <Text fontWeight="medium" mb={1} color={autograderDisabled ? "fg.subtle" : "fg.default"}>
+            Autograder
+          </Text>
+          <Text fontSize="sm" color="fg.muted" mb={3}>
+            {noRepoMode
+              ? "The autograder runs as a GitHub Actions workflow in the student repository, so it is unavailable for assignments with no repository."
+              : autograderDisabled
+                ? "Pull-request submissions are graded without GitHub Actions, so the autograder is unavailable in pull-request mode."
+                : "Whether student pushes are graded automatically by GitHub Actions."}
+          </Text>
+          <Fieldset.Content>
+            <Field
+              helperText={
+                autograderDisabled
+                  ? undefined
+                  : autograderChecked
+                    ? "Handout and student repositories include the grading workflow (.github/workflows/grade.yml), and a push with #submit in the commit message runs it."
+                    : "Handout and student repositories are created WITHOUT the grading workflow, so no GitHub Actions run and students never see a failing check. Every push to the student repository creates a submission for you to grade by hand — no #submit needed. A solution repository is still created for your reference solution and grading notes."
+              }
+            >
+              {forkAutograderMismatch && (
+                <Text fontSize="sm" color="fg.error" mb={2}>
+                  This assignment forks from &quot;{selectedSource?.title}&quot;, so both share that assignment&apos;s
+                  handout repository and must have the same autograder setting. &quot;{selectedSource?.title}&quot; has
+                  the autograder {selectedSource?.has_autograder === false ? "disabled" : "enabled"}
+                  {autograderDisabled
+                    ? ", and this assignment cannot have one in its current mode. Pick a different source assignment, or a repository configuration that gives this assignment its own handout."
+                    : ", so this assignment must too. Saving will fail until they match."}
+                </Text>
+              )}
+              <Controller
+                name="has_autograder"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={autograderChecked}
+                    disabled={autograderDisabled}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Enable autograder (GitHub Actions)</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+        </Box>
+        <Box mt={3}>
+          <Text fontWeight="medium" mb={1} color={protectionDisabled ? "fg.subtle" : "fg.default"}>
+            Branch Protection
+          </Text>
+          <Text fontSize="sm" color="fg.muted" mb={3}>
+            {protectionDisabled
+              ? repoMode === "no_submission"
+                ? "Branch protection is unavailable: this assignment has no repository and no student submission."
+                : "Branch protection is unavailable when the assignment has no repository."
+              : "Rules applied to the default branch of every student/group repository for this assignment."}
+          </Text>
+          <Fieldset.Content>
+            <Field helperText="Block force-pushes (non-fast-forward updates) to the default branch.">
+              <Controller
+                name="protect_block_force_push"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value !== false}
+                    disabled={protectionDisabled}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Block force-push to default branch</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
+            <Field helperText="Require changes to the default branch to go through a pull request.">
+              <Controller
+                name="protect_require_pull_request"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value === true}
+                    disabled={protectionDisabled}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Require pull request to update default branch</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+          {requirePR && !protectionDisabled && (
+            <Fieldset.Content>
+              <Field
+                label="Required reviewers"
+                helperText="Minimum number of approving reviews before a pull request can be merged (0 = no minimum)."
+                errorText={errors.protect_required_reviewers?.message?.toString()}
+                invalid={errors.protect_required_reviewers ? true : false}
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  max={5}
+                  {...register("protect_required_reviewers", {
+                    valueAsNumber: true,
+                    min: { value: 0, message: "Must be at least 0" },
+                    max: { value: 5, message: "Must be at most 5" }
+                  })}
+                />
+              </Field>
+            </Fieldset.Content>
+          )}
+        </Box>
+      </CardBody>
+    </CardRoot>
+  );
+}
+
+/**
+ * How a submission is produced (push vs PR). For PR mode the upstream repo PRs
+ * target IS the assignment's handout repo (template_repo) — kept equal so the
+ * two can't drift — so it is shown read-only rather than typed/installation-checked.
+ *
+ * The available choices depend on the repo mode (Student Repositories):
+ *   - no repository (none / no_submission): there is nothing to push to or PR
+ *     against, so this whole section is hidden.
+ *   - template-only (template_only_staff): students get fresh copies of the
+ *     handout, so a push to their repo is the only kind of submission.
+ *   - fork modes (template_with_student_forks / fork_from_prior_assignment):
+ *     students have a fork, so they can push to it OR open a PR against the
+ *     upstream — PR is offered only here.
+ */
+function SubmissionModeSubform({ form }: { form: UseFormReturnType<Assignment> }) {
+  const {
+    register,
+    control,
+    watch,
+    setValue,
+    formState: { errors }
+  } = form;
+
+  const repoMode = watch("repo_mode") ?? "template_only_staff";
+  const submissionMode = watch("submission_mode") ?? "push";
+  const prIdentification = watch("pr_identification") ?? "base_branch";
+  // Option A: for pr-mode the upstream repo IS the handout repo (template_repo) —
+  // students fork the handout and PR back to it. It is set automatically (the
+  // handout-creation edge function points upstream_repo at the handout), shown
+  // read-only here, so there is no separate upstream to type or install-check.
+  const templateRepo = watch("template_repo");
+
+  // Only fork-based repo modes give students a fork to PR from; no-repo modes
+  // have no submission at all.
+  const noRepo = repoMode === "none" || repoMode === "no_submission";
+  const canPr = repoMode === "template_with_student_forks" || repoMode === "fork_from_prior_assignment";
+  const isPr = canPr && submissionMode === "pr";
+
+  // Keep submission_mode consistent with the repo mode: if the repo mode can't
+  // support PR (template-only or no repo), force 'push' so a stale 'pr' value —
+  // and its upstream/PR config — isn't persisted after switching repo modes.
+  useEffect(() => {
+    if (!canPr && submissionMode !== "push") {
+      setValue("submission_mode", "push", { shouldDirty: true });
+    }
+  }, [canPr, submissionMode, setValue]);
+
+  // No repository → no push and no PR; nothing to configure here.
+  if (noRepo) {
+    return null;
+  }
+
+  return (
+    <CardRoot>
+      <CardHeader>
+        <CardTitle>Submission mode</CardTitle>
+        <Text fontSize="sm" color="fg.muted">
+          {canPr
+            ? "Whether a submission is a push to the student repository or a pull request against an upstream repository."
+            : "Students get a fresh copy of the handout, so a push to their repository is the submission."}
+        </Text>
+      </CardHeader>
+      <CardBody gap="5px">
+        <Fieldset.Content>
+          <Field
+            orientation="horizontal"
+            label="Submission mode"
+            helperText={
+              canPr
+                ? "Push: a push to the student repo is the submission (today's default). Pull request: a PR against an upstream/class repo is the submission."
+                : "A push to the student repo is the submission. Pull-request mode requires a fork-based repository configuration."
+            }
+          >
+            <NativeSelectRoot>
+              <NativeSelectField {...register("submission_mode")}>
+                <option value="push">Push to student repository</option>
+                {canPr && <option value="pr">Pull request against an upstream repository</option>}
+              </NativeSelectField>
+            </NativeSelectRoot>
+          </Field>
+        </Fieldset.Content>
+        {isPr && (
+          <>
+            <Fieldset.Content>
+              <Field
+                orientation="horizontal"
+                label="Upstream repository (= handout)"
+                helperText="PRs target this assignment's handout repository — the handout IS the upstream (students fork it and open PRs back), so it's set automatically and can't drift. ⚠ Changing the handout repository after student repos exist will orphan their forks; set it before students start."
+              >
+                {templateRepo ? (
+                  <Input value={templateRepo} readOnly disabled />
+                ) : (
+                  <Text fontSize="sm" color="fg.muted">
+                    The handout repository (created when you save) will be the upstream students PR against.
+                  </Text>
+                )}
+              </Field>
+            </Fieldset.Content>
+            <Fieldset.Content>
+              <Field
+                orientation="horizontal"
+                label="Upstream base branch"
+                helperText="PRs must target this branch to count as a submission."
+                errorText={errors.upstream_base_branch?.message?.toString()}
+                invalid={!!errors.upstream_base_branch}
+              >
+                <Input placeholder="main" {...register("upstream_base_branch")} />
+              </Field>
+            </Fieldset.Content>
+            <Fieldset.Content>
+              <Field
+                orientation="horizontal"
+                label="PR identification"
+                helperText="How the submission PR is identified among a student's PRs."
+              >
+                <NativeSelectRoot>
+                  <NativeSelectField {...register("pr_identification")}>
+                    <option value="base_branch">By base branch (confirm if more than one)</option>
+                    <option value="branch_convention">By head branch name convention</option>
+                    <option value="manual">Manually linked</option>
+                  </NativeSelectField>
+                </NativeSelectRoot>
+              </Field>
+            </Fieldset.Content>
+            {prIdentification === "branch_convention" && (
+              <Fieldset.Content>
+                <Field
+                  orientation="horizontal"
+                  label="Head branch convention"
+                  helperText="Regex the PR's head branch name must match (e.g. ^submission/.+$)."
+                  errorText={errors.pr_branch_convention?.message?.toString()}
+                  invalid={!!errors.pr_branch_convention}
+                >
+                  <Input placeholder="^submission/.+$" {...register("pr_branch_convention")} />
+                </Field>
+              </Fieldset.Content>
+            )}
+            <Fieldset.Content>
+              <Field helperText="When enabled, having an open (confirmed) PR is itself a graded condition.">
+                <Controller
+                  name="require_pr_open"
+                  control={control}
+                  render={({ field }) => (
+                    <Checkbox.Root
+                      checked={field.value === true}
+                      onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                    >
+                      <Checkbox.HiddenInput />
+                      <Checkbox.Control>
+                        <LuCheck />
+                      </Checkbox.Control>
+                      <Checkbox.Label>Require an open pull request</Checkbox.Label>
+                    </Checkbox.Root>
+                  )}
                 />
               </Field>
             </Fieldset.Content>
@@ -659,6 +1009,12 @@ export default function AssignmentForm({
     form.getValues("require_tokens_before_due_date") == true
   );
   const timezone = course.time_zone || "America/New_York";
+  // Read through the course controller, not `role.classes`: that role snapshot is fetched once per
+  // page load and has no realtime subscription, so an instructor who toggles the flag in Course
+  // Settings and soft-navigates here would keep seeing the pre-toggle helper text. `useCourse()`
+  // merges `classes` realtime updates. Both routes that render this form sit under
+  // `CourseControllerProvider` (LabDueDatePreview in this file already calls useCourseController).
+  const showSuggestedDueDate = useSuggestedDueDateEmphasisEnabled();
   const isEditing = !!form.getValues("id");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
@@ -738,7 +1094,6 @@ export default function AssignmentForm({
 
   return (
     <div>
-      <Toaster />
       <form ref={formRef} onSubmit={handleSubmit(onSubmitWrapper, onInvalid)}>
         <Fieldset.Root>
           <VStack align="stretch" gap={6} w="100%">
@@ -852,24 +1207,21 @@ export default function AssignmentForm({
                         required: "This is required",
                         validate: (value: string) => {
                           if (!value) return "This is required";
+                          const selected = parseZonedFormDate(value, timezone);
+                          // Report an unparseable value as such, rather than as "must be in the
+                          // future", which sends the instructor looking for the wrong problem.
+                          if (!selected) return "Enter a valid date and time";
                           // Only enforce future date requirement when creating new assignments
                           if (!isEditing) {
-                            const selected = new TZDate(value, timezone).getTime();
-                            const now = TZDate.tz(timezone).getTime();
-                            return selected > now || "Release date must be in the future";
+                            return (
+                              selected.getTime() > TZDate.tz(timezone).getTime() || "Release date must be in the future"
+                            );
                           }
                           return true;
                         }
                       }}
                       render={({ field }) => {
-                        const hasATimezoneOffset =
-                          field.value &&
-                          (field.value.charAt(field.value.length - 6) === "+" ||
-                            field.value.charAt(field.value.length - 6) === "-");
-                        const localValue =
-                          field.value && hasATimezoneOffset
-                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                            : field.value;
+                        const localValue = toDateTimeLocalValue(field.value, timezone);
                         return (
                           <Input
                             type="datetime-local"
@@ -884,10 +1236,18 @@ export default function AssignmentForm({
                   </Field>
                 </Fieldset.Content>
                 <Fieldset.Content>
+                  {/* The field stays visible even when the course flag is off, so staff can set the
+                      date ahead of opting in and can still see and edit one an earlier term left
+                      behind. The helper text carries the flag state instead, so nobody sets a date
+                      expecting students to see it. */}
                   <Field
                     orientation="horizontal"
                     label="Suggested due date"
-                    helperText="Optional recommended target date shown to students. The Due Date below remains the hard deadline; students may resubmit freely until then."
+                    helperText={
+                      showSuggestedDueDate
+                        ? "Optional. Shown to students as the assignment's due date; the Due Date below is presented as the end of the resubmission window."
+                        : "Optional. Not shown to students - turn on the 'Suggested due dates' feature flag in Course Settings to display it."
+                    }
                     errorText={errors.suggested_due_date?.message?.toString()}
                     invalid={errors.suggested_due_date ? true : false}
                   >
@@ -897,23 +1257,26 @@ export default function AssignmentForm({
                       rules={{
                         validate: (value: string) => {
                           if (!value) return true;
+                          // Both sides go through the course zone: in edit mode one field may
+                          // still hold an offset-carrying value from the database while the other
+                          // is a freshly-typed naive value, so a raw parse would compare apples
+                          // to oranges.
+                          const suggested = parseZonedFormDate(value, timezone);
+                          if (!suggested) return "Enter a valid date and time";
                           const dueDate = form.getValues("due_date");
-                          if (!dueDate) return true;
-                          const suggested = new TZDate(value, timezone).getTime();
-                          const due = new TZDate(dueDate, timezone).getTime();
-                          return suggested <= due || "Suggested due date must be on or before the due date";
+                          const due = parseZonedFormDate(dueDate, timezone);
+                          // Nothing to compare against yet; the due-date field reports its own
+                          // missing/invalid value.
+                          if (!due) return true;
+                          return (
+                            suggested.getTime() <= due.getTime() ||
+                            "Suggested due date must be on or before the due date"
+                          );
                         },
                         deps: ["due_date"]
                       }}
                       render={({ field }) => {
-                        const hasATimezoneOffset =
-                          field.value &&
-                          (field.value.charAt(field.value.length - 6) === "+" ||
-                            field.value.charAt(field.value.length - 6) === "-");
-                        const localValue =
-                          field.value && hasATimezoneOffset
-                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                            : field.value;
+                        const localValue = toDateTimeLocalValue(field.value, timezone);
                         return (
                           <Input
                             type="datetime-local"
@@ -938,16 +1301,13 @@ export default function AssignmentForm({
                     <Controller
                       name="due_date"
                       control={control}
-                      rules={{ required: "This is required" }}
+                      // `deps` re-validates the listed fields when THIS one changes, so the
+                      // suggested-vs-due rule has to be re-run from here too: without it, moving
+                      // the due date earlier than an already-set suggested date passes client
+                      // validation and only trips the DB CHECK.
+                      rules={{ required: "This is required", deps: ["suggested_due_date"] }}
                       render={({ field }) => {
-                        const hasATimezoneOffset =
-                          field.value &&
-                          (field.value.charAt(field.value.length - 6) === "+" ||
-                            field.value.charAt(field.value.length - 6) === "-");
-                        const localValue =
-                          field.value && hasATimezoneOffset
-                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                            : field.value;
+                        const localValue = toDateTimeLocalValue(field.value, timezone);
                         return (
                           <Input
                             type="datetime-local"
@@ -1020,6 +1380,8 @@ export default function AssignmentForm({
               </CardBody>
             </CardRoot>
             <GroupConfigurationSubform form={form} timezone={timezone} />
+            <RepositoryConfigurationSubform form={form} />
+            <SubmissionModeSubform form={form} />
             <SelfEvaluationSubform form={form} timezone={timezone} />
             <CardRoot>
               <Accordion.Root
@@ -1052,14 +1414,7 @@ export default function AssignmentForm({
                             control={control}
                             rules={{ required: false }}
                             render={({ field }) => {
-                              const hasATimezoneOffset =
-                                field.value &&
-                                (field.value.charAt(field.value.length - 6) === "+" ||
-                                  field.value.charAt(field.value.length - 6) === "-");
-                              const localValue =
-                                field.value && hasATimezoneOffset
-                                  ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                                  : field.value;
+                              const localValue = toDateTimeLocalValue(field.value, timezone);
                               return (
                                 <Input
                                   type="datetime-local"

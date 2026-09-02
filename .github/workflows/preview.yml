@@ -251,12 +251,42 @@ jobs:
             --from-literal=PAWTOGRADER_PASSWORD="$PAWTOGRADER_PASSWORD"
           kubectl -n "$NS" create secret generic pawtograder-e2e \
             --from-literal=END_TO_END_SECRET="$END_TO_END_SECRET" \
-            --from-literal=EDGE_FUNCTION_SECRET="$EDGE_FUNCTION_SECRET"
+            --from-literal=EDGE_FUNCTION_SECRET="$EDGE_FUNCTION_SECRET" \
+            --from-literal=CACHE_INVALIDATION_SECRET="$CACHE_INVALIDATION_SECRET"
           kubectl -n "$NS" create secret generic pawtograder-s3 \
             --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS" \
             --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET"
           # pawtograder-edge-functions is created by the top-up loop above
           # (whether or not we hit this first-install path).
+
+      # Mirror the e2e bundle (Supabase keys, END_TO_END_SECRET, derived
+      # URLs) into OpenBao so out-of-cluster runners — the a11y VoiceOver
+      # Mac (a11y-voiceover.yml) — can fetch it without cluster access.
+      # Best-effort by design: Bao downtime or missing config must never
+      # break the preview hot path. Removed again by the destroy job.
+      - name: Publish e2e bundle to OpenBao (best-effort)
+        continue-on-error: true
+        env:
+          PREVIEW_ID: ${{ needs.meta.outputs.preview_id }}
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+          BAO_ROLE_ID: ${{ secrets.BAO_PUBLISHER_ROLE_ID }}
+          BAO_SECRET_ID: ${{ secrets.BAO_PUBLISHER_SECRET_ID }}
+          BAO_VERSION: 2.2.0
+        run: |
+          set -euo pipefail
+          if [ -z "${BAO_ADDR:-}" ] || [ -z "${BAO_ROLE_ID:-}" ] || [ -z "${BAO_SECRET_ID:-}" ]; then
+            echo "::warning::OpenBao e2e publish skipped — vars.BAO_ADDR / secrets.BAO_PUBLISHER_ROLE_ID / secrets.BAO_PUBLISHER_SECRET_ID not configured"
+            exit 0
+          fi
+          if ! command -v bao >/dev/null 2>&1 && ! command -v vault >/dev/null 2>&1; then
+            curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
+              | tar -xz -C "$RUNNER_TEMP" bao
+            chmod +x "$RUNNER_TEMP/bao"
+            export PATH="$RUNNER_TEMP:$PATH"
+          fi
+          BAO_TOKEN=$(bao write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id="$BAO_SECRET_ID")
+          export BAO_TOKEN
+          ./scripts/publish-preview-e2e-to-bao.sh "$PREVIEW_ID"
 
   # --------------------------------------------------------------------------
   # build-* — per-PR images. web is the only one whose build args change
@@ -316,8 +346,22 @@ jobs:
           # Cache image lives in the in-cluster registry (auth seeded into
           # the runner's ~/.docker/config.json by the gha-runner-scale-set
           # init container — see k8s/apps/arc/values-pawtograder-ci.yaml).
-          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest
-          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest,mode=max
+          #
+          # Per-branch scoping: every preview build used to read AND write the
+          # single shared `:latest` tag, so concurrent PRs clobbered each
+          # other's layers and missed the cache they should have hit. Now each
+          # preview gets its own `:pr-<id>` cache (stable across that PR's
+          # sync pushes), with `:latest` as a warm fallback for a branch's
+          # first build. We still write `:latest` (mode=max) so the shared
+          # baseline stays fresh for new branches — but active builds read
+          # their own scoped tag first, so cross-branch writes to `:latest`
+          # no longer cause misses on layers a branch already has.
+          cache-from: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:pr-${{ needs.meta.outputs.preview_id }}
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest
+          cache-to: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:pr-${{ needs.meta.outputs.preview_id }},mode=max
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest,mode=max
 
   build-edge-functions:
     needs: meta
@@ -339,8 +383,13 @@ jobs:
           file: charts/pawtograder/images/edge-functions/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/edge-functions:${{ needs.meta.outputs.tag }}
-          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest
-          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest,mode=max
+          # Per-branch scoping — see the "Build & push web" step for rationale.
+          cache-from: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:pr-${{ needs.meta.outputs.preview_id }}
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest
+          cache-to: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:pr-${{ needs.meta.outputs.preview_id }},mode=max
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest,mode=max
 
   build-migrations:
     needs: meta
@@ -362,8 +411,13 @@ jobs:
           file: charts/pawtograder/images/migrations/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/migrations:${{ needs.meta.outputs.tag }}
-          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest
-          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest,mode=max
+          # Per-branch scoping — see the "Build & push web" step for rationale.
+          cache-from: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:pr-${{ needs.meta.outputs.preview_id }}
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest
+          cache-to: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:pr-${{ needs.meta.outputs.preview_id }},mode=max
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest,mode=max
 
   # --------------------------------------------------------------------------
   # build-seeder — Node + TS sources + node_modules + psql. Used only by
@@ -390,13 +444,31 @@ jobs:
           file: charts/pawtograder/images/seeder/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/seeder:${{ needs.meta.outputs.tag }}
-          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest
-          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest,mode=max
+          # Per-branch scoping — see the "Build & push web" step for rationale.
+          cache-from: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:pr-${{ needs.meta.outputs.preview_id }}
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest
+          cache-to: |
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:pr-${{ needs.meta.outputs.preview_id }},mode=max
+            type=registry,ref=registry.work.ripley.cloud/pawtograder/seeder-buildcache:latest,mode=max
 
   # --------------------------------------------------------------------------
   # deploy — helm install/upgrade against ripley
   # --------------------------------------------------------------------------
   deploy:
+    env:
+      # Raise the client-side API throttle for every helm call in this job
+      # (upgrade, the recovery uninstall/rollback, smoke test, teardown).
+      #
+      # Helm defaults to burst 100 and QPS 0 — and QPS 0 means client-go's
+      # default of 5 req/s. The initial apply spends the burst, then everything
+      # after it (notably --wait/--wait-for-jobs polling every resource in the
+      # release) crawls at 5 req/s until the operation context expires:
+      #   UPGRADE FAILED: client rate limiter Wait returned an error
+      # That error is the client queueing behind its own limiter, not the API
+      # server rejecting anything, so the fix is on this side.
+      HELM_QPS: "50"
+      HELM_BURST_LIMIT: "300"
     needs: [meta, secrets, build-web, build-edge-functions, build-migrations, build-seeder]
     if: needs.meta.outputs.mode == 'deploy'
     runs-on: pawtograder-ci
@@ -423,14 +495,109 @@ jobs:
           chmod 600 "$HOME/.kube/config"
           kubectl version --client=true --output=yaml | head -20
 
+      - name: Recover stuck helm release
+        # A preview deploy that gets interrupted mid-`helm upgrade` — most
+        # commonly when `concurrency.cancel-in-progress: true` SIGKILLs the
+        # runner because a newer push to the same PR arrived, but also any
+        # runner crash/OOM — leaves the release in a `pending-*` state. Helm
+        # never clears that on its own, so every later deploy aborts instantly
+        # with "UPGRADE FAILED: another operation (install/upgrade/rollback) is
+        # in progress", permanently bricking the PR's preview until someone
+        # intervenes by hand. Uninstall the stuck release so the upgrade below
+        # recreates it cleanly. Safe for previews: `helm uninstall` does NOT
+        # delete the Postgres PVC (see the destroy job), so DB data survives,
+        # and the migration/seed jobs re-run on every deploy anyway.
+        env:
+          RELEASE: ${{ needs.meta.outputs.release }}
+          NAMESPACE: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          status=$(helm status "$RELEASE" -n "$NAMESPACE" 2>/dev/null | sed -n 's/^STATUS: //p' || true)
+          echo "current helm release status: ${status:-<none>}"
+          case "$status" in
+            pending-install|pending-upgrade|pending-rollback)
+              echo "::warning::release '$RELEASE' is stuck in '$status' (a previous deploy was interrupted). Uninstalling so this deploy can recreate it; Postgres PVC is preserved."
+              helm uninstall "$RELEASE" -n "$NAMESPACE" --wait --timeout 10m || true
+              ;;
+          esac
+
+      - name: Start hook-job log capture
+        # `kubectl logs job/x` after the fact only works while a pod still
+        # exists, and a failed hook job's pod does not survive: once the Job
+        # hits its backoff limit the Job controller deletes the pod, typically
+        # a couple of seconds after the container exits. So the failure
+        # snapshot below reliably lost exactly the output we needed — a seed
+        # failure showed up as nothing but `error: timed out waiting for the
+        # condition`, and diagnosing it meant re-running the job by hand
+        # against the live preview.
+        #
+        # Follow every batch job pod from the moment it appears instead, and
+        # spool it to disk. `--pod-running-timeout` makes each follower wait
+        # out ContainerCreating rather than erroring on a not-yet-started
+        # container, and `-f` returns on its own when the pod ends or is
+        # deleted, so the followers wind themselves up.
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hook-logs"
+          cat > "$RUNNER_TEMP/follow-hook-logs.sh" <<'EOS'
+          #!/usr/bin/env bash
+          # usage: follow-hook-logs.sh <namespace> <output-dir>
+          ns="$1"; dir="$2"
+
+          follow_pod() {
+            local pod="$1" out="$2" phase i
+            for i in $(seq 1 900); do
+              phase=$(kubectl -n "$ns" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+              # Pod is gone (deleted, or never observed) — nothing left to read.
+              [ -z "$phase" ] && return 0
+              # `kubectl logs -f <pod>` does NOT wait out ContainerCreating: it
+              # errors immediately with "is waiting to start", and
+              # --pod-running-timeout only applies to selector/controller
+              # lookups, not a named pod. So poll until the container exists.
+              if [ "$phase" = "Pending" ]; then sleep 1; continue; fi
+              # Succeeded/Failed pods that still exist return their full log and
+              # exit 0 immediately; Running pods stream until the pod ends.
+              kubectl -n "$ns" logs -f --all-containers --timestamps "$pod" >>"$out" 2>/dev/null && return 0
+              sleep 1
+            done
+          }
+
+          while :; do
+            for pod in $(kubectl -n "$ns" get pods -l batch.kubernetes.io/job-name \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+              marker="$dir/.$pod.following"
+              [ -e "$marker" ] && continue
+              : > "$marker"
+              follow_pod "$pod" "$dir/$pod.log" &
+            done
+            sleep 2
+          done
+          EOS
+          chmod +x "$RUNNER_TEMP/follow-hook-logs.sh"
+          nohup "$RUNNER_TEMP/follow-hook-logs.sh" "$NS" "$RUNNER_TEMP/hook-logs" \
+            > "$RUNNER_TEMP/hook-logs/.watcher.out" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/hook-logs/.watcher.pid"
+          echo "following batch job pods in $NS (pid $(cat "$RUNNER_TEMP/hook-logs/.watcher.pid"))"
+
       - name: helm upgrade --install
         env:
           RELEASE: ${{ needs.meta.outputs.release }}
           NAMESPACE: ${{ needs.meta.outputs.namespace }}
           HOSTNAME: ${{ needs.meta.outputs.hostname }}
           TAG: ${{ needs.meta.outputs.tag }}
+          # Stamped onto every edge-function Sentry event so a Bugsink record names the branch and PR
+          # it came from. Held in env: rather than templated into the run: block below — a branch name
+          # is attacker-influenceable and these flow into a shell command.
+          DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          DEPLOY_PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          # helm --set splits on commas and interprets dots as key nesting, so a branch name reaches it
+          # only after being reduced to a charset that cannot restructure the flag. Informational tag —
+          # dropping an odd character is preferable to a failed deploy.
+          SAFE_BRANCH=$(printf '%s' "$DEPLOY_BRANCH" | tr -cd 'A-Za-z0-9._/-' | cut -c1-100)
           # secrets.create=false: chart consumes the pawtograder-{jwt,
           # postgres,e2e,s3} Secrets created by the `secrets` job.
           # secrets.autogenerate=false: skip the in-cluster bootstrap Job
@@ -446,6 +613,11 @@ jobs:
             --set seed.image.tag="$TAG" \
             --set secrets.autogenerate=false \
             --set secrets.create=false \
+            --set-string global.deploy.branch="$SAFE_BRANCH" \
+            --set-string global.deploy.pr="$DEPLOY_PR" \
+            --set-string global.deploy.runId="$GITHUB_RUN_ID" \
+            --set-string global.deploy.runAttempt="$GITHUB_RUN_ATTEMPT" \
+            --set-string global.deploy.commit="$GITHUB_SHA" \
             --wait --wait-for-jobs --timeout 20m
 
       - name: Status snapshot on failure
@@ -454,16 +626,48 @@ jobs:
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
           kubectl -n "$NS" get pods,jobs 2>&1 | head -50
-          for j in $(kubectl -n "$NS" get jobs -o name); do
-            echo "=== $j ==="
-            kubectl -n "$NS" logs "$j" --all-containers --tail=200 2>&1 | tail -200 || true
+
+          # Captured live by the follower above, so this survives the Job
+          # controller deleting a failed pod. Print the tail of every hook pod
+          # we managed to follow, failures last-and-loudest.
+          shopt -s nullglob
+          for f in "$RUNNER_TEMP"/hook-logs/*.log; do
+            echo "=== $(basename "$f" .log) (captured live) ==="
+            tail -200 "$f"
           done
+
+          # Best-effort fallback for anything the follower missed (a pod that
+          # came and went inside one poll interval, or a job whose pod is
+          # somehow still around).
+          for j in $(kubectl -n "$NS" get jobs -o name); do
+            pod_logs=$(kubectl -n "$NS" logs "$j" --all-containers --tail=200 2>/dev/null || true)
+            [ -z "$pod_logs" ] && continue
+            echo "=== $j (live pod) ==="
+            printf '%s\n' "$pod_logs" | tail -200
+          done
+
+          # Whatever the seed/migration containers printed, the Job's own
+          # failure reason (BackoffLimitExceeded, DeadlineExceeded, an image
+          # pull that never resolved) is only on the Job object and its events.
+          for j in $(kubectl -n "$NS" get jobs -o name); do
+            echo "=== $j conditions ==="
+            kubectl -n "$NS" get "$j" -o jsonpath='{range .status.conditions[*]}{.type}: {.reason} — {.message}{"\n"}{end}' 2>&1 || true
+          done
+          echo "=== recent events ==="
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp 2>&1 | tail -30
 
       - name: Status snapshot
         if: always()
         env:
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
+          # Wind up the log follower before the runner does it for us — an
+          # `kubectl logs -f` left attached keeps the job alive to its cleanup
+          # phase and shows up as "Cleaning up orphan processes".
+          if [ -f "$RUNNER_TEMP/hook-logs/.watcher.pid" ]; then
+            pkill -P "$(cat "$RUNNER_TEMP/hook-logs/.watcher.pid")" 2>/dev/null || true
+            kill "$(cat "$RUNNER_TEMP/hook-logs/.watcher.pid")" 2>/dev/null || true
+          fi
           kubectl -n "$NS" get pods,svc,ingress 2>&1 | head -50
 
       - name: Comment URL on PR
@@ -495,6 +699,19 @@ jobs:
   # destroy — helm uninstall + namespace delete on PR close (or manual)
   # --------------------------------------------------------------------------
   destroy:
+    env:
+      # Raise the client-side API throttle for every helm call in this job
+      # (upgrade, the recovery uninstall/rollback, smoke test, teardown).
+      #
+      # Helm defaults to burst 100 and QPS 0 — and QPS 0 means client-go's
+      # default of 5 req/s. The initial apply spends the burst, then everything
+      # after it (notably --wait/--wait-for-jobs polling every resource in the
+      # release) crawls at 5 req/s until the operation context expires:
+      #   UPGRADE FAILED: client rate limiter Wait returned an error
+      # That error is the client queueing behind its own limiter, not the API
+      # server rejecting anything, so the fix is on this side.
+      HELM_QPS: "50"
+      HELM_BURST_LIMIT: "300"
     needs: meta
     if: needs.meta.outputs.mode == 'destroy'
     runs-on: pawtograder-ci
@@ -531,6 +748,35 @@ jobs:
           else
             echo "preview ${NS} already absent — nothing to do"
           fi
+
+      # Counterpart of the secrets job's OpenBao publish: drop the mirrored
+      # e2e bundle with the preview. Best-effort — a stale bundle is dead
+      # weight anyway once the namespace is gone.
+      - name: Remove e2e bundle from OpenBao (best-effort)
+        continue-on-error: true
+        env:
+          PREVIEW_ID: ${{ needs.meta.outputs.preview_id }}
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+          BAO_ROLE_ID: ${{ secrets.BAO_PUBLISHER_ROLE_ID }}
+          BAO_SECRET_ID: ${{ secrets.BAO_PUBLISHER_SECRET_ID }}
+          BAO_VERSION: 2.2.0
+        run: |
+          set -euo pipefail
+          if [ -z "${BAO_ADDR:-}" ] || [ -z "${BAO_ROLE_ID:-}" ] || [ -z "${BAO_SECRET_ID:-}" ]; then
+            echo "OpenBao not configured — nothing to remove"
+            exit 0
+          fi
+          if ! command -v bao >/dev/null 2>&1 && ! command -v vault >/dev/null 2>&1; then
+            curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
+              | tar -xz -C "$RUNNER_TEMP" bao
+            chmod +x "$RUNNER_TEMP/bao"
+            export PATH="$RUNNER_TEMP:$PATH"
+          fi
+          BAO_TOKEN=$(bao write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id="$BAO_SECRET_ID")
+          export BAO_TOKEN
+          bao kv metadata delete -mount=kv "apps/pawtograder/preview-e2e/pr-${PREVIEW_ID}" \
+            && echo "removed e2e bundle for pr-${PREVIEW_ID}" \
+            || echo "no e2e bundle to remove for pr-${PREVIEW_ID}"
 
       - name: Update PR comment
         if: github.event_name == 'pull_request'

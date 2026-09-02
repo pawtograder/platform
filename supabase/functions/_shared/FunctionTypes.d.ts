@@ -163,6 +163,35 @@ export type AddEnrollmentRequest = {
   notify?: boolean;
 };
 
+/** A GitHub org the App is currently installed on. */
+export type GitHubOrg = {
+  login: string;
+  installationId: number;
+};
+
+/** Orgs the GitHub App is installed on, plus the URL to install it on a new org. */
+export type ListGitHubOrgsResponse = {
+  orgs: GitHubOrg[];
+  installUrl: string;
+};
+
+/** A Discord server the bot is currently a member of. */
+export type DiscordGuild = {
+  id: string;
+  name: string;
+};
+
+/**
+ * Servers the Discord bot is in, plus the URL to add it to a new one.
+ *
+ * Admin-only: the bot is a single shared account, so this list spans every course on the
+ * deployment. See discord-list-guilds.
+ */
+export type ListDiscordGuildsResponse = {
+  guilds: DiscordGuild[];
+  installUrl: string;
+};
+
 /** Request to (re)build the code-symbol index for a submission's source files. */
 export type IndexSubmissionRequest = {
   submission_id: number;
@@ -211,6 +240,26 @@ export type GetFileRequest = {
   orgName: string;
   repoName: string;
   path: string;
+  /**
+   * Skip the 15s delay + single retry the function otherwise performs on a 404. The interactive
+   * editor sets this so opening a not-yet-created file (create-on-save) fails fast instead of
+   * spinning for 15-30s. Callers racing fresh repo creation should leave it unset.
+   */
+  skipRetryOnNotFound?: boolean;
+};
+export type WriteFileRequest = {
+  courseId: number;
+  orgName: string;
+  repoName: string;
+  path: string;
+  content: string;
+  message: string;
+  /** Blob sha of the file being replaced. Omit to create a new file. */
+  sha?: string;
+};
+export type WriteFileResponse = {
+  commit_sha?: string;
+  content_sha?: string;
 };
 export type GithubRepoConfigureWebhookRequest = {
   assignment_id: number;
@@ -346,6 +395,17 @@ export type CheckRunStatus = {
   requested_at?: string;
   workflow_triggered_at?: string;
   check_run_marked_in_progress_at?: string;
+  /**
+   * Records which workflow run was allowed through the "dispatched before the autograder
+   * was disabled" exception in autograder-create-submission. The exception is a property of
+   * one in-flight run, not of the commit, so it is claimed once and then only honored for
+   * the run that claimed it.
+   */
+  autograder_disabled_exception?: {
+    run_id: string;
+    run_attempt: string;
+    claimed_at: string;
+  };
 };
 
 export type AssignmentGroupInstructorCreateRequest = {
@@ -381,6 +441,74 @@ export type AssignmentCreateSolutionRepoRequest = {
 export type AssignmentCreateSolutionRepoResponse = {
   repo_name: string;
   org_name: string;
+};
+
+/** Bring the handout's grading workflow into line with `assignments.has_autograder`
+ * after an instructor toggles the autograder on an existing assignment. */
+export type AssignmentSyncAutograderWorkflowRequest = {
+  assignment_id: number;
+  class_id: number;
+  /**
+   * Reconcile the handout with the flag, without doing anything if it already agrees.
+   *
+   * Set by callers that suspect the repository disagrees with `has_autograder` but cannot tell
+   * from the database — the case being assignments the PR-mode backfill in
+   * 20260805170500 flipped to `false` while their handout still holds a live `grade.yml`. A
+   * migration cannot edit GitHub, so those handouts are reconciled the next time someone saves
+   * the assignment.
+   *
+   * The difference from an ordinary call: when there turns out to be nothing to change, this
+   * skips the revision re-pin and the repository-sync queueing rather than performing them for
+   * no reason. Without that, a caller which cannot detect the disagreement would have to run
+   * those side effects on every save forever.
+   */
+  reconcile_only?: boolean;
+};
+
+export type AssignmentSyncAutograderWorkflowResponse = {
+  /** What the sync did to `.github/workflows/grade.yml` in the handout repo. */
+  action: "added" | "removed" | "unchanged";
+  has_autograder: boolean;
+  template_repo: string | null;
+  /**
+   * Other assignments sharing this handout that were brought to the same
+   * `has_autograder` value. The workflow file belongs to the shared repo, so they
+   * cannot disagree; callers should tell the instructor when this is non-empty,
+   * since it changes assignments they did not explicitly edit.
+   */
+  realigned_assignments?: { id: number; title: string }[];
+  /**
+   * True when the handout-sync jobs for existing student repositories could NOT be queued.
+   *
+   * The handout itself is correct at this point, but existing student repositories still hold
+   * the previous workflow state — so after an enable, `#submit` cannot run a workflow their
+   * repo does not have yet, and after a disable their pushes keep burning Actions minutes.
+   * Callers must tell the instructor to sync student repositories by hand; swallowing this
+   * reported success over a state that only a manual sync repairs.
+   */
+  repo_sync_queue_failed?: boolean;
+  /**
+   * How many assignments in OTHER classes share this handout repository.
+   *
+   * The workflow change reaches them — the file and the revision pointer belong to the shared
+   * repo — but their student repositories cannot be queued from here: queue_repository_syncs
+   * requires instructor privileges in the repositories' own class and refuses a mixed-class
+   * batch. Callers should tell the instructor that those classes need a manual sync.
+   *
+   * A COUNT rather than a list, deliberately: an instructor in this class is not authorized to
+   * learn which assignments exist in another one.
+   */
+  unsynced_other_class_count?: number;
+  /**
+   * Set on a `reconcile_only` call that declined to park the handout's workflow because these
+   * in-class assignments still use it. Naming them is safe — they are in the caller's own class,
+   * unlike `unsynced_other_class_count`.
+   *
+   * The handout was NOT changed. Callers should tell the instructor, since the only resolution is
+   * to give one of the assignments its own handout repository; until then the pull-request
+   * assignment's forks keep a workflow that reports failing checks.
+   */
+  reconcile_blocked_by?: { id: number; title: string }[];
 };
 
 export type AutograderCreateReposForStudentRequest = {

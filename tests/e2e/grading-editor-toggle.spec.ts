@@ -65,7 +65,7 @@ test.describe("Grading editor view toggle", () => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
 
     // Default: the new Monaco editor renders (no preference was set for this user).
     await expect(page.locator(".monaco-editor").first()).toBeVisible();

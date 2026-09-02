@@ -1,6 +1,7 @@
 import { Redis as UpstashRedis } from "https://esm.sh/@upstash/redis";
 import IORedisDefault, { type Redis as IORedisInstance } from "npm:ioredis";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 
 // npm:ioredis ships as a CJS default export; the named import above is
 // types-only. Picking the runtime constructor based on what esm interop
@@ -136,29 +137,20 @@ export function createRedis(
 }
 
 /**
- * Build the `{ datastore, clientOptions, Redis }` block a Bottleneck
- * constructor expects, picking real ioredis vs the Upstash REST adapter
- * based on the same env precedence as `createRedis()`. Returns null when
- * neither is configured — callers should fall back to a local-only
- * limiter (no `datastore`, no `clientOptions`, no `Redis` field).
+ * Raw ioredis connection params for Bottleneck (`{ Redis, clientOptions }`),
+ * picking real ioredis vs the Upstash REST adapter on the same env precedence
+ * as `createRedis()`. Returns null when neither backend is configured.
  *
- * Centralising the wiring here lets every Bottleneck call site stay
- * one line; before this helper each one had to know how to construct
- * clientOptions for one backend.
+ * Internal: callers use `bottleneckRedisOptions()` / `getBottleneckConnection()`
+ * below, which wrap this in a single shared connection.
  */
 // deno-lint-ignore no-explicit-any
-export function bottleneckRedisOptions(): {
-  datastore: "ioredis";
-  Redis: any;
-  clientOptions: Record<string, unknown>;
-} | null {
+function bottleneckClientOptions(): { Redis: any; clientOptions: Record<string, unknown> } | null {
   const redisUrl = Deno.env.get("REDIS_URL");
   if (redisUrl) {
     // ioredis accepts the URL constructor form directly, but Bottleneck
-    // does `new Redis(clientOptions)` — so we pass the URL as the sole
-    // positional via the special `path` field that ioredis recognises
-    // when its only option is a URL string. Most cleanly we parse it
-    // and hand Bottleneck the discrete fields it expects.
+    // does `new Redis(clientOptions)` — so we parse the URL and hand
+    // Bottleneck the discrete fields it expects.
     const u = new URL(redisUrl);
     const clientOptions: Record<string, unknown> = {
       host: u.hostname,
@@ -175,13 +167,12 @@ export function bottleneckRedisOptions(): {
       const db = Number(u.pathname.slice(1));
       if (Number.isInteger(db) && db >= 0) clientOptions.db = db;
     }
-    return { datastore: "ioredis", Redis: IORedisCtor, clientOptions };
+    return { Redis: IORedisCtor, clientOptions };
   }
   const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
   const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
   if (upstashUrl && upstashToken) {
     return {
-      datastore: "ioredis",
       Redis,
       clientOptions: {
         host: upstashUrl.replace("https://", ""),
@@ -191,6 +182,54 @@ export function bottleneckRedisOptions(): {
     };
   }
   return null;
+}
+
+// ONE Bottleneck ioredis connection per isolate, shared by every limiter AND
+// the Octokit throttle. Each `new Bottleneck({ datastore, clientOptions })`
+// used to build its own client+subscriber pair (2 sockets); with per-org
+// (createContentLimiters) and per-key (syncLimiters) limiters, that count grew
+// with every org/key an isolate touched — across ~24 pods this pushed the
+// shared prod Redis toward maxclients. A shared connection multiplexes them all
+// over one pair. Reuse is safe: Bottleneck flags a passed-in connection as
+// `sharedConnection`, so an individual limiter's stop()/disconnect() will NOT
+// close it (see withSettingsKeyRecovery, which disconnects rotated limiters).
+let sharedBottleneckConnection: Bottleneck.IORedisConnection | null = null;
+
+/**
+ * The shared Bottleneck Redis connection for this isolate, or null when no
+ * backend is configured. Built lazily on first use.
+ */
+export function getBottleneckConnection(): Bottleneck.IORedisConnection | null {
+  if (sharedBottleneckConnection) {
+    return sharedBottleneckConnection;
+  }
+  const opts = bottleneckClientOptions();
+  if (!opts) {
+    return null;
+  }
+  sharedBottleneckConnection = new Bottleneck.IORedisConnection({
+    clientOptions: opts.clientOptions,
+    Redis: opts.Redis
+  });
+  sharedBottleneckConnection.on("error", (e: Error) => console.error("shared Bottleneck Redis connection error", e));
+  return sharedBottleneckConnection;
+}
+
+/**
+ * The Bottleneck datastore block every Redis-backed limiter spreads into its
+ * constructor: `{ datastore: "ioredis", connection }` over the shared
+ * connection. Returns null when no backend is configured — callers fall back to
+ * a local-only limiter (no `datastore`, no `connection`).
+ */
+export function bottleneckRedisOptions(): {
+  datastore: "ioredis";
+  connection: Bottleneck.IORedisConnection;
+} | null {
+  const connection = getBottleneckConnection();
+  if (!connection) {
+    return null;
+  }
+  return { datastore: "ioredis", connection };
 }
 
 /**

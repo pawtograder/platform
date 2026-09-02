@@ -20,7 +20,12 @@ export const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(function S
   return (
     <ChakraSwitch.Root ref={rootRef} {...rest}>
       <ChakraSwitch.HiddenInput ref={ref} {...inputProps} />
-      <ChakraSwitch.Control>
+      {/* Keyboard focus lives on the visually-hidden input, so without a ring
+          on the visible control there is no focus indicator at all (WCAG
+          2.4.7). _focusVisible also matches Zag's [data-focus-visible], which
+          the switch machine sets on the control while the input has keyboard
+          focus. */}
+      <ChakraSwitch.Control _focusVisible={{ outline: "2px solid", outlineColor: "blue.500", outlineOffset: "2px" }}>
         <ChakraSwitch.Thumb>
           {thumbLabel && (
             <ChakraSwitch.ThumbIndicator fallback={thumbLabel?.off}>{thumbLabel?.on}</ChakraSwitch.ThumbIndicator>

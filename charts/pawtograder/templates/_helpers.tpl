@@ -6,6 +6,28 @@ Expand the name of the chart.
 {{- end -}}
 
 {{/*
+Version-STABLE component labels: the full componentLabels set MINUS the two
+chart-version-carrying lines (helm.sh/chart, app.kubernetes.io/version). Use on
+a StatefulSet POD TEMPLATE so a chart-only version bump does not mutate the
+template and roll the pod, while still carrying the stable common/managed labels
+(app.kubernetes.io/managed-by, global.commonLabels, name/instance/component)
+that policy/cost-allocation/admission selectors rely on.
+Usage: {{ include "pawtograder.componentStableLabels" (dict "ctx" . "component" "postgres") }}
+*/}}
+{{- define "pawtograder.componentStableLabels" -}}
+{{ include "pawtograder.selectorLabels" .ctx }}
+app.kubernetes.io/component: {{ .component }}
+app.kubernetes.io/managed-by: {{ .ctx.Release.Service }}
+{{- /* commonLabels last, but strip the reserved selector keys: this label set
+     goes on a StatefulSet/Deployment pod template, and the selector is immutable
+     and must equal the template labels — a commonLabels override of name/
+     instance/component would break that contract, so drop those keys. */}}
+{{- with omit (.ctx.Values.global.commonLabels | default dict) "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/component" }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Fully qualified app name. Truncated to 63 chars (DNS-1123 limit).
 */}}
 {{- define "pawtograder.fullname" -}}
@@ -162,6 +184,48 @@ label, so the default two-label "api.pr-123.preview…" form is NOT coverable).
 {{- end -}}
 
 {{/*
+Per-deployment-channel public host. Each channel (.Values.channels[]) is served
+on its own single-label host "<name>.<global.hostname>" so a *.<zone> wildcard
+TLS cert always covers it; the channel runs web + edge-functions code against the
+shared data plane, and the app redirects each course to its channel's host
+(classes.deployment_channel). The host pattern is fixed (no per-channel override)
+because the web middleware's hostForChannel() computes the same "<name>.<suffix>"
+to drive the redirect — the chart and the app must agree on one host per channel.
+The name is capped at 63 chars to match the DB CHECK on classes.deployment_channel
+(a longer channel could render chart resources but never be stored / pinned to).
+Usage: {{ include "pawtograder.channel.host" (dict "ctx" . "channel" $c) }}
+*/}}
+{{- define "pawtograder.channel.host" -}}
+{{- $name := required "channels[].name is required" .channel.name -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" $name) -}}
+{{- fail (printf "invalid channels[].name %q: must be a DNS-1123 label, <=63 chars (lowercase alphanumeric and '-', starting/ending alphanumeric) — it becomes a resource name and host label" $name) -}}
+{{- end -}}
+{{- printf "%s.%s" $name .ctx.Values.global.hostname -}}
+{{- end -}}
+
+{{/*
+Shared Supabase API path routes (auth / rest / realtime / storage / functions →
+Kong) for an Ingress host. Used by the primary host, its TLS-SAN extraHosts, and
+every deployment-channel host, so the five proxied prefixes (and their port
+handling) can't drift between the three Ingresses. Caller decides whether to emit
+them (the primary host omits these when global.apiOnSeparateHost).
+Usage: {{ include "pawtograder.ingress.apiPaths" $ | trim | nindent 10 }}
+*/}}
+{{- define "pawtograder.ingress.apiPaths" -}}
+{{- $kong := include "pawtograder.kong.host" . -}}
+{{- $port := .Values.kong.service.port -}}
+{{- range $p := (list "auth" "rest" "realtime" "storage" "functions") }}
+- path: /{{ $p }}/v1
+  pathType: Prefix
+  backend:
+    service:
+      name: {{ $kong }}
+      port:
+        number: {{ $port }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Internal service hostnames.
 */}}
 {{- define "pawtograder.postgres.host" -}}
@@ -216,6 +280,46 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "web") -}}
 {{- end -}}
 
+{{- define "pawtograder.postgres.replica.host" -}}
+{{- include "pawtograder.componentName" (dict "ctx" . "component" "postgres-replica") -}}
+{{- end -}}
+
+{{/*
+WAL-G environment (the WALG_ and AWS_ vars). Shared verbatim by the primary
+container (runs archive_command), the base-backup sidecar, and the replica (restore_command
+fallback), so wal-g behaves identically wherever it runs. Call with the root
+context and nindent (see the postgres StatefulSet for a call site). S3
+credentials come from secrets.names.s3 (the same secret backup.yaml uses).
+*/}}
+{{- define "pawtograder.walg.env" -}}
+- name: WALG_S3_PREFIX
+  value: {{ required "postgres.walg.s3Prefix is required when postgres.walg.enabled=true" .Values.postgres.walg.s3Prefix | quote }}
+- name: WALG_COMPRESSION_METHOD
+  value: {{ .Values.postgres.walg.compressionMethod | default "zstd" | quote }}
+- name: AWS_REGION
+  value: {{ .Values.postgres.walg.region | default "us-east-1" | quote }}
+{{- if .Values.postgres.walg.s3Endpoint }}
+- name: AWS_ENDPOINT
+  value: {{ .Values.postgres.walg.s3Endpoint | quote }}
+{{- end }}
+- name: AWS_S3_FORCE_PATH_STYLE
+  # `dig` (not `| default true`): sprig's `default` treats a boolean false as
+  # empty and would force "true", making forcePathStyle: false impossible to
+  # set. `dig` returns the actual value when the key is present — including
+  # false — and only falls back to true when the key is absent.
+  value: {{ dig "forcePathStyle" true .Values.postgres.walg | quote }}
+- name: AWS_ACCESS_KEY_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secrets.names.s3 }}
+      key: AWS_ACCESS_KEY_ID
+- name: AWS_SECRET_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secrets.names.s3 }}
+      key: AWS_SECRET_ACCESS_KEY
+{{- end -}}
+
 {{/*
 Postgres connection URL — pointed at supavisor by default. Components that
 need the unpooled connection use pawtograder.postgres.directUrl.
@@ -236,4 +340,111 @@ Image pull secrets.
 imagePullSecrets:
 {{- toYaml . | nindent 2 }}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Pod-level securityContext. A component that defines its own
+`podSecurityContext` key wins outright (set it to {} to opt a component out
+entirely — postgres-style images whose entrypoints need more than the
+default allows). Otherwise global.podSecurityContext applies.
+Usage: {{ include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.web) | nindent 6 }}
+*/}}
+{{- define "pawtograder.podSecurityContext" -}}
+{{- $sc := .ctx.Values.global.podSecurityContext -}}
+{{- if hasKey .component "podSecurityContext" -}}
+{{- $sc = .component.podSecurityContext -}}
+{{- end -}}
+{{- with $sc }}
+securityContext:
+  {{- toYaml . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Container-level securityContext, same precedence rules as
+pawtograder.podSecurityContext. Applied to main containers only — init
+containers and hook Jobs that legitimately need root (apk/apt installs,
+postgres entrypoint chown/su) are left alone.
+Usage: {{ include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.web) | nindent 10 }}
+*/}}
+{{- define "pawtograder.containerSecurityContext" -}}
+{{- $sc := .ctx.Values.global.containerSecurityContext -}}
+{{- if hasKey .component "containerSecurityContext" -}}
+{{- $sc = .component.containerSecurityContext -}}
+{{- end -}}
+{{- with $sc }}
+securityContext:
+  {{- toYaml . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+priorityClassName — component override, else global.
+Usage: {{ include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.web) | nindent 6 }}
+*/}}
+{{- define "pawtograder.priorityClassName" -}}
+{{- $p := default .ctx.Values.global.priorityClassName .component.priorityClassName -}}
+{{- with $p }}
+priorityClassName: {{ . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Pod affinity block. Per-component / global affinity (if set) wins — the
+user opted into custom placement explicitly. Otherwise emit a soft
+podAntiAffinity spreading the component's pods across nodes when its
+`spreadAcrossNodes` value is true (no effect on single-node tiers).
+Generalizes the pattern realtime.yaml pioneered.
+Usage: {{ include "pawtograder.componentAffinity" (dict "ctx" . "component" .Values.web "name" "web") | nindent 6 }}
+*/}}
+{{- define "pawtograder.componentAffinity" -}}
+{{- $userAffinity := include "pawtograder.affinity" (dict "ctx" .ctx "component" .component) -}}
+{{- if $userAffinity }}
+affinity:
+  {{- $userAffinity | nindent 2 }}
+{{- else if .component.spreadAcrossNodes }}
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              {{- include "pawtograder.componentSelectorLabels" (dict "ctx" .ctx "component" .name) | nindent 14 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+preStop drain hook: sleep so the kubelet's endpoint removal propagates to
+kube-proxy/ingress before the process gets SIGTERM, instead of dropping
+in-flight requests. Rendered only when the component sets a non-zero
+preStopSleepSeconds (images without /bin/sh must keep it 0).
+Usage: {{ include "pawtograder.preStop" (dict "component" .Values.web) | nindent 10 }}
+*/}}
+{{- define "pawtograder.preStop" -}}
+{{- with .component.preStopSleepSeconds }}
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep {{ . }}"]
+{{- end -}}
+{{- end -}}
+
+{{/*
+Deployment rollout strategy from the component's updateStrategy value.
+Usage: {{ include "pawtograder.deploymentStrategy" (dict "component" .Values.web) | nindent 2 }}
+*/}}
+{{- define "pawtograder.deploymentStrategy" -}}
+{{- with .component.updateStrategy }}
+strategy:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- /* Deployment progress deadline. Default 1200s, not the k8s default 600s:
+     a chart-version bump rolls the postgres StatefulSet (its pod template
+     checksums postgres-config.yaml, whose labels carry the chart version), and
+     dependent tiers wait on postgres to come back — which on slow (NFS) storage
+     can exceed 600s and make `helm --wait` report a false failure even though
+     the rollout converges seconds later. Per-component overridable. */}}
+progressDeadlineSeconds: {{ .component.progressDeadlineSeconds | default 1200 }}
 {{- end -}}

@@ -53,6 +53,10 @@ spec:
       labels:
         {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "smtp-relay") | nindent 8 }}
     spec:
+      # socat never talks to the k8s API; the explicit false survives overlays
+      # that re-enable automount on the shared ServiceAccount.
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      automountServiceAccountToken: false
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: socat

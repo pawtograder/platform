@@ -3,6 +3,15 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
+import {
+  DialogActionTrigger,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle
+} from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useAssignmentGroups } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -14,8 +23,10 @@ import {
   useSetOnlyShowGradesFor
 } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
+import { createManualSubmission } from "@/lib/edgeFunctions";
 import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import TableController from "@/lib/TableController";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -26,6 +37,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
+  Badge,
   Box,
   Button,
   HStack,
@@ -46,22 +58,79 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { ColumnDef, flexRender, RowSelectionState } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { formatInTimeZone } from "date-fns-tz";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
+import { describeBulkReleaseResult } from "@/lib/bulkReleaseMessage";
+import { groupBySubmissionId } from "@/lib/groupBySubmissionId";
+
+/**
+ * "Grade anyway" action for a student/group with no active submission. Creates
+ * an empty (`submitted_via='manual'`) stub submission on demand, then navigates
+ * to its grading page. Targets the group when `assignmentGroupId` is set so one
+ * stub covers all members, else the individual profile.
+ */
+function GradeAnywayButton({
+  course_id,
+  assignment_id,
+  profile_id,
+  assignment_group_id
+}: {
+  course_id: string;
+  assignment_id: string;
+  profile_id: string;
+  assignment_group_id: number | null;
+}) {
+  const router = useRouter();
+  const supabase = useMemo(() => createClient(), []);
+
+  const handleConfirm = useCallback(async () => {
+    try {
+      const submissionId = await createManualSubmission(
+        {
+          assignment_id: Number(assignment_id),
+          ...(assignment_group_id != null ? { assignment_group_id } : { profile_id })
+        },
+        supabase
+      );
+      router.push(`/course/${course_id}/assignments/${assignment_id}/submissions/${submissionId}`);
+    } catch (err) {
+      toaster.error({
+        title: "Could not start grading",
+        description: err instanceof Error ? err.message : "Failed to create a submission to grade."
+      });
+    }
+  }, [assignment_group_id, profile_id, assignment_id, course_id, router, supabase]);
+
+  return (
+    <PopConfirm
+      triggerLabel="Grade anyway"
+      confirmHeader="Grade without a submission?"
+      confirmText="This creates an empty submission for this student/group so you can grade them. The student will be able to see it."
+      onConfirm={handleConfirm}
+      trigger={
+        <Button variant="outline" size="xs" colorPalette="gray">
+          Grade anyway
+        </Button>
+      }
+    />
+  );
+}
 
 function StudentNameCell({
   course_id,
   assignment_id,
   uid,
-  activeSubmissionId
+  activeSubmissionId,
+  assignmentGroupId
 }: {
   course_id: string;
   assignment_id: string;
   uid: string;
   activeSubmissionId: number | null;
+  assignmentGroupId: number | null;
 }) {
   const isObfuscated = useObfuscatedGradesMode();
   const canShowGradeFor = useCanShowGradeFor(uid);
@@ -78,6 +147,14 @@ function StudentNameCell({
         </Link>
       ) : (
         <PersonName uid={uid} showAvatar={false} />
+      )}
+      {activeSubmissionId === null && (
+        <GradeAnywayButton
+          course_id={course_id}
+          assignment_id={assignment_id}
+          profile_id={uid}
+          assignment_group_id={assignmentGroupId}
+        />
       )}
       <Box flex="1" display="flex" justifyContent="flex-end">
         {isObfuscated && (
@@ -303,6 +380,8 @@ export default function AssignmentsTable({
 } = {}) {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { role: classRole } = useClassProfiles();
   const { assignment } = useAssignmentController();
   const assignmentGroups = useAssignmentGroups();
@@ -312,6 +391,7 @@ export default function AssignmentsTable({
   const supabase = useMemo(() => createClient(), []);
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
+  const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
   // Get sections and assignment data for default visibility logic
@@ -335,7 +415,8 @@ export default function AssignmentsTable({
       created_at: false,
       gradername: true,
       checkername: false,
-      grading_complete: false
+      grading_complete: false,
+      placeholder: false
     };
   });
 
@@ -468,6 +549,7 @@ export default function AssignmentsTable({
               assignment_id={assignment_id as string}
               uid={uid}
               activeSubmissionId={row.original.activesubmissionid}
+              assignmentGroupId={row.original.assignment_group_id ?? null}
             />
           );
         }
@@ -565,6 +647,10 @@ export default function AssignmentsTable({
         header: "Autograder Score",
         enableColumnFilter: true,
         cell: (props) => {
+          // No-repo / no-submission assignments have no autograder by convention.
+          if (assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission") {
+            return <Text color="fg.muted">N/A</Text>;
+          }
           return (
             <ScoreLink
               score={props.getValue() as number | null | undefined}
@@ -692,6 +778,30 @@ export default function AssignmentsTable({
           const status = isReleased ? "Released" : "Not Released";
           return values.includes(status);
         }
+      },
+      {
+        id: "placeholder",
+        accessorKey: "is_placeholder",
+        header: "Placeholder",
+        enableColumnFilter: true,
+        cell: (props) =>
+          props.row.original.is_placeholder ? (
+            <Badge
+              colorPalette="orange"
+              cursor="help"
+              title="Placeholder submission created for grading — no student-submitted work."
+            >
+              Yes
+            </Badge>
+          ) : (
+            <Text color="fg.muted">No</Text>
+          ),
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const status = row.original.is_placeholder ? "Yes" : "No";
+          return values.includes(status);
+        }
       }
     ],
     [timeZone, course_id, assignment_id, assignment, showGroupMentorColumn]
@@ -771,11 +881,60 @@ export default function AssignmentsTable({
   });
   const isInstructor = classRole.role === "instructor";
 
-  const selectedSubmissionIds = getFilteredRowModel()
-    .rows.filter((row) => row.getIsSelected() && row.original.activesubmissionid != null)
-    .map((row) => row.original.activesubmissionid as number);
+  // The dashboard view emits one row per group member, so a single group
+  // submission appears as multiple selected rows that share one
+  // activesubmissionid. Dedupe by submission id so the counts, labels, and
+  // success toast reflect distinct submissions rather than group members.
+  const selectedSubmissionIds = Array.from(
+    new Set(
+      getFilteredRowModel()
+        .rows.filter((row) => row.getIsSelected() && row.original.activesubmissionid != null)
+        .map((row) => row.original.activesubmissionid as number)
+    )
+  );
+  const selectedIncompleteCount = new Set(
+    getFilteredRowModel()
+      .rows.filter(
+        (row) => row.getIsSelected() && row.original.activesubmissionid != null && row.original.completed_at == null
+      )
+      .map((row) => row.original.activesubmissionid as number)
+  ).size;
 
   const selectedCount = selectedSubmissionIds.length;
+
+  const releaseSelectedSubmissionReviews = useCallback(async () => {
+    setIsReleasingAll(true);
+    try {
+      const { data, error } = await supabase.rpc("release_grading_reviews_for_submissions", {
+        p_assignment_id: Number(assignment_id),
+        p_submission_ids: selectedSubmissionIds
+      });
+
+      if (error) {
+        throw new Error(`Failed to release reviews: ${error.message}`);
+      }
+
+      await tableController?.refetchAll();
+      resetRowSelection();
+
+      // Report what the RPC actually changed. It touches only each submission's grading review
+      // (never the self-review or meta-grading rounds) and filters on `s.is_active` and on the
+      // review not already being released, so selecting 40 can legitimately release 12 — and the
+      // old toast claimed all 40 regardless.
+      const affected = typeof data === "number" ? data : 0;
+      const message = describeBulkReleaseResult({ affected, selectedCount, action: "released" });
+      toaster[message.status]({ title: message.title, description: message.description });
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Error releasing grading reviews for selection:", error);
+      toaster.error({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
+      });
+    } finally {
+      setIsReleasingAll(false);
+    }
+  }, [assignment_id, resetRowSelection, selectedCount, selectedSubmissionIds, supabase, tableController]);
 
   const columnFiltersKey = JSON.stringify(getState().columnFilters);
   useEffect(() => {
@@ -789,6 +948,30 @@ export default function AssignmentsTable({
       return restrictRowIds == null ? others : [...others, { id: "cohort_membership", value: restrictRowIds }];
     });
   }, [restrictRowIds, setColumnFilters]);
+
+  // A `?grading_complete=complete|incomplete` query param is a one-shot deep link
+  // (used by the release-incomplete warning dialogs) that filters the table to the
+  // matching rows. Apply it once and reveal the otherwise-hidden column so the
+  // filter is visible and clearable, then strip the param from the URL so it does
+  // not stick (the user could not clear the filter while the param lingered) and
+  // does not re-apply on later navigations.
+  useEffect(() => {
+    const gradingCompleteParam = searchParams.get("grading_complete");
+    if (!gradingCompleteParam) return;
+    const normalized = gradingCompleteParam.trim().toLowerCase();
+    const filterValue = normalized === "complete" ? "Complete" : normalized === "incomplete" ? "Incomplete" : null;
+    if (filterValue) {
+      setColumnVisibility((prev) => ({ ...prev, grading_complete: true }));
+      setColumnFilters((prev) => {
+        const others = prev.filter((f) => f.id !== "grading_complete");
+        return [...others, { id: "grading_complete", value: [filterValue] }];
+      });
+    }
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("grading_complete");
+    const queryString = params.toString();
+    router.replace(`${pathname}${queryString ? `?${queryString}` : ""}`, { scroll: false });
+  }, [searchParams, setColumnFilters, setColumnVisibility, router, pathname]);
 
   const toggleColumnVisibility = (columnId: keyof typeof columnVisibility) => {
     setColumnVisibility((prev) => ({
@@ -818,42 +1001,15 @@ export default function AssignmentsTable({
                 loading={isReleasingAll}
                 disabled={isReleasingAll || isUnreleasingAll || selectedCount === 0}
                 onClick={async () => {
-                  setIsReleasingAll(true);
-                  try {
-                    const { error } = await supabase.rpc("release_grading_reviews_for_submissions", {
-                      p_assignment_id: Number(assignment_id),
-                      p_submission_ids: selectedSubmissionIds
-                    });
-
-                    if (error) {
-                      throw new Error(`Failed to release reviews: ${error.message}`);
-                    }
-
-                    await tableController?.refetchAll();
-                    resetRowSelection();
-
-                    toaster.success({
-                      title: "Success",
-                      description:
-                        selectedCount === 1
-                          ? "1 selected submission review released"
-                          : `${selectedCount} selected submission reviews released`
-                    });
-                  } catch (error) {
-                    // eslint-disable-next-line no-console
-                    console.error("Error releasing grading reviews for selection:", error);
-                    toaster.error({
-                      title: "Error",
-                      description:
-                        error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
-                    });
-                  } finally {
-                    setIsReleasingAll(false);
+                  if (selectedIncompleteCount > 0) {
+                    setIsReleaseIncompleteWarningOpen(true);
+                    return;
                   }
+                  await releaseSelectedSubmissionReviews();
                 }}
               >
                 {selectedCount === 0
-                  ? "Release selected submission reviews"
+                  ? "Release selected grading reviews"
                   : `Release ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
               </Button>
               <Button
@@ -864,7 +1020,7 @@ export default function AssignmentsTable({
                 onClick={async () => {
                   setIsUnreleasingAll(true);
                   try {
-                    const { error } = await supabase.rpc("unrelease_grading_reviews_for_submissions", {
+                    const { data, error } = await supabase.rpc("unrelease_grading_reviews_for_submissions", {
                       p_assignment_id: Number(assignment_id),
                       p_submission_ids: selectedSubmissionIds
                     });
@@ -875,13 +1031,15 @@ export default function AssignmentsTable({
 
                     await tableController?.refetchAll();
                     resetRowSelection();
-                    toaster.success({
-                      title: "Success",
-                      description:
-                        selectedCount === 1
-                          ? "1 selected submission review unreleased"
-                          : `${selectedCount} selected submission reviews unreleased`
+                    // Same as the release path: grading review only, and report the RPC's
+                    // ROW_COUNT rather than the selection size.
+                    const affected = typeof data === "number" ? data : 0;
+                    const message = describeBulkReleaseResult({
+                      affected,
+                      selectedCount,
+                      action: "unreleased"
                     });
+                    toaster[message.status]({ title: message.title, description: message.description });
                   } catch (error) {
                     // eslint-disable-next-line no-console
                     console.error("Error unreleasing grading reviews for selection:", error);
@@ -896,11 +1054,60 @@ export default function AssignmentsTable({
                 }}
               >
                 {selectedCount === 0
-                  ? "Unrelease selected submission reviews"
+                  ? "Unrelease selected grading reviews"
                   : `Unrelease ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
               </Button>
             </HStack>
           ))}
+        <DialogRoot
+          open={isReleaseIncompleteWarningOpen}
+          onOpenChange={(e) => setIsReleaseIncompleteWarningOpen(e.open)}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Some selected reviews are incomplete</DialogTitle>
+            </DialogHeader>
+            <DialogBody>
+              <Text>
+                {selectedIncompleteCount} selected grading review{selectedIncompleteCount === 1 ? "" : "s"}{" "}
+                {selectedIncompleteCount === 1 ? "is" : "are"} incomplete. Releasing now will publish those grades
+                anyway.
+              </Text>
+            </DialogBody>
+            <DialogFooter flexDirection={{ base: "column", md: "row" }} alignItems="stretch">
+              <DialogActionTrigger asChild>
+                <Button variant="ghost" w={{ base: "100%", md: "auto" }}>
+                  Cancel
+                </Button>
+              </DialogActionTrigger>
+              <Button
+                variant="outline"
+                w={{ base: "100%", md: "auto" }}
+                whiteSpace="normal"
+                h="auto"
+                onClick={() => {
+                  setIsReleaseIncompleteWarningOpen(false);
+                  router.push(`/course/${course_id}/manage/assignments/${assignment_id}?grading_complete=incomplete`, {
+                    scroll: false
+                  });
+                }}
+              >
+                Review
+              </Button>
+              <Button
+                colorPalette="green"
+                w={{ base: "100%", md: "auto" }}
+                loading={isReleasingAll}
+                onClick={async () => {
+                  await releaseSelectedSubmissionReviews();
+                  setIsReleaseIncompleteWarningOpen(false);
+                }}
+              >
+                Continue anyway
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </DialogRoot>
         {/* Column Visibility Controls */}
         <Box w="100%" p={4} bg="bg.subtle" borderRadius="md" mb={0}>
           <Text fontSize="sm" fontWeight="medium" mb={3}>
@@ -959,6 +1166,12 @@ export default function AssignmentsTable({
               onCheckedChange={() => toggleColumnVisibility("grading_complete")}
             >
               Grading Complete
+            </Checkbox>
+            <Checkbox
+              checked={columnVisibility.placeholder}
+              onCheckedChange={() => toggleColumnVisibility("placeholder")}
+            >
+              Placeholder
             </Checkbox>
           </HStack>
         </Box>
@@ -1195,6 +1408,21 @@ export default function AssignmentsTable({
                                   { label: "Not Released", value: "Not Released" }
                                 ]}
                                 placeholder="Filter by release status..."
+                              />
+                            )}
+                            {header.id === "placeholder" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "Yes", value: "Yes" },
+                                  { label: "No", value: "No" }
+                                ]}
+                                placeholder="Filter by placeholder..."
                               />
                             )}
                             {header.id === "created_at" && (
@@ -1628,19 +1856,9 @@ async function exportGrades({
       }
     }
   }
-  const autograderTestResultsBySubmissionID = new Map<number, GraderResultTest[]>();
-  if (include_autograder_test_results) {
-    for (const autograderTestResult of autograder_test_results) {
-      if (autograderTestResult.submission_id === null) {
-        continue;
-      }
-      if (!autograderTestResultsBySubmissionID.has(autograderTestResult.submission_id)) {
-        autograderTestResultsBySubmissionID.set(autograderTestResult.submission_id, []);
-      } else {
-        autograderTestResultsBySubmissionID.get(autograderTestResult.submission_id)!.push(autograderTestResult);
-      }
-    }
-  }
+  const autograderTestResultsBySubmissionID = include_autograder_test_results
+    ? groupBySubmissionId(autograder_test_results)
+    : new Map<number, GraderResultTest[]>();
 
   const exportRows: ExportRow[] = [];
   for (const submission of latestSubmissionsWithGrades) {

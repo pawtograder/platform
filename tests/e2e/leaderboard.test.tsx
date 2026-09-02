@@ -112,7 +112,7 @@ test.describe("Assignment Leaderboard", () => {
 
     // Wait for realtime connection
     await expect(
-      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+      page.getByRole("status").filter({ hasText: "Realtime connection status: All realtime connections active" })
     ).toBeVisible({ timeout: 10000 });
 
     // Navigate to assignment page

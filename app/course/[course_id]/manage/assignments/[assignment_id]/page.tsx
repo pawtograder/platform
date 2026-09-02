@@ -3,15 +3,18 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { useCourseController } from "@/hooks/useCourseController";
+import { CourseFeatureGate } from "@/components/course/course-feature-gate";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
+import { Box, DataList, HStack, Link, Tabs, Text, VStack } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import AssignmentDashboard from "./assignmentDashboard";
 import { AssignmentExportControls } from "./assignmentsTable";
+import CreateSubmissionForStudentDialog from "./createSubmissionForStudentDialog";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 
 const VALID_TABS = ["dashboard", "assigned-grading"] as const;
@@ -117,6 +120,19 @@ export default function AssignmentHome() {
                   {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}
                 </DataList.ItemValue>
               </DataList.Item>
+              {/* Mastery-grading courses start grading at the suggested date rather than the
+                  hard deadline (#894). "Due" keeps meaning the enforced deadline for staff, so
+                  nobody has to guess which date the autograder actually applies. */}
+              {assignment.suggested_due_date && (
+                <CourseFeatureGate feature={COURSE_FEATURES.SUGGESTED_DUE_DATE}>
+                  <DataList.Item>
+                    <DataList.ItemLabel>Suggested due</DataList.ItemLabel>
+                    <DataList.ItemValue>
+                      <TimeZoneAwareDate date={assignment.suggested_due_date} format="Pp" />
+                    </DataList.ItemValue>
+                  </DataList.Item>
+                </CourseFeatureGate>
+              )}
               <DataList.Item>
                 <DataList.ItemLabel>Due</DataList.ItemLabel>
                 <DataList.ItemValue>
@@ -126,9 +142,19 @@ export default function AssignmentHome() {
               <DataList.Item>
                 <DataList.ItemLabel>Handout repo</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
-                    {assignment.template_repo}
-                  </Link>
+                  {assignment.repo_mode === "fork_from_prior_assignment" ? (
+                    <Text fontStyle="italic" color="fg.muted">
+                      Copied from a prior assignment
+                    </Text>
+                  ) : assignment.template_repo ? (
+                    <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
+                      {assignment.template_repo}
+                    </Link>
+                  ) : (
+                    <Text fontStyle="italic" color="fg.muted">
+                      No handout repository
+                    </Text>
+                  )}
                 </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>
@@ -144,7 +170,24 @@ export default function AssignmentHome() {
               </DataList.Item>
             </DataList.Root>
           </VStack>
-          {isInstructor && <AssignmentExportControls assignment_id={assignment.id} class_id={assignment.class_id} />}
+          <HStack>
+            {assignment.repo_mode === "none" && (
+              <CreateSubmissionForStudentDialog
+                assignmentId={assignment.id}
+                groupConfig={(assignment.group_config ?? "individual") as "individual" | "groups" | "both"}
+                onSubmissionCreated={async () => {
+                  // Pull the just-created submission into the table cache; without
+                  // this the new row only appears after a full page reload.
+                  try {
+                    await tableController?.refetchAll();
+                  } catch (e) {
+                    Sentry.captureException(e);
+                  }
+                }}
+              />
+            )}
+            {isInstructor && <AssignmentExportControls assignment_id={assignment.id} class_id={assignment.class_id} />}
+          </HStack>
         </HStack>
       </Box>
       <Suspense fallback={null}>

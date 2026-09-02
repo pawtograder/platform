@@ -145,7 +145,7 @@ test.describe("Create submission", () => {
     await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentInFuture!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
     await assertStudentPageAccessible(page, "create submission - future deadline files");
   });
@@ -200,7 +200,7 @@ test.describe("Create submission", () => {
     await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentInFuture!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
     await assertStudentPageAccessible(page, "create submission - extended due date files");
   });
@@ -218,7 +218,7 @@ test.describe("Create submission", () => {
     await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentWithNotGraded!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
     await assertStudentPageAccessible(page, "create submission - not graded files");
   });
@@ -329,6 +329,20 @@ test.describe("Create submission", () => {
       class_id: course.id
     });
     await expect(submission).rejects.toThrow("Empty submissions are not permitted for this assignment");
+
+    // The rejection must still be recorded for instructors. The rejected submission row is deleted
+    // during cleanup, so the error is recorded unattached (submission_id null) — recording it
+    // against the deleted id violates the foreign key and loses the error entirely.
+    const { data: workflowRunErrors, error: workflowRunErrorsError } = await supabase
+      .from("workflow_run_error")
+      .select("name, submission_id")
+      .eq("class_id", course.id)
+      .like("name", "Empty submissions are not permitted%");
+    if (workflowRunErrorsError) {
+      throw new Error(`Failed to load workflow run errors: ${workflowRunErrorsError.message}`);
+    }
+    expect(workflowRunErrors?.length).toBeGreaterThan(0);
+    expect(workflowRunErrors!.every((e) => e.submission_id === null)).toBe(true);
   });
 
   test("Submission is accepted when prohibited but not empty (no handout match)", async () => {

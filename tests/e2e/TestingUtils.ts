@@ -123,7 +123,12 @@ export async function createClass({
     // Final slug pattern is `<prefix><sanitized-name>-<id>`. Demo provisioning sets
     // slugPrefix="demo-" so mirrored repos don't carry the e2e-ignore prefix DB
     // cleanup scripts rely on.
-    const provisionalSlug = slugPrefix + className.toLowerCase().replace(/ /g, "-");
+    const baseSlug = slugPrefix + className.toLowerCase().replace(/ /g, "-");
+    // The id isn't known until after the insert, but (github_org, slug) is unique per org and
+    // parallel workers all create the same class name in pawtograder-playground -- so the
+    // pre-rename slug has to be unique too. Keep the prefix: the e2e GitHub guard and the DB
+    // cleanup scripts both match on it.
+    const provisionalSlug = `${baseSlug}-pending-${crypto.randomUUID().slice(0, 8)}`;
     const { data: classDataList, error: classError } = await (
       rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
     ).trackAndLimit("classes", () =>
@@ -151,14 +156,14 @@ export async function createClass({
     const { error: classError2 } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("classes", () =>
       supabase
         .from("classes")
-        .update({ slug: `${classData.slug}-${classData.id}` })
+        .update({ slug: `${baseSlug}-${classData.id}` })
         .eq("id", classData.id)
         .select("id")
     );
     if (classError2) {
       throw new Error(`Failed to update class slug: ${classError2.message}`);
     }
-    classData.slug = `${classData.slug}-${classData.id}`;
+    classData.slug = `${baseSlug}-${classData.id}`;
     return classData;
   });
 }
@@ -259,6 +264,10 @@ export type SimulatedSISRosterEntry = {
   role: "student" | "grader" | "instructor";
   class_section_crn?: number | null;
   lab_section_crn?: number | null;
+  // Optional email — the LTI roster-sync path carries it so sis_sync_enrollment can
+  // link a roster member to an existing (email-confirmed) account. Omitted by the
+  // classic SIS path. Passed straight through into p_roster_data.
+  email?: string | null;
 };
 
 export type SISSyncEnrollmentResult = {
@@ -437,7 +446,7 @@ export async function updateClassSettings({
  * generateLink error as transient and retry with jitter; only surface the
  * error after all retries are exhausted.
  */
-async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supabase.auth.admin.generateLink> {
+export async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supabase.auth.admin.generateLink> {
   const delaysMs = [500, 1500, 4000];
   let lastErrMsg = "";
   for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
@@ -769,7 +778,8 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
 const userIdx = {
   student: 1,
   instructor: 1,
-  grader: 1
+  grader: 1,
+  admin: 1
 };
 export async function createUserInClass({
   role,
@@ -783,7 +793,7 @@ export async function createUserInClass({
   rateLimitManager,
   useMagicLink = false
 }: {
-  role: "student" | "instructor" | "grader";
+  role: "student" | "instructor" | "grader" | "admin";
   class_id: number;
   section_id?: number;
   lab_section_id?: number;
@@ -1550,10 +1560,120 @@ export async function insertOfficeHoursQueue({ class_id, name }: { class_id: num
   }
   return officeHoursQueueData;
 }
+
+/**
+ * Put a TA/instructor "on duty" on a help queue. The student-facing New
+ * Request button is disabled unless at least one queue has active staff
+ * (components/help-queue/office-hours-header.tsx), so seeded office-hours
+ * flows that must CREATE requests need this.
+ */
+export async function insertHelpQueueAssignment({
+  class_id,
+  help_queue_id,
+  ta_profile_id
+}: {
+  class_id: number;
+  help_queue_id: number;
+  ta_profile_id: string;
+}): Promise<void> {
+  const { error } = await supabase.from("help_queue_assignments").insert({
+    class_id,
+    help_queue_id,
+    ta_profile_id,
+    is_active: true,
+    started_at: new Date().toISOString(),
+    ended_at: null,
+    max_concurrent_students: 1
+  });
+  if (error) {
+    throw new Error(`Failed to assign staff to help queue: ${error.message}`);
+  }
+}
+
+/**
+ * Seed a help request directly in the DB (office-hours.test.tsx creates them
+ * through the UI; a11y evidence/agent seeding needs them pre-existing).
+ * Uses the class's auto-created "office-hours" queue unless `help_queue_id`
+ * is given, and links the student via help_request_students. Pass
+ * `active_staff_profile_id` to also put that user on duty so the New Request
+ * button is enabled for students.
+ */
+export async function insertHelpRequest({
+  class_id,
+  student_profile_id,
+  request,
+  help_queue_id,
+  status = "open",
+  active_staff_profile_id
+}: {
+  class_id: number;
+  student_profile_id: string;
+  request: string;
+  help_queue_id?: number;
+  status?: "open" | "in_progress" | "resolved" | "closed";
+  active_staff_profile_id?: string;
+}): Promise<{ id: number; help_queue_id: number }> {
+  let queueId = help_queue_id;
+  if (!queueId) {
+    const { data: queue, error: queueError } = await supabase
+      .from("help_queues")
+      .select("id")
+      .eq("class_id", class_id)
+      .eq("name", "office-hours")
+      .single();
+    if (queueError || !queue) {
+      throw new Error(`Failed to find office hours queue: ${queueError?.message ?? "not found"}`);
+    }
+    queueId = queue.id;
+  }
+
+  const { data: helpRequest, error: requestError } = await supabase
+    .from("help_requests")
+    .insert({
+      class_id,
+      help_queue: queueId,
+      request,
+      status,
+      created_by: student_profile_id,
+      is_private: false,
+      location_type: "remote"
+    })
+    .select("id")
+    .single();
+  if (requestError || !helpRequest) {
+    throw new Error(`Failed to create help request: ${requestError?.message ?? "no row"}`);
+  }
+
+  const { error: studentLinkError } = await supabase.from("help_request_students").insert({
+    class_id,
+    help_request_id: helpRequest.id,
+    profile_id: student_profile_id
+  });
+  if (studentLinkError) {
+    throw new Error(`Failed to link student to help request: ${studentLinkError.message}`);
+  }
+
+  if (active_staff_profile_id) {
+    await insertHelpQueueAssignment({ class_id, help_queue_id: queueId, ta_profile_id: active_staff_profile_id });
+  }
+
+  return { id: helpRequest.id, help_queue_id: queueId };
+}
 const assignmentIdx = {
   lab: 1,
   assignment: 1
 };
+/**
+ * Same enum as supabase/functions/_shared/repoCreationStrategy.AssignmentRepoMode,
+ * re-declared here to avoid pulling Deno-shaped imports into the Node test runtime.
+ */
+export type AssignmentRepoMode =
+  | "none"
+  | "template_only_staff"
+  | "template_with_student_forks"
+  | "fork_from_prior_assignment"
+  | "no_submission";
+
 export async function insertAssignment({
   due_date,
   suggested_due_date,
@@ -1571,7 +1691,12 @@ export async function insertAssignment({
   min_group_size,
   max_group_size,
   group_formation_deadline,
-  assignment_slug
+  assignment_slug,
+  repo_mode,
+  source_assignment_id,
+  protect_block_force_push,
+  protect_require_pull_request,
+  protect_required_reviewers
 }: {
   due_date: string;
   suggested_due_date?: string;
@@ -1591,6 +1716,20 @@ export async function insertAssignment({
   group_formation_deadline?: string | null;
   /** When set, used as assignments.slug instead of the global assignment index (avoids parallel E2E collisions). */
   assignment_slug?: string;
+  /**
+   * One of the five repo modes. Defaults to undefined (DB default
+   * 'template_only_staff'), so legacy callers behave identically.
+   */
+  repo_mode?: AssignmentRepoMode;
+  /**
+   * Required (and only allowed) when repo_mode = 'fork_from_prior_assignment'.
+   * Must reference an assignment in the same class.
+   */
+  source_assignment_id?: number | null;
+  /** Defaults match DB defaults (true / false / 0). Forbidden for none/no_submission modes. */
+  protect_block_force_push?: boolean;
+  protect_require_pull_request?: boolean;
+  protect_required_reviewers?: number;
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
   const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
@@ -1614,32 +1753,61 @@ export async function insertAssignment({
   const selfReviewSettingData = selfReviewSettingDataList[0];
   const self_review_setting_id = selfReviewSettingData.id;
   const slug = assignment_slug ?? `assignment-${currentAssignmentIdx}`;
+  // template_repo lives outside repo-mode (every assignment has a handout for
+  // staff) for everything EXCEPT the explicitly-no-repo modes, where the
+  // DB constraint is happier with a null template_repo.
+  if (
+    repo_mode === "fork_from_prior_assignment" &&
+    (source_assignment_id === undefined || source_assignment_id === null)
+  ) {
+    throw new Error("insertAssignment: source_assignment_id is required when repo_mode='fork_from_prior_assignment'");
+  }
+  const noRepoMode = repo_mode === "none" || repo_mode === "no_submission";
+  // assignments_no_protection_when_no_repo requires the protect_* fields be
+  // false/false/0 when repo_mode is none/no_submission. The DB column defaults
+  // are true/false/0, so we must explicitly zero them out for no-repo modes
+  // — otherwise the insert violates the check constraint.
+  const protectionFields = noRepoMode
+    ? {
+        protect_block_force_push: false,
+        protect_require_pull_request: false,
+        protect_required_reviewers: 0
+      }
+    : {
+        ...(protect_block_force_push !== undefined ? { protect_block_force_push } : {}),
+        ...(protect_require_pull_request !== undefined ? { protect_require_pull_request } : {}),
+        ...(protect_required_reviewers !== undefined ? { protect_required_reviewers } : {})
+      };
+  const insertPayload = {
+    title: title,
+    description: "This is a test assignment for E2E testing",
+    due_date: due_date,
+    suggested_due_date: suggested_due_date ?? null,
+    minutes_due_after_lab: lab_due_date_offset,
+    template_repo: noRepoMode ? null : TEST_HANDOUT_REPO,
+    autograder_points: 100,
+    total_points: 100,
+    max_late_tokens: 10,
+    release_date: release_date ?? addDays(new Date(), -1).toUTCString(),
+    class_id: class_id,
+    slug,
+    group_config: group_config ?? "individual",
+    min_group_size: min_group_size ?? null,
+    max_group_size: max_group_size ?? null,
+    group_formation_deadline: group_formation_deadline ?? null,
+    allow_not_graded_submissions: allow_not_graded_submissions || false,
+    permit_empty_submissions: permit_empty_submissions ?? true,
+    self_review_setting_id: self_review_setting_id,
+    regrade_deadline: regrade_deadline,
+    grader_pseudonymous_mode: grader_pseudonymous_mode || false,
+    show_leaderboard: show_leaderboard || false,
+    ...(repo_mode !== undefined ? { repo_mode } : {}),
+    ...(repo_mode === "fork_from_prior_assignment" ? { source_assignment_id: source_assignment_id ?? null } : {}),
+    ...protectionFields
+  };
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
-    .insert({
-      title: title,
-      description: "This is a test assignment for E2E testing",
-      due_date: due_date,
-      suggested_due_date: suggested_due_date ?? null,
-      minutes_due_after_lab: lab_due_date_offset,
-      template_repo: TEST_HANDOUT_REPO,
-      autograder_points: 100,
-      total_points: 100,
-      max_late_tokens: 10,
-      release_date: release_date ?? addDays(new Date(), -1).toUTCString(),
-      class_id: class_id,
-      slug,
-      group_config: group_config ?? "individual",
-      min_group_size: min_group_size ?? null,
-      max_group_size: max_group_size ?? null,
-      group_formation_deadline: group_formation_deadline ?? null,
-      allow_not_graded_submissions: allow_not_graded_submissions || false,
-      permit_empty_submissions: permit_empty_submissions ?? true,
-      self_review_setting_id: self_review_setting_id,
-      regrade_deadline: regrade_deadline,
-      grader_pseudonymous_mode: grader_pseudonymous_mode || false,
-      show_leaderboard: show_leaderboard || false
-    })
+    .insert(insertPayload)
     .select("id")
     .single();
   if (assignmentError) {
@@ -1860,6 +2028,43 @@ export async function insertAssignment({
   }
 
   return { ...assignmentData, rubricParts: partsData.data, rubricChecks: rubricChecksData };
+}
+
+/**
+ * Patch repo-config columns on an existing assignment. Use when a test needs
+ * to flip an assignment to a different repo_mode after creation (e.g. set
+ * source_assignment_id once the prior assignment exists).
+ *
+ * Honors the same DB constraints as insertAssignment: protection fields are
+ * only allowed when the (final) repo_mode is not none/no_submission, and
+ * source_assignment_id must be paired with fork_from_prior_assignment.
+ */
+export async function updateAssignmentRepoConfig(
+  assignmentId: number,
+  fields: {
+    repo_mode?: AssignmentRepoMode;
+    source_assignment_id?: number | null;
+    protect_block_force_push?: boolean;
+    protect_require_pull_request?: boolean;
+    protect_required_reviewers?: number;
+    /** When set, also clears/sets template_repo. Useful when flipping to/from a no-repo mode. */
+    template_repo?: string | null;
+  }
+): Promise<void> {
+  const payload: Record<string, unknown> = {};
+  if (fields.repo_mode !== undefined) payload.repo_mode = fields.repo_mode;
+  if (fields.source_assignment_id !== undefined) payload.source_assignment_id = fields.source_assignment_id;
+  if (fields.protect_block_force_push !== undefined) payload.protect_block_force_push = fields.protect_block_force_push;
+  if (fields.protect_require_pull_request !== undefined)
+    payload.protect_require_pull_request = fields.protect_require_pull_request;
+  if (fields.protect_required_reviewers !== undefined)
+    payload.protect_required_reviewers = fields.protect_required_reviewers;
+  if (fields.template_repo !== undefined) payload.template_repo = fields.template_repo;
+  if (Object.keys(payload).length === 0) return;
+  const { error } = await supabase.from("assignments").update(payload).eq("id", assignmentId);
+  if (error) {
+    throw new Error(`Failed to update assignment ${assignmentId} repo config: ${error.message}`);
+  }
 }
 
 export async function insertSubmissionViaAPI({

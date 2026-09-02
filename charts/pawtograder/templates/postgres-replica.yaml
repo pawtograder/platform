@@ -1,0 +1,306 @@
+{{- /*
+Streaming standby replica (postgres.replica.enabled). A separate StatefulSet
+that bootstraps from the primary with pg_basebackup, then runs as a hot standby
+streaming WAL, with `wal-g wal-fetch` as the archive fallback if it falls behind
+the primary's retained pg_wal. Read-only until promoted. Failover is MANUAL —
+see docs/operations/point-in-time-recovery.md ("Manual failover").
+
+Why a separate StatefulSet (not replicas>1 on the primary sts): primary and
+standby need different startup (initdb vs pg_basebackup), different lifecycle,
+and independent scaling. Keeping them separate avoids ordinal-based role logic.
+
+Requires postgres.walg.enabled (shares the WAL-G config for the restore
+fallback); validations.yaml enforces this.
+*/ -}}
+{{- if and .Values.postgres.enabled .Values.postgres.replica.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.postgres.replica.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-replica") | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: {{ .Values.postgres.service.port }}
+      targetPort: postgres
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres-replica") | nindent 4 }}
+---
+# Read-only service: load-balances SELECTs across ready standbys. Point
+# read-heavy clients here; writes must still go to the primary.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.postgres.replica.host" . }}-read
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-replica") | nindent 4 }}
+spec:
+  ports:
+    - name: postgres
+      port: {{ .Values.postgres.service.port }}
+      targetPort: postgres
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres-replica") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "pawtograder.postgres.replica.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-replica") | nindent 4 }}
+spec:
+  serviceName: {{ include "pawtograder.postgres.replica.host" . }}
+  {{- /* `dig` (not `| default 1`): sprig's `default` treats 0 as empty and would
+     force 1, blocking a values-driven scale-to-zero (pause the standby, keep its
+     PVC/config). `dig` honors an explicit 0. */}}
+  replicas: {{ dig "replicas" 1 .Values.postgres.replica }}
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres-replica") | nindent 6 }}
+  template:
+    metadata:
+      # Version-STABLE labels — see postgres-statefulset.yaml: drops only the
+      # chart/version labels (which would roll the standby on every chart bump)
+      # while keeping the stable common/managed labels.
+      labels:
+        {{- include "pawtograder.componentStableLabels" (dict "ctx" . "component" "postgres-replica") | nindent 8 }}
+      annotations:
+        # Hash CONFIG content only, not the chart-version labels (helm.sh/chart,
+        # app.kubernetes.io/version) — otherwise a chart-only bump rolls the
+        # standby even with no real config change. Mirrors postgres-statefulset.yaml.
+        checksum/config: {{ regexReplaceAll "(?m)^.*(helm\\.sh/chart|app\\.kubernetes\\.io/version):.*$" (include (print $.Template.BasePath "/postgres-config.yaml") .) "" | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.postgres) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.postgres) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.postgres.terminationGracePeriodSeconds | default 600 }}
+      initContainers:
+        # Bootstrap: if the data dir is empty, take a fresh base backup from the
+        # primary over the streaming protocol (pg_basebackup -R writes
+        # standby.signal + primary_conninfo). We then rewrite primary_conninfo
+        # WITH the password (-R omits it) and add the wal-g restore_command
+        # fallback. On restart with a populated dir this is a no-op.
+        - name: pg-basebackup
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          # Inherit the pod-level securityContext (pawtograder.podSecurityContext)
+          # so pg_basebackup runs as the SAME user the postgres container will —
+          # the supabase/postgres user (uid 101), NOT root. That matters on
+          # root-squashed NFS (e.g. NetApp): a root process is squashed to the
+          # anon uid and can neither chown nor own PGDATA, so a root init here
+          # made the standby unstartable. pg_basebackup writes PGDATA as its own
+          # uid, so no post-hoc chown is needed; we only chmod 700 (the running
+          # user owns the dir). On non-squashing storage the default pod context
+          # (root) still works — the main container entrypoint chowns as before.
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PGDATA=/var/lib/postgresql/data/pgdata
+              if [ -s "$PGDATA/PG_VERSION" ]; then
+                echo "[bootstrap] $PGDATA already initialized — skipping base backup"
+                exit 0
+              fi
+              PRIMARY={{ include "pawtograder.postgres.host" . }}
+              echo "[bootstrap] pg_basebackup from ${PRIMARY} as supabase_replication_admin"
+              mkdir -p "$PGDATA"
+              # -R: write standby.signal + primary_conninfo. -X stream: fetch WAL
+              # concurrently so the backup is consistent without archive access.
+              # -c fast: immediate checkpoint on the primary.
+              PGPASSWORD="$REPL_PASSWORD" pg_basebackup \
+                -h "$PRIMARY" -p {{ .Values.postgres.service.port }} \
+                -U supabase_replication_admin \
+                -D "$PGDATA" -R -X stream -c fast --no-password
+              # pg_basebackup -R omits the password from primary_conninfo. Rewrite
+              # it with an application_name (shows in pg_stat_replication on the
+              # primary) and the wal-g archive fallback for when the primary has
+              # recycled the needed WAL. The replication password goes in a
+              # chmod-600 .pgpass referenced by `passfile=`, NOT inlined as
+              # `password=…`: a password containing a space, quote, or backslash
+              # would otherwise break the libpq conninfo parse (and leak into
+              # postgresql.auto.conf). .pgpass lives in PGDATA so it persists on
+              # the PVC and is re-read on every standby restart.
+              PASSFILE="$PGDATA/.pgpass"
+              # .pgpass field escaping: backslash-escape ':' and '\'.
+              esc_pw=$(printf '%s' "$REPL_PASSWORD" | sed 's/[:\\]/\\&/g')
+              printf '%s:%s:*:%s:%s\n' "$PRIMARY" "{{ .Values.postgres.service.port }}" "supabase_replication_admin" "$esc_pw" > "$PASSFILE"
+              chmod 600 "$PASSFILE"
+              {
+                echo "primary_conninfo = 'host=${PRIMARY} port={{ .Values.postgres.service.port }} user=supabase_replication_admin passfile=${PASSFILE} application_name=$(hostname)'"
+                echo "restore_command = 'wal-g wal-fetch %f %p'"
+                echo "recovery_target_timeline = 'latest'"
+                # The supabase/postgres image ships /etc/postgresql-custom/read-replica.conf
+                # with `hot_standby = off`, pulled in by our include_dir. Force it on
+                # here (postgresql.auto.conf is read last, so it wins) or the standby
+                # refuses read connections and never becomes Ready.
+                echo "hot_standby = on"
+              } >> "$PGDATA/postgresql.auto.conf"
+              # No chown: pg_basebackup already wrote PGDATA as the running user
+              # (the postgres uid), which is what the server requires. The former
+              # recursive chown to 999:999 here was both the wrong uid (supabase
+              # postgres is 101) and impossible under NFS root_squash. Postgres
+              # only requires the dir be mode 0700, which its owner can set.
+              chmod 700 "$PGDATA"
+              echo "[bootstrap] standby prepared"
+          env:
+            # supabase_replication_admin's password is set to POSTGRES_PASSWORD
+            # by the primary's zz-supabase-passwords init script.
+            - name: REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+            {{- include "pawtograder.walg.env" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgres
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.postgres) | nindent 10 }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          args:
+            - "-c"
+            - "config_file=/etc/postgresql/postgresql.conf"
+            - "-c"
+            - "hba_file=/etc/postgresql/pg_hba.conf"
+          env:
+            # POSTGRES_* are ignored on a populated data dir (init is skipped),
+            # but the entrypoint still expects POSTGRES_PASSWORD to be set.
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_USER
+              value: supabase_admin
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+            # restore_command (in postgresql.auto.conf) runs wal-g wal-fetch, so
+            # the standby container needs the wal-g config too.
+            {{- include "pawtograder.walg.env" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: config
+              mountPath: /etc/postgresql/postgresql.conf
+              subPath: postgresql.conf
+            - name: config
+              mountPath: /etc/postgresql/pg_hba.conf
+              subPath: pg_hba.conf
+            - name: config
+              mountPath: /etc/postgresql/pgsodium_getkey.sh
+              subPath: pgsodium_getkey.sh
+            - name: pgsodium
+              mountPath: /var/run/secrets/pgsodium
+              readOnly: true
+          # pg_isready reports ready once the standby accepts read connections
+          # (hot_standby defaults on). Probe supabase_admin (exists post-clone).
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, supabase_admin, -d, {{ .Values.postgres.database }}]
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+          # NO livenessProbe — same decision as the primary, for the same reason.
+          # See the long note in postgres-statefulset.yaml.
+          #
+          # This is not a copy of the primary's problem, it is the second half of
+          # the same incident: postgres-replica-0 was killed by its own liveness
+          # probe at 17:18:18 on 2026-08-27, hours after the primary went down at
+          # 14:02:44. Both templates carried their own hardcoded probe with
+          # periodSeconds 10 / timeoutSeconds 5 / failureThreshold unset (default
+          # 3), so both had ~30s of tolerance and both lost the same race against
+          # a transient NetApp NFS stall during network maintenance.
+          #
+          # The recovery argument is STRONGER here than on the primary. A standby
+          # is in continuous recovery by definition, and pg_isready reports
+          # "rejecting connections" (exit 1) whenever it cannot yet accept
+          # queries — which is precisely the state a replica catching up on WAL is
+          # in. A liveness probe on a standby is therefore closest to a timer that
+          # kills it whenever it falls behind, which is the worst possible response
+          # to falling behind.
+          #
+          # readinessProbe above is kept and does the useful work: an unready
+          # replica is removed from Service endpoints, so nothing is routed to a
+          # standby that cannot serve, without destroying the process.
+          #
+          # If you reintroduce a liveness probe, you must also update the
+          # assertion in charts/pawtograder/tests/render-guardrails.sh that pins
+          # its absence.
+          resources:
+            {{- toYaml .Values.postgres.replica.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-config") }}
+            defaultMode: 0644
+            items:
+              - key: postgresql.conf
+                path: postgresql.conf
+              - key: pg_hba.conf
+                path: pg_hba.conf
+              - key: pgsodium_getkey.sh
+                path: pgsodium_getkey.sh
+                mode: 0755
+        - name: pgsodium
+          secret:
+            secretName: {{ .Values.secrets.names.jwt }}
+            defaultMode: 0444
+            items:
+              - key: PGSODIUM_ROOT_KEY
+                path: PGSODIUM_ROOT_KEY
+                mode: 0444
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.postgres)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.postgres)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.postgres.replica.spreadAcrossNodes }}
+      # Soft anti-affinity: keep the standby off the primary's node (a standby
+      # co-located with the primary defeats the durability purpose) and spread
+      # standbys across nodes.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [postgres, postgres-replica]
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        {{- with .Values.postgres.replica.persistence.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          - {{ .Values.postgres.replica.persistence.accessMode | default "ReadWriteOnce" }}
+        {{- if .Values.postgres.replica.persistence.storageClass }}
+        storageClassName: {{ .Values.postgres.replica.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.replica.persistence.size | default "50Gi" }}
+{{- end }}

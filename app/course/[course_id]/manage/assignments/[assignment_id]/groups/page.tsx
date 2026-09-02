@@ -2,13 +2,18 @@
 import { toaster } from "@/components/ui/toaster";
 
 import { createClient } from "@/utils/supabase/client";
+import { assignmentGroupCopyGroupsFromAssignment } from "@/lib/edgeFunctions";
 import {
   Assignment,
   AssignmentGroupWithMembersAndMentor,
   UserRoleWithPrivateProfileGroupMembershipsAndUser
 } from "@/utils/supabase/DatabaseTypes";
 import { useCourseController, useGradersAndInstructors } from "@/hooks/useCourseController";
-import { useIsTableControllerReady, useListTableControllerValues } from "@/lib/TableController";
+import {
+  useIsTableControllerReady,
+  useListTableControllerValues,
+  useTableControllerTableValues
+} from "@/lib/TableController";
 import {
   Box,
   Button,
@@ -30,7 +35,7 @@ import {
 import { useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
-import { FaArrowRight, FaEdit, FaRegTimesCircle, FaDownload } from "react-icons/fa";
+import { FaArrowRight, FaCopy, FaEdit, FaRegTimesCircle, FaDownload } from "react-icons/fa";
 import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
 import CreateNewGroup from "./createNewGroupModal";
@@ -89,9 +94,159 @@ function downloadCSV(csvContent: string, filename: string) {
 
 export type RolesWithProfilesAndGroupMemberships = UserRoleWithPrivateProfileGroupMembershipsAndUser;
 
+type CopyGroupsResult = {
+  groups_processed?: number;
+  members_copied?: number;
+  memberships_removed?: number;
+  groups_deleted?: number;
+  groups_preserved?: number;
+};
+
+function CopyGroupsFromAssignmentDialog({
+  assignment,
+  course_id,
+  sourceAssignments
+}: {
+  assignment: Assignment;
+  course_id: number;
+  sourceAssignments: Assignment[];
+}) {
+  const courseController = useCourseController();
+  const supabase = createClient();
+  const [open, setOpen] = useState(false);
+  const [sourceAssignmentId, setSourceAssignmentId] = useState("");
+  const [copying, setCopying] = useState(false);
+  const selectedAssignment = sourceAssignments.find((source) => String(source.id) === sourceAssignmentId);
+
+  const copyGroups = async () => {
+    if (!selectedAssignment) {
+      toaster.create({
+        title: "Choose an assignment",
+        description: "Select a prior assignment to copy groups from.",
+        type: "error"
+      });
+      return;
+    }
+
+    setCopying(true);
+    try {
+      const result = (await assignmentGroupCopyGroupsFromAssignment(
+        {
+          source_assignment_id: selectedAssignment.id,
+          target_assignment_id: assignment.id,
+          class_id: course_id
+        },
+        supabase
+      )) as CopyGroupsResult;
+
+      await Promise.all([
+        courseController.assignmentGroupsWithMembers.refetchAll(),
+        courseController.userRolesWithProfiles.refetchAll()
+      ]);
+
+      const parts = [
+        `${result.groups_processed ?? 0} group(s) copied`,
+        `${result.members_copied ?? 0} member(s) assigned`
+      ];
+      if ((result.memberships_removed ?? 0) > 0) {
+        parts.push(`${result.memberships_removed} previous member assignment(s) removed`);
+      }
+      if ((result.groups_deleted ?? 0) > 0) {
+        parts.push(`${result.groups_deleted} empty group(s) removed`);
+      }
+      if ((result.groups_preserved ?? 0) > 0) {
+        parts.push(`${result.groups_preserved} historical group(s) preserved`);
+      }
+
+      toaster.create({
+        title: "Groups copied",
+        description: parts.join(", "),
+        type: "success"
+      });
+      setOpen(false);
+      setSourceAssignmentId("");
+    } catch (error) {
+      Sentry.captureException(error);
+      toaster.create({
+        title: "Error copying groups",
+        description: error instanceof Error ? error.message : "Unknown error",
+        type: "error"
+      });
+    } finally {
+      setCopying(false);
+    }
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(details) => setOpen(details.open)} role="alertdialog">
+      <Dialog.Trigger asChild>
+        <Button size="sm" variant="outline" disabled={sourceAssignments.length === 0}>
+          <Icon as={FaCopy} />
+          Copy Groups from Prior Assignment
+        </Button>
+      </Dialog.Trigger>
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content>
+            <Dialog.Header>
+              <Dialog.Title>Copy groups immediately from prior assignment</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <VStack align="stretch" gap={4}>
+                <Text>
+                  This immediately overwrites the current group assignments for <strong>{assignment.title}</strong> with
+                  the groups and memberships from a prior assignment.
+                </Text>
+                <Text fontWeight="semibold">
+                  This action is not staged. It runs as soon as you click overwrite and does not wait for the
+                  page&apos;s Publish Changes button.
+                </Text>
+                <Text fontSize="sm" color="text.muted">
+                  Existing groups that become empty are removed when they have no submission history. Groups with
+                  submission history are preserved so graded work stays intact.
+                </Text>
+                <NativeSelect.Root disabled={copying}>
+                  <NativeSelect.Field
+                    aria-label="Prior assignment"
+                    value={sourceAssignmentId}
+                    onChange={(event) => setSourceAssignmentId(event.target.value)}
+                  >
+                    <option value="">Select prior assignment</option>
+                    {sourceAssignments.map((sourceAssignment) => (
+                      <option key={sourceAssignment.id} value={sourceAssignment.id}>
+                        {sourceAssignment.title}
+                      </option>
+                    ))}
+                  </NativeSelect.Field>
+                </NativeSelect.Root>
+              </VStack>
+            </Dialog.Body>
+            <Dialog.Footer>
+              <HStack justify="flex-end">
+                <Button variant="outline" disabled={copying} onClick={() => setOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  colorPalette="red"
+                  loading={copying}
+                  disabled={!selectedAssignment || copying}
+                  onClick={copyGroups}
+                >
+                  Overwrite Groups Now
+                </Button>
+              </HStack>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
+  );
+}
+
 function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignment; course_id: number }) {
   const courseController = useCourseController();
-  const { assignmentGroupsWithMembers, userRolesWithProfiles } = courseController;
+  const { assignmentGroupsWithMembers, assignments, userRolesWithProfiles } = courseController;
 
   const groupsPredicate = useCallback(
     (g: AssignmentGroupWithMembersAndMentor) => g.assignment_id === assignment.id,
@@ -99,6 +254,30 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
   );
   const groupsUnsorted = useListTableControllerValues(assignmentGroupsWithMembers, groupsPredicate);
   const groupsData = useMemo(() => [...groupsUnsorted].sort((a, b) => a.name.localeCompare(b.name)), [groupsUnsorted]);
+  const allGroups = useTableControllerTableValues(assignmentGroupsWithMembers);
+  const sourceAssignmentIdsWithGroups = useMemo(
+    () =>
+      new Set(
+        allGroups
+          .filter((group) => group.assignment_id !== assignment.id && group.assignment_groups_members.length > 0)
+          .map((group) => group.assignment_id)
+      ),
+    [allGroups, assignment.id]
+  );
+
+  const assignmentPredicate = useCallback(
+    (sourceAssignment: Assignment) =>
+      sourceAssignment.id !== assignment.id &&
+      (sourceAssignment.group_config === "groups" || sourceAssignment.group_config === "both") &&
+      sourceAssignmentIdsWithGroups.has(sourceAssignment.id) &&
+      new Date(sourceAssignment.due_date).getTime() < new Date(assignment.due_date).getTime(),
+    [assignment.due_date, assignment.id, sourceAssignmentIdsWithGroups]
+  );
+  const sourceAssignments = useListTableControllerValues(assignments, assignmentPredicate);
+  const orderedSourceAssignments = useMemo(
+    () => [...sourceAssignments].sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime()),
+    [sourceAssignments]
+  );
 
   const studentPredicate = useCallback(
     (r: RolesWithProfilesAndGroupMemberships) => r.role === "student" && !r.disabled,
@@ -107,8 +286,9 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
   const profiles = useListTableControllerValues(userRolesWithProfiles, studentPredicate);
 
   const groupsReady = useIsTableControllerReady(assignmentGroupsWithMembers);
+  const assignmentsReady = useIsTableControllerReady(assignments);
   const rolesReady = useIsTableControllerReady(userRolesWithProfiles);
-  const dataReady = groupsReady && rolesReady;
+  const dataReady = groupsReady && rolesReady && assignmentsReady;
 
   const [loading, setLoading] = useState<boolean>(false);
   const [groupViewOn, setGroupViewOn] = useState<boolean>(false);
@@ -237,10 +417,17 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
 
   return (
     <Box>
-      <Text fontSize="sm" color="text.muted">
-        Minimum group size: {assignment.min_group_size}, Maximum group size: {assignment.max_group_size} (
-        <Link href={`/course/${course_id}/manage/assignments/${assignment.id}/edit`}>Edit</Link>)
-      </Text>
+      <Flex justifyContent="space-between" alignItems="center" gap={3} wrap="wrap">
+        <Text fontSize="sm" color="text.muted">
+          Minimum group size: {assignment.min_group_size}, Maximum group size: {assignment.max_group_size} (
+          <Link href={`/course/${course_id}/manage/assignments/${assignment.id}/edit`}>Edit</Link>)
+        </Text>
+        <CopyGroupsFromAssignmentDialog
+          assignment={assignment}
+          course_id={course_id}
+          sourceAssignments={orderedSourceAssignments}
+        />
+      </Flex>
       {loading && (
         <Box
           position="fixed"

@@ -1,0 +1,761 @@
+{{- /*
+Alerting rules for the operational failure modes PRODUCTION-READINESS left to
+"cluster monitoring": a failed/stale backup (§1.5), a stale ExternalSecret
+(§5), and the Studio/ingress cert nearing expiry (checklist). Shipping them
+here means an install gets the alerts by default instead of every operator
+re-deriving them.
+
+Emitted only when monitoring.enabled AND monitoring.prometheusRules.enabled, and
+only useful on a cluster running the Prometheus Operator (kube-prometheus-stack)
+whose ruleSelector matches `monitoring.prometheusRules.labels`. If the
+kube-metrics / ESO / cert-manager exporters named in the exprs aren't present,
+that series is simply absent — tune to your stack. See
+docs/operations/monitoring-alerting.md.
+*/ -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- /* The nightly-dump CronJob's name. Its spawned Jobs are
+     `<name>-<numeric-timestamp>`, so `<name>-[0-9].*` matches the dump Job but
+     NOT the sibling `<name>-verify-*` / `<name>-restore-drill-*` Jobs (those
+     have a letter after `<name>-`). Keeps a failing/slow verify or drill from
+     masking a stale real backup or paging as a backup outage. */}}
+{{- $backupJob := include "pawtograder.componentName" (dict "ctx" . "component" "backup") }}
+{{- $pgSts := include "pawtograder.componentName" (dict "ctx" . "component" "postgres") }}
+{{- $backupMaxAge := .Values.monitoring.prometheusRules.backupMaxAgeHours | default 36 }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alerts") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "alerts") | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRules.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    {{- if .Values.backup.enabled }}
+    - name: pawtograder.backup
+      rules:
+        # The nightly pg_dump Job failed. Scoped to the dump Job only
+        # ({{ $backupJob }}-<timestamp>) so a failing verify/restore-drill pages
+        # separately (below), not as a backup outage. The recency guard (Job
+        # started within backupMaxAgeHours) keeps a RETAINED failed Job
+        # (failedJobsHistoryLimit) from firing forever after a later run recovers.
+        - alert: PawtograderBackupJobFailed
+          expr: |
+            (
+              max by (job_name, namespace) (
+                kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+              ) > 0
+            )
+            and on (job_name, namespace) (
+              kube_job_status_start_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+                > time() - {{ $backupMaxAge }} * 3600
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder backup job failed ({{`{{ $labels.job_name }}`}})"
+            description: >-
+              The nightly pg_dump Job in {{ $ns }} has failed pods. Backups are
+              the recovery floor for any install without WAL-G/PITR enabled.
+              Runbook: docs/operations/disaster-recovery.md ("When backup-verify
+              goes red").
+        # No successful dump completed recently. Catches the case where the
+        # CronJob stopped scheduling entirely (no failing Job to alert on).
+        # Dump-only scope so a verify/drill success can't reset the clock.
+        - alert: PawtograderBackupMissing
+          expr: |
+            (
+              time() - max(
+                kube_job_status_completion_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+              )
+            ) > {{ $backupMaxAge }} * 3600
+            or absent(kube_job_status_completion_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"})
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder has no recent successful backup"
+            description: >-
+              No pg_dump Job in {{ $ns }} has completed in the last
+              {{ $backupMaxAge }}h. The CronJob may be suspended or its runs
+              failing to start. Runbook: docs/operations/disaster-recovery.md.
+        # A backup-verify, restore-drill, or pitr-drill Job failed. These prove
+        # the newest backup actually restores (verify = TOC parse; restore-drill =
+        # full logical restore into a scratch DB; pitr-drill = wal-g base backup +
+        # WAL replay to a target time — the ONLY check that proves point-in-time
+        # recovery), so a failure means recoverability is in doubt even when the
+        # dump itself is fresh — serious, but distinct from the dump pipeline being
+        # down, so it pages at warning with its own scope. The regex covers all
+        # three drill Job types ({{ $backupJob }}-{verify,restore-drill,pitr-drill}-
+        # <timestamp>) while still excluding the dump Job ({{ $backupJob }}-<digit>).
+        # Recency-guarded like the dump alert.
+        - alert: PawtograderBackupVerifyJobFailed
+          expr: |
+            (
+              max by (job_name, namespace) (
+                kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill|pitr-drill)-[0-9].*"}
+              ) > 0
+            )
+            and on (job_name, namespace) (
+              kube_job_status_start_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill|pitr-drill)-[0-9].*"}
+                > time() - {{ $backupMaxAge }} * 3600
+            )
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder backup verify/restore-drill/pitr-drill failed ({{`{{ $labels.job_name }}`}})"
+            description: >-
+              A backup-verify, restore-drill, or pitr-drill Job in {{ $ns }} failed
+              — the newest dump parsed or restored incorrectly, or point-in-time
+              recovery could not replay to its target, so recoverability is in doubt
+              even if the dump is fresh. Runbook:
+              docs/operations/disaster-recovery.md ("When backup-verify goes red").
+    {{- end }}
+    {{- if .Values.postgres.walg.enabled }}
+    - name: pawtograder.walg
+      rules:
+        # WAL-G archiving is failing: the most recent `archive_command` attempt
+        # errored and has not since succeeded (pawtograder_wal_archiving metric
+        # from the postgres_exporter query in monitoring.yaml). With
+        # archive_mode=on, unarchived WAL accumulates in pg_wal and can fill the
+        # primary's PVC, halting all writes. Fires before the disk fills so there
+        # is time to fix the object store / credentials. The `absent()` arm makes
+        # the alert self-monitoring: if the exporter is down (metric missing) the
+        # critical WAL-fill risk would otherwise go undetected.
+        - alert: PawtograderWALArchiveFailing
+          expr: |
+            max(pawtograder_wal_archiving_last_attempt_failed{namespace="{{ $ns }}"}) > 0
+            or absent(pawtograder_wal_archiving_last_attempt_failed{namespace="{{ $ns }}"})
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder WAL-G archiving is failing"
+            description: >-
+              The most recent `archive_command` (wal-g wal-push) in {{ $ns }}
+              failed and has not since succeeded, or the WAL-G archiving metric
+              is missing (postgres-exporter down). archive_mode is on, so WAL can
+              pile up in pg_wal and fill the primary's volume, halting all writes.
+              Check the S3 endpoint/credentials, the postgres-exporter, and pg_wal
+              usage. Runbook: docs/operations/point-in-time-recovery.md.
+    {{- end }}
+    {{- /* Skip when the standby is intentionally paused (replica.replicas: 0,
+         supported by postgres-replica.yaml to keep the PVC/config while stopped):
+         pg_stat_replication is then empty by design and NotStreaming would fire
+         forever. */}}
+    {{- $wantStandbys := int (dig "replicas" 1 .Values.postgres.replica) }}
+    {{- if and .Values.postgres.enabled .Values.postgres.replica.enabled (gt $wantStandbys 0) }}
+    - name: pawtograder.replication
+      rules:
+        # Fewer standbys streaming than configured (postgres.replica.replicas =
+        # {{ $wantStandbys }}). streaming_standbys is the primary-side count from
+        # pg_stat_replication (pawtograder_replication query in monitoring.yaml) —
+        # NOT pg_replication_slots, which is empty because the chart creates no
+        # slot. Comparing to the configured count (not a hard-coded 1) catches a
+        # DEGRADED topology: with replicas>1, losing one standby while another
+        # still streams must still warn. A missing standby leaves the warm
+        # failover target (docs/operations/point-in-time-recovery.md) stale.
+        # Warns (a broken standby is not itself an outage; the primary still
+        # serves). No absent() arm — matching the connection alerts: a downed
+        # exporter must NOT page as "not streaming" (the WAL-archiving alert
+        # already covers an exporter-down blind spot for the primary's path).
+        - alert: PawtograderReplicaNotStreaming
+          expr: |
+            max(pawtograder_replication_streaming_standbys{namespace="{{ $ns }}"}) < {{ $wantStandbys }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Postgres standby(s) not streaming"
+            description: >-
+              Fewer than the configured {{ $wantStandbys }} standby(s) have been
+              in state=streaming in {{ $ns }} for 10m (pg_stat_replication,
+              primary side). The warm failover target is stale or the replica
+              topology is degraded — a promotion now would lose writes since a
+              standby dropped off. Check the postgres-replica pod(s), replication
+              credentials, and the primary's pg_wal. Runbook:
+              docs/operations/point-in-time-recovery.md.
+        # The standby is streaming but replaying WAL far behind the primary. Lag
+        # in bytes (primary current LSN − standby replay_lsn); a large, sustained
+        # gap widens the RPO of a failover. Warns.
+        - alert: PawtograderReplicaLagHigh
+          expr: |
+            max(pawtograder_replication_max_replay_lag_bytes{namespace="{{ $ns }}"})
+              > {{ int64 .Values.monitoring.prometheusRules.replicationLagBytesWarning }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Postgres standby replication lag is high"
+            description: >-
+              The standby in {{ $ns }} has trailed the primary by more than
+              {{ int64 .Values.monitoring.prometheusRules.replicationLagBytesWarning }}
+              bytes for 15m (pg_stat_replication replay_lsn). Failover RPO is
+              growing. Check standby I/O/CPU, network to the primary, and whether
+              it fell back to wal-g wal-fetch. Runbook:
+              docs/operations/point-in-time-recovery.md.
+    {{- end }}
+    {{- if .Values.postgres.enabled }}
+    - name: pawtograder.postgres
+      rules:
+        # DATABASE AVAILABILITY — the one rule that actually detects a dead or
+        # wedged primary. Read this before touching any other rule in this group.
+        #
+        # Why it has to exist, and why it is keyed on kube-state-metrics rather
+        # than on anything the platform itself emits: EVERY other critical rule in
+        # this chart fails OPEN when the database is gone. They are all
+        # `metric > threshold` on series that DISAPPEAR in that scenario, and a
+        # threshold comparison against no data returns no data, so the alert
+        # simply never fires:
+        #
+        #   PawtograderPostgresConnectionsSaturated (critical, 5m) reads
+        #     pawtograder_db_connections_*, produced by the postgres_exporter
+        #     SIDECAR — which lives in the postgres pod and dies with it.
+        #   PawtograderRecalcStalled (3m), PawtograderAsyncDLQGrowing (1m),
+        #     PawtograderAsyncQueueBacklog (5m), PawtograderQueueOldestMessageAging
+        #     (10m) — all critical — read pawtograder_*queue* series from the
+        #     `metrics` edge function, whose handler THROWS and returns HTTP 500
+        #     when its first DB RPC fails, so the whole target goes away.
+        #   PawtograderPostgresExporterDown notices, but at warning after 30m.
+        #
+        # So before this rule, a wedged primary was silent for 30 minutes and then
+        # merely warned. That gap became load-bearing when the liveness probes were
+        # removed from postgres-statefulset.yaml / postgres-replica.yaml: nothing
+        # restarts a wedged postmaster automatically now, so the condition MUST
+        # page. Detection is the other half of that trade.
+        #
+        # kube_statefulset_status_replicas_ready is independent of the database,
+        # the exporter and the edge function, and it is precisely the signal the
+        # retained readinessProbe produces. Labels are `statefulset` and
+        # `namespace` (kube-state-metrics, STABLE). max() because kube-state-metrics
+        # may run more than one replica and kube-prometheus-stack adds per-target
+        # labels; we want one alert, not one per KSM pod.
+        #
+        # Known limitation, deliberate and consistent with this file's stated
+        # philosophy: if kube-state-metrics is absent the series is missing and this
+        # rule is silent rather than firing. No absent() arm — that would page every
+        # install without KSM. Do not "simplify" this rule away on the grounds that
+        # the queue alerts look like they cover it. They do not.
+        - alert: PawtograderPostgresUnavailable
+          expr: max(kube_statefulset_status_replicas_ready{namespace="{{ $ns }}", statefulset="{{ $pgSts }}"}) == 0
+          for: {{ .Values.monitoring.prometheusRules.postgresUnavailableFor | default "5m" }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder Postgres has no ready replica — database unavailable"
+            description: >-
+              The {{ $pgSts }} StatefulSet in {{ $ns }} has reported zero ready
+              replicas for
+              {{ .Values.monitoring.prometheusRules.postgresUnavailableFor | default "5m" }}.
+              Every tier is down: PostgREST, GoTrue, realtime, storage and the edge
+              functions all depend on this database. The pod is NOT restarted
+              automatically — the liveness probes were deliberately removed after
+              they killed the primary twice during a transient NFS stall (see
+              templates/postgres-statefulset.yaml), so recovery here is a human
+              decision. Check `kubectl describe pod` and the postgres container
+              logs first: if the postmaster is wedged on storage, restarting will
+              not help and may extend the outage by forcing WAL replay. Do not
+              expect the queue or connection alerts to corroborate this — they read
+              series that vanish when the database is gone. Runbook:
+              docs/operations/monitoring-alerting.md.
+        # Connection-budget saturation. pawtograder_db_connections (postgres_exporter
+        # query in monitoring.yaml) reports used backends against max_connections;
+        # the ratio is compared to a percent threshold. max() not sum(): there is a
+        # single primary and max() collapses any residual per-`server` label
+        # duplication from the exporter's auto-discovery. No absent() arm — an
+        # exporter that is down must NOT page as connection saturation.
+        - alert: PawtograderPostgresConnectionsHigh
+          expr: |
+            max(pawtograder_db_connections_used{namespace="{{ $ns }}"})
+              / max(pawtograder_db_connections_max{namespace="{{ $ns }}"})
+              > {{ divf .Values.monitoring.prometheusRules.connectionUsagePercentWarning 100 }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Postgres connection usage is high"
+            description: >-
+              Backend connections in {{ $ns }} have exceeded
+              {{ .Values.monitoring.prometheusRules.connectionUsagePercentWarning }}% of
+              max_connections for 15m. Usually a pool leak (PostgREST rest.dbPool ×
+              replicas, supavisor, or realtime holding more than expected) or
+              idle-in-transaction sessions pinning slots. Raise
+              postgres.config.max_connections only with memory headroom (each
+              backend costs RAM). Runbook: docs/operations/monitoring-alerting.md.
+        - alert: PawtograderPostgresConnectionsSaturated
+          expr: |
+            max(pawtograder_db_connections_used{namespace="{{ $ns }}"})
+              / max(pawtograder_db_connections_max{namespace="{{ $ns }}"})
+              > {{ divf .Values.monitoring.prometheusRules.connectionUsagePercentCritical 100 }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder Postgres connections are nearly saturated"
+            description: >-
+              Backend connections in {{ $ns }} have exceeded
+              {{ .Values.monitoring.prometheusRules.connectionUsagePercentCritical }}% of
+              max_connections for 5m. superuser_reserved_connections shrinks the
+              app-usable ceiling below max_connections, so new client connections
+              are about to be refused (FATAL: too many clients). Kill leaked/idle
+              sessions or scale down connection consumers immediately. Runbook:
+              docs/operations/monitoring-alerting.md.
+        # Monitoring blind-spot guard. Added when the vacuum, buffer-cache and
+        # dead-tuple metrics moved off the `metrics` edge function into the
+        # postgres_exporter's queries.yaml (monitoring.yaml).
+        #
+        # postgres_exporter does NOT fail a scrape when one custom query breaks. It
+        # drops that namespace from /metrics entirely and records the failure only
+        # here. Traced in the pinned v0.18.0: a db.Query error becomes
+        # queryNamespaceMapping's fatal (third) return, lands in
+        # queryNamespaceMappings' errMap, and Server.Scrape turns a non-empty errMap
+        # into the error that sets this gauge to 1.
+        #
+        # Without this alert that failure is not just silent, it fails OPEN. The
+        # vacuum dashboard reads
+        # `count(pawtograder_vacuum_alert{severity!="ok"} == 1) OR vector(0)`, so a
+        # dropped namespace renders as 0 active alerts — green. A dropped function, a
+        # revoked grant, or a pg_buffercache extension relocated out of `public`
+        # would look exactly like a healthy database. The edge function used to emit
+        # an explicit pawtograder_vacuum_alert{check="rpc_failed"} 1 on failure; the
+        # exporter has no equivalent, so the signal has to come from here.
+        #
+        # severity: warning, not critical — nothing user-facing is broken. We have
+        # gone blind on vacuum/XID-wraparound and RAM telemetry, which needs fixing
+        # in hours, not a 3am page. `for: 15m` so a single bad scrape (or one query
+        # hitting a transient lock timeout) cannot flap it, matching
+        # PawtograderPostgresConnectionsHigh and PawtograderWALArchiveFailing.
+        #
+        # max() for the same reason as the connection rules above: the ServiceMonitor
+        # attaches pod/instance/endpoint labels, and this should be one alert rather
+        # than one per label set.
+        - alert: PawtograderPostgresExporterQueryFailing
+          expr: max(pg_exporter_last_scrape_error{namespace="{{ $ns }}"}) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder postgres_exporter custom queries are failing"
+            description: >-
+              At least one postgres_exporter custom query in {{ $ns }} has failed for
+              15m (pg_exporter_last_scrape_error=1). The exporter silently OMITS the
+              failing query's metrics from /metrics, so affected panels read as empty
+              or — for pawtograder_vacuum_alert, whose dashboard wraps it in
+              `OR vector(0)` — as healthy. Likely causes: a function the queries wrap
+              was dropped or renamed (public.vacuum_health_check), a grant was revoked
+              from the exporter's role (supabase_admin), the pg_buffercache extension
+              moved out of `public`, or a query is timing out under load. Check the
+              postgres-exporter container logs in the postgres pod — it logs the
+              failing namespace and the Postgres error. Runbook:
+              docs/operations/monitoring-alerting.md.
+        # The watcher's watcher. The rule above needs pg_exporter_last_scrape_error to
+        # EXIST. If the exporter sidecar is gone, the postgres-exporter Service or its
+        # ServiceMonitor selector breaks, or Prometheus stops scraping that target,
+        # the gauge disappears and that rule goes quiet along with every signal it was
+        # guarding.
+        #
+        # This matters more than it used to: the vacuum, buffer-cache and dead-tuple
+        # series previously came from 32 edge-function pods, so losing any one changed
+        # nothing. The exporter is a single target, so it is now a single point of
+        # monitoring failure for those signals.
+        #
+        # absent() is deliberately on pg_exporter_last_scrape_error and NOT on the
+        # pawtograder_db_* families themselves. Those are legitimately empty on a
+        # healthy database: pawtograder_db_dead_tuples only has series for tables with
+        # more than 100 dead tuples, and pawtograder_db_buffer_cache_bytes only for
+        # relations over 1 MiB, so absent() on either would page on an idle instance.
+        # This gauge is emitted on every scrape regardless of what the queries return,
+        # so its absence means exactly one thing: the exporter is not being scraped.
+        #
+        # `for: 30m` and severity: warning — rides out a postgres StatefulSet roll or
+        # a Prometheus reload without paging (matching PawtograderBackupMissing's 30m),
+        # and deliberately overlaps kube-prometheus-stack's own TargetDown: this is the
+        # Pawtograder-scoped, self-contained version for installs that have not wired
+        # generic target alerting to a receiver.
+        - alert: PawtograderPostgresExporterDown
+          expr: absent(pg_exporter_last_scrape_error{namespace="{{ $ns }}"})
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder postgres_exporter is not being scraped"
+            description: >-
+              pg_exporter_last_scrape_error has been absent from {{ $ns }} for 30m, so
+              Prometheus is not scraping the postgres_exporter sidecar at all. Every
+              pawtograder_db_*, pawtograder_table_sizes, pawtograder_vacuum_alert,
+              pawtograder_replication_* and pawtograder_wal_archiving_* series is
+              missing, which also silences PawtograderPostgresConnections*,
+              PawtograderWALArchiveFailing, PawtograderReplica* and
+              PawtograderPostgresExporterQueryFailing. Check that the postgres pod's
+              postgres-exporter container is running, that the postgres-exporter
+              Service still selects it, and that the ServiceMonitor's labels still
+              match your Prometheus ruleSelector/serviceMonitorSelector. Runbook:
+              docs/operations/monitoring-alerting.md.
+    {{- end }}
+    # App-level KPI alerts. Converted from the Ripley Grafana-managed rules
+    # (k8s/apps/monitoring/alerting/rules.yaml — reference only; a SEPARATE
+    # deployment, so no cutover/double-fire concern). Fire on app-emitted metrics
+    # (async worker queue, its dead-letter queue, gradebook recalc backlog),
+    # scoped to this release's namespace. They require those metrics to be
+    # scraped in THIS deployment; without a scrape target the series are absent
+    # and the alerts stay dormant (no false pages). All page (severity: critical),
+    # matching the Ripley rules' uniform routing to Pawtograder On Call.
+    - name: pawtograder.app
+      rules:
+        # Gradebook row-recalculate queue is backed up — recalculation is not
+        # keeping pace, so student-visible grades go stale.
+        - alert: PawtograderRecalcStalled
+          expr: |
+            max by (namespace) (pawtograder_gradebook_row_recalculate_queue_size{namespace="{{ $ns }}"}) > 1000
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder gradebook recalc queue is stalled"
+            description: >-
+              The gradebook row-recalculate queue in {{ $ns }} has exceeded 1000
+              for 3m — recalculation is not keeping pace and student-visible grades
+              may be stale.
+        # Async dead-letter queue is filling — webhook/repo/async jobs are failing
+        # repeatedly and landing in the DLQ.
+        - alert: PawtograderAsyncDLQGrowing
+          expr: |
+            max by (namespace) (pawtograder_async_dlq_size{namespace="{{ $ns }}"}) > 200
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder async DLQ is growing"
+            description: >-
+              The async dead-letter queue in {{ $ns }} has exceeded 200 for 1m —
+              jobs are failing repeatedly. Inspect the DLQ and the failing job class.
+        # Async worker queue has a large backlog — enqueue rate outpaces workers.
+        - alert: PawtograderAsyncQueueBacklog
+          expr: |
+            max by (namespace) (pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 1000
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder async queue backlog is high"
+            description: >-
+              The async worker queue in {{ $ns }} has exceeded 1000 for 5m — the
+              enqueue rate is outpacing worker drain. Check worker health/scaling.
+        # Async worker queue is not draining — a small backlog that persists for an
+        # hour means stuck/starved workers rather than a burst.
+        - alert: PawtograderAsyncQueueStuck
+          expr: |
+            max by (namespace) (pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 10
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder async queue is not draining"
+            description: >-
+              The async worker queue in {{ $ns }} has held above 10 for 1h — the
+              workers are stuck or starved rather than handling a burst. Check
+              worker liveness.
+        # Notification email backlog. This queue had no gauge at all until the metrics function
+        # started reporting it, which is why an email pipeline that never delivered anything in
+        # production was invisible to monitoring as well as to the code.
+        - alert: PawtograderNotificationEmailBacklog
+          expr: |
+            max by (namespace) (pawtograder_notification_emails_queue_size{namespace="{{ $ns }}"}) > {{ .Values.monitoring.prometheusRules.notificationEmailBacklog | default 500 }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder notification email queue is backing up"
+            description: >-
+              The notification email queue in {{ $ns }} has exceeded
+              {{ .Values.monitoring.prometheusRules.notificationEmailBacklog | default 500 }} for 15m.
+              Check that SMTP is configured and reachable — with EMAIL_ENABLED set, a
+              misconfiguration reports itself, but an unreachable relay still backs up here.
+        # Oldest-message age, one rule for every queue.
+        #
+        # Depth thresholds have to be tuned against enrollment and the deadline calendar, so they
+        # drift out of calibration and get raised until they stop firing. Age does not: a queue
+        # whose oldest message has been waiting twenty minutes is broken at any scale, in any week
+        # of the term. This is the queue signal that needs no seasonal retuning.
+        #
+        # DLQs are excluded. A dead-letter queue is where poison messages go to STAY -- nothing
+        # drains it on a schedule -- so its oldest message is older than any threshold within hours
+        # of the first permanent failure, and this rule would fire forever at severity: critical and
+        # get silenced, taking the live queues down with it. Every DLQ name ends in `_dlq`, so the
+        # matcher below excludes new ones (gradebook_row_recalculate_dlq included) without an edit.
+        # DLQ health is a growth signal, which is what PawtograderAsyncDLQGrowing,
+        # PawtograderDiscordDLQGrowing and PawtograderGradebookRecalcDLQGrowing measure.
+        #
+        # async_calls_low_priority is excluded for the same reason. github-async-worker reads it ONLY
+        # when async_calls returned zero messages, four at a time, so on any busy day the bulk
+        # repo-analytics queue is starved by design and its oldest message ages past any threshold on
+        # a completely healthy system. Including it would produce a permanent critical that gets
+        # silenced -- exactly the shape the DLQ exclusion above rejects.
+        - alert: PawtograderQueueOldestMessageAging
+          expr: |
+            max by (namespace, queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue!~".*_dlq|async_calls_low_priority"}) > {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder queue {{`{{ $labels.queue }}`}} is not draining"
+            description: >-
+              The oldest message in queue {{`{{ $labels.queue }}`}} ({{ $ns }}) has been waiting over
+              {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}s. Unlike a
+              depth alert this does not depend on volume — the queue has genuinely stopped moving.
+        # Discord dead-letter queue, as a RATE rather than a level.
+        #
+        # The gauge was already exported and had no rule at all; only the GitHub queue was watched.
+        # A rate is the right shape here: a single poison message parks in the DLQ indefinitely, so
+        # a level alert would fire forever and get silenced, while growth means new failures. The
+        # max() matters because every edge-function pod exports this gauge.
+        #
+        # delta(), not increase(): this is a GAUGE (see the # TYPE line in metrics/index.ts).
+        # increase() applies counter-reset correction, so draining the DLQ -- 50 -> 0 -- reads as a
+        # reset and adds the pre-reset value back, reporting ~50 of "growth" and paging whoever just
+        # cleaned the queue up. delta() is the gauge-safe form and is what "grew by" means here.
+        - alert: PawtograderDiscordDLQGrowing
+          expr: |
+            delta(max by (namespace) (pawtograder_discord_dlq_size{namespace="{{ $ns }}"})[1h:5m]) > {{ .Values.monitoring.prometheusRules.discordDlqGrowthPerHour | default 20 }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Discord DLQ is growing"
+            description: >-
+              The Discord dead-letter queue in {{ $ns }} grew by more than
+              {{ .Values.monitoring.prometheusRules.discordDlqGrowthPerHour | default 20 }} in the last
+              hour — messages are failing repeatedly. A 403 from the bot (missing guild permissions)
+              produces exactly this shape.
+        # Gradebook recalc dead-letter queue, same delta() shape and for the same reason.
+        #
+        # This queue was created with the version-mismatch retry ceiling and reported by nothing at
+        # all: no gauge, no rule, no panel, so a row that gave up was visible only in Sentry or by
+        # querying pgmq by hand.
+        #
+        # The threshold is far lower than the other two DLQs because the messages are not equivalent.
+        # A message lands here only after eight recovery attempts with backoff, and it represents a
+        # gradebook row whose stored score is now stale and will not be recomputed by anything —
+        # student-visible wrong grades, one per message. A handful an hour is already worth looking at.
+        - alert: PawtograderGradebookRecalcDLQGrowing
+          expr: |
+            delta(max by (namespace) (pawtograder_gradebook_row_recalculate_dlq_size{namespace="{{ $ns }}"})[1h:5m]) > {{ .Values.monitoring.prometheusRules.gradebookRecalcDlqGrowthPerHour | default 5 }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder gradebook recalc DLQ is growing"
+            description: >-
+              The gradebook row-recalculate dead-letter queue in {{ $ns }} grew by more than
+              {{ .Values.monitoring.prometheusRules.gradebookRecalcDlqGrowthPerHour | default 5 }} in
+              the last hour — rows exhausted their version-mismatch retry budget, so their stored
+              scores are stale and nothing will recompute them. Inspect
+              pgmq.q_gradebook_row_recalculate_dlq and re-enqueue after fixing the contention source.
+        # Discord per-guild circuit breaker open.
+        #
+        # A level alert is right here, unlike for the DLQs: the breaker closes itself when its window
+        # expires, so this cannot fire forever the way a dead-letter backlog does.
+        #
+        # This one matters beyond the affected course. One bot token serves every course, so
+        # Discord's 50 rps primary limit is charged platform-wide: the guild being parked here is a
+        # guild that was consuming everyone else's Discord budget to rediscover the same 403.
+        #
+        # `for` MUST stay below the breaker's shortest window, which is thirty minutes: that is the
+        # permission_storm base in open_discord_circuit(), and
+        # get_discord_circuit_breaker_statuses() computes is_open as
+        # `state = 'open' AND open_until >= now()`, so the gauge drops to 0 the moment open_until
+        # passes. A `for` of 45m -- what this rule shipped with -- therefore could not fire on a
+        # first trip at all: the condition it waited for was 45 minutes of uninterrupted open on a
+        # gauge that is true for 30. It became reachable only from the second trip onward, where the
+        # exponential backoff widens the window to 60m, i.e. the alert was silent for exactly the
+        # first hour of every incident and then arrived 15 minutes before the breaker reopened.
+        #
+        # 10m is the compromise: long enough that a scrape gap, a metrics-endpoint timeout or a
+        # single re-evaluation cannot flap it (the endpoint is scraped every 30-60s, so this is ten
+        # or more consecutive samples), and short enough to leave 20 minutes of margin inside the
+        # shortest window. The "is this worth waking someone" filter is not `for`'s job here and
+        # never was -- the breaker only trips after ten unretriable failures from one guild in five
+        # minutes, which is already a misconfigured server burning a shared rate limit, and the
+        # severity is warning.
+        - alert: PawtograderDiscordCircuitBreakerOpen
+          expr: |
+            max by (namespace, key) (pawtograder_discord_circuit_breaker_open{namespace="{{ $ns }}"}) > 0
+          for: {{ .Values.monitoring.prometheusRules.discordCircuitOpenFor | default "10m" }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Discord circuit breaker open for guild {{`{{ $labels.key }}`}}"
+            description: >-
+              The Discord circuit breaker for guild {{`{{ $labels.key }}`}} in {{ $ns }} has been open
+              for over {{ .Values.monitoring.prometheusRules.discordCircuitOpenFor | default "10m" }},
+              so that guild's role and invite work is being deferred. The usual causes are the bot
+              having been removed from the server, having lost its channel-view permission, or the
+              server no longer existing at all; check public.discord_circuit_breakers.last_reason and
+              trip_count, and the class's discord_membership_status rows. A trip_count above 1 means
+              the guild has re-tripped after its window expired, so nobody has fixed it yet.
+    - name: pawtograder.edgefunctions
+      rules:
+        # Edge-function pods being OOM-killed.
+        #
+        # Repeated restarts here are not a nuisance: the kernel kills PID 1, so every in-flight
+        # request on that pod dies at once and Kong reports 502 to whoever was calling — including
+        # the grading runner. This had been happening continuously and alerted nobody, because no
+        # rule covered pod lifecycle at all.
+        #
+        # container="functions" is the CONTAINER name from _edge-functions-workload.tpl, not the
+        # workload name. kube-state-metrics labels by container, so container="edge-functions"
+        # matches zero series and every rule in this group would sit Inactive forever — pod-lifecycle
+        # monitoring that looks shipped and is dead on arrival.
+        - alert: PawtograderEdgeFunctionsRestarting
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}", container="functions"}[30m]) > {{ .Values.monitoring.prometheusRules.edgeFunctionRestarts30m | default 2 }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder edge-function pods are restarting ({{`{{ $labels.pod }}`}})"
+            description: >-
+              {{`{{ $labels.pod }}`}} in {{ $ns }} restarted more than
+              {{ .Values.monitoring.prometheusRules.edgeFunctionRestarts30m | default 2 }} times in 30m.
+              If the last termination reason is OOMKilled, check that eszipCacheMaxMb +
+              (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi fits inside the container
+              memory limit.
+        # Gated on a RECENT restart, not on the reason alone. kube_pod_container_status_last_terminated_reason
+        # reflects the container's lastState, so it keeps reporting OOMKilled=1 for the rest of that
+        # container's life -- a single 03:00 kill would hold a critical alert firing for days after
+        # the workload recovered, get silenced, and hide the next real one. That is the same
+        # fire-forever shape the Discord DLQ rule above rejects. Joining on a restart within the last
+        # hour makes it self-resolve once the pod is stable.
+        - alert: PawtograderEdgeFunctionsOOMKilled
+          expr: |
+            (
+              max by (pod) (kube_pod_container_status_last_terminated_reason{namespace="{{ $ns }}", container="functions", reason="OOMKilled"}) > 0
+            )
+              and on (pod)
+            (
+              max by (pod) (increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}", container="functions"}[1h])) > 0
+            )
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder edge-function pod was OOM-killed ({{`{{ $labels.pod }}`}})"
+            description: >-
+              {{`{{ $labels.pod }}`}} in {{ $ns }} was terminated with OOMKilled. Every request in
+              flight on that pod failed. Check the NODE first: a node-level SystemOOM kills the
+              biggest process on the box and is reported here identically to a cgroup kill, but the
+              fix is different (see PawtograderEdgeFunctionsNodeMemoryHigh). If the node was fine,
+              the pod budget is a sum that must fit inside the container memory limit:
+              eszipCacheMaxMb + eszipColdLoadHeadroomMb
+              + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi of Deno host. The chart
+              asserts it at render time, so a pod that OOMs despite fitting means one of the
+              measured constants has drifted -- re-measure before raising the limit. The cache term is the one that is easy to forget: it fills with
+              the DISTINCT FUNCTIONS a pod has served rather than with load, up to eszipCacheMaxMb,
+              and evicts least-recently-used past that. So it is bounded, but the bound is a term in
+              this budget and raising it without raising the limit is how you get back here.
+        # The axis the two rules above CANNOT see. Every alert in this group is per-pod and compares
+        # a pod against its own limit, so all of them stay green while the node underneath runs out
+        # of memory -- which is exactly how 2026-08-18 went: worker-1 hit a kernel SystemOOM, the
+        # kernel picked edge-runtime as the victim, and the pod-level rules had nothing to say
+        # because no pod was near its own 4Gi limit.
+        #
+        # Scoped by CONSTRUCTION to nodes that run this release's pods: the numerator only produces
+        # a series for a node once a pod from {{ $ns }} lands on it, so an unrelated node filling up
+        # in a shared cluster cannot fire an alert named after our edge functions, and two releases
+        # cannot emit the same cluster-wide series.
+        #
+        # What it therefore measures is THIS RELEASE'S FOOTPRINT against the node's allocatable
+        # memory, not total node usage. That is the honest trade: a node filled by some other
+        # tenant's workload will not fire this. It would have caught 2026-08-18 with room to spare
+        # (27.5Gi of pawtograder pods against 30.8Gi allocatable on worker-1 = 89%), and it is the
+        # part we can both see and act on.
+        #
+        # Against ALLOCATABLE, deliberately not against requests: these pods run well over their
+        # memory request, so the scheduler packs by a number that understates reality and
+        # request-based headroom looks fine right up to the kill.
+        #
+        # Uses kube-state-metrics + cadvisor rather than node-exporter, so it depends only on the
+        # same exporters the rest of this group already relies on. `max by (namespace, pod, node)`
+        # on kube_pod_info guards the join against duplicate series for one pod.
+        - alert: PawtograderEdgeFunctionsNodeMemoryHigh
+          expr: |
+            (
+              sum by (node) (
+                container_memory_working_set_bytes{namespace="{{ $ns }}", container!="", image!=""}
+                  * on (namespace, pod) group_left (node)
+                max by (namespace, pod, node) (kube_pod_info{namespace="{{ $ns }}"})
+              )
+                / on (node)
+              max by (node) (kube_node_status_allocatable{resource="memory", unit="byte"})
+            ) > {{ .Values.monitoring.prometheusRules.nodeMemoryRatio | default 0.85 }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder pods are filling a node ({{`{{ $labels.node }}`}})"
+            description: >-
+              Pods from {{ $ns }} are using more than
+              {{ .Values.monitoring.prometheusRules.nodeMemoryRatio | default 0.85 }} of
+              {{`{{ $labels.node }}`}}'s allocatable memory. At this point the kernel can OOM-kill a
+              pod on this node while every pod-level memory alert stays green, because those compare
+              each pod against its OWN limit. Check what is co-located here -- Postgres and the edge
+              tier landing on one node is the combination that has bitten before. Note this counts
+              only {{ $ns }}'s own usage, so the node may be fuller than this figure shows.
+        # Leading indicator for the above. Memory that climbs with UPTIME rather than load is the
+        # signature of long-lived isolates accumulating, and it is visible well before the kill.
+        - alert: PawtograderEdgeFunctionsMemoryHigh
+          expr: |
+            max by (pod) (
+              container_memory_working_set_bytes{namespace="{{ $ns }}", container="functions"}
+                / on(namespace, pod, container)
+              kube_pod_container_resource_limits{namespace="{{ $ns }}", container="functions", resource="memory"}
+            ) > {{ .Values.monitoring.prometheusRules.edgeFunctionMemoryRatio | default 0.85 }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder edge-function memory is near its limit ({{`{{ $labels.pod }}`}})"
+            description: >-
+              {{`{{ $labels.pod }}`}} in {{ $ns }} has held above
+              {{ .Values.monitoring.prometheusRules.edgeFunctionMemoryRatio | default 0.85 }} of its
+              memory limit for 15m. Expect an OOM kill, and with it a burst of 502s.
+    - name: pawtograder.secrets
+      rules:
+        # An ExternalSecret is not Ready — ESO syncs at refreshInterval and
+        # serves the last-good value silently, so a broken store is invisible
+        # until a pod restarts against a stale/absent secret.
+        - alert: PawtograderExternalSecretNotReady
+          expr: |
+            externalsecret_status_condition{namespace="{{ .Release.Namespace }}", condition="Ready", status="False"} == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder ExternalSecret not syncing ({{`{{ $labels.name }}`}})"
+            description: >-
+              ExternalSecret {{`{{ $labels.name }}`}} in {{ .Release.Namespace }}
+              has been non-Ready for 15m. The backing store (OpenBao/Vault) may be
+              unreachable or the path/role wrong; the mounted Secret is stale.
+              Runbook: docs/operations/secrets-rotation.md.
+    - name: pawtograder.certs
+      rules:
+        # A cert-manager Certificate (Studio/ingress TLS) is close to expiry.
+        - alert: PawtograderCertificateExpiringSoon
+          expr: |
+            (certmanager_certificate_expiration_timestamp_seconds{namespace=~"{{ join "|" (.Values.monitoring.prometheusRules.certNamespaces | default (list .Release.Namespace)) }}"} - time())
+              < {{ .Values.monitoring.prometheusRules.certExpiryWarningDays | default 14 }} * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder TLS certificate expiring soon ({{`{{ $labels.name }}`}})"
+            description: >-
+              Certificate {{`{{ $labels.name }}`}} in {{ .Release.Namespace }}
+              expires in under {{ .Values.monitoring.prometheusRules.certExpiryWarningDays | default 14 }}
+              days. Check cert-manager renewal (DNS-01 solver, issuer health).
+{{- end }}

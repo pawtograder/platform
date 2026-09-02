@@ -1,0 +1,619 @@
+/**
+ * Unified submission-file ingestion core.
+ *
+ * This is the single mechanical "writer" that takes a student's code (either an
+ * already-downloaded zipball buffer, or a repo+sha to clone) and writes its
+ * files into `submission_files` for a given submission:
+ *   - text files     → inline in `submission_files.contents`
+ *   - binary files   → uploaded to the `submission-files` storage bucket at the
+ *                      submission-scoped key
+ *                      `classes/{class}/profiles/{profileOrGroup}/submissions/{submission}/files/{path}`
+ *                      then a `submission_files` row referencing the storage key.
+ *
+ * It is deliberately ONLY the writer: it does NOT make autograder decisions
+ * (workflow-sha validation, submissionFiles glob requirements, due-date checks,
+ * rate-limits, grade.yml dispatch). Those stay in the callers. The two existing
+ * callers — `autograder-create-submission` and `_shared/PrSubmissionFiles.ts` —
+ * both used to carry byte-for-byte copies of this logic; this module unifies
+ * them so there is exactly one place where files get written.
+ *
+ * Behavior is preserved exactly from the autograder path:
+ *   - identical path sanitization (getSafeRelativePath / normalizeFilenameWhitespace
+ *     / sanitizeSegmentForSupabaseStorage / sanitizePathForSupabaseStorageObjectKey),
+ *   - identical BINARY_EXTENSIONS / MIME_TYPES sets, plus a content check
+ *     (`hasNulByte`) for files the extension set cannot classify,
+ *   - identical per-file 50 MB cap and the two pre-unzip guards
+ *     (MAX_SUBMISSION_ZIP_* / MAX_SUBMISSION_UNZIPPED_*),
+ *   - identical binary storage-key shape and de-dup suffixing,
+ *   - identical combined empty-submission hash (sorted "name\0hex\n").
+ *
+ * `fileFilter` (optional) lets the autograder restrict ingestion to the files
+ * that match its `submissionFiles` glob set; PR/push-direct callers pass none
+ * (ingest the whole head tree). `detectEmptyForAssignmentId` (optional) enables
+ * the handout-hash empty-submission check and returns `isEmpty`.
+ *
+ * `emptyHashFilter` (optional) narrows only the EMPTY-CHECK hash, for callers that
+ * ingest the whole tree but must still compare against handout hashes computed
+ * over `submissionFiles` alone.
+ */
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import { Open as openZip } from "npm:unzipper";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { cloneRepository, END_TO_END_REPO_PREFIX, getRepoToCloneConsideringE2E } from "./GitHubWrapper.ts";
+import type { Database } from "./SupabaseTypes.d.ts";
+
+// Safety guards for the in-memory repo unzip. create-submission downloads the
+// student repo as a zipball and unzips it inside the edge isolate, whose heap is
+// capped (256MB, matching supabase.com). A repo with committed build
+// artifacts/caches can blow that cap and get the worker killed mid-request.
+// These limits reject the pathological case early. Both are env-tunable.
+const MAX_SUBMISSION_ZIP_MB = Number(Deno.env.get("MAX_SUBMISSION_ZIP_MB")) || 120;
+const MAX_SUBMISSION_UNZIPPED_MB = Number(Deno.env.get("MAX_SUBMISSION_UNZIPPED_MB")) || 300;
+const MAX_SUBMISSION_ZIP_BYTES = MAX_SUBMISSION_ZIP_MB * 1024 * 1024;
+const MAX_SUBMISSION_UNZIPPED_BYTES = MAX_SUBMISSION_UNZIPPED_MB * 1024 * 1024;
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB per file
+/**
+ * The same limit in MB, exported so the student-facing rejection message cannot drift from
+ * the limit actually enforced here — it used to hardcode "50 MB" in the webhook.
+ */
+export const MAX_FILE_SIZE_MB = MAX_FILE_SIZE / (1024 * 1024);
+
+// Binary file detection by extension. (SVG excluded — text-based XML, stored
+// inline for markdown image resolution.)
+const BINARY_EXTENSIONS = new Set([
+  // Images
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".bmp",
+  ".ico",
+  ".webp",
+  ".tiff",
+  ".tif",
+  // Documents
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  // Archives
+  ".zip",
+  ".tar",
+  ".gz",
+  ".bz2",
+  ".7z",
+  ".rar",
+  // Media
+  ".mp3",
+  ".mp4",
+  ".wav",
+  ".avi",
+  ".mov",
+  ".webm",
+  // Fonts
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+  ".eot",
+  // Other binary
+  ".class",
+  ".jar",
+  ".exe",
+  ".dll",
+  ".so",
+  ".dylib",
+  ".o",
+  ".pyc",
+  ".sqlite",
+  ".db",
+  ".bin",
+  ".dat"
+]);
+
+const MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+  ".tiff": "image/tiff",
+  ".tif": "image/tiff",
+  ".pdf": "application/pdf",
+  ".zip": "application/zip",
+  ".gz": "application/gzip",
+  ".mp3": "audio/mpeg",
+  ".mp4": "video/mp4",
+  ".wav": "audio/wav",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf"
+};
+
+function getFileExtension(name: string): string {
+  const lastDot = name.lastIndexOf(".");
+  return lastDot >= 0 ? name.substring(lastDot).toLowerCase() : "";
+}
+
+function isBinaryFile(name: string): boolean {
+  return BINARY_EXTENSIONS.has(getFileExtension(name));
+}
+
+/**
+ * A NUL byte anywhere in the file means the contents cannot be stored inline.
+ * PostgREST sends `submission_files.contents` as a JSON string, and Postgres
+ * refuses to convert a NUL escape in that JSON to `text` ("unsupported Unicode
+ * escape sequence", SQLSTATE 22P05) — which fails the insert and, via the
+ * rollback below, the entire submission.
+ *
+ * It is also the standard content heuristic for "not source code" (git uses the
+ * same signal), and it is the only classification we have for a file whose name
+ * carries no extension: a compiled `a.out` committed next to its `.c` is the
+ * case that motivated this. Such files now route to storage like any other
+ * binary instead of crashing ingestion.
+ *
+ * Scanning the whole buffer rather than git's 8000-byte prefix window costs one
+ * memchr and leaves no tail past which a NUL could still reach the insert.
+ */
+function hasNulByte(contents: Buffer): boolean {
+  return contents.indexOf(0) !== -1;
+}
+
+/**
+ * Full binary classification: known-binary extension, or NUL-bearing content.
+ * Callers that must decide before reading a file still use `isBinaryFile` alone
+ * (name-only), then apply this once the buffer is in hand.
+ */
+function isBinaryContent(name: string, contents: Buffer): boolean {
+  return isBinaryFile(name) || hasNulByte(contents);
+}
+
+function sha256Hex(buf: Uint8Array): string {
+  const hash = createHash("sha256");
+  hash.update(buf);
+  return hash.digest("hex");
+}
+
+/** Combined empty-submission hash from per-file SHA-256 hex strings (sorted by path). */
+function combinedHashFromPerFileHexHashes(file_hashes: Record<string, string>): string {
+  const combinedInput = Object.keys(file_hashes)
+    .sort()
+    .map((name) => `${name}\0${file_hashes[name]}\n`)
+    .join("");
+  return sha256Hex(Buffer.from(combinedInput, "utf-8"));
+}
+
+/**
+ * Returns a sanitized relative path: no ".." or "." segments, no backslashes,
+ * no leading/trailing slashes. Preserves safe subpaths for display names.
+ */
+function getSafeRelativePath(name: string): string {
+  const normalized = name.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const segments = normalized.split("/").filter((s) => s.length > 0);
+  const resolved: string[] = [];
+  for (const seg of segments) {
+    if (seg === ".") continue;
+    if (seg === "..") {
+      if (resolved.length > 0) resolved.pop();
+      continue;
+    }
+    resolved.push(seg);
+  }
+  const result = resolved.join("/");
+  if (result === "") return "unnamed";
+  return result;
+}
+
+/** Map Unicode whitespace (e.g. U+202F in macOS screenshot names) to ASCII space per segment. */
+function normalizeFilenameWhitespace(resolvedRelativePath: string): string {
+  return resolvedRelativePath
+    .split("/")
+    .map((seg) => {
+      let out = "";
+      for (const ch of seg.normalize("NFC")) {
+        out += /\p{White_Space}/u.test(ch) ? " " : ch;
+      }
+      return out.replace(/ +/g, " ").trim();
+    })
+    .join("/");
+}
+
+/**
+ * Per-segment sanitization for Supabase Storage object keys (file name restrictions in docs).
+ * Replaces any character outside the allowed set with underscore.
+ */
+function sanitizeSegmentForSupabaseStorage(seg: string): string {
+  const normalized = seg.normalize("NFC");
+  const allowed = new Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-',!*$&@=;:+?() ");
+  let out = "";
+  for (const ch of normalized) {
+    if (allowed.has(ch)) out += ch;
+    else if (/\p{White_Space}/u.test(ch)) out += " ";
+    else out += "_";
+  }
+  const trimmed = out.replace(/ +/g, " ").trim();
+  const collapsed = trimmed.replace(/_+/g, "_").replace(/^_|_$/g, "");
+  return collapsed.length > 0 ? collapsed : "unnamed";
+}
+
+function sanitizePathForSupabaseStorageObjectKey(resolvedRelativePath: string): string {
+  if (resolvedRelativePath === "") return "unnamed";
+  return resolvedRelativePath.split("/").map(sanitizeSegmentForSupabaseStorage).join("/");
+}
+
+/** Raised when the submission zip/extracted contents exceed the safety guards. */
+export class SubmissionTooLargeError extends Error {
+  readonly kind: "download" | "extracted";
+  readonly observedMb: number;
+  readonly limitMb: number;
+  constructor(kind: "download" | "extracted", observedMb: number, limitMb: number) {
+    super(`Submission too large: ${observedMb} MB ${kind} > ${limitMb} MB`);
+    this.name = "SubmissionTooLargeError";
+    this.kind = kind;
+    this.observedMb = observedMb;
+    this.limitMb = limitMb;
+  }
+}
+
+/** Raised when a single file exceeds the per-file 50 MB cap. */
+export class SubmissionFileTooLargeError extends Error {
+  readonly fileName: string;
+  readonly fileSize: number;
+  constructor(fileName: string, fileSize: number) {
+    super(`File "${fileName}" exceeds the 50 MB per-file limit`);
+    this.name = "SubmissionFileTooLargeError";
+    this.fileName = fileName;
+    this.fileSize = fileSize;
+  }
+}
+
+export type IngestScope = {
+  adminSupabase: SupabaseClient<Database>;
+  submissionId: number;
+  classId: number;
+  profileId: string | null;
+  groupId: number | null;
+  /**
+   * Optional path filter (relative to repo root, top dir stripped). Return true
+   * to ingest the file. The autograder passes its submissionFiles glob matcher;
+   * PR/push-direct callers pass nothing (ingest everything).
+   */
+  fileFilter?: (relativePath: string) => boolean;
+  /**
+   * When set, after writing files the combined per-file hash is compared to the
+   * recorded `assignment_handout_file_hashes` for this assignment; the result is
+   * returned as `isEmpty` (the caller decides whether to reject). When omitted,
+   * `isEmpty` is null.
+   */
+  detectEmptyForAssignmentId?: number;
+  /**
+   * Restricts which files feed the EMPTY-CHECK hash, without affecting which files
+   * are ingested and stored.
+   *
+   * `assignment_handout_file_hashes.combined_hash` is computed over the handout's
+   * configured `submissionFiles` only. A caller that ingests the whole tree (push
+   * direct, PR) therefore produces a hash over a different file set, which can
+   * never match the handout's — so emptiness would always read "not empty". Pass
+   * the same glob matcher the handout hashes use to make the two comparable while
+   * still storing every file for hand-grading.
+   *
+   * When omitted, the empty-check hash covers everything ingested (the autograder's
+   * case, where `fileFilter` has already narrowed ingestion to the same set).
+   *
+   * If the filter matches none of the ingested files there is nothing comparable, and
+   * `isEmpty` is reported as `false` rather than compared: the hash of the empty file set
+   * is a constant that the handout side records too whenever its own tree has no matching
+   * file, so comparing them would falsely report a match.
+   */
+  emptyHashFilter?: (relativePath: string) => boolean;
+  scope?: Sentry.Scope;
+};
+
+export type IngestFromZipParams = IngestScope & {
+  zipBuffer: Buffer;
+};
+
+export type IngestFromRepoParams = IngestScope & {
+  repo: string; // "owner/name"
+  sha: string;
+};
+
+export type IngestResult = {
+  combinedHash: string;
+  isEmpty: boolean | null;
+};
+
+/**
+ * Parse a zipball buffer into `{ strippedPath: contents }` for TEXT files only,
+ * applying the exact same size guards / top-dir stripping / binary detection /
+ * path sanitization as the submission writer. Binaries are skipped (the caller —
+ * the PR base-tree cache — only diffs text). Read-only: this neither writes
+ * submission_files nor touches storage, so it's safe to use for the base side of
+ * a PR diff (which is not a submission).
+ *
+ * Shares the writer's guards so a pathological base tree can't blow the edge
+ * isolate's heap any more than a pathological student repo can.
+ */
+export function collectTextFilesFromZipBuffer(zipBuffer: Buffer): Promise<Record<string, string>> {
+  return (async () => {
+    if (zipBuffer.length > MAX_SUBMISSION_ZIP_BYTES) {
+      throw new SubmissionTooLargeError("download", Math.ceil(zipBuffer.length / (1024 * 1024)), MAX_SUBMISSION_ZIP_MB);
+    }
+
+    const zip = await openZip.buffer(zipBuffer);
+
+    const totalUncompressedBytes = zip.files.reduce(
+      (sum: number, f: { uncompressedSize?: number }) => sum + (f.uncompressedSize ?? 0),
+      0
+    );
+    if (totalUncompressedBytes > MAX_SUBMISSION_UNZIPPED_BYTES) {
+      throw new SubmissionTooLargeError(
+        "extracted",
+        Math.ceil(totalUncompressedBytes / (1024 * 1024)),
+        MAX_SUBMISSION_UNZIPPED_MB
+      );
+    }
+
+    const stripTopDir = (str: string) => str.split("/").slice(1).join("/");
+    const files = zip.files.filter((f: { path: string; type: string }) => {
+      if (f.type !== "File") return false;
+      const rel = stripTopDir(f.path);
+      if (rel === "") return false;
+      if (isBinaryFile(rel)) return false;
+      return true;
+    });
+
+    const out: Record<string, string> = {};
+    for (const zipEntry of files) {
+      const name = stripTopDir(zipEntry.path);
+      const contents: Buffer = await zipEntry.buffer();
+      if (contents.length > MAX_FILE_SIZE) {
+        throw new SubmissionFileTooLargeError(name, contents.length);
+      }
+      // Extensionless binaries survive the name-only filter above, so re-check
+      // once the bytes are in hand. Two reasons to drop them here: `files` is
+      // written to the jsonb `pr_base_tree_cache.files`, which rejects a NUL for
+      // the same reason `submission_files.contents` does; and the head side of
+      // the diff now sends these to storage, so keeping one as pseudo-text would
+      // render the pair as a whole-file deletion.
+      if (hasNulByte(contents)) continue;
+      out[name] = contents.toString("utf-8");
+    }
+    return out;
+  })();
+}
+
+/**
+ * Write the files from an already-downloaded zipball into submission_files.
+ *
+ * The two size guards throw `SubmissionTooLargeError`; the per-file cap throws
+ * `SubmissionFileTooLargeError`. Callers map these to their own user-facing
+ * errors and cleanup as needed.
+ */
+export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams): Promise<IngestResult> {
+  const {
+    adminSupabase,
+    zipBuffer,
+    submissionId,
+    classId,
+    profileId,
+    groupId,
+    fileFilter,
+    detectEmptyForAssignmentId,
+    emptyHashFilter,
+    scope
+  } = params;
+
+  if (zipBuffer.length > MAX_SUBMISSION_ZIP_BYTES) {
+    throw new SubmissionTooLargeError("download", Math.ceil(zipBuffer.length / (1024 * 1024)), MAX_SUBMISSION_ZIP_MB);
+  }
+
+  const zip = await openZip.buffer(zipBuffer);
+
+  const totalUncompressedBytes = zip.files.reduce(
+    (sum: number, f: { uncompressedSize?: number }) => sum + (f.uncompressedSize ?? 0),
+    0
+  );
+  if (totalUncompressedBytes > MAX_SUBMISSION_UNZIPPED_BYTES) {
+    throw new SubmissionTooLargeError(
+      "extracted",
+      Math.ceil(totalUncompressedBytes / (1024 * 1024)),
+      MAX_SUBMISSION_UNZIPPED_MB
+    );
+  }
+
+  const stripTopDir = (str: string) => str.split("/").slice(1).join("/");
+  const files = zip.files.filter((f: { path: string; type: string }) => {
+    if (f.type !== "File") return false;
+    const rel = stripTopDir(f.path);
+    if (rel === "") return false;
+    if (fileFilter && !fileFilter(rel)) return false;
+    return true;
+  });
+
+  const storageProfileKey = profileId || groupId;
+  const file_hashes: Record<string, string> = {};
+  const usedBinaryStorageRelPaths = new Set<string>();
+
+  // One in-flight file buffer at a time (zipball is already fully buffered).
+  //
+  // Track the storage objects and DB rows created so far so we can roll them back if any later
+  // file fails. Without this, a failure on file N leaves a partial submission_files set (and
+  // orphaned storage blobs) attached to the submission while the caller surfaces only an error.
+  const createdStorageKeys: string[] = [];
+  const createdFileNames: string[] = [];
+  try {
+    for (const zipEntry of files) {
+      const name = stripTopDir(zipEntry.path);
+      const contents: Buffer = await zipEntry.buffer();
+
+      if (contents.length > MAX_FILE_SIZE) {
+        throw new SubmissionFileTooLargeError(name, contents.length);
+      }
+
+      file_hashes[name] = sha256Hex(contents);
+
+      if (isBinaryContent(name, contents)) {
+        const logicalPath = normalizeFilenameWhitespace(getSafeRelativePath(name));
+        let storageRelPath = sanitizePathForSupabaseStorageObjectKey(logicalPath);
+        if (usedBinaryStorageRelPaths.has(storageRelPath)) {
+          const extDup = getFileExtension(storageRelPath);
+          const base = extDup.length > 0 ? storageRelPath.slice(0, -extDup.length) : storageRelPath;
+          let n = 2;
+          while (usedBinaryStorageRelPaths.has(`${base}__${n}${extDup}`)) n++;
+          storageRelPath = `${base}__${n}${extDup}`;
+        }
+        usedBinaryStorageRelPaths.add(storageRelPath);
+
+        const ext = getFileExtension(logicalPath);
+        const mimeType = MIME_TYPES[ext] || "application/octet-stream";
+        const storageKey = `classes/${classId}/profiles/${storageProfileKey}/submissions/${submissionId}/files/${storageRelPath}`;
+
+        const { error: storageError } = await adminSupabase.storage
+          .from("submission-files")
+          .upload(storageKey, contents, { contentType: mimeType, upsert: true });
+        if (storageError) {
+          Sentry.captureException(storageError, scope);
+          throw new Error(`Failed to upload binary file "${logicalPath}" to storage: ${storageError.message}`);
+        }
+        createdStorageKeys.push(storageKey);
+
+        const { error: dbError } = await adminSupabase.from("submission_files").insert({
+          submission_id: submissionId,
+          name: logicalPath,
+          profile_id: profileId,
+          assignment_group_id: groupId,
+          contents: null,
+          class_id: classId,
+          is_binary: true,
+          file_size: contents.length,
+          mime_type: mimeType,
+          storage_key: storageKey
+        });
+        if (dbError) {
+          Sentry.captureException(dbError, scope);
+          throw new Error(`Failed to insert binary file record for "${logicalPath}": ${dbError.message}`);
+        }
+        createdFileNames.push(logicalPath);
+      } else {
+        const { error: textFileError } = await adminSupabase.from("submission_files").insert({
+          submission_id: submissionId,
+          name,
+          profile_id: profileId,
+          assignment_group_id: groupId,
+          contents: contents.toString("utf-8"),
+          class_id: classId,
+          is_binary: false,
+          file_size: contents.length
+        });
+        if (textFileError) {
+          Sentry.captureException(textFileError, scope);
+          throw new Error(`Failed to insert text submission file "${name}": ${textFileError.message}`);
+        }
+        createdFileNames.push(name);
+      }
+    }
+  } catch (err) {
+    // Best-effort rollback of everything written so far, then re-throw the original error so the
+    // caller still sees the failure — but without a half-written submission_files set left behind.
+    if (createdStorageKeys.length > 0) {
+      const { error: removeError } = await adminSupabase.storage.from("submission-files").remove(createdStorageKeys);
+      if (removeError) {
+        Sentry.captureException(removeError, scope);
+      }
+    }
+    if (createdFileNames.length > 0) {
+      const { error: deleteError } = await adminSupabase
+        .from("submission_files")
+        .delete()
+        .eq("submission_id", submissionId)
+        .in("name", createdFileNames);
+      if (deleteError) {
+        Sentry.captureException(deleteError, scope);
+      }
+    }
+    throw err;
+  }
+
+  const combinedHash = combinedHashFromPerFileHexHashes(file_hashes);
+
+  // Hash used for the handout comparison. Narrowed to `emptyHashFilter` when the
+  // caller ingested more than the handout hashes cover, so the two are computed
+  // over the same file set (see the field's doc comment).
+  const narrowedHashes = emptyHashFilter
+    ? Object.fromEntries(Object.entries(file_hashes).filter(([name]) => emptyHashFilter(name)))
+    : file_hashes;
+  const emptyCheckHash = emptyHashFilter ? combinedHashFromPerFileHexHashes(narrowedHashes) : combinedHash;
+
+  let isEmpty: boolean | null = null;
+  // When the filter selects nothing, the narrowed hash is the hash of the empty set — a
+  // fixed constant that the handout side also records whenever ITS tree has no file
+  // matching those globs. Comparing them would report "identical to the handout" for a
+  // submission whose real content simply lives outside the glob set, and the caller may
+  // then delete it. There is nothing comparable here, so report "not empty".
+  const narrowedSetIsEmpty = emptyHashFilter !== undefined && Object.keys(narrowedHashes).length === 0;
+  if (detectEmptyForAssignmentId !== undefined && narrowedSetIsEmpty) {
+    scope?.setTag("empty_check_skipped", "no_files_matched_empty_hash_filter");
+    isEmpty = false;
+  } else if (detectEmptyForAssignmentId !== undefined) {
+    // Empty submission detection: if the submitted files match ANY recorded
+    // handout version for the assignment, mark the submission as empty.
+    //
+    // Retry transient lookup failures (statement timeout / pool exhaustion under
+    // load) before giving up to the unknown state. The caller fails CLOSED on
+    // null when `permit_empty_submissions = false` (rejects with a 503), so a
+    // single DB blip on this read would otherwise bounce a student's real,
+    // non-empty submission. Only a persistent failure should surface as null.
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const { data: match, error: matchError } = await adminSupabase
+        .from("assignment_handout_file_hashes")
+        .select("id")
+        .eq("assignment_id", detectEmptyForAssignmentId)
+        .eq("combined_hash", emptyCheckHash)
+        .limit(1)
+        .maybeSingle();
+      if (!matchError) {
+        isEmpty = !!match;
+        break;
+      }
+      if (attempt === MAX_ATTEMPTS) {
+        // Leave isEmpty = null (unknown) on a persistent lookup failure rather than
+        // downgrading to "not empty": silently treating an unverifiable submission as
+        // non-empty would disable a `permit_empty_submissions = false` policy exactly
+        // when the check is unavailable. The caller decides how to treat the unknown state.
+        Sentry.captureException(matchError, scope);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+      }
+    }
+  }
+
+  return { combinedHash, isEmpty };
+}
+
+/**
+ * Download `repo` at `sha` via cloneRepository, then ingest its files. Mirrors
+ * how PrSubmissionFiles.ts fetched the head fork. `cloneRepository` resolves the
+ * ptg GitHub App installation for the repo's own org (handles cross-org forks).
+ */
+export async function ingestSubmissionFilesFromRepo(params: IngestFromRepoParams): Promise<IngestResult> {
+  const { repo, sha, scope, ...rest } = params;
+  // Resolve E2E repos (`<real>--<suffix>`) to the real fixture repo, matching the
+  // autograder, so E2E webhook-direct ingestion clones the real test repo in CI
+  // (the E2E_MOCK_GITHUB canned path is handled by the callers for local runs).
+  // For E2E the caller's sha is synthetic and won't exist in the fixture repo, so
+  // clone at HEAD — mirroring the autograder's `isE2ERun ? "HEAD" : sha`.
+  const isE2E = repo.startsWith(END_TO_END_REPO_PREFIX);
+  const zipBuffer = await cloneRepository(getRepoToCloneConsideringE2E(repo), isE2E ? "HEAD" : sha, scope);
+  return await ingestSubmissionFilesFromZip({ ...rest, scope, zipBuffer });
+}

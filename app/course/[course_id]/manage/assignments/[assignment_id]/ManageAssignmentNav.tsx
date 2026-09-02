@@ -1,7 +1,9 @@
 "use client";
 
+import { useAssignmentController } from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
+import { Tooltip } from "@/components/ui/tooltip";
 import { Select } from "chakra-react-select";
 import { hasRubricUnsavedChangesFlag, RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE } from "@/lib/rubricUnsavedChanges";
 import NextLink from "next/link";
@@ -27,12 +29,15 @@ import DeleteAssignmentButton from "./deleteAssignmentButton";
 export type AssignmentType = "code" | "quiz" | "exam" | "survey";
 
 // `types` restricts an item to certain assignment types; omit it to show for all types.
+// `repoOnly` marks tools that need a git repository, so they are disabled (desktop) or
+// omitted (mobile) when the assignment's repo_mode is "none"/"no_submission".
 type NavItem = {
   label: string;
   href: string;
   icon: React.ComponentType;
   instructorsOnly?: boolean | "graderOrInstructor";
   types?: AssignmentType[];
+  repoOnly?: boolean;
 };
 
 const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
@@ -81,14 +86,16 @@ const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/repositories`,
     icon: FaCode,
     instructorsOnly: true,
-    types: ["code"]
+    types: ["code"],
+    repoOnly: true
   },
   {
     label: "Rerun Autograder",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/rerun-autograder`,
     icon: FaPooStorm,
     instructorsOnly: true,
-    types: ["code"]
+    types: ["code"],
+    repoOnly: true
   },
   {
     label: "Manage Due Date Exceptions",
@@ -119,14 +126,16 @@ const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/security`,
     icon: FaShieldAlt,
     instructorsOnly: true,
-    types: ["code"]
+    types: ["code"],
+    repoOnly: true
   },
   {
     label: "Test Insights",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/test-insights`,
     icon: FaChartBar,
     instructorsOnly: "graderOrInstructor",
-    types: ["code"]
+    types: ["code"],
+    repoOnly: true
   }
 ];
 
@@ -147,6 +156,10 @@ export function ManageAssignmentNav({
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const pathname = usePathname();
   const router = useRouter();
+  const { assignment } = useAssignmentController();
+  // Repo-only tools (repository status, rerun autograder, test insights,
+  // security audit) don't apply when there's no git repository.
+  const noRepo = assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission";
 
   const filteredLinkItems = React.useMemo(
     () =>
@@ -159,9 +172,13 @@ export function ManageAssignmentNav({
         }),
     [course_id, assignment_id, isGraderOrInstructor, isInstructor, assignmentType]
   );
+  // Mobile <Select> can't show disabled options, so omit repo-only items there.
   const selectOptions = React.useMemo(
-    () => filteredLinkItems.map((item) => ({ label: item.label, value: item.href })),
-    [filteredLinkItems]
+    () =>
+      filteredLinkItems
+        .filter((item) => !(noRepo && item.repoOnly))
+        .map((item) => ({ label: item.label, value: item.href })),
+    [filteredLinkItems, noRepo]
   );
   const selectedOption = React.useMemo(() => {
     // Longest-prefix match so nested sub-routes reflect the parent nav entry.
@@ -193,6 +210,27 @@ export function ManageAssignmentNav({
                 .filter((h) => pathname === h || pathname.startsWith(h + "/"))
                 .reduce((a, b) => (b.length > a.length ? b : a), "");
               const isActive = pathname === item.href || item.href === longestPrefixHref;
+              // Repo-only tools are shown but disabled for no-repository assignments.
+              if (noRepo && item.repoOnly) {
+                return (
+                  <Tooltip key={item.label} content="Not applicable for assignments without a repository">
+                    <Button
+                      variant="ghost"
+                      w="100%"
+                      size="xs"
+                      pt="0"
+                      fontSize="sm"
+                      justifyContent="flex-start"
+                      disabled
+                    >
+                      <HStack textAlign="left" w="100%" justify="flex-start">
+                        {React.createElement(item.icon)}
+                        {item.label}
+                      </HStack>
+                    </Button>
+                  </Tooltip>
+                );
+              }
               return (
                 <Button
                   key={item.label}

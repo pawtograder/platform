@@ -98,7 +98,17 @@ export async function createUserInClass(
   let highestExistingRoleEntry: Database["public"]["Tables"]["user_roles"]["Row"] | undefined = undefined;
   let foundPrivateProfileId: string | null = null;
   let foundPublicProfileId: string | null = null;
-  const roleHierarchy: ReadonlyArray<Database["public"]["Enums"]["app_role"]> = ["instructor", "grader", "student"];
+  // Highest-privilege first. "admin" MUST be included: omitting it makes
+  // indexOf("admin") return -1, which sorts as *higher* than every real role, so
+  // an existing class admin (e.g. the class creator added as an instructor) would
+  // be treated as outranking the new role and the enrollment would be silently
+  // dropped with no error. Keep this in sync with the app_role enum.
+  const roleHierarchy: ReadonlyArray<Database["public"]["Enums"]["app_role"]> = [
+    "admin",
+    "instructor",
+    "grader",
+    "student"
+  ];
 
   if (existingUserRoles && existingUserRoles.length > 0) {
     existingUserRoles.forEach((r) => {

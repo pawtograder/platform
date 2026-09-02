@@ -5,6 +5,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useForm } from "@refinedev/react-hook-form";
+import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import SurveyForm from "./form";
@@ -37,6 +38,7 @@ type SurveyStatus = Tables<"surveys">["status"]; // "draft" | "published" | "clo
 export default function NewSurveyPage() {
   const { course_id } = useParams();
   const router = useRouter();
+  const revalidateServerCaches = useRevalidateServerCaches(Number(course_id));
   const searchParams = useSearchParams();
   const trackEvent = useTrackEvent();
 
@@ -415,14 +417,23 @@ export default function NewSurveyPage() {
         }
       }
 
-      // Redirect if requested
+      // Redirect if requested. The surveys list is server-rendered, so the browser's cached
+      // copy of it has to be dropped or the new survey is missing on arrival (#937).
       if (shouldRedirect) {
-        router.push(`/course/${course_id}/manage/surveys`);
+        await revalidateServerCaches({ tables: ["surveys"], navigateTo: `/course/${course_id}/manage/surveys` });
       }
 
       return { data, error };
     },
-    [course_id, private_profile_id, router, trackEvent, isReturningFromPreview, convertDueDateToISO, currentSurveyId]
+    [
+      course_id,
+      private_profile_id,
+      trackEvent,
+      isReturningFromPreview,
+      convertDueDateToISO,
+      currentSurveyId,
+      revalidateServerCaches
+    ]
   );
 
   // -------- SAVE DRAFT ONLY (WRAPPER) --------

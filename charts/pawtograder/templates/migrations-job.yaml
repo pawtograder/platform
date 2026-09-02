@@ -120,6 +120,11 @@ spec:
             # See values.yaml `migrations.resetOnDrift` for semantics.
             - name: MIGRATIONS_RESET_ON_DRIFT
               value: {{ .Values.migrations.resetOnDrift | default false | quote }}
+            # Deployment tier, so migrate.sh can independently refuse the
+            # destructive drift reset on a durable env even if RESET_ON_DRIFT is
+            # somehow set — defense in depth behind templates/validations.yaml.
+            - name: MIGRATIONS_ENVIRONMENT
+              value: {{ .Values.global.environment | default "dev" | quote }}
             # DB→edge callback wiring. migrate.sh Phase 4 rewrites the vault
             # `supabase_project_url` / `edge-function-secret` (seeded with local
             # dev defaults by the gradebook migration) so pg_cron / triggers can
@@ -137,6 +142,42 @@ spec:
                 secretKeyRef:
                   name: pawtograder-e2e
                   key: EDGE_FUNCTION_SECRET
+            {{- else }}
+            # Production / staging: if the operator provided EDGE_FUNCTION_SECRET
+            # in the edge-functions Secret, Phase 4 writes the same value into
+            # vault so DB-triggered callbacks authenticate against the runtime.
+            # Optional keeps existing installs that rely on the legacy seeded
+            # default rendering; prod values include the `misc` bundle so this
+            # should be present there.
+            - name: EDGE_FUNCTION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.edgeFunctions }}
+                  key: EDGE_FUNCTION_SECRET
+                  optional: true
+            {{- end }}
+            # Cache invalidation (Phase 4 seeds vault vercel_host +
+            # cache_invalidation_secret). HOST is the in-cluster web service the
+            # DB trigger POSTs to; SECRET must match the web app's
+            # CACHE_INVALIDATION_SECRET, so read it from the SAME source web does
+            # (e2e secret for previews, web secret for prod — mirrors
+            # EDGE_FUNCTION_SECRET above).
+            - name: CACHE_INVALIDATION_HOST
+              value: "http://{{ include "pawtograder.web.host" . }}:{{ .Values.web.service.port }}"
+            {{- if .Values.edgeFunctions.e2e.enabled }}
+            - name: CACHE_INVALIDATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pawtograder-e2e
+                  key: CACHE_INVALIDATION_SECRET
+                  optional: true
+            {{- else }}
+            - name: CACHE_INVALIDATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.web }}
+                  key: CACHE_INVALIDATION_SECRET
+                  optional: true
             {{- end }}
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}

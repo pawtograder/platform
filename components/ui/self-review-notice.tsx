@@ -37,13 +37,13 @@ function CompleteReviewButton({
   return (
     <>
       {!reviewSubmissions || reviewSubmissions?.data.length == 0 ? (
-        <Link
-          href={`/course/${course_id}/assignments/${assignment_id}/submissions/${selfReviewAssignment?.submission_id}/files?review_assignment_id=${selfReviewAssignment?.id}`}
-        >
-          <Button colorPalette="green" variant="solid">
+        <Button asChild colorPalette="green" variant="solid">
+          <Link
+            href={`/course/${course_id}/assignments/${assignment_id}/submissions/${selfReviewAssignment?.submission_id}/files?review_assignment_id=${selfReviewAssignment?.id}`}
+          >
             Complete Self Review
-          </Button>
-        </Link>
+          </Link>
+        </Button>
       ) : (
         <Flex>You have already submitted your review for this assignment.</Flex>
       )}
