@@ -63,6 +63,13 @@ jobs:
       # promtool ships inside the Prometheus release tarball; there is no
       # first-party action for it. Pinned rather than `latest` so a Prometheus
       # release cannot change unit-test semantics under us on an unrelated push.
+      #
+      # Installed into RUNNER_TEMP and put on PATH via GITHUB_PATH rather than
+      # into /usr/local/bin: the `pawtograder-ci` runner executes unprivileged
+      # and the system path is not writable, so `install … /usr/local/bin` fails
+      # with "Permission denied" before the tests ever run. RUNNER_TEMP is
+      # per-job and cleaned up by the runner, so nothing leaks between jobs.
+      # There is no sudo here and none is wanted.
       - name: Install promtool
         env:
           # The fixtures were run green against this exact version and against
@@ -70,12 +77,23 @@ jobs:
           PROM_VERSION: "3.14.0"
         run: |
           set -euo pipefail
-          curl -fsSL -o /tmp/prom.tar.gz \
+          mkdir -p "$RUNNER_TEMP/promtool-bin"
+          curl -fsSL -o "$RUNNER_TEMP/prom.tar.gz" \
             "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
-          tar -xzf /tmp/prom.tar.gz -C /tmp \
+          tar -xzf "$RUNNER_TEMP/prom.tar.gz" -C "$RUNNER_TEMP" \
             "prometheus-${PROM_VERSION}.linux-amd64/promtool"
-          install -m 0755 "/tmp/prometheus-${PROM_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool
-          promtool --version
+          install -m 0755 \
+            "$RUNNER_TEMP/prometheus-${PROM_VERSION}.linux-amd64/promtool" \
+            "$RUNNER_TEMP/promtool-bin/promtool"
+          echo "$RUNNER_TEMP/promtool-bin" >>"$GITHUB_PATH"
+          # Assert the pin landed. alert-rules.sh hard-fails when promtool is
+          # absent from PATH, so a broken install can never silently skip the
+          # suite -- but check here too, because GITHUB_PATH only takes effect
+          # in LATER steps and this is the last chance to fail on the version.
+          "$RUNNER_TEMP/promtool-bin/promtool" --version
+          "$RUNNER_TEMP/promtool-bin/promtool" --version 2>&1 \
+            | grep -qF "$PROM_VERSION" \
+            || { echo "promtool is not the pinned ${PROM_VERSION}"; exit 1; }
       - name: Run chart alert-rule tests
         run: charts/pawtograder/tests/alert-rules.sh
 
