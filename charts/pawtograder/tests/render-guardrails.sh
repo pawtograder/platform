@@ -1174,6 +1174,78 @@ assert_refused "the worker tier's budget failure names the worker tier" \
 assert_renders "worker tier accepts a limit exactly equal to its sum (2936Mi)" \
   "${WT[@]}" --set edgeFunctions.workerTier.resources.limits.memory=2936Mi
 
+# THE POLICY VALUE, which nothing checked until 2026-09-02. `policy` became
+# overridable per tier in this change and the allowlist accepts any non-empty
+# string, which then goes to `edge-runtime --policy` verbatim: an unsupported one
+# renders a valid manifest and CrashLoops every pod in the tier. On the worker
+# tier that is all four routed pgmq consumers at once.
+#
+# `per-request` is the probe on purpose -- a hyphen where the runtime wants an
+# underscore, in a values file otherwise full of camelCase and hyphens. It is
+# also the value that failed SILENTLY as well as loudly: it matches neither
+# "per_worker" nor "per_request", so the maxParallelism >= 2 assertion above
+# simply did not run for it.
+assert_refused "an unsupported worker-tier policy value is refused" \
+  "edgeFunctions.workerTier.policy is \"per-request\", which edge-runtime does not accept" \
+  "${WT[@]}" --set edgeFunctions.workerTier.policy=per-request
+# THE REQUEST TIER TOO, and this is the assertion that matters most here: the
+# first attempt at this guard sat inside `if $ef.functions` in
+# _edge-functions-workload.tpl, a block only a ROUTED tier enters, so it caught
+# the worker tier and let `edgeFunctions.policy: per-request` through -- while
+# looking like it worked, because the worker-tier probe above went red. Every
+# workload renders through the same helper; all of them must be covered.
+assert_refused "an unsupported REQUEST-tier policy value is refused" \
+  "edgeFunctions.policy is \"per-request\", which edge-runtime does not accept" \
+  --set edgeFunctions.policy=per-request
+# A channel inherits edgeFunctions.policy wholesale (channels[] carries only
+# `image` and `replicas`), so it is covered by the request-tier check rather than
+# needing its own -- pinned so that stays true if the channel surface grows.
+assert_refused "a channel rendering under a bad inherited policy is refused" \
+  "which edge-runtime does not accept" \
+  --set edgeFunctions.policy=per-request --set channelWildcardTlsSecret=wc \
+  --set 'channels[0].name=canary' --set 'channels[0].web.image.tag=v1' \
+  --set 'channels[0].edgeFunctions.image.tag=v1'
+# All three documented values must still render. A guard that refused a legal
+# value would be the worse bug -- see the prefix-shadow loop this suite removed
+# in the same round.
+for _pol in per_worker per_request oneshot; do
+  # per_worker additionally needs maxParallelism >= 2, which the chart default
+  # (8) already satisfies; this is only asserting the policy NAME is accepted.
+  assert_renders "policy $_pol is accepted on the worker tier" \
+    "${WT[@]}" --set "edgeFunctions.workerTier.policy=$_pol"
+done
+# Case is not normalized anywhere, so an upper-case value would reach the runtime
+# unchanged. Pinned because "it is obviously the same word" is how a normalize
+# step gets added later and quietly widens the accepted set.
+assert_refused "an upper-case policy value is refused rather than normalized" \
+  "which edge-runtime does not accept" \
+  --set edgeFunctions.policy=PER_REQUEST
+
+# THE OTHER RUNTIME-FLAG INPUTS ON THE TIER SURFACE. beforeUnload's three ratios
+# go straight into --dispatch-beforeunload-{memory,cpu,wall-clock}-ratio, and
+# they were the only allowlisted keys left that nothing validated (maxParallelism,
+# the four worker.* knobs and gracefulExitTimeoutSeconds are all checked;
+# nodeSelector/tolerations/affinity/priorityClassName/resources are Kubernetes
+# fields the API server rejects itself).
+#
+# The bound is PERMISSIVE, (0, 100], and the last two assertions are the point of
+# it: the chart documents these as percentages but the flag is named "ratio", so
+# the guard refuses only what is broken under either reading and does not
+# adjudicate 0.5-vs-50.
+assert_refused "a non-numeric beforeUnload ratio is refused" \
+  "beforeUnload.memoryRatio is half" \
+  --set edgeFunctions.beforeUnload.memoryRatio=half
+assert_refused "a zero beforeUnload ratio is refused (it disables recycling)" \
+  "beforeUnload.cpuRatio is 0" \
+  --set edgeFunctions.beforeUnload.cpuRatio=0
+assert_refused "a beforeUnload ratio above 100 is refused" \
+  "beforeUnload.wallClockRatio is 150" \
+  --set edgeFunctions.beforeUnload.wallClockRatio=150
+assert_renders "a fractional beforeUnload ratio is NOT adjudicated (0.5 accepted)" \
+  --set edgeFunctions.beforeUnload.memoryRatio=0.5
+assert_renders "beforeUnload ratio 100 is accepted (inclusive bound)" \
+  --set edgeFunctions.beforeUnload.memoryRatio=100
+
 echo "== worker-tier override surface is honored, not merely accepted =="
 # `image` is deliberately NOT overridable per tier. An earlier revision honored
 # it, which escaped templates/validations.yaml -- that enforces the production

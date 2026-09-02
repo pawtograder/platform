@@ -129,6 +129,70 @@ writing the limit the same way as the request beside it.
 {{- fail (printf "%s.%s must be a positive number (got %v). main.ts falls back to its own default for anything non-positive, so the container would run on a value this budget assertion never counted." $p $knob $value) -}}
 {{- end -}}
 {{- end -}}
+{{/* THE POLICY VALUE ITSELF, before anything reasons about it. `--policy` takes
+     one of three words and this template passes the configured string through
+     VERBATIM, so `per-request` (hyphen where the runtime wants an underscore)
+     renders a clean manifest and then every pod in the tier CrashLoops on an
+     unsupported policy. On the worker tier that takes all four routed pgmq
+     consumers offline at once, with nothing in the render to show for it.
+
+     Note what does NOT catch this. assertTierOverrides' allowlist turns a typo
+     in the KEY into a render error -- its own comment uses `polciy: oneshot` as
+     the example -- but the allowlist has nothing to say about the VALUE, and a
+     misspelled value is the likelier typo of the two because the correct
+     spelling is an underscore in a file full of camelCase and hyphens. The
+     per_worker branch below is the reason it also fails SILENTLY rather than
+     just loudly: `per-request` is not equal to "per_worker", so the
+     maxParallelism >= 2 assertion simply does not run, and a tier that meant to
+     be per_request skips a check it should have skipped for the right reason.
+
+     Checked here rather than only on the tier, because this helper runs for
+     EVERY workload the chart renders -- request tier, worker tier and each
+     deployment channel -- and .Values.edgeFunctions.policy is just as
+     misspellable as an override. $p names whichever block is at fault.
+
+     PLACEMENT IS LOAD-BEARING and the first attempt at this guard got it wrong.
+     It sat next to the per_worker branch further down, which is inside
+     `if $ef.functions` -- a block only the worker tier enters, because only a
+     routed tier has a `functions` list. So `edgeFunctions.policy: per-request`
+     on the REQUEST tier rendered clean and the guard looked like it worked
+     because the worker-tier probe refused. It belongs up here with the other
+     unconditional value checks. Anything added below that `if` is worker-tier
+     only, whether or not it reads a worker-tier key. */}}
+{{- $policy := $ef.policy | toString -}}
+{{- $policies := list "per_worker" "per_request" "oneshot" -}}
+{{- if not (has $policy $policies) -}}
+{{- fail (printf "%s.policy is %q, which edge-runtime does not accept. Must be one of: %s. This value is passed to `edge-runtime --policy` verbatim, so an unsupported one renders a perfectly valid manifest and then CrashLoops every pod in this tier -- and on edgeFunctions.workerTier that is all of the routed pgmq consumers at once. Watch the SPELLING: the separator is an underscore (`per_request`), not a hyphen. A hyphenated value is also invisible to the per_worker maxParallelism assertion below, because it matches neither name." $p $policy (join ", " $policies)) -}}
+{{- end -}}
+{{/* The other three values this template feeds to a runtime flag without
+     checking anything. `beforeUnload` is a per-tier overridable map and its
+     three ratios go straight into
+     --dispatch-beforeunload-{memory,cpu,wall-clock}-ratio, so a non-numeric one
+     (`memoryRatio: half`) renders a clean manifest and then CrashLoops the pod
+     exactly the way a bad --policy does. This is the only other runtime-flag
+     input on the tier surface that nothing validated: maxParallelism, the four
+     worker.* knobs and gracefulExitTimeoutSeconds are all checked above, and
+     nodeSelector/tolerations/affinity/priorityClassName/resources are Kubernetes
+     fields the API server rejects with an error of its own.
+
+     Deliberately a PERMISSIVE bound, (0, 100], and deliberately not an opinion
+     about units. values.yaml documents these as percentages of a resource limit
+     (default 50, with a note that the runtime's own 90% is too late) and the
+     chart's prose assumes that, but the flag is named "ratio" and this template
+     cannot verify which form the runtime parses. So the guard rejects only what
+     is wrong under EITHER reading -- non-numeric (`float64` collapses it to 0),
+     zero, negative, or above 100 -- and stays out of the 0.5-vs-50 question.
+     Zero and above-100 are the ones worth catching: both silently DISABLE the
+     recycling that keeps a pod inside the memory budget asserted below, so the
+     pod runs against a budget that no longer holds and nothing reports it. */}}
+{{- if $ef.beforeUnload -}}
+{{- range $knob := list "memoryRatio" "cpuRatio" "wallClockRatio" -}}
+{{- $r := index $ef.beforeUnload $knob | float64 -}}
+{{- if or (le $r 0.0) (gt $r 100.0) -}}
+{{- fail (printf "%s.beforeUnload.%s is %v, which is not a usable ratio. It must be greater than 0 and at most 100. This value is passed to --dispatch-beforeunload-%s verbatim, so a non-numeric, zero, negative or over-100 value either CrashLoops the pod or silently switches OFF the EarlyDrop recycling that the memory budget below depends on -- a pod that never retires an isolate exceeds the sum this assertion just checked, and OOM-kills instead." $p $knob (index $ef.beforeUnload $knob) $knob) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- $perIsolateMi := $ef.worker.memoryLimitMb | int -}}
 {{- $par := $ef.maxParallelism | toString -}}
 {{- if or (eq $par "") (le ($par | int) 0) -}}
