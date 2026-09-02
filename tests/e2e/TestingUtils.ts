@@ -1696,7 +1696,8 @@ export async function insertAssignment({
   source_assignment_id,
   protect_block_force_push,
   protect_require_pull_request,
-  protect_required_reviewers
+  protect_required_reviewers,
+  assignment_type
 }: {
   due_date: string;
   suggested_due_date?: string;
@@ -1726,6 +1727,13 @@ export async function insertAssignment({
    * Must reference an assignment in the same class.
    */
   source_assignment_id?: number | null;
+  /**
+   * Assessment type discriminator. Defaults to undefined (DB default 'code'), so legacy
+   * callers behave identically. Required for exam/quiz fixtures: exam_create and
+   * exam_upsert_questions_and_regions reject an assignment that is not of type 'quiz' or
+   * 'exam', so a fixture left at the 'code' default cannot author an assessment.
+   */
+  assignment_type?: "code" | "quiz" | "exam" | "survey";
   /** Defaults match DB defaults (true / false / 0). Forbidden for none/no_submission modes. */
   protect_block_force_push?: boolean;
   protect_require_pull_request?: boolean;
@@ -1801,6 +1809,7 @@ export async function insertAssignment({
     regrade_deadline: regrade_deadline,
     grader_pseudonymous_mode: grader_pseudonymous_mode || false,
     show_leaderboard: show_leaderboard || false,
+    ...(assignment_type !== undefined ? { assignment_type } : {}),
     ...(repo_mode !== undefined ? { repo_mode } : {}),
     ...(repo_mode === "fork_from_prior_assignment" ? { source_assignment_id: source_assignment_id ?? null } : {}),
     ...protectionFields

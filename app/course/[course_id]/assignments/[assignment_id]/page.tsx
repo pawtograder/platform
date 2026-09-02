@@ -188,6 +188,12 @@ export default function AssignmentPage() {
   // (#895), whose push submissions never get grader_results — without it the
   // score column would sit at "In Progress" forever.
   const isPrMode = assignment.submission_mode === "pr";
+  // Only 'code' assignments have a git repository or a file-upload submission. quiz/exam/survey
+  // are pinned to repo_mode 'none' at creation, and 'none' is exactly the value that selects the
+  // generic <UploadSubmission> branch below -- so without this gate a quiz would offer students
+  // an unrelated file upload, and an accidental upload would create an active grading submission
+  // alongside the real quiz/exam/survey flow.
+  const isCodeAssignment = (assignment.assignment_type ?? "code") === "code";
   const noAutograder =
     assignment.has_autograder === false ||
     assignment.repo_mode === "none" ||
@@ -229,7 +235,9 @@ export default function AssignmentPage() {
             />
           )}
 
-          {isPrMode ? (
+          {!isCodeAssignment ? (
+            <></>
+          ) : isPrMode ? (
             <></>
           ) : assignment.repo_mode === "none" ? (
             <UploadSubmission assignmentId={Number(assignment_id)} onUploaded={() => refetchSubmissions()} />
@@ -259,7 +267,10 @@ export default function AssignmentPage() {
               assignment={assignment}
               repositories={repositories ?? []}
               showRepositories={
-                !isPrMode && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission"
+                isCodeAssignment &&
+                !isPrMode &&
+                assignment.repo_mode !== "none" &&
+                assignment.repo_mode !== "no_submission"
               }
             />
           </Box>
@@ -273,6 +284,20 @@ export default function AssignmentPage() {
           />
           {enrollment?.role === "student" && (
             <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
+          )}
+          {enrollment?.role === "student" && assignment?.assignment_type === "quiz" && (
+            <Box w="100%" maxW="4xl">
+              <Alert.Root status="info" flexDirection="column">
+                <Alert.Title>This is an in-app quiz</Alert.Title>
+                <Alert.Description>
+                  Answer the questions and submit. Objective questions are graded automatically.
+                  <br />
+                  <Link href={`/course/${course_id}/assignments/${assignment_id}/quiz`} fontWeight="bold">
+                    Take the quiz →
+                  </Link>
+                </Alert.Description>
+              </Alert.Root>
+            </Box>
           )}
           {/* Submission limits throttle autograder runs, so they are meaningless
               without an autograder — and the `autograder` row is auto-created with
@@ -352,7 +377,16 @@ export default function AssignmentPage() {
                         #{submission.pr_number}
                         {submission.sha ? ` (${submission.sha.slice(0, 7)})` : ""}
                       </Link>
-                    ) : submission.sha && submission.repository ? (
+                    ) : submission.submitted_via !== "manual" &&
+                      submission.submitted_via !== "upload" &&
+                      submission.sha &&
+                      submission.repository ? (
+                      // Only build a commit URL for a channel that actually has one. This branch
+                      // sits BEFORE the manual branch below, so any row carrying a synthetic
+                      // sha/repository (quiz, scanned exam, survey) used to render a github.com
+                      // link that 404s. Excluding the known non-git channels rather than
+                      // requiring via === "git" keeps legacy rows -- real pushes recorded before
+                      // submitted_via existed, so NULL with a genuine sha -- still linking.
                       <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
                         {submission.sha.slice(0, 7)}
                       </Link>
