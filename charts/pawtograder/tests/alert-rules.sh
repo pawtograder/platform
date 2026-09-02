@@ -46,8 +46,20 @@ done
 # a rule that only appears with wal-g or a replica enabled would otherwise ship.
 # Release name `t` and namespace `default` are what the expressions interpolate,
 # so the test fixtures' series labels must match — see tests/alerts/*.test.yaml.
+#
+# `--namespace default` is PINNED and load-bearing, not decoration. Six rules in
+# prometheus-rules.yaml interpolate .Release.Namespace into their expressions,
+# and `helm template` with no --namespace resolves it from the ambient kube
+# context rather than defaulting to "default". On a workstation with no context
+# that happens to BE "default", so this suite passed locally and failed only in
+# CI, where the runner is itself a pod: the expressions came out selecting
+# namespace="arc-runners-pawtograder", matched none of the fixtures' series, and
+# eight assertions failed with `got: nil` -- looking like broken rules rather
+# than a broken harness. Without the pin the suite's result depends on whoever
+# runs it.
 render_rules() {
   helm template t "$CHART" \
+    --namespace default \
     --set monitoring.enabled=true \
     --set monitoring.prometheusRules.labels.release=kps \
     --set edgeFunctions.workerTier.enabled=true \

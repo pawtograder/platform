@@ -36,6 +36,14 @@ BASE=(
   --set backup.enabled=false
   --set storage.backend=file
   --set studio.enabled=false
+  # Pinned so a render never depends on the ambient kube context. Nothing here
+  # asserts on a namespace today, so this changes no result -- but `helm
+  # template` resolves .Release.Namespace from the current context when it is
+  # not given, which is how tests/alert-rules.sh passed locally and failed in
+  # CI (the runner is a pod, so it rendered namespace="arc-runners-pawtograder"
+  # instead of "default"). The first assertion here to reference a namespace
+  # would inherit that trap silently.
+  --namespace default
 )
 
 render() { helm template t "$CHART" "${BASE[@]}" "$@" >/dev/null 2>"$ERRFILE"; }
