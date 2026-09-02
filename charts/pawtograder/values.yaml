@@ -1522,16 +1522,25 @@ edgeFunctions:
       limits:
         cpu: "1"
         memory: 3584Mi
-    # The base rule "gracefulExitTimeoutSeconds >= worker.timeoutMs" INVERTS on
-    # this tier. There it protects a long in-flight USER request. Here the
-    # long-lived thing is a deliberately infinite drain loop that will never
-    # finish on its own, so honouring 410s would make every rollout take ~7
-    # minutes per pod. Cutting it is safe: pgmq's visibility timeout makes an
-    # interrupted batch visible again, and the Redis lease lapses at its 60s TTL
-    # — workerRun.ts is explicitly written for a wall-clock kill that leaves the
-    # lease unreleased.
-    gracefulExitTimeoutSeconds: 60
-    terminationGracePeriodSeconds: 90
+    # gracefulExitTimeoutSeconds / terminationGracePeriodSeconds are deliberately
+    # NOT overridden, and an earlier revision of this PR got that wrong.
+    #
+    # It cut them to 60/90 on the reasoning that the drain loop never finishes on
+    # its own, so honouring the base 410 makes every rollout wait it out. True,
+    # but it traded the wrong thing. pgmq guarantees REDELIVERY, not exactly-once
+    # EFFECTS, and these workers act before they archive: notification-queue-
+    # processor sends the mail then archives, discord-async-worker posts then
+    # archives. A SIGTERM that lands between those two steps duplicates a
+    # user-visible email or Discord post on redelivery. github-async-worker's
+    # sync_repo_to_handout is documented in workerRun.ts as running for minutes,
+    # so a 60s cutoff would hit it routinely.
+    #
+    # These four run on the request tier today WITH 410/430, so inheriting is
+    # exactly today's behaviour; 60/90 would have been a regression introduced by
+    # moving them, in exchange for rollout speed nobody had measured a problem
+    # with. Making rollouts fast is a real goal, but the correct fix is for the
+    # loop to observe SIGTERM and exit promptly (a workerRun.ts change), not to
+    # shorten the window it is given to finish.
     # worker.timeoutMs is deliberately NOT overridden. Raising it would shrink
     # the lease duty-cycle gap (#926 lists that gap as a revisit trigger), but
     # the 400s wall clock is also what currently bounds a possible

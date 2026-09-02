@@ -57,6 +57,28 @@ own admission budget and eszip cache.
 {{- end }}
 {{- end }}
 {{- end }}
+{{- /* The raw-name checks above catch a channel called exactly `workers` or
+   `worker-<fn>`, but names collide AFTER truncation too, and that is the case
+   nobody would predict by reading. componentName truncates to 63 characters, so
+   with a fullname of 44-51 characters an edge-functions channel named
+   `workers-blue` renders the SAME Service and Deployment name as this tier:
+
+       fullname len 44 .. 51  ->  <fullname>-functions-workers[-blue] both
+                                  truncate to one identical string
+
+   Same consequence as the request-tier collision: one Kubernetes identity for
+   two workloads, last apply wins, isolation gone silently. So compare the
+   COMPUTED names rather than the raw channel string. This subsumes the exact
+   matches above, which are kept only because they can give a better message. */ -}}
+{{- $wkr := include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}
+{{- range $c := .Values.channels }}
+{{- if $c.edgeFunctions }}
+{{- $chan := include "pawtograder.componentName" (dict "ctx" $ "component" (printf "functions-%s" $c.name)) }}
+{{- if eq $chan $wkr }}
+{{- fail (printf "channel %q and the worker tier both render the component name %q after componentName's 63-character truncation, so their Services and Deployments would overwrite each other and the tier isolation would silently not exist. Shorten the channel name or the release fullname (currently %d characters)." $c.name $wkr (len (include "pawtograder.fullname" $))) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- /* Routing for this tier is Kong path routing; there is no other mechanism in
    this chart. With Kong disabled the workload still schedules and still costs its
    full memory limit, but kong-config.yaml renders nothing, so none of the four

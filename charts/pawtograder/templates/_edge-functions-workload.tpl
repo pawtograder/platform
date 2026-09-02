@@ -36,11 +36,15 @@ demuxer's eszip cache, which grows to eszipCacheMaxMb, and OOM-killed pods again
 So the sum is asserted at render time rather than documented and hoped for:
 
     eszipCacheMaxMb + eszipColdLoadHeadroomMb
-      + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
+      + (maxParallelism x worker.memoryLimitMb) + ~600Mi host
       <= resources.limits.memory
 
-The host term is measured, not guessed: a freshly started pod with an empty
-cache sits at ~87Mi.
+The host term is measured, not guessed -- but measured at the RIGHT moment,
+which is the correction this note previously got wrong. A freshly started pod
+with an empty cache sits at ~87Mi; that was the old ~90Mi term. The limit is a
+hard cgroup ceiling, so what has to fit is the CONVERGED baseline, which #949
+measured at ~600Mi and load-independent (it takes ~24h to settle, which is why
+every earlier attempt to size this tier read it too low).
 
 The cold-load term covers bundle buffers that residentBytes does NOT count: a
 bundle being read for a cache miss, and one the LRU evicted or refused while a

@@ -622,9 +622,13 @@ spec:
             description: >-
               {{`{{ $labels.pod }}`}} in {{ $ns }} restarted more than
               {{ .Values.monitoring.prometheusRules.edgeFunctionRestarts30m | default 2 }} times in 30m.
-              If the last termination reason is OOMKilled, check that eszipCacheMaxMb +
-              (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi fits inside the container
-              memory limit. The POD NAME says which values block holds those knobs: a
+              If the last termination reason is OOMKilled, check that the FOUR-term budget
+              fits inside the container memory limit: eszipCacheMaxMb + eszipColdLoadHeadroomMb
+              + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~600Mi Deno host. The host term
+              is 600Mi, not the ~90Mi this text used to quote: 90 was the cost at startup with an
+              empty cache, but the limit is a hard cgroup ceiling, so what must fit is the
+              converged baseline. Using the old number here would invent ~500Mi of headroom that
+              does not exist, mid-incident. The POD NAME says which values block holds those knobs: a
               <release>-functions-<hash> pod is the request tier (edgeFunctions.*), and a
               <release>-functions-workers-<hash> pod is the background-worker tier
               (edgeFunctions.workerTier.*), whose budget is a different sum.
@@ -655,7 +659,9 @@ spec:
               fix is different (see PawtograderEdgeFunctionsNodeMemoryHigh). If the node was fine,
               the pod budget is a sum that must fit inside the container memory limit:
               eszipCacheMaxMb + eszipColdLoadHeadroomMb
-              + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi of Deno host. The chart
+              + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~600Mi of Deno host (the
+              converged, load-independent baseline -- NOT the ~90Mi startup figure this text
+              used to quote, which would invent ~500Mi of headroom that does not exist). The chart
               asserts it at render time, so a pod that OOMs despite fitting means one of the
               measured constants has drifted -- re-measure before raising the limit.
               Read the knobs off the tier the POD NAME names: <release>-functions-<hash> is the

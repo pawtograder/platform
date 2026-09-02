@@ -806,8 +806,15 @@ assert_rendered_contains "worker tier renders a Deployment" \
 # mergeOverwrite aliases sub-maps out of its source, so without deepCopy on both
 # operands a tier's overrides leak into .Values and the request tier silently
 # inherits them.
-assert_cli_arg "worker tier graceful-exit is 60s, not the base 410s" \
-  templates/edge-functions-worker-tier.yaml --graceful-exit-timeout 60 "${WT[@]}"
+# The worker tier INHERITS 410s, and must. An earlier revision cut it to 60s to
+# make rollouts faster; that traded a user-visible duplicate for rollout speed,
+# because pgmq guarantees redelivery and not exactly-once EFFECTS -- the
+# notification worker sends mail before archiving, the Discord worker posts
+# before archiving, and github-async-worker's sync_repo_to_handout runs for
+# minutes. A SIGTERM inside that window duplicates the side effect on redelivery.
+# Pinned on BOTH tiers so nobody re-introduces the shortcut.
+assert_cli_arg "worker tier inherits graceful-exit 410s (drain window intact)" \
+  templates/edge-functions-worker-tier.yaml --graceful-exit-timeout 410 "${WT[@]}"
 assert_cli_arg "request tier keeps graceful-exit 410s (no override leak)" \
   templates/edge-functions.yaml --graceful-exit-timeout 410 "${WT[@]}"
 assert_env_value "worker tier eszip cache renders 192Mi in bytes" \
@@ -945,6 +952,16 @@ assert_refused "a NESTED empty override is refused" \
 # componentName truncates to 63 chars, and "functions-workers" is 8 longer than
 # "functions" -- so at a 52-char fullname BOTH tiers render the same name, the
 # two Deployments overwrite each other and the isolation silently disappears.
+# Names collide after TRUNCATION too, which is the case nobody predicts by
+# reading: at a 44-51 char fullname, an edge-functions channel named
+# `workers-blue` renders the same component name as the worker tier, so the two
+# workloads share one Kubernetes identity and the last apply wins.
+assert_refused "a channel colliding with the worker tier AFTER truncation is refused" \
+  "after componentName's 63-character truncation" \
+  "${WT[@]}" --set channelWildcardTlsSecret=wc \
+  --set fullnameOverride=pppppppppppppppppppppppppppppppppppppppppppp \
+  --set 'channels[0].name=workers-blue' --set 'channels[0].web.image.tag=v1' \
+  --set 'channels[0].edgeFunctions.image.tag=v1'
 assert_refused "a fullname long enough to collide the two tiers is refused" \
   "collides with the request tier" \
   "${WT[@]}" --set fullnameOverride=pppppppppppppppppppppppppppppppppppppppppppppppppppp
