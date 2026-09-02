@@ -94,7 +94,17 @@ change too, in lockstep, or every connection fails:
 2. Update the value in OpenBao and force ESO sync.
 3. `rollout restart` **every** tier that connects (rest, realtime, storage,
    auth, functions, supavisor if enabled) — they cache the password in env and
-   reconnect with it. The edge-functions Deployment is `<release>-functions`.
+   reconnect with it. The edge-functions Deployments are `<release>-functions`
+   **and `<release>-functions-workers` when `edgeFunctions.workerTier` is
+   enabled** — the worker tier gets `POSTGRES_PASSWORD` from the same shared
+   workload template (verified against the rendered Deployment, not assumed) and
+   holds it for the pod's whole life. Miss it and the four routed pgmq consumers
+   keep presenting the password you just revoked: notifications, GitHub and
+   Discord async work and gradebook recalculation all stop draining, while the
+   request tier restarts and recovers and every dashboard goes green. This step
+   named only `<release>-functions` until 2026-09-02, which was an inconsistency
+   inside this document rather than a new pattern — the integration and Redis
+   sections above already enumerate both.
 
 Treat this as a brief planned outage; expect connection errors in the gap
 between the `ALTER ROLE` and the restarts. Prefer to avoid it unless the
@@ -111,6 +121,14 @@ and the long-lived API keys. Rotating it is disruptive by design:
   new key alongside the old in `JWT_PUBLIC_JWKS` / `JWT_REALTIME_JWKS`, roll it
   out, cut GoTrue over to signing with the new `kid`, then drop the old public
   key after existing sessions expire. A hard swap (no overlap) logs everyone out.
+
+  "Roll it out" includes **`<release>-functions-workers` when
+  `edgeFunctions.workerTier` is enabled**, for the same reason the Postgres step
+  does: the worker tier receives `JWT_SECRET` and `SUPABASE_ANON_KEY` from the
+  shared edge workload template like the request tier. A worker left on the
+  retired key keeps minting or presenting tokens PostgREST now rejects, and the
+  symptom is four queues that stop draining rather than a login failure anyone
+  would connect to a key rotation.
 
   **Rotate `JWT_SIGNING_JWK` with it.** That key is a copy of this same EC private
   JWK, held on its own because `_shared/MCPAuth.ts` needs a bare JWK rather than a
@@ -143,6 +161,12 @@ Used by storage (object serving) and the backup/verify/drill CronJobs. Rotate
 the key in your object store, update OpenBao, force ESO sync, `rollout restart`
 storage. The next backup Job picks up the new value on its own schedule; run a
 manual backup to confirm before the old key is revoked.
+
+Neither edge tier needs a restart here, and that is a real exception rather than
+the omission the Postgres step used to have: the edge workload's rendered
+environment carries no S3 or AWS credentials at all (checked against the
+manifest), because functions reach storage through Kong rather than the object
+store directly.
 
 ---
 
