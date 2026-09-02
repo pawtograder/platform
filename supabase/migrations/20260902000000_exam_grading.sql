@@ -465,6 +465,10 @@ declare
   r3 record;  -- level 3 (check)
   v_part_id bigint;
   v_crit_id bigint;
+  v_check_count integer;
+  v_check_points numeric;
+  v_l2_count integer;
+  v_l3_count integer;
 begin
   select class_id, assignment_id into v_class_id, v_assignment_id
     from public.exams where id = p_exam_id;
@@ -476,6 +480,20 @@ begin
     where up.user_id = auth.uid() and up.class_id = v_class_id and up.role = 'instructor'
   ) then
     raise exception 'Access denied: instructors only';
+  end if;
+
+  -- The instructor check above is scoped to the EXAM's class, but every write below targets
+  -- p_rubric_id, which until now was unvalidated. A caller authorized for this exam could pass
+  -- any enumerable rubric id and have this security-definer function insert parts/criteria/checks
+  -- into another class's rubric (stamped with this class's ids); score recomputation joins
+  -- components by rubric_id, so that would alter grades in a class the caller cannot access.
+  if not exists (
+    select 1 from public.rubrics r
+    where r.id = p_rubric_id
+      and r.class_id = v_class_id
+      and r.assignment_id = v_assignment_id
+  ) then
+    raise exception 'Rubric % does not belong to assignment %', p_rubric_id, v_assignment_id;
   end if;
 
   -- level 1 -> rubric_parts
@@ -490,6 +508,46 @@ begin
     else
       update public.rubric_parts set name = coalesce(r1.label, name), description = r1.prompt, ordinal = r1.ordinal
         where id = v_part_id;
+    end if;
+
+    -- A level-1 question with no children is a LEAF, which the flat one-question-per-prompt
+    -- quiz the builder permits consists entirely of. Mapping strictly by level left such a
+    -- question with a rubric part and nothing else: no criterion to carry its points and no
+    -- check to award them, so its points and answer key were ungradeable. Promote the leaf to
+    -- its own criterion + check under its part.
+    select count(*) into v_l2_count from public.exam_questions
+      where exam_id = p_exam_id and level = 2 and parent_id = r1.id;
+    if v_l2_count = 0 then
+      select id into v_crit_id from public.rubric_criteria
+        where rubric_id = p_rubric_id and (data->>'exam_question_id')::bigint = r1.id limit 1;
+      if v_crit_id is null then
+        insert into public.rubric_criteria
+          (class_id, assignment_id, rubric_id, rubric_part_id, name, description, total_points, is_additive, ordinal, data)
+        values (v_class_id, v_assignment_id, p_rubric_id, v_part_id, coalesce(r1.label, 'Criteria'), r1.prompt,
+                coalesce(r1.points, 0), true, r1.ordinal, jsonb_build_object('exam_question_id', r1.id))
+        returning id into v_crit_id;
+      else
+        update public.rubric_criteria set rubric_part_id = v_part_id, name = coalesce(r1.label, name),
+          description = r1.prompt, ordinal = r1.ordinal
+          where id = v_crit_id;
+      end if;
+      -- INSERT-ONLY, matching the level-3 checks below: never overwrite a grader's edits.
+      if not exists (
+        select 1 from public.rubric_checks
+        where rubric_criteria_id = v_crit_id and (data->>'exam_question_id')::bigint = r1.id
+      ) then
+        insert into public.rubric_checks
+          (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, data)
+        values (v_class_id, v_assignment_id, p_rubric_id, v_crit_id, coalesce(r1.label, 'Check'), r1.prompt, r1.ordinal,
+                coalesce(r1.points, 0), false, false, jsonb_build_object('exam_question_id', r1.id));
+      end if;
+      select count(*), coalesce(sum(points), 0)
+        into v_check_count, v_check_points
+        from public.rubric_checks
+        where rubric_criteria_id = v_crit_id;
+      if v_check_count > 0 then
+        update public.rubric_criteria set total_points = v_check_points where id = v_crit_id;
+      end if;
     end if;
 
     -- level 2 -> rubric_criteria (children of r1)
@@ -512,6 +570,22 @@ begin
       -- level 3 -> rubric_checks (children of r2). Intentionally INSERT-ONLY (unlike parts
       -- and criteria above, which upsert): once a check exists we never overwrite it, so a
       -- grader's manual edits to a generated check survive re-syncing the exam structure.
+      select count(*) into v_l3_count from public.exam_questions
+        where exam_id = p_exam_id and level = 3 and parent_id = r2.id;
+      -- Same reasoning one level down: an additive criterion with no checks has nothing to add,
+      -- so a two-level tree's level-2 leaves need a check of their own.
+      if v_l3_count = 0 then
+        if not exists (
+          select 1 from public.rubric_checks
+          where rubric_criteria_id = v_crit_id and (data->>'exam_question_id')::bigint = r2.id
+        ) then
+          insert into public.rubric_checks
+            (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, data)
+          values (v_class_id, v_assignment_id, p_rubric_id, v_crit_id, coalesce(r2.label, 'Check'), r2.prompt, r2.ordinal,
+                  coalesce(r2.points, 0), false, false, jsonb_build_object('exam_question_id', r2.id));
+        end if;
+      end if;
+
       for r3 in select * from public.exam_questions
                 where exam_id = p_exam_id and level = 3 and parent_id = r2.id order by ordinal loop
         if not exists (
@@ -524,6 +598,21 @@ begin
                   coalesce(r3.points, 0), false, false, jsonb_build_object('exam_question_id', r3.id));
         end if;
       end loop;
+
+      -- Derive the criterion total from the checks that actually hang off it. A level-2 question
+      -- becomes a non-leaf as soon as level-3 items exist, and the editor then hides its points
+      -- control -- so r2.points stays 0 while the real points sit on the level-3 checks. Leaving
+      -- the additive criterion at total_points = 0 makes _submission_review_recompute_scores cap
+      -- those checks at 0, so a grader can never award them. Summing the persisted checks (rather
+      -- than the exam_questions points) also keeps the total honest after a grader edits a check,
+      -- which the INSERT-ONLY policy above deliberately preserves.
+      select count(*), coalesce(sum(points), 0)
+        into v_check_count, v_check_points
+        from public.rubric_checks
+        where rubric_criteria_id = v_crit_id;
+      if v_check_count > 0 then
+        update public.rubric_criteria set total_points = v_check_points where id = v_crit_id;
+      end if;
     end loop;
   end loop;
 end;
@@ -597,6 +686,8 @@ as $$
 declare
   v_class_id bigint;
   v_count integer := 0;
+  v_page_count integer;
+  v_total_pages integer;
   rec record;
 begin
   select class_id into v_class_id from public.exam_scan_batches where id = p_batch_id;
@@ -608,6 +699,18 @@ begin
     where up.user_id = auth.uid() and up.class_id = v_class_id and up.role in ('instructor','grader')
   ) then
     raise exception 'Access denied: staff only';
+  end if;
+
+  -- Refuse to process a batch whose pages are not all persisted. uploadExamScanBatch inserts the
+  -- batch row (with the full total_pages) before uploading pages, so a failure part-way leaves a
+  -- processable batch holding only a prefix -- and matching would then split exams from a short
+  -- page list and produce wrong student submissions. Checked here rather than only in the UI so
+  -- it also holds for a direct RPC call and for the 'error' retry path.
+  select count(*) into v_page_count from public.exam_scan_pages where batch_id = p_batch_id;
+  select total_pages into v_total_pages from public.exam_scan_batches where id = p_batch_id;
+  if v_page_count is distinct from v_total_pages then
+    raise exception 'Batch % has % of % scan pages persisted; re-upload the scan before processing',
+      p_batch_id, v_page_count, v_total_pages;
   end if;
 
   update public.exam_scan_batches set status = 'ocr', error = null where id = p_batch_id;

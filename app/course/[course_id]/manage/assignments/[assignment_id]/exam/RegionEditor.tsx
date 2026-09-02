@@ -42,6 +42,28 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+// Structure-only snapshot used to decide whether the editor is ahead of the database.
+// client_ids are regenerated on every load, so ordering-stable field tuples are compared
+// instead of the raw objects.
+function snapshotOf(questions: EditorQuestion[], regions: EditorRegion[]): string {
+  return JSON.stringify({
+    questions: questions.map((q) => [
+      q.id,
+      q.parent_client_id,
+      q.level,
+      q.ordinal,
+      q.label,
+      q.prompt,
+      q.answer_type,
+      q.choices,
+      q.points,
+      q.correct_answer,
+      q.grading_tolerance
+    ]),
+    regions: regions.map((r) => [r.kind, r.page_number, r.x, r.y, r.width, r.height])
+  });
+}
+
 export default function RegionEditor({ examId, gradingRubricId }: { examId: number; gradingRubricId: number | null }) {
   const [pages, setPages] = useState<TemplatePage[]>([]);
   const [urls, setUrls] = useState<Record<number, string>>({});
@@ -50,6 +72,10 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
   const [draftKind, setDraftKind] = useState<"answer" | "student_id" | "name">("answer");
   const [draftQuestion, setDraftQuestion] = useState<string>("");
   const [saving, setSaving] = useState(false);
+  // Snapshot of the structure as last persisted. "Build rubric from exam" runs entirely
+  // server-side off the saved rows, so it must refuse to run while the editor is ahead of
+  // the database -- otherwise it reports success having synced the previous structure.
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
   const drawing = useRef<{ page: number; startX: number; startY: number } | null>(null);
   const [preview, setPreview] = useState<(NormRect & { page: number }) | null>(null);
 
@@ -128,6 +154,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       setUrls(next);
       setQuestions(qs);
       setRegions(rs);
+      setSavedSnapshot(snapshotOf(qs, rs));
     }
     load().catch((e) => {
       toaster.error({
@@ -136,6 +163,9 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       });
     });
   }, [examId]);
+
+  const currentSnapshot = useMemo(() => snapshotOf(questions, regions), [questions, regions]);
+  const dirty = savedSnapshot !== null && currentSnapshot !== savedSnapshot;
 
   const addQuestion = useCallback((level: 1 | 2 | 3, parent: string | null) => {
     setQuestions((qs) => [
@@ -261,6 +291,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
         }))
       });
       if (error) throw error;
+      setSavedSnapshot(snapshotOf(questions, regions));
       toaster.success({ title: "Saved exam structure" });
     } catch (e) {
       toaster.error({ title: "Save failed", description: e instanceof Error ? e.message : String(e) });
@@ -319,6 +350,16 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       toaster.error({ title: "No grading rubric", description: "Create a grading rubric for this assignment first." });
       return;
     }
+    // exam_sync_rubric_from_questions takes only the exam id, so it reads the SAVED question
+    // tree -- it cannot see pending edits. Running it now would build the rubric from the
+    // previous structure and report success.
+    if (dirty) {
+      toaster.error({
+        title: "Save the structure first",
+        description: "The rubric is built from the saved questions, so unsaved edits would be ignored."
+      });
+      return;
+    }
     const supabase = createClient();
     const { error } = await supabase.rpc("exam_sync_rubric_from_questions", {
       p_exam_id: examId,
@@ -326,7 +367,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
     });
     if (error) toaster.error({ title: "Build rubric failed", description: error.message });
     else toaster.success({ title: "Rubric built from exam structure" });
-  }, [examId, gradingRubricId]);
+  }, [examId, gradingRubricId, dirty]);
 
   return (
     <VStack align="stretch" gap={4}>

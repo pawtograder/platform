@@ -108,14 +108,30 @@ export function examTreeToSurveyJson(questions: StudentQuizQuestion[]): Record<s
   };
 
   const roots = childrenOf.get(null) ?? [];
-  // If there are no level-1 groupings at all, put everything on one page.
-  const pages = roots.length
-    ? roots.map((root) => ({
-        name: `page_${root.id}`,
-        title: root.level === 1 ? root.label || undefined : undefined,
-        elements: isLeaf(root) ? [renderLeafOrPanel(root)] : (childrenOf.get(root.id) ?? []).map(renderLeafOrPanel)
-      }))
-    : [];
+  // One page per *grouping* root, but consecutive leaf roots share a page. Mapping every root
+  // to its own page turned a flat quiz -- where each question is a level-1 leaf, which is what
+  // the builder produces by default -- into a one-question-per-page wizard. Runs are grouped
+  // rather than all leaves hoisted together so the author's ordering survives a mixed tree.
+  const pages: { name: string; title?: string; elements: SurveyElement[] }[] = [];
+  let leafRun: StudentQuizQuestion[] = [];
+  const flushLeafRun = () => {
+    if (leafRun.length === 0) return;
+    pages.push({ name: `page_${leafRun[0].id}`, elements: leafRun.map(renderLeafOrPanel) });
+    leafRun = [];
+  };
+  for (const root of roots) {
+    if (isLeaf(root)) {
+      leafRun.push(root);
+      continue;
+    }
+    flushLeafRun();
+    pages.push({
+      name: `page_${root.id}`,
+      title: root.level === 1 ? root.label || undefined : undefined,
+      elements: (childrenOf.get(root.id) ?? []).map(renderLeafOrPanel)
+    });
+  }
+  flushLeafRun();
 
   return { pages, showQuestionNumbers: "off" };
 }

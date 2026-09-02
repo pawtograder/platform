@@ -67,7 +67,11 @@ create or replace function public.exam_create(
   p_num_pages integer default 0,
   p_template_pdf_path text default null,
   p_template_markdown text default null,
-  p_delivery_mode text default 'paper'
+  -- NULL, not 'paper': this is an upsert, and callers that do not choose a mode (e.g.
+  -- uploadExamTemplate) must not silently rewrite an existing in_app quiz to paper --
+  -- the quiz RPCs then reject the assignment as not in-app. NULL means "leave as is",
+  -- and only the INSERT path falls back to 'paper'.
+  p_delivery_mode text default null
 ) returns bigint
 language plpgsql
 security definer
@@ -97,7 +101,7 @@ begin
         num_pages = excluded.num_pages,
         template_pdf_path = coalesce(excluded.template_pdf_path, exams.template_pdf_path),
         template_markdown = coalesce(excluded.template_markdown, exams.template_markdown),
-        delivery_mode = excluded.delivery_mode
+        delivery_mode = coalesce(p_delivery_mode, exams.delivery_mode)
   returning id into v_exam_id;
 
   return v_exam_id;

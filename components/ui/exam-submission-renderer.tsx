@@ -57,7 +57,12 @@ export default function ExamSubmissionRenderer({ artifact }: { artifact: Submiss
       const client = createClient();
       const pages = data?.pages ?? [];
       // Sign all page URLs in parallel (was serial — slow first paint for multi-page exams).
-      const signed = await Promise.all(
+      // allSettled, not all: one rejected createSignedUrl (a network blip is enough) used to
+      // reject the whole batch, and because load() is neither awaited nor caught, setLoading(false)
+      // never ran -- the component span forever on <Spinner /> with an unhandled rejection. The
+      // render path already degrades per page with "(page image unavailable)", so dropping the
+      // failed pages keeps the rest of the submission readable.
+      const signed = await Promise.allSettled(
         pages.map((p) =>
           client.storage
             .from("submission-files")
@@ -66,7 +71,9 @@ export default function ExamSubmissionRenderer({ artifact }: { artifact: Submiss
         )
       );
       const next: Record<number, string> = {};
-      for (const [pageNumber, url] of signed) {
+      for (const result of signed) {
+        if (result.status !== "fulfilled") continue;
+        const [pageNumber, url] = result.value;
         if (url) next[pageNumber] = url;
       }
       if (mounted) {
@@ -74,7 +81,11 @@ export default function ExamSubmissionRenderer({ artifact }: { artifact: Submiss
         setLoading(false);
       }
     }
-    load();
+    // Guard the whole load(): anything else that throws in there (an unexpected storage client
+    // error) would otherwise strand the spinner in exactly the same way.
+    load().catch(() => {
+      if (mounted) setLoading(false);
+    });
     return () => {
       mounted = false;
     };

@@ -96,7 +96,10 @@ export async function generateAndUploadExamTemplate(
     p_assignment_id: assignmentId,
     p_source_type: "generated",
     p_num_pages: rasters.length,
-    p_delivery_mode: opts.deliveryMode ?? "paper"
+    // Left undefined (and so omitted from the request body) when the caller did not choose a
+    // mode, which makes exam_create fall back to its NULL default = "keep the existing mode".
+    // Defaulting to "paper" here used to flip an in_app quiz to paper on any re-save.
+    p_delivery_mode: opts.deliveryMode
   });
   if (examErr || !examId) throw new Error(`exam_create failed: ${examErr?.message}`);
 
@@ -109,7 +112,11 @@ export async function generateAndUploadExamTemplate(
       upsert: true
     });
   if (pdfUp.error) throw new Error(`upload generated pdf failed: ${pdfUp.error.message}`);
-  await supabase.from("exams").update({ template_pdf_path: pdfPath }).eq("id", examId);
+  // This is the only write of template_pdf_path. Swallowing the error let the caller resolve
+  // successfully and the builder show "Download printable PDF" from local state, while after a
+  // reload the path was missing and the generated PDF looked lost.
+  const { error: pdfPathErr } = await supabase.from("exams").update({ template_pdf_path: pdfPath }).eq("id", examId);
+  if (pdfPathErr) throw new Error(`record generated pdf path failed: ${pdfPathErr.message}`);
 
   const pages = await uploadTemplatePages(supabase, classId, examId, rasters);
 
@@ -169,24 +176,37 @@ export async function uploadExamScanBatch(
   if (batchErr || !batch) throw new Error(`create batch failed: ${batchErr?.message}`);
   const batchId = batch.id;
 
-  for (let i = 0; i < rasters.length; i++) {
-    const r = rasters[i];
-    const path = `classes/${classId}/exams/${examId}/batches/${batchId}/page-${i}.png`;
-    const up = await supabase.storage.from("exam-scans").upload(path, r.blob, {
-      contentType: "image/png",
-      upsert: true
-    });
-    if (up.error) throw new Error(`upload scan page ${i} failed: ${up.error.message}`);
-    const { error: insErr } = await supabase.from("exam_scan_pages").insert({
-      class_id: classId,
-      exam_id: examId,
-      batch_id: batchId,
-      page_index: i,
-      image_path: path,
-      width: r.width,
-      height: r.height
-    });
-    if (insErr) throw new Error(`insert scan page failed: ${insErr.message}`);
+  // The batch row already claims the full total_pages, so a failure part-way through leaves a
+  // batch holding only a prefix of its pages. Record that on the batch so staff can see why it
+  // stalled; enqueue_exam_process_batch independently refuses to process any batch whose
+  // persisted page count differs from total_pages, so a partial batch can't be OCR'd/matched.
+  try {
+    for (let i = 0; i < rasters.length; i++) {
+      const r = rasters[i];
+      const path = `classes/${classId}/exams/${examId}/batches/${batchId}/page-${i}.png`;
+      const up = await supabase.storage.from("exam-scans").upload(path, r.blob, {
+        contentType: "image/png",
+        upsert: true
+      });
+      if (up.error) throw new Error(`upload scan page ${i} failed: ${up.error.message}`);
+      const { error: insErr } = await supabase.from("exam_scan_pages").insert({
+        class_id: classId,
+        exam_id: examId,
+        batch_id: batchId,
+        page_index: i,
+        image_path: path,
+        width: r.width,
+        height: r.height
+      });
+      if (insErr) throw new Error(`insert scan page failed: ${insErr.message}`);
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    await supabase
+      .from("exam_scan_batches")
+      .update({ status: "error", error: `incomplete upload: ${message}` })
+      .eq("id", batchId);
+    throw e;
   }
   return { batchId, totalPages: rasters.length };
 }

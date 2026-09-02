@@ -188,6 +188,12 @@ export default function AssignmentPage() {
   // (#895), whose push submissions never get grader_results — without it the
   // score column would sit at "In Progress" forever.
   const isPrMode = assignment.submission_mode === "pr";
+  // Only 'code' assignments have a git repository or a file-upload submission. quiz/exam/survey
+  // are pinned to repo_mode 'none' at creation, and 'none' is exactly the value that selects the
+  // generic <UploadSubmission> branch below -- so without this gate a quiz would offer students
+  // an unrelated file upload, and an accidental upload would create an active grading submission
+  // alongside the real quiz/exam/survey flow.
+  const isCodeAssignment = (assignment.assignment_type ?? "code") === "code";
   const noAutograder =
     assignment.has_autograder === false ||
     assignment.repo_mode === "none" ||
@@ -229,7 +235,9 @@ export default function AssignmentPage() {
             />
           )}
 
-          {isPrMode ? (
+          {!isCodeAssignment ? (
+            <></>
+          ) : isPrMode ? (
             <></>
           ) : assignment.repo_mode === "none" ? (
             <UploadSubmission assignmentId={Number(assignment_id)} onUploaded={() => refetchSubmissions()} />
@@ -259,7 +267,10 @@ export default function AssignmentPage() {
               assignment={assignment}
               repositories={repositories ?? []}
               showRepositories={
-                !isPrMode && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission"
+                isCodeAssignment &&
+                !isPrMode &&
+                assignment.repo_mode !== "none" &&
+                assignment.repo_mode !== "no_submission"
               }
             />
           </Box>

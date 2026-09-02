@@ -79,4 +79,56 @@ describe("examTreeToSurveyJson", () => {
     expect(json.pages[0].elements[0].name).toBe("q_10");
     expect(json.pages[0].elements[0].type).toBe("text");
   });
+
+  it("keeps several flat questions on ONE page instead of one page each", () => {
+    // A flat quiz is what the builder produces by default (every question a level-1 leaf).
+    // Mapping each root to its own page turned it into a one-question-per-page wizard.
+    const flat: StudentQuizQuestion[] = [10, 11, 12].map((id, i) => ({
+      id,
+      parent_id: null,
+      level: 1,
+      ordinal: i,
+      label: `Q${i + 1}`,
+      prompt: null,
+      answer_type: "numeric",
+      choices: null
+    }));
+    const json = examTreeToSurveyJson(flat) as { pages: Array<{ elements: Array<Record<string, unknown>> }> };
+    expect(json.pages).toHaveLength(1);
+    expect(json.pages[0].elements.map((e) => e.name)).toEqual(["q_10", "q_11", "q_12"]);
+  });
+
+  it("gives a grouping root its own page while consecutive leaf roots share one", () => {
+    const mixed: StudentQuizQuestion[] = [
+      {
+        id: 1,
+        parent_id: null,
+        level: 1,
+        ordinal: 0,
+        label: "Q1",
+        prompt: null,
+        answer_type: "numeric",
+        choices: null
+      },
+      {
+        id: 2,
+        parent_id: null,
+        level: 1,
+        ordinal: 1,
+        label: "Q2",
+        prompt: null,
+        answer_type: "numeric",
+        choices: null
+      },
+      { id: 3, parent_id: null, level: 1, ordinal: 2, label: "Part A", prompt: null, answer_type: null, choices: null },
+      { id: 4, parent_id: 3, level: 2, ordinal: 0, label: "A1", prompt: null, answer_type: "numeric", choices: null }
+    ];
+    const json = examTreeToSurveyJson(mixed) as {
+      pages: Array<{ title?: string; elements: Array<Record<string, unknown>> }>;
+    };
+    expect(json.pages).toHaveLength(2);
+    expect(json.pages[0].elements.map((e) => e.name)).toEqual(["q_1", "q_2"]);
+    expect(json.pages[1].title).toBe("Part A");
+    expect(json.pages[1].elements.map((e) => e.name)).toEqual(["q_4"]);
+  });
 });

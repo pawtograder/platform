@@ -301,7 +301,10 @@ export default function NewAssignmentPage() {
                 : assignmentType === "exam"
                   ? `${base}/exam`
                   : assignmentType === "survey"
-                    ? `/course/${course_id}/manage/surveys/new` // survey: create + link a survey
+                    ? // survey: create + link a survey. Pass the new assignment id so the survey
+                      // form links back to it -- its `assignment_id` defaults to null, so without
+                      // this the flow can leave a survey assignment with no survey attached.
+                      `/course/${course_id}/manage/surveys/new?assignment_id=${data.id}`
                     : `${base}/autograder`;
             // Awaited, and the navigation goes through the hook: this also drops the browser's
             // Router Cache, which still holds the pre-insert render of the assignments list the
