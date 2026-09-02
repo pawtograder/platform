@@ -276,15 +276,33 @@ assert_hpa_replica_bound() {
 # `- name:` at the same column, and deeper ones are skipped.
 assert_container_memory() {
   local label="$1" template="$2" container="$3" section="$4" want="$5"; shift 5
-  if ! helm template t "$CHART" "${BASE[@]}" "$@" \
-      --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+  local got
+  if ! got="$(read_container_memory "$template" "$container" "$section" "$@")"; then
     echo "FAIL [$label]: render was REFUSED but should have succeeded"
     echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
     FAILED=1
     return
   fi
-  local got
-  got="$(awk -v c="$container" -v s="$section" '
+  if [ -z "$got" ]; then
+    echo "FAIL [$label]: no $section.memory found for container $container in $template"
+    FAILED=1
+  elif [ "$got" != "$want" ]; then
+    echo "FAIL [$label]: container $container $section.memory rendered $got, expected $want"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+# read_container_memory "<template>" "<container>" "<requests|limits>" <args...>
+# The extractor behind assert_container_memory, split out because
+# assert_edge_reservation needs the VALUE rather than a pass/fail. Echoes the
+# rendered quantity (e.g. `1.5Gi`) or nothing.
+read_container_memory() {
+  local template="$1" container="$2" section="$3"; shift 3
+  helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" \
+    >"$OUTFILE" 2>"$ERRFILE" || return 1
+  awk -v c="$container" -v s="$section" '
     /^[[:space:]]*- name: / {
       ind = index($0, "-")
       name = $0; sub(/^[[:space:]]*- name: /, "", name); gsub(/"/, "", name)
@@ -303,15 +321,79 @@ assert_container_memory() {
       v = $0; sub(/^[[:space:]]*memory:[[:space:]]*/, "", v); gsub(/"/, "", v)
       print v; exit
     }
-  ' "$OUTFILE")"
-  if [ -z "$got" ]; then
-    echo "FAIL [$label]: no $section.memory found for container $container in $template"
+  ' "$OUTFILE"
+}
+
+# to_mib "<quantity>" -> integer MiB. Mi and whole/half Gi only, which is what
+# this chart's memory values are allowed to be (the render-time budget assertion
+# refuses anything else -- see the "whole number of Mi or Gi" note in README.md).
+to_mib() {
+  case "$1" in
+    *Mi) echo "${1%Mi}" ;;
+    *Gi) awk -v g="${1%Gi}" 'BEGIN { printf "%d", g * 1024 }' ;;
+    *)   echo "" ;;
+  esac
+}
+
+# assert_edge_reservation "<label>" <wantFloorMiB> <wantCeilingMiB> <args...>
+# DERIVES the total edge-functions memory RESERVATION from the render and asserts
+# it, instead of trusting a total typed into a comment.
+#
+# This exists because that total has now been wrong three times in three
+# different ways -- once by omitting the `canary` CHANNEL, once by using a
+# superseded worker-tier request, and once by stating a counterfactual whose
+# ceiling was not even the product of its own two factors (21 x 1.5Gi is 31.5GiB,
+# not 32.5). Every individual TERM already had an assertion behind it; the sum
+# did not, and the sum is the number an operator makes a node-budget decision
+# from. Three reviewers produced three different totals for it, which is the
+# signal that it should not be maintained by hand at all.
+#
+#     floor   = minReplicas x request  +  SUM(channel replicas) x request
+#                                      +  worker replicas x worker request
+#     ceiling = the same with maxReplicas
+#
+# The request tier is the only HPA-managed term, so it is the only one that has a
+# floor different from its ceiling. Channels inherit edgeFunctions.resources
+# wholesale (channels[] carries only `image` and `replicas` -- see
+# edge-functions-channels.yaml), which is what makes one request figure exact for
+# all of them.
+assert_edge_reservation() {
+  local label="$1" want_floor="$2" want_ceil="$3"; shift 3
+  local req_mem wt_mem mn mx wt_reps ch_reps
+  req_mem="$(to_mib "$(read_container_memory templates/edge-functions.yaml functions requests "$@")")"
+  wt_mem="$(to_mib "$(read_container_memory templates/edge-functions-worker-tier.yaml functions requests "$@")")"
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" \
+      --show-only templates/edge-functions-hpa.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: HPA render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
     FAILED=1
-  elif [ "$got" != "$want" ]; then
-    echo "FAIL [$label]: container $container $section.memory rendered $got, expected $want"
+    return
+  fi
+  mn="$(grep -E '^[[:space:]]*minReplicas:' "$OUTFILE" | head -1 | sed -E 's/.*:[[:space:]]*//')"
+  mx="$(grep -E '^[[:space:]]*maxReplicas:' "$OUTFILE" | head -1 | sed -E 's/.*:[[:space:]]*//')"
+  helm template t "$CHART" "${BASE[@]}" "$@" \
+    --show-only templates/edge-functions-worker-tier.yaml >"$OUTFILE" 2>/dev/null
+  wt_reps="$(grep -E '^[[:space:]]*replicas: ' "$OUTFILE" | head -1 | sed -E 's/.*:[[:space:]]*//')"
+  # Channels: sum every rendered channel Deployment's replica count. `|| true`
+  # because an overlay with no channels renders an empty document, which
+  # --show-only makes a non-zero exit.
+  helm template t "$CHART" "${BASE[@]}" "$@" \
+    --show-only templates/edge-functions-channels.yaml >"$OUTFILE" 2>/dev/null || true
+  ch_reps="$(awk '/^[[:space:]]*replicas: /{ sub(/.*:[[:space:]]*/, ""); s += $0 } END { print s + 0 }' "$OUTFILE")"
+  if [ -z "$req_mem" ] || [ -z "$wt_mem" ] || [ -z "$mn" ] || [ -z "$mx" ] || [ -z "$wt_reps" ]; then
+    echo "FAIL [$label]: could not read a term (request=$req_mem worker=$wt_mem hpa=$mn-$mx workerReplicas=$wt_reps)"
+    FAILED=1
+    return
+  fi
+  local floor ceil
+  floor=$(( mn * req_mem + ch_reps * req_mem + wt_reps * wt_mem ))
+  ceil=$(( mx * req_mem + ch_reps * req_mem + wt_reps * wt_mem ))
+  if [ "$floor" != "$want_floor" ] || [ "$ceil" != "$want_ceil" ]; then
+    echo "FAIL [$label]: reservation is ${floor}Mi-${ceil}Mi, expected ${want_floor}Mi-${want_ceil}Mi"
+    echo "       terms: request tier ${mn}-${mx} x ${req_mem}Mi, channels ${ch_reps} x ${req_mem}Mi, worker ${wt_reps} x ${wt_mem}Mi"
     FAILED=1
   else
-    echo "ok   [$label]"
+    echo "ok   [$label] (${floor}Mi floor / ${ceil}Mi ceiling)"
   fi
 }
 
@@ -761,20 +843,21 @@ assert_hpa_utilization "values-staging: memory target 80, not 100" memory 80 \
   --set global.environment=staging
 
 # Staging's replica bounds were resized on 2026-09-02 to BOUND its RAM reservation
-# across the 512Mi -> 1.5Gi request change. Counting all THREE edge Deployments the
-# overlay renders — the request tier, the worker tier, and the `canary` CHANNEL,
-# which an earlier version of this comment omitted:
-#     floor    3 x 1.5Gi + 1 x 1.5Gi + 2 x 1.5Gi =  9.0GiB  (was 13 x 512Mi =  6.5GiB)
-#     ceiling  5 x 1.5Gi + 1 x 1.5Gi + 2 x 1.5Gi = 12.0GiB  (was 21 x 512Mi = 10.5GiB)
-# So it is +38% at the floor and +14% at the ceiling, not flat overall — the
-# earlier "flat" claim counted only two of the three Deployments AND used the
-# worker tier's old 1Gi request. Figures read off the rendered manifests.
+# across the 512Mi -> 1.5Gi request change. The TOTAL is asserted by
+# assert_edge_reservation below, which derives it from the render rather than from
+# a number in this comment -- see the note on that helper for why (three
+# reviewers, three different totals, and one of them was not the product of its
+# own factors). The per-tier terms, all of which have their own assertion:
+#     request tier   minReplicas..maxReplicas  x  edgeFunctions request
+#     canary channel 1                         x  the same request (inherited)
+#     worker tier    2                         x  workerTier request
+# Only the request tier is HPA-managed, so it is the only term whose floor and
+# ceiling differ; that is why the bounds below are what actually govern the
+# reservation.
 #
-# Restoring either bound to its old value without also restoring the old request
-# is what this pins against: at 1.5Gi a pod, 12-20 reserves 19.5-32.5GiB, a ~3x
-# jump that renders identically in every other respect. The worker tier's 2 pods
-# and the canary channel's 1 are part of the sum and have no HPA, which is why
-# they are constants in the arithmetic above.
+# Restoring either bound to its old 12-20 without also restoring the old 512Mi
+# request is the regression these pin against, and it renders identically in
+# every other respect.
 assert_hpa_replica_bound "values-staging: minReplicas 3 (RAM floor 9.0GiB across all three edge Deployments)" \
   minReplicas 3 \
   -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
@@ -792,6 +875,17 @@ assert_rendered_contains "values-staging: worker tier stays 2 pods (the constant
 # test behind every term rather than only the two anyone remembers.
 assert_rendered_contains "values-staging: the canary channel is a third edge pod in that sum" \
   templates/edge-functions-channels.yaml "name: t-pawtograder-functions-canary" \
+  -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
+  --set global.environment=staging
+# THE TOTAL, derived. 9216Mi (9.0GiB) floor / 12288Mi (12.0GiB) ceiling, computed
+# from the rendered replica bounds and the rendered per-pod requests, so it fails
+# when ANY term drifts -- a replica bound, either memory request, an added or
+# removed channel, or the worker tier being turned off in this overlay. Asserted
+# in MiB rather than GiB so the assertion cannot be satisfied by a rounding
+# story. This is the number a staging node-budget decision is made from and the
+# only one in this file that is not typed by hand somewhere else too.
+assert_edge_reservation "values-staging: total edge memory reservation is 9.0GiB floor / 12.0GiB ceiling" \
+  9216 12288 \
   -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
   --set global.environment=staging
 

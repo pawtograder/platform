@@ -241,30 +241,47 @@ edgeFunctions:
     # 2026-09-02: 12-20 -> 3-5, bounding staging's RAM RESERVATION across the
     # request-memory change below. The request tripled (512Mi -> 1.5Gi) without the
     # pods becoming more capable — the increase is the load-independent ~600Mi Deno
-    # baseline, not extra capacity — so leaving the replica range alone would have
-    # taken staging from 6.5GiB reserved to 19.5GiB at the floor and 32.5GiB at the
-    # ceiling.
+    # baseline, not extra capacity — so the replica range had to come down with it.
     #
-    # Counted across ALL THREE edge Deployments this overlay renders, which is the
-    # correction that matters: an earlier version of this table counted the request
-    # tier and the worker tier and silently omitted the `canary` CHANNEL enabled
-    # above, which is a third edge pod and went 512Mi -> 1.5Gi with the others.
-    # Read off the rendered manifests rather than derived here, because deriving it
-    # by hand is what produced the wrong table twice:
-    #     floor    3 x 1.5Gi + 1 x 1.5Gi + 2 x 1.5Gi =  9.0GiB  (was 13 x 512Mi =  6.5GiB)
-    #     ceiling  5 x 1.5Gi + 1 x 1.5Gi + 2 x 1.5Gi = 12.0GiB  (was 21 x 512Mi = 10.5GiB)
-    # (13 and 21, not 12 and 20: the canary channel was there before too, at 512Mi.
-    # The worker tier's 1.5Gi is its raised request — see the workerTier resources
-    # note in charts/pawtograder/values.yaml; it was 1Gi in an earlier draft of
-    # this PR, which is the other reason this table has been wrong.)
+    # THE TOTALS ARE NOT MAINTAINED HERE ANY MORE, deliberately. This table has
+    # been wrong three times and three reviewers produced three different numbers
+    # for it, so the sum now lives in an assertion that DERIVES it from the render:
+    # `assert_edge_reservation` in charts/pawtograder/tests/render-guardrails.sh,
+    # which goes red when any term drifts (either replica bound, either memory
+    # request, a channel added or removed, or the worker tier turned off). The
+    # terms, which are what is worth reading here:
     #
-    # So this is NOT flat, and the earlier claim that it was is withdrawn: +38% at
-    # the floor and +14% at the ceiling. The floor is what governs steady-state
-    # cost, so the number that moved most is the one the resizing was trying to
-    # hold still. Accepted rather than re-tuned: the node budget absorbs it, and
-    # CPU requests drop 2.8 cores over the same change. 5/3 is the same 1.67x scale
-    # ratio as 20/12, so burst BEHAVIOUR is unchanged even though absolute headroom
-    # is not.
+    #     request tier    3-5 pods  x  1.5Gi   (HPA-managed; the only term that
+    #                                           has a floor and a ceiling)
+    #     canary channel  1 pod     x  1.5Gi   (inherits edgeFunctions.resources;
+    #                                           this is the term omitted twice)
+    #     worker tier     2 pods    x  1.5Gi   (its raised request — see the
+    #                                           workerTier note in values.yaml;
+    #                                           1Gi in an earlier draft of this PR,
+    #                                           which is the other reason the
+    #                                           table was wrong)
+    #
+    # Add them up if you need the figure; the assertion prints it, and it is the
+    # only copy of it that cannot go stale. For scale: before this change staging
+    # reserved 13 x 512Mi = 6.5GiB at the floor and 21 x 512Mi = 10.5GiB at the
+    # ceiling (13 and 21, not 12 and 20 — the canary channel was there too, at
+    # 512Mi, and there was no worker tier).
+    #
+    # WHAT THE RESIZE AVOIDED, with its scope stated because the version of this
+    # sentence that did not state it was wrong twice: keeping 12-20 while making
+    # every other change in this PR means 15 pods at the floor and 23 at the
+    # ceiling (12-20 request + 1 canary + 2 worker), all at 1.5Gi, so
+    # 22.5GiB / 34.5GiB. That is a ~3.5x jump at the floor over the 6.5GiB it
+    # replaced. This comment previously said 19.5/32.5, which counted only 13 and
+    # 21 pods (the worker tier left out) and whose ceiling was not even 21 x 1.5Gi.
+    #
+    # So the reservation is NOT flat, and the earlier claim that it was is
+    # withdrawn: the floor rises against the old 6.5GiB and the ceiling rises
+    # against the old 10.5GiB. The floor is what governs steady-state cost, so the
+    # number that moved most is the one the resizing was trying to hold still.
+    # Accepted rather than re-tuned: the node budget absorbs it, and CPU requests
+    # drop 2.8 cores over the same change. 5/3 is the same 1.67x scale ratio as
+    # 20/12, so burst BEHAVIOUR is unchanged even though absolute headroom is not.
     #
     # What this costs in concurrency is NOT 20x8 -> 5x8. `maxParallelism` is per
     # SERVICE PATH, not per pod — edge-runtime keys its worker registry by service
