@@ -623,15 +623,37 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
 spec:
-  {{- /* matchExpressions, not an exact component match: the worker tier carries
-     component=functions-workers (edge-functions-worker-tier.yaml), and an exact
-     match on "functions" would leave it UNSCRAPED. That failure is silent in the
-     worst way — the dashboard's $fn dropdown is built from
-     label_values(deno_http_requests_total, function), so the four worker
-     functions would not show up as broken, they would show up as ABSENT.
-     Channels (component=functions-<channel>) are still not scraped; they are a
-     whole-function-set A/B on their own host and out of scope here. */}}
+  {{- /* TWO SHAPES, GATED ON THE TIER, and the gate is about the Postgres
+     PRIMARY rather than about monitoring.
+
+     postgres-statefulset.yaml hashes the rendered text of this file (plus
+     postgres-config.yaml) into the primary's pod-template `checksum/config`,
+     stripping only lines carrying helm.sh/chart, app.kubernetes.io/version,
+     interval or scrapeTimeout. That strip exists so a chart bump or a
+     scrape-cadence tweak does not roll the database for no reason. An edit to
+     THIS selector matches none of those patterns, so when the matchExpressions
+     form below rendered unconditionally it moved the checksum on every install
+     — including installs with the worker tier off, which is every install
+     except staging — and rolled the primary (a write outage, and with the
+     sidecars' slow SIGTERM not a brief one) purely to add a value to a selector
+     they were not using. Measured, not predicted: tier-off
+     0.3.17 -> 0.4.0 moved it bffad95b -> 16bd9c55 with matchExpressions and the
+     relabeling unconditional, and is byte-identical with this gate in place.
+
+     So: when the tier is OFF, emit the ORIGINAL exact matchLabels shape, which
+     keeps the tier-off render of this file byte-identical to 0.3.17 and the
+     primary's checksum unmoved. When it is ON, the operator is already taking a
+     Kong roll and a new Deployment in that release, and the selector has real
+     work to do.
+
+     Why the shape has to change at all when the tier is on: the worker tier
+     carries component=functions-workers (edge-functions-worker-tier.yaml), and
+     an exact match on "functions" would leave it UNSCRAPED — silently, since a
+     tier that is never scraped does not look broken, it looks absent.
+     Channels (component=functions-<channel>) are still not scraped either way;
+     they are a whole-function-set A/B on their own host and out of scope here. */}}
   selector:
+    {{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
     matchLabels:
       {{- include "pawtograder.selectorLabels" . | nindent 6 }}
     matchExpressions:
@@ -639,18 +661,47 @@ spec:
         operator: In
         values:
           - functions
-          {{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
           - functions-workers
-          {{- end }}
+    {{- else }}
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions") | nindent 6 }}
+    {{- end }}
   endpoints:
     - port: http
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
-      {{- /* Without this every series from both tiers is indistinguishable, so
-         "is the worker tier serving?" is not a question PromQL can ask. Copies
-         the Service's component label onto each series as edge_tier=functions |
-         functions-workers. Adding a label cannot break existing selectors.
+      {{- /* Copies the Service's component label onto each series as
+         edge_tier=functions | functions-workers, so that "which tier produced
+         this series?" is expressible in PromQL. Adding a label cannot break
+         existing selectors.
+
+         GATED for the same checksum reason as the selector above — this block is
+         three rendered lines, matches none of the strip patterns, and moved the
+         primary's checksum on its own. It is also meaningless when the tier is
+         off: with one tier every series would carry the same constant
+         edge_tier="functions".
+
+         KNOWN INERT TODAY, and recorded here so the next reader does not build
+         on it. There is currently NO deno_* series for this label to land on.
+         The `#` comment at the top of this ServiceMonitor says edge-runtime
+         v1.74 serves deno_http_requests_total at /metrics; that is wrong, and it
+         is left in place only because it is a RENDERED comment and editing it
+         would move the Postgres checksum this gate exists to hold still (fix it
+         in a release that already rolls the primary). What actually happens:
+         this image replaces the runtime's main service with our own demuxer
+         (images/edge-functions/main.ts), whose Deno.serve handler dispatches
+         every path by its first segment — so a scrape of /metrics runs the
+         `metrics` FUNCTION and returns exactly what supabase/functions/metrics/
+         index.ts prints, which is pawtograder_* and nothing else. Confirmed
+         against live Prometheus: of 3700 metric names, zero begin with `deno`.
+         Consequences: the panels in dashboards/edge-functions.json that select
+         on deno_http_requests_total are empty (pre-existing, tracked
+         separately), and per-tier request rate is answered off Kong's own
+         kong_http_requests_total instead — see
+         PawtograderEdgeWorkerTierNoTraffic in prometheus-rules.yaml. The
+         relabeling is kept rather than deleted because it costs one scrape-time
+         label rewrite and becomes correct the moment any deno_* series exists.
 
          Note this endpoint resolves as the `metrics` FUNCTION — the demuxer
          routes /metrics on the first path segment — so worker-tier pods also
@@ -662,9 +713,11 @@ spec:
          app-business.json read pawtograder_help_queue_depth, which comes from
          the postgres-exporter (see above in this file) and not from this
          endpoint at all. So adding this tier moves no queue-depth number. */}}
+      {{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
       relabelings:
         - sourceLabels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
           targetLabel: edge_tier
+      {{- end }}
       authorization:
         type: Bearer
         credentials:
