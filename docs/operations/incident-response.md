@@ -135,6 +135,18 @@ Two consequences worth knowing before you start pulling threads:
   and `helm upgrade` returns all four functions to the request tier: no DB
   change, no client change, no image rebuild. It does roll Kong.
 
+**Expected once, on the first upgrade that enables the tier:** the Kong config
+checksum rolls Kong in the same release that creates the worker Deployment, so a
+new Kong pod can serve the four worker paths before that Deployment has ready
+endpoints — they return 502 until it does. Bounded by pod startup, and nothing is
+lost: those paths are reached only by pg_cron, which retries every minute, and
+pgmq's per-message visibility timeout means an undelivered poke drops no work.
+Kong readiness is deliberately NOT coupled to worker endpoints — that would take
+the entire API down whenever this one tier was unhealthy, which is the failure
+`PawtograderEdgeWorkerTierUnavailable` exists to report while everything else
+keeps serving. If you want a clean rollout, enable the tier and its routes in
+separate releases.
+
 `scripts/edge-logs.sh` covers both tiers (it selects `component=~"functions(-.*)?"`),
 so `--function <name>` works regardless of which tier serves it.
 
