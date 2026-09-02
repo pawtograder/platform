@@ -173,8 +173,12 @@ edgeFunctions:
   e2e:
     enabled: true
     mockGitHub: true
-  # NOTE: edgeFunctions.workerTier is deliberately NOT enabled here. The split is
-  # staging-and-prod only: a preview would pay for a second edge Deployment
+  # NOTE: edgeFunctions.workerTier is deliberately NOT enabled here. Scope, so the
+  # absence reads as a decision rather than an oversight: the split is ON for
+  # staging (values-staging.yaml, this PR) and is INTENDED for production, which
+  # is deployed from the separate prod-charts repo and so is enabled by a change
+  # there rather than by anything in this file. What it is not is per-preview: a
+  # preview would pay for a second edge Deployment
   # (+2Gi Guaranteed per namespace, on top of the 6Gi the request tier already
   # reserves) to exercise a routing change that is asserted at render time by
   # tests/render-guardrails.sh and was verified end to end on this PR's own

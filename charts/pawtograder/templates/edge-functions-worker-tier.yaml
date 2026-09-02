@@ -44,6 +44,27 @@ own admission budget and eszip cache.
 {{- if eq $c.name "workers" }}
 {{- fail (printf "channel %q collides with edgeFunctions.workerTier: both render component \"functions-workers\", i.e. one Kubernetes Service and Deployment name for two different workloads. Rename the channel." $c.name) }}
 {{- end }}
+{{- /* The second collision, on Kong entity names rather than Kubernetes ones. A
+   channel renders the Kong service `functions-v1-<channel>`, and each routed
+   worker renders `functions-v1-worker-<fn>` -- so a channel named
+   `worker-github-async-worker` produces the SAME service and route name as the
+   worker route. Kong rejects a declarative config with duplicate entity names
+   outright, so this does not degrade the channel or the tier: Kong fails to
+   start and the whole deployment's API goes down. */ -}}
+{{- range $fn := $wt.functions }}
+{{- if eq $c.name (printf "worker-%s" $fn) }}
+{{- fail (printf "channel %q collides with the worker route for %q: both render the Kong service and route name \"functions-v1-worker-%s\". Kong rejects a declarative config with duplicate entity names, so Kong would fail to START and the whole deployment's API would be down -- not just this channel. Rename the channel." $c.name $fn $fn) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* Routing for this tier is Kong path routing; there is no other mechanism in
+   this chart. With Kong disabled the workload still schedules and still costs its
+   full memory limit, but kong-config.yaml renders nothing, so none of the four
+   functions is ever sent to it -- they keep being served by the request tier and
+   the split silently does not exist. Same failure shape as an empty `functions`
+   list, so it is refused in the same place. */ -}}
+{{- if not .Values.kong.enabled }}
+{{- fail "edgeFunctions.workerTier is enabled but kong.enabled is false. This tier is reached only by Kong path routing (templates/kong-config.yaml), so with Kong off the pods would schedule and cost their full memory limit while every routed function kept being served by the request tier -- the split would silently not exist. Enable Kong, or set edgeFunctions.workerTier.enabled: false." }}
 {{- end }}
 {{- include "pawtograder.edgeFunctions.assertTierOverrides" (dict "tier" "workerTier" "overrides" $wt) }}
 {{- /* hasKey, not `default`, so replicas: 0 can idle the tier without its routes

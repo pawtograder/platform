@@ -864,6 +864,31 @@ assert_refused "a channel named workers collides with the tier" \
 # Sprig's mergeOverwrite (mergo) skips empty source values, so a mistyped or
 # unsupported override key would be silently ignored rather than applied. The
 # allowlist turns that into a render error.
+# An EMPTY allowlisted override is the same failure as a disallowed key, just
+# harder to see: mergeOverwrite skips empty source values, so the tier would
+# silently keep the BASE's value while the values file said otherwise. Clearing
+# the integration secrets off the worker tier is the one that would bite.
+assert_refused "an empty list override is refused, not silently inherited" \
+  "is empty" "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {envFromSecrets: []}}'
+assert_refused "an empty map override is refused" \
+  "is empty" "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {nodeSelector: {}}}'
+assert_refused "an empty string override is refused" \
+  "is empty" "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {priorityClassName: ""}}'
+# A channel renders the Kong service functions-v1-<channel>; a routed worker
+# renders functions-v1-worker-<fn>. A channel named worker-<fn> produces the SAME
+# Kong entity name, and Kong rejects duplicate names outright -- so Kong fails to
+# START and the whole deployment's API is down, not just that channel.
+assert_refused "a channel named worker-<fn> is refused" \
+  "collides with the worker route" \
+  "${WT[@]}" --set channelWildcardTlsSecret=wc \
+  --set 'channels[0].name=worker-github-async-worker' \
+  --set 'channels[0].web.image.tag=v1' --set 'channels[0].edgeFunctions.image.tag=v1'
+# This tier is reachable ONLY by Kong path routing. With Kong off the pods
+# schedule and cost their full memory limit while every routed function keeps
+# being served by the request tier -- the split silently does not exist.
+assert_refused "the tier without Kong is refused" \
+  "kong.enabled is false" \
+  "${WT[@]}" --set kong.enabled=false
 # A duplicate renders two Kong services and two routes with the same name, and
 # Kong rejects a declarative config with duplicate entity names outright -- so
 # Kong does not start and the whole deployment's API is down, not just this tier.

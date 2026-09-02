@@ -757,9 +757,18 @@ spec:
         # queue is moving; an error-rate rule here would be inert by construction. Drain health is
         # already covered by PawtograderAsyncQueueBacklog / QueueStuck /
         # NotificationEmailBacklog / QueueOldestMessageAging / RecalcStalled above.
+        # The `or absent(...)` arm is the whole point of the rule surviving contact
+        # with reality. `== 0` needs the SERIES to exist; if the Deployment is
+        # deleted, never created, or its name drifts, kube-state-metrics emits
+        # nothing and the comparison yields an empty vector -- which is silence,
+        # not a firing alert. That is the worst case, because Kong keeps routing
+        # the four functions at a Service with no backend and the queues stop
+        # draining, exactly when the alert is most needed. `absent()` fires on
+        # the missing series instead.
         - alert: PawtograderEdgeWorkerTierUnavailable
           expr: |
             kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}"} == 0
+              or absent(kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") }}"})
           for: 5m
           labels:
             severity: critical

@@ -68,13 +68,32 @@ LOGQL="{namespace=\"${NAMESPACE}\", component=~\"functions(-.*)?\"}"
 # hardcoded both the release name and the single-Deployment assumption.
 edge_pod_selector() {
   local components
-  components="$(kubectl get deploy -n "$NAMESPACE" -l app.kubernetes.io/name=pawtograder \
+  # `|| true` is load-bearing, not defensive. Under `set -euo pipefail` a grep
+  # that matches nothing exits 1, pipefail propagates that to the pipeline, and
+  # an assignment takes the substitution's status -- so the script would exit
+  # HERE and never reach the fallback below. Verified: without it the function
+  # aborts on an empty match instead of falling back.
+  components="$( { kubectl get deploy -n "$NAMESPACE" -l app.kubernetes.io/name=pawtograder \
       -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{"\n"}{end}' 2>/dev/null \
-    | grep -E '^functions(-.+)?$' | sort -u | paste -sd, -)"
+    | grep -E '^functions(-.+)?$' | sort -u | paste -sd, -; } || true)"
   # No Deployments found (wrong namespace, no RBAC): fall back to the two tiers
   # the chart always names, rather than emitting `in ()` which selects nothing.
   [ -z "$components" ] && components="functions,functions-workers"
   echo "app.kubernetes.io/name=pawtograder,app.kubernetes.io/component in (${components})"
+}
+
+# `kubectl logs -l` REFUSES to run when the selector matches more pods than
+# --max-log-requests, rather than tailing a subset -- so a limit that is merely
+# "generous" is a hard failure, not degraded output. The old value of 10 was
+# already marginal against staging/prod's 12 request replicas and became wrong
+# the moment a second tier existed (12 + 2 = 14). Count the pods and ask for
+# that many, with a floor so a transient empty result still runs.
+edge_log_stream_limit() {
+  local n
+  n="$( { kubectl get pods -n "$NAMESPACE" -l "$(edge_pod_selector)" \
+      --no-headers 2>/dev/null | wc -l; } || echo 0)"
+  [ "${n:-0}" -lt 10 ] && n=10
+  echo "$n"
 }
 [ -n "$function" ]  && LOGQL="${LOGQL} |= \"[fn=${function}]\""
 [ -n "$grep_text" ] && LOGQL="${LOGQL} |= \"${grep_text}\""
@@ -85,11 +104,11 @@ if [ "$follow" -eq 1 ] && ! command -v logcli >/dev/null 2>&1; then
   echo "==> logcli not found; live-tailing pod stdout via kubectl (no history)" >&2
   if [ -n "$function" ] || [ -n "$grep_text" ]; then
     pat="${function:+[fn=${function}]}"
-    kubectl logs -f -l "$(edge_pod_selector)" -n "$NAMESPACE" --max-log-requests=10 --prefix=false \
+    kubectl logs -f -l "$(edge_pod_selector)" -n "$NAMESPACE" --max-log-requests="$(edge_log_stream_limit)" --prefix=false \
       | { [ -n "$pat" ] && grep --line-buffered -F "$pat" || cat; } \
       | { [ -n "$grep_text" ] && grep --line-buffered -F "$grep_text" || cat; }
   else
-    kubectl logs -f -l "$(edge_pod_selector)" -n "$NAMESPACE" --max-log-requests=10 --prefix=false
+    kubectl logs -f -l "$(edge_pod_selector)" -n "$NAMESPACE" --max-log-requests="$(edge_log_stream_limit)" --prefix=false
   fi
   exit 0
 fi

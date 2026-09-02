@@ -231,9 +231,23 @@ edge-functions-channels.yaml uses hasKey+ternary rather than `default 1` so
       "envFromSecrets" "gracefulExitTimeoutSeconds" "preStopSleepSeconds"
       "terminationGracePeriodSeconds" "nodeSelector" "tolerations" "affinity"
       "priorityClassName" "updateStrategy" -}}
+{{/* An EMPTY allowlisted value is the same bug as a disallowed key, just harder
+     to see: mergeOverwrite skips empty source values, so `envFromSecrets: []`,
+     `tolerations: []`, `nodeSelector: {}` or `priorityClassName: ""` on a tier
+     render as the BASE's value with no error at all. An operator clearing the
+     integration secrets off the worker tier would get every one of them anyway.
+     Refuse it, because "you cannot express that here" is a far better outcome
+     than silently running the opposite configuration.
+
+     `enabled`, `replicas` and `functions` are exempt: callers read those from
+     the RAW tier block (hasKey/ternary), so `false` and `0` do reach the render
+     -- which is exactly why they are handled outside the merge. */}}
 {{- range $k, $v := .overrides -}}
 {{- if not (has $k $allowed) -}}
 {{- fail (printf "edgeFunctions.%s: %q is not an overridable per-tier key. Allowed: %s. The surface is an allowlist because Sprig's mergeOverwrite (mergo) SKIPS EMPTY source values -- a false, a 0 or an empty list here would render as the base's value with no error, so an unlisted key is far more likely to be silently ignored than honoured. Booleans that must stay shared across tiers (verifyJwt, reloader, e2e, email) are excluded for exactly that reason; set them on edgeFunctions instead." $tier $k (join ", " (sortAlpha $allowed))) -}}
+{{- end -}}
+{{- if and (empty $v) (not (has $k (list "enabled" "replicas" "functions"))) -}}
+{{- fail (printf "edgeFunctions.%s.%s is empty (%v). Sprig's mergeOverwrite (mergo) SKIPS empty source values, so this would silently render the value from edgeFunctions instead of the empty one you asked for -- the tier would keep the base's setting while the values file said otherwise. Remove the key to inherit deliberately, or set a non-empty value. (enabled/replicas/functions are exempt: they are read from the raw tier block, so false and 0 work there.)" $.tier $k $v) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
