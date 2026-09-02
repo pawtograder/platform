@@ -907,7 +907,33 @@ spec:
            which is the same silently-inert failure as the edge_tier label that
            nothing reads. Interpolating into a regex is safe because
            edge-functions-worker-tier.yaml already refuses any name that is not
-           DNS-1123, so no name can carry a metacharacter. */}}
+           DNS-1123, so no name can carry a metacharacter.
+
+           THIS RULE COVERS THE WHOLE TIER ONLY, and that scoping is deliberate
+           rather than a leftover. A single aggregate cannot see ONE missing
+           route: the other three keep taking their unconditional per-minute
+           pg_cron pokes, the sum stays positive, and the one function that fell
+           back to functions-v1-all is served by the request tier forever in
+           silence. That partial case is PawtograderEdgeWorkerRouteNoTraffic
+           below, one rule per configured name. The two are mutually exclusive by
+           construction -- this one requires the tier aggregate to be 0, that one
+           requires it to be >0 -- so a whole-tier misroute arrives as ONE alert
+           and not as one-per-route, and the per-route rules cannot pile four
+           copies of the same incident onto Alertmanager.
+
+           NAMESPACE AND DEPLOYMENT ARE STAMPED AS STATIC LABELS, because the
+           expression cannot supply them. Both `sum()` calls are ungrouped and
+           `vector(0)` has no labels at all, so without this block the alert
+           carries only alertname and severity -- and one Prometheus watching two
+           worker-enabled releases would fingerprint their simultaneous incidents
+           as ONE alert, with no way to route or silence by namespace. An earlier
+           round of this PR observed that bare label set in the promtool fixture
+           and recorded it as a quirk of the shape; it was an alerting defect.
+           The labels match PawtograderEdgeWorkerTierUnavailable above (which
+           gets namespace and deployment for free, from its selector's equality
+           matchers, via absent()) so the two rules for this tier group together.
+           Static values are safe here precisely because the expression produces
+           no labels: there is nothing for them to collide with. */}}
         - alert: PawtograderEdgeWorkerTierNoTraffic
           expr: |
             (
@@ -919,6 +945,8 @@ spec:
           for: 30m
           labels:
             severity: warning
+            namespace: {{ $ns | quote }}
+            deployment: {{ include "pawtograder.edgeFunctions.workers.host" . | quote }}
           annotations:
             summary: "Pawtograder edge worker tier is serving no traffic (the tier split may not be in effect)"
             description: >-
@@ -941,6 +969,110 @@ spec:
               alongside, and this rule will not be the interesting one. Neither
               cause loses work: pgmq holds unconsumed messages. Runbook:
               docs/operations/incident-response.md.
+        {{- /* THE PARTIAL MISROUTE — one route missing, the other three fine.
+           This is the compensating control for the one residual risk the routing
+           review called the mandatory pre-prod check, and it is worth stating why
+           it has to live in an alert rather than in a test: the prefix/existence
+           guard in tests/render-guardrails.sh renders the chart's own default
+           values.yaml, so it cannot see the `functions` list a downstream overlay
+           sets. Production's list lives in the separate prod-charts repo. A typo
+           there renders a route for a name with no function behind it, or omits a
+           name entirely, and the chart's tests are structurally incapable of
+           noticing. Neither is the aggregate rule above capable of it: three
+           healthy routes keep the sum positive.
+
+           WHY ONE RULE PER NAME AND NOT `sum by (route)`. Grouping needs series
+           to group. A route Kong never registered -- a typo'd name, or a
+           declarative config that half-loaded -- emits NO kong_http_requests_total
+           at all, so `sum by (route)` returns three elements and the fourth is
+           simply not in the result: the exact silence this rule exists to break.
+           Both naive repairs were run through promtool against three-serving/
+           one-absent series before this shape was chosen, and both are worse
+           than the aggregate they would replace:
+             sum by (route)(rate(...)) == 0
+               never fires. Nothing to group, so the missing route is absent from
+               the result rather than present as a zero.
+             (sum by (route)(rate(...)) or vector(0)) == 0
+               fires ALWAYS, including on a fleet where all four routes are
+               serving, and names no route when it does. `or` is a set operation:
+               it appends right-hand elements whose label set is not on the left,
+               and vector(0)'s label set is `{}`, which no `{route=...}` group can
+               ever displace. So the labelless 0 is always there to satisfy `== 0`.
+           The expected set therefore has to come from VALUES, not from the data,
+           which is what generating a rule per entry does. Each gets its own
+           `or vector(0)` -- correct here, and not in the shape above, because the
+           selector is a single exact route so both sides are labelless and the
+           union is a genuine fallback rather than an extra element. A hardcoded
+           list would go stale silently
+           the moment someone edits workerTier.functions, so this ranges over the
+           same values the Kong routes and the worker Deployment are built from --
+           the routed set, the alert set and the pods can only ever disagree by
+           someone editing one of three templates in this repo.
+
+           THE GUARD IS THE SIBLING ROUTES, NOT THE REQUEST TIER, and that is a
+           change from the aggregate rule rather than an oversight. Three reasons.
+           (1) Mutual exclusivity: this fires only when some OTHER worker route is
+           serving, so a whole-tier misroute (aggregate 0) fires the rule above
+           and none of these. One incident, one alert; four copies of "the tier
+           isn't routing" would be worse than the bug. (2) It is the stronger
+           telemetry guard anyway: if Kong stops being scraped, every worker
+           series goes away at once, this sum goes empty, `> 0` fails, and the
+           rule is silent -- same protection the request arm gives the aggregate,
+           from a signal that is nearer the thing being measured. (3) The request
+           arm would SUPPRESS A TRUE POSITIVE here: all four schedules are
+           `* * * * *` and fire whether or not a human is using the app, so a
+           deployment with a genuinely idle request tier (out of term, a preview
+           env) still proves a partial misroute through its siblings. Requiring
+           functions-v1-all to be busy would blind the rule on exactly the quiet
+           deployments where nobody would notice by hand.
+
+           CARDINALITY. At most len(functions)-1 of these can fire at once, since
+           each needs a sibling serving -- so the worst case is 3 alerts naming 3
+           distinct broken functions, which is 3 real facts and not 3 copies of
+           one. `for: 30m` is the aggregate's window for the same reasons (the
+           first-enable Kong roll, and a 15m rate() that has to drain of the old
+           traffic when a route that WAS serving stops). severity: warning, also
+           for the same reason: the function still works, it is just not isolated.
+           */}}
+        {{- range $fn := .Values.edgeFunctions.workerTier.functions }}
+        - alert: PawtograderEdgeWorkerRouteNoTraffic
+          expr: |
+            (
+              sum(rate(kong_http_requests_total{namespace="{{ $ns }}", route="functions-v1-worker-{{ $fn }}"}[15m]))
+              or vector(0)
+            ) == 0
+            and
+            sum(rate(kong_http_requests_total{namespace="{{ $ns }}", route=~"functions-v1-worker-({{ join "|" $.Values.edgeFunctions.workerTier.functions }})"}[15m])) > 0
+          for: 30m
+          labels:
+            severity: warning
+            namespace: {{ $ns | quote }}
+            deployment: {{ include "pawtograder.edgeFunctions.workers.host" $ | quote }}
+            route: {{ printf "functions-v1-worker-%s" $fn | quote }}
+          annotations:
+            summary: "Pawtograder edge worker route functions-v1-worker-{{ $fn }} is serving no traffic while its siblings are"
+            description: >-
+              Kong in {{ $ns }} has recorded no requests on
+              functions-v1-worker-{{ $fn }} for 30m, while at least one other
+              functions-v1-worker-* route IS serving — so Kong is loaded and
+              routing, and this one name is the exception. {{ $fn }} is therefore
+              being served by the REQUEST tier through the functions-v1-all
+              catch-all: the isolation this tier exists to provide does not apply
+              to it, and nothing else will report that. Likeliest cause is the
+              `functions` list itself — a name misspelled in
+              edgeFunctions.workerTier.functions (production sets it in the
+              separate prod-charts repo, which this chart's tests cannot see), so
+              Kong renders a route for a function that does not exist and the real
+              one falls through. Check the rendered ConfigMap against
+              `ls supabase/functions/` and against `select jobname from cron.job`.
+              Second cause is a partial Kong config load, which the pod's logs
+              will name. Third, and check it before assuming a bug: this function
+              may simply have no pg_cron schedule poking it, in which case the
+              routed set and the schedule set disagree and one of the two is
+              wrong. No work is lost either way — pgmq holds unconsumed messages
+              and the function still runs, on the wrong tier. Runbook:
+              docs/operations/incident-response.md.
+        {{- end }}
         {{- end }}
     - name: pawtograder.secrets
       rules:

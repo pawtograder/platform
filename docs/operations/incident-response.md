@@ -179,9 +179,18 @@ for fn in notification-queue-processor github-async-worker \
 done
 ```
 
-`PawtograderEdgeWorkerTierNoTraffic` is the backstop if this is missed — a typo
-in all four names produces exactly its firing condition — but it takes 30m and
-tells you the split is not in effect, not which name is wrong.
+Two alerts are the backstop if this is missed, and between them they cover both
+shapes of the mistake. A typo in **all four** names produces
+`PawtograderEdgeWorkerTierNoTraffic`, which tells you the split is not in effect
+but not which name is wrong. A typo in **one** name — much likelier, since the
+list is edited by hand in a downstream repo — produces
+`PawtograderEdgeWorkerRouteNoTraffic`, which names the route in its labels: the
+other three keep taking their per-minute pokes, so the tier-wide rule stays
+Inactive and only the per-route rule can see it. Both take 30m, so the hand-check
+above is still the cheaper way to find it. The two are mutually exclusive by
+construction (the tier rule requires the whole worker arm at zero, the per-route
+rules require a sibling still serving), so a whole-tier misroute arrives as one
+alert rather than five.
 
 `scripts/edge-logs.sh` covers both tiers (it selects
 `component=~"functions|functions-workers"`), so `--function <name>` works

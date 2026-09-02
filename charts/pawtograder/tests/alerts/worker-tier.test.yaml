@@ -146,49 +146,169 @@ tests:
           - labels: "{}"
             value: 1
 
+
   # ---------------------------------------------------------------------------
   # PawtograderEdgeWorkerTierNoTraffic — `(... or vector(0)) == 0 and ... > 0`
+  # PawtograderEdgeWorkerRouteNoTraffic — the same shape per configured name,
+  # guarded on the SIBLING routes instead of on the request tier.
   #
   # Counter increments are chosen to match production: the worker arm's real
-  # steady-state floor was measured at 8.3-8.6 req/min (four pg_cron schedules,
-  # all `* * * * *`, github-async-worker alone posting 2 pokes per tick), so
-  # `8` per 1m interval is the live number rather than a round one.
+  # steady-state floor was measured at 8.3-8.6 req/min, which is what the four
+  # pg_cron schedules actually produce — all four are `* * * * *` and each
+  # invoker unconditionally POSTs twice per tick (2 x 4 = 8/min; verified in
+  # supabase/migrations/20251009175823_workflow-event-trigger-optimization.sql
+  # for github-async-worker, notification-queue-processor and
+  # gradebook-column-recalculate, and in 20251213194246_calendar_discord.sql for
+  # discord-async-worker). None of them checks queue depth first — that check was
+  # deliberately removed to stop a read() RPC stampede — so `2` per 1m interval
+  # is the live per-route number and a route at ZERO is never "just idle".
+  #
+  # That fact is what makes the per-route rule sound, and it is why the fixtures
+  # below give ALL FOUR routes traffic in every scenario that is meant to be
+  # silent. An earlier version of this file gave two of the four traffic and
+  # asserted that the quiet pair was normal; that was true of the AGGREGATE rule
+  # and false about production, where a quiet route means the route is missing or
+  # its schedule is gone. Both are bugs, neither is idleness.
   # ---------------------------------------------------------------------------
 
-  # Both arms serving: the split is working. Two routed functions are given
-  # traffic and two are not, deliberately — the rule sums the whole worker arm,
-  # so a quiet individual function (gradebook-column-recalculate has nothing to
-  # do on an idle deployment) must NOT look like a misroute.
+  # The split working: all four routes taking their pokes, request tier serving.
+  # Both rules must be silent, and both alertnames are asserted because a rule
+  # that fires on a HEALTHY fleet is the one failure mode that gets alerting
+  # switched off entirely.
   - interval: 1m
-    name: "NoTraffic: both tiers serving is silent (and a quiet single function does not trip it)"
+    name: "NoTraffic: all four worker routes plus the request tier serving is silent"
     input_series:
-      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
-        values: 0+8x80
       - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="200"}
-        values: 0+1x80
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-discord-async-worker", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-gradebook-column-recalculate", code="200"}
+        values: 0+2x80
       - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
         values: 0+40x80
     promql_expr_test:
       - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic"})
         eval_time: 60m
         exp_samples: []
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic"})
+        eval_time: 60m
+        exp_samples: []
 
-  # THE SILENT FALLBACK. Kong's config is stale, so no worker route exists at
-  # all: the worker arm's series are absent while the request tier serves
-  # normally. This is the state that is invisible to every availability alert —
-  # pods up, queues draining, nothing unavailable — and it is the whole reason
-  # this rule exists. Both halves of `for: 30m` are pinned.
+  # THE SINGLE MISSING ROUTE. This is the case the aggregate rule provably cannot
+  # see and the reason the per-route rules exist: three routes keep taking their
+  # unconditional pokes, so `sum(rate(...))` over the whole worker arm stays at
+  # ~6/min and the tier rule is correctly Inactive — while
+  # gradebook-column-recalculate has no route at all (a typo in a downstream
+  # overlay's `functions` list, or a Kong config that half-loaded) and is being
+  # served by the request tier through functions-v1-all.
   #
-  # Note the firing alert carries ONLY `severity` — no namespace, no route. Both
-  # arms are wrapped in `sum()`, which drops every label, and `vector(0)` has
-  # none to begin with, so nothing survives to be synthesised. Pinned here
-  # because it has a consequence: this alert cannot be routed or silenced by
-  # namespace in Alertmanager, and its description therefore interpolates the
-  # namespace at RENDER time ({{ $ns }}) rather than reading $labels.namespace,
-  # which would come out empty. Anyone adding `by (namespace)` to make the label
-  # survive should expect this assertion to change.
+  # EXACTLY ONE alert fires, it names the missing route, and the tier rule stays
+  # quiet. All three of those are asserted: the count pins that the other three
+  # routes do NOT also fire (which is what would make this rule useless noise),
+  # the label set pins the routing identity, and the tier-rule assertion pins the
+  # mutual exclusivity the two rules are built on.
   - interval: 1m
-    name: "NoTraffic: worker routes ABSENT while the request tier serves fires at 30m, not before"
+    name: "RouteNoTraffic: ONE missing route fires exactly one alert naming it (the aggregate rule cannot see this)"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-discord-async-worker", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
+        values: 0+40x80
+    promql_expr_test:
+      # Silent before the `for:` window, so a Kong roll that briefly drops one
+      # route cannot page — and so that a `for:` deleted in a refactor is caught.
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing"})
+        eval_time: 29m
+        exp_samples: []
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing"})
+        eval_time: 35m
+        exp_samples:
+          - labels: "{}"
+            value: 1
+      - expr: ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing"}
+        eval_time: 35m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing", deployment="t-pawtograder-functions-workers", namespace="default", route="functions-v1-worker-gradebook-column-recalculate", severity="warning"}'
+            value: 1
+      # The aggregate rule is Inactive here. This is the assertion that documents
+      # the original defect: delete the per-route rules and nothing fires at all.
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic"})
+        eval_time: 35m
+        exp_samples: []
+
+  # The same failure with the route PRESENT but flat — it loaded once, served,
+  # and then stopped matching. `or vector(0)` covers the absent shape; this
+  # covers the real-zero shape, and a rule written for only one would miss the
+  # other. Note the 45m eval: a route that WAS serving has to drain out of the
+  # 15m rate window before the 30m `for:` can even start, which is the worst-case
+  # detection time the rule's comment quotes.
+  - interval: 1m
+    name: "RouteNoTraffic: one route PRESENT but flat at zero also fires"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-discord-async-worker", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-gradebook-column-recalculate", code="200"}
+        values: 40+0x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
+        values: 0+40x80
+    promql_expr_test:
+      - expr: ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing"}
+        eval_time: 45m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing", deployment="t-pawtograder-functions-workers", namespace="default", route="functions-v1-worker-gradebook-column-recalculate", severity="warning"}'
+            value: 1
+
+  # TWO missing routes are TWO alerts, not one and not four. Cardinality is the
+  # thing most likely to get this rule shape reverted, so it is pinned: N broken
+  # routes are N distinct facts, each nameable in a silence, and the ceiling is
+  # len(functions)-1 because every one of them needs a sibling still serving.
+  - interval: 1m
+    name: "RouteNoTraffic: two missing routes fire two alerts, one per route"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
+        values: 0+40x80
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing"})
+        eval_time: 35m
+        exp_samples:
+          - labels: "{}"
+            value: 2
+      - expr: count by (route) (ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing"})
+        eval_time: 35m
+        exp_samples:
+          - labels: '{route="functions-v1-worker-discord-async-worker"}'
+            value: 1
+          - labels: '{route="functions-v1-worker-gradebook-column-recalculate"}'
+            value: 1
+
+  # THE SILENT FALLBACK, whole-tier. Kong's config is stale so NO worker route
+  # exists: the worker arm's series are absent while the request tier serves
+  # normally. Invisible to every availability alert — pods up, queues draining,
+  # nothing unavailable — and the reason the aggregate rule exists. Both halves
+  # of `for: 30m` are pinned.
+  #
+  # And the per-route rules are SILENT here, which is the other half of the
+  # mutual exclusivity: their guard is "some sibling is serving", and with the
+  # whole tier unrouted no sibling is. One incident produces ONE alert rather
+  # than one aggregate plus four per-route copies of it. Anyone who reguards the
+  # per-route rules on functions-v1-all instead should expect this to go red with
+  # five firing alerts.
+  - interval: 1m
+    name: "NoTraffic: worker routes ABSENT while the request tier serves fires at 30m, not before (and no per-route copies)"
     input_series:
       - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
         values: 0+40x80
@@ -196,11 +316,24 @@ tests:
       - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"})
         eval_time: 29m
         exp_samples: []
+      # The full label set. Both `sum()` calls are ungrouped and `vector(0)` has
+      # no labels at all, so namespace and deployment are STAMPED by the rule's
+      # labels block — they cannot come from the data. Pinned because they are
+      # routing-relevant: without them one Prometheus watching two
+      # worker-enabled releases fingerprints both incidents as one alert, and no
+      # receiver or silence can target a namespace. An earlier round of this PR
+      # asserted the bare {severity} set here and described it as a quirk of the
+      # expression shape; it was a defect, and this is the assertion that keeps
+      # it fixed. The set matches PawtograderEdgeWorkerTierUnavailable above so
+      # the two rules for this tier group together in Alertmanager.
       - expr: ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"}
         eval_time: 35m
         exp_samples:
-          - labels: 'ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing", severity="warning"}'
+          - labels: 'ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing", deployment="t-pawtograder-functions-workers", namespace="default", severity="warning"}'
             value: 1
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic"})
+        eval_time: 35m
+        exp_samples: []
 
   # The same failure with the series PRESENT but flat — a route that loaded once,
   # served, and then stopped matching (a Kong reload that dropped it, or the
@@ -223,9 +356,11 @@ tests:
 
   # THE NO-TRAFFIC GUARD. An idle or torn-down deployment has neither arm. The
   # left side reads 0 via `or vector(0)`, so without the `and ... > 0` on the
-  # request arm this rule would fire on every quiet namespace forever. This is
-  # the assertion that proves the guard is load-bearing: delete the `and` clause
-  # and this test goes red.
+  # request arm the aggregate rule would fire on every quiet namespace forever.
+  # This is the assertion that proves the guard is load-bearing: delete the `and`
+  # clause and this test goes red. The per-route rules are covered by the same
+  # assertion through a different clause — theirs is the sibling sum, which is
+  # also zero here.
   - interval: 1m
     name: "NoTraffic: no traffic on EITHER tier is silent (the no-traffic guard)"
     input_series:
@@ -235,6 +370,9 @@ tests:
       - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic"})
         eval_time: 60m
         exp_samples: []
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic"})
+        eval_time: 60m
+        exp_samples: []
 
   # THE FIRST-ENABLE WINDOW, which is what `for: 30m` is sized against. Enabling
   # the tier rolls Kong in the same release that creates the worker Deployment,
@@ -242,24 +380,42 @@ tests:
   # condition is genuinely true — and then the new Kong pod starts serving. The
   # worker arm here stays absent for 5m (the derived worst case: Kong pod
   # replacement + one pg_cron tick + one rate() sample) and then begins
-  # incrementing. Nothing may fire.
+  # incrementing. Nothing may fire, on either rule.
+  #
+  # ALL FOUR routes appear together, because that is what actually happens: Kong
+  # loads one declarative config, so the routes arrive as a set rather than one
+  # at a time. Giving only one route traffic here would have been a fixture that
+  # tests a scenario Kong cannot produce, and it would have hidden the per-route
+  # rules firing on the other three.
   #
   # The first pokes are 502s on purpose: the worker Service has no ready
   # endpoints yet, which is the documented behaviour in
   # docs/operations/incident-response.md. Kong counts a request against the route
   # it MATCHED regardless of the status it returns, so a 502 still proves the
-  # route loaded — the rule must not require success, and a well-meaning edit
-  # adding code=~"2.." to the worker arm would fire straight through the
-  # documented window. This test is what would catch that.
+  # route loaded — the rules must not require success, and a well-meaning edit
+  # adding code=~"2.." to either arm would fire straight through the documented
+  # window. This test is what would catch that.
   - interval: 1m
     name: "NoTraffic: the documented first-enable window does not fire (502s still count)"
     input_series:
       - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
         values: 0+40x80
       - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="502"}
-        values: _x5 0+8x10
+        values: _x5 0+2x10
       - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
-        values: _x15 0+8x65
+        values: _x15 0+2x65
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="502"}
+        values: _x5 0+2x10
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="200"}
+        values: _x15 0+2x65
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-discord-async-worker", code="502"}
+        values: _x5 0+2x10
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-discord-async-worker", code="200"}
+        values: _x15 0+2x65
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-gradebook-column-recalculate", code="502"}
+        values: _x5 0+2x10
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-gradebook-column-recalculate", code="200"}
+        values: _x15 0+2x65
     promql_expr_test:
       - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"})
         eval_time: 35m
@@ -267,72 +423,133 @@ tests:
       - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"})
         eval_time: 60m
         exp_samples: []
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing"})
+        eval_time: 35m
+        exp_samples: []
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing"})
+        eval_time: 60m
+        exp_samples: []
 
-  # The worker tier is ROUTED but BROKEN: Kong matches the four paths and every
+  # The worker tier is ROUTED but BROKEN: Kong matches all four paths and every
   # one of them 502s, for well over the `for:` window, because the Service has no
-  # ready endpoints. This rule must stay silent — the routes loaded, which is the
-  # only thing it claims to measure, and the outage is
-  # PawtograderEdgeWorkerTierUnavailable's job to report at critical. Firing both
-  # would turn one incident into two alerts pointing at different causes.
+  # ready endpoints. Both rules must stay silent — the routes loaded, which is
+  # the only thing they claim to measure, and the outage is
+  # PawtograderEdgeWorkerTierUnavailable's job to report at critical. Firing
+  # would turn one incident into several alerts pointing at different causes.
   #
   # This is the unit that makes "Kong counts a request against the route it
   # matched regardless of status" load-bearing rather than merely stated: add
-  # code=~"2.." to the worker arm and this goes red, while the shorter
-  # first-enable window above stays green (a sub-30m burst of 502s never reaches
-  # `for:` either way, so that test alone cannot catch the mistake).
+  # code=~"2.." to either arm and this goes red, while the shorter first-enable
+  # window above stays green (a sub-30m burst of 502s never reaches `for:`
+  # either way, so that test alone cannot catch the mistake).
   - interval: 1m
     name: "NoTraffic: worker arm serving only 502s stays silent (that is Unavailable's job)"
     input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="502"}
+        values: 0+2x80
       - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="502"}
-        values: 0+8x80
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-discord-async-worker", code="502"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-gradebook-column-recalculate", code="502"}
+        values: 0+2x80
       - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
         values: 0+40x80
     promql_expr_test:
       - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic"})
         eval_time: 70m
         exp_samples: []
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic"})
+        eval_time: 70m
+        exp_samples: []
 
-  # A Kong metrics outage takes BOTH arms away at once, so the request-arm guard
-  # fails and this stays silent instead of blaming the tier for a telemetry gap.
-  # The contrast with PawtograderEdgeWorkerTierUnavailable is intentional and is
-  # the reason the two rules are shaped differently: silence is the wrong default
-  # when Kong is routing at a Service with no backend, and the right default when
-  # the only thing we know is that we cannot see.
+  # A Kong metrics outage takes EVERY arm away at once — all four worker routes
+  # and the catch-all — so the aggregate's request-arm guard fails and the
+  # per-route rules' sibling guard fails, and both stay silent instead of blaming
+  # the tier for a telemetry gap. The contrast with
+  # PawtograderEdgeWorkerTierUnavailable is intentional and is the reason the
+  # rules are shaped differently: silence is the wrong default when Kong is
+  # routing at a Service with no backend, and the right default when the only
+  # thing we know is that we cannot see.
   - interval: 1m
     name: "NoTraffic: a Kong scrape outage mid-window is silent, not a false positive"
     input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="200"}
+        values: 0+2x20 _x60
       - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
-        values: 0+8x20 _x60
+        values: 0+2x20 _x60
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-discord-async-worker", code="200"}
+        values: 0+2x20 _x60
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-gradebook-column-recalculate", code="200"}
+        values: 0+2x20 _x60
       - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
         values: 0+40x20 _x60
     promql_expr_test:
       - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"})
         eval_time: 60m
         exp_samples: []
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing"})
+        eval_time: 60m
+        exp_samples: []
 
   # The request tier quiet while the worker tier serves. Not a misroute in any
-  # direction, and the rule is one-sided by design — see the "NOT the reverse
-  # direction" note on the rule. Asserted so that making the rule symmetric is a
-  # deliberate act with a test to change, rather than something that looks like
-  # an oversight.
+  # direction for the AGGREGATE rule, which is one-sided by design — see the "NOT
+  # the reverse direction" note on it. Asserted so that making that rule
+  # symmetric is a deliberate act with a test to change, rather than something
+  # that looks like an oversight.
   - interval: 1m
     name: "NoTraffic: worker serving while the request tier is quiet is silent (rule is one-sided by design)"
     input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="200"}
+        values: 0+2x80
       - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
-        values: 0+8x80
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-discord-async-worker", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-gradebook-column-recalculate", code="200"}
+        values: 0+2x80
     promql_expr_test:
       - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic"})
         eval_time: 60m
         exp_samples: []
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic"})
+        eval_time: 60m
+        exp_samples: []
+
+  # WHY THE PER-ROUTE GUARD IS THE SIBLING ROUTES AND NOT functions-v1-all. Same
+  # partial misroute as above, but on a deployment whose request tier is
+  # genuinely idle — out of term, or a preview env nobody is using. The four
+  # pg_cron schedules fire regardless of whether a human is using the app, so the
+  # siblings still prove Kong is loaded and the missing route is still a real
+  # bug. Guarding on the request tier instead would go silent here, which is
+  # exactly the quiet deployment where nobody would notice by hand. Reguard the
+  # per-route rules on functions-v1-all and this test goes red.
+  - interval: 1m
+    name: "RouteNoTraffic: a partial misroute still fires when the REQUEST tier is idle (sibling guard, not request guard)"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
+        values: 0+2x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-gradebook-column-recalculate", code="200"}
+        values: 0+2x80
+    promql_expr_test:
+      - expr: ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing"}
+        eval_time: 35m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic", alertstate="firing", deployment="t-pawtograder-functions-workers", namespace="default", route="functions-v1-worker-discord-async-worker", severity="warning"}'
+            value: 1
 
   # A routed name that is NOT in .Values.edgeFunctions.workerTier.functions must
-  # not satisfy the worker arm. This is what pins the regex to the VALUES list
-  # rather than to a `functions-v1-worker-.*` wildcard: with a wildcard, Kong
-  # serving some other worker route would mask a genuine misroute of all four
-  # configured ones. Traffic here goes to a plausible-looking non-member, and the
-  # rule must still fire.
+  # not satisfy either worker arm. This is what pins both regexes to the VALUES
+  # list rather than to a `functions-v1-worker-.*` wildcard: with a wildcard,
+  # Kong serving some other worker route would mask a genuine misroute of all
+  # four configured ones (aggregate rule) and would satisfy the sibling guard
+  # into firing four per-route alerts (per-route rules). Traffic here goes to a
+  # plausible-looking non-member, so the aggregate must fire and the per-route
+  # rules must not.
   - interval: 1m
-    name: "NoTraffic: traffic on a NON-routed worker name does not satisfy the worker arm"
+    name: "NoTraffic: traffic on a NON-routed worker name does not satisfy either worker arm"
     input_series:
       - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-autograder-create-submission", code="200"}
         values: 0+8x80
@@ -344,3 +561,6 @@ tests:
         exp_samples:
           - labels: "{}"
             value: 1
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerRouteNoTraffic"})
+        eval_time: 35m
+        exp_samples: []
