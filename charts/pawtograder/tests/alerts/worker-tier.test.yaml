@@ -1,0 +1,346 @@
+# promtool unit tests for the two edgeFunctions.workerTier alerts in
+# templates/prometheus-rules.yaml. Run by tests/alert-rules.sh, which renders the
+# chart and drops the rendered `groups:` document next to this file as rules.yaml.
+#
+# Series labels here must match what the template INTERPOLATES: the harness
+# renders with release name `t` into namespace `default`, so the Deployment is
+# `t-pawtograder-functions-workers` and every expression carries
+# namespace="default". A rename on either side should fail these tests — that is
+# the name-drift case below.
+#
+# Assertions are written as `promql_expr_test` against the ALERTS series rather
+# than as `alert_rule_test` with `exp_alerts`, and that choice is deliberate.
+# promtool compares annotations EXACTLY when exp_alerts is used, so a fixture in
+# that form pins every word of the description and goes red on prose edits —
+# which, in a chart whose comments and annotations are maintained as an ops log,
+# means the tests break on changes that cannot affect behaviour. Asserting on
+# ALERTS{alertstate=...} tests what these rules are actually for (does it fire,
+# when, and with which identifying labels) and leaves the prose free. The label
+# set IS pinned, because severity and the deployment/namespace identity are
+# routing-relevant.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------------
+  # PawtograderEdgeWorkerTierUnavailable — `== 0 or absent(...)`
+  # ---------------------------------------------------------------------------
+
+  - interval: 1m
+    name: "Unavailable: healthy tier is silent"
+    input_series:
+      - series: kube_deployment_status_replicas_available{namespace="default", deployment="t-pawtograder-functions-workers"}
+        values: 2+0x40
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable"})
+        eval_time: 20m
+        exp_samples: []
+
+  # The ordinary outage: the Deployment exists and reports zero available. Both
+  # halves of `for: 5m` are asserted — silent at 4m, firing at 5m — because a
+  # `for:` that got dropped or shortened is invisible to `check rules` and shows
+  # up as a page during a routine 90-second rollout.
+  - interval: 1m
+    name: "Unavailable: zero available with the series PRESENT is silent before 5m and fires at 5m"
+    input_series:
+      - series: kube_deployment_status_replicas_available{namespace="default", deployment="t-pawtograder-functions-workers"}
+        values: 0+0x40
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="firing"})
+        eval_time: 4m
+        exp_samples: []
+      - expr: ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="pending"}
+        eval_time: 4m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="pending", deployment="t-pawtograder-functions-workers", namespace="default", severity="critical"}'
+            value: 1
+      - expr: ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="firing", deployment="t-pawtograder-functions-workers", namespace="default", severity="critical"}'
+            value: 1
+
+  # THE CASE THE `or absent(...)` ARM EXISTS FOR, and the one no syntax check can
+  # see. The Deployment was never created (or was deleted, or kube-state-metrics
+  # never saw it): the series does not exist, so `== 0` alone yields an empty
+  # vector, which is SILENCE — while Kong keeps routing four function names at a
+  # Service with no backend.
+  #
+  # The firing alert keeps its full label set, which is not obvious and is worth
+  # pinning: absent() synthesises labels from the EQUALITY matchers in its
+  # selector, so both namespace="default" and deployment="t-pawtograder-functions-workers"
+  # survive even though no series exists. That is what makes the two arms of this
+  # rule produce identically-labelled alerts, so it deduplicates in Alertmanager
+  # instead of arriving as two distinct incidents — and it is why a description
+  # referring to $labels.deployment would still render correctly here. It would
+  # NOT survive a matcher rewritten as a regex (`deployment=~"..."`), which
+  # synthesises nothing.
+  - interval: 1m
+    name: "Unavailable: series ABSENT entirely (Deployment never created) still fires"
+    input_series:
+      - series: up{job="unrelated"}
+        values: 1+0x40
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="firing"})
+        eval_time: 4m
+        exp_samples: []
+      - expr: ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="firing"}
+        eval_time: 6m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="firing", deployment="t-pawtograder-functions-workers", namespace="default", severity="critical"}'
+            value: 1
+
+  # Name drift: a healthy Deployment under a DIFFERENT name is not this tier. If
+  # pawtograder.componentName and the rule's selector ever disagree — a release
+  # rename, a fullnameOverride, an edit to one and not the other — the tier is
+  # unmonitored, and the failure looks like "all quiet" rather than like an
+  # error. absent() catches it because the selector matches nothing.
+  - interval: 1m
+    name: "Unavailable: Deployment NAME DRIFT is caught by absent(), not read as healthy"
+    input_series:
+      - series: kube_deployment_status_replicas_available{namespace="default", deployment="t-pawtograder-functions-wrkers"}
+        values: 2+0x40
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="firing"})
+        eval_time: 6m
+        exp_samples:
+          - labels: "{}"
+            value: 1
+
+  # Healthy, then the Deployment is deleted mid-window. Distinct from the
+  # never-created case: here the series EXISTS with a good value and then stops.
+  # A rule written as `== 0` would go from "not firing because 2 > 0" straight to
+  # "not firing because the vector is empty" — the two silences have different
+  # causes and the same appearance. Prometheus keeps a stale series selectable
+  # for 5m after its last sample, so the absent() arm only starts matching after
+  # that; the assertion at 20m is comfortably past both that and the `for: 5m`.
+  - interval: 1m
+    name: "Unavailable: healthy then DELETED mid-window fires"
+    input_series:
+      - series: kube_deployment_status_replicas_available{namespace="default", deployment="t-pawtograder-functions-workers"}
+        values: 2+0x10 _x30
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="firing"})
+        eval_time: 8m
+        exp_samples: []
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="firing"})
+        eval_time: 25m
+        exp_samples:
+          - labels: "{}"
+            value: 1
+
+  # A TOTAL kube-state-metrics outage, as opposed to this one Deployment
+  # vanishing. Nothing at all is scraped, so absent() matches and this fires —
+  # which is a FALSE POSITIVE for "the tier is down", and is the accepted trade
+  # documented next to PawtograderBackupMissing (which has paged for exactly
+  # this). Asserted rather than merely commented, so that anyone who decides the
+  # trade is wrong has to change a test that states it, not just an expression.
+  - interval: 1m
+    name: "Unavailable: total kube-state-metrics outage fires (documented false positive)"
+    input_series: []
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierUnavailable", alertstate="firing"})
+        eval_time: 6m
+        exp_samples:
+          - labels: "{}"
+            value: 1
+
+  # ---------------------------------------------------------------------------
+  # PawtograderEdgeWorkerTierNoTraffic — `(... or vector(0)) == 0 and ... > 0`
+  #
+  # Counter increments are chosen to match production: the worker arm's real
+  # steady-state floor was measured at 8.3-8.6 req/min (four pg_cron schedules,
+  # all `* * * * *`, github-async-worker alone posting 2 pokes per tick), so
+  # `8` per 1m interval is the live number rather than a round one.
+  # ---------------------------------------------------------------------------
+
+  # Both arms serving: the split is working. Two routed functions are given
+  # traffic and two are not, deliberately — the rule sums the whole worker arm,
+  # so a quiet individual function (gradebook-column-recalculate has nothing to
+  # do on an idle deployment) must NOT look like a misroute.
+  - interval: 1m
+    name: "NoTraffic: both tiers serving is silent (and a quiet single function does not trip it)"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
+        values: 0+8x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-notification-queue-processor", code="200"}
+        values: 0+1x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
+        values: 0+40x80
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic"})
+        eval_time: 60m
+        exp_samples: []
+
+  # THE SILENT FALLBACK. Kong's config is stale, so no worker route exists at
+  # all: the worker arm's series are absent while the request tier serves
+  # normally. This is the state that is invisible to every availability alert —
+  # pods up, queues draining, nothing unavailable — and it is the whole reason
+  # this rule exists. Both halves of `for: 30m` are pinned.
+  #
+  # Note the firing alert carries ONLY `severity` — no namespace, no route. Both
+  # arms are wrapped in `sum()`, which drops every label, and `vector(0)` has
+  # none to begin with, so nothing survives to be synthesised. Pinned here
+  # because it has a consequence: this alert cannot be routed or silenced by
+  # namespace in Alertmanager, and its description therefore interpolates the
+  # namespace at RENDER time ({{ $ns }}) rather than reading $labels.namespace,
+  # which would come out empty. Anyone adding `by (namespace)` to make the label
+  # survive should expect this assertion to change.
+  - interval: 1m
+    name: "NoTraffic: worker routes ABSENT while the request tier serves fires at 30m, not before"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
+        values: 0+40x80
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"})
+        eval_time: 29m
+        exp_samples: []
+      - expr: ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"}
+        eval_time: 35m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing", severity="warning"}'
+            value: 1
+
+  # The same failure with the series PRESENT but flat — a route that loaded once,
+  # served, and then stopped matching (a Kong reload that dropped it, or the
+  # routed set edited out from under a still-running config). `or vector(0)`
+  # covers the absent shape; this covers the shape where the arm is a real zero.
+  # Both must fire, and a rule written only for one of them would miss the other.
+  - interval: 1m
+    name: "NoTraffic: worker arm PRESENT but flat at zero also fires"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
+        values: 500+0x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
+        values: 0+40x80
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"})
+        eval_time: 35m
+        exp_samples:
+          - labels: "{}"
+            value: 1
+
+  # THE NO-TRAFFIC GUARD. An idle or torn-down deployment has neither arm. The
+  # left side reads 0 via `or vector(0)`, so without the `and ... > 0` on the
+  # request arm this rule would fire on every quiet namespace forever. This is
+  # the assertion that proves the guard is load-bearing: delete the `and` clause
+  # and this test goes red.
+  - interval: 1m
+    name: "NoTraffic: no traffic on EITHER tier is silent (the no-traffic guard)"
+    input_series:
+      - series: up{job="unrelated"}
+        values: 1+0x80
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic"})
+        eval_time: 60m
+        exp_samples: []
+
+  # THE FIRST-ENABLE WINDOW, which is what `for: 30m` is sized against. Enabling
+  # the tier rolls Kong in the same release that creates the worker Deployment,
+  # so for a few minutes there is no worker route and no worker series — the
+  # condition is genuinely true — and then the new Kong pod starts serving. The
+  # worker arm here stays absent for 5m (the derived worst case: Kong pod
+  # replacement + one pg_cron tick + one rate() sample) and then begins
+  # incrementing. Nothing may fire.
+  #
+  # The first pokes are 502s on purpose: the worker Service has no ready
+  # endpoints yet, which is the documented behaviour in
+  # docs/operations/incident-response.md. Kong counts a request against the route
+  # it MATCHED regardless of the status it returns, so a 502 still proves the
+  # route loaded — the rule must not require success, and a well-meaning edit
+  # adding code=~"2.." to the worker arm would fire straight through the
+  # documented window. This test is what would catch that.
+  - interval: 1m
+    name: "NoTraffic: the documented first-enable window does not fire (502s still count)"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
+        values: 0+40x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="502"}
+        values: _x5 0+8x10
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
+        values: _x15 0+8x65
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"})
+        eval_time: 35m
+        exp_samples: []
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"})
+        eval_time: 60m
+        exp_samples: []
+
+  # The worker tier is ROUTED but BROKEN: Kong matches the four paths and every
+  # one of them 502s, for well over the `for:` window, because the Service has no
+  # ready endpoints. This rule must stay silent — the routes loaded, which is the
+  # only thing it claims to measure, and the outage is
+  # PawtograderEdgeWorkerTierUnavailable's job to report at critical. Firing both
+  # would turn one incident into two alerts pointing at different causes.
+  #
+  # This is the unit that makes "Kong counts a request against the route it
+  # matched regardless of status" load-bearing rather than merely stated: add
+  # code=~"2.." to the worker arm and this goes red, while the shorter
+  # first-enable window above stays green (a sub-30m burst of 502s never reaches
+  # `for:` either way, so that test alone cannot catch the mistake).
+  - interval: 1m
+    name: "NoTraffic: worker arm serving only 502s stays silent (that is Unavailable's job)"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="502"}
+        values: 0+8x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
+        values: 0+40x80
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic"})
+        eval_time: 70m
+        exp_samples: []
+
+  # A Kong metrics outage takes BOTH arms away at once, so the request-arm guard
+  # fails and this stays silent instead of blaming the tier for a telemetry gap.
+  # The contrast with PawtograderEdgeWorkerTierUnavailable is intentional and is
+  # the reason the two rules are shaped differently: silence is the wrong default
+  # when Kong is routing at a Service with no backend, and the right default when
+  # the only thing we know is that we cannot see.
+  - interval: 1m
+    name: "NoTraffic: a Kong scrape outage mid-window is silent, not a false positive"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
+        values: 0+8x20 _x60
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
+        values: 0+40x20 _x60
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"})
+        eval_time: 60m
+        exp_samples: []
+
+  # The request tier quiet while the worker tier serves. Not a misroute in any
+  # direction, and the rule is one-sided by design — see the "NOT the reverse
+  # direction" note on the rule. Asserted so that making the rule symmetric is a
+  # deliberate act with a test to change, rather than something that looks like
+  # an oversight.
+  - interval: 1m
+    name: "NoTraffic: worker serving while the request tier is quiet is silent (rule is one-sided by design)"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-github-async-worker", code="200"}
+        values: 0+8x80
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic"})
+        eval_time: 60m
+        exp_samples: []
+
+  # A routed name that is NOT in .Values.edgeFunctions.workerTier.functions must
+  # not satisfy the worker arm. This is what pins the regex to the VALUES list
+  # rather than to a `functions-v1-worker-.*` wildcard: with a wildcard, Kong
+  # serving some other worker route would mask a genuine misroute of all four
+  # configured ones. Traffic here goes to a plausible-looking non-member, and the
+  # rule must still fire.
+  - interval: 1m
+    name: "NoTraffic: traffic on a NON-routed worker name does not satisfy the worker arm"
+    input_series:
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-worker-autograder-create-submission", code="200"}
+        values: 0+8x80
+      - series: kong_http_requests_total{namespace="default", route="functions-v1-all", code="200"}
+        values: 0+40x80
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="PawtograderEdgeWorkerTierNoTraffic", alertstate="firing"})
+        eval_time: 35m
+        exp_samples:
+          - labels: "{}"
+            value: 1

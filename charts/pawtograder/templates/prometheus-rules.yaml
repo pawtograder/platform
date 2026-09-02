@@ -788,6 +788,146 @@ spec:
               tier's sum is NOT the same as edgeFunctions.*. Setting
               edgeFunctions.workerTier.enabled=false returns all four functions to the request
               tier in one helm upgrade.
+        {{- /* SILENT FALLBACK. The failure above is loud: no pods, queues stop, a
+           critical page. This one is the opposite and it is the failure this tier
+           split is most likely to actually suffer.
+
+           Kong's ConfigMap goes stale, or its declarative config fails to load,
+           and the four routed paths keep being served by the REQUEST tier. Every
+           observable is green: the functions answer, pgmq drains, both
+           Deployments are healthy, PawtograderEdgeWorkerTierUnavailable is
+           Inactive because the worker pods are up and Ready. They are simply
+           serving nothing, while costing 2 x 3584Mi. The isolation this tier
+           exists to provide does not exist, and no availability alert can see
+           that, because nothing is unavailable.
+
+           WHY KONG'S OWN METRICS AND NOT THE EDGE POD'S. The obvious expression
+           is a per-tier request rate off the deno_* series the ServiceMonitor
+           above relabels with edge_tier. That does not work, and the reason is
+           worth recording so nobody rebuilds it: `deno_http_requests_total` DOES
+           NOT EXIST. Checked against live Prometheus, not inferred -- of 3700
+           metric names in the cluster, zero begin with `deno`. The cause is
+           structural rather than a scrape bug: this image replaces the runtime's
+           main service with our own demuxer (images/edge-functions/main.ts), and
+           that demuxer's Deno.serve handler dispatches EVERY path by its first
+           segment, /metrics included. So a scrape of /metrics on the pod runs the
+           `metrics` FUNCTION (supabase/functions/metrics/index.ts) and gets back
+           exactly what that function prints, which is pawtograder_* and nothing
+           else. There is no code path by which a deno_* series reaches
+           Prometheus. The dashboard panels in dashboards/edge-functions.json that
+           select on it are consequently empty today -- pre-existing, not
+           introduced by this tier, and tracked separately.
+
+           kong_http_requests_total is the right signal anyway, and not merely the
+           available one: the question is "which upstream did the GATEWAY pick",
+           and Kong is the component that picks. The chart enables the Prometheus
+           plugin globally (kong-config.yaml) with per-service and per-route
+           metrics, so each of the one-service-per-routed-name entities this tier
+           renders gets its own counter.
+
+           `route`, NOT `service`. Kong's own `service` label collides with the
+           `service` target label the ServiceMonitor attaches, so Prometheus
+           renames Kong's to `exported_service` -- which silently becomes `service`
+           again the day anyone sets honorLabels on that ServiceMonitor. `route`
+           is Kong-native, collides with no target label, and carries the same
+           per-name value. Both spellings were read off live series before
+           choosing.
+
+           NO-TRAFFIC GUARD, and it has to be an explicit one. `sum(rate(...))`
+           over series that do not exist returns an EMPTY VECTOR, not 0 -- verified
+           by running exactly this worker-arm query against a namespace with the
+           tier off, which returns no result rather than 0. So a bare `== 0` is
+           silence in precisely the state the rule exists to report, the same
+           `absent()` trap the rule above documents. `or vector(0)` makes the
+           missing arm read 0; the `and ... > 0` on the request arm is what keeps
+           it from firing on an idle or torn-down deployment. Note the useful
+           side-effect: if KONG itself stops being scraped, both arms go empty,
+           the right-hand side fails, and this rule stays silent instead of
+           blaming the tier for a telemetry gap.
+
+           FIRST ENABLE. Enabling the tier rolls Kong in the same release that
+           creates the worker Deployment (see the "Expected once" note in
+           docs/operations/incident-response.md), and until the new Kong pod is
+           serving there is no worker route and so no worker series at all -- this
+           condition is TRUE for real. Sized against that window: <=3m to replace
+           the Kong pods (readiness is initialDelaySeconds 5 + periodSeconds 5, so
+           the probe is seconds; the budget is image pull and rolling
+           replacement), + <=60s for the next pg_cron poke (all four are
+           `* * * * *`), + 60s for rate() to get its second sample at
+           monitoring.scrapeInterval 30s = ~5m worst case. `for: 30m` is 6x that.
+           Once the new Kong serves, note the 502s the incident-response note
+           describes do NOT keep this firing: Kong counts a request against the
+           route it MATCHED whatever status it returns, so a 502 from a
+           not-yet-ready worker Service still proves the route loaded.
+
+           30m is cheap because the condition is chronic, not acute -- stale Kong
+           config stays stale until someone changes it, and nobody acts on "the
+           split isn't splitting" inside half an hour. Worst-case detection is 45m
+           in the case where the tier was previously serving (the 15m rate window
+           has to drain of the old traffic first, which is also what stops it
+           flapping through a Kong roll); on first enable it is the 30m alone.
+           severity: warning, deliberately -- nothing is failing, and this must
+           not page.
+
+           TWO CAUSES, named in the description rather than papered over. Kong not
+           routing is one. The other is that nothing is POKING these four, because
+           pg_cron is stopped or its schedules were unscheduled -- the arms look
+           identical from here, since the request tier stays busy with the other
+           ~50 functions either way. Both are real problems and the queue-depth
+           alerts above discriminate, so the honest rule reports the symptom and
+           the description says how to tell them apart. A rule that claimed only
+           the first cause would be lying about a case it cannot distinguish.
+
+           NOT the reverse direction (worker tier serving functions NOT in the
+           routed set). Considered and deliberately absent: it is unrepresentable
+           in this metric. Kong renders exactly one service+route per name in
+           .Values.edgeFunctions.workerTier.functions, so there is no route by
+           which an unlisted function could reach this tier -- and the anchored
+           regex sends even `/functions/v1/<worker>/sub` to functions-v1-all
+           instead. The only way in is a client addressing the tier's Service
+           directly, past the gateway, which Kong's metrics cannot see by
+           construction and which the (nonexistent) deno_* series would have been
+           the tool for. There is nothing to assert.
+
+           The function list is interpolated from values, NOT hardcoded: a literal
+           regex here stops matching the moment someone edits the routed set,
+           which is the same silently-inert failure as the edge_tier label that
+           nothing reads. Interpolating into a regex is safe because
+           edge-functions-worker-tier.yaml already refuses any name that is not
+           DNS-1123, so no name can carry a metacharacter. */}}
+        - alert: PawtograderEdgeWorkerTierNoTraffic
+          expr: |
+            (
+              sum(rate(kong_http_requests_total{namespace="{{ $ns }}", route=~"functions-v1-worker-({{ join "|" .Values.edgeFunctions.workerTier.functions }})"}[15m]))
+              or vector(0)
+            ) == 0
+            and
+            sum(rate(kong_http_requests_total{namespace="{{ $ns }}", route="functions-v1-all"}[15m])) > 0
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder edge worker tier is serving no traffic (the tier split may not be in effect)"
+            description: >-
+              Kong in {{ $ns }} has recorded no requests on any of its
+              functions-v1-worker-* routes for 30m, while the functions-v1-all
+              catch-all IS serving. The worker tier is enabled and its pods are up
+              (PawtograderEdgeWorkerTierUnavailable would be firing otherwise), so
+              {{ join ", " .Values.edgeFunctions.workerTier.functions }} are almost
+              certainly still being served by the REQUEST tier: the split is not in
+              effect and the worker pods are burning their memory reservation for
+              nothing. Two causes, and they look the same from this rule. (1) Kong
+              is not routing: its ConfigMap is stale or its declarative config
+              failed to load. Check the Kong pod's logs for a config-load error and
+              confirm the running ConfigMap contains the functions-v1-worker-*
+              services; a `helm upgrade` that rolls Kong re-applies them. (2)
+              Nothing is poking them: pg_cron is stopped or the
+              invoke-*-every-minute schedules were unscheduled. Check
+              `select * from cron.job` — if this is the cause the queue-depth
+              alerts (PawtograderAsyncQueueBacklog and siblings) will be firing
+              alongside, and this rule will not be the interesting one. Neither
+              cause loses work: pgmq holds unconsumed messages. Runbook:
+              docs/operations/incident-response.md.
         {{- end }}
     - name: pawtograder.secrets
       rules:

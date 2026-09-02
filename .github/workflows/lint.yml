@@ -46,6 +46,39 @@ jobs:
       - name: Run chart guard-rail render tests
         run: charts/pawtograder/tests/render-guardrails.sh
 
+  # Alert-rule tests. `promtool check rules` is syntax only, and every alert this
+  # chart ships already passes it — including, before this job existed, ones that
+  # were permanently inert. `promtool test rules` is the only check that runs the
+  # expressions against series and asserts on what fires and when, which is what
+  # the worker-tier rules' `or absent(...)` and `(... or vector(0)) == 0` arms
+  # need: both are silent-by-default shapes where the failure mode is "never
+  # fires" rather than "fails to parse". See charts/pawtograder/tests/alert-rules.sh.
+  chart-alert-rules:
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.20.2
+      # promtool ships inside the Prometheus release tarball; there is no
+      # first-party action for it. Pinned rather than `latest` so a Prometheus
+      # release cannot change unit-test semantics under us on an unrelated push.
+      - name: Install promtool
+        env:
+          # The fixtures were run green against this exact version and against
+          # 2.53.3, so the suite is not relying on a behaviour specific to either.
+          PROM_VERSION: "3.14.0"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/prom.tar.gz \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          tar -xzf /tmp/prom.tar.gz -C /tmp \
+            "prometheus-${PROM_VERSION}.linux-amd64/promtool"
+          install -m 0755 "/tmp/prometheus-${PROM_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool
+          promtool --version
+      - name: Run chart alert-rule tests
+        run: charts/pawtograder/tests/alert-rules.sh
+
   # Fast, deterministic unit tests for the gradebook recalc computation (the math the
   # gradebook-calculations e2e fixtures exercise end-to-end through the async pipeline).
   # These run the real edge-function expression functions directly — no DB, no pipeline.
