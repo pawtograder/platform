@@ -4,9 +4,13 @@
 # release-images pipeline run. For fast iteration on supabase/functions/.
 #
 # It rebuilds charts/pawtograder/images/edge-functions/Dockerfile (the eszip
-# bundle + demuxer main service), pushes a unique tag to ghcr, then patches the
-# `functions` Deployment via `kubectl set image` and waits for the rollout.
-# Surgical: it touches ONLY the functions Deployment — not web/migrations/db.
+# bundle + demuxer main service), pushes a unique tag to ghcr, then patches every
+# edge-functions Deployment via `kubectl set image` and waits for the rollouts.
+# That is the request tier and, when edgeFunctions.workerTier is enabled, the
+# background-worker tier: both run the same image, so patching one would leave the
+# four pgmq workers on old code. Surgical in the sense that matters: it touches
+# only the edge tiers — not web/migrations/db. The confirmation prompt lists every
+# Deployment it will patch.
 #
 # Usage:
 #   scripts/deploy-edge-functions.sh                    # -> staging
@@ -79,11 +83,42 @@ assert_namespace "$NAMESPACE"
 kubectl get deploy "$DEPLOYMENT" -n "$NAMESPACE" >/dev/null 2>&1 \
   || { echo "deployment ${DEPLOYMENT} not found in ${NAMESPACE} — is the env deployed?" >&2; exit 1; }
 
+# Both edge tiers run the SAME image, so patching only the request tier would
+# leave the four pgmq workers on the old code while the tool reported success --
+# a half-updated fleet is worse than an un-updated one, because the symptom shows
+# up as "my change did not take effect" for exactly the functions being debugged.
+# The worker tier is optional (edgeFunctions.workerTier.enabled), so it is patched
+# only when it actually exists.
+#
+# Resolved BEFORE the confirmation banner, deliberately: the banner is the safety
+# mechanism for an interactive tool aimed at prod and previews, so it has to name
+# every Deployment that is about to be patched, not just the first one.
+#
+# `--ignore-not-found -o name` rather than discarding the exit status. A bare
+# `kubectl get ... >/dev/null 2>&1` conflates "the tier is disabled" with "I could
+# not tell" -- an expired token, a wrong context, a `get`-scoped role or a
+# transient API 5xx all took the else branch, printed a reassuring "worker tier
+# disabled", patched one tier and reported success. That is the exact half-updated
+# fleet this block exists to prevent, announced as a deliberate decision.
+TARGETS="$DEPLOYMENT"
+if worker_found="$(kubectl get "deploy/${DEPLOYMENT}-workers" -n "$NAMESPACE" \
+    --ignore-not-found -o name 2>/dev/null)"; then
+  if [ -n "$worker_found" ]; then
+    TARGETS="$TARGETS ${DEPLOYMENT}-workers"
+  else
+    echo "==> no ${DEPLOYMENT}-workers Deployment in ${NAMESPACE} (worker tier disabled); patching the request tier only"
+  fi
+else
+  echo "could not determine whether ${DEPLOYMENT}-workers exists in ${NAMESPACE} (kubectl get failed: RBAC, expired credentials, or an API error)." >&2
+  echo "Refusing to guess: patching only the request tier here would silently leave the four pgmq workers on the old image." >&2
+  exit 1
+fi
+
 cat <<EOF
 Redeploy edge functions
   checkout    : ${REPO_ROOT} (HEAD ${SHA}${DIRTY})
   namespace   : ${NAMESPACE}
-  deployment  : ${DEPLOYMENT} (container ${CONTAINER})
+  deployments : ${TARGETS} (container ${CONTAINER})
   image       : ${IMAGE_REF}
   build       : $([ "$do_build" -eq 1 ] && echo yes || echo 'no (reuse existing tag)')
 EOF
@@ -111,30 +146,29 @@ if [ "$do_build" -eq 1 ]; then
   docker push "$IMAGE_REF"
 fi
 
-# Both edge tiers run the SAME image, so patching only the request tier would
-# leave the four pgmq workers on the old code while the tool reported success --
-# a half-updated fleet is worse than an un-updated one, because the symptom shows
-# up as "my change did not take effect" for exactly the functions being debugged.
-# The worker tier is optional (edgeFunctions.workerTier.enabled), so it is
-# patched only when it actually exists.
-TARGETS="$DEPLOYMENT"
-if kubectl get "deploy/${DEPLOYMENT}-workers" -n "$NAMESPACE" >/dev/null 2>&1; then
-  TARGETS="$TARGETS ${DEPLOYMENT}-workers"
-else
-  echo "==> no ${DEPLOYMENT}-workers Deployment in ${NAMESPACE} (worker tier disabled); patching the request tier only"
-fi
-
+# Patch every target first, THEN wait: the rollouts then progress concurrently in
+# the cluster and the waits are max(), not sum().
 for d in $TARGETS; do
   echo "==> kubectl set image ${d} ${CONTAINER}=${IMAGE_REF}"
   kubectl set image "deploy/${d}" "${CONTAINER}=${IMAGE_REF}" -n "$NAMESPACE"
 done
+# Every target is waited on even if an earlier one fails. Under `set -e` a failing
+# `rollout status` used to abort here, so when the request tier timed out the
+# worker tier was never waited on and never reported -- pgmq quietly stopped
+# draining while the tool's last word was about the other tier. Both tiers are
+# already patched by this point, so the operator needs the status of both.
+rollout_failed=0
 for d in $TARGETS; do
   echo "==> waiting for rollout: ${d}"
-  kubectl rollout status "deploy/${d}" -n "$NAMESPACE" --timeout=5m
+  kubectl rollout status "deploy/${d}" -n "$NAMESPACE" --timeout=5m || rollout_failed=1
 done
 
 echo
 for d in $TARGETS; do
   echo "Done. ${d} in ${NAMESPACE} now runs ${IMAGE_REF}"
 done
+if [ "$rollout_failed" -ne 0 ]; then
+  echo "One or more rollouts did not complete — see above. Both tiers were patched, so check every Deployment listed." >&2
+  exit 1
+fi
 echo "Note: a later 'helm upgrade' / staging auto-deploy resets this to the chart's tag."

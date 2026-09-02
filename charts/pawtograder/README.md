@@ -27,6 +27,29 @@ function names to it by path. Callers are unaffected — everything still lives 
 split does not exist on hosted supabase.com or under `supabase functions serve`.
 See the `workerTier` block in `values.yaml` for the sizing and the reasoning.
 
+### Upgrading to 0.4.0
+
+Two render-time refusals are new, and both can stop a `helm upgrade` on values
+that rendered fine on 0.3.x. Neither touches the cluster when it fires.
+
+- **The edge memory budget got 510Mi stricter.** The Deno host term in
+  `pawtograder.edgeFunctions.assertMemoryBudget` moved from ~90Mi (the cost at
+  startup with an empty cache) to ~600Mi (the converged, load-independent
+  baseline), so the required sum at chart defaults is 3160Mi rather than 2650Mi.
+  An overlay with `edgeFunctions.resources.limits.memory` between those two —
+  `3Gi` is the likely one — is now refused. Raise the limit; the message prints
+  every term.
+- **A memory limit must be a whole number of `Mi` or `Gi`.** The assertion reads
+  only those two forms, and a fractional `Gi` used to switch the whole check off
+  rather than fail. Spell a fractional limit in `Mi` (`3584Mi`, not `3.5Gi`).
+
+`edgeFunctions.resources.requests.memory` also moves 512Mi → 1.5Gi and
+`autoscaling.targetMemoryUtilizationPercentage` 100 → 80. Requests are what the
+scheduler reserves, so check that `autoscaling.minReplicas x 1.5Gi` still fits
+your node pool before upgrading — at the shipped `minReplicas: 12` that is 18Gi
+where it used to be 6Gi, and `updateStrategy` is `maxUnavailable: 0`, so a pod
+that cannot be scheduled stalls the rollout rather than replacing an old one.
+
 The chart is environment-agnostic. Cluster-specific concerns (ingress class,
 storage class, node selectors, secret backend) come from a values overlay you
 maintain alongside your deployment.

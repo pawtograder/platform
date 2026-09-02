@@ -16,10 +16,22 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 //     carried two majors of one glob library.
 //
 // Note the root `supabase/functions/deno.json` import map does NOT fix this: an
-// alias for the bare specifier `mathjs` is not consulted for `npm:mathjs`. That
-// is the same trap #934 hit with `@sentry/deno`, and `deno.lock` cannot help
-// either — it is gitignored AND `rm -f`'d by the Dockerfile before bundling, so
-// the inline specifier is the only thing that pins anything.
+// alias for the bare specifier `mathjs` is not consulted for `npm:mathjs`, and
+// this directory has its own `deno.json` with an empty `imports` map anyway, so
+// the root map is never consulted for this function at all. That is the same
+// trap #934 hit with `@sentry/deno`, and the ROOT `deno.lock` cannot help either
+// — it is gitignored AND `rm -f`'d by the Dockerfile before bundling — so the
+// inline specifier is the only thing that pins anything HERE.
+//
+// What this does NOT do, stated so the next reader does not assume otherwise:
+// it does not make the two gradebook functions agree. PER-FUNCTION locks are
+// tracked (`supabase/functions/gradebook-column-recalculate/deno.lock` is in
+// git) and the Dockerfile removes only the root one, so recalculate resolves
+// mathjs 14.9.1 deterministically while this file is now on 14.5.2 — a fixed
+// minor skew where there was a drifting major one. Closing it means either
+// bumping this pin to 14.9.1 or relaxing recalculate's lock, and neither should
+// happen without re-running the gradebook expression specs. `mcp-server` is
+// likewise still on `npm:minimatch@9`.
 import { all, create } from "npm:mathjs@14.5.2";
 import { minimatch } from "npm:minimatch@10.0.3";
 

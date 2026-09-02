@@ -111,6 +111,12 @@ is already warm.
    kubectl -n "$NS" scale deploy \
      <release>-web <release>-rest <release>-functions <release>-realtime \
      --replicas=0
+   # When edgeFunctions.workerTier is enabled there is a SECOND edge Deployment,
+   # and it is the one that drains pgmq — leaving it up means writes continue
+   # through a window this step exists to close. It is absent on installs that
+   # have the tier off, so ignore-not-found:
+   kubectl -n "$NS" scale deploy <release>-functions-workers --replicas=0 \
+     --ignore-not-found
    ```
 3. **Promote the standby:**
    ```bash

@@ -50,19 +50,22 @@
     },
     {
       "type": "timeseries", "title": "Edge HPA memory utilization vs target (%)",
+      "description": "REQUEST TIER ONLY, and the pod exclusion is load-bearing. This is a sum/sum ratio, which is only the HPA's own number while every pod in it has the SAME memory request. edgeFunctions.workerTier is the first workload in this chart with a different one (1Gi against the request tier's 1.5Gi, 1.8Gi in the prod overlays) and it names its container `functions` too, so an unscoped container= selector folds in pods the HPA never measures and returns a figure that is neither tier's. The `edge_tier` label the chart adds is on the deno_* series from the ServiceMonitor, not on cAdvisor/kube-state-metrics, so the pod name is the discriminator available here.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" }, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "100 * sum(container_memory_working_set_bytes{namespace=\"$ns\",container=\"functions\"}) / sum(kube_pod_container_resource_requests{namespace=\"$ns\",container=\"functions\",resource=\"memory\"})", "legendFormat": "avg mem util %" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "100 * sum(container_memory_working_set_bytes{namespace=\"$ns\",container=\"functions\",pod!~\".*-functions-workers-.*\"}) / sum(kube_pod_container_resource_requests{namespace=\"$ns\",container=\"functions\",pod!~\".*-functions-workers-.*\",resource=\"memory\"})", "legendFormat": "avg mem util %" }
       ],
       "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
     },
     { "type": "row", "title": "Memory (the resilience signal)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 } },
     {
       "type": "timeseries", "title": "Per-pod edge memory (MiB) — should plateau, not ramp",
+      "description": "Per-pod series cover BOTH edge tiers (they are per-pod, so mixing is fine and the worker tier is worth watching here). The ceiling is drawn per tier because the two limits differ: 4Gi on the request tier, 3584Mi on edgeFunctions.workerTier. A single max() across container=\"functions\" would draw one 4Gi line and plot worker pods against a ceiling 512Mi higher than the one that will actually OOM-kill them.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" }, "gridPos": { "h": 9, "w": 16, "x": 0, "y": 10 },
       "targets": [
         { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "container_memory_working_set_bytes{namespace=\"$ns\",container=\"functions\"}/1048576", "legendFormat": "{{pod}}" },
-        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "max(kube_pod_container_resource_limits{namespace=\"$ns\",container=\"functions\",resource=\"memory\"})/1048576", "legendFormat": "pod limit" }
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "max(kube_pod_container_resource_limits{namespace=\"$ns\",container=\"functions\",pod!~\".*-functions-workers-.*\",resource=\"memory\"})/1048576", "legendFormat": "request-tier limit" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "max(kube_pod_container_resource_limits{namespace=\"$ns\",container=\"functions\",pod=~\".*-functions-workers-.*\",resource=\"memory\"})/1048576", "legendFormat": "worker-tier limit" }
       ],
       "fieldConfig": { "defaults": { "unit": "decmbytes" }, "overrides": [] }
     },

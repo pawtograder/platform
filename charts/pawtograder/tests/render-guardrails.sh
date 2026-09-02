@@ -220,6 +220,41 @@ assert_hpa_utilization() {
   fi
 }
 
+# assert_hpa_replica_bound "<label>" "<minReplicas|maxReplicas>" "<expected>" <extra args...>
+# Pins one HPA replica bound to an exact rendered value.
+#
+# These bounds are a MEMORY BUDGET on this tier, not just an availability knob:
+# what the cluster reserves is replicas x requests.memory, and the request here is
+# three times what it was on 2026-08-31 without the pods becoming more capable.
+# The CEILING is pinned as well as the floor because the request sits inside the
+# 72-88% dead band, so a quiet fleet cannot scale down on memory at all — whatever
+# a burst drives the fleet to is where it stays, which makes maxReplicas the number
+# that actually governs steady-state cost. An overlay nudging either bound moves
+# the reservation in 1.5Gi steps, and nothing else in the render would show it.
+assert_hpa_replica_bound() {
+  local label="$1" field="$2" want="$3"; shift 3
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set edgeFunctions.autoscaling.enabled=true \
+      "$@" --show-only templates/edge-functions-hpa.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local got
+  got="$(grep -E "^[[:space:]]*${field}:" "$OUTFILE" | head -1 \
+          | sed -E "s/^[[:space:]]*${field}:[[:space:]]*//")"
+  if [ -z "$got" ]; then
+    echo "FAIL [$label]: no $field found in the rendered HPA"
+    FAILED=1
+  elif [ "$got" != "$want" ]; then
+    echo "FAIL [$label]: $field rendered $got, expected $want"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
 # assert_container_memory "<label>" "<template>" "<container>" "<requests|limits>" "<expected>" <extra --set args...>
 # Pins one container's resources.<requests|limits>.memory to an exact rendered
 # value, keyed on the CONTAINER NAME.
@@ -634,7 +669,7 @@ assert_edge_envfrom_optional "edge-function channels envFrom is optional" \
 # pinned at maxReplicas 32 with CPU at 5% — see the note on eszipCacheMaxMb in
 # values.yaml. 2026-08-28 halved it to 256Mi. Pin the rendered BYTES so a future
 # edit cannot quietly restore 512 and re-pin the autoscaler: this is a number
-# whose regression is invisible in behaviour for hours (the floor climbs with
+# whose regression is invisible in behavior for hours (the floor climbs with
 # cache warmth after each deploy) and then permanent.
 echo "== edge-function eszip byte budgets are pinned (HPA floor, 2026-08-28) =="
 assert_env_value "eszip cache renders 256Mi in bytes" \
@@ -644,7 +679,7 @@ assert_env_value "eszip cold-load allowance renders 256Mi in bytes" \
 
 # The budget assertion is the thing that makes the four terms safe to tune at all,
 # so prove it still REFUSES rather than trusting that it would. 3160Mi is the exact
-# sum at the current defaults (256 + 256 + 8 x 256 + 90), so one MiB below it is
+# sum at the current defaults (256 + 256 + 8 x 256 + 600), so one MiB below it is
 # the tightest possible negative case and it also pins the arithmetic itself.
 assert_refused "memory budget refuses a limit one MiB below the computed sum" \
   "+ ~600Mi Deno host = 3160Mi" \
@@ -714,6 +749,28 @@ assert_container_memory "values-staging: functions requests 1.5Gi (chart default
   -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
   --set global.environment=staging
 assert_hpa_utilization "values-staging: memory target 80, not 100" memory 80 \
+  -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
+  --set global.environment=staging
+
+# Staging's replica bounds were resized on 2026-09-02 to hold its RAM reservation
+# flat across the 512Mi -> 1.5Gi request change, counting BOTH tiers:
+#     floor    3 x 1.5Gi + 2 x 1Gi =  6.5GiB   (was 12 x 512Mi =  6.0GiB)
+#     ceiling  5 x 1.5Gi + 2 x 1Gi =  9.5GiB   (was 20 x 512Mi = 10.0GiB)
+# Restoring either bound to its old value without also restoring the old request
+# is what this pins against: at 1.5Gi a pod, 12-20 reserves 18.0-30.0GiB, a 3x
+# jump that renders identically in every other respect. The worker tier's 2 pods
+# are part of the sum, so they are pinned here too — that Deployment has no HPA,
+# which is why it is a constant in the arithmetic above.
+assert_hpa_replica_bound "values-staging: minReplicas 3 (RAM floor 6.5GiB across both tiers)" \
+  minReplicas 3 \
+  -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
+  --set global.environment=staging
+assert_hpa_replica_bound "values-staging: maxReplicas 5 (RAM ceiling 9.5GiB; the dead band makes this the real budget)" \
+  maxReplicas 5 \
+  -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
+  --set global.environment=staging
+assert_rendered_contains "values-staging: worker tier stays 2 pods (the constant in that sum)" \
+  templates/edge-functions-worker-tier.yaml "replicas: 2" \
   -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
   --set global.environment=staging
 
@@ -795,8 +852,13 @@ echo "== background-worker tier is absent unless enabled =="
 WT=(--set edgeFunctions.workerTier.enabled=true)
 assert_absent "no worker-tier workload by default" "functions-workers"
 assert_absent "no worker-tier Kong routes by default" "functions-v1-worker-"
+# Rendered WITH monitoring on, deliberately. The BASE leaves monitoring.enabled
+# false, so templates/prometheus-rules.yaml renders nothing at all -- an absence
+# assertion under BASE alone would pass even if the tier gate were deleted, which
+# is the one regression it exists to catch.
 assert_absent "no worker-tier availability alert by default" \
-  "PawtograderEdgeWorkerTierUnavailable"
+  "PawtograderEdgeWorkerTierUnavailable" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 
 echo "== background-worker tier renders its own isolation config =="
 assert_rendered_contains "worker tier renders a Deployment" \
@@ -902,12 +964,16 @@ assert_refused "the tier without Kong is refused" \
 assert_refused "a duplicated worker function name is refused" \
   "more than once" \
   "${WT[@]}" --set 'edgeFunctions.workerTier.functions={github-async-worker,github-async-worker}'
-assert_refused "an unrecognised override key is refused, not ignored" \
+assert_refused "an unrecognized override key is refused, not ignored" \
   "is not an overridable per-tier key" \
   "${WT[@]}" --set edgeFunctions.workerTier.polciy=oneshot
 # A routed tier exists partly so it never evicts: it serves a handful of bundles,
-# all of them hot. Sized off the LARGEST bundle, not the median -- averaging
-# bundle sizes is how 2026-08-19 happened.
+# all of them hot. Sized off the MEDIAN bundle (37Mi), not the largest: the
+# routed set is KNOWN at render time, so charging the largest for every member
+# systematically over-requires and would reject this chart's own 192Mi default.
+# See the reasoning in _edge-functions-workload.tpl -- it does NOT transfer to
+# the stable tier, whose subset is unknown and where averaging is how 2026-08-19
+# happened.
 # 5, not 4: `metrics` is hot on every tier and in no route list -- the
 # ServiceMonitor scrapes /metrics, the demuxer resolves it by first path segment
 # like any other function, and its bundle stays resident at the scrape interval.
@@ -928,14 +994,8 @@ assert_refused "the worker tier's budget failure names the worker tier" \
 assert_renders "worker tier accepts a limit exactly equal to its sum (2936Mi)" \
   "${WT[@]}" --set edgeFunctions.workerTier.resources.limits.memory=2936Mi
 
-# A Kong plain-prefix path also matches LONGER paths, so /functions/v1/<worker>
-# would swallow /functions/v1/<worker>-something. Nothing collides today
-# (gradebook-column-inserted vs gradebook-column-recalculate diverge before the
-# boundary), but that is luck rather than design: a future function whose name
-# extends a worker's would be silently routed to the worker tier and 404 there.
-# Checked against the real tree, not a hardcoded list.
-echo "== worker-tier override surface is honoured, not merely accepted =="
-# `image` is deliberately NOT overridable per tier. An earlier revision honoured
+echo "== worker-tier override surface is honored, not merely accepted =="
+# `image` is deliberately NOT overridable per tier. An earlier revision honored
 # it, which escaped templates/validations.yaml -- that enforces the production
 # no-floating-tag rule on web/edgeFunctions/migrations only, so
 # workerTier.image.tag=latest would have deployed a floating image for exactly
@@ -983,6 +1043,71 @@ assert_rendered_contains "availability alert IS present at a positive replica co
   templates/prometheus-rules.yaml "PawtograderEdgeWorkerTierUnavailable" \
   "${WT[@]}" --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 
+# A limit the assertion cannot PARSE must be refused, not skipped. Sprig's `int`
+# returns 0 for "1.5", not a truncation, so a fractional Gi used to zero $limitMi
+# and switch the whole four-term budget off: an integer 2Gi was refused while the
+# SMALLER 1.5Gi rendered clean. Fractional Gi is this chart's own house notation
+# for memory (requests are 1.5Gi/1.8Gi), so the cliff was one keystroke away.
+assert_refused "a fractional Gi limit is refused, not silently unchecked" \
+  "which this assertion cannot parse" \
+  --set edgeFunctions.resources.limits.memory=1.5Gi
+assert_refused "a fractional Gi limit on the worker tier is refused too" \
+  "which this assertion cannot parse" \
+  "${WT[@]}" --set edgeFunctions.workerTier.resources.limits.memory=1.5Gi
+
+# `workerTier: null` is the Helm idiom for deleting a values block. Five templates
+# dereference the key, so it must be inert rather than a Go type error naming a
+# template the operator never edited.
+assert_renders "workerTier: null renders as if the tier were disabled" \
+  --set edgeFunctions.workerTier=null
+assert_absent "workerTier: null renders no worker-tier workload" \
+  "functions-workers" --set edgeFunctions.workerTier=null
+
+# tolerations elements are MAPS, so the empty-leaf guard has to descend into list
+# elements. An empty toleration matches EVERY taint, which would put this tier on
+# control-plane / GPU / spot-drain nodes -- the opposite of what allowlisting
+# tolerations is for.
+assert_refused "an empty toleration element is refused" \
+  "tolerations[0] is empty" \
+  "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {tolerations: [{}]}}'
+assert_renders "a real toleration is still accepted" \
+  "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {tolerations: [{key: w, operator: Equal, value: "y", effect: NoSchedule}]}}'
+
+# The drain window is the other sizing invariant over this block, and all four
+# terms are independently overridable per tier. These handlers act before they
+# archive, so a SIGKILL mid-drain duplicates a user-visible email or Discord post
+# on pgmq redelivery -- #926 invites raising worker.timeoutMs, which forces
+# gracefulExitTimeoutSeconds up while terminationGracePeriodSeconds sits still.
+assert_refused "a graceful window the SIGKILL backstop cannot cover is refused" \
+  "below preStopSleepSeconds" \
+  "${WT[@]}" --set edgeFunctions.workerTier.gracefulExitTimeoutSeconds=900
+assert_refused "a graceful window shorter than worker.timeoutMs is refused" \
+  "below worker.timeoutMs" \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=60
+assert_renders "raising the whole drain window together is accepted" \
+  "${WT[@]}" --set edgeFunctions.workerTier.gracefulExitTimeoutSeconds=900 \
+  --set edgeFunctions.workerTier.terminationGracePeriodSeconds=930
+
+# Routed names are interpolated into a Kong REGEX path, so a metacharacter either
+# over-matches at a segment boundary (silently executing a different function) or
+# fails to compile and makes Kong reject the whole declarative config.
+assert_refused "a routed name with a regex metacharacter is refused" \
+  "not a plain lowercase function-directory name" \
+  "${WT[@]}" --set 'edgeFunctions.workerTier.functions={gradebook.column-recalculate}'
+
+# A channel with only a `web` block renders web-<name>, never functions-workers,
+# so the collision guards must not refuse it.
+assert_renders "a web-only channel named workers does not collide with the tier" \
+  "${WT[@]}" --set channelWildcardTlsSecret=wc \
+  --set 'channels[0].name=workers' --set 'channels[0].web.image.tag=v1'
+
+# A Kong plain-prefix path also matches LONGER paths, so /functions/v1/<worker>
+# would swallow /functions/v1/<worker>-something. Nothing collides today
+# (gradebook-column-inserted vs gradebook-column-recalculate diverge before the
+# boundary), but that is luck rather than design: a future function whose name
+# extends a worker's would be silently routed to the worker tier and 404 there.
+# Checked against the real tree, not a hardcoded list -- which also lets the same
+# pass catch a routed name that matches NO function at all.
 echo "== no routed worker name shadows another function's path =="
 shadow_check() {
   local fns_dir="$CHART/../../supabase/functions" bad=0 w f
@@ -995,6 +1120,17 @@ shadow_check() {
     FAILED=1
     return
   fi
+  # A routed name that matches NO function directory is the same silent failure
+  # as a shadowed one, from the other side: Kong renders a route, the demuxer
+  # 404s on it, and the real function keeps being served by the request tier. A
+  # typo in edgeFunctions.workerTier.functions is the way in, and the chart
+  # itself cannot check this (it does not know its image's inventory).
+  for w in $workers; do
+    if [ ! -f "$fns_dir/$w/index.ts" ]; then
+      echo "FAIL [routed name exists]: worker route /functions/v1/$w has no supabase/functions/$w/index.ts"
+      bad=1
+    fi
+  done
   for w in $workers; do
     for f in "$fns_dir"/*/; do
       f="$(basename "$f")"

@@ -111,10 +111,16 @@ Components:
 **First question: which tier?** When `edgeFunctions.workerTier.enabled` is set
 there are **two** edge Deployments, and they fail differently:
 
-| Deployment                    | serves                                                                                                        | scaling                | when it is down                                                             |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------- |
-| `<release>-functions`         | every function except the routed workers                                                                      | HPA                    | user-facing 502s                                                            |
-| `<release>-functions-workers` | `notification-queue-processor`, `github-async-worker`, `discord-async-worker`, `gradebook-column-recalculate` | fixed replicas, no HPA | those four 503; pgmq stops draining, nothing user-facing breaks immediately |
+| Deployment                    | serves                                                                                                        | scaling                | when it is down                                                                                                                                               |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<release>-functions`         | every function except the routed workers                                                                      | HPA                    | user-facing 502s                                                                                                                                              |
+| `<release>-functions-workers` | `notification-queue-processor`, `github-async-worker`, `discord-async-worker`, `gradebook-column-recalculate` | fixed replicas, no HPA | those four **502** (same code as the request tier — the tier is in the pod name, not the status); pgmq stops draining, nothing user-facing breaks immediately |
+
+The status code does **not** discriminate: a Deployment with zero ready pods
+leaves a Service with no endpoints, kube-proxy refuses the connection and Kong
+reports that upstream failure as **502** on either tier. Use the failing **path**
+(`/functions/v1/<one of the four>` vs anything else) or the **pod name** in the
+alert, not the code.
 
 Kong routes by **path**, not by health, so the request tier does **not** absorb
 worker traffic when the worker tier is down — and it has no HPA, so
@@ -144,11 +150,19 @@ pgmq's per-message visibility timeout means an undelivered poke drops no work.
 Kong readiness is deliberately NOT coupled to worker endpoints — that would take
 the entire API down whenever this one tier was unhealthy, which is the failure
 `PawtograderEdgeWorkerTierUnavailable` exists to report while everything else
-keeps serving. If you want a clean rollout, enable the tier and its routes in
-separate releases.
+keeps serving. There is no way to stage this across two releases:
+`edgeFunctions.workerTier.enabled` gates the Deployment and the Kong routes
+together, and both ways you would try to decouple them are render errors (an
+empty `functions` list, and `kong.enabled: false`). Enable it in a window where a
+minute of 502s on those four paths is acceptable, which — because pg_cron retries
+every minute and pgmq holds the message — is any window at all.
 
-`scripts/edge-logs.sh` covers both tiers (it selects `component=~"functions(-.*)?"`),
-so `--function <name>` works regardless of which tier serves it.
+`scripts/edge-logs.sh` covers both tiers (it selects
+`component=~"functions|functions-workers"`), so `--function <name>` works
+regardless of which tier serves it. Deployment channels are deliberately outside
+that selector — they run their own image tag and the output is unlabelled, so
+mixing them in would answer a triage question with lines from another build; set
+`EDGE_LOG_COMPONENTS` to read one on purpose.
 
 ### Kong (`<release>-kong`)
 

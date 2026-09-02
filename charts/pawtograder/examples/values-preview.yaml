@@ -178,14 +178,21 @@ edgeFunctions:
   # staging (values-staging.yaml, this PR) and is INTENDED for production, which
   # is deployed from the separate prod-charts repo and so is enabled by a change
   # there rather than by anything in this file. What it is not is per-preview: a
-  # preview would pay for a second edge Deployment
-  # (+2Gi Guaranteed per namespace, on top of the 6Gi the request tier already
-  # reserves) to exercise a routing change that is asserted at render time by
+  # preview would pay for a second edge Deployment (2 pods x 1Gi of request and
+  # 3584Mi of limit each, on top of the 6Gi the request tier already reserves) to
+  # exercise a routing change that is asserted at render time by
   # tests/render-guardrails.sh and was verified end to end on this PR's own
   # preview -- see #950. Not worth it per-PR, and previews are the tier most
   # sensitive to memory pressure on the shared worker pool (see the Guaranteed
   # QoS note above). Enable it here temporarily if you are changing the routing
   # itself and want a live check; do not leave it on.
+  #
+  # If you do enable it here, override its resources first. The tier's chart
+  # defaults are requests 1Gi / limits 3584Mi, i.e. BURSTABLE with a small
+  # request — the QoS class the note above says gave edge pods oom_score_adj
+  # ~989 on the shared Talos worker and crash-looped the node about once a day.
+  # A tier enabled here at its defaults would sit at the top of that node's OOM
+  # kill order, which is the opposite of what the 6Gi/6Gi block above buys.
 
 # Migration drift handling: previews are ephemeral, so when somebody
 # edits an already-applied migration we'd rather wipe + replay than fail

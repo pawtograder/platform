@@ -1185,13 +1185,13 @@ edgeFunctions:
   # 100% target while CPU sat at 5% of a 200% target — an autoscaler that can
   # only ever say "already at max" is not autoscaling, and it left no burst
   # headroom ahead of a ~2k WAU ramp. The cause is a per-pod memory FLOOR that
-  # is load-INDEPENDENT and dominated by this cache:
-  #   ~320Mi Deno host baseline (measured, see resources notes)
-  #    512Mi eszip cache at its cap
-  #   -------
-  #   ~832Mi against prod's 1Gi request  => ~81% before a request is served,
-  #          and measured idle sat higher still (~98%) because a pod keeps
-  #          some isolates resident between requests.
+  # is load-INDEPENDENT and dominated by this cache. (The arithmetic this note
+  # used to carry here — a ~320Mi host baseline giving ~832Mi against prod's
+  # then-1Gi request — is RETIRED, not merely refined: the host term is ~600Mi,
+  # so the floor with a 256Mi cache is ~860Mi, and the converged prod floor
+  # measured ~1260Mi. It is deleted rather than annotated because a retired
+  # derivation stated in the present tense is what re-sized this value wrong
+  # twice. See the resources note below, which carries the live numbers.)
   #
   # Confirmed by a natural experiment during the 2026-08-28 deploy: the pods
   # were recreated, and the SAME fleet under the SAME load went from mean
@@ -1495,9 +1495,12 @@ edgeFunctions:
     # render time against len(functions): a routed tier that evicts re-reads a
     # bundle it will need again seconds later, which is the opposite of the point.
     eszipCacheMaxMb: 192
-    # Above the 64Mi floor (the largest bundle in the image), with margin for a
-    # bundle growing. A routed tier does exactly 4 cold loads per pod lifetime,
-    # at startup, so serializing them costs nothing.
+    # Above the 64Mi render-time floor (which covers the largest bundle in the
+    # image, 48.6MiB measured 2026-09-01), with margin for a bundle growing. A
+    # routed tier does one cold load per hot bundle per pod lifetime -- five, not
+    # four: `metrics` is loaded by the first /metrics scrape, as the cache note
+    # above explains -- and they are spread over startup, so serializing them
+    # costs nothing.
     eszipColdLoadHeadroomMb: 96
     # 192 + 96 + (8 x 256) + ~600Mi host = 2936Mi. 3584Mi leaves 648Mi (18%) of
     # backstop slack; the request tier runs 3160Mi against 4Gi (23%).
@@ -1526,7 +1529,7 @@ edgeFunctions:
     # NOT overridden, and an earlier revision of this PR got that wrong.
     #
     # It cut them to 60/90 on the reasoning that the drain loop never finishes on
-    # its own, so honouring the base 410 makes every rollout wait it out. True,
+    # its own, so honoring the base 410 makes every rollout wait it out. True,
     # but it traded the wrong thing. pgmq guarantees REDELIVERY, not exactly-once
     # EFFECTS, and these workers act before they archive: notification-queue-
     # processor sends the mail then archives, discord-async-worker posts then
@@ -1536,7 +1539,7 @@ edgeFunctions:
     # so a 60s cutoff would hit it routinely.
     #
     # These four run on the request tier today WITH 410/430, so inheriting is
-    # exactly today's behaviour; 60/90 would have been a regression introduced by
+    # exactly today's behavior; 60/90 would have been a regression introduced by
     # moving them, in exchange for rollout speed nobody had measured a problem
     # with. Making rollouts fast is a real goal, but the correct fix is for the
     # loop to observe SIGTERM and exit promptly (a workerRun.ts change), not to

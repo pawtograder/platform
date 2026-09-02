@@ -56,7 +56,12 @@ and/or edge-functions Secret. Rotate one without touching the others:
    for that bundle, or patch the single key).
 2. Force ESO sync on `pawtograder-edge-functions` / `pawtograder-web`.
 3. `rollout restart` the web (`<release>-web`) and edge-functions
-   (`<release>-functions`) deployments.
+   (`<release>-functions`) deployments — and `<release>-functions-workers` when
+   `edgeFunctions.workerTier` is enabled. The worker tier mounts the same
+   `envFromSecrets` set and is where several of these credentials are actually
+   used (GitHub App key, Discord token, SMTP), and `envFrom` is one-shot: a pod
+   that is not restarted keeps the revoked value for its whole life while every
+   dashboard stays green.
 
 Notes per integration:
 
@@ -74,7 +79,8 @@ Notes per integration:
   ExternalSecret (`templates/redis-externalsecret.yaml`), which both the web and
   edge-functions deployments mount via `envFrom`. So rotate the OpenBao path,
   force ESO sync on `pawtograder-redis` (not the web/edge bundles), then
-  `rollout restart` the `<release>-web` and `<release>-functions` deployments.
+  `rollout restart` the `<release>-web`, `<release>-functions` and (when enabled)
+  `<release>-functions-workers` deployments.
 
 ### Postgres passwords (`pawtograder-postgres`)
 

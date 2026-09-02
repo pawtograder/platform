@@ -57,9 +57,16 @@ derives it from CPU count, which cannot be known at render time; treating that a
 zero made this assertion accept the very combinations the values documentation
 says it rejects, which is worse than not having it.
 
-One deliberate gap remains: a limit that is not an integer number of Gi/Mi is
-skipped rather than mis-parsed -- a guardrail that silently computes the wrong
-number is worse than one that admits it cannot.
+A limit that is not an integer number of Gi/Mi is REFUSED, not skipped. It used
+to be skipped, on the reasoning that a guardrail which silently computes the
+wrong number is worse than one that admits it cannot -- true, but skipping is
+also silent, and it fails in the dangerous direction. Sprig's `int` is
+cast.ToInt, which returns 0 (not a truncation) for "1.5", so `1.5Gi` set
+$limitMi to 0 and the final `gt $limitMi 0` switched the whole assertion off:
+an integer `2Gi` was refused while the SMALLER `1.5Gi` rendered clean. Fractional
+Gi is this chart's own house notation for memory (resources.requests.memory is
+1.5Gi here and 1.8Gi in the prod overlays), so that cliff was reachable by
+writing the limit the same way as the request beside it.
 */}}
 {{- define "pawtograder.edgeFunctions.assertMemoryBudget" -}}
 {{- $ef := .cfg -}}
@@ -79,6 +86,12 @@ number is worse than one that admits it cannot.
 {{- $limitMi = mul (trimSuffix "Gi" $limit | int) 1024 -}}
 {{- else if hasSuffix "Mi" $limit -}}
 {{- $limitMi = trimSuffix "Mi" $limit | int -}}
+{{- end -}}
+{{/* A limit that is set but did not parse is the one input class where
+     "skip" and "passed" are indistinguishable, so refuse it. See the note
+     above: `int` yields 0 for a fractional value, not a truncation. */}}
+{{- if and (ne $limit "") (le $limitMi 0) -}}
+{{- fail (printf "%s.resources.limits.memory is %q, which this assertion cannot parse: it reads only a whole number of Mi or Gi. Sprig's int returns 0 for a fractional value, so a limit like 1.5Gi would switch the four-term memory budget off entirely rather than checking it -- an integer 2Gi is refused while the smaller 1.5Gi would render clean. Spell the limit in Mi (3584Mi, not 3.5Gi) or as a whole number of Gi." $p $limit) -}}
 {{- end -}}
 {{- $cacheMi := $ef.eszipCacheMaxMb | int -}}
 {{- if le $cacheMi 0 -}}
@@ -198,6 +211,29 @@ number is worse than one that admits it cannot.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{/* The OTHER sizing invariant over this same block, asserted for the same reason
+     the memory budget is: values.yaml states it in three comments
+     (gracefulExitTimeoutSeconds >= worker.timeoutMs, and
+     terminationGracePeriodSeconds >= preStopSleepSeconds + gracefulExitTimeoutSeconds)
+     and nothing enforced it. All four are independently overridable per tier, so a
+     tier could raise one and leave the others -- and on the worker tier that is not
+     a rollout-speed nuisance, it is a correctness bug: these four functions act
+     before they archive, so a SIGKILL landing mid-drain duplicates a user-visible
+     email or Discord post on pgmq redelivery. #926 actively invites raising
+     worker.timeoutMs, which forces gracefulExitTimeoutSeconds up with it while
+     terminationGracePeriodSeconds is a separate key nobody is prompted to touch. */}}
+{{- $graceful := $ef.gracefulExitTimeoutSeconds | default 0 | int -}}
+{{- if gt $graceful 0 -}}
+{{- $workerTimeoutS := div (add ($ef.worker.timeoutMs | int) 999) 1000 -}}
+{{- if lt $graceful $workerTimeoutS -}}
+{{- fail (printf "%s.gracefulExitTimeoutSeconds is %ds, below worker.timeoutMs (%dms = %ds). On SIGTERM the runtime stops intake and forcibly terminates after the graceful window, so the longest request it is willing to START cannot finish -- raise gracefulExitTimeoutSeconds to at least %d (and terminationGracePeriodSeconds above it), or lower worker.timeoutMs." $p $graceful ($ef.worker.timeoutMs | int) $workerTimeoutS $workerTimeoutS) -}}
+{{- end -}}
+{{- $preStop := $ef.preStopSleepSeconds | default 0 | int -}}
+{{- $termGrace := $ef.terminationGracePeriodSeconds | default 30 | int -}}
+{{- if lt $termGrace (add $preStop $graceful) -}}
+{{- fail (printf "%s.terminationGracePeriodSeconds is %ds, below preStopSleepSeconds %ds + gracefulExitTimeoutSeconds %ds = %ds. terminationGracePeriodSeconds is only a SIGKILL BACKSTOP: below the sum the kubelet kills the container mid-drain, and these handlers act before they archive, so pgmq redelivers work whose side effect already happened (a duplicate notification email, a duplicate Discord post). Raise terminationGracePeriodSeconds to at least %d." $p $termGrace $preStop $graceful (add $preStop $graceful) (add $preStop $graceful)) -}}
+{{- end -}}
+{{- end -}}
 {{- $needMi := add $cacheMi $coldMi $isolatesMi $hostMi -}}
 {{- if and (gt $limitMi 0) (gt $needMi $limitMi) -}}
 {{- fail (printf "%s memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + eszipColdLoadHeadroomMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $p $limit $limitMi $cacheMi $coldMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
@@ -207,7 +243,7 @@ number is worse than one that admits it cannot.
 {{/*
 Validate a tier's override keys against an ALLOWLIST.
 
-This exists because of one specific Sprig behaviour: `mergeOverwrite` is mergo
+This exists because of one specific Sprig behavior: `mergeOverwrite` is mergo
 with `WithOverride`, and mergo SKIPS EMPTY SOURCE VALUES -- `false`, `0`, `""`,
 `{}`, `[]`. So an override of `verifyJwt: false` against a base of `true`, or
 `envFromSecrets: []` against a non-empty base, renders as the BASE value with no
@@ -216,7 +252,7 @@ bug the memory-budget assertion exists to prevent: the config a reviewer reads
 is not the config the container runs.
 
 So every key that CANNOT merge correctly is kept out of the surface entirely,
-and anything unrecognised is refused rather than ignored. That also turns a typo
+and anything unrecognized is refused rather than ignored. That also turns a typo
 (`polciy: oneshot`) into a render error instead of a no-op.
 
 Allowed keys are maps (merge key-by-key), non-empty lists (replaced wholesale,
@@ -224,8 +260,13 @@ matching channels[].image semantics), strings, or positive numbers that
 assertMemoryBudget already rejects at <= 0.
 
 `enabled`, `replicas` and `functions` are allowed through but are read from the
-RAW tier block by the caller, never from the merged result -- they are the keys
-that need `false`/`0`/absent to mean something.
+RAW tier block by the CALLERS -- they are the keys that need `false`/`0`/absent
+to mean something. (One exception, stated because the blanket claim used to read
+"never from the merged result": assertMemoryBudget reads `functions` off the
+MERGED config, because that is how it recognises a routed tier at all. A `false`
+or `0` there would be meaningless, so nothing is lost, but it does mean a
+`functions` key set on the BASE edgeFunctions block would put the stable tier
+through the routed-tier assertions.)
 
 The chart already works around this family of footgun elsewhere:
 edge-functions-channels.yaml uses hasKey+ternary rather than `default 1` so
@@ -240,10 +281,14 @@ an empty child is the same silent-inherit bug wearing a disguise:
 tier runs the BASE's limit while the values file says otherwise. A top-level-only
 check passes that, which is why this recurses.
 
-Recursion is by self-include, which Helm supports. Lists are treated as leaves:
-an empty list is refused, but elements are not descended into -- our allowlisted
-lists (envFromSecrets, tolerations) hold scalars, and an empty element there is
-not a merge hazard.
+Recursion is by self-include, which Helm supports, and it descends into LIST
+ELEMENTS as well as map values. An earlier version treated lists as leaves on the
+premise that "our allowlisted lists (envFromSecrets, tolerations) hold scalars".
+That is false for `tolerations`, whose elements are maps -- and an empty
+toleration is not a harmless empty leaf, it is a toleration that matches EVERY
+taint, so `tolerations: [{}]` rendered a worker tier schedulable onto
+control-plane, GPU and spot-drain nodes: the exact opposite of the placement
+isolation `tolerations` is on the allowlist to provide.
 */}}
 {{- define "pawtograder.edgeFunctions.assertNoEmptyLeaves" -}}
 {{- $path := .path -}}
@@ -258,12 +303,26 @@ not a merge hazard.
 {{- range $k, $v := .value -}}
 {{- include "pawtograder.edgeFunctions.assertNoEmptyLeaves" (dict "value" $v "path" (printf "%s.%s" $path $k)) -}}
 {{- end -}}
+{{- else if kindIs "slice" .value -}}
+{{- range $i, $v := .value -}}
+{{- include "pawtograder.edgeFunctions.assertNoEmptyLeaves" (dict "value" $v "path" (printf "%s[%d]" $path $i)) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
 {{- define "pawtograder.edgeFunctions.assertTierOverrides" -}}
 {{- $tier := .tier -}}
-{{/* `spreadAcrossNodes` was here and is deliberately NOT: it is a boolean, and
+{{/* `service` is deliberately NOT here either, and unlike the booleans the reason
+     is a cross-file coupling rather than a merge hazard: this template reads
+     `$ef.service.port` for the Service, the containerPort and the runtime's `-p`,
+     while kong-config.yaml builds the worker upstream URL from the RAW
+     `.Values.edgeFunctions.service.port`. Allowing a per-tier port would leave
+     the tier listening on one port while Kong dialled another -- every routed
+     path 502s and pgmq stops draining, with nothing in the render to show for
+     it. Adding "service" to this list is a one-line change that reads as safe;
+     it is not.
+
+     `spreadAcrossNodes` was here and is deliberately NOT: it is a boolean, and
      the whole point of this allowlist is that mergeOverwrite cannot carry a
      `false`. Allowing it meant `workerTier.spreadAcrossNodes: false` against a
      base of `true` silently left the anti-affinity in place -- accepting a
@@ -290,7 +349,7 @@ not a merge hazard.
      -- which is exactly why they are handled outside the merge. */}}
 {{- range $k, $v := .overrides -}}
 {{- if not (has $k $allowed) -}}
-{{- fail (printf "edgeFunctions.%s: %q is not an overridable per-tier key. Allowed: %s. The surface is an allowlist because Sprig's mergeOverwrite (mergo) SKIPS EMPTY source values -- a false, a 0 or an empty list here would render as the base's value with no error, so an unlisted key is far more likely to be silently ignored than honoured. Booleans that must stay shared across tiers (verifyJwt, reloader, e2e, email) are excluded for exactly that reason; set them on edgeFunctions instead." $tier $k (join ", " (sortAlpha $allowed))) -}}
+{{- fail (printf "edgeFunctions.%s: %q is not an overridable per-tier key. Allowed: %s. The surface is an allowlist because Sprig's mergeOverwrite (mergo) SKIPS EMPTY source values -- a false, a 0 or an empty list here would render as the base's value with no error, so an unlisted key is far more likely to be silently ignored than honored. Booleans that must stay shared across tiers (verifyJwt, reloader, e2e, email) are excluded for exactly that reason; set them on edgeFunctions instead." $tier $k (join ", " (sortAlpha $allowed))) -}}
 {{- end -}}
 {{- if not (has $k (list "enabled" "replicas" "functions")) -}}
 {{- include "pawtograder.edgeFunctions.assertNoEmptyLeaves" (dict "value" $v "path" (printf "edgeFunctions.%s.%s" $tier $k)) -}}
@@ -318,8 +377,10 @@ not a merge hazard.
      "", {} and []. So an override of `verifyJwt: false` against a base of true
      is SILENTLY IGNORED. That is why the override surface is an allowlist
      (assertTierOverrides below) that excludes every boolean, and why `enabled`,
-     `replicas` and `autoscaling` are read from the RAW tier block by callers
-     instead of from this merged result. Helm's own values coalescing across -f
+     `replicas` and `functions` are read from the RAW tier block by callers
+     instead of from this merged result. (`autoscaling` is not read from a tier
+     block at all: the caller passes `"autoscaling" false` and `autoscaling` is
+     not on the allowlist, so setting it on a tier is a render error.) Helm's own values coalescing across -f
      files handles false correctly; only this template-level merge does not. */}}
 {{- $ef := deepCopy $ctx.Values.edgeFunctions -}}
 {{- $_ := unset $ef "workerTier" -}}

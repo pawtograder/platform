@@ -140,7 +140,7 @@ data:
               - /functions/v1/
         plugins:
           - name: cors
-      {{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.workerTier.enabled }}
+      {{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
       {{- /* Background-worker tier: these function NAMES go to their own Deployment
          instead of the request tier. This is the whole mechanism of the tier split
          — no migration, no client change. Callers keep addressing
@@ -171,7 +171,7 @@ data:
 
          Note the syntax: this config is `_format_version: "2.1"`, where a regex
          path is written WITHOUT the `~` prefix and Kong auto-detects it from the
-         metacharacters (it normalises to `~/...$` internally). The `~/` form
+         metacharacters (it normalizes to `~/...$` internally). The `~/` form
          requires format 3.0 and is REJECTED here — "should start with: / (fixed
          path) or ~/ (regex path)", which is a confusing way to say "your format
          version is too old".

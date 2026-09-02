@@ -276,6 +276,40 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "functions") -}}
 {{- end -}}
 
+{{/*
+Background-worker TIER resolution. Five templates have to agree on whether the
+tier exists (kong-config, monitoring, pdb, prometheus-rules, the tier's own
+workload) and three on how many replicas it asks for, so resolve it once here.
+
+`workerTier` is read through `default dict` rather than dereferenced directly:
+`workerTier: null` is the Helm idiom for deleting a values block, and a bare
+`.Values.edgeFunctions.workerTier.enabled` then aborts the WHOLE render with
+"wrong type for value; expected map[string]interface {}" pointing at whichever
+template happened to run first -- not at the file the operator edited.
+
+replicas uses hasKey, not `default 2`, so `replicas: 0` survives (Sprig `default`
+treats 0 as empty) -- the same reason edge-functions-channels.yaml does this for a
+channel, and the reason the tier reads it off the RAW block rather than off the
+mergeOverwrite'd config.
+
+Usage:
+  {{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
+  {{- $n := int (include "pawtograder.edgeFunctions.workerTier.replicas" .) }}
+*/}}
+{{- define "pawtograder.edgeFunctions.workerTier.enabled" -}}
+{{- $wt := .Values.edgeFunctions.workerTier | default dict -}}
+{{- if and .Values.edgeFunctions.enabled $wt.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.edgeFunctions.workerTier.replicas" -}}
+{{- $wt := .Values.edgeFunctions.workerTier | default dict -}}
+{{- ternary ($wt.replicas | int) 2 (hasKey $wt "replicas") -}}
+{{- end -}}
+
+{{- define "pawtograder.edgeFunctions.workers.host" -}}
+{{- include "pawtograder.componentName" (dict "ctx" . "component" "functions-workers") -}}
+{{- end -}}
+
 {{- define "pawtograder.web.host" -}}
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "web") -}}
 {{- end -}}

@@ -65,11 +65,8 @@ spec:
    stops draining until the next pg_cron tick. Guarded on >1 replica for the same
    reason as above: over a single replica minAvailable:1 blocks every voluntary
    eviction, including a node drain. */}}
-{{- $workerReplicas := 2 }}
-{{- if hasKey .Values.edgeFunctions.workerTier "replicas" }}
-{{- $workerReplicas = int .Values.edgeFunctions.workerTier.replicas }}
-{{- end }}
-{{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.workerTier.enabled (gt $workerReplicas 1) }}
+{{- $workerReplicas := int (include "pawtograder.edgeFunctions.workerTier.replicas" .) }}
+{{- if and (include "pawtograder.edgeFunctions.workerTier.enabled" .) (gt $workerReplicas 1) }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

@@ -260,11 +260,22 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    #    would also scale the maintenance page down and STILL miss realtime (a
    #    StatefulSet, not a Deployment).
    kubectl -n "$NS" delete hpa <release>-functions
-   for c in functions web rest auth storage; do
+   for c in web rest auth storage; do
      kubectl -n "$NS" scale deploy -l "app.kubernetes.io/component=$c" --replicas=0
    done
+   # Every edge tier, not just `functions`. The component label is exact, so a
+   # loop over `functions` misses the background-worker tier
+   # (component=functions-workers, edgeFunctions.workerTier) and any per-course
+   # channel (functions-<channel>) — and the worker tier is the one that keeps
+   # draining pgmq and writing to the primary through a window you believe is
+   # fenced. Enumerate them instead of naming them:
+   for d in $(kubectl -n "$NS" get deploy -l app.kubernetes.io/name=pawtograder \
+       -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.labels.app\.kubernetes\.io/component}{"\n"}{end}' \
+       | awk '$2 ~ /^functions(-.+)?$/ { print $1 }'); do
+     kubectl -n "$NS" scale "deploy/$d" --replicas=0
+   done
    kubectl -n "$NS" scale statefulset -l "app.kubernetes.io/component=realtime" --replicas=0
-   # plus any per-course channel Deployments (<release>-{web,functions}-<channel>).
+   # plus any per-course channel Deployments (<release>-web-<channel>).
    ```
 
 2. **Confirm the physical standby is caught up** before you disturb the primary —

@@ -639,7 +639,7 @@ spec:
         operator: In
         values:
           - functions
-          {{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.workerTier.enabled }}
+          {{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
           - functions-workers
           {{- end }}
   endpoints:

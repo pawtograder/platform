@@ -229,9 +229,31 @@ edgeFunctions:
   # consistent if you change any of them.
   maxParallelism: 8
   autoscaling:
+    # 2026-09-02: 12-20 -> 3-5, holding staging's RAM RESERVATION flat across the
+    # request-memory change below. The request tripled (512Mi -> 1.5Gi) without the
+    # pods becoming more capable — the increase is the load-independent ~600Mi Deno
+    # baseline, not extra capacity — so leaving the replica range alone would have
+    # taken staging from 6.0GiB reserved to 18.0GiB at the floor and 30.0GiB at the
+    # ceiling. Sized across BOTH tiers, since the worker tier below is 2 more pods
+    # at 1Gi that did not exist before:
+    #     floor    3 x 1.5Gi + 2 x 1Gi =  6.5GiB   (was 12 x 512Mi =  6.0GiB)
+    #     ceiling  5 x 1.5Gi + 2 x 1Gi =  9.5GiB   (was 20 x 512Mi = 10.0GiB)
+    # 5/3 is also the same 1.67x scale ratio as 20/12, so burst BEHAVIOUR is
+    # unchanged even though absolute headroom is not.
+    #
+    # The cost is real and deliberate: peak concurrency goes from 20 x
+    # maxParallelism 8 = 160 admitted isolates to 5 x 8 = 40. Staging absorbs that
+    # because the four pgmq workers have moved to their own tier and because e2e is
+    # the only sustained load here. If e2e starts queueing, raise maxReplicas first
+    # (the floor is what governs steady-state cost) and re-check the total above.
+    #
+    # NOTE: lowering these bounds does not, by itself, let a quiet fleet shrink.
+    # The request below sits INSIDE the 72-88% dead band (see the resources note),
+    # so the HPA cannot scale down on memory at all; the ceiling is what actually
+    # bounds staging's RAM, which is why both numbers moved and not just the floor.
     enabled: true
-    minReplicas: 12
-    maxReplicas: 20
+    minReplicas: 3
+    maxReplicas: 5
     # 80, not 100: the HPA controller applies a default 10% TOLERANCE, so a target of
     # 100 is really a dead BAND of 90-110% and anything inside it moves nothing in
     # either direction. 80 puts the band at 72-88%, and the memory request below is
@@ -293,7 +315,7 @@ edgeFunctions:
   # reasoning and the sizing; everything here is the chart default except being
   # on.
   #
-  # What this changes: the four pg_cron-poked pgmq workers move off the 12-20
+  # What this changes: the four pg_cron-poked pgmq workers move off the 3-5
   # request-tier replicas onto 2 dedicated pods, and Kong routes their function
   # NAMES there. Nothing else moves, the policy stays per_request on both tiers,
   # and `enabled: false` puts it back in one helm upgrade.
