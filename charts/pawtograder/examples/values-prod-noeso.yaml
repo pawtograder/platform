@@ -163,13 +163,21 @@ edgeFunctions:
   # reports 502). RAISING maxParallelism therefore does not buy headroom -- it raises the ceiling on
   # every path at once. Add replicas instead.
   #
-  # The arithmetic has to actually leave headroom, which 8 alone does not: at the chart-default
-  # worker.memoryLimitMb of 256 and the chart-default limits.memory of 2Gi, 8 x 256 MiB is EXACTLY
-  # the container limit, with nothing left for the main.ts demuxer or the Deno runtime -- and the
-  # PawtograderEdgeFunctionsMemoryHigh alert fires at 0.85 of the limit, below even that floor.
-  # The explicit resources block below raises the limit to 4Gi (matching staging), so the charged
-  # sum is 50% and a burst has somewhere to go. Keep the three numbers consistent if you change any
-  # of them.
+  # The arithmetic has to actually leave headroom, and since chart 0.4.0 it is no longer this
+  # comment's job to check: `pawtograder.edgeFunctions.assertMemoryBudget` refuses a render whose
+  # resources.limits.memory cannot hold eszipCacheMaxMb + eszipColdLoadHeadroomMb
+  # + (maxParallelism x worker.memoryLimitMb) + ~600Mi Deno host. At chart defaults that sum is
+  # 3160Mi, and the 4Gi limit set below leaves 936Mi (23%) of backstop over it; the isolate term
+  # alone (8 x 256Mi = 2048Mi) is 50% of the limit, so a burst has somewhere to go.
+  #
+  # This paragraph used to argue from "the chart-default limits.memory of 2Gi", where 8 x 256 MiB
+  # was EXACTLY the whole limit and this overlay's 4Gi was a deliberate raise. Both halves of that
+  # are now stale -- the chart default has been 4Gi since before the tier split, so the block below
+  # matches it rather than raising it -- and the argument was rewritten rather than just
+  # renumbered, because a correct figure inside a dead derivation is what re-sized this value
+  # wrong twice before. Keep maxParallelism, worker.memoryLimitMb and resources.limits.memory
+  # consistent; the render-time assertion is what tells you when they are not, and
+  # PawtograderEdgeFunctionsMemoryHigh (0.85 of the limit) is what tells you at runtime.
   maxParallelism: 8
   # 2026-09-01: request 512Mi -> 1.8Gi, the documented PRODUCTION pair with
   # autoscaling.targetMemoryUtilizationPercentage 80 below. A memory-target HPA
