@@ -42,6 +42,17 @@ own admission budget and eszip cache.
    shadow_check assumes the same set. */ -}}
 {{- $dupSeen := dict }}
 {{- range $fn := $wt.functions }}
+{{- /* Type first, because the two checks below cannot handle a non-string and
+   fail differently badly. The format check passes it (`123 | toString` is
+   "123", a legal DNS-1123 label), and then `hasKey` -- which needs a string key
+   -- aborts with a raw "wrong type for value; expected string; got float64"
+   naming this template's line number instead of the values file the operator
+   edited. Coercing instead of refusing would be worse than either: YAML turns
+   an unquoted `0123` into the number 123, so the tier would render a Kong route
+   for a function name the operator never wrote. */ -}}
+{{- if ne (kindOf $fn) "string" }}
+{{- fail (printf "edgeFunctions.workerTier.functions contains a %s (%v), not a string. Function names must be quoted in YAML: an unquoted value like 0123 is parsed as a number and would silently route a name you did not write. Write it as a quoted directory name, e.g. \"github-async-worker\"." (kindOf $fn) $fn) }}
+{{- end }}
 {{- if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" ($fn | toString)) }}
 {{- fail (printf "edgeFunctions.workerTier.functions contains %q, which is not a plain lowercase function-directory name. Each name is interpolated into a Kong REGEX path (\"/functions/v1/<name>$\"), so a regex metacharacter either over-matches at a segment boundary and silently executes a DIFFERENT function, or fails to compile and makes Kong reject the whole declarative config -- taking the deployment's entire API down, not just this tier. Use the function's directory name (lowercase alphanumerics and '-')." $fn) }}
 {{- end }}

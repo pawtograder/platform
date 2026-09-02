@@ -46,7 +46,7 @@ assert_refused() {
   if render "$@"; then
     echo "FAIL [$label]: render SUCCEEDED but the guard should have refused it"
     FAILED=1
-  elif ! grep -qF "$want" "$ERRFILE"; then
+  elif ! grep -qF -- "$want" "$ERRFILE"; then
     echo "FAIL [$label]: refused, but message missing expected text: $want"
     echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
     FAILED=1
@@ -774,6 +774,50 @@ assert_rendered_contains "values-staging: worker tier stays 2 pods (the constant
   -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
   --set global.environment=staging
 
+# THE PROPERTY THE WHOLE TIER SPLIT RESTS ON, from the side nothing else covers.
+# shadow_check asserts the inverse (every routed name is a real function
+# directory) and assert_absent covers the tier being OFF, but nothing pinned that
+# when the tier is ON, EXACTLY the configured names get worker routes and every
+# other function still falls through to the functions-v1-all catch-all.
+#
+# Both halves matter and they fail differently. Too FEW routes and a worker keeps
+# running on the request tier (silent no-op). Too MANY and a request-tier function
+# is diverted onto a 2-pod tier sized for four background consumers --
+# autograder-create-submission is the one that would hurt, being the hot student
+# submission path, and it is used as the probe here for that reason. The behaviour
+# is correct today (verified against live Kong 3.9.1); this closes the coverage
+# hole, it does not fix a bug.
+assert_worker_route_set() {
+  local label="$1"; shift
+  local want=4 got
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only templates/kong-config.yaml \
+      >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  # Count SERVICES, not every mention: each routed name renders one service, one
+  # route and one _comment carrying the same string, so grepping the raw name
+  # over-counts by 3x and would pass on a partial render.
+  got="$(grep -cE '^      - name: functions-v1-worker-' "$OUTFILE")"
+  if [ "$got" -ne "$want" ]; then
+    echo "FAIL [$label]: rendered $got worker Kong services, expected $want"
+    FAILED=1
+  elif grep -qF -- "functions-v1-worker-autograder-create-submission" "$OUTFILE"; then
+    echo "FAIL [$label]: an UNLISTED function got a worker route"
+    FAILED=1
+  elif ! grep -qF -- "- name: functions-v1-all" "$OUTFILE"; then
+    echo "FAIL [$label]: the functions-v1-all catch-all is gone, so unlisted functions have no route"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+assert_worker_route_set "values-staging: exactly 4 worker routes, and unlisted functions stay on the catch-all" \
+  -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
+  --set global.environment=staging
+
 # The HPA controller applies a default 10% tolerance, so a target of 100 is a dead
 # band of 90-110%. The edge tier's load-independent floor sat inside that band,
 # which wedged scaling in BOTH directions: it could not scale down (needs <90%) and
@@ -1118,6 +1162,14 @@ assert_renders "raising the whole drain window together is accepted" \
 assert_refused "a routed name with a regex metacharacter is refused" \
   "not a plain lowercase function-directory name" \
   "${WT[@]}" --set 'edgeFunctions.workerTier.functions={gradebook.column-recalculate}'
+# An unquoted YAML number passes the format check ("123" is a legal DNS-1123
+# label) and then died on `hasKey` with a raw Go type error naming this template
+# instead of the values file. Refused with the guard's own message now. Not just
+# a nicer error: YAML parses an unquoted 0123 as the number 123, so coercing
+# would route a name the operator never wrote.
+assert_refused "a non-string routed name is refused with the guard's message" \
+  "not a string. Function names must be quoted" \
+  "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {functions: [123]}}'
 
 # A channel with only a `web` block renders web-<name>, never functions-workers,
 # so the collision guards must not refuse it.
@@ -1136,6 +1188,14 @@ echo "== no routed worker name shadows another function's path =="
 shadow_check() {
   local fns_dir="$CHART/../../supabase/functions" bad=0 w f
   local workers
+  # This is the one check in the file that reads OUTSIDE the chart, so it only
+  # works in a monorepo checkout. A packaged or vendored chart has no
+  # supabase/functions/ next to it, and without this it produced four hard FAILs
+  # that looked like real shadowing rather than a missing input.
+  if [ ! -d "$fns_dir" ]; then
+    echo "skip [prefix shadowing]: $fns_dir not present (packaged chart, not a monorepo checkout)"
+    return
+  fi
   workers="$(helm template t "$CHART" "${BASE[@]}" "${WT[@]}" \
     --show-only templates/kong-config.yaml 2>/dev/null \
     | sed -nE 's#^[ \t]*- "/functions/v1/([a-z0-9-]+)[$]"$#\1#p' | sort -u)"
