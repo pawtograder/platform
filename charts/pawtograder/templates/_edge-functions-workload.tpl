@@ -101,7 +101,19 @@ number is worse than one that admits it cannot.
 {{- fail (printf "%s.maxParallelism must be set to a positive integer (got %q). Left unset the runtime derives it from CPU count, which cannot be known at render time -- so the isolate term of the memory budget could not be checked and this assertion would pass configurations it documents as rejected. Set it explicitly; 8 is the chart default and what production runs." $p $par) -}}
 {{- end -}}
 {{- $isolatesMi := mul ($par | int) $perIsolateMi -}}
-{{- $hostMi := 90 -}}
+{{/* 600, not 90. The 90 came from "a freshly started pod with an empty cache sits
+     at ~87Mi", which is the host cost at t=0 -- but this budget is checked against
+     a HARD cgroup limit, so what has to fit is the CONVERGED steady state, not the
+     first minute. #949 measured that baseline at ~600Mi and load-independent, and
+     the same values.yaml has been carrying both numbers since: ~90Mi here and
+     ~600Mi in the HPA-sizing notes.
+
+     Under-counting by ~510Mi is not academic on a tier this size: it is most of
+     the worker tier's apparent slack, and this assertion exists precisely because
+     twice (2026-08-11, 2026-08-19) a term was left out of the sum and production
+     OOMed. Raising it can only make the guard REFUSE more configurations -- it
+     cannot permit an OOM -- and every overlay in this repo still renders. */}}
+{{- $hostMi := 600 -}}
 {{- $coldMi := $ef.eszipColdLoadHeadroomMb | int -}}
 {{- if le $coldMi 0 -}}
 {{- fail (printf "%s.eszipColdLoadHeadroomMb must be a positive number of MiB (got %v). Same reason as eszipCacheMaxMb: main.ts would substitute its own 256Mi default and the process would reserve memory this assertion did not count." $p $ef.eszipColdLoadHeadroomMb) -}}

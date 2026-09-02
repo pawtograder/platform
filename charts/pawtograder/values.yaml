@@ -1174,8 +1174,8 @@ edgeFunctions:
   #
   # The container budget is four terms that must be reconciled together:
   #   eszipCacheMaxMb + eszipColdLoadHeadroomMb
-  #     + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
-  # At these defaults: 256Mi + 256Mi + (8 x 256Mi) + 90Mi = 2650Mi (~2.6Gi),
+  #     + (maxParallelism x worker.memoryLimitMb) + ~600Mi host
+  # At these defaults: 256Mi + 256Mi + (8 x 256Mi) + 600Mi = 3160Mi (~3.1Gi),
   # which is why the edge tier wants a limit at or above 4Gi. Raise this only
   # alongside that sum.
   #
@@ -1309,7 +1309,7 @@ edgeFunctions:
   #
   # The memory LIMIT has to hold the whole budget documented above
   # (eszipCacheMaxMb + eszipColdLoadHeadroomMb
-  #   + maxParallelism x worker.memoryLimitMb + ~90Mi host), which is asserted at
+  #   + maxParallelism x worker.memoryLimitMb + ~600Mi host), which is asserted at
   # render time by pawtograder.edgeFunctions.assertMemoryBudget.
   # 4Gi rather than 2Gi because the documented working configuration does not fit
   # 2Gi, so the old default was a combination the guardrail now rejects outright.
@@ -1499,8 +1499,17 @@ edgeFunctions:
     # bundle growing. A routed tier does exactly 4 cold loads per pod lifetime,
     # at startup, so serializing them costs nothing.
     eszipColdLoadHeadroomMb: 96
-    # 192 + 96 + (8 x 256) + ~90Mi host = 2426Mi. 3Gi leaves 646Mi (21%) of
-    # backstop slack; the request tier runs 2650Mi against 4Gi (35%).
+    # 192 + 96 + (8 x 256) + ~600Mi host = 2936Mi. 3584Mi leaves 648Mi (18%) of
+    # backstop slack; the request tier runs 3160Mi against 4Gi (23%).
+    #
+    # The host term is 600Mi, not the 90Mi this comment used to carry: 90 was the
+    # cost at t=0 with an empty cache, but the limit is a hard cgroup ceiling, so
+    # what has to fit is the converged baseline #949 measured. At 3Gi the same
+    # tier would have had 136Mi of real slack while claiming 646Mi.
+    #
+    # Mi, not Gi, deliberately: assertMemoryBudget parses a Gi limit with
+    # `trimSuffix "Gi" | int`, so a fractional value like 3.5Gi would truncate to
+    # 3 and silently certify against 3072Mi.
     #
     # requests.memory is a SCHEDULING HINT here, not an autoscaling input,
     # because this tier has no HPA — so unlike the request tier (see the long
@@ -1512,7 +1521,7 @@ edgeFunctions:
         memory: 1Gi
       limits:
         cpu: "1"
-        memory: 3Gi
+        memory: 3584Mi
     # The base rule "gracefulExitTimeoutSeconds >= worker.timeoutMs" INVERTS on
     # this tier. There it protects a long in-flight USER request. Here the
     # long-lived thing is a deliberately infinite drain loop that will never

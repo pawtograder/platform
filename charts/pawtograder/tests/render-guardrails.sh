@@ -643,14 +643,14 @@ assert_env_value "eszip cold-load allowance renders 256Mi in bytes" \
   templates/edge-functions.yaml EDGE_ESZIP_COLD_LOAD_MAX_BYTES 268435456
 
 # The budget assertion is the thing that makes the four terms safe to tune at all,
-# so prove it still REFUSES rather than trusting that it would. 2650Mi is the exact
+# so prove it still REFUSES rather than trusting that it would. 3160Mi is the exact
 # sum at the current defaults (256 + 256 + 8 x 256 + 90), so one MiB below it is
 # the tightest possible negative case and it also pins the arithmetic itself.
 assert_refused "memory budget refuses a limit one MiB below the computed sum" \
-  "+ ~90Mi Deno host = 2650Mi" \
-  --set edgeFunctions.resources.limits.memory=2649Mi
+  "+ ~600Mi Deno host = 3160Mi" \
+  --set edgeFunctions.resources.limits.memory=3159Mi
 assert_renders "memory budget accepts a limit exactly equal to the computed sum" \
-  --set edgeFunctions.resources.limits.memory=2650Mi
+  --set edgeFunctions.resources.limits.memory=3160Mi
 # eszipColdLoadHeadroomMb must still cover the largest bundle in the image. It is
 # NOT reduced alongside the cache: halving the cache makes cold reads MORE frequent.
 assert_refused "cold-load allowance below the largest bundle is refused" \
@@ -814,8 +814,8 @@ assert_env_value "worker tier eszip cache renders 192Mi in bytes" \
   templates/edge-functions-worker-tier.yaml EDGE_ESZIP_CACHE_MAX_BYTES 201326592 "${WT[@]}"
 assert_env_value "request tier eszip cache stays 256Mi (no override leak)" \
   templates/edge-functions.yaml EDGE_ESZIP_CACHE_MAX_BYTES 268435456 "${WT[@]}"
-assert_container_memory "worker tier limit is 3Gi, not the base 4Gi" \
-  templates/edge-functions-worker-tier.yaml functions limits 3Gi "${WT[@]}"
+assert_container_memory "worker tier limit is 3584Mi, not the base 4Gi" \
+  templates/edge-functions-worker-tier.yaml functions limits 3584Mi "${WT[@]}"
 # resources is a nested map, so a shallow merge would replace `limits` and drop
 # `requests` entirely. Assert the sibling survived.
 assert_container_memory "worker tier requests survive the deep merge" \
@@ -917,9 +917,9 @@ assert_refused "per_worker with too few admission slots is refused" \
 # the reader to the wrong values block, which defeats the point of the assertion.
 assert_refused "the worker tier's budget failure names the worker tier" \
   "edgeFunctions.workerTier memory budget does not fit" \
-  "${WT[@]}" --set edgeFunctions.workerTier.resources.limits.memory=2425Mi
-assert_renders "worker tier accepts a limit exactly equal to its sum (2426Mi)" \
-  "${WT[@]}" --set edgeFunctions.workerTier.resources.limits.memory=2426Mi
+  "${WT[@]}" --set edgeFunctions.workerTier.resources.limits.memory=2935Mi
+assert_renders "worker tier accepts a limit exactly equal to its sum (2936Mi)" \
+  "${WT[@]}" --set edgeFunctions.workerTier.resources.limits.memory=2936Mi
 
 # A Kong plain-prefix path also matches LONGER paths, so /functions/v1/<worker>
 # would swallow /functions/v1/<worker>-something. Nothing collides today
