@@ -173,10 +173,15 @@ export default function QuestionTreeEditor({
                   <Input
                     size="xs"
                     type="number"
+                    min={0}
                     width="70px"
                     placeholder="pts"
                     value={q.points}
-                    onChange={(e) => updateQuestion(q.client_id, { points: Number(e.target.value) })}
+                    // Clamped at 0 to match the exam_questions non-negative check: negative
+                    // points fail rubric sync (the rubric tables have their own non-negative
+                    // constraints) and would subtract from a student's earned score in
+                    // autograding. `min` alone is advisory -- a typed "-5" still reaches state.
+                    onChange={(e) => updateQuestion(q.client_id, { points: Math.max(0, Number(e.target.value) || 0) })}
                   />
                 </HStack>
 
@@ -187,14 +192,24 @@ export default function QuestionTreeEditor({
                       width="260px"
                       placeholder="Choices (comma separated)"
                       value={q.choices.join(", ")}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const choices = e.target.value
+                          .split(",")
+                          .map((c) => c.trim())
+                          .filter(Boolean);
+                        // Drop an answer key that is no longer one of the choices. Renaming or
+                        // removing the selected option used to leave correct_answer.choice at
+                        // the old string: the <select> below falls back to "— correct answer —"
+                        // so it LOOKS unset, while quiz_autograde still compares against the
+                        // stale value, which no student can now submit -- marking every
+                        // response incorrect. Clearing it makes the UI and the key agree.
+                        const key = (q.correct_answer as { choice?: string } | null)?.choice;
+                        const keyStillValid = key != null && choices.includes(key);
                         updateQuestion(q.client_id, {
-                          choices: e.target.value
-                            .split(",")
-                            .map((c) => c.trim())
-                            .filter(Boolean)
-                        })
-                      }
+                          choices,
+                          ...(key != null && !keyStillValid ? { correct_answer: null } : {})
+                        });
+                      }}
                     />
                     {showAnswerKey && (
                       <NativeSelect.Root size="xs" width="160px">
@@ -254,10 +269,13 @@ export default function QuestionTreeEditor({
                       type="number"
                       width="110px"
                       placeholder="± tolerance"
+                      min={0}
                       value={q.grading_tolerance ?? ""}
                       onChange={(e) =>
                         updateQuestion(q.client_id, {
-                          grading_tolerance: e.target.value === "" ? null : Number(e.target.value)
+                          // A negative tolerance makes abs(diff) <= tolerance unsatisfiable, so
+                          // every numeric answer would be marked wrong.
+                          grading_tolerance: e.target.value === "" ? null : Math.max(0, Number(e.target.value) || 0)
                         })
                       }
                     />

@@ -522,11 +522,18 @@ begin
   returning id into v_grader_result_id;
 
   for rec in
-    select id, label, answer_type, points, correct_answer, grading_tolerance
-    from public.exam_questions
-    where exam_id = v_exam_id
-      and answer_type in ('multiple_choice', 'true_false', 'numeric')
-      and correct_answer is not null
+    select q.id, q.label, q.answer_type, q.points, q.correct_answer, q.grading_tolerance
+    from public.exam_questions q
+    where q.exam_id = v_exam_id
+      and q.answer_type in ('multiple_choice', 'true_false', 'numeric')
+      and q.correct_answer is not null
+      -- LEAVES ONLY. A question that gains children becomes a panel in the student renderer
+      -- with no input of its own, but it keeps whatever answer_type, points and answer key it
+      -- had as a leaf. Counting it here put unreachable points into v_max, which no student
+      -- could ever earn, so everyone silently lost them.
+      and not exists (
+        select 1 from public.exam_questions child where child.parent_id = q.id
+      )
   loop
     -- pull the student's answer for this question out of the artifact
     select value into v_qentry
@@ -606,8 +613,17 @@ declare
   v_total_points numeric;
   v_submission_id bigint;
   v_review_id bigint;
+  v_revoking boolean := false;
 begin
-  if not new.is_submitted or (tg_op = 'UPDATE' and coalesce(old.is_submitted, false)) then
+  -- Two transitions matter, not one. AWARD when a response becomes submitted, and REVOKE when
+  -- an already-submitted response becomes unsubmitted: with response editing enabled, reopening
+  -- a submitted response and changing an answer autosaves is_submitted = false, and this used to
+  -- return early -- leaving the assignment's review released at FULL credit for a response that
+  -- is no longer complete. A re-submit fires the award path again and restores the score.
+  if tg_op = 'UPDATE' and coalesce(old.is_submitted, false) and not new.is_submitted then
+    v_revoking := true;
+  elsif not new.is_submitted or (tg_op = 'UPDATE' and coalesce(old.is_submitted, false)) then
+    -- Not a transition we act on (e.g. re-saving an already-submitted response).
     return new;
   end if;
 
@@ -633,6 +649,10 @@ begin
   limit 1;
 
   if v_submission_id is null then
+    -- Nothing to revoke if no submission was ever created; do not create one just to zero it.
+    if v_revoking then
+      return new;
+    end if;
     insert into public.submissions
       (assignment_id, profile_id, class_id, sha, repository, run_attempt, run_number, is_active)
     values
@@ -645,8 +665,11 @@ begin
   end if;
 
   if v_review_id is not null then
+    -- Stay released either way: the honest state of an incomplete response is a visible 0, not
+    -- a hidden grade, and it flips back on re-submit.
     update public.submission_reviews
-      set total_score = coalesce(v_total_points, 0), released = true
+      set total_score = case when v_revoking then 0 else coalesce(v_total_points, 0) end,
+          released = true
       where id = v_review_id;
   end if;
 

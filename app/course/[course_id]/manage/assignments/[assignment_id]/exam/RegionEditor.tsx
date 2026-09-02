@@ -76,6 +76,12 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
   // server-side off the saved rows, so it must refuse to run while the editor is ahead of
   // the database -- otherwise it reports success having synced the previous structure.
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
+  // Bumped after a successful save to re-run the load effect below. Without it, questions added
+  // in this session keep id: null even though the save persisted them, so the NEXT save looks
+  // like an all-new tree to exam_upsert_questions_and_regions -- it re-mints the ids and the
+  // rubric built in between is left pointing at the previous ones. (Same failure that was fixed
+  // in QuizBuilder; this editor has the identical shape.)
+  const [reloadKey, setReloadKey] = useState(0);
   const drawing = useRef<{ page: number; startX: number; startY: number } | null>(null);
   const [preview, setPreview] = useState<(NormRect & { page: number }) | null>(null);
 
@@ -162,7 +168,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
         description: e instanceof Error ? e.message : String(e)
       });
     });
-  }, [examId]);
+  }, [examId, reloadKey]);
 
   const currentSnapshot = useMemo(() => snapshotOf(questions, regions), [questions, regions]);
   const dirty = savedSnapshot !== null && currentSnapshot !== savedSnapshot;
@@ -291,7 +297,11 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
         }))
       });
       if (error) throw error;
+      // Re-read the persisted tree so state carries the database ids (and the snapshot is taken
+      // from what was actually stored). setSavedSnapshot here too so the editor is not briefly
+      // marked dirty between the save and the reload landing.
       setSavedSnapshot(snapshotOf(questions, regions));
+      setReloadKey((k) => k + 1);
       toaster.success({ title: "Saved exam structure" });
     } catch (e) {
       toaster.error({ title: "Save failed", description: e instanceof Error ? e.message : String(e) });

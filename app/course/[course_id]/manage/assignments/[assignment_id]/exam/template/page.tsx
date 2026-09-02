@@ -16,6 +16,11 @@ export default function ExamTemplatePage() {
   const [gradingRubricId, setGradingRubricId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  // Replacing a template upserts the SAME exam row, so setExamId() below is a no-op and
+  // RegionEditor -- whose load effect keys on examId -- keeps rendering the previous pages,
+  // signed URLs and region overlays. A later structure save would then persist coordinates
+  // drawn against the old template. Remount the editor on every successful upload instead.
+  const [templateRevision, setTemplateRevision] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -44,6 +49,7 @@ export default function ExamTemplatePage() {
       const supabase = createClient();
       const result = await uploadExamTemplate(supabase, courseId, assignmentId, file);
       setExamId(result.examId);
+      setTemplateRevision((r) => r + 1);
       toaster.success({ title: `Uploaded ${result.pages.length} template page(s)` });
     } catch (e) {
       toaster.error({ title: "Upload failed", description: e instanceof Error ? e.message : String(e) });
@@ -70,7 +76,7 @@ export default function ExamTemplatePage() {
       </Box>
 
       {examId ? (
-        <RegionEditor examId={examId} gradingRubricId={gradingRubricId} />
+        <RegionEditor key={`${examId}-${templateRevision}`} examId={examId} gradingRubricId={gradingRubricId} />
       ) : (
         <Text color="fg.muted">Upload a template PDF to start labeling regions.</Text>
       )}
