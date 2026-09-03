@@ -1600,10 +1600,22 @@ edgeFunctions:
     # each on a 3-node cluster. 1.5Gi (1536Mi) covers the derived steady state
     # with ~22% headroom.
     #
-    # The 3584Mi LIMIT is unchanged and stays deliberately loose (~35% of it is
-    # the charged sum): per the maxParallelism note above, that sum is a floor
-    # rather than a ceiling, and the slack is what lets the runtime retire an
-    # isolate instead of the kernel killing PID 1.
+    # The 3584Mi LIMIT is unchanged. TWO different fractions of it are in play and
+    # this comment mislabelled them until 2026-09-03, calling 35% "the charged
+    # sum" while the line above already said the charged sum leaves 18%:
+    #
+    #   2936Mi = 82% of the limit -- the CHARGED SUM (192 cache + 96 cold-load +
+    #            8 x 256 admitted isolates + 600 host). This is the same figure as
+    #            the "3584Mi leaves 648Mi (18%) of backstop slack" note above;
+    #            82% + 18% is where those two lines meet.
+    #   1256Mi = 35% of the limit -- the DERIVED STEADY STATE (600 host + 192
+    #            cache + 4 resident isolates at ~116Mi), i.e. what these pods
+    #            actually sit at, and the figure requests.memory is sized from.
+    #
+    # So the limit is loose against the STEADY STATE, not against the charged sum,
+    # and it stays that way deliberately: per the maxParallelism note above, the
+    # charged sum is a floor rather than a ceiling, and the slack is what lets the
+    # runtime retire an isolate instead of the kernel killing PID 1.
     #
     # Check the derivation against reality after the first 24h: the isolate term
     # is the soft one, and 4 x ~116Mi assumes each routed function keeps exactly
