@@ -43,6 +43,7 @@ data:
             strip_path: true
             paths:
               - /auth/v1/verify
+              - /verify
         plugins:
           - name: cors
       - name: auth-v1-open-callback
@@ -52,6 +53,7 @@ data:
             strip_path: true
             paths:
               - /auth/v1/callback
+              - /callback
         plugins:
           - name: cors
       - name: auth-v1-open-authorize
