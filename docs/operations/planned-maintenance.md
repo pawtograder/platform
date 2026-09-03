@@ -322,24 +322,61 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
        -d postgres -tAc "SELECT string_agg(jobid::text,',') FROM cron.job WHERE active;"
      kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
        -d postgres -c "UPDATE cron.job SET active=false WHERE active;"
+     #    The count is read WITHOUT a `| tr` pipeline. `set -o pipefail` is in
+     #    force here so a pipeline WOULD abort (verified: exec rc=1 -> block
+     #    rc=1, nothing scaled) -- but the same line copied out of this subshell
+     #    into `fenced()`, where pipefail is not in force, is exactly how the
+     #    swallowed-exit-status bug got in. Both forms are written the same way so
+     #    the next copy is safe wherever it lands.
      still_active="$(kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
-       -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;" | tr -d '[:space:]')"
+       -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;")"
+     still_active="${still_active//[[:space:]]/}"
      if [ "$still_active" != "0" ]; then
        echo "STOP: $still_active pg_cron job(s) are still active -- in-database writers are NOT fenced." >&2
        exit 1
      fi
 
      # 1. Record what to restore: writer Deployments + the realtime StatefulSet
-     #    (name + desired replicas — a `-o wide` snapshot is not machine-readable),
-     #    and the HPA YAML.
-     kubectl -n "$NS" get deploy,statefulset \
+     #    (name, kind and desired replicas — a `-o wide` snapshot is not
+     #    machine-readable), and the HPA YAML.
+     #
+     #    `-l app.kubernetes.io/instance=<release>` scopes this to THIS release.
+     #    Without it the snapshot picks up every Deployment and StatefulSet in the
+     #    namespace, and step 5 then "restores" whatever unrelated workload
+     #    happens to share it — to whatever replica count it had at fence time,
+     #    which is not step 5's business to set.
+     #
+     #    Everything lands in ONE timestamped directory whose path is PRINTED,
+     #    because step 5 has to find it again and cannot inherit a variable across
+     #    this subshell. Step 5 read `done < /tmp/pg-maint-replicas-*.txt`: on the
+     #    SECOND window on the same jump host that glob matches two files and bash
+     #    refuses with `ambiguous redirect`, so the loop restored NOTHING and the
+     #    fleet stayed at 0 replicas behind the maintenance page, mid-outage.
+     #    Executed: one file rc=0 and both workloads restored; two files rc=1 and
+     #    zero scale calls issued.
+     STATE_DIR="/tmp/pg-maint-$(date +%s)"; mkdir -p "$STATE_DIR"
+     kubectl -n "$NS" get deploy,statefulset -l "app.kubernetes.io/instance=<release>" \
        -o jsonpath='{range .items[*]}{.kind}{"\t"}{.metadata.name}{"\t"}{.spec.replicas}{"\n"}{end}' \
-       > "/tmp/pg-maint-replicas-$(date +%s).txt"
-     kubectl -n "$NS" get hpa -o yaml > "/tmp/pg-maint-hpa-$(date +%s).yaml"
+       > "$STATE_DIR/replicas.txt"
+     kubectl -n "$NS" get hpa -l "app.kubernetes.io/instance=<release>" -o yaml > "$STATE_DIR/hpa.yaml"
+     echo "prior state recorded in $STATE_DIR -- step 5 reads it back. Note the path down."
 
-     # 2. edge-functions is HPA-managed and cannot be "paused" via minReplicas:0
-     #    (needs the HPAScaleToZero gate) / maxReplicas:0 (rejected outright) — so
-     #    DELETE the HPA first (recorded above), then scale the writer tiers to 0.
+     # 2. DELETE the edge-functions HPA (recorded above), then scale the writer
+     #    tiers to 0. It cannot be "paused" instead: minReplicas:0 needs the
+     #    HPAScaleToZero gate and maxReplicas:0 is rejected outright.
+     #
+     #    Delete it for the RIGHT reason. `kubectl scale --replicas=0` is not
+     #    undone by the HPA: with `spec.replicas: 0` and `minReplicas` non-zero
+     #    the controller reports `ScalingActive=False` / `ScalingDisabled` and
+     #    stops acting on the target (scaling back OFF zero is what needs
+     #    HPAScaleToZero; prod runs v1.32.13 without it). The fence would hold on
+     #    its own. What the delete buys is that nothing can RE-ARM it: the instant
+     #    something sets `spec.replicas` off zero — a partial restore, a deploy
+     #    run, a controller reconcile — a live HPA drives the tier straight back
+     #    toward `minReplicas`, un-fencing it with no operator action and no log
+     #    line an operator would look at. (Reasoned from the controller's
+     #    documented scale-to-zero behaviour, not measured: measuring it means
+     #    scaling prod.)
      #    `--ignore-not-found` because an install with autoscaling off has no HPA
      #    and a NotFound here would abort a fence that is otherwise fine; unlike
      #    `scale`, `delete` really does take that flag.
@@ -390,7 +427,30 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
      # shellcheck disable=SC2086  # deliberate word-splitting: one kubectl call, N targets
      kubectl -n "$NS" scale $WRITERS --replicas=0
 
-     # 3. WAIT for the writers to actually be gone, and wait LONG ENOUGH.
+     # 3. SUSPEND the write-capable CronJobs. The summary above lists "suspend
+     #    write CronJobs" as part of the flow and `maintenance.sh` does it
+     #    (`SUSPEND_CRONJOBS`), but this manual sequence — the documented fallback
+     #    when the script cannot be used — had no CronJob step at all. Five
+     #    unsuspended CronJobs exist in prod and `audit-partitions` (03:00)
+     #    writes DDL, so a window that straddles its schedule gets DDL committed
+     #    into the database whose node is being drained. The `backup` CronJob is
+     #    deliberately left alone: pg_dump only reads.
+     #
+     #    Record each prior `suspend` value rather than assuming false — some may
+     #    be suspended on purpose, and step 5 must put back what was there.
+     #    Suspending does NOT stop a Job that is ALREADY running; `fenced()` in
+     #    step 3 refuses on that separately, which is the half a suspend cannot
+     #    cover.
+     for cj in audit-partitions backup-verify backup-restore-drill backup-pitr-drill; do
+       name="<release>-$cj"
+       if kubectl -n "$NS" get cronjob "$name" >/dev/null 2>&1; then
+         prior="$(kubectl -n "$NS" get cronjob "$name" -o jsonpath='{.spec.suspend}')"
+         printf '%s\t%s\n' "$name" "${prior:-false}" >> "$STATE_DIR/cronjobs.txt"
+         kubectl -n "$NS" patch cronjob "$name" --type=merge -p '{"spec":{"suspend":true}}'
+       fi
+     done
+
+     # 4. WAIT for the writers to actually be gone, and wait LONG ENOUGH.
      #    `kubectl scale` only writes `.spec.replicas`; termination is
      #    asynchronous, so a "fenced" writer keeps committing until its pod
      #    actually exits — including a worker draining pgmq into the primary you
@@ -424,7 +484,7 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
          exit 1
        fi
      fi
-     echo "FENCED: pg_cron is paused and every writer pod is gone."
+     echo "FENCED: pg_cron is paused, write CronJobs are suspended, and every writer pod is gone."
    )
    ```
 
@@ -545,10 +605,14 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    enabled in this environment — see [above](#what-makes-the-bounce-safe-and-cheap);
    do **not** force-delete the pod as a habit.
 
-   > **If the drain hangs on `<release>-functions-workers` instead.** The
-   > background-worker tier (`edgeFunctions.workerTier`, disabled in the chart
-   > default and enabled by environment overlay — staging here, and production
-   > through the separate `prod-charts` repo) gets a `minAvailable: 1` PDB, and
+   > **If the drain hangs on `<release>-functions-workers`.** Read this as
+   > forward-looking: `edgeFunctions.workerTier` is **off in the chart default and
+   > off in production today** — `prod-charts` sets no `workerTier` key, so there
+   > is no `<release>-functions-workers` Deployment in the Khoury cluster to hang
+   > on, and none of the example prod overlays enable one. `values-staging.yaml`
+   > does, and prod is expected to follow after the staging shadow deploy; until
+   > that lands, do not go hunting a Deployment that is not there. When it is
+   > enabled, the tier gets a `minAvailable: 1` PDB, and
    > unlike the Postgres case that shape is
    > correct — it is a 2-pod tier and losing both at once stops pgmq draining for
    > all four routed functions. But at 2 replicas it allows exactly one
@@ -594,6 +658,12 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    > kubectl -n "$NS" delete hpa <release>-functions --ignore-not-found
    > # shellcheck disable=SC2086
    > kubectl -n "$NS" scale $WRITERS --replicas=0
+   > # Re-suspend the write CronJobs too: the upgrade reconciled `spec.suspend`
+   > # back to the chart's value, so step 1's suspends are gone.
+   > for cj in audit-partitions backup-verify backup-restore-drill backup-pitr-drill; do
+   >   kubectl -n "$NS" get cronjob "<release>-$cj" >/dev/null 2>&1 &&
+   >     kubectl -n "$NS" patch cronjob "<release>-$cj" --type=merge -p '{"spec":{"suspend":true}}'
+   > done
    > # Wait for the WRITER pods by name, exactly as step 1 does. A release-wide
    > # `-l app.kubernetes.io/instance=<release>` would also wait on postgres, kong
    > # and the maintenance page -- which are all deliberately still running -- so it
@@ -620,9 +690,10 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    > ```
    >
    > **`helm upgrade` reconciles the whole release, not just the worker tier.** It
-   > restores the fixed-replica writer Deployments step 1 scaled to zero and
-   > recreates the edge HPA step 1 deleted — step 5 relies on exactly that
-   > reconciliation to bring the fleet back, which is why it happens here too. Left
+   > restores the fixed-replica writer Deployments step 1 scaled to zero, recreates
+   > the edge HPA step 1 deleted, and un-suspends the CronJobs step 1 suspended —
+   > step 5 relies on exactly that reconciliation to bring the fleet back, which is
+   > why it happens here too. Left
    > running, the drain would resume the moment the PDB is deleted and race those
    > restored writers to the primary, and a `fenced` check can only report that
    > afterwards: it cannot pause a drain that is already evicting. That is why the
@@ -689,16 +760,38 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    maintenance page. If you scaled down in step 1:
 
    - Resume pg_cron for exactly the jobs you paused in step 0 (the jobids you
-     recorded), then restore each writer to its recorded replica count — read it
-     back from the saved file (**do not** hardcode), scaling by the captured
-     **kind** so the `realtime` StatefulSet is restored too:
+     recorded), restore each writer to its recorded replica count — read it back
+     from the saved file (**do not** hardcode), scaling by the captured **kind**
+     so the `realtime` StatefulSet is restored too — and unsuspend the CronJobs
+     to their **prior** values:
 
      ```bash
+     # $STATE_DIR did not survive step 1: it was assigned inside that step's
+     # `( set -euo pipefail )` subshell. Use the path step 1 printed; `ls -dt`
+     # picks the newest if you did not note it down.
+     #
+     # This was `done < /tmp/pg-maint-replicas-*.txt`, a GLOB in a redirect.
+     # Step 1 timestamps the filename deliberately, so the files accumulate: on
+     # the second window on the same jump host the glob matches two files, bash
+     # refuses with `ambiguous redirect`, and the loop restores NOTHING -- the
+     # fleet stays at 0 replicas behind the maintenance page, mid-outage, and the
+     # only signal is one line of stderr in a step that "ran".
+     STATE_DIR="$(ls -dt /tmp/pg-maint-* | head -1)"
+     [ -s "$STATE_DIR/replicas.txt" ] || { echo "no recorded state in $STATE_DIR -- do NOT guess replica counts" >&2; exit 1; }
+     echo "restoring from $STATE_DIR"
+
      kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
        -d postgres -c "UPDATE cron.job SET active=true WHERE jobid = ANY(ARRAY[<recorded-jobids>]::bigint[]);"
      while IFS=$'\t' read -r kind name replicas; do
        kubectl -n "$NS" scale "${kind,,}" "$name" --replicas="$replicas"
-     done < /tmp/pg-maint-replicas-*.txt   # the file written in step 1 above
+     done < "$STATE_DIR/replicas.txt"
+
+     # Unsuspend to the PRIOR value, not blindly to false.
+     if [ -s "$STATE_DIR/cronjobs.txt" ]; then
+       while IFS=$'\t' read -r name prior; do
+         kubectl -n "$NS" patch cronjob "$name" --type=merge -p "{\"spec\":{\"suspend\":${prior}}}"
+       done < "$STATE_DIR/cronjobs.txt"
+     fi
      ```
 
    - **Recreate the deleted HPA by reconciling the Helm release**
@@ -707,6 +800,11 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
      memory Resource metrics plus custom scale-up/down behavior, none of which a
      `kubectl autoscale` (CPU-target v1-style) HPA reproduces. Helm owns it, so a
      reconcile restores it exactly.
+
+   - **Resume the deploy source you paused before step 1** (`paused:false`,
+     `flux resume kustomization`, `--sync-policy automated`), or lift the gate on
+     the deploy workflow. Do it here, after the writers are back — and do not skip
+     it: a sync source left suspended is a silent config-drift outage days later.
 
    **Point the web host back to the app** (reverse of the step-1 patch), then drop
    the maintenance page only after the smoke checklist passes:
