@@ -200,8 +200,33 @@ jobs:
           # execution.
           echo "${SC_SHA256}  ${RUNNER_TEMP}/shellcheck.tar.xz" | sha256sum -c - \
             || { echo "::error::shellcheck archive digest does not match the pinned SC_SHA256 -- refusing to extract"; exit 1; }
-          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP" \
-            "shellcheck-v${SC_VERSION}/shellcheck"
+          # DECOMPRESS WITHOUT ASSUMING `xz`. shellcheck publishes linux builds
+          # ONLY as .tar.xz (checked the release assets: xz for every arch, plus
+          # a Windows .zip -- there is no .tar.gz to fall back to), and
+          # `pawtograder-ci` has no `xz`: the first run of this job died with
+          # "tar (child): xz: Cannot exec: No such file or directory" AFTER the
+          # digest verified, so the download was fine and only the unpack failed.
+          # That is the third CI addition on this branch to break on a runner
+          # assumption rather than on its own logic, so this probes instead of
+          # assuming, and fails with an actionable message if neither path
+          # exists rather than a tar error six lines deep.
+          #
+          # Both paths extract the identical binary -- verified by sha256 of the
+          # extracted file, not just by the archive digest.
+          if command -v xz >/dev/null 2>&1; then
+            echo "unpacking with xz"
+            tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP" \
+              "shellcheck-v${SC_VERSION}/shellcheck"
+          elif python3 -c 'import lzma' >/dev/null 2>&1; then
+            echo "no xz on this runner; unpacking with python3 lzma (stdlib)"
+            python3 -c 'import lzma,sys,shutil; shutil.copyfileobj(lzma.open(sys.argv[1],"rb"), sys.stdout.buffer)' \
+              "$RUNNER_TEMP/shellcheck.tar.xz" \
+              | tar -x -C "$RUNNER_TEMP" -f - "shellcheck-v${SC_VERSION}/shellcheck"
+          else
+            echo "::error::cannot decompress the shellcheck archive: this runner has neither \`xz\` nor a python3 with the stdlib \`lzma\` module."
+            echo "::error::shellcheck ships linux builds only as .tar.xz, so one of those is required. Install xz on the runner image, or vendor the binary."
+            exit 1
+          fi
           install -m 0755 \
             "$RUNNER_TEMP/shellcheck-v${SC_VERSION}/shellcheck" \
             "$RUNNER_TEMP/shellcheck-bin/shellcheck"
