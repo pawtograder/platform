@@ -146,7 +146,27 @@ is already warm.
      #    pipefail` is in force here so a pipeline would in fact abort, but the
      #    same line copied into `fenced()` below -- where it is not -- is how the
      #    swallowed-exit-status bug got in, so both forms are written the same way.
-     if kubectl -n "$NS" get pod <release>-postgres-0 >/dev/null 2>&1; then
+     #    The probe uses `--ignore-not-found`, NOT `>/dev/null 2>&1`. The first
+     #    version of this guard used the latter, and it was the SEVENTH instance
+     #    of the fence bug this branch keeps finding: `2>&1` throws the error
+     #    away, so an RBAC denial, a namespace typo, an expired token or a
+     #    transient API 5xx all fell into the `else` branch, set `still_active=0`,
+     #    and skipped the pg_cron pause entirely on a primary that may well have
+     #    been alive and firing. The reasoning for HAVING a guard is unchanged --
+     #    `set -e` would otherwise abort this fence on the most common promote of
+     #    all -- but "I could not tell" is not "the primary is gone".
+     #    `--ignore-not-found` gives rc=0 + empty output for genuine absence and
+     #    rc!=0 for every other failure, which `set -e` then turns into a stop.
+     if ! primary_probe="$(kubectl -n "$NS" get pod <release>-postgres-0 --ignore-not-found -o name)"; then
+       echo "STOP: could not determine whether <release>-postgres-0 exists (RBAC, credentials, wrong namespace, or an API error)." >&2
+       echo "  Fix the access and re-run. Do NOT promote on an unknown primary state." >&2
+       exit 1
+     fi
+     if [ -n "$primary_probe" ]; then
+       # PLANNED path (the major-version upgrade planned-maintenance.md routes
+       # here): the old primary is up, so it is both writable and reachable.
+       # Record the active jobids, pause, and verify the pause took. The pause
+       # replicates, so the standby you are about to promote inherits it.
        kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
          -d postgres -tAc "SELECT string_agg(jobid::text,',') FROM cron.job WHERE active;"
        kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
@@ -255,13 +275,20 @@ is already warm.
      #    stop a Job that is ALREADY running -- `fenced()` below refuses on that
      #    separately, which is the half a suspend cannot cover.
      #    Record each prior `suspend` value: some may be suspended on purpose.
+     #    `--ignore-not-found`, NOT `>/dev/null 2>&1`. That idiom cannot tell
+     #    "this CronJob does not exist in this install" from "RBAC denied / wrong
+     #    namespace / expired token / API 5xx": both are a non-zero exit with the
+     #    error thrown away, so both skipped the suspend and left a write-capable
+     #    CronJob free to fire mid-window. `--ignore-not-found` is rc=0 with EMPTY
+     #    output for genuine absence and rc!=0 for everything else, so `set -e`
+     #    aborts on "I could not tell".
      for cj in audit-partitions backup-verify backup-restore-drill backup-pitr-drill; do
        name="<release>-$cj"
-       if kubectl -n "$NS" get cronjob "$name" >/dev/null 2>&1; then
-         prior="$(kubectl -n "$NS" get cronjob "$name" -o jsonpath='{.spec.suspend}')"
-         printf '%s\t%s\n' "$name" "${prior:-false}" >> "$STATE_DIR/cronjobs.txt"
-         kubectl -n "$NS" patch cronjob "$name" --type=merge -p '{"spec":{"suspend":true}}'
-       fi
+       found="$(kubectl -n "$NS" get cronjob "$name" --ignore-not-found -o name)"
+       [ -n "$found" ] || continue
+       prior="$(kubectl -n "$NS" get cronjob "$name" -o jsonpath='{.spec.suspend}')"
+       printf '%s\t%s\n' "$name" "${prior:-false}" >> "$STATE_DIR/cronjobs.txt"
+       kubectl -n "$NS" patch cronjob "$name" --type=merge -p '{"spec":{"suspend":true}}'
      done
      # 5. Then WAIT, and wait LONG ENOUGH. `kubectl scale` only writes
      # `.spec.replicas`; termination is asynchronous, so between the scale

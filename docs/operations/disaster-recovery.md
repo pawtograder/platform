@@ -323,13 +323,20 @@ nothing writes during the restore and no half-restored state is served.
      #    stop a Job that is ALREADY running -- `fenced()` below refuses on that
      #    separately, which is the half a suspend cannot cover.
      #    Record each prior `suspend` value: some may be suspended on purpose.
+     #    `--ignore-not-found`, NOT `>/dev/null 2>&1`. That idiom cannot tell
+     #    "this CronJob does not exist in this install" from "RBAC denied / wrong
+     #    namespace / expired token / API 5xx": both are a non-zero exit with the
+     #    error thrown away, so both skipped the suspend and left a write-capable
+     #    CronJob free to fire mid-window. `--ignore-not-found` is rc=0 with EMPTY
+     #    output for genuine absence and rc!=0 for everything else, so `set -e`
+     #    aborts on "I could not tell".
      for cj in audit-partitions backup-verify backup-restore-drill backup-pitr-drill; do
        name="<release>-$cj"
-       if kubectl -n "$NS" get cronjob "$name" >/dev/null 2>&1; then
-         prior="$(kubectl -n "$NS" get cronjob "$name" -o jsonpath='{.spec.suspend}')"
-         printf '%s\t%s\n' "$name" "${prior:-false}" >> "$STATE_DIR/cronjobs.txt"
-         kubectl -n "$NS" patch cronjob "$name" --type=merge -p '{"spec":{"suspend":true}}'
-       fi
+       found="$(kubectl -n "$NS" get cronjob "$name" --ignore-not-found -o name)"
+       [ -n "$found" ] || continue
+       prior="$(kubectl -n "$NS" get cronjob "$name" -o jsonpath='{.spec.suspend}')"
+       printf '%s\t%s\n' "$name" "${prior:-false}" >> "$STATE_DIR/cronjobs.txt"
+       kubectl -n "$NS" patch cronjob "$name" --type=merge -p '{"spec":{"suspend":true}}'
      done
      # 5. Then WAIT, and wait LONG ENOUGH. `kubectl scale` only writes
      # `.spec.replicas`; termination is asynchronous, so between the scale

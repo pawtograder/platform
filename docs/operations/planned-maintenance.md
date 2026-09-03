@@ -471,13 +471,20 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
      #    Suspending does NOT stop a Job that is ALREADY running; `fenced()` in
      #    step 3 refuses on that separately, which is the half a suspend cannot
      #    cover.
+     #    `--ignore-not-found`, NOT `>/dev/null 2>&1`. That idiom cannot tell
+     #    "this CronJob does not exist in this install" from "RBAC denied / wrong
+     #    namespace / expired token / API 5xx": both are a non-zero exit with the
+     #    error thrown away, so both skipped the suspend and left a write-capable
+     #    CronJob free to fire mid-window. `--ignore-not-found` is rc=0 with EMPTY
+     #    output for genuine absence and rc!=0 for everything else, so `set -e`
+     #    aborts on "I could not tell".
      for cj in audit-partitions backup-verify backup-restore-drill backup-pitr-drill; do
        name="<release>-$cj"
-       if kubectl -n "$NS" get cronjob "$name" >/dev/null 2>&1; then
-         prior="$(kubectl -n "$NS" get cronjob "$name" -o jsonpath='{.spec.suspend}')"
-         printf '%s\t%s\n' "$name" "${prior:-false}" >> "$STATE_DIR/cronjobs.txt"
-         kubectl -n "$NS" patch cronjob "$name" --type=merge -p '{"spec":{"suspend":true}}'
-       fi
+       found="$(kubectl -n "$NS" get cronjob "$name" --ignore-not-found -o name)"
+       [ -n "$found" ] || continue
+       prior="$(kubectl -n "$NS" get cronjob "$name" -o jsonpath='{.spec.suspend}')"
+       printf '%s\t%s\n' "$name" "${prior:-false}" >> "$STATE_DIR/cronjobs.txt"
+       kubectl -n "$NS" patch cronjob "$name" --type=merge -p '{"spec":{"suspend":true}}'
      done
 
      # 4. WAIT for the writers to actually be gone, and wait LONG ENOUGH.
@@ -691,8 +698,12 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    > # Re-suspend the write CronJobs too: the upgrade reconciled `spec.suspend`
    > # back to the chart's value, so step 1's suspends are gone.
    > for cj in audit-partitions backup-verify backup-restore-drill backup-pitr-drill; do
-   >   kubectl -n "$NS" get cronjob "<release>-$cj" >/dev/null 2>&1 &&
-   >     kubectl -n "$NS" patch cronjob "<release>-$cj" --type=merge -p '{"spec":{"suspend":true}}'
+   >   # `--ignore-not-found`, not `>/dev/null 2>&1`: absence must be
+   >   # distinguishable from "RBAC denied" / "API error", or a swallowed failure
+   >   # silently leaves a write CronJob unsuspended before the drain restarts.
+   >   found="$(kubectl -n "$NS" get cronjob "<release>-$cj" --ignore-not-found -o name)"
+   >   [ -n "$found" ] || continue
+   >   kubectl -n "$NS" patch cronjob "<release>-$cj" --type=merge -p '{"spec":{"suspend":true}}'
    > done
    > # Wait for the WRITER pods by name, exactly as step 1 does. A release-wide
    > # `-l app.kubernetes.io/instance=<release>` would also wait on postgres, kong
