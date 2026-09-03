@@ -4,9 +4,13 @@
 # release-images pipeline run. For fast iteration on supabase/functions/.
 #
 # It rebuilds charts/pawtograder/images/edge-functions/Dockerfile (the eszip
-# bundle + demuxer main service), pushes a unique tag to ghcr, then patches the
-# `functions` Deployment via `kubectl set image` and waits for the rollout.
-# Surgical: it touches ONLY the functions Deployment — not web/migrations/db.
+# bundle + demuxer main service), pushes a unique tag to ghcr, then patches every
+# edge-functions Deployment via `kubectl set image` and waits for the rollouts.
+# That is the request tier and, when edgeFunctions.workerTier is enabled, the
+# background-worker tier: both run the same image, so patching one would leave the
+# four pgmq workers on old code. Surgical in the sense that matters: it touches
+# only the edge tiers — not web/migrations/db. The confirmation prompt lists every
+# Deployment it will patch.
 #
 # Usage:
 #   scripts/deploy-edge-functions.sh                    # -> staging
@@ -79,11 +83,42 @@ assert_namespace "$NAMESPACE"
 kubectl get deploy "$DEPLOYMENT" -n "$NAMESPACE" >/dev/null 2>&1 \
   || { echo "deployment ${DEPLOYMENT} not found in ${NAMESPACE} — is the env deployed?" >&2; exit 1; }
 
+# Both edge tiers run the SAME image, so patching only the request tier would
+# leave the four pgmq workers on the old code while the tool reported success --
+# a half-updated fleet is worse than an un-updated one, because the symptom shows
+# up as "my change did not take effect" for exactly the functions being debugged.
+# The worker tier is optional (edgeFunctions.workerTier.enabled), so it is patched
+# only when it actually exists.
+#
+# Resolved BEFORE the confirmation banner, deliberately: the banner is the safety
+# mechanism for an interactive tool aimed at prod and previews, so it has to name
+# every Deployment that is about to be patched, not just the first one.
+#
+# `--ignore-not-found -o name` rather than discarding the exit status. A bare
+# `kubectl get ... >/dev/null 2>&1` conflates "the tier is disabled" with "I could
+# not tell" -- an expired token, a wrong context, a `get`-scoped role or a
+# transient API 5xx all took the else branch, printed a reassuring "worker tier
+# disabled", patched one tier and reported success. That is the exact half-updated
+# fleet this block exists to prevent, announced as a deliberate decision.
+TARGETS="$DEPLOYMENT"
+if worker_found="$(kubectl get "deploy/${DEPLOYMENT}-workers" -n "$NAMESPACE" \
+    --ignore-not-found -o name 2>/dev/null)"; then
+  if [ -n "$worker_found" ]; then
+    TARGETS="$TARGETS ${DEPLOYMENT}-workers"
+  else
+    echo "==> no ${DEPLOYMENT}-workers Deployment in ${NAMESPACE} (worker tier disabled); patching the request tier only"
+  fi
+else
+  echo "could not determine whether ${DEPLOYMENT}-workers exists in ${NAMESPACE} (kubectl get failed: RBAC, expired credentials, or an API error)." >&2
+  echo "Refusing to guess: patching only the request tier here would silently leave the four pgmq workers on the old image." >&2
+  exit 1
+fi
+
 cat <<EOF
 Redeploy edge functions
   checkout    : ${REPO_ROOT} (HEAD ${SHA}${DIRTY})
   namespace   : ${NAMESPACE}
-  deployment  : ${DEPLOYMENT} (container ${CONTAINER})
+  deployments : ${TARGETS} (container ${CONTAINER})
   image       : ${IMAGE_REF}
   build       : $([ "$do_build" -eq 1 ] && echo yes || echo 'no (reuse existing tag)')
 EOF
@@ -111,11 +146,149 @@ if [ "$do_build" -eq 1 ]; then
   docker push "$IMAGE_REF"
 fi
 
-echo "==> kubectl set image ${DEPLOYMENT} ${CONTAINER}=${IMAGE_REF}"
-kubectl set image "deploy/${DEPLOYMENT}" "${CONTAINER}=${IMAGE_REF}" -n "$NAMESPACE"
-echo "==> waiting for rollout…"
-kubectl rollout status "deploy/${DEPLOYMENT}" -n "$NAMESPACE" --timeout=5m
+# Patch every target first, THEN wait: the rollouts then progress concurrently in
+# the cluster and the waits are max(), not sum().
+#
+# `|| patch_failed=...` for the same reason the rollout loop below collects
+# failures instead of aborting, and this loop needed it more. Under `set -e` a
+# failing `kubectl set image` on the SECOND target exits here immediately --
+# after the first target is already patched and before a single rollout has been
+# waited on or reported. That is the half-updated fleet this whole multi-tier
+# block exists to prevent, reached by the one path that skips every check: the
+# request tier is rolling out to the new image, the worker tier is still on the
+# old one, and the tool's last word is a kubectl error about a Deployment it
+# never touched. The worker Deployment disappearing between discovery and here
+# (a concurrent `helm upgrade` turning the tier off) and a transient API 5xx both
+# get there.
+#
+# The successfully-patched targets are still waited on and still reported, and
+# the script exits non-zero at the end naming what did not get patched -- so the
+# operator learns the fleet is split from this tool rather than from an alert.
+# NOT rolled back: reverting the first patch would start a second rollout of the
+# old image over a fleet that is already mid-rollout, which is more disruption
+# than the split it repairs, and the retry is one re-run of this script.
+patch_failed=""
+PATCHED=""
+for d in $TARGETS; do
+  echo "==> kubectl set image ${d} ${CONTAINER}=${IMAGE_REF}"
+  if kubectl set image "deploy/${d}" "${CONTAINER}=${IMAGE_REF}" -n "$NAMESPACE"; then
+    PATCHED="$PATCHED $d"
+  else
+    echo "!!! kubectl set image FAILED for ${d} -- it stays on its current image" >&2
+    patch_failed="$patch_failed $d"
+  fi
+done
+if [ -z "$PATCHED" ]; then
+  echo "No Deployment was patched. Nothing to wait for; the fleet is unchanged." >&2
+  exit 1
+fi
+# Every patched target is waited on even if an earlier one fails. Under `set -e` a
+# failing `rollout status` used to abort here, so when the request tier timed out
+# the worker tier was never waited on and never reported -- pgmq quietly stopped
+# draining while the tool's last word was about the other tier. The patched tiers
+# need their status reported whatever happened to the others.
+rollout_failed=0
+ROLLED=""
+rollout_stalled=""
+# Timeout is DERIVED per deployment, because a fixed one was wrong in both
+# directions and the wrong direction that bit was "too short".
+#
+# It was --timeout=5m. The edge tier's terminationGracePeriodSeconds alone is
+# 430s (7.2 min), so a single pod that used its full drain window outlasted the
+# whole timeout -- and prod's own values log records a 24-replica request-tier
+# deploy taking ~12 minutes. So the tool reported failure on rollouts that were
+# healthy and still progressing, which is worse than waiting: both tiers have
+# already been patched by this point, so a spurious failure invites someone to
+# intervene in a deploy that was fine.
+#
+# The rollout is SERIAL, which is what makes it slow: the chart sets
+# maxUnavailable: 0 with maxSurge: 1, so one new pod comes up Ready before one
+# old pod is terminated, N times. Per replica the cost is a new pod reaching
+# readiness (tcpSocket, initialDelay 5s + period 5s) plus an old pod draining
+# (preStop 10s, then edge-runtime's --graceful-exit-timeout: ~0.3s when idle,
+# up to 410s with a long request in flight, SIGKILL-backstopped at 430s).
+#
+# Budget 60s per replica against the ~30s/replica the 24-pod prod deploy actually
+# measured -- 2x, so pods with real in-flight work to drain fit -- plus a fixed 5m
+# for a cold image pull on a node that has never run this tag (the eszip image is
+# large, and that cost is per node, not per replica). Floor of 10m so small
+# deployments still tolerate one full drain window. Deliberately NOT sized to the
+# theoretical worst case (24 x 430s = 172 min): a timeout should be longer than
+# any healthy rollout, not longer than any conceivable one, or it stops being a
+# signal at all.
+for d in $PATCHED; do
+  replicas="$(kubectl get "deploy/${d}" -n "$NAMESPACE" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "")"
+  case "$replicas" in
+    '' | *[!0-9]*) replicas=1 ;; # unreadable: fall back to the floor
+  esac
+  timeout=$((replicas * 60 + 300))
+  [ "$timeout" -lt 600 ] && timeout=600
+  # The 60s/replica term is calibrated on the REQUEST tier, whose drains are
+  # ~0.3s because its requests are short -- that is what the 24-pod prod deploy
+  # measured. The WORKER tier is the opposite: its pods hold leased pgmq batches,
+  # so using the full graceful-exit window is its NORMAL drain, not a pathological
+  # one. At 2 replicas the formula above yields the 600s floor while a serial
+  # rollout legitimately needs 2 x (preStop + graceful exit) ~= 840s, so a healthy
+  # worker-tier rollout timed out and reported failure.
+  #
+  # Floor it instead at "two full drain windows", read from the Deployment's own
+  # terminationGracePeriodSeconds rather than a hardcoded 430. Two, not N: the
+  # rollout is serial, but budgeting every replica a full drain is the
+  # 24 x 430s = 172min worst case this block deliberately refuses to size for. At
+  # 24 replicas the 60s/replica term already exceeds this floor, so the request
+  # tier is unchanged; at 2 it is what saves the rollout.
+  grace="$(kubectl get "deploy/${d}" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}' 2>/dev/null || echo "")"
+  case "$grace" in
+    '' | *[!0-9]*) grace=0 ;; # unreadable: keep the replica-derived timeout
+  esac
+  if [ "$grace" -gt 0 ]; then
+    # How many of those windows land on the critical path differs by tier, and
+    # the cap is why: the request tier's drains are ~0.3s, so budgeting a full
+    # window for each of its 24 replicas would be the 172-minute worst case this
+    # block refuses to size for -- two is a floor there, and its 60s/replica term
+    # exceeds that floor anyway. The WORKER tier is the case the cap gets wrong:
+    # leased batches can be active on every old pod, so a serial rollout of N
+    # replicas genuinely needs N full windows, and `replicas` is operator-settable
+    # above 2. Budget all of them there.
+    case "$d" in
+      *-workers) drains="$replicas" ;;
+      *) drains="$replicas"; [ "$drains" -gt 2 ] && drains=2 ;;
+    esac
+    # +30s per drain for the replacement pod reaching readiness (tcpSocket,
+    # initialDelay 5s + period 5s), +300s for a cold image pull on a new node.
+    drain_floor=$((drains * (grace + 30) + 300))
+    [ "$timeout" -lt "$drain_floor" ] && timeout="$drain_floor"
+  fi
+  echo "==> waiting for rollout: ${d} (${replicas} replicas, timeout ${timeout}s)"
+  if kubectl rollout status "deploy/${d}" -n "$NAMESPACE" --timeout="${timeout}s"; then
+    ROLLED="$ROLLED $d"
+  else
+    rollout_failed=1
+    rollout_stalled="$rollout_stalled $d"
+  fi
+done
 
+# "Done." is per DEPLOYMENT and it has to mean what it says. This loop used to run
+# over $PATCHED, so a tier whose rollout timed out still got its own
+# "Done. <name> ... now runs <image>" line, followed by one generic "one or more
+# rollouts did not complete" -- an operator reading a per-Deployment success line
+# for the tier that is still on the old code, which is precisely the half-updated
+# fleet the rest of this block exists to surface.
 echo
-echo "Done. ${DEPLOYMENT} in ${NAMESPACE} now runs ${IMAGE_REF}"
+for d in $ROLLED; do
+  echo "Done. ${d} in ${NAMESPACE} now runs ${IMAGE_REF}"
+done
+for d in $rollout_stalled; do
+  echo "NOT ROLLED OUT: ${d} in ${NAMESPACE} was patched to ${IMAGE_REF} but its rollout did not complete -- some pods may still be on the previous image." >&2
+done
+if [ -n "$patch_failed" ]; then
+  echo "SPLIT FLEET: these Deployments were NOT patched and are still on their previous image:${patch_failed}" >&2
+  echo "The tiers share a database and a pgmq queue set, so re-run this script until every target reports Done." >&2
+  exit 1
+fi
+if [ "$rollout_failed" -ne 0 ]; then
+  echo "One or more rollouts did not complete — see above. Every tier listed was patched, so check each Deployment." >&2
+  exit 1
+fi
 echo "Note: a later 'helm upgrade' / staging auto-deploy resets this to the chart's tag."

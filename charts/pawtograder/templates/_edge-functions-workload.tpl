@@ -1,20 +1,30 @@
 {{/*
 Edge functions (Deno edge-runtime) Service + Deployment, parameterized so the
-stable channel and any extra deployment channels (.Values.channels) render from
-one definition.
+stable channel, any extra deployment channels (.Values.channels) and any extra
+ISOLATION TIER (.Values.edgeFunctions.workerTier) render from one definition.
 
 Usage:
   {{ include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions" "image" .Values.edgeFunctions.image "replicas" .Values.edgeFunctions.replicas "autoscaling" .Values.edgeFunctions.autoscaling.enabled) }}
 
 Args:
   ctx          root context (.)
-  component    component label + name suffix: "functions" for stable, "functions-<channel>" for a channel
+  component    component label + name suffix: "functions" for stable, "functions-<channel>" for a channel, "functions-workers" for the worker tier
   image        image dict ({ repository, tag, pullPolicy })
   replicas     replica count (used when autoscaling is false)
   autoscaling  when true, omit replicas (an HPA owns it — stable only)
+  overrides    OPTIONAL dict merged over .Values.edgeFunctions for this workload only
+  tier         OPTIONAL values-block name ("workerTier") used in budget-failure messages
 
-All other config is shared from .Values.edgeFunctions; channels differ only by
-name, labels, image, and replicas, and target the same Postgres/auth/storage.
+Two dimensions, deliberately different:
+  * A CHANNEL differs only by name, labels, image and replicas. It serves the
+    same function set with the same isolation config, is reached by HOST, and
+    passes no `overrides`.
+  * A TIER differs by isolation config (policy, maxParallelism, the memory
+    budget) and is reached by PATH — Kong routes specific function NAMES to it
+    (see templates/kong-config.yaml). It passes `overrides`.
+
+Everything not overridden comes from .Values.edgeFunctions, and every workload
+targets the same Postgres/auth/storage.
 */}}
 {{/*
 Guardrail: the edge-function container memory budget is a SUM, and every
@@ -26,11 +36,32 @@ demuxer's eszip cache, which grows to eszipCacheMaxMb, and OOM-killed pods again
 So the sum is asserted at render time rather than documented and hoped for:
 
     eszipCacheMaxMb + eszipColdLoadHeadroomMb
-      + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
+      + (maxParallelism x worker.memoryLimitMb) + ~600Mi host
       <= resources.limits.memory
 
-The host term is measured, not guessed: a freshly started pod with an empty
-cache sits at ~87Mi.
+WHAT THIS SUM IS AND IS NOT. It is the FLOOR a pod needs, and passing it means
+"this configuration is not obviously impossible". It is NOT an upper bound on
+what a pod can use, and the isolate term is the reason: --max-parallelism is per
+SERVICE PATH, not per pod (pool.rs keys active_workers by service path and gives
+each its own Semaphore(max_parallelism) -- :242/:325/:169, v1.74.0 b1edf453), and
+a permit is held for the isolate's life rather than the request's (stored at
+:513, released only via retire() at :727). So the true ceiling on resident
+isolates is (distinct paths served) x maxParallelism, which on the stable tier is
+up to 58 x 8 while this term charges 8. `force_create` can even mint an isolate
+holding NO permit (:343-347, with an in-source NOTE questioning it).
+
+What actually keeps a pod under its limit is `beforeUnload` recycling,
+worker.timeoutMs retiring IDLE isolates, and the pool's idle cleanup. None of
+those is asserted here, and none has a render-time expression -- which is exactly
+why the limit needs slack rather than being tightened to track the sum. Do not
+read a passing assertion as a bound.
+
+The host term is measured, not guessed -- but measured at the RIGHT moment,
+which is the correction this note previously got wrong. A freshly started pod
+with an empty cache sits at ~87Mi; that was the old ~90Mi term. The limit is a
+hard cgroup ceiling, so what has to fit is the CONVERGED baseline, which #949
+measured at ~600Mi and load-independent (it takes ~24h to settle, which is why
+every earlier attempt to size this tier read it too low).
 
 The cold-load term covers bundle buffers that residentBytes does NOT count: a
 bundle being read for a cache miss, and one the LRU evicted or refused while a
@@ -43,12 +74,24 @@ derives it from CPU count, which cannot be known at render time; treating that a
 zero made this assertion accept the very combinations the values documentation
 says it rejects, which is worse than not having it.
 
-One deliberate gap remains: a limit that is not an integer number of Gi/Mi is
-skipped rather than mis-parsed -- a guardrail that silently computes the wrong
-number is worse than one that admits it cannot.
+A limit that is not an integer number of Gi/Mi is REFUSED, not skipped. It used
+to be skipped, on the reasoning that a guardrail which silently computes the
+wrong number is worse than one that admits it cannot -- true, but skipping is
+also silent, and it fails in the dangerous direction. Sprig's `int` is
+cast.ToInt, which returns 0 (not a truncation) for "1.5", so `1.5Gi` set
+$limitMi to 0 and the final `gt $limitMi 0` switched the whole assertion off:
+an integer `2Gi` was refused while the SMALLER `1.5Gi` rendered clean. Fractional
+Gi is this chart's own house notation for memory (resources.requests.memory is
+1.5Gi here and 1.8Gi in the prod overlays), so that cliff was reachable by
+writing the limit the same way as the request beside it.
 */}}
 {{- define "pawtograder.edgeFunctions.assertMemoryBudget" -}}
-{{- $ef := .Values.edgeFunctions -}}
+{{- $ef := .cfg -}}
+{{/* Which values block this failure is about. Every tier renders from one
+     definition and each has its OWN budget, so a message that always said
+     "edgeFunctions.*" would send a reader to the wrong block -- and the whole
+     value of this assertion is that it names the knob to change. */}}
+{{- $p := ternary "edgeFunctions" (printf "edgeFunctions.%s" .tier) (empty .tier) -}}
 {{- $limit := "" -}}
 {{- if $ef.resources -}}
 {{- if $ef.resources.limits -}}
@@ -61,9 +104,15 @@ number is worse than one that admits it cannot.
 {{- else if hasSuffix "Mi" $limit -}}
 {{- $limitMi = trimSuffix "Mi" $limit | int -}}
 {{- end -}}
+{{/* A limit that is set but did not parse is the one input class where
+     "skip" and "passed" are indistinguishable, so refuse it. See the note
+     above: `int` yields 0 for a fractional value, not a truncation. */}}
+{{- if and (ne $limit "") (le $limitMi 0) -}}
+{{- fail (printf "%s.resources.limits.memory is %q, which this assertion cannot parse: it reads only a whole number of Mi or Gi. Sprig's int returns 0 for a fractional value, so a limit like 1.5Gi would switch the four-term memory budget off entirely rather than checking it -- an integer 2Gi is refused while the smaller 1.5Gi would render clean. Spell the limit in Mi (3584Mi, not 3.5Gi) or as a whole number of Gi." $p $limit) -}}
+{{- end -}}
 {{- $cacheMi := $ef.eszipCacheMaxMb | int -}}
 {{- if le $cacheMi 0 -}}
-{{- fail (printf "edgeFunctions.eszipCacheMaxMb must be a positive number of MiB (got %v). Zero or negative would be counted as-is by this assertion while main.ts substitutes its own 512Mi default, so the process would reserve memory the budget never accounted for." $ef.eszipCacheMaxMb) -}}
+{{- fail (printf "%s.eszipCacheMaxMb must be a positive number of MiB (got %v). Zero or negative would be counted as-is by this assertion while main.ts substitutes its own 512Mi default, so the process would reserve memory the budget never accounted for." $p $ef.eszipCacheMaxMb) -}}
 {{- end -}}
 {{/* Every one of these is rendered into the environment AND has a fallback in
      main.ts of the shape `Number(env) || default`. A zero, negative or
@@ -77,38 +126,396 @@ number is worse than one that admits it cannot.
      validated knob beside four unvalidated ones. */}}
 {{- range $knob, $value := dict "worker.memoryLimitMb" $ef.worker.memoryLimitMb "worker.timeoutMs" $ef.worker.timeoutMs "worker.cpuSoftMs" $ef.worker.cpuSoftMs "worker.cpuHardMs" $ef.worker.cpuHardMs "worker.lowMemoryMultiplier" $ef.worker.lowMemoryMultiplier -}}
 {{- if le ($value | int) 0 -}}
-{{- fail (printf "edgeFunctions.%s must be a positive number (got %v). main.ts falls back to its own default for anything non-positive, so the container would run on a value this budget assertion never counted." $knob $value) -}}
+{{- fail (printf "%s.%s must be a positive number (got %v). main.ts falls back to its own default for anything non-positive, so the container would run on a value this budget assertion never counted." $p $knob $value) -}}
+{{- end -}}
+{{- end -}}
+{{/* THE POLICY VALUE ITSELF, before anything reasons about it. `--policy` takes
+     one of three words and this template passes the configured string through
+     VERBATIM, so `per-request` (hyphen where the runtime wants an underscore)
+     renders a clean manifest and then every pod in the tier CrashLoops on an
+     unsupported policy. On the worker tier that takes all four routed pgmq
+     consumers offline at once, with nothing in the render to show for it.
+
+     Note what does NOT catch this. assertTierOverrides' allowlist turns a typo
+     in the KEY into a render error -- its own comment uses `polciy: oneshot` as
+     the example -- but the allowlist has nothing to say about the VALUE, and a
+     misspelled value is the likelier typo of the two because the correct
+     spelling is an underscore in a file full of camelCase and hyphens. The
+     per_worker branch below is the reason it also fails SILENTLY rather than
+     just loudly: `per-request` is not equal to "per_worker", so the
+     maxParallelism >= 2 assertion simply does not run, and a tier that meant to
+     be per_request skips a check it should have skipped for the right reason.
+
+     Checked here rather than only on the tier, because this helper runs for
+     EVERY workload the chart renders -- request tier, worker tier and each
+     deployment channel -- and .Values.edgeFunctions.policy is just as
+     misspellable as an override. $p names whichever block is at fault.
+
+     PLACEMENT IS LOAD-BEARING and the first attempt at this guard got it wrong.
+     It sat next to the per_worker branch further down, which is inside
+     `if $ef.functions` -- a block only the worker tier enters, because only a
+     routed tier has a `functions` list. So `edgeFunctions.policy: per-request`
+     on the REQUEST tier rendered clean and the guard looked like it worked
+     because the worker-tier probe refused. It belongs up here with the other
+     unconditional value checks. Anything added below that `if` is worker-tier
+     only, whether or not it reads a worker-tier key. */}}
+{{- $policy := $ef.policy | toString -}}
+{{- $policies := list "per_worker" "per_request" "oneshot" -}}
+{{- if not (has $policy $policies) -}}
+{{- fail (printf "%s.policy is %q, which edge-runtime does not accept. Must be one of: %s. This value is passed to `edge-runtime --policy` verbatim, so an unsupported one renders a perfectly valid manifest and then CrashLoops every pod in this tier -- and on edgeFunctions.workerTier that is all of the routed pgmq consumers at once. Watch the SPELLING: the separator is an underscore (`per_request`), not a hyphen. A hyphenated value is also invisible to the per_worker maxParallelism assertion below, because it matches neither name." $p $policy (join ", " $policies)) -}}
+{{- end -}}
+{{/* The other three values this template feeds to a runtime flag without
+     checking anything. `beforeUnload` is a per-tier overridable map and its
+     three ratios go straight into
+     --dispatch-beforeunload-{memory,cpu,wall-clock}-ratio, so a non-numeric one
+     (`memoryRatio: half`) renders a clean manifest and then CrashLoops the pod
+     exactly the way a bad --policy does. This is the only other runtime-flag
+     input on the tier surface that nothing validated: maxParallelism, the four
+     worker.* knobs and gracefulExitTimeoutSeconds are all checked above, and
+     nodeSelector/tolerations/affinity/priorityClassName/resources are Kubernetes
+     fields the API server rejects with an error of its own.
+
+     Deliberately a PERMISSIVE bound, (0, 100], and deliberately not an opinion
+     about units. values.yaml documents these as percentages of a resource limit
+     (default 50, with a note that the runtime's own 90% is too late) and the
+     chart's prose assumes that, but the flag is named "ratio" and this template
+     cannot verify which form the runtime parses. So the guard rejects only what
+     is wrong under EITHER reading -- non-numeric (`float64` collapses it to 0),
+     zero, negative, or above 100 -- and stays out of the 0.5-vs-50 question.
+     Zero and above-100 are the ones worth catching: both silently DISABLE the
+     recycling that keeps a pod inside the memory budget asserted below, so the
+     pod runs against a budget that no longer holds and nothing reports it. */}}
+{{- if $ef.beforeUnload -}}
+{{/* The values KEY is camelCase and the runtime FLAG is kebab-case, so the two
+     are carried separately. Interpolating the key into the flag name -- which
+     this did -- printed `--dispatch-beforeunload-cpuRatio`, a flag edge-runtime
+     does not have, in the one message whose whole job is to name the knob the
+     operator has to look at. */}}
+{{- range $knob, $flag := dict "memoryRatio" "memory-ratio" "cpuRatio" "cpu-ratio" "wallClockRatio" "wall-clock-ratio" -}}
+{{- $r := index $ef.beforeUnload $knob | float64 -}}
+{{- if or (le $r 0.0) (gt $r 100.0) -}}
+{{- fail (printf "%s.beforeUnload.%s is %v, which is not a usable ratio. It must be greater than 0 and at most 100. This value is passed to --dispatch-beforeunload-%s verbatim, so a non-numeric, zero, negative or over-100 value either CrashLoops the pod or silently switches OFF the EarlyDrop recycling that the memory budget below depends on -- a pod that never retires an isolate exceeds the sum this assertion just checked, and OOM-kills instead." $p $knob (index $ef.beforeUnload $knob) $flag) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- $perIsolateMi := $ef.worker.memoryLimitMb | int -}}
 {{- $par := $ef.maxParallelism | toString -}}
 {{- if or (eq $par "") (le ($par | int) 0) -}}
-{{- fail (printf "edgeFunctions.maxParallelism must be set to a positive integer (got %q). Left unset the runtime derives it from CPU count, which cannot be known at render time -- so the isolate term of the memory budget could not be checked and this assertion would pass configurations it documents as rejected. Set it explicitly; 8 is the chart default and what production runs." $par) -}}
+{{- fail (printf "%s.maxParallelism must be set to a positive integer (got %q). Left unset the runtime derives it from CPU count, which cannot be known at render time -- so the isolate term of the memory budget could not be checked and this assertion would pass configurations it documents as rejected. Set it explicitly; 8 is the chart default and what production runs." $p $par) -}}
 {{- end -}}
 {{- $isolatesMi := mul ($par | int) $perIsolateMi -}}
-{{- $hostMi := 90 -}}
+{{/* 600, not 90. The 90 came from "a freshly started pod with an empty cache sits
+     at ~87Mi", which is the host cost at t=0 -- but this budget is checked against
+     a HARD cgroup limit, so what has to fit is the CONVERGED steady state, not the
+     first minute. #949 measured that baseline at ~600Mi and load-independent, and
+     the same values.yaml has been carrying both numbers since: ~90Mi here and
+     ~600Mi in the HPA-sizing notes.
+
+     Under-counting by ~510Mi is not academic on a tier this size: it is most of
+     the worker tier's apparent slack, and this assertion exists precisely because
+     twice (2026-08-11, 2026-08-19) a term was left out of the sum and production
+     OOMed. Raising it can only make the guard REFUSE more configurations -- it
+     cannot permit an OOM -- and every overlay in this repo still renders. */}}
+{{- $hostMi := 600 -}}
 {{- $coldMi := $ef.eszipColdLoadHeadroomMb | int -}}
 {{- if le $coldMi 0 -}}
-{{- fail (printf "edgeFunctions.eszipColdLoadHeadroomMb must be a positive number of MiB (got %v). Same reason as eszipCacheMaxMb: main.ts would substitute its own 256Mi default and the process would reserve memory this assertion did not count." $ef.eszipColdLoadHeadroomMb) -}}
+{{- fail (printf "%s.eszipColdLoadHeadroomMb must be a positive number of MiB (got %v). Same reason as eszipCacheMaxMb: main.ts would substitute its own 256Mi default and the process would reserve memory this assertion did not count." $p $ef.eszipColdLoadHeadroomMb) -}}
 {{- end -}}
 {{/* The cold-load semaphore charges a bundle's FULL size, so an allowance smaller
      than the largest bundle in the image cannot bound it -- an oversized bundle is
      admitted alone and overshoots by (size - allowance). 64Mi covers the largest
-     bundle measured in this image (58.4MiB); if the bundles grow past that, this
-     minimum and the sizing note in values.yaml both need revisiting. */}}
+     bundle measured in this image (48.6MiB, autograder-create-submission,
+     re-measured 2026-09-01 -- the 58.4MiB this note used to quote predates the
+     @sentry/deno pin). If the bundles grow past 64MiB, this minimum and the
+     sizing note in values.yaml both need revisiting. */}}
 {{- $minColdMi := 64 -}}
 {{- if lt $coldMi $minColdMi -}}
-{{- fail (printf "edgeFunctions.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (58.4MiB measured). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $coldMi $minColdMi) -}}
+{{- fail (printf "%s.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (48.6MiB measured 2026-09-01). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $p $coldMi $minColdMi) -}}
+{{- end -}}
+{{/* --max-parallelism IS PER SERVICE PATH, NOT PER POD. This assertion used to
+     require `2 x len(functions)` on the reasoning that a poke for one worker
+     would queue behind another. That failure mode cannot occur, and the
+     correction matters in both directions: the old form refused safe
+     configurations (5 routed names at maxParallelism 8 was rejected, demanding
+     10) and its remediation said "raise maxParallelism", which multiplies the
+     real per-path ceiling across EVERY path -- advice that increases the exposure
+     the memory budget already fails to bound.
+
+     Established from the runtime source, supabase/edge-runtime v1.74.0
+     (b1edf453), crates/base/src/worker/pool.rs -- read directly, not inferred
+     from behavior:
+
+       :242  active_workers: HashMap<String, ActiveWorkerRegistry>, keyed by
+             SERVICE PATH (the comment at :230 spells the mapping out).
+       :325  .entry(service_path).or_insert_with(||
+             ActiveWorkerRegistry::new(self.policy.max_parallelism)) -- every
+             distinct function name gets its OWN registry with a FULL allotment.
+       :169  that allotment is Semaphore::const_new(max_parallelism).
+       :341  permits are acquired per registry, stored in the worker profile at
+             :513, and released ONLY at :727 (profile.permit.take(), reached from
+             retire()). Nothing in the request path releases one, so a permit is
+             held for the ISOLATE's life, not the request's.
+       :343  in force_create mode the pool returns Create(None, tx) -- an isolate
+             holding no permit at all, with an in-source NOTE questioning exactly
+             that.
+
+     There is no global admission semaphore anywhere in the runtime. So function
+     A never waits on B's permits, and the per-POD ceiling is
+     (distinct paths served) x maxParallelism, not maxParallelism.
+
+     What remains true per path under per_worker: the isolate is reused across
+     requests, and beforeUnload recycling holds the retiring and the replacement
+     isolate for the same path at once. That needs 2 permits in ONE registry, and
+     is independent of how many functions are routed. Hence the constant.
+
+     Deliberately NOT scaled by $routed any more, and the message no longer
+     recommends raising the value. `metrics` needs no term here either: it gets
+     its own registry like everything else.
+
+     PLACEMENT, for the same reason the --policy guard above states it: this sat
+     inside `if $ef.functions` and so ran only on a ROUTED tier, even though
+     nothing it asserts is about routing -- one path needing two permits is a
+     property of per_worker, not of how many names Kong sends here. Since
+     `edgeFunctions.policy` DEFAULTS to per_worker, that left the request tier
+     and every preview able to render `--policy per_worker --max-parallelism 1`
+     clean while the identical pair on the worker tier was refused. It belongs
+     with the unconditional checks. */}}
+{{- if eq ($ef.policy | toString) "per_worker" -}}
+{{- if lt ($par | int) 2 -}}
+{{- fail (printf "%s.maxParallelism is %s, but policy per_worker needs at least 2. maxParallelism is per SERVICE PATH, not per pod (edge-runtime pool.rs keys active_workers by service path and gives each its own Semaphore(max_parallelism)), so this is not about how many functions the tier routes -- it is that ONE path needs two permits at once, because beforeUnload recycling holds the retiring isolate and its replacement together. Set it to at least 2. Note that RAISING it does not buy headroom safely: it raises the ceiling on EVERY path independently, so the pod's real isolate ceiling is (distinct paths served) x maxParallelism, which the memory budget does not bound." $p $par) -}}
+{{- end -}}
+{{- end -}}
+{{/* The one assertion that applies only to a ROUTED tier -- one Kong sends a
+     known, fixed set of function names to. The stable tier serves all 58 bundles
+     and has no route list, so `functions` is empty there and this does not fire.
+     Nothing else belongs in here: the per_worker/maxParallelism check used to,
+     and was wrong to, because it asserts a property of the POLICY rather than of
+     the routed set. Anything added below this `if` is worker-tier only, whether
+     or not it reads a worker-tier key. */}}
+{{- if $ef.functions -}}
+{{- $routed := len $ef.functions -}}
+{{/* A routed tier exists partly so it never evicts: it serves a handful of
+     bundles, all of them hot, so the cache should hold the whole routed set.
+
+     Sized off the MEDIAN bundle (36.1MiB measured 2026-09-01, rounded to 37),
+     and this is the opposite of the rule for the stable tier's cache -- worth
+     saying why, because the reasoning does not transfer. The stable tier caches
+     an UNKNOWN subset of 58 bundles, so a median is not a bound there and
+     averaging is how the 2026-08-19 OOM happened. A routed tier's set is KNOWN
+     at render time and small, so what matters is its actual total, and charging
+     the largest bundle for every member systematically over-requires: the four
+     workers measure 90.3MiB together while 4 x the 48.6MiB largest would demand
+     196MiB. That is not conservative, it is wrong in a way that forces an
+     oversized cache -- and it would reject this chart's own 192Mi default.
+
+     Still a real guard: it refuses a cache that cannot plausibly hold the set
+     (128Mi for four bundles), which is the mistake worth catching. It cannot be
+     exact, because the chart does not know its image's bundle inventory.
+
+     THE ROUTED LIST IS NOT THE WHOLE HOT SET. `metrics` is hot on every tier and
+     appears in no route list: the ServiceMonitor scrapes /metrics on each pod,
+     the demuxer resolves that by first path segment like any other request, and
+     the `metrics` function's bundle is therefore loaded and kept hot on this tier
+     at the scrape interval (30s). Counting only `functions` would accept a cache
+     between routed x 37Mi and (routed + 1) x 37Mi that then evicts and reloads a
+     bundle every scrape -- passing a guard whose own stated model is "hold every
+     hot bundle". So the metrics bundle is counted unconditionally rather than
+     gated on monitoring.enabled: it is one 37Mi allowance, this assertion cannot
+     see .Values.monitoring from here, and over-counting by one bundle on a tier
+     that is not scraped is the harmless direction. */}}
+{{- $hot := add1 $routed -}}
+{{- $cacheNeed := mul $hot 37 -}}
+{{- if lt $cacheMi $cacheNeed -}}
+{{- fail (printf "%s.eszipCacheMaxMb is %dMi, below the %dMi needed to hold all %d hot bundles (%d routed + the `metrics` bundle that /metrics scrapes keep hot, x 37Mi median). A routed tier that evicts re-reads a bundle it will need again seconds later, which is the opposite of why the tier exists -- either raise the cache or shorten `functions`." $p $cacheMi $cacheNeed $hot $routed) -}}
+{{- end -}}
+{{- end -}}
+{{/* The OTHER sizing invariant over this same block, asserted for the same reason
+     the memory budget is: values.yaml states it in three comments
+     (gracefulExitTimeoutSeconds >= worker.timeoutMs, and
+     terminationGracePeriodSeconds >= preStopSleepSeconds + gracefulExitTimeoutSeconds)
+     and nothing enforced it. All four are independently overridable per tier, so a
+     tier could raise one and leave the others -- and on the worker tier that is not
+     a rollout-speed nuisance, it is a correctness bug: these four functions act
+     before they archive, so a SIGKILL landing mid-drain duplicates a user-visible
+     email or Discord post on pgmq redelivery. #926 actively invites raising
+     worker.timeoutMs, which forces gracefulExitTimeoutSeconds up with it while
+     terminationGracePeriodSeconds is a separate key nobody is prompted to touch. */}}
+{{- $graceful := $ef.gracefulExitTimeoutSeconds | default 0 | int -}}
+{{- if gt $graceful 0 -}}
+{{- $workerTimeoutS := div (add ($ef.worker.timeoutMs | int) 999) 1000 -}}
+{{- if lt $graceful $workerTimeoutS -}}
+{{- fail (printf "%s.gracefulExitTimeoutSeconds is %ds, below worker.timeoutMs (%dms = %ds). On SIGTERM the runtime stops intake and forcibly terminates after the graceful window, so the longest request it is willing to START cannot finish -- raise gracefulExitTimeoutSeconds to at least %d (and terminationGracePeriodSeconds above it), or lower worker.timeoutMs." $p $graceful ($ef.worker.timeoutMs | int) $workerTimeoutS $workerTimeoutS) -}}
+{{- end -}}
+{{- end -}}
+{{/* The SIGKILL backstop is checked UNCONDITIONALLY, outside the `graceful > 0`
+     gate above. It used to sit inside it, which made clearing
+     gracefulExitTimeoutSeconds -- the documented way to omit --graceful-exit-timeout
+     and the obvious first move for anyone trying to speed up rollouts -- switch
+     this check off rather than tighten it: `gracefulExitTimeoutSeconds: 0` with
+     `preStopSleepSeconds: 120` and `terminationGracePeriodSeconds: 30` rendered
+     clean, and the kubelet SIGKILLs 90s into the pod's own preStop sleep, before
+     edge-runtime has even seen SIGTERM. With a zero graceful window the invariant
+     is simply terminationGracePeriodSeconds >= preStopSleepSeconds, which is
+     still the thing worth asserting. */}}
+{{- $preStop := $ef.preStopSleepSeconds | default 0 | int -}}
+{{- $termGrace := $ef.terminationGracePeriodSeconds | default 30 | int -}}
+{{- if lt $termGrace (add $preStop $graceful) -}}
+{{- fail (printf "%s.terminationGracePeriodSeconds is %ds, below preStopSleepSeconds %ds + gracefulExitTimeoutSeconds %ds = %ds. terminationGracePeriodSeconds is only a SIGKILL BACKSTOP: below the sum the kubelet kills the container mid-drain, and these handlers act before they archive, so pgmq redelivers work whose side effect already happened (a duplicate notification email, a duplicate Discord post). Raise terminationGracePeriodSeconds to at least %d." $p $termGrace $preStop $graceful (add $preStop $graceful) (add $preStop $graceful)) -}}
 {{- end -}}
 {{- $needMi := add $cacheMi $coldMi $isolatesMi $hostMi -}}
 {{- if and (gt $limitMi 0) (gt $needMi $limitMi) -}}
-{{- fail (printf "edgeFunctions memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + eszipColdLoadHeadroomMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $limit $limitMi $cacheMi $coldMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
+{{- fail (printf "%s memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + eszipColdLoadHeadroomMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $p $limit $limitMi $cacheMi $coldMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validate a tier's override keys against an ALLOWLIST.
+
+This exists because of one specific Sprig behavior: `mergeOverwrite` is mergo
+with `WithOverride`, and mergo SKIPS EMPTY SOURCE VALUES -- `false`, `0`, `""`,
+`{}`, `[]`. So an override of `verifyJwt: false` against a base of `true`, or
+`envFromSecrets: []` against a non-empty base, renders as the BASE value with no
+error at all. A silently-ignored override on this tier is exactly the class of
+bug the memory-budget assertion exists to prevent: the config a reviewer reads
+is not the config the container runs.
+
+So every key that CANNOT merge correctly is kept out of the surface entirely,
+and anything unrecognized is refused rather than ignored. That also turns a typo
+(`polciy: oneshot`) into a render error instead of a no-op.
+
+Allowed keys are maps (merge key-by-key), non-empty lists (replaced wholesale,
+matching channels[].image semantics), strings, or positive numbers that
+assertMemoryBudget already rejects at <= 0.
+
+`enabled`, `replicas` and `functions` are allowed through but are read from the
+RAW tier block by the CALLERS -- they are the keys that need `false`/`0`/absent
+to mean something. (One exception, stated because the blanket claim used to read
+"never from the merged result": assertMemoryBudget reads `functions` off the
+MERGED config, because that is how it recognises a routed tier at all. A `false`
+or `0` there would be meaningless, so nothing is lost, but it does mean a
+`functions` key set on the BASE edgeFunctions block would put the stable tier
+through the routed-tier assertions.)
+
+The chart already works around this family of footgun elsewhere:
+edge-functions-channels.yaml uses hasKey+ternary rather than `default 1` so
+`replicas: 0` works, and _helpers.tpl uses `dig` rather than `default`.
+*/}}
+{{/*
+Refuse an empty value ANYWHERE inside a tier override, not just at the top level.
+
+mergeOverwrite skips empty source values at every depth, so a non-empty map with
+an empty child is the same silent-inherit bug wearing a disguise:
+`resources: {limits: {memory: ""}}` merges the map, drops the empty leaf, and the
+tier runs the BASE's limit while the values file says otherwise. A top-level-only
+check passes that, which is why this recurses.
+
+Recursion is by self-include, which Helm supports, and it descends into LIST
+ELEMENTS as well as map values. An earlier version treated lists as leaves on the
+premise that "our allowlisted lists (envFromSecrets, tolerations) hold scalars".
+That is false for `tolerations`, whose elements are maps -- and an empty
+toleration is not a harmless empty leaf, it is a toleration that matches EVERY
+taint, so `tolerations: [{}]` rendered a worker tier schedulable onto
+control-plane, GPU and spot-drain nodes: the exact opposite of the placement
+isolation `tolerations` is on the allowlist to provide.
+*/}}
+{{- define "pawtograder.edgeFunctions.assertNoEmptyLeaves" -}}
+{{- $path := .path -}}
+{{/* `empty` FIRST, then recurse. The other order is a real bug and I shipped it
+     briefly: an empty map IS empty, but `kindIs "map"` is also true for it, so
+     testing map-ness first sends `nodeSelector: {}` into a loop over zero keys
+     and it passes -- silently inheriting, which is the exact thing being
+     guarded. Caught by the empty-map guardrail. */}}
+{{- if empty .value -}}
+{{- fail (printf "%s is empty (%v). Sprig's mergeOverwrite (mergo) SKIPS empty source values at every depth, so this would silently render the value from edgeFunctions instead of the empty one you asked for -- the tier would keep the base's setting while the values file said otherwise. Remove the key to inherit deliberately, or set a non-empty value. (enabled/replicas/functions are exempt: they are read from the raw tier block, so false and 0 work there.)" $path .value) -}}
+{{- else if kindIs "map" .value -}}
+{{- range $k, $v := .value -}}
+{{- include "pawtograder.edgeFunctions.assertNoEmptyLeaves" (dict "value" $v "path" (printf "%s.%s" $path $k)) -}}
+{{- end -}}
+{{- else if kindIs "slice" .value -}}
+{{- range $i, $v := .value -}}
+{{- include "pawtograder.edgeFunctions.assertNoEmptyLeaves" (dict "value" $v "path" (printf "%s[%d]" $path $i)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.edgeFunctions.assertTierOverrides" -}}
+{{- $tier := .tier -}}
+{{/* `service` is deliberately NOT here either, and unlike the booleans the reason
+     is a cross-file coupling rather than a merge hazard: this template reads
+     `$ef.service.port` for the Service, the containerPort and the runtime's `-p`,
+     while kong-config.yaml builds the worker upstream URL from the RAW
+     `.Values.edgeFunctions.service.port`. Allowing a per-tier port would leave
+     the tier listening on one port while Kong dialled another -- every routed
+     path 502s and pgmq stops draining, with nothing in the render to show for
+     it. Adding "service" to this list is a one-line change that reads as safe;
+     it is not.
+
+     `spreadAcrossNodes` was here and is deliberately NOT: it is a boolean, and
+     the whole point of this allowlist is that mergeOverwrite cannot carry a
+     `false`. Allowing it meant `workerTier.spreadAcrossNodes: false` against a
+     base of `true` silently left the anti-affinity in place -- accepting a
+     setting and then ignoring it, which is the exact failure this list exists to
+     prevent. It is shared from edgeFunctions; a tier that genuinely needs
+     different placement has `nodeSelector`, `tolerations` and `affinity`. */}}
+{{- $allowed := list
+      "enabled" "replicas" "functions"
+      "policy" "maxParallelism" "beforeUnload" "worker"
+      "eszipCacheMaxMb" "eszipColdLoadHeadroomMb" "resources"
+      "envFromSecrets" "gracefulExitTimeoutSeconds" "preStopSleepSeconds"
+      "terminationGracePeriodSeconds" "nodeSelector" "tolerations" "affinity"
+      "priorityClassName" "updateStrategy" -}}
+{{/* An EMPTY allowlisted value is the same bug as a disallowed key, just harder
+     to see: mergeOverwrite skips empty source values, so `envFromSecrets: []`,
+     `tolerations: []`, `nodeSelector: {}` or `priorityClassName: ""` on a tier
+     render as the BASE's value with no error at all. An operator clearing the
+     integration secrets off the worker tier would get every one of them anyway.
+     Refuse it, because "you cannot express that here" is a far better outcome
+     than silently running the opposite configuration.
+
+     `enabled`, `replicas` and `functions` are exempt: callers read those from
+     the RAW tier block (hasKey/ternary), so `false` and `0` do reach the render
+     -- which is exactly why they are handled outside the merge. */}}
+{{- range $k, $v := .overrides -}}
+{{- if not (has $k $allowed) -}}
+{{- fail (printf "edgeFunctions.%s: %q is not an overridable per-tier key. Allowed: %s. The surface is an allowlist because Sprig's mergeOverwrite (mergo) SKIPS EMPTY source values -- a false, a 0 or an empty list here would render as the base's value with no error, so an unlisted key is far more likely to be silently ignored than honored. Booleans that must stay shared across tiers (verifyJwt, reloader, e2e, email) are excluded for exactly that reason; set them on edgeFunctions instead." $tier $k (join ", " (sortAlpha $allowed))) -}}
+{{- end -}}
+{{- if not (has $k (list "enabled" "replicas" "functions")) -}}
+{{- include "pawtograder.edgeFunctions.assertNoEmptyLeaves" (dict "value" $v "path" (printf "edgeFunctions.%s.%s" $tier $k)) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
 {{- define "pawtograder.edgeFunctions.workload" -}}
 {{- $ctx := .ctx -}}
-{{- include "pawtograder.edgeFunctions.assertMemoryBudget" $ctx -}}
+{{/* Effective config for THIS workload: .Values.edgeFunctions, optionally with a
+     tier's overrides merged over it. Every knob below reads $ef rather than
+     .Values.edgeFunctions directly, which is what lets two workloads run
+     different policies and different memory budgets from one definition.
+
+     deepCopy on both sides is required, not defensive: mergeOverwrite MUTATES
+     its destination and aliases sub-maps out of src, so without it a second
+     tier rendered in the same pass would see the first tier's `worker` block --
+     and .Values itself would be corrupted for every template after this one.
+
+     `workerTier` is unset from the result so a tier can never carry a tier of
+     its own. Nothing reads that key off $ef, so removing it changes no output.
+
+     MERGE SEMANTICS, stated because one of them is a trap: mergeOverwrite is
+     mergo with WithOverride, and mergo SKIPS EMPTY SOURCE VALUES -- false, 0,
+     "", {} and []. So an override of `verifyJwt: false` against a base of true
+     is SILENTLY IGNORED. That is why the override surface is an allowlist
+     (assertTierOverrides below) that excludes every boolean, and why `enabled`,
+     `replicas` and `functions` are read from the RAW tier block by callers
+     instead of from this merged result. (`autoscaling` is not read from a tier
+     block at all: the caller passes `"autoscaling" false` and `autoscaling` is
+     not on the allowlist, so setting it on a tier is a render error.) Helm's own values coalescing across -f
+     files handles false correctly; only this template-level merge does not. */}}
+{{- $ef := deepCopy $ctx.Values.edgeFunctions -}}
+{{- $_ := unset $ef "workerTier" -}}
+{{- with .overrides -}}
+{{- $ef = mergeOverwrite $ef (deepCopy .) -}}
+{{- end -}}
+{{- include "pawtograder.edgeFunctions.assertMemoryBudget" (dict "cfg" $ef "tier" (.tier | default "")) -}}
 {{- $component := .component -}}
 {{- $image := .image -}}
 {{- $name := include "pawtograder.componentName" (dict "ctx" $ctx "component" $component) -}}
@@ -123,7 +530,7 @@ spec:
   type: ClusterIP
   ports:
     - name: http
-      port: {{ $ctx.Values.edgeFunctions.service.port }}
+      port: {{ $ef.service.port }}
       targetPort: http
   selector:
     {{- include "pawtograder.componentSelectorLabels" (dict "ctx" $ctx "component" $component) | nindent 4 }}
@@ -138,7 +545,7 @@ metadata:
   namespace: {{ $ctx.Release.Namespace }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" $ctx "component" $component) | nindent 4 }}
-  {{- if $ctx.Values.edgeFunctions.reloader.enabled }}
+  {{- if $ef.reloader.enabled }}
   annotations:
     # Stakater Reloader: roll this Deployment when a referenced Secret changes.
     # The edge-functions env (incl. GITHUB_PRIVATE_KEY_STRING) comes from a
@@ -152,7 +559,7 @@ spec:
   {{- if not .autoscaling }}
   replicas: {{ .replicas }}
   {{- end }}
-  {{- include "pawtograder.deploymentStrategy" (dict "component" $ctx.Values.edgeFunctions) | nindent 2 }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" $ef) | nindent 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" $ctx "component" $component) | nindent 6 }}
@@ -163,18 +570,18 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" $ctx }}
       {{- include "pawtograder.imagePullSecrets" $ctx | nindent 6 }}
-      {{- include "pawtograder.priorityClassName" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 6 }}
-      {{- include "pawtograder.podSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 6 }}
-      terminationGracePeriodSeconds: {{ $ctx.Values.edgeFunctions.terminationGracePeriodSeconds | default 30 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" $ctx "component" $ef) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" $ctx "component" $ef) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ $ef.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: functions
           image: {{ include "pawtograder.image" (dict "ctx" $ctx "image" $image) }}
           imagePullPolicy: {{ $image.pullPolicy }}
-          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions) | nindent 10 }}
-          {{- include "pawtograder.preStop" (dict "component" $ctx.Values.edgeFunctions) | nindent 10 }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ctx "component" $ef) | nindent 10 }}
+          {{- include "pawtograder.preStop" (dict "component" $ef) | nindent 10 }}
           ports:
             - name: http
-              containerPort: {{ $ctx.Values.edgeFunctions.service.port }}
+              containerPort: {{ $ef.service.port }}
           command: ["edge-runtime"]
           # NOTE: --no-verify-jwt isn't supported by edge-runtime (as of v1.74.0);
           # JWT verification (or lack thereof) is handled inside main.ts.
@@ -183,10 +590,10 @@ spec:
             - --main-service
             - /home/deno/functions/main
             - -p
-            - "{{ $ctx.Values.edgeFunctions.service.port }}"
+            - "{{ $ef.service.port }}"
             - --policy
-            - {{ $ctx.Values.edgeFunctions.policy | quote }}
-            {{- with $ctx.Values.edgeFunctions.gracefulExitTimeoutSeconds }}
+            - {{ $ef.policy | quote }}
+            {{- with $ef.gracefulExitTimeoutSeconds }}
             # On SIGTERM (scale-down / rolling deploy / node drain) edge-runtime
             # stops new intake and lets in-flight handlers finish for up to this
             # many seconds before forcibly terminating, then exits (immediately if
@@ -195,13 +602,13 @@ spec:
             - --graceful-exit-timeout
             - {{ . | quote }}
             {{- end }}
-            {{- if $ctx.Values.edgeFunctions.maxParallelism }}
+            {{- if $ef.maxParallelism }}
             # Cap on simultaneous isolates; under per_request this bounds max
             # concurrent requests/pod (excess queue via --request-wait-timeout).
             - --max-parallelism
-            - {{ $ctx.Values.edgeFunctions.maxParallelism | quote }}
+            - {{ $ef.maxParallelism | quote }}
             {{- end }}
-            {{- with $ctx.Values.edgeFunctions.beforeUnload }}
+            {{- with $ef.beforeUnload }}
             # EarlyDrop: retire+recycle a per_worker isolate at this % of a
             # resource limit so memory is reclaimed before the hard cap (default
             # 90% is too late under bursty load). ~50% mirrors supabase.com.
@@ -243,27 +650,27 @@ spec:
             - name: SUPABASE_DB_URL
               value: "postgres://postgres:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" $ctx }}:{{ $ctx.Values.postgres.service.port }}/{{ $ctx.Values.postgres.database }}"
             - name: VERIFY_JWT
-              value: {{ $ctx.Values.edgeFunctions.verifyJwt | quote }}
+              value: {{ $ef.verifyJwt | quote }}
             # Per-isolate worker limits read by the main.ts demuxer.
             - name: EDGE_WORKER_MEMORY_LIMIT_MB
-              value: {{ $ctx.Values.edgeFunctions.worker.memoryLimitMb | quote }}
+              value: {{ $ef.worker.memoryLimitMb | quote }}
             - name: EDGE_WORKER_TIMEOUT_MS
-              value: {{ $ctx.Values.edgeFunctions.worker.timeoutMs | quote }}
+              value: {{ $ef.worker.timeoutMs | quote }}
             - name: EDGE_WORKER_CPU_SOFT_MS
-              value: {{ $ctx.Values.edgeFunctions.worker.cpuSoftMs | quote }}
+              value: {{ $ef.worker.cpuSoftMs | quote }}
             - name: EDGE_WORKER_CPU_HARD_MS
-              value: {{ $ctx.Values.edgeFunctions.worker.cpuHardMs | quote }}
+              value: {{ $ef.worker.cpuHardMs | quote }}
             - name: EDGE_WORKER_LOW_MEMORY_MULTIPLIER
-              value: {{ $ctx.Values.edgeFunctions.worker.lowMemoryMultiplier | quote }}
+              value: {{ $ef.worker.lowMemoryMultiplier | quote }}
             # Byte budget for the demuxer's resident eszip cache. This is the
             # THIRD term in the container's memory budget, alongside
             # maxParallelism x worker.memoryLimitMb — see values.yaml.
             - name: EDGE_ESZIP_CACHE_MAX_BYTES
-              value: {{ mul $ctx.Values.edgeFunctions.eszipCacheMaxMb 1048576 | quote }}
+              value: {{ mul $ef.eszipCacheMaxMb 1048576 | quote }}
             # Enforced at runtime by main.ts, not just budgeted here: a semaphore
             # holds these bytes from before a cold read until create() returns.
             - name: EDGE_ESZIP_COLD_LOAD_MAX_BYTES
-              value: {{ mul $ctx.Values.edgeFunctions.eszipColdLoadHeadroomMb 1048576 | quote }}
+              value: {{ mul $ef.eszipColdLoadHeadroomMb 1048576 | quote }}
             # JWT_SECRET here is NOT the deployment's HS256 shared secret. The
             # only consumer inside the edge runtime is _shared/MCPAuth.ts, which
             # mints short-lived per-user RLS JWTs for MCP and the CLI — with
@@ -302,7 +709,13 @@ spec:
               value: {{ $ctx.Values.global.environment | quote }}
             # The image tag is the closest thing to a build identity the chart knows (previews use
             # pr-<n>-<short_sha>), so it doubles as the Sentry release when nothing more precise is set.
-            {{- with $ctx.Values.edgeFunctions.image.tag }}
+            #
+            # $image.tag, NOT $ef.image.tag: $image is the tag this workload actually RUNS, after a
+            # channel's `mergeOverwrite` (edge-functions-channels.yaml). Reading it off the values
+            # block instead reported the STABLE tag as a canary channel's Sentry release, i.e. the
+            # one field whose whole job is to say which build an error came from named the wrong
+            # build. The container image on line ~199 has always used $image; only this disagreed.
+            {{- with $image.tag }}
             - name: RELEASE_VERSION
               value: {{ . | quote }}
             {{- end }}
@@ -326,7 +739,7 @@ spec:
             - name: GIT_COMMIT_SHA
               value: {{ . | quote }}
             {{- end }}
-            {{- $emailEnabled := $ctx.Values.edgeFunctions.email.enabled }}
+            {{- $emailEnabled := $ef.email.enabled }}
             {{- if or (kindIs "bool" $emailEnabled) $emailEnabled }}
             # Explicit switch for notification email, consumed by
             # supabase/functions/_shared/emailTransportConfig.ts. Leave unset to infer from
@@ -342,11 +755,11 @@ spec:
             - name: EMAIL_ENABLED
               value: {{ $emailEnabled | toString | quote }}
             {{- end }}
-            {{- if $ctx.Values.edgeFunctions.e2e.enabled }}
+            {{- if $ef.e2e.enabled }}
             - name: E2E_ENABLE
               value: "true"
             {{- end }}
-            {{- if $ctx.Values.edgeFunctions.e2e.mockGitHub }}
+            {{- if $ef.e2e.mockGitHub }}
             - name: E2E_MOCK_GITHUB
               value: "true"
             {{- end }}
@@ -354,7 +767,7 @@ spec:
             - secretRef:
                 name: {{ $ctx.Values.secrets.names.edgeFunctions }}
                 optional: true
-            {{- if $ctx.Values.edgeFunctions.envFromSecrets }}
+            {{- if $ef.envFromSecrets }}
             # These are always optional: true, deliberately and permanently. envFrom is one-shot
             # and all-or-nothing: if any named Secret is absent when the pod starts, the kubelet
             # fails the container with CreateContainerConfigError and never retries the lookup on
@@ -372,7 +785,7 @@ spec:
             # explicit `optional: false` secretRef (see pawtograder-redis below), not a
             # chart-wide switch over a list of unrelated names.
             {{- end }}
-            {{- range $ctx.Values.edgeFunctions.envFromSecrets }}
+            {{- range $ef.envFromSecrets }}
             - secretRef:
                 name: {{ . }}
                 optional: true
@@ -406,14 +819,14 @@ spec:
             periodSeconds: 30
             failureThreshold: 4
           resources:
-            {{- toYaml $ctx.Values.edgeFunctions.resources | nindent 12 }}
-      {{- with (include "pawtograder.nodeSelector" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions)) }}
+            {{- toYaml $ef.resources | nindent 12 }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" $ctx "component" $ef)) }}
       nodeSelector:
         {{- . | nindent 8 }}
       {{- end }}
-      {{- with (include "pawtograder.tolerations" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions)) }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" $ctx "component" $ef)) }}
       tolerations:
         {{- . | nindent 8 }}
       {{- end }}
-      {{- include "pawtograder.componentAffinity" (dict "ctx" $ctx "component" $ctx.Values.edgeFunctions "name" $component) | nindent 6 }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" $ctx "component" $ef "name" $component) | nindent 6 }}
 {{- end -}}

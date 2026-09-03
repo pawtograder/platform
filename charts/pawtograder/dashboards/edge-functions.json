@@ -420,7 +420,7 @@
       "id": 40,
       "type": "logs",
       "title": "Logs \u2014 $namespace / $fn",
-      "description": "Edge-function stdout from Loki, filtered to the selected function(s) via the [fn=<name>] tag stamped by the demuxer (main.ts) and wrapRequestHandler. Pick a single $fn to isolate one function.",
+      "description": "Edge-function stdout from Loki, filtered to the selected function(s) via the [fn=<name>] tag stamped by the demuxer (main.ts) and wrapRequestHandler. Pick a single $fn to isolate one function. Scoped to the two TIERS (functions, functions-workers) and deliberately NOT to functions(-.*)?, which also matches deployment CHANNELS. A channel runs a DIFFERENT IMAGE TAG -- values-staging.yaml ships a canary channel beside the two tiers -- and nothing in this panel shows which stream a line came from, so the wider selector would answer a question about your change with interleaved lines from a build that does not contain it. Same scope as scripts/edge-logs.sh and as the metrics ServiceMonitor in templates/monitoring.yaml; the three are meant to stay in step.",
       "gridPos": {
         "h": 14,
         "w": 24,
@@ -440,7 +440,7 @@
           },
           "editorMode": "code",
           "queryType": "range",
-          "expr": "{namespace=\"$namespace\", component=\"functions\"} |~ \"\\[fn=(${fn:pipe})\\]\""
+          "expr": "{namespace=\"$namespace\", component=~\"functions|functions-workers\"} |~ \"\\[fn=(${fn:pipe})\\]\""
         }
       ],
       "options": {

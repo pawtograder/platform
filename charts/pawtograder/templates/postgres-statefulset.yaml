@@ -52,16 +52,27 @@ spec:
         # on a real postgresql.conf / pg_hba edit. (Explicit arg order, not a
         # pipe: sprig regexReplaceAll is regexReplaceAll(regex, input, repl).)
         #
-        # Also hash monitoring.yaml (empty unless monitoring.enabled): it renders
-        # the postgres_exporter custom-queries ConfigMap the exporter SIDECAR mounts
-        # and reads ONLY at startup. Without this, adding/altering a collector (e.g.
-        # the replication-lag query) on an in-place upgrade would update the mounted
-        # file but never restart the sidecar, so the new metric stays absent until a
-        # manual roll. The strip drops the version labels AND the ServiceMonitor
-        # `interval`/`scrapeTimeout` lines, so a scrape-cadence tweak (unrelated to
-        # the exporter's query set) does NOT needlessly roll the primary — only a
-        # real query change does.
-        checksum/config: {{ regexReplaceAll "(?m)^.*(helm\\.sh/chart|app\\.kubernetes\\.io/version|interval|scrapeTimeout):.*$" (printf "%s\n%s" (include (print $.Template.BasePath "/postgres-config.yaml") .) (include (print $.Template.BasePath "/monitoring.yaml") .)) "" | sha256sum }}
+        # Also hash the postgres_exporter custom-queries ConfigMap (empty unless
+        # monitoring.enabled): the exporter SIDECAR mounts it and reads it ONLY at
+        # startup. Without this, adding/altering a collector (e.g. the
+        # replication-lag query) on an in-place upgrade would update the mounted
+        # file but never restart the sidecar, so the new metric stays absent until
+        # a manual roll.
+        #
+        # Hash the NAMED TEMPLATE, not the monitoring.yaml file that emits it. That
+        # file also carries every ServiceMonitor in the chart, none of which the
+        # primary reads, so hashing the file coupled the primary to unrelated
+        # scrape wiring: adding the edge-functions worker tier changed this hash
+        # and rolled the DB. The queries template is byte-identical across that
+        # flip (pinned in tests/render-guardrails.sh). Narrowing the input also
+        # retires the old `interval`/`scrapeTimeout` strip arm, which existed only
+        # to undo the over-broad hash — and which would have silently swallowed a
+        # real query line containing an `interval:` key.
+        {{- $exporterQueries := "" }}
+        {{- if .Values.monitoring.enabled }}
+          {{- $exporterQueries = include "pawtograder.postgresExporterQueries" . }}
+        {{- end }}
+        checksum/config: {{ regexReplaceAll "(?m)^.*(helm\\.sh/chart|app\\.kubernetes\\.io/version):.*$" (printf "%s\n%s" (include (print $.Template.BasePath "/postgres-config.yaml") .) $exporterQueries) "" | sha256sum }}
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}

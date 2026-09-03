@@ -173,6 +173,31 @@ edgeFunctions:
   e2e:
     enabled: true
     mockGitHub: true
+  # NOTE: edgeFunctions.workerTier is deliberately NOT enabled here. Scope, so the
+  # absence reads as a decision rather than an oversight: the split is ON for
+  # staging (values-staging.yaml, this PR) and is INTENDED for production, which
+  # is deployed from the separate prod-charts repo and so is enabled by a change
+  # there rather than by anything in this file. What it is not is per-preview: a
+  # preview would pay for a second edge Deployment (2 pods x 1.5Gi of request and
+  # 3584Mi of limit each, on top of the 6Gi the request tier already reserves) to
+  # exercise a routing change that is asserted at render time by
+  # tests/render-guardrails.sh and was verified end to end on this PR's own
+  # preview -- see #950. Not worth it per-PR, and previews are the tier most
+  # sensitive to memory pressure on the shared worker pool (see the Guaranteed
+  # QoS note above). Enable it here temporarily if you are changing the routing
+  # itself and want a live check; do not leave it on.
+  #
+  # If you do enable it here, override its resources first. The tier's chart
+  # defaults are requests 1.5Gi / limits 3584Mi — request below limit, so
+  # BURSTABLE, which is the QoS class the note above says gave edge pods
+  # oom_score_adj ~989 on the shared Talos worker and crash-looped the node about
+  # once a day. A Burstable pod's oom_score_adj falls as its request rises, so
+  # 1.5Gi is less exposed than the 1Gi an earlier draft of this note quoted, and
+  # the tier's derived steady state (~1256Mi, see values.yaml) sits UNDER the
+  # request rather than permanently over it. It is still Burstable, and still
+  # ranks below the Guaranteed 6Gi/6Gi request tier in that node's kill order,
+  # which is the opposite of what the block above buys. Match request to limit
+  # here, as the request tier does.
 
 # Migration drift handling: previews are ephemeral, so when somebody
 # edits an already-applied migration we'd rather wipe + replay than fail

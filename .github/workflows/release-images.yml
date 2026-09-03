@@ -482,6 +482,37 @@ jobs:
 
       - name: helm upgrade pawtograder (staging)
         # helm/kubectl pick up $HOME/.kube/config (written above) by default.
+        #
+        # --timeout 25m, NOT the 15m this used to carry, and the number is derived
+        # from what a release that rolls the Postgres PRIMARY actually has to wait
+        # out. Chart 0.4.0 forces exactly one such roll (the checksum/config
+        # narrowing in postgres-statefulset.yaml), and the primary's
+        # terminationGracePeriodSeconds is 600 with a measured ~10 min real
+        # shutdown, because its base-backup and postgres-exporter sidecars have no
+        # preStop and no graceful SIGTERM handling. The critical path is then:
+        #
+        #     600s  primary grace window (SIGTERM -> SIGKILL), worst case
+        #   + ~120s  the replacement pod starting and passing readiness
+        #   +  360s  the migrations Job's wait-for-supabase-services budget
+        #   + ~120s  the migration set itself
+        #   ------
+        #    ~1200s  = 20 min, against a 900s (15m) deadline
+        #
+        # At 15m helm gave up BEFORE the Job did (the Job's own first-attempt
+        # budget is now the full grace window -- see migrations-job.yaml), so an
+        # ordinary primary roll surfaced as a bare `context deadline exceeded`.
+        # 25m also puts the deadline ABOVE the 1200s progressDeadlineSeconds every
+        # Deployment in this chart renders (_helpers.tpl), which is what makes a
+        # genuinely stuck rollout report as ProgressDeadlineExceeded on the
+        # Deployment instead of as an undiagnosable helm timeout.
+        #
+        # NO --atomic, deliberately. --atomic rolls the release back on failure,
+        # and for this release that is the worse outcome: the rollback re-rolls the
+        # primary (a second ~10 min outage) and cannot un-apply the migrations that
+        # already ran, so it restores a chart that is now behind its own schema. A
+        # `failed` release does not hold the upgrade lock -- only `pending-*` does,
+        # which is what the recovery step above clears -- so the next push
+        # reconciles it. Left failed is recoverable; rolled back is not.
         env:
           VERSION: ${{ needs.meta.outputs.version }}
         run: |
@@ -500,7 +531,7 @@ jobs:
             --set maintenance.image.tag="$VERSION" \
             --wait \
             --wait-for-jobs \
-            --timeout 15m
+            --timeout 25m
 
       - name: helm smoke test pawtograder (staging)
         run: helm test pawtograder -n pawtograder-staging --timeout 10m

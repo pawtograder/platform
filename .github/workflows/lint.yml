@@ -46,6 +46,203 @@ jobs:
       - name: Run chart guard-rail render tests
         run: charts/pawtograder/tests/render-guardrails.sh
 
+  # Alert-rule tests. `promtool check rules` is syntax only, and every alert this
+  # chart ships already passes it — including, before this job existed, ones that
+  # were permanently inert. `promtool test rules` is the only check that runs the
+  # expressions against series and asserts on what fires and when, which is what
+  # the worker-tier rules' `or absent(...)` and `(... or vector(0)) == 0` arms
+  # need: both are silent-by-default shapes where the failure mode is "never
+  # fires" rather than "fails to parse". See charts/pawtograder/tests/alert-rules.sh.
+  chart-alert-rules:
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.20.2
+      # promtool ships inside the Prometheus release tarball; there is no
+      # first-party action for it. Pinned rather than `latest` so a Prometheus
+      # release cannot change unit-test semantics under us on an unrelated push.
+      #
+      # Installed into RUNNER_TEMP and put on PATH via GITHUB_PATH rather than
+      # into /usr/local/bin: the `pawtograder-ci` runner executes unprivileged
+      # and the system path is not writable, so `install … /usr/local/bin` fails
+      # with "Permission denied" before the tests ever run. RUNNER_TEMP is
+      # per-job and cleaned up by the runner, so nothing leaks between jobs.
+      # There is no sudo here and none is wanted.
+      - name: Install promtool
+        env:
+          # The fixtures were run green against this exact version and against
+          # 2.53.3, so the suite is not relying on a behavior specific to either.
+          PROM_VERSION: "3.14.0"
+          # SHA-256 of prometheus-3.14.0.linux-amd64.tar.gz, pinned because this
+          # job downloads a tarball over the network and then EXECUTES what comes
+          # out of it, on a self-hosted runner, in a repo where every other
+          # toolchain arrives through a pinned action. Without this the version
+          # check below is the only gate, and a version string is something the
+          # artifact asserts about itself.
+          #
+          # Established from three independent sources that agree, 2026-09-02:
+          #   1. the release's own sha256sums.txt
+          #      (github.com/prometheus/prometheus/releases/download/v3.14.0/)
+          #   2. GitHub's asset `digest` field from the releases API, which GitHub
+          #      computes server-side from the stored blob rather than reading the
+          #      publisher's checksum file
+          #   3. sha256sum of a locally downloaded copy
+          # Bump this WITH PROM_VERSION -- a stale digest fails the job loudly,
+          # which is the intended failure mode and not a reason to delete it.
+          PROM_SHA256: "f665c6da19eb7ba399c915d30c7d9793c9b417bf8a749b504bc470678631478d"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/promtool-bin"
+          # BOUNDED. `curl -fsSL` with no timeouts will sit on a half-open
+          # connection indefinitely, and this runner is `pawtograder-ci` -- a
+          # single self-hosted pool, so one stalled GitHub endpoint parks a runner
+          # slot until the workflow timeout and every other job queues behind it.
+          # --connect-timeout bounds the handshake, --max-time bounds each whole
+          # attempt (the tarball is ~102MiB, so 180s is generous rather than
+          # tight), and the retries are capped so the worst case is ~9m and
+          # arithmetic rather than "until something gives up".
+          curl -fsSL \
+            --connect-timeout 10 --max-time 180 \
+            --retry 3 --retry-delay 5 --retry-connrefused \
+            -o "$RUNNER_TEMP/prom.tar.gz" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          # Verify BEFORE extracting, not after: a tar of a hostile archive is
+          # itself the exposure, so the digest has to gate the extraction rather
+          # than the execution. `sha256sum -c` prints "FAILED" and exits non-zero
+          # on a mismatch, and the extra echo is there so the reason is in the log
+          # at the point of failure instead of only in the exit status.
+          echo "${PROM_SHA256}  ${RUNNER_TEMP}/prom.tar.gz" | sha256sum -c - \
+            || { echo "::error::promtool tarball digest does not match the pinned PROM_SHA256 -- refusing to extract"; exit 1; }
+          tar -xzf "$RUNNER_TEMP/prom.tar.gz" -C "$RUNNER_TEMP" \
+            "prometheus-${PROM_VERSION}.linux-amd64/promtool"
+          install -m 0755 \
+            "$RUNNER_TEMP/prometheus-${PROM_VERSION}.linux-amd64/promtool" \
+            "$RUNNER_TEMP/promtool-bin/promtool"
+          echo "$RUNNER_TEMP/promtool-bin" >>"$GITHUB_PATH"
+          # Assert the pin landed. alert-rules.sh hard-fails when promtool is
+          # absent from PATH, so a broken install can never silently skip the
+          # suite -- but check here too, because GITHUB_PATH only takes effect
+          # in LATER steps and this is the last chance to fail on the version.
+          "$RUNNER_TEMP/promtool-bin/promtool" --version
+          "$RUNNER_TEMP/promtool-bin/promtool" --version 2>&1 \
+            | grep -qF "$PROM_VERSION" \
+            || { echo "promtool is not the pinned ${PROM_VERSION}"; exit 1; }
+      - name: Run chart alert-rule tests
+        run: charts/pawtograder/tests/alert-rules.sh
+
+  # Parse-check and lint the fenced bash blocks in docs/operations/*.md.
+  #
+  # Shell embedded in Markdown is executed by nothing, so it rots invisibly until
+  # an incident. This branch shipped an orphaned `while ... do` in a runbook block
+  # that nothing noticed until a `bash -n` sweep was added by hand. The sweep is
+  # cheap, so it is carried permanently. Read the script's header for what it
+  # deliberately does NOT verify -- it is a parse and lint gate, not a run of the
+  # procedures.
+  runbook-blocks:
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v4
+      # shellcheck is PINNED and installed per-job rather than taken from the
+      # runner image, for two reasons. First, a lint gate whose findings can
+      # change because a runner was reimaged is a gate that goes red on an
+      # unrelated push, which is how gates get muted. Second, the runner may not
+      # have it at all -- and the script degrades to the parse half only in that
+      # case, which would silently halve the check.
+      #
+      # Installed into RUNNER_TEMP and put on PATH via GITHUB_PATH, NOT into
+      # /usr/local/bin: `pawtograder-ci` executes unprivileged and the system
+      # path is not writable, so `install ... /usr/local/bin` fails with
+      # "Permission denied" before the check ever runs. This is the same
+      # constraint the promtool step above documents. No sudo here and none
+      # wanted.
+      - name: Install shellcheck
+        env:
+          # 0.10.0. The blocks were verified clean against this version and
+          # against 0.9.0, at -S warning, -S info AND -S style, so the suite is
+          # not leaning on behavior specific to either release.
+          SC_VERSION: "0.10.0"
+          # SHA-256 of shellcheck-v0.10.0.linux.x86_64.tar.xz. This job downloads
+          # an archive over the network and then EXECUTES what comes out of it on
+          # a self-hosted runner, so the digest gates the extraction.
+          #
+          # Established 2026-09-03 from two independent downloads of the release
+          # asset, both agreeing, plus a version assertion on the extracted
+          # binary. NOTE, honestly: unlike the promtool pin above, this release
+          # publishes no sha256sums.txt and the GitHub releases API returns a
+          # null `digest` for its assets (the field postdates the release), so
+          # there is no publisher-side checksum to corroborate against. Treat this
+          # as trust-on-first-use, pinned. If you bump SC_VERSION, re-derive it
+          # and prefer a release that does publish checksums.
+          SC_SHA256: "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
+        run: |
+          set -euo pipefail
+          # Report whether the runner already has one, so the question is
+          # answered in the log rather than guessed at in a review.
+          if command -v shellcheck >/dev/null 2>&1; then
+            echo "note: runner image already provides $(shellcheck --version | awk '/^version:/ {print $2}'); using the pinned ${SC_VERSION} anyway for determinism"
+          else
+            echo "note: runner image has no shellcheck; installing the pinned ${SC_VERSION}"
+          fi
+          mkdir -p "$RUNNER_TEMP/shellcheck-bin"
+          # BOUNDED, for the reason the promtool step gives: `pawtograder-ci` is a
+          # single self-hosted pool, so an unbounded curl on a half-open
+          # connection parks a runner slot until the workflow timeout and queues
+          # every other job behind it. ~2.4MiB, so 60s per attempt is generous.
+          curl -fsSL \
+            --connect-timeout 10 --max-time 60 \
+            --retry 3 --retry-delay 5 --retry-connrefused \
+            -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SC_VERSION}/shellcheck-v${SC_VERSION}.linux.x86_64.tar.xz"
+          # Verify BEFORE extracting: untarring a hostile archive is itself the
+          # exposure, so the digest has to gate the extraction and not just the
+          # execution.
+          echo "${SC_SHA256}  ${RUNNER_TEMP}/shellcheck.tar.xz" | sha256sum -c - \
+            || { echo "::error::shellcheck archive digest does not match the pinned SC_SHA256 -- refusing to extract"; exit 1; }
+          # DECOMPRESS WITHOUT ASSUMING `xz`. shellcheck publishes linux builds
+          # ONLY as .tar.xz (checked the release assets: xz for every arch, plus
+          # a Windows .zip -- there is no .tar.gz to fall back to), and
+          # `pawtograder-ci` has no `xz`: the first run of this job died with
+          # "tar (child): xz: Cannot exec: No such file or directory" AFTER the
+          # digest verified, so the download was fine and only the unpack failed.
+          # That is the third CI addition on this branch to break on a runner
+          # assumption rather than on its own logic, so this probes instead of
+          # assuming, and fails with an actionable message if neither path
+          # exists rather than a tar error six lines deep.
+          #
+          # Both paths extract the identical binary -- verified by sha256 of the
+          # extracted file, not just by the archive digest.
+          if command -v xz >/dev/null 2>&1; then
+            echo "unpacking with xz"
+            tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP" \
+              "shellcheck-v${SC_VERSION}/shellcheck"
+          elif python3 -c 'import lzma' >/dev/null 2>&1; then
+            echo "no xz on this runner; unpacking with python3 lzma (stdlib)"
+            python3 -c 'import lzma,sys,shutil; shutil.copyfileobj(lzma.open(sys.argv[1],"rb"), sys.stdout.buffer)' \
+              "$RUNNER_TEMP/shellcheck.tar.xz" \
+              | tar -x -C "$RUNNER_TEMP" -f - "shellcheck-v${SC_VERSION}/shellcheck"
+          else
+            echo "::error::cannot decompress the shellcheck archive: this runner has neither \`xz\` nor a python3 with the stdlib \`lzma\` module."
+            echo "::error::shellcheck ships linux builds only as .tar.xz, so one of those is required. Install xz on the runner image, or vendor the binary."
+            exit 1
+          fi
+          install -m 0755 \
+            "$RUNNER_TEMP/shellcheck-v${SC_VERSION}/shellcheck" \
+            "$RUNNER_TEMP/shellcheck-bin/shellcheck"
+          echo "$RUNNER_TEMP/shellcheck-bin" >>"$GITHUB_PATH"
+          # Assert the pin landed. GITHUB_PATH only takes effect in LATER steps,
+          # so this is the last chance to fail on the version rather than
+          # silently linting with something else -- or, worse, with nothing: the
+          # script falls back to parse-only when shellcheck is absent, and that
+          # fallback must never be reached in CI.
+          "$RUNNER_TEMP/shellcheck-bin/shellcheck" --version
+          "$RUNNER_TEMP/shellcheck-bin/shellcheck" --version 2>&1 \
+            | grep -qF "version: $SC_VERSION" \
+            || { echo "shellcheck is not the pinned ${SC_VERSION}"; exit 1; }
+      - name: Parse-check and lint runbook bash blocks
+        run: docs/operations/tests/runbook-blocks.sh
+
   # Fast, deterministic unit tests for the gradebook recalc computation (the math the
   # gradebook-calculations e2e fixtures exercise end-to-end through the async pipeline).
   # These run the real edge-function expression functions directly — no DB, no pipeline.

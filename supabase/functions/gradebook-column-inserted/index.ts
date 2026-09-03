@@ -2,8 +2,53 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import { all, create } from "npm:mathjs";
-import { minimatch } from "npm:minimatch";
+// Pinned, and the versions are not arbitrary — these were bare `npm:mathjs` and
+// `npm:minimatch`, which resolve to LATEST at image-build time. Two consequences,
+// both measured from the build cache on 2026-09-01:
+//
+//   * mathjs resolved to 15.2.0 here while every other mathjs consumer in the
+//     repo (gradebook-column-recalculate, via its own deno.json `^14.5.2`)
+//     resolved to 14.9.1. This function was silently a MAJOR version ahead of
+//     the code it shares expression semantics with, and would have moved again
+//     on the next mathjs release. 14.5.2 matches the root deno.json's stated
+//     intent.
+//   * minimatch resolved to 10.2.6 here and 9.0.9 in mcp-server, so the corpus
+//     carried two majors of one glob library.
+//
+// Note the root `supabase/functions/deno.json` import map does NOT fix this: an
+// alias for the bare specifier `mathjs` is not consulted for `npm:mathjs`, and
+// this directory has its own `deno.json` with an empty `imports` map anyway, so
+// the root map is never consulted for this function at all. That is the same
+// trap #934 hit with `@sentry/deno`, and the ROOT `deno.lock` cannot help either
+// — it is gitignored AND `rm -f`'d by the Dockerfile before bundling — so the
+// inline specifier is the only thing that pins anything HERE.
+//
+// What this does NOT do, stated so the next reader does not assume otherwise:
+// it does not make the two gradebook functions agree. One per-function lock is
+// tracked (`supabase/functions/gradebook-column-recalculate/deno.lock`) and the
+// Dockerfile removes only the root one, so recalculate resolves mathjs 14.9.1
+// deterministically while this file is now on 14.5.2 — a fixed minor skew where
+// there was a drifting major one. Closing it means either bumping this pin to
+// 14.9.1 or relaxing recalculate's lock, and neither should happen without
+// re-running the gradebook expression specs.
+//
+// That lock pins mathjs AND NOTHING ELSE, which is worth stating because the
+// paragraph above reads as though it pinned the whole function.
+// `npm:minimatch@^10.0.3` and `npm:@supabase/postgrest-js@^1.19.4` appear only
+// under `workspace.dependencies`, with no `specifiers` entry and no package in
+// the lock's `npm` section — so recalculate's minimatch still floats while this
+// file is pinned to 10.0.3, and those two functions are the WRITER and the
+// READER of the same `dependencies` column. `mcp-server` is likewise still on
+// `npm:minimatch@9`.
+//
+// And note the asymmetry that makes those inline pins load-bearing rather than
+// belt-and-braces: THIS directory has no tracked `deno.lock` of its own (only
+// gradebook-column-recalculate does). So for this function the two specifiers
+// below are the ONLY pins that exist — everything else it imports, including
+// `jsr:@supabase/supabase-js@2`, still floats to whatever resolves at
+// image-build time.
+import { all, create } from "npm:mathjs@14.5.2";
+import { minimatch } from "npm:minimatch@10.0.3";
 
 type ColumnRow = {
   id: number;

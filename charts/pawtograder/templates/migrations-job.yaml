@@ -1,3 +1,65 @@
+{{- /* pg_wait(): the postgres-readiness loop BOTH init containers below use, in
+   one place because the budget is derived and a second copy is how a derivation
+   goes stale.
+
+   THE BUDGET IS DERIVED FROM postgres.terminationGracePeriodSeconds, not chosen.
+   It used to be a flat 60 iterations x 2s = 120s, against a primary whose
+   terminationGracePeriodSeconds is 600 and whose real shutdown takes close to all
+   of it: postgres-statefulset.yaml records the measurement -- with the sidecars'
+   slow SIGTERM a needless restart "took the DB down ~10 min", because
+   base-backup and postgres-exporter have no preStop and no graceful SIGTERM
+   handling, so the pod rides the full grace window to the SIGKILL. 120s of wait
+   against a ~600s outage was a latent mismatch for as long as the primary did not
+   roll on upgrade. 0.4.0 FORCES exactly one primary roll (the checksum/config
+   narrowing in postgres-statefulset.yaml; pinned in tests/render-guardrails.sh),
+   which converts it into a probable failure.
+
+   AND THE JOB LOSES THE RACE BY CONSTRUCTION. Helm's install/upgrade kind
+   ordering applies the StatefulSet before the Job, so the primary's deletion
+   starts first and this Job is created seconds later -- the worst case for the
+   Job, not the best.
+
+   WHAT FAILING COSTS. The staging auto-deploy runs
+   `helm upgrade --wait --wait-for-jobs` (release-images.yml deploy-staging) with
+   no `--atomic`, so a Job that exhausts backoffLimit turns the deploy red and
+   leaves the release `failed` with Kong already carrying the new worker routes.
+   The workflow's "Recover stuck helm release" step only clears `pending-*`
+   states, not `failed`. That workflow's `--timeout` was raised to 25m in the same
+   change as this budget and for the same reason -- the derivation is written out
+   on the `helm upgrade` step there.
+
+   ticks x 2s = the full grace window, so the FIRST attempt alone survives a
+   worst-case roll. That matters more than the retry budget: backoffLimit 3 adds
+   10/20/40s restart backoffs, but four attempts at this budget exceed the
+   workflow's own `--timeout` even at 25m, so helm gives up before the Job does.
+   The retries are a safety net for a transient, not for the roll.
+
+   FLOORED at the old 60 ticks so the derivation can only ever raise the budget.
+   `div` on a grace period someone lowered to 30 would give 15 ticks; at 0 it
+   gives none at all, and `seq 1 0` is empty, so the loop would fall straight
+   through to `return 1` and every install would fail its migrations on a value
+   that looks like a tuning knob.
+
+   No activeDeadlineSeconds, deliberately: it would have to exceed this budget to
+   be safe, at which point helm's `--timeout` is already the binding deadline --
+   and a deadline BELOW it converts a slow-but-succeeding migration into
+   DeadlineExceeded, which (unlike a backoff retry) never retries. */ -}}
+{{- define "pawtograder.migrations.waitForPostgres" -}}
+{{- $graceSeconds := .Values.postgres.terminationGracePeriodSeconds | default 600 | int -}}
+{{- $ticks := max (div $graceSeconds 2) 60 -}}
+pg_wait() {
+  for i in $(seq 1 {{ $ticks }}); do
+    if pg_isready -h {{ include "pawtograder.postgres.host" . }} -p {{ .Values.postgres.service.port }} -U postgres; then
+      echo "postgres ready"
+      return 0
+    fi
+    echo "waiting for postgres ($i/{{ $ticks }})"
+    sleep 2
+  done
+  echo "postgres not ready after {{ mul $ticks 2 }}s (>= postgres.terminationGracePeriodSeconds {{ $graceSeconds }}s, the primary's whole shutdown window)" >&2
+  return 1
+}
+{{- end -}}
 {{- if and .Values.postgres.enabled .Values.migrations.enabled }}
 # Migrations run as a regular install resource (not a Helm hook): the chart's
 # postgres StatefulSet is also a regular resource, and pre-install hooks fire
@@ -33,16 +95,8 @@ spec:
             - -c
             - |
               set -e
-              for i in $(seq 1 60); do
-                if pg_isready -h {{ include "pawtograder.postgres.host" . }} -p {{ .Values.postgres.service.port }} -U postgres; then
-                  echo "postgres ready"
-                  exit 0
-                fi
-                echo "waiting for postgres ($i/60)"
-                sleep 2
-              done
-              echo "postgres not ready after 120s" >&2
-              exit 1
+              {{- include "pawtograder.migrations.waitForPostgres" . | nindent 14 }}
+              pg_wait
         # Pawtograder migrations reference auth/storage/realtime/vault tables
         # and grant on them. Those services run their OWN schema migrations on
         # startup; we have to wait for them to finish before pawtograder
@@ -70,6 +124,22 @@ spec:
             - -c
             - |
               set -e
+              {{- include "pawtograder.migrations.waitForPostgres" . | nindent 14 }}
+              # The SAME wait again, and NOT redundant. The first init container can
+              # observe a FALSE READY: helm deletes the primary's pod moments before
+              # this Job is created, and for the first couple of seconds of
+              # termination the old pod is still in the Service's endpoints, so
+              # pg_isready can succeed once and let that container exit 0 while the
+              # ~600s outage is still ahead. Without this the outage would instead
+              # be charged to the 360s service-migration budget below, which is
+              # sized for supabase's own migrations and would exhaust first.
+              #
+              # The two waits are mutually exclusive in practice rather than
+              # additive: whichever one observes the outage spends the budget, and
+              # the other returns on its first tick. So the Job's realistic
+              # worst-case first attempt is one grace window plus the service wait,
+              # not two grace windows.
+              pg_wait
               check() {
                 # $1 = label, $2 = SQL that returns 1 row when ready
                 psql -tAc "$2" 2>/dev/null | grep -q 1

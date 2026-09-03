@@ -622,9 +622,16 @@ spec:
             description: >-
               {{`{{ $labels.pod }}`}} in {{ $ns }} restarted more than
               {{ .Values.monitoring.prometheusRules.edgeFunctionRestarts30m | default 2 }} times in 30m.
-              If the last termination reason is OOMKilled, check that eszipCacheMaxMb +
-              (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi fits inside the container
-              memory limit.
+              If the last termination reason is OOMKilled, check that the FOUR-term budget
+              fits inside the container memory limit: eszipCacheMaxMb + eszipColdLoadHeadroomMb
+              + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~600Mi Deno host. The host term
+              is 600Mi, not the ~90Mi this text used to quote: 90 was the cost at startup with an
+              empty cache, but the limit is a hard cgroup ceiling, so what must fit is the
+              converged baseline. Using the old number here would invent ~500Mi of headroom that
+              does not exist, mid-incident. The POD NAME says which values block holds those knobs: a
+              <release>-functions-<hash> pod is the request tier (edgeFunctions.*), and a
+              <release>-functions-workers-<hash> pod is the background-worker tier
+              (edgeFunctions.workerTier.*), whose budget is a different sum.
         # Gated on a RECENT restart, not on the reason alone. kube_pod_container_status_last_terminated_reason
         # reflects the container's lastState, so it keeps reporting OOMKilled=1 for the rest of that
         # container's life -- a single 03:00 kill would hold a critical alert firing for days after
@@ -652,9 +659,16 @@ spec:
               fix is different (see PawtograderEdgeFunctionsNodeMemoryHigh). If the node was fine,
               the pod budget is a sum that must fit inside the container memory limit:
               eszipCacheMaxMb + eszipColdLoadHeadroomMb
-              + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~90Mi of Deno host. The chart
+              + (maxParallelism x EDGE_WORKER_MEMORY_LIMIT_MB) + ~600Mi of Deno host (the
+              converged, load-independent baseline -- NOT the ~90Mi startup figure this text
+              used to quote, which would invent ~500Mi of headroom that does not exist). The chart
               asserts it at render time, so a pod that OOMs despite fitting means one of the
-              measured constants has drifted -- re-measure before raising the limit. The cache term is the one that is easy to forget: it fills with
+              measured constants has drifted -- re-measure before raising the limit.
+              Read the knobs off the tier the POD NAME names: <release>-functions-<hash> is the
+              request tier (edgeFunctions.*), <release>-functions-workers-<hash> is the
+              background-worker tier (edgeFunctions.workerTier.*). Each tier has its OWN sum, and
+              this rule selects container="functions" so it covers both -- comparing every pod
+              against its own limit, which is what makes per-tier limits safe here. The cache term is the one that is easy to forget: it fills with
               the DISTINCT FUNCTIONS a pod has served rather than with load, up to eszipCacheMaxMb,
               and evicts least-recently-used past that. So it is bounded, but the bound is a term in
               this budget and raising it without raising the limit is how you get back here.
@@ -724,6 +738,349 @@ spec:
               {{`{{ $labels.pod }}`}} in {{ $ns }} has held above
               {{ .Values.monitoring.prometheusRules.edgeFunctionMemoryRatio | default 0.85 }} of its
               memory limit for 15m. Expect an OOM kill, and with it a burst of 502s.
+        {{- /* The replica gate is a BACKSTOP, and as of this version it is
+           unreachable. It exists because this rule's expression is
+           `replicas_available == 0`, which at a configured zero is true forever:
+           rendering the rule anyway would turn a configuration into a continuous
+           critical page five minutes after deploy.
+
+           `replicas: 0` used to be described as a supported way to idle the tier.
+           It is not, and edge-functions-worker-tier.yaml now refuses it outright
+           (it leaves Kong routing four function names at a Service with no
+           endpoints while suppressing both this alert and the PDB -- the full
+           reasoning and the render matrix are at that `fail`). Since the tier
+           cannot render with fewer than 1 replica, `gt $wtReplicas 0` is always
+           true here.
+
+           Kept rather than deleted: it is one comparison, the two files are
+           edited independently, and the failure it prevents -- a critical alert
+           that pages continuously by construction -- is bad enough to be worth a
+           dead branch. Not left unexplained, because a guard whose stated reason
+           is false is worse than no guard. */}}
+        {{- $wtReplicas := int (include "pawtograder.edgeFunctions.workerTier.replicas" .) }}
+        {{- if and (include "pawtograder.edgeFunctions.workerTier.enabled" .) (gt $wtReplicas 0) }}
+        {{- /* Resolved ONCE. Five expressions below have to render the byte-identical
+           string that kong-config.yaml dials and that the Deployment is named, and one
+           of them sits inside `range $fn` where the include has to be spelled `$`
+           rather than `.` -- a `.`-scoped copy there would resolve against the loop
+           variable. kong-config.yaml already hoists the same include for the same
+           reason. */}}
+        {{- $wkrHost := include "pawtograder.edgeFunctions.workers.host" . }}
+        # The background-worker tier is routed by PATH: Kong sends the four worker function names
+        # to it and nowhere else, so unlike the request tier there is no other pool to absorb the
+        # traffic when it is down -- pgmq simply stops draining. None of the rules above can see
+        # this, because they are all per-pod and a tier with zero pods has no pod to alert on.
+        #
+        # Rendered ONLY when the tier is enabled, so it can never exist as a permanently-Inactive
+        # rule for a Deployment that does not exist. That shape -- a rule that looks shipped and
+        # silently never fires -- is what #934 was about, and it is worth the `if`.
+        #
+        # Availability, deliberately NOT drain health. These handlers return 200 immediately and do
+        # the real work under waitUntil, so HTTP status carries no information about whether the
+        # queue is moving; an error-rate rule here would be inert by construction. Drain health is
+        # already covered by PawtograderAsyncQueueBacklog / QueueStuck /
+        # NotificationEmailBacklog / QueueOldestMessageAging / RecalcStalled above.
+        # The `or absent(...)` arm is the whole point of the rule surviving contact
+        # with reality. `== 0` needs the SERIES to exist; if the Deployment is
+        # deleted, never created, or its name drifts, kube-state-metrics emits
+        # nothing and the comparison yields an empty vector -- which is silence,
+        # not a firing alert. That is the worst case, because Kong keeps routing
+        # the four functions at a Service with no backend and the queues stop
+        # draining, exactly when the alert is most needed. `absent()` fires on
+        # the missing series instead.
+        - alert: PawtograderEdgeWorkerTierUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ $wkrHost }}"} == 0
+              or absent(kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ $wkrHost }}"})
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder edge worker tier has no available pods"
+            description: >-
+              {{ $wkrHost }}
+              in {{ $ns }} has had zero available replicas for 5m. Kong routes
+              {{ join ", " .Values.edgeFunctions.workerTier.functions }} to this tier by path, so
+              every call to those functions is failing -- including the pg_cron pokes that drain
+              pgmq. The blast radius is queue depth, on the queues-and-workers dashboard.
+              Check the per-tier memory budget under edgeFunctions.workerTier first: a limit that
+              no longer holds its sum OOM-kills this tier exactly like the request tier, and this
+              tier's sum is NOT the same as edgeFunctions.*. Setting
+              edgeFunctions.workerTier.enabled=false returns all four functions to the request
+              tier in one helm upgrade.
+        {{- /* SILENT FALLBACK. The failure above is loud: no pods, queues stop, a
+           critical page. This one is the opposite and it is the failure this tier
+           split is most likely to actually suffer.
+
+           Kong's ConfigMap goes stale, or its declarative config fails to load,
+           and the four routed paths keep being served by the REQUEST tier. Every
+           observable is green: the functions answer, pgmq drains, both
+           Deployments are healthy, PawtograderEdgeWorkerTierUnavailable is
+           Inactive because the worker pods are up and Ready. They are simply
+           serving nothing, while costing 2 x 3584Mi. The isolation this tier
+           exists to provide does not exist, and no availability alert can see
+           that, because nothing is unavailable.
+
+           WHY KONG'S OWN METRICS AND NOT THE EDGE POD'S. The obvious expression
+           is a per-tier request rate off the deno_* series the ServiceMonitor
+           above relabels with edge_tier. That does not work, and the reason is
+           worth recording so nobody rebuilds it: `deno_http_requests_total` DOES
+           NOT EXIST. Checked against live Prometheus, not inferred -- of 3700
+           metric names in the cluster, zero begin with `deno`. The cause is
+           structural rather than a scrape bug: this image replaces the runtime's
+           main service with our own demuxer (images/edge-functions/main.ts), and
+           that demuxer's Deno.serve handler dispatches EVERY path by its first
+           segment, /metrics included. So a scrape of /metrics on the pod runs the
+           `metrics` FUNCTION (supabase/functions/metrics/index.ts) and gets back
+           exactly what that function prints, which is pawtograder_* and nothing
+           else. There is no code path by which a deno_* series reaches
+           Prometheus. The five dashboard panels in dashboards/edge-functions.json
+           that select on it are consequently empty today -- pre-existing, not
+           introduced by this tier, and tracked in #951.
+
+           kong_http_requests_total is the right signal anyway, and not merely the
+           available one: the question is "which upstream did the GATEWAY pick",
+           and Kong is the component that picks. The chart enables the Prometheus
+           plugin globally (kong-config.yaml) with per-service and per-route
+           metrics, so each of the one-service-per-routed-name entities this tier
+           renders gets its own counter.
+
+           `route`, NOT `service`. Kong's own `service` label collides with the
+           `service` target label the ServiceMonitor attaches, so Prometheus
+           renames Kong's to `exported_service` -- which silently becomes `service`
+           again the day anyone sets honorLabels on that ServiceMonitor. `route`
+           is Kong-native, collides with no target label, and carries the same
+           per-name value. Both spellings were read off live series before
+           choosing.
+
+           NO-TRAFFIC GUARD, and it has to be an explicit one. `sum(rate(...))`
+           over series that do not exist returns an EMPTY VECTOR, not 0 -- verified
+           by running exactly this worker-arm query against a namespace with the
+           tier off, which returns no result rather than 0. So a bare `== 0` is
+           silence in precisely the state the rule exists to report, the same
+           `absent()` trap the rule above documents. `or vector(0)` makes the
+           missing arm read 0; the `and ... > 0` on the request arm is what keeps
+           it from firing on an idle or torn-down deployment. Note the useful
+           side-effect: if KONG itself stops being scraped, both arms go empty,
+           the right-hand side fails, and this rule stays silent instead of
+           blaming the tier for a telemetry gap.
+
+           FIRST ENABLE. Enabling the tier rolls Kong in the same release that
+           creates the worker Deployment (see the "Expected once" note in
+           docs/operations/incident-response.md), and until the new Kong pod is
+           serving there is no worker route and so no worker series at all -- this
+           condition is TRUE for real. Sized against that window: <=3m to replace
+           the Kong pods (readiness is initialDelaySeconds 5 + periodSeconds 5, so
+           the probe is seconds; the budget is image pull and rolling
+           replacement), + <=60s for the next pg_cron poke (all four are
+           `* * * * *`), + 60s for rate() to get its second sample at
+           monitoring.scrapeInterval 30s = ~5m worst case. `for: 30m` is 6x that.
+           Once the new Kong serves, note the 502s the incident-response note
+           describes do NOT keep this firing: Kong counts a request against the
+           route it MATCHED whatever status it returns, so a 502 from a
+           not-yet-ready worker Service still proves the route loaded.
+
+           30m is cheap because the condition is chronic, not acute -- stale Kong
+           config stays stale until someone changes it, and nobody acts on "the
+           split isn't splitting" inside half an hour. Worst-case detection is 45m
+           in the case where the tier was previously serving (the 15m rate window
+           has to drain of the old traffic first, which is also what stops it
+           flapping through a Kong roll); on first enable it is the 30m alone.
+           severity: warning, deliberately -- nothing is failing, and this must
+           not page.
+
+           TWO CAUSES, named in the description rather than papered over. Kong not
+           routing is one. The other is that nothing is POKING these four, because
+           pg_cron is stopped or its schedules were unscheduled -- the arms look
+           identical from here, since the request tier stays busy with the other
+           ~50 functions either way. Both are real problems and the queue-depth
+           alerts above discriminate, so the honest rule reports the symptom and
+           the description says how to tell them apart. A rule that claimed only
+           the first cause would be lying about a case it cannot distinguish.
+
+           NOT the reverse direction (worker tier serving functions NOT in the
+           routed set). Considered and deliberately absent: it is unrepresentable
+           in this metric. Kong renders exactly one service+route per name in
+           .Values.edgeFunctions.workerTier.functions, so there is no route by
+           which an unlisted function could reach this tier -- and the anchored
+           regex sends even `/functions/v1/<worker>/sub` to functions-v1-all
+           instead. The only way in is a client addressing the tier's Service
+           directly, past the gateway, which Kong's metrics cannot see by
+           construction and which the (nonexistent) deno_* series would have been
+           the tool for. There is nothing to assert.
+
+           The function list is interpolated from values, NOT hardcoded: a literal
+           regex here stops matching the moment someone edits the routed set,
+           which is the same silently-inert failure as the edge_tier label that
+           nothing reads. Interpolating into a regex is safe because
+           edge-functions-worker-tier.yaml already refuses any name that is not
+           DNS-1123, so no name can carry a metacharacter.
+
+           THIS RULE COVERS THE WHOLE TIER ONLY, and that scoping is deliberate
+           rather than a leftover. A single aggregate cannot see ONE missing
+           route: the other three keep taking their unconditional per-minute
+           pg_cron pokes, the sum stays positive, and the one function that fell
+           back to functions-v1-all is served by the request tier forever in
+           silence. That partial case is PawtograderEdgeWorkerRouteNoTraffic
+           below, one rule per configured name. The two are mutually exclusive by
+           construction -- this one requires the tier aggregate to be 0, that one
+           requires it to be >0 -- so a whole-tier misroute arrives as ONE alert
+           and not as one-per-route, and the per-route rules cannot pile four
+           copies of the same incident onto Alertmanager.
+
+           NAMESPACE AND DEPLOYMENT ARE STAMPED AS STATIC LABELS, because the
+           expression cannot supply them. Both `sum()` calls are ungrouped and
+           `vector(0)` has no labels at all, so without this block the alert
+           carries only alertname and severity -- and one Prometheus watching two
+           worker-enabled releases would fingerprint their simultaneous incidents
+           as ONE alert, with no way to route or silence by namespace. An earlier
+           round of this PR observed that bare label set in the promtool fixture
+           and recorded it as a quirk of the shape; it was an alerting defect.
+           The labels match PawtograderEdgeWorkerTierUnavailable above (which
+           gets namespace and deployment for free, from its selector's equality
+           matchers, via absent()) so the two rules for this tier group together.
+           Static values are safe here precisely because the expression produces
+           no labels: there is nothing for them to collide with. */}}
+        - alert: PawtograderEdgeWorkerTierNoTraffic
+          expr: |
+            (
+              sum(rate(kong_http_requests_total{namespace="{{ $ns }}", route=~"functions-v1-worker-({{ join "|" .Values.edgeFunctions.workerTier.functions }})"}[15m]))
+              or vector(0)
+            ) == 0
+            and
+            sum(rate(kong_http_requests_total{namespace="{{ $ns }}", route="functions-v1-all"}[15m])) > 0
+          for: 30m
+          labels:
+            severity: warning
+            namespace: {{ $ns | quote }}
+            deployment: {{ $wkrHost | quote }}
+          annotations:
+            summary: "Pawtograder edge worker tier is serving no traffic (the tier split may not be in effect)"
+            description: >-
+              Kong in {{ $ns }} has recorded no requests on any of its
+              functions-v1-worker-* routes for 30m, while the functions-v1-all
+              catch-all IS serving. The worker tier is enabled and its pods are up
+              (PawtograderEdgeWorkerTierUnavailable would be firing otherwise), so
+              {{ join ", " .Values.edgeFunctions.workerTier.functions }} are almost
+              certainly still being served by the REQUEST tier: the split is not in
+              effect and the worker pods are burning their memory reservation for
+              nothing. Two causes, and they look the same from this rule. (1) Kong
+              is not routing: its ConfigMap is stale or its declarative config
+              failed to load. Check the Kong pod's logs for a config-load error and
+              confirm the running ConfigMap contains the functions-v1-worker-*
+              services; a `helm upgrade` that rolls Kong re-applies them. (2)
+              Nothing is poking them: pg_cron is stopped or the
+              invoke-*-every-minute schedules were unscheduled. Check
+              `select * from cron.job` — if this is the cause the queue-depth
+              alerts (PawtograderAsyncQueueBacklog and siblings) will be firing
+              alongside, and this rule will not be the interesting one. Neither
+              cause loses work: pgmq holds unconsumed messages. Runbook:
+              docs/operations/incident-response.md.
+        {{- /* THE PARTIAL MISROUTE — one route missing, the other three fine.
+           This is the compensating control for the one residual risk the routing
+           review called the mandatory pre-prod check, and it is worth stating why
+           it has to live in an alert rather than in a test: the prefix/existence
+           guard in tests/render-guardrails.sh renders the chart's own default
+           values.yaml, so it cannot see the `functions` list a downstream overlay
+           sets. Production's list lives in the separate prod-charts repo. A typo
+           there renders a route for a name with no function behind it, or omits a
+           name entirely, and the chart's tests are structurally incapable of
+           noticing. Neither is the aggregate rule above capable of it: three
+           healthy routes keep the sum positive.
+
+           WHY ONE RULE PER NAME AND NOT `sum by (route)`. Grouping needs series
+           to group. A route Kong never registered -- a typo'd name, or a
+           declarative config that half-loaded -- emits NO kong_http_requests_total
+           at all, so `sum by (route)` returns three elements and the fourth is
+           simply not in the result: the exact silence this rule exists to break.
+           Both naive repairs were run through promtool against three-serving/
+           one-absent series before this shape was chosen, and both are worse
+           than the aggregate they would replace:
+             sum by (route)(rate(...)) == 0
+               never fires. Nothing to group, so the missing route is absent from
+               the result rather than present as a zero.
+             (sum by (route)(rate(...)) or vector(0)) == 0
+               fires ALWAYS, including on a fleet where all four routes are
+               serving, and names no route when it does. `or` is a set operation:
+               it appends right-hand elements whose label set is not on the left,
+               and vector(0)'s label set is `{}`, which no `{route=...}` group can
+               ever displace. So the labelless 0 is always there to satisfy `== 0`.
+           The expected set therefore has to come from VALUES, not from the data,
+           which is what generating a rule per entry does. Each gets its own
+           `or vector(0)` -- correct here, and not in the shape above, because the
+           selector is a single exact route so both sides are labelless and the
+           union is a genuine fallback rather than an extra element. A hardcoded
+           list would go stale silently
+           the moment someone edits workerTier.functions, so this ranges over the
+           same values the Kong routes and the worker Deployment are built from --
+           the routed set, the alert set and the pods can only ever disagree by
+           someone editing one of three templates in this repo.
+
+           THE GUARD IS THE SIBLING ROUTES, NOT THE REQUEST TIER, and that is a
+           change from the aggregate rule rather than an oversight. Three reasons.
+           (1) Mutual exclusivity: this fires only when some OTHER worker route is
+           serving, so a whole-tier misroute (aggregate 0) fires the rule above
+           and none of these. One incident, one alert; four copies of "the tier
+           isn't routing" would be worse than the bug. (2) It is the stronger
+           telemetry guard anyway: if Kong stops being scraped, every worker
+           series goes away at once, this sum goes empty, `> 0` fails, and the
+           rule is silent -- same protection the request arm gives the aggregate,
+           from a signal that is nearer the thing being measured. (3) The request
+           arm would SUPPRESS A TRUE POSITIVE here: all four schedules are
+           `* * * * *` and fire whether or not a human is using the app, so a
+           deployment with a genuinely idle request tier (out of term, a preview
+           env) still proves a partial misroute through its siblings. Requiring
+           functions-v1-all to be busy would blind the rule on exactly the quiet
+           deployments where nobody would notice by hand.
+
+           CARDINALITY. At most len(functions)-1 of these can fire at once, since
+           each needs a sibling serving -- so the worst case is 3 alerts naming 3
+           distinct broken functions, which is 3 real facts and not 3 copies of
+           one. `for: 30m` is the aggregate's window for the same reasons (the
+           first-enable Kong roll, and a 15m rate() that has to drain of the old
+           traffic when a route that WAS serving stops). severity: warning, also
+           for the same reason: the function still works, it is just not isolated.
+           */}}
+        {{- range $fn := .Values.edgeFunctions.workerTier.functions }}
+        - alert: PawtograderEdgeWorkerRouteNoTraffic
+          expr: |
+            (
+              sum(rate(kong_http_requests_total{namespace="{{ $ns }}", route="functions-v1-worker-{{ $fn }}"}[15m]))
+              or vector(0)
+            ) == 0
+            and
+            sum(rate(kong_http_requests_total{namespace="{{ $ns }}", route=~"functions-v1-worker-({{ join "|" $.Values.edgeFunctions.workerTier.functions }})"}[15m])) > 0
+          for: 30m
+          labels:
+            severity: warning
+            namespace: {{ $ns | quote }}
+            deployment: {{ $wkrHost | quote }}
+            route: {{ printf "functions-v1-worker-%s" $fn | quote }}
+          annotations:
+            summary: "Pawtograder edge worker route functions-v1-worker-{{ $fn }} is serving no traffic while its siblings are"
+            description: >-
+              Kong in {{ $ns }} has recorded no requests on
+              functions-v1-worker-{{ $fn }} for 30m, while at least one other
+              functions-v1-worker-* route IS serving — so Kong is loaded and
+              routing, and this one name is the exception. {{ $fn }} is therefore
+              being served by the REQUEST tier through the functions-v1-all
+              catch-all: the isolation this tier exists to provide does not apply
+              to it, and nothing else will report that. Likeliest cause is the
+              `functions` list itself — a name misspelled in
+              edgeFunctions.workerTier.functions (production sets it in the
+              separate prod-charts repo, which this chart's tests cannot see), so
+              Kong renders a route for a function that does not exist and the real
+              one falls through. Check the rendered ConfigMap against
+              `ls supabase/functions/` and against `select jobname from cron.job`.
+              Second cause is a partial Kong config load, which the pod's logs
+              will name. Third, and check it before assuming a bug: this function
+              may simply have no pg_cron schedule poking it, in which case the
+              routed set and the schedule set disagree and one of the two is
+              wrong. No work is lost either way — pgmq holds unconsumed messages
+              and the function still runs, on the wrong tier. Runbook:
+              docs/operations/incident-response.md.
+        {{- end }}
+        {{- end }}
     - name: pawtograder.secrets
       rules:
         # An ExternalSecret is not Ready — ESO syncs at refreshInterval and

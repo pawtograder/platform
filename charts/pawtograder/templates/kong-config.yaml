@@ -43,6 +43,7 @@ data:
             strip_path: true
             paths:
               - /auth/v1/verify
+              - /verify
         plugins:
           - name: cors
       - name: auth-v1-open-callback
@@ -52,6 +53,7 @@ data:
             strip_path: true
             paths:
               - /auth/v1/callback
+              - /callback
         plugins:
           - name: cors
       - name: auth-v1-open-authorize
@@ -140,6 +142,103 @@ data:
               - /functions/v1/
         plugins:
           - name: cors
+      {{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
+      {{- /* Background-worker tier: these function NAMES go to their own Deployment
+         instead of the request tier. This is the whole mechanism of the tier split
+         — no migration, no client change. Callers keep addressing
+         /functions/v1/<name>, which is the one contract shared by hosted
+         supabase.com, `supabase functions serve` and this deployment, and the
+         split is resolved gateway-side.
+
+         ONE KONG SERVICE PER NAME, WITH THE NAME IN THE SERVICE URL PATH. This
+         is not a style choice and getting it wrong fails quietly: `strip_path`
+         removes the MATCHED route path, so a route on /functions/v1/<fn> against
+         a service url of ".../" would hand the demuxer "/" and main.ts would
+         answer `400 missing function name in request path` on every poke. Kong
+         builds the upstream as service-path + stripped-remainder, so carrying
+         <fn> in the url is what reconstructs the single path segment main.ts
+         routes on. The auth-v1-open / auth-v1-open-callback /
+         auth-v1-open-authorize services above use exactly this shape against the
+         /auth/v1/ catch-all, and have in production for as long as this file has
+         existed.
+
+         ANCHORED REGEX, NOT A PLAIN PREFIX. A plain prefix path matches on the
+         path STRING, not on segment boundaries, so `/functions/v1/foo` also
+         matches `/functions/v1/foo-bar`. That is not a near-miss: verified
+         against Kong 3.9.1 with this exact config, `/functions/v1/github-async-worker-v2`
+         was routed to the worker tier AND rewritten to `/github-async-worker/-v2`,
+         so the demuxer would read pathParts[0] and silently execute
+         github-async-worker instead. A future function whose name merely EXTENDS
+         a worker's would run the wrong code.
+
+         Note the syntax: this config is `_format_version: "2.1"`, where a regex
+         path is written WITHOUT the `~` prefix and Kong auto-detects it from the
+         metacharacters (it normalizes to `~/...$` internally). The `~/` form
+         requires format 3.0 and is REJECTED here — "should start with: / (fixed
+         path) or ~/ (regex path)", which is a confusing way to say "your format
+         version is too old".
+
+         Sub-paths deliberately fall through to the request tier. The anchor means
+         `/functions/v1/<fn>/sub` does not match this route, so it lands on
+         functions-v1-all and is served by the request tier — same function, path
+         intact. That is the better trade: the sub-path-tolerant regex
+         `(?:/.*)?$` keeps such a request on the worker tier but strip_path then
+         removes the sub-path too, delivering `/github-async-worker` and losing
+         it. Both were measured. None of these four functions uses a sub-path
+         (pg_net posts the bare path), so the fallthrough is unreachable today.
+
+         PRIORITY. Verified live, not inferred: with these anchored regexes the
+         four worker paths reach the worker tier, every other function reaches
+         the request tier via functions-v1-all, and upstream paths are exactly
+         `/<fn>`. Kong evaluates regex routes ahead of plain prefixes, so the
+         `/functions/v1/` catch-all does not shadow them.
+
+         PLUGIN PARITY, AND THE ADMISSION-SLOT TRADE IT CONCENTRATES. These four
+         routes carry exactly `['cors']`, byte-identical to the functions-v1
+         catch-all they are carved out of, so this tier exposes NO new surface:
+         every one of these paths was already reachable unauthenticated at the
+         same URL before the split, and the `x-edge-function-secret` check that
+         actually guards these handlers lives inside each function, unchanged.
+
+         What DID change is where an unauthenticated POST lands. The isolate is
+         created by main.ts before any function code runs, so the 401 is decided
+         after admission -- and these four names now admit against 2 worker pods
+         instead of spreading across the request tier's 12-24 replicas. The blast
+         radius of a burst of junk POSTs to these paths therefore moves from
+         "some user requests get slower" to "all four queues stall". Accepted:
+         the 401 returns immediately so slots are not parked, real external
+         traffic on these paths is ~1.3 req/min, and per-path admission means the
+         four do not even contend with each other (see the maxParallelism note in
+         values.yaml -- --max-parallelism is per service path). Recorded because
+         it was considered rather than overlooked, and because the mitigation is
+         a behavior change on a live gateway: adding `rate-limiting` or
+         `ip-restriction` here would break plugin parity with the catch-all and
+         is not a cleanup to make in passing.
+
+         DELIBERATELY NO `hosts`. It would look tidier and it would break the
+         traffic that matters: SUPABASE_URL is http://<kong-svc>:8000, so
+         in-cluster pg_net pokes carry the Kong SERVICE NAME as Host, and a
+         host-scoped route would miss them and send every worker poke back to the
+         request tier. Conversely the channel routes below carry hosts AND paths —
+         two match fields — so they out-prioritize these regardless of path
+         length, and a channel host's worker traffic stays on that channel's own
+         deployment. That is correct: a channel is an A/B of the whole function
+         set, and pg_cron never pokes a channel host. */ -}}
+      {{- $workerHost := include "pawtograder.edgeFunctions.workers.host" . }}
+      {{- range $fn := .Values.edgeFunctions.workerTier.functions }}
+      - name: functions-v1-worker-{{ $fn }}
+        _comment: "Functions (worker tier): /functions/v1/{{ $fn }} -> functions-workers:{{ $.Values.edgeFunctions.service.port }}/{{ $fn }}"
+        url: http://{{ $workerHost }}:{{ $.Values.edgeFunctions.service.port }}/{{ $fn }}
+        routes:
+          - name: functions-v1-worker-{{ $fn }}
+            strip_path: true
+            paths:
+              # Anchored so the name matches at a segment boundary — see above.
+              - "/functions/v1/{{ $fn }}$"
+        plugins:
+          - name: cors
+      {{- end }}
+      {{- end }}
       {{- range $c := .Values.channels }}
       {{- if $c.edgeFunctions }}
       # Channel "{{ $c.name }}": /functions/v1/* on its own host routes to that

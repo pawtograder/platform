@@ -1,17 +1,12 @@
-{{- if .Values.monitoring.enabled -}}
 {{- /*
-Monitoring wiring. Emits Prometheus Operator CRs (ServiceMonitor) for every
-component that exposes /metrics, plus the postgres_exporter custom-queries
-ConfigMap consumed by the sidecar in postgres-statefulset.yaml.
-
-We do NOT deploy our own Prometheus or Grafana — the cluster's
-kube-prometheus-stack auto-discovers ServiceMonitors in any namespace and the
-Grafana sidecar picks up ConfigMaps labeled `grafana_dashboard: "1"`.
-
-Each ServiceMonitor reuses the chart's selectorLabels so that even if a Service
-gets renamed, the operator still finds the right pod set.
+The postgres_exporter custom-queries ConfigMap, factored into a named template
+so postgres-statefulset.yaml can hash EXACTLY the bytes its exporter sidecar
+mounts. Hashing the whole of monitoring.yaml instead swept in every
+ServiceMonitor in the file, so unrelated scrape wiring — most recently the
+edge-functions worker tier — rolled the Postgres primary. Emitted below,
+unchanged, so the rendered ConfigMap is byte-identical to before the split.
 */ -}}
----
+{{- define "pawtograder.postgresExporterQueries" -}}
 # postgres_exporter — custom queries that surface supabase/pawtograder
 # semantics on top of the default pg_stat_database / pg_stat_user_tables
 # coverage. Keep query names stable: dashboards reference them.
@@ -525,6 +520,22 @@ data:
         - heap_bytes:
             usage: "GAUGE"
             description: "Heap size only (no indexes)"
+{{- end -}}
+{{- if .Values.monitoring.enabled -}}
+{{- /*
+Monitoring wiring. Emits Prometheus Operator CRs (ServiceMonitor) for every
+component that exposes /metrics, plus the postgres_exporter custom-queries
+ConfigMap consumed by the sidecar in postgres-statefulset.yaml.
+
+We do NOT deploy our own Prometheus or Grafana — the cluster's
+kube-prometheus-stack auto-discovers ServiceMonitors in any namespace and the
+Grafana sidecar picks up ConfigMaps labeled `grafana_dashboard: "1"`.
+
+Each ServiceMonitor reuses the chart's selectorLabels so that even if a Service
+gets renamed, the operator still finds the right pod set.
+*/ -}}
+---
+{{ include "pawtograder.postgresExporterQueries" . }}
 ---
 {{- /*
 Both of the following are gated on postgres.enabled: the sidecar they front only
@@ -606,15 +617,43 @@ spec:
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 {{- end }}
 ---
-# ServiceMonitor: edge-functions. edge-runtime v1.74 serves Prometheus metrics
-# (deno_http_requests_total, pawtograder_*) at /metrics on the http port,
-# optionally gated by a Bearer token — the runtime enforces METRICS_TOKEN only
-# when that env value is set (metrics/index.ts: no token => open /metrics).
-# The credential is `optional: true` so a deploy that DOESN'T set METRICS_TOKEN
-# (e.g. staging, where edge /metrics is intentionally unauthed) still scrapes:
-# without optional, the missing Secret key makes the Prometheus Operator reject
-# this whole ServiceMonitor, silently dropping the edge target (rate-limiting
-# dashboard goes dark). When the key IS present, the token is sent as required.
+# ServiceMonitor: edge-functions. /metrics on the http port serves the fifteen
+# `pawtograder_*` families and NOTHING ELSE — in particular no deno_* series.
+# This comment asserted the opposite (that edge-runtime v1.74 serves
+# deno_http_requests_total here) until 0.4.0. The claim was never true of THIS
+# image, whatever the upstream runtime does: it replaces the runtime's main
+# service with our own demuxer (images/edge-functions/main.ts), whose Deno.serve
+# handler dispatches EVERY path by its first segment, /metrics included. So a
+# scrape of /metrics runs the `metrics` FUNCTION and returns exactly what
+# supabase/functions/metrics/index.ts prints. Checked against live Prometheus
+# rather than inferred: of 3700 metric names in the cluster, zero begin with
+# `deno`. The five panels in dashboards/edge-functions.json that select on
+# deno_http_requests_total have therefore been empty since they were written —
+# pre-existing, and tracked in #951 rather than fixed here.
+#
+# Access is optionally gated by a Bearer token — the runtime enforces
+# METRICS_TOKEN only when that env value is set (metrics/index.ts: no token =>
+# open /metrics).
+#
+# The authorization block is gated on monitoring.edgeFunctionsMetricsAuth, NOT
+# on `optional: true`. `optional` does not do what the previous version of this
+# comment claimed: the Prometheus Operator resolves the credential while
+# SELECTING the ServiceMonitor, and a missing Secret OR a missing key rejects
+# the whole object —
+#   endpoints[0]: authorization: failed to get authorization token of type
+#   "Bearer": unable to get secret "pawtograder-edge-functions": secrets
+#   "pawtograder-edge-functions" not found
+# A rejected ServiceMonitor yields no scrape pool at all. Not a "down" target —
+# an absent one, with nothing in Prometheus to notice. On ripley staging that
+# dark-ed every pawtograder_*_queue_size series and the whole pawtograder.app
+# alert group that reads them, from the day the k8s repo dropped the
+# edge-functions ExternalSecret (this chart having moved each integration to its
+# own envFromSecrets entry). Preview namespaces hit the same rejection via the
+# missing key rather than the missing Secret.
+#
+# So set edgeFunctionsMetricsAuth=false wherever METRICS_TOKEN is unset. Getting
+# it wrong the other way fails LOUDLY — the target 401s and shows as down —
+# which is the failure mode to prefer.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -623,20 +662,148 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
 spec:
+  {{- /* TWO SHAPES, GATED ON THE TIER. This gate USED TO BE about the Postgres
+     primary. As of 0.4.0 it is not, and the old reason is recorded here because
+     it is the reason the gate exists at all.
+
+     WHAT IT WAS. postgres-statefulset.yaml hashed the rendered text of this whole
+     file (plus postgres-config.yaml) into the primary's pod-template
+     `checksum/config`, stripping only lines carrying helm.sh/chart,
+     app.kubernetes.io/version, interval or scrapeTimeout. An edit to THIS selector
+     matches none of those patterns, so when the matchExpressions form below
+     rendered unconditionally it moved the checksum on every install — including
+     installs with the worker tier off, which is every install except staging — and
+     rolled the primary (a write outage, and with the sidecars' slow SIGTERM not a
+     brief one) purely to add a value to a selector they were not using. Measured,
+     not predicted: tier-off 0.3.17 -> 0.4.0 moved it bffad95b -> 16bd9c55.
+
+     WHAT IT IS NOW. The hash was narrowed in the same release: it takes the
+     `pawtograder.postgresExporterQueries` named template, not this file, because
+     the queries file is the only thing in here the primary's exporter sidecar
+     actually reads. So this file's ServiceMonitors are no longer hashed and an
+     edit to this selector — or to any comment in this file — CANNOT move the
+     primary's checksum. Verified rather than assumed: editing the comment above
+     this ServiceMonitor leaves checksum/config unchanged at 0.4.0, and moved it at
+     50f71406. Do not re-derive a `hold this file still` argument from it; the
+     three checksum assertions in tests/render-guardrails.sh are what hold the
+     property now, and 0.4.0 rolls the primary exactly once regardless.
+
+     SO WHY KEEP THE GATE. The two halves have different amounts of reason left.
+     The RELABELING gate below still earns its keep on its own terms: with the tier
+     off it would stamp a constant edge_tier label onto every pawtograder_* series
+     on every install, and because a label is part of a series' identity that ENDS
+     each old series and starts a new one at the upgrade — a real, if small, cost
+     paid by every install that will never run the tier. The SELECTOR gate is now
+     close to cosmetic: with no functions-workers Service in the cluster, a
+     matchExpressions `In (functions, functions-workers)` selects exactly what the
+     exact matchLabels form selects, so the only thing the gate buys is that a
+     tier-off upgrade produces no ServiceMonitor diff for the Prometheus Operator
+     to reconcile. It is kept because it costs one `if`, it keeps the two halves
+     symmetrical, and both are pinned by the same pair of assertions — not because
+     anything breaks without it.
+
+     So: when the tier is OFF, emit the ORIGINAL exact matchLabels shape, which
+     keeps the tier-off render of this file byte-identical to 0.3.17. When it is
+     ON, the operator is already taking a Kong roll and a new Deployment in that
+     release, and the selector has real work to do.
+
+     Why the shape has to change at all when the tier is on: the worker tier
+     carries component=functions-workers (edge-functions-worker-tier.yaml), and
+     an exact match on "functions" would leave it UNSCRAPED — silently, since a
+     tier that is never scraped does not look broken, it looks absent.
+     Channels (component=functions-<channel>) are still not scraped either way;
+     they are a whole-function-set A/B on their own host and out of scope here. */}}
   selector:
+    {{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
+    matchLabels:
+      {{- include "pawtograder.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - functions
+          - functions-workers
+    {{- else }}
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions") | nindent 6 }}
+    {{- end }}
   endpoints:
     - port: http
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+      {{- /* Copies the Service's component label onto each series as
+         edge_tier=functions | functions-workers, so that "which tier produced
+         this series?" is expressible in PromQL. Adding a label cannot break
+         existing selectors.
+
+         GATED, and unlike the selector above this half still has a live reason.
+         The historical one — this block is three rendered lines, matches none of
+         the old strip patterns, and moved the primary's checksum on its own — is
+         retired with the narrowed hash. What remains is worse than cosmetic: with
+         one tier every series would carry the same constant edge_tier="functions",
+         and stamping it is not free, because a label is part of a series' identity
+         (see NOT INERT below). Gating it means an install that never enables the
+         tier never pays that cutover.
+
+         NOT INERT, which an earlier version of this note got backwards and which
+         matters before you enable the tier. `endpoints[].relabelings` is TARGET
+         relabeling (prometheus `relabel_configs`), so it rewrites the target's
+         label set and every sample scraped from that target carries the result --
+         not just the deno_* series this label was reached for. What the endpoint
+         actually serves is the `metrics` FUNCTION's output (see below), so
+         enabling the tier stamps edge_tier onto all fifteen pawtograder_* series
+         and, because a label is part of a series' identity, ENDS each old series
+         and starts a new one at the cutover. Nothing numeric breaks: every
+         consumer aggregates the label away (prometheus-rules.yaml uses
+         `max by (namespace, ...)`, dashboards/queues-and-workers.json uses
+         `max()`), but per-series functions over the boundary -- the
+         `deriv(pawtograder_async_dlq_size[10m])` panel is the one -- see a
+         discontinuity for one window. If you want the label WITHOUT that, the
+         field is `metricRelabelings`, which applies after the scrape and can be
+         scoped to a metric name.
+
+         What IS true, and is the reason the label reads as constant today: there
+         is no deno_* series for it to distinguish. The `#` comment at the top of
+         this ServiceMonitor used to claim edge-runtime v1.74 serves
+         deno_http_requests_total at /metrics; it was wrong, and 0.4.0 corrects it
+         — see it for the mechanism and the live-Prometheus check. An earlier
+         revision of THIS note said the false claim had to stay because it was a
+         RENDERED comment whose edit would move the Postgres checksum. That
+         reasoning is dead twice over: the checksum no longer hashes this file (see
+         the gate note above), and 0.4.0 rolls the primary once anyway. Nothing in
+         this file is checksum-frozen, so a wrong comment in it is just a wrong
+         comment — fix it where you find it.
+         Consequences: the five panels in dashboards/edge-functions.json that
+         select on deno_http_requests_total are empty (pre-existing, tracked in
+         #951), and per-tier request rate is answered off Kong's own
+         kong_http_requests_total instead — see
+         PawtograderEdgeWorkerTierNoTraffic in prometheus-rules.yaml. The
+         relabeling is kept rather than deleted because it costs one scrape-time
+         label rewrite and becomes correct the moment any deno_* series exists.
+
+         Note this endpoint resolves as the `metrics` FUNCTION — the demuxer
+         routes /metrics on the first path segment — so worker-tier pods also
+         report the ABSOLUTE pgmq queue depths, and a panel that summed them
+         across pods would inflate by the pod count. Checked rather than assumed:
+         every pgmq panel in dashboards/queues-and-workers.json already uses
+         max() (max(pawtograder_async_queue_size) and siblings), which is
+         correct and pod-count-independent. The sum() queue panels in
+         app-business.json read pawtograder_help_queue_depth, which comes from
+         the postgres-exporter (see above in this file) and not from this
+         endpoint at all. So adding this tier moves no queue-depth number. */}}
+      {{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
+          targetLabel: edge_tier
+      {{- end }}
+      {{- if .Values.monitoring.edgeFunctionsMetricsAuth }}
       authorization:
         type: Bearer
         credentials:
           name: {{ .Values.secrets.names.edgeFunctions }}
           key: METRICS_TOKEN
-          optional: true
+      {{- end }}
 ---
 # ServiceMonitor: GoTrue (auth). /metrics on the dedicated metrics
 # port (9100); requires GOTRUE_METRICS_EXPORTER=prometheus, set in

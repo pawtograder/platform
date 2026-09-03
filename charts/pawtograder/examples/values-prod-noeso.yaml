@@ -152,21 +152,50 @@ web:
 
 edgeFunctions:
   policy: per_request
-  # 8, not 16: under per_request this is the cap on concurrent isolates per pod, and each isolate is
-  # admitted with its own memory budget. maxParallelism x edgeFunctions.worker.memoryLimitMb is the
-  # aggregate the runtime will admit, and nothing enforces it -- the runtime's protections are all
-  # per-isolate -- so once it exceeds the container limit the kernel OOM-kills PID 1 and every
-  # in-flight request dies at once (Kong then reports 502).
+  # 8, not 16: under per_request each request gets its own isolate, and each is admitted with its
+  # own memory budget. Note what maxParallelism actually caps: it is PER SERVICE PATH, not per pod
+  # -- edge-runtime keys active_workers by service path and gives each its own
+  # Semaphore(max_parallelism) (pool.rs :242/:325/:169, v1.74.0 b1edf453) -- so
+  # maxParallelism x worker.memoryLimitMb is a LOWER bound on resident isolate memory, not the
+  # aggregate ceiling. The real ceiling is (distinct paths this pod serves) x 8, and nothing
+  # enforces it: the runtime's protections are all per-isolate, so once actual usage exceeds the
+  # container limit the kernel OOM-kills PID 1 and every in-flight request dies at once (Kong then
+  # reports 502). RAISING maxParallelism therefore does not buy headroom -- it raises the ceiling on
+  # every path at once. Add replicas instead.
   #
-  # The arithmetic has to actually leave headroom, which 8 alone does not: at the chart-default
-  # worker.memoryLimitMb of 256 and the chart-default limits.memory of 2Gi, 8 x 256 MiB is EXACTLY
-  # the container limit, with nothing left for the main.ts demuxer or the Deno runtime -- and the
-  # PawtograderEdgeFunctionsMemoryHigh alert fires at 0.85 of the limit, below the admission budget.
-  # The explicit resources block below raises the limit to 4Gi (matching staging), so the budget is
-  # 50% and a burst has somewhere to go. Keep the three numbers consistent if you change any of them.
+  # The arithmetic has to actually leave headroom, and since chart 0.4.0 it is no longer this
+  # comment's job to check: `pawtograder.edgeFunctions.assertMemoryBudget` refuses a render whose
+  # resources.limits.memory cannot hold eszipCacheMaxMb + eszipColdLoadHeadroomMb
+  # + (maxParallelism x worker.memoryLimitMb) + ~600Mi Deno host. At chart defaults that sum is
+  # 3160Mi, and the 4Gi limit set below leaves 936Mi (23%) of backstop over it; the isolate term
+  # alone (8 x 256Mi = 2048Mi) is 50% of the limit, so a burst has somewhere to go.
+  #
+  # This paragraph used to argue from "the chart-default limits.memory of 2Gi", where 8 x 256 MiB
+  # was EXACTLY the whole limit and this overlay's 4Gi was a deliberate raise. Both halves of that
+  # are now stale -- the chart default has been 4Gi since before the tier split, so the block below
+  # matches it rather than raising it -- and the argument was rewritten rather than just
+  # renumbered, because a correct figure inside a dead derivation is what re-sized this value
+  # wrong twice before. Keep maxParallelism, worker.memoryLimitMb and resources.limits.memory
+  # consistent; the render-time assertion is what tells you when they are not, and
+  # PawtograderEdgeFunctionsMemoryHigh (0.85 of the limit) is what tells you at runtime.
   maxParallelism: 8
+  # 2026-09-01: request 512Mi -> 1.8Gi, the documented PRODUCTION pair with
+  # autoscaling.targetMemoryUtilizationPercentage 80 below. A memory-target HPA
+  # measures against the REQUEST, and the ~600Mi load-independent Deno baseline put
+  # an idle pod over 100% of 512Mi — which pinned the HPA at maxReplicas
+  # permanently, at any load, including none.
+  #
+  # 1.8Gi rather than the chart default of 1.5Gi because this is a production
+  # overlay and the prod window is measured: converged idle floor ~1260Mi, loaded
+  # ceiling ~1690Mi, so the request must exceed idle/0.72 = 1750Mi and stay below
+  # loaded/0.88 = 1920Mi. 1.8Gi (1843Mi) sits mid-window at 68% idle / 92% loaded;
+  # 1.5Gi (1536Mi) is BELOW it, which is right for a smaller install serving fewer
+  # distinct functions but leaves a prod-sized fleet unable to scale down.
+  #
+  # The floor takes ~24h to converge. Measure your own on pods >24h old at low CPU
+  # before changing this; the full curve is in charts/pawtograder/values.yaml.
   resources:
-    requests: { cpu: "200m", memory: "512Mi" }
+    requests: { cpu: "200m", memory: "1.8Gi" }
     limits:   { cpu: "2",    memory: "4Gi"   }
   # Mount the same SMTP Secret GoTrue uses, rather than populating a second OpenBao `smtp` bundle.
   # Without it SMTP_HOST is unset in the functions environment, and the notification processor read
@@ -183,7 +212,15 @@ edgeFunctions:
     enabled: true
     minReplicas: 12
     maxReplicas: 24
-    targetMemoryUtilizationPercentage: 100
+    # 80, not 100: the HPA controller applies a default 10% TOLERANCE, so a target of
+    # 100 is really a dead BAND of 90-110% and anything inside it moves nothing in
+    # either direction. 80 puts the band at 72-88%, and the memory request below is
+    # sized to straddle it: above idle/0.72 so a quiet fleet can scale down, below
+    # loaded/0.88 so a busy one can scale up. 100 is known-wrong at ANY request
+    # value for that reason. This matches the chart default — an overlay that sets
+    # 100 silently overrides it back to the configuration that pinned prod at
+    # maxReplicas for weeks.
+    targetMemoryUtilizationPercentage: 80
     targetCPUUtilizationPercentage: 200
   image:
     repository: ghcr.io/pawtograder/edge-functions

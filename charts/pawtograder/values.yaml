@@ -1096,9 +1096,40 @@ edgeFunctions:
     repository: ghcr.io/pawtograder/edge-functions
     tag: "" # default: chart appVersion
     pullPolicy: IfNotPresent
-  policy: per_worker # per_worker | per_request | oneshot. per_request gives each
-                     # request its own isolate (no concurrent co-location → no shared-heap
-                     # memory pile-up under bursts); per_worker co-locates for efficiency.
+  # per_worker | per_request | oneshot. per_request gives each request its own
+  # isolate (no concurrent co-location → no shared-heap memory pile-up under
+  # bursts); per_worker co-locates for efficiency.
+  #
+  # KNOWN EXPOSURE, LEFT AS per_worker DELIBERATELY — READ BEFORE RELYING ON IT.
+  # Every overlay that is actually operated pins per_request: values-prod.yaml,
+  # values-prod-noeso.yaml, values-staging.yaml, and the workerTier block below.
+  # No overlay sets per_worker. So this default is the one configuration none of
+  # them vouches for, and the only thing that inherits it is the preview overlay,
+  # which serves all 58 functions from one pod.
+  #
+  # That matters more than it used to, because --max-parallelism is PER SERVICE
+  # PATH, not per pod: edge-runtime keys its worker registry by service path and
+  # gives each path its own Semaphore(max_parallelism) (pool.rs :242/:325/:169,
+  # v1.74.0 b1edf453), and under per_worker a permit is held for the ISOLATE's
+  # life, released only in retire() (:727) — not at the end of a request. So a
+  # preview pod's runtime permit ceiling is 58 x 8 = 464 resident isolates, while
+  # the memory budget charges 8 x 256Mi = 2048Mi. The charged term is a LOWER
+  # bound on resident isolate memory, roughly 57x below the ceiling.
+  #
+  # Not flipped here on purpose, and the reason is evidence rather than taste:
+  # previews have run exactly this configuration for months and are not OOMing.
+  # Checked against the live cluster across ~15 preview namespaces — every edge
+  # pod runs `--policy per_worker --max-parallelism 8`, and total container
+  # restarts across all of them is 1. The ceiling is real but unrealized, because
+  # a preview never serves anywhere near 58 distinct paths with resident isolates
+  # at once. Flipping the fleet-wide default is a behavior change with an
+  # unmeasured throughput cost on the one workload that would feel it, and it does
+  # not belong in a change about the worker tier.
+  #
+  # If you are sizing a NEW install: set per_request explicitly, as every operated
+  # overlay does. If you keep per_worker, the number to watch is distinct paths
+  # served per pod, not maxParallelism.
+  policy: per_worker
   # NOTE for the pg_cron-poked background workers (notification-queue-processor,
   # github/discord-async-worker, gradebook-column-recalculate): they must NOT rely on
   # module-level state to keep one poll loop per pod, because `per_request` gives every
@@ -1112,14 +1143,42 @@ edgeFunctions:
   #     work waits for the next cron tick instead. Safer, slower.
   # Raising maxParallelism does not substitute for either: an unbounded loop consumes
   # whatever you give it.
-  # Cap on simultaneous worker isolates (--max-parallelism). Under per_request this
-  # is effectively the max concurrent requests per pod (excess queue up to
-  # request-wait-timeout).
+  # Cap on simultaneous worker isolates (--max-parallelism), PER SERVICE PATH.
+  #
+  # Not per pod, which is how this was documented until 2026-09-02 and is the
+  # single most misleading thing you can believe about the memory budget.
+  # edge-runtime holds `active_workers: HashMap<String, ActiveWorkerRegistry>`
+  # keyed by service path, and creates each entry with a FULL allotment —
+  # `.or_insert_with(|| ActiveWorkerRegistry::new(self.policy.max_parallelism))`,
+  # whose semaphore is `Semaphore::const_new(max_parallelism)` (pool.rs :242,
+  # :325-329, :169; v1.74.0 b1edf453). There is no global admission semaphore
+  # anywhere in the runtime. So a pod's real ceiling is
+  # (distinct paths it serves) x maxParallelism, and one function never queues
+  # behind another — they cannot contend for the same permits.
+  #
+  # Two consequences:
+  #   * RAISING this does not buy safe headroom. It raises the ceiling on every
+  #     path at once, so it multiplies the exposure the budget fails to bound. If
+  #     something is queueing, add replicas.
+  #   * (maxParallelism x worker.memoryLimitMb) in the budget below is a LOWER
+  #     bound on resident isolate memory, not an upper bound. What actually bounds
+  #     it is `beforeUnload` recycling, worker.timeoutMs on IDLE isolates, and the
+  #     pool's own idle cleanup — none of which this chart asserts, and none of
+  #     which has a render-time expression. Treat the budget as "the floor a pod
+  #     needs", never as "the most it can use".
+  #
+  # Under per_request the isolate is still RETAINED and reused after a request
+  # (strategy_per_request.rs :199, :240-250: EarlyDrop with oneshot == false sends
+  # UserWorkerMsgs::Idle rather than tearing down) and the wall clock is reset per
+  # request — so worker.timeoutMs bounds an IDLE isolate, not a busy one. Any
+  # comment claiming per_request tears the isolate down, or re-instantiates the
+  # module graph per request, is wrong. per_request's guarantee is that two
+  # requests never share a heap, not that the heap is short-lived.
   #
   # REQUIRED, and validated by pawtograder.edgeFunctions.assertMemoryBudget: this
   # is a term in the container memory budget, and unset means "whatever the runtime
   # infers from CPU count", which cannot be checked at render time. 8 is what
-  # production runs; 8 x worker.memoryLimitMb is the isolate half of the budget.
+  # production runs.
   maxParallelism: 8
   verifyJwt: false # all functions in pawtograder set this; auth handled in-function
   # "beforeunload" / EarlyDrop thresholds (% of each per-worker resource limit).
@@ -1150,17 +1209,32 @@ edgeFunctions:
   # has ever been asked for. Unbounded, that alone exceeded the container limit
   # and OOM-killed pods after a few days' uptime (2026-08-19).
   #
-  # Bundle inventory, measured 2026-08-28 from /home/deno/eszips in a running
-  # pod (the earlier "55 bundles, ~2.2GB, 19-59MB" here was stale — it came from
-  # the Dockerfile bundler's own log line, which main.ts still quotes):
-  #   58 bundles, 1390MiB total; min 5.5MiB / median 30.7MiB / max 43.2MiB.
+  # Bundle inventory. Re-measure this rather than trusting it: nothing pins the
+  # dependency graph (deno.lock is gitignored AND `rm -f`'d by the Dockerfile), so
+  # the corpus drifts on its own and every figure here has a date for that reason.
+  #   2026-08-28, from /home/deno/eszips in a running pod:
+  #     58 bundles, 1390MiB total; min 5.5MiB / median 30.7MiB / max 43.2MiB.
+  #   2026-09-01, from `docker build --target bundler` on the same tree:
+  #     58 bundles, 1569MiB total; min 5.5MiB / median 36.1MiB / max 48.6MiB.
+  # That is +13% in four days with no deliberate dependency change — which is the
+  # argument for pinning, and the reason to re-measure before re-tuning.
+  # (The much older "55 bundles, ~2.2GB, 19-59MB" came from the Dockerfile
+  # bundler's own log line, which main.ts still quotes; it predates the
+  # @sentry/deno pin in #934.)
   # Averaging these is how you get surprised, so size the cache off the MEDIAN:
-  # 512Mi holds ~16 of 58, 256Mi holds ~8.
+  # at 36.1MiB, 512Mi holds ~14 of 58 and 256Mi holds ~7.
+  #
+  # To re-measure:
+  #   docker build -f charts/pawtograder/images/edge-functions/Dockerfile \
+  #     --target bundler -t eszip-check .
+  #   docker run --rm --entrypoint sh eszip-check -c \
+  #     'cd /home/deno/eszips && for f in *.eszip; do \
+  #        printf "%s\t%s\n" "$(stat -c%s "$f")" "${f%.eszip}"; done | sort -n'
   #
   # The container budget is four terms that must be reconciled together:
   #   eszipCacheMaxMb + eszipColdLoadHeadroomMb
-  #     + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
-  # At these defaults: 256Mi + 256Mi + (8 x 256Mi) + 90Mi = 2650Mi (~2.6Gi),
+  #     + (maxParallelism x worker.memoryLimitMb) + ~600Mi host
+  # At these defaults: 256Mi + 256Mi + (8 x 256Mi) + 600Mi = 3160Mi (~3.1Gi),
   # which is why the edge tier wants a limit at or above 4Gi. Raise this only
   # alongside that sum.
   #
@@ -1170,13 +1244,13 @@ edgeFunctions:
   # 100% target while CPU sat at 5% of a 200% target — an autoscaler that can
   # only ever say "already at max" is not autoscaling, and it left no burst
   # headroom ahead of a ~2k WAU ramp. The cause is a per-pod memory FLOOR that
-  # is load-INDEPENDENT and dominated by this cache:
-  #   ~320Mi Deno host baseline (measured, see resources notes)
-  #    512Mi eszip cache at its cap
-  #   -------
-  #   ~832Mi against prod's 1Gi request  => ~81% before a request is served,
-  #          and measured idle sat higher still (~98%) because a pod keeps
-  #          some isolates resident between requests.
+  # is load-INDEPENDENT and dominated by this cache. (The arithmetic this note
+  # used to carry here — a ~320Mi host baseline giving ~832Mi against prod's
+  # then-1Gi request — is RETIRED, not merely refined: the host term is ~600Mi,
+  # so the floor with a 256Mi cache is ~860Mi, and the converged prod floor
+  # measured ~1260Mi. It is deleted rather than annotated because a retired
+  # derivation stated in the present tense is what re-sized this value wrong
+  # twice. See the resources note below, which carries the live numbers.)
   #
   # Confirmed by a natural experiment during the 2026-08-28 deploy: the pods
   # were recreated, and the SAME fleet under the SAME load went from mean
@@ -1208,15 +1282,16 @@ edgeFunctions:
   # 90-110% dead band, which is what autoscaling.targetMemoryUtilizationPercentage
   # below now addresses.
   #
-  # NOT changed here: resources.requests.memory. Note the corrected numbers also
-  # retire the argument the earlier note gave for leaving it alone (that a 1.5Gi
-  # request would strand a loaded pod near 48%) — at a ~1500Mi loaded peak, 1.5Gi
-  # would read ~98%, not 48%. The request is simply out of scope for this change:
-  # the target bump below is what was measured and confirmed live, and the request
-  # should be re-set from the idle-vs-loaded band observed on pods that have been
-  # up ~24h on these settings rather than from either version of this arithmetic.
-  # The two are coupled — the target is a percentage OF the request, so moving one
-  # without redoing the band calculation re-wedges the dead band.
+  # Host baseline corrected again 2026-09-01: the ~320Mi above is wrong by half.
+  # Measured on a fleet that had converged, the load-independent Deno baseline is
+  # ~600Mi, so the floor with a 256Mi cache is ~860Mi rather than the ~576Mi this
+  # note computed — and that wrong term is why halving the cache on 08-28 moved
+  # the floor much less than its arithmetic promised. An earlier version of this
+  # note also left resources.requests.memory alone as "out of scope"; it is not
+  # out of scope any more, and the default is now 1.5Gi. See the note on
+  # resources below, which carries the converged measurements. The two stay
+  # coupled — the HPA target is a percentage OF the request, so moving one without
+  # redoing the band calculation re-wedges the dead band.
   #
   # In MiB, matching worker.memoryLimitMb below. (Kept in MiB rather than bytes
   # because YAML renders a bare 536870912 as 5.36870912e+08 through Helm.)
@@ -1231,8 +1306,9 @@ edgeFunctions:
   # what keeps this term small — but it is not zero, and a burst of cold requests
   # for DISTINCT functions right after a pod starts is when it peaks. 256Mi is
   # roughly four of the largest bundle in the image (58.4MiB when this was
-  # written; re-measured 43.2MiB on 2026-08-28, so the render-time floor of
-  # 64Mi is now conservative — left alone deliberately, it costs nothing).
+  # written; 43.2MiB on 2026-08-28, 48.6MiB on 2026-09-01 — it moves, see the
+  # inventory note above). The render-time floor of 64Mi still covers the
+  # largest, with less margin than the 2026-08-28 figure suggested.
   # After warmup the working set is resident and this is not touched at all.
   # Deliberately NOT reduced alongside eszipCacheMaxMb above: this term covers
   # COLD reads, and halving the cache makes cold reads more frequent, not less.
@@ -1247,14 +1323,61 @@ edgeFunctions:
     # hosted "50% of any resource" rule (~128MB at 256MB). This lets a memory-heavy
     # request finish + return instead of being force-killed at the hard cap.
     lowMemoryMultiplier: 2
+  # The memory REQUEST is what a memory-target HPA measures utilization against,
+  # so on this tier it is an autoscaling input and not just a scheduling hint.
+  #
+  # 2026-09-01: 512Mi -> 1.5Gi. 512Mi was not merely a low number — it was below
+  # the floor on ANY deployment, at ANY load, including a completely idle one.
+  # The Deno host baseline for this runtime measures ~600Mi and is
+  # load-INDEPENDENT: it is the runtime itself, not per-request work. So
+  # utilization started above 100% before a single request was served, and a
+  # memory-target HPA is pinned at maxReplicas from the moment it is enabled —
+  # it cannot scale down (that needs <90% of target, given the controller's 10%
+  # tolerance) and cannot scale up (already at max). Production spent weeks that
+  # way, and its own values file has carried a warning since 2026-08-11 telling
+  # operators not to copy this block wholesale because of exactly this value. A
+  # default that has to ship with a "do not use this" note attached is a bug.
+  #
+  # The floor takes ~24h to CONVERGE, not the 2-3h every previous attempt at this
+  # value assumed. Measured in production at 2-10m CPU (i.e. no load), request
+  # 1.5Gi, eszipCacheMaxMb 256:
+  #     30m  mean  459Mi (30%)     10h  mean 1069Mi (70%)
+  #      2h  mean  723Mi (47%)     24h  mean 1227Mi (80%)
+  #      4h  mean  898Mi (58%)     29h  mean 1268Mi (83%)
+  #      6h  mean  972Mi (63%)   2d11h  mean 1253Mi (82%)  <- converged
+  # Four values have now been set on this tier (512Mi -> 1Gi -> 1.5Gi -> 1.8Gi);
+  # the first three were each chosen from a fleet that had not converged, and each
+  # looked correct for a few hours. Anyone re-tuning this has to measure on pods
+  # more than 24h old at low CPU, or they will repeat that.
+  #
+  # Why 1.5Gi as the CHART DEFAULT rather than the 1.8Gi prod sets for itself: the
+  # floor is not a constant. It scales with how many distinct functions a pod
+  # serves and how big its eszip cache is, so the default must not encode one
+  # deployment's floor. Prod's converged idle floor is ~1260Mi, which puts its
+  # usable request window at 1750-1920Mi (derived from the 72-88% dead band at
+  # target 80: the request must exceed idle/0.72 and stay below loaded/0.88), and
+  # prod overrides this to 1.8Gi in its own values. 1.5Gi is chosen here because
+  # it sits comfortably above the ~600Mi load-independent baseline, so the HPA is
+  # never pinned out of the box; it is a value production ran stably for days; and
+  # it does not impose prod's capacity cost on smaller installs.
+  #
+  # Operators should measure their OWN converged floor — idle mean and min at low
+  # CPU on pods >24h old — and size this from it, together with
+  # autoscaling.targetMemoryUtilizationPercentage below. The target is a
+  # percentage of this number, so the two cannot be set independently.
+  #
   # The memory LIMIT has to hold the whole budget documented above
   # (eszipCacheMaxMb + eszipColdLoadHeadroomMb
-  #   + maxParallelism x worker.memoryLimitMb + ~90Mi host), which is asserted at
+  #   + maxParallelism x worker.memoryLimitMb + ~600Mi host), which is asserted at
   # render time by pawtograder.edgeFunctions.assertMemoryBudget.
   # 4Gi rather than 2Gi because the documented working configuration does not fit
   # 2Gi, so the old default was a combination the guardrail now rejects outright.
-  # That was 2906Mi (~2.8Gi) when the cache was 512Mi; at the current 256Mi cache
-  # it is 2650Mi (~2.6Gi), still well past 2Gi. The limit is deliberately NOT
+  # That was 3416Mi (~3.3Gi) when the cache was 512Mi; at the current 256Mi cache
+  # it is 3160Mi (~3.1Gi), still well past 2Gi — and 3160Mi is the exact figure
+  # tests/render-guardrails.sh asserts the guard still refuses one Mi below. Both
+  # numbers here were 90Mi-era sums (2906/2650) until 2026-09-02; the host term
+  # moved to ~600Mi and this sentence did not, which is the fourth instance on
+  # this branch of the trap the paragraph above names. The limit is deliberately NOT
   # lowered to track the cache: it is the backstop described below, and the slack
   # is the point.
   #
@@ -1264,7 +1387,7 @@ edgeFunctions:
   # it. Limits are not scheduled (requests are), so raising it does not change
   # placement.
   resources:
-    requests: { cpu: "200m", memory: "512Mi" }
+    requests: { cpu: "200m", memory: "1.5Gi" }
     limits: { cpu: "2", memory: "4Gi" }
   # Horizontal autoscaling. When enabled, a HorizontalPodAutoscaler manages the
   # replica count (and the Deployment's static `replicas` is omitted so the two
@@ -1285,11 +1408,22 @@ edgeFunctions:
     # stayed there permanently; and at 109% under load it still would not scale
     # UP (that needs >110%). Both directions were wedged by the same band.
     #
-    # Measured band with eszipCacheMaxMb at 256 (see the note on that value):
-    # floor ~576Mi = 56% of prod's 1Gi request, loaded peak ~1500Mi = 146%.
-    # A target of 80 puts the dead band at 72-88%, which sits cleanly BETWEEN
-    # those two -- the floor is below it, so a quiet fleet can scale down; a
-    # loaded pod is above it, so a busy fleet can scale up.
+    # The band this was originally sized against -- floor ~576Mi = 56% of prod's
+    # then-1Gi request, loaded peak ~1500Mi = 146% -- is HISTORICAL and both
+    # numbers have since been retired. See the resources note above: the floor is
+    # ~860Mi, not ~576Mi (the host baseline is ~600Mi, not ~320Mi), it takes ~24h
+    # to converge, and prod measures a converged idle floor of ~1260Mi against a
+    # loaded ceiling of ~1690Mi. Do not re-derive a request from the figures in
+    # this paragraph.
+    #
+    # What survives the correction is the shape of the argument, which is why 80
+    # is still right: a target of 80 puts the dead band at 72-88%, and the request
+    # is sized to straddle it -- above idle/0.72 so a quiet fleet can scale down,
+    # below loaded/0.88 so a busy one can scale up. With the converged numbers
+    # that window is 1750-1920Mi for prod (which sets 1.8Gi in its own values), and
+    # the chart default of 1.5Gi clears the ~600Mi load-independent baseline by
+    # enough that a stock install is never pinned. Every install should still
+    # re-measure its own floor.
     #
     # Confirmed live on the prod fleet, cache already at 256Mi:
     #   18:46   109%/100%   12 replicas   pinned
@@ -1330,6 +1464,193 @@ edgeFunctions:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+  # ---------------------------------------------------------------------------
+  # Supervised background-worker TIER
+  # ---------------------------------------------------------------------------
+  # A second edge-functions Deployment serving ONLY the four pg_cron-poked pgmq
+  # consumers. Same image, same 58 bundles, same database — it differs in its
+  # isolation config and its memory budget, and Kong routes those four function
+  # NAMES to it by path (templates/kong-config.yaml). Everything not set here
+  # inherits from edgeFunctions above.
+  #
+  # A tier is not a channel. A channel is an A/B of the WHOLE function set on
+  # its own image tag, reached by HOST. A tier is a subset of functions on the
+  # same image, reached by PATH.
+  #
+  # Why these four do not belong on the request tier — two measured reasons:
+  #
+  #  1. ADMISSION SLOTS. Three of them run in `leased` mode (see
+  #     supabase/functions/_shared/workerRun.ts): one isolate per worker per
+  #     lease scope parks a resident drain loop and holds one of
+  #     maxParallelism's 8 slots for the isolate's life. On the request tier
+  #     those slots are the same ones student requests queue behind.
+  #  2. ESZIP CACHE OCCUPANCY. eszipCacheMaxMb 256 holds ~7 of 58 bundles at the
+  #     36.1MiB median, and these four are 90.3MiB of them. They are poked every
+  #     ~30s, so they are never
+  #     LRU-evicted and permanently occupy about half of every request-tier
+  #     pod's cache — on all 12-24 replicas — while serving zero user requests.
+  #
+  # A third, non-obvious one: today every request-tier pod contends for each
+  # worker's Redis lease, so 11-23 of them do a Redis round trip per poke and
+  # then return `idle`. Confining pokes to this tier removes that entirely.
+  #
+  # Enabling this is a Kong ROUTING change: no migration, no client change, no
+  # image rebuild. Callers only ever address `/functions/v1/<name>`, and that is
+  # resolved gateway-side. Setting enabled: false returns all four to the
+  # request tier's `/functions/v1/` catch-all in one `helm upgrade`.
+  workerTier:
+    # Off by default, so an existing values file renders exactly what it renders
+    # today. Also correct for the two runtimes that have no demuxer and no Kong
+    # of ours: hosted supabase.com and `supabase functions serve`.
+    enabled: false
+    # The function names Kong routes here. This list is the ONLY source of truth
+    # for the split — the routes are generated from it, so routing and tier
+    # membership cannot disagree. A name NOT listed keeps hitting the request
+    # tier and behaves exactly as it does today, which is what makes shortening
+    # this list a safe way to move one worker back without a rollback.
+    #
+    # Enabled with an empty list is refused at render time: the pods would run,
+    # be scraped, cost their whole memory limit and receive nothing, while the
+    # four workers kept running on the request tier. Nothing would look broken.
+    functions:
+      - notification-queue-processor
+      - github-async-worker
+      - discord-async-worker
+      - gradebook-column-recalculate
+    # 2, and it buys AVAILABILITY, not throughput. Three of the four workers are
+    # leased: exactly one isolate per worker per lease scope drains, and every
+    # other poke returns immediately via `idleRun` (workerRun.ts). Replicas do
+    # not parallelize the work. The second one covers a rolling update and a node
+    # drain. (gradebook-column-recalculate is the exception — `preferBounded:
+    # true` — and pgmq's per-message visibility timeout makes extra drainers safe
+    # there, just unnecessary.)
+    replicas: 2
+    # Deliberately per_request, i.e. the same policy every deployed overlay runs
+    # today, so enabling this tier changes WHERE the workers run and nothing
+    # else. That keeps the split independently revertible.
+    #
+    # This tier is also where per_worker should be VALIDATED before the request
+    # tier is considered (issue #926). It is the cheap place to learn it: its
+    # routed function count is known at render time and small, whereas on the
+    # request tier `--max-parallelism` has two plausible meanings under
+    # per_worker that fail in opposite directions — see the maxParallelism note
+    # above, and the per_worker assertions in _edge-functions-workload.tpl.
+    policy: per_request
+    # 8, matching the request tier rather than inventing a smaller number. The
+    # four workers hold up to 4 resident slots (3 leased loops + 1 bounded
+    # drain), and beforeUnload recycling transiently holds a retiring and a
+    # replacement isolate at once. Slot exhaustion as a function of uptime is the
+    # exact failure workerRun.ts was written to escape, so this is not the knob
+    # to economize on; the memory it costs is bounded and this tier has 2 pods.
+    maxParallelism: 8
+    # The four routed bundles MEASURED 2026-09-01: notification-queue-processor
+    # 14.2 + github-async-worker 36.7 + discord-async-worker 13.9 +
+    # gradebook-column-recalculate 25.6 = 90.3MiB.
+    #
+    # The hot set is FIVE bundles, not four: `metrics` is in no route list, but
+    # the ServiceMonitor scrapes /metrics on every pod of this tier and the
+    # demuxer resolves that by first path segment like any other request, so that
+    # bundle is loaded and stays resident at the scrape interval. The render-time
+    # assertion counts it (len(functions) + 1); at 192Mi there is room for all
+    # five plus growth, so this tier NEVER evicts — unlike the request tier, where
+    # 256Mi holds ~7 of 58 and eviction is the steady state. Asserted at
+    # render time against len(functions): a routed tier that evicts re-reads a
+    # bundle it will need again seconds later, which is the opposite of the point.
+    eszipCacheMaxMb: 192
+    # Above the 64Mi render-time floor (which covers the largest bundle in the
+    # image, 48.6MiB measured 2026-09-01), with margin for a bundle growing. A
+    # routed tier does one cold load per hot bundle per pod lifetime -- five, not
+    # four: `metrics` is loaded by the first /metrics scrape, as the cache note
+    # above explains -- and they are spread over startup, so serializing them
+    # costs nothing.
+    eszipColdLoadHeadroomMb: 96
+    # 192 + 96 + (8 x 256) + ~600Mi host = 2936Mi. 3584Mi leaves 648Mi (18%) of
+    # backstop slack; the request tier runs 3160Mi against 4Gi (23%).
+    #
+    # The host term is 600Mi, not the 90Mi this comment used to carry: 90 was the
+    # cost at t=0 with an empty cache, but the limit is a hard cgroup ceiling, so
+    # what has to fit is the converged baseline #949 measured. At 3Gi the same
+    # tier would have had 136Mi of real slack while claiming 646Mi.
+    #
+    # Mi, not Gi, deliberately: assertMemoryBudget parses a Gi limit with
+    # `trimSuffix "Gi" | int`, so a fractional value like 3.5Gi would truncate to
+    # 3 and silently certify against 3072Mi.
+    #
+    # requests.memory is a SCHEDULING HINT here, not an autoscaling input,
+    # because this tier has no HPA — so unlike the request tier (see the long
+    # note above, and #949) it can be re-measured and changed without re-wedging
+    # a dead band. But a hint that is 23% low is how you get evictions, which is
+    # why it is 1.5Gi and not the 1Gi it started as.
+    #
+    # Derived from this tier's own constants rather than copied from the request
+    # tier:
+    #
+    #     600Mi  converged Deno host baseline (#949, load-independent)
+    #   + 192Mi  eszipCacheMaxMb for this tier
+    #   ------
+    #     792Mi  with zero isolates resident
+    #   + 464Mi  4 resident worker isolates at the ~116Mi/isolate measured in prod
+    #   ------
+    #    1256Mi  steady state
+    #
+    # 1256Mi is ~123% of a 1Gi request, so at 1Gi these pods are Burstable and sit
+    # permanently ABOVE their request: they lead the eviction order under node
+    # memory pressure, and they understate their scheduling footprint by ~230Mi
+    # each on a 3-node cluster. 1.5Gi (1536Mi) covers the derived steady state
+    # with ~22% headroom.
+    #
+    # The 3584Mi LIMIT is unchanged. TWO different fractions of it are in play and
+    # this comment mislabelled them until 2026-09-03, calling 35% "the charged
+    # sum" while the line above already said the charged sum leaves 18%:
+    #
+    #   2936Mi = 82% of the limit -- the CHARGED SUM (192 cache + 96 cold-load +
+    #            8 x 256 admitted isolates + 600 host). This is the same figure as
+    #            the "3584Mi leaves 648Mi (18%) of backstop slack" note above;
+    #            82% + 18% is where those two lines meet.
+    #   1256Mi = 35% of the limit -- the DERIVED STEADY STATE (600 host + 192
+    #            cache + 4 resident isolates at ~116Mi), i.e. what these pods
+    #            actually sit at, and the figure requests.memory is sized from.
+    #
+    # So the limit is loose against the STEADY STATE, not against the charged sum,
+    # and it stays that way deliberately: per the maxParallelism note above, the
+    # charged sum is a floor rather than a ceiling, and the slack is what lets the
+    # runtime retire an isolate instead of the kernel killing PID 1.
+    #
+    # Check the derivation against reality after the first 24h: the isolate term
+    # is the soft one, and 4 x ~116Mi assumes each routed function keeps exactly
+    # one resident isolate. Measure idle mean/min at low CPU on pods >24h old.
+    resources:
+      requests:
+        cpu: "100m"
+        memory: 1.5Gi
+      limits:
+        cpu: "1"
+        memory: 3584Mi
+    # gracefulExitTimeoutSeconds / terminationGracePeriodSeconds are deliberately
+    # NOT overridden, and an earlier revision of this PR got that wrong.
+    #
+    # It cut them to 60/90 on the reasoning that the drain loop never finishes on
+    # its own, so honoring the base 410 makes every rollout wait it out. True,
+    # but it traded the wrong thing. pgmq guarantees REDELIVERY, not exactly-once
+    # EFFECTS, and these workers act before they archive: notification-queue-
+    # processor sends the mail then archives, discord-async-worker posts then
+    # archives. A SIGTERM that lands between those two steps duplicates a
+    # user-visible email or Discord post on redelivery. github-async-worker's
+    # sync_repo_to_handout is documented in workerRun.ts as running for minutes,
+    # so a 60s cutoff would hit it routinely.
+    #
+    # These four run on the request tier today WITH 410/430, so inheriting is
+    # exactly today's behavior; 60/90 would have been a regression introduced by
+    # moving them, in exchange for rollout speed nobody had measured a problem
+    # with. Making rollouts fast is a real goal, but the correct fix is for the
+    # loop to observe SIGTERM and exit promptly (a workerRun.ts change), not to
+    # shorten the window it is given to finish.
+    # worker.timeoutMs is deliberately NOT overridden. Raising it would shrink
+    # the lease duty-cycle gap (#926 lists that gap as a revisit trigger), but
+    # the 400s wall clock is also what currently bounds a possible
+    # background-worker memory leak — which #926 lists as its own trigger. Raise
+    # it only after this tier's memory panel has been flat for 24h.
 
 # -----------------------------------------------------------------------------
 # Kong (API gateway)
@@ -1642,6 +1963,20 @@ monitoring:
   enabled: false
   scrapeInterval: 30s
   scrapeTimeout: 10s
+
+  # Send a Bearer token when scraping the edge-functions /metrics endpoint.
+  #
+  # Must be true if and only if secrets.names.edgeFunctions actually carries a
+  # METRICS_TOKEN key. The Prometheus Operator resolves the credential while
+  # selecting the ServiceMonitor and rejects the ENTIRE object when the Secret
+  # or key is absent — `optional: true` is not honoured there. A rejected
+  # ServiceMonitor produces no scrape pool and no "down" target, so the edge
+  # metrics simply vanish, taking the pawtograder.app alert group with them.
+  #
+  # Default true, matching an install with the full edge-functions Secret. Set
+  # false on deploys that leave METRICS_TOKEN unset — the edge runtime serves
+  # /metrics openly in that case, so no token is needed.
+  edgeFunctionsMetricsAuth: true
 
   # Per-component ServiceMonitor toggles (all default on). Set one false when a
   # component doesn't expose a scrapeable /metrics endpoint in your topology, so

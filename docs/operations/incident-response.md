@@ -108,6 +108,126 @@ Components:
   `edge-function-secret` to the in-cluster Kong host. Re-run migrations if a
   restore or fresh DB skipped it (see [rollback.md](./rollback.md) / DR notes).
 
+**First question: which tier?** When `edgeFunctions.workerTier.enabled` is set
+there are **two** edge Deployments, and they fail differently:
+
+| Deployment                    | serves                                                                                                        | scaling                | when it is down                                                                                                                                               |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<release>-functions`         | every function except the routed workers                                                                      | HPA                    | user-facing 502s                                                                                                                                              |
+| `<release>-functions-workers` | `notification-queue-processor`, `github-async-worker`, `discord-async-worker`, `gradebook-column-recalculate` | fixed replicas, no HPA | those four **502** (same code as the request tier — the tier is in the pod name, not the status); pgmq stops draining, nothing user-facing breaks immediately |
+
+The status code does **not** discriminate: a Deployment with zero ready pods
+leaves a Service with no endpoints, kube-proxy refuses the connection and Kong
+reports that upstream failure as **502** on either tier. Use the failing **path**
+(`/functions/v1/<one of the four>` vs anything else) or the **pod name** in the
+alert, not the code.
+
+Kong routes by **path**, not by health, so the request tier does **not** absorb
+worker traffic when the worker tier is down — and it has no HPA, so
+"HPA scaled up?" is not a useful question there. `PawtograderEdgeWorkerTierUnavailable`
+is the alert that names it; queue depth on the queues-and-workers dashboard is
+the blast radius. pg_cron pokes are idempotent and pgmq's per-message visibility
+timeout is the mutual exclusion, so work resumes on the next tick rather than
+being lost.
+
+Two consequences worth knowing before you start pulling threads:
+
+- **Each tier has its OWN memory budget.** `edgeFunctions.*` for the request
+  tier, `edgeFunctions.workerTier.*` for the worker tier. The OOM and
+  memory-high alerts select on the _container_ name, which both tiers share, so
+  they cover both — read the knobs off the tier the **pod name** identifies, not
+  off `edgeFunctions.*` reflexively.
+- **Fastest mitigation is to un-split.** `--set edgeFunctions.workerTier.enabled=false`
+  and `helm upgrade` returns all four functions to the request tier: no DB
+  change, no client change, no image rebuild. It does roll Kong.
+
+**Enabling the tier does NOT restart the Postgres primary.** It used to:
+`postgres-statefulset.yaml` hashed the rendered text of `templates/monitoring.yaml`
+into the primary's pod-template `checksum/config`, and enabling the tier widens
+the edge ServiceMonitor's selector to `component In (functions, functions-workers)`
+and adds the `edge_tier` relabeling, so the checksum moved and the StatefulSet
+rolled. The hash now takes only the postgres_exporter custom-queries named
+template — the one thing in that file the exporter sidecar mounts — so scrape
+wiring no longer reaches the database. The tier flip is free in both directions,
+and `tests/render-guardrails.sh` fails if that stops being true.
+
+**Expected once, on the upgrade onto 0.4.0 itself:** narrowing that hash moves the
+digest one time, for every install, tier on or off. That upgrade restarts the
+primary — a write outage — so schedule it. `charts/pawtograder/README.md` carries
+the `OnDelete` procedure for deferring the restart when a window is not available,
+along with the two conditions that make it safe.
+
+Also on the first upgrade that enables the tier: the Kong config
+checksum rolls Kong in the same release that creates the worker Deployment, so a
+new Kong pod can serve the four worker paths before that Deployment has ready
+endpoints — they return 502 until it does. Bounded by pod startup, and nothing is
+lost: those paths are reached only by pg_cron, which retries every minute, and
+pgmq's per-message visibility timeout means an undelivered poke drops no work.
+Kong readiness is deliberately NOT coupled to worker endpoints — that would take
+the entire API down whenever this one tier was unhealthy, which is the failure
+`PawtograderEdgeWorkerTierUnavailable` exists to report while everything else
+keeps serving. There is no way to stage this across two releases:
+`edgeFunctions.workerTier.enabled` gates the Deployment and the Kong routes
+together, and both ways you would try to decouple them are render errors (an
+empty `functions` list, and `kong.enabled: false`). Enable it in a window where a
+minute of 502s on those four paths is acceptable, which — because pg_cron retries
+every minute and pgmq holds the message — is any window at all.
+
+**Manual pre-flight when enabling the tier from a DOWNSTREAM values repo.** The
+chart checks the routed names it can see: `tests/render-guardrails.sh`'s
+`shadow_check` renders the chart's own `values.yaml` and asserts every name in
+`edgeFunctions.workerTier.functions` has a matching `supabase/functions/<name>/`
+directory. That check cannot see an overlay in another repository, and production
+is deployed from one (`prod-charts`). A typo there is the quietest failure this
+tier has: the name passes the chart's format guard (it is a legal DNS-1123
+label), Kong loads the route cleanly, the demuxer 404s on it, and the real
+function keeps being served by the request tier. Nothing looks broken — two pods
+run and serve nothing, and the split silently does not exist.
+
+So before enabling the tier in a downstream repo, hand-check the list against the
+image's inventory:
+
+```bash
+# From a platform checkout at the SHA the target environment runs.
+#
+# Read the names from the routes that environment actually RENDERS, not from the
+# chart defaults: the whole point of this check is the case where a downstream
+# values file has changed workerTier.functions, and a hardcoded list prints four
+# reassuring `ok` lines for names nobody deploys.
+FNS="$(helm template <release> charts/pawtograder -f <downstream-values.yaml> \
+  --show-only templates/kong-config.yaml \
+  | grep -oE 'functions-v1-worker-[a-z0-9-]+' \
+  | sed 's/^functions-v1-worker-//' | sort -u)"
+
+if [ -z "$FNS" ]; then
+  echo "NO worker routes rendered -- the tier is off in these values, or the path is wrong." >&2
+else
+  for fn in $FNS; do
+    [ -f "supabase/functions/$fn/index.ts" ] && echo "ok      $fn" || echo "MISSING $fn"
+  done
+fi
+```
+
+Two alerts are the backstop if this is missed, and between them they cover both
+shapes of the mistake. A typo in **all four** names produces
+`PawtograderEdgeWorkerTierNoTraffic`, which tells you the split is not in effect
+but not which name is wrong. A typo in **one** name — much likelier, since the
+list is edited by hand in a downstream repo — produces
+`PawtograderEdgeWorkerRouteNoTraffic`, which names the route in its labels: the
+other three keep taking their per-minute pokes, so the tier-wide rule stays
+Inactive and only the per-route rule can see it. Both take 30m, so the hand-check
+above is still the cheaper way to find it. The two are mutually exclusive by
+construction (the tier rule requires the whole worker arm at zero, the per-route
+rules require a sibling still serving), so a whole-tier misroute arrives as one
+alert rather than five.
+
+`scripts/edge-logs.sh` covers both tiers (it selects
+`component=~"functions|functions-workers"`), so `--function <name>` works
+regardless of which tier serves it. Deployment channels are deliberately outside
+that selector — they run their own image tag and the output is unlabeled, so
+mixing them in would answer a triage question with lines from another build; set
+`EDGE_LOG_COMPONENTS` to read one on purpose.
+
 ### Kong (`<release>-kong`)
 
 - Symptom: everything behind the gateway 5xx even though upstreams are healthy.
@@ -120,12 +240,19 @@ Components:
 - Go straight to [disaster-recovery.md](./disaster-recovery.md) — "When
   backup-verify goes red" triages by log line.
 
-### Secrets / ESO
+### Secrets
 
 - Symptom: `PawtograderExternalSecretNotReady`, or a pod crash-looping on a
   missing/stale secret after a restart.
-- Go to [secrets-rotation.md](./secrets-rotation.md); check the ExternalSecret
-  status and the OpenBao path/role.
+- **First establish which secret store this install uses** — the two paths share
+  no commands. On an **ESO** install, check the ExternalSecret status and the
+  OpenBao path/role. On a **SealedSecrets** install — which includes the Khoury
+  production instance deployed from `prod-charts` — there is no `ExternalSecret`
+  resource type to query and `PawtograderExternalSecretNotReady` cannot fire;
+  inspect the `SealedSecret`/`Secret` pair and the sealed-secrets controller
+  instead.
+- Go to [secrets-rotation.md](./secrets-rotation.md), and read its scope note at
+  the top first: the procedure there is ESO-only.
 
 ---
 

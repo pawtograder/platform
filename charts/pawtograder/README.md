@@ -15,8 +15,202 @@ app together with the Supabase services it depends on:
 | postgres-meta | `supabase/postgres-meta`                                 | 1                |
 | studio        | `supabase/studio`                                        | 1                |
 | edge-runtime  | `ghcr.io/pawtograder/edge-functions` (built per release) | 2                |
+| edge-runtime (worker tier) | same image, `edgeFunctions.workerTier` (opt-in) | 2 |
 | kong          | `kong:3`                                                 | 2                |
 | web (Next.js) | `ghcr.io/pawtograder/web` (built per release)            | 2                |
+
+`edgeFunctions.workerTier` (off by default) splits the edge fleet by isolation
+model: the four pg_cron-poked pgmq consumers get a second Deployment with their
+own `maxParallelism`, eszip cache and memory limit, and Kong routes those
+function names to it by path. (Not an "admission budget": `--max-parallelism` is
+per service path rather than per pod, so it is not a per-pod cap on concurrency —
+see the `maxParallelism` note in `values.yaml`.) Callers are unaffected — everything still lives at
+`/functions/v1/<name>`, so there is no migration and no client change, and the
+split does not exist on hosted supabase.com or under `supabase functions serve`.
+See the `workerTier` block in `values.yaml` for the sizing and the reasoning.
+
+## Upgrading to 0.4.0
+
+Two render-time refusals are new, and both can stop a `helm upgrade` on values
+that rendered fine on 0.3.x. Neither touches the cluster when it fires.
+
+- **The edge memory budget got 510Mi stricter.** The Deno host term in
+  `pawtograder.edgeFunctions.assertMemoryBudget` moved from ~90Mi (the cost at
+  startup with an empty cache) to ~600Mi (the converged, load-independent
+  baseline), so the required sum at chart defaults is 3160Mi rather than 2650Mi.
+  An overlay with `edgeFunctions.resources.limits.memory` between those two —
+  `3Gi` is the likely one — is now refused. Raise the limit; the message prints
+  every term.
+- **A memory limit must be a whole number of `Mi` or `Gi`.** The assertion reads
+  only those two forms, and anything else used to switch the whole check off
+  rather than fail. That is more than fractional `Gi`: **decimal SI** (`4G`,
+  `4000M`), **bare bytes** (`4294967296`) and other binary suffixes (`4Ki`) are
+  all refused too, and all of them are valid Kubernetes quantities that rendered
+  fine on 0.3.x. Verified against the chart, not inferred from the regex. Spell
+  the limit in whole `Mi` or `Gi` (`3584Mi`, not `3.5Gi`; `4Gi`, not `4G`).
+
+`edgeFunctions.resources.requests.memory` also moves 512Mi to 1.5Gi in the chart
+default, and to 1.8Gi in both prod overlays. Requests are what the scheduler
+reserves, so re-check the edge tier's total against your node pool before
+upgrading. At the chart's own defaults (`replicas: 2`, autoscaling off) that is
+3Gi where it used to be 1Gi. On a fleet shaped like `values-prod.yaml`, which
+sets `minReplicas: 12` / `maxReplicas: 24` at 1.8Gi, it is 21.6GiB at the floor
+and 43.2GiB at the ceiling, against 6GiB and 12GiB before. `updateStrategy` is
+`maxUnavailable: 0`, so a pod that cannot be scheduled stalls the rollout rather
+than replacing an old one. `edgeFunctions.workerTier`, if you enable it, adds
+its own 2 x 1.5Gi on top of all of that.
+
+#### Peak edge memory during the 0.4.0 rollout
+
+Every figure above is **steady state**. The rollout itself peaks well above both
+the old and the new steady state, and this is the number to size nodes against.
+
+The chart omits `spec.replicas` from the edge Deployment whenever the HPA owns it,
+so `helm upgrade` does **not** reset the live replica count: the request tier
+rolls out at whatever the HPA last set it to, not at the new `maxReplicas`. With
+`maxUnavailable: 0` / `maxSurge: 1`, an incumbent 512Mi pod survives until its
+1.5Gi replacement is `Ready`, so the pod *count* stays at `N+1` while the *mix*
+shifts. The peak is therefore bounded by
+
+```
+peak = 1 x old_request                       # the last un-replaced incumbent
+     + N_live x new_request                   # N_live = live replicas at upgrade time
+     + (old_request + new_request) x channels # each channel surges by one pod
+     + workerTier_replicas x workerTier_request
+```
+
+For a fleet shaped like `values-staging.yaml`, which sat at its old
+`maxReplicas: 20` with a 512Mi request and one canary channel:
+
+| term | arithmetic | total |
+| --- | --- | --- |
+| request tier | `1 x 512Mi + 20 x 1.5Gi` | 31232Mi |
+| canary channel surge | `1 x 512Mi + 1 x 1.5Gi` | 2048Mi |
+| worker tier (new, schedules at once) | `2 x 1.5Gi` | 3072Mi |
+| **peak** | | **36352Mi ≈ 35.5GiB** |
+
+against **10.5GiB** of edge memory requests before the upgrade and 12.0GiB after
+it. That is an upper bound rather than an estimate: the HPA does clamp the fleet
+to the new `maxReplicas`, but not until its scale-down stabilization window (300s
+by default) has closed, and whether that clips the peak is a race between the
+window and the pod-replacement rate. Do not budget nodes on winning it.
+
+**The cheap mitigation is to remove the transient instead of provisioning for
+it.** Lower the HPA's ceiling *before* the upgrade and let the fleet shrink at the
+old, small request:
+
+```bash
+kubectl patch hpa <release>-functions -n <ns> \
+  -p '{"spec":{"maxReplicas":5}}'
+kubectl get deploy <release>-functions -n <ns> -w   # wait for it to settle at <= 5
+helm upgrade ...                                    # now rolls 5 pods, not 20
+```
+
+**The diagnostic trap.** With `maxUnavailable: 0` an unschedulable pod goes
+`Pending` and *stalls* — nothing fails, so a node-capacity shortfall presents as a
+rollout that is merely not progressing. Every Deployment in this chart renders
+`progressDeadlineSeconds: 1200`, so it does eventually surface as
+`ProgressDeadlineExceeded` on the Deployment, which names the real problem — but
+only if your `helm --timeout` is longer than 20 minutes. Below that, helm's own
+deadline expires first and you get an undiagnosable `context deadline exceeded`
+instead. (This is why the staging auto-deploy in `.github/workflows/release-images.yml`
+uses `--timeout 25m`.)
+
+**Upgrading to 0.4.0 restarts the Postgres primary once**, whether or not you
+enable the worker tier. The primary's pod-template `checksum/config` used to hash
+the whole rendered `monitoring.yaml`; it now hashes only the postgres_exporter
+custom-queries named template, which is the sole part of that file the exporter
+sidecar mounts. Narrowing the hash input moves the digest once, so the first
+`helm upgrade` onto 0.4.0 rolls the StatefulSet — a write outage the chart's own
+notes put at ~10 min. Schedule it as a maintenance window rather than as an
+ordinary `helm upgrade`.
+
+What that one roll buys: enabling `edgeFunctions.workerTier` afterwards no longer
+touches the database, and neither does any future ServiceMonitor or scrape-cadence
+edit. Before the narrowing, turning the tier on widened the edge ServiceMonitor's
+selector to `component In (functions, functions-workers)` and added an `edge_tier`
+relabeling, neither of which matched the checksum's strip patterns, so the tier
+flip alone rolled the primary. `tests/render-guardrails.sh` now pins the
+invariance in both directions: the checksum must not move on the tier flip or on
+a chart-version bump, and must still move on a real config edit.
+
+If the maintenance window is genuinely unavailable, the restart can be deferred.
+The chart renders no `updateStrategy` for the Postgres StatefulSet, so it runs the
+Kubernetes default of `RollingUpdate`; patching it to `OnDelete` lets the new pod
+template land without restarting the primary:
+
+```bash
+# BEFORE the upgrade
+kubectl patch statefulset <release>-postgres -n <ns> \
+  -p '{"spec":{"updateStrategy":{"type":"OnDelete"}}}'
+
+helm upgrade ...          # new pod template is recorded; the primary keeps running
+
+# ... LATER, in the maintenance window, and not before:
+kubectl delete pod <release>-postgres-0 -n <ns>     # applies the new template
+kubectl patch statefulset <release>-postgres -n <ns> \
+  -p '{"spec":{"updateStrategy":{"type":"RollingUpdate"}}}'
+```
+
+**Do not restore `RollingUpdate` straight after the upgrade.** The StatefulSet
+would then hold an outdated pod under a strategy whose whole job is to replace
+outdated pods, and the controller does exactly that — immediately, and outside
+any window. That is the restart this procedure exists to defer, so restoring the
+strategy early buys nothing at all. `OnDelete` has to stay in place until the
+window; the pod delete is what applies the template, and the second patch just
+returns the StatefulSet to its normal mode afterwards.
+
+Two more caveats, both load-bearing.
+
+**First: safe only if the exporter's queries are unchanged — and not for the
+reason you would guess.** Deferring the roll is safe only when the upgrade does
+not change the postgres_exporter `queries.yaml` — true for 0.4.0, where the
+rendered ConfigMap is byte-identical to 0.3.17 and only the *input* to the
+primary's `checksum/config` narrowed, but confirm it with `helm diff` before
+assuming it on any later version.
+
+The reason is *not* that the sidecar keeps its previously mounted file. The
+ConfigMap is mounted at the directory `/etc/postgres-exporter` with **no
+`subPath`**, so the kubelet does refresh that file inside the live container
+shortly after the ConfigMap changes. What does not refresh is the *process*:
+postgres_exporter v0.18.0 reads `PG_EXPORTER_EXTEND_QUERY_PATH` once at startup
+and exposes no reload flag and no `/-/reload` endpoint, so a new file is never
+re-parsed. That is documented behaviour for the release the chart pins, not
+something verified against the exporter's source here — but it is the premise the
+`checksum/config` annotation exists on: a restart is the only way to pick up new
+queries, which is why the chart hashes them into the pod template at all.
+
+The trap that the wrong reason hides: during an `OnDelete` window,
+`kubectl exec <pod> -c postgres-exporter -- cat /etc/postgres-exporter/queries.yaml`
+shows the **new** file while the process is still serving the **old** parse. The
+file is not evidence about what the exporter is collecting. Check for the metric
+in Prometheus, not for the query in the file.
+
+The instructive contrast is in the same pod. The **main postgres container**
+mounts its config volume with a `subPath` for every entry (`postgresql.conf`,
+`pg_hba.conf`, and the four init scripts), and a `subPath` mount is a one-time
+copy the kubelet never updates. So for `postgresql.conf` or `pg_hba.conf` a
+ConfigMap edit does not reach the running container *at all* — there is no
+refreshed file to be misled by, and only the pod replacement applies it. Two
+mounts in one pod, two different staleness mechanisms, one operational
+conclusion: the restart is what applies config.
+
+**Second: `OnDelete` suspends every other postgres change too.** While the
+StatefulSet sits on `OnDelete`, *every* postgres
+pod-template change stops rolling, not just this one: an image bump, a resource
+change, a `postgresql.conf` edit all land silently and apply only on the next
+pod delete. The chart does not manage `updateStrategy`, so Helm will not restore
+it for you. Track it, and keep the window short. See
+[incident-response.md](../../docs/operations/incident-response.md).
+
+`autoscaling.targetMemoryUtilizationPercentage` is **unchanged** at 80: it was
+already 80 in 0.3.17 (#948). What moved in 0.4.0 is the three example
+overlays — `values-prod.yaml`, `values-prod-noeso.yaml` and
+`values-staging.yaml` — which set it explicitly and went 100 → 80. If your own
+overlay pins 100, nothing about this upgrade changes that, and you should read
+the target note in `values.yaml`: 100 is a dead band of 90–110% once the HPA's
+default tolerance is applied, which is what pinned prod at `maxReplicas` for
+weeks.
 
 The chart is environment-agnostic. Cluster-specific concerns (ingress class,
 storage class, node selectors, secret backend) come from a values overlay you

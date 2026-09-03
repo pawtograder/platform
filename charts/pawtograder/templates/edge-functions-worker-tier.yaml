@@ -1,0 +1,218 @@
+{{- /*
+Supervised background-worker TIER.
+
+Renders a second edge-functions Service+Deployment (component "functions-workers")
+from the shared pawtograder.edgeFunctions.workload definition, on a config merged
+over .Values.edgeFunctions, with no HPA. Kong routes the function NAMES in
+.Values.edgeFunctions.workerTier.functions to it by path (templates/kong-config.yaml).
+
+Unlike a channel (edge-functions-channels.yaml), which is an A/B of the whole
+function set reached by HOST and needs its own image tag, a tier runs the SAME
+image and is reached by PATH. So it needs no `web` block and no tag of its own.
+
+See the workerTier block in values.yaml for why these four functions want their
+own admission budget and eszip cache.
+*/ -}}
+{{- if include "pawtograder.edgeFunctions.workerTier.enabled" . }}
+{{- $wt := .Values.edgeFunctions.workerTier | default dict }}
+{{- /* Enabled with no routed names would render pods that are scheduled, scraped
+   and charged their full memory limit while receiving nothing, because Kong
+   routes this tier by name and there would be no routes -- meanwhile the four
+   workers would keep running on the request tier exactly as before. Nothing
+   would look broken, which is the worst way for this to fail. */ -}}
+{{- if not $wt.functions }}
+{{- fail "edgeFunctions.workerTier is enabled but `functions` is empty. Kong routes this tier by function NAME, so nothing would reach it: the pods would run, be scraped and cost their whole memory limit while the four workers kept running on the request tier. Either list the names or set enabled: false." }}
+{{- end }}
+{{- /* A duplicated name renders two Kong services and two routes both called
+   functions-v1-worker-<name>. Kong enforces uniqueness on entity names in a
+   declarative config and REJECTS the whole file -- so the blast radius is not
+   the worker tier, it is that Kong itself will not start and every API request
+   in the deployment fails. Refuse it here, where the message can say which name,
+   rather than at Kong boot where it is a uniqueness-violation stack trace. */ -}}
+{{- /* The routed names are interpolated UNESCAPED into a Kong path that Kong
+   auto-detects as a regex (kong-config.yaml anchors each one with `$`), so their
+   character set is load-bearing in two directions. A `.` is a wildcard, so
+   `gradebook.column-recalculate` would also match `/functions/v1/gradebookXcolumn-
+   recalculate`, strip it, and hand the demuxer a different function -- the exact
+   silent-wrong-function failure the anchoring was added to prevent. A `+`, `(` or
+   `[` instead produces an invalid PCRE, and Kong rejects a declarative config it
+   cannot compile outright: same blast radius as a duplicate name, i.e. Kong does
+   not start and the whole deployment's API is down. Restrict to the DNS-1123 label
+   shape every function directory already uses; tests/render-guardrails.sh's
+   shadow_check assumes the same set. */ -}}
+{{- $dupSeen := dict }}
+{{- range $fn := $wt.functions }}
+{{- /* Type first, because the two checks below cannot handle a non-string and
+   fail differently badly. The format check passes it (`123 | toString` is
+   "123", a legal DNS-1123 label), and then `hasKey` -- which needs a string key
+   -- aborts with a raw "wrong type for value; expected string; got float64"
+   naming this template's line number instead of the values file the operator
+   edited. Coercing instead of refusing would be worse than either: YAML turns
+   an unquoted `0123` into the number 123, so the tier would render a Kong route
+   for a function name the operator never wrote. */ -}}
+{{- if ne (kindOf $fn) "string" }}
+{{- fail (printf "edgeFunctions.workerTier.functions contains a %s (%v), not a string. Function names must be quoted in YAML: an unquoted value like 0123 is parsed as a number and would silently route a name you did not write. Write it as a quoted directory name, e.g. \"github-async-worker\"." (kindOf $fn) $fn) }}
+{{- end }}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" ($fn | toString)) }}
+{{- fail (printf "edgeFunctions.workerTier.functions contains %q, which is not a plain lowercase function-directory name. Each name is interpolated into a Kong REGEX path (\"/functions/v1/<name>$\"), so a regex metacharacter either over-matches at a segment boundary and silently executes a DIFFERENT function, or fails to compile and makes Kong reject the whole declarative config -- taking the deployment's entire API down, not just this tier. Use the function's directory name (lowercase alphanumerics and '-')." $fn) }}
+{{- end }}
+{{- if hasKey $dupSeen $fn }}
+{{- fail (printf "edgeFunctions.workerTier.functions lists %q more than once. That renders two Kong services and two routes with the same name, and Kong rejects a declarative config with duplicate entity names outright -- meaning Kong does not start and the whole deployment's API is down, not just this tier. Remove the duplicate." $fn) }}
+{{- end }}
+{{- $_ := set $dupSeen $fn true }}
+{{- end }}
+{{- /* A channel named "workers" would render the SAME Service and Deployment name
+   (<release>-functions-workers) as this tier. That is an install-time collision
+   between two helm resources, not a routing subtlety, so fail loudly rather than
+   let one silently win. */ -}}
+{{- range $c := .Values.channels }}
+{{- /* Gated on `$c.edgeFunctions`, and that gate is not optional: a channel with
+   only a `web` block renders `web-<name>` and the Kong service `web-<name>`, never
+   a `functions-*` component and never `functions-v1-*` (edge-functions-channels.yaml
+   and kong-config.yaml both range under the same condition). Ungated, these two
+   checks refused a web-only channel named `workers` with a message asserting a
+   Deployment collision that render would not have produced -- a hard failure an
+   operator could only satisfy by renaming a channel that was fine. */ -}}
+{{- if $c.edgeFunctions }}
+{{- if eq $c.name "workers" }}
+{{- fail (printf "channel %q collides with edgeFunctions.workerTier: both render component \"functions-workers\", i.e. one Kubernetes Service and Deployment name for two different workloads. Rename the channel." $c.name) }}
+{{- end }}
+{{- /* The second collision, on Kong entity names rather than Kubernetes ones. A
+   channel renders the Kong service `functions-v1-<channel>`, and each routed
+   worker renders `functions-v1-worker-<fn>` -- so a channel named
+   `worker-github-async-worker` produces the SAME service and route name as the
+   worker route. Kong rejects a declarative config with duplicate entity names
+   outright, so this does not degrade the channel or the tier: Kong fails to
+   start and the whole deployment's API goes down. */ -}}
+{{- range $fn := $wt.functions }}
+{{- if eq $c.name (printf "worker-%s" $fn) }}
+{{- fail (printf "channel %q collides with the worker route for %q: both render the Kong service and route name \"functions-v1-worker-%s\". Kong rejects a declarative config with duplicate entity names, so Kong would fail to START and the whole deployment's API would be down -- not just this channel. Rename the channel." $c.name $fn $fn) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* The raw-name checks above catch a channel called exactly `workers` or
+   `worker-<fn>`, but names collide AFTER truncation too, and that is the case
+   nobody would predict by reading. componentName truncates to 63 characters, so
+   with a fullname of 44-51 characters an edge-functions channel named
+   `workers-blue` renders the SAME Service and Deployment name as this tier:
+
+       fullname len 44 .. 51  ->  <fullname>-functions-workers[-blue] both
+                                  truncate to one identical string
+
+   Same consequence as the request-tier collision: one Kubernetes identity for
+   two workloads, last apply wins, isolation gone silently. So compare the
+   COMPUTED names rather than the raw channel string. This subsumes the exact
+   matches above, which are kept only because they can give a better message. */ -}}
+{{- $wkr := include "pawtograder.edgeFunctions.workers.host" . }}
+{{- range $c := .Values.channels }}
+{{- if $c.edgeFunctions }}
+{{- $chan := include "pawtograder.componentName" (dict "ctx" $ "component" (printf "functions-%s" $c.name)) }}
+{{- if eq $chan $wkr }}
+{{- fail (printf "channel %q and the worker tier both render the component name %q after componentName's 63-character truncation, so their Services and Deployments would overwrite each other and the tier isolation would silently not exist. Shorten the channel name or the release fullname (currently %d characters)." $c.name $wkr (len (include "pawtograder.fullname" $))) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* Routing for this tier is Kong path routing; there is no other mechanism in
+   this chart. With Kong disabled the workload still schedules and still costs its
+   full memory limit, but kong-config.yaml renders nothing, so none of the four
+   functions is ever sent to it -- they keep being served by the request tier and
+   the split silently does not exist. Same failure shape as an empty `functions`
+   list, so it is refused in the same place. */ -}}
+{{- if not .Values.kong.enabled }}
+{{- fail "edgeFunctions.workerTier is enabled but kong.enabled is false. This tier is reached only by Kong path routing (templates/kong-config.yaml), so with Kong off the pods would schedule and cost their full memory limit while every routed function kept being served by the request tier -- the split would silently not exist. Enable Kong, or set edgeFunctions.workerTier.enabled: false." }}
+{{- end }}
+{{- include "pawtograder.edgeFunctions.assertTierOverrides" (dict "tier" "workerTier" "overrides" $wt) }}
+{{- /* componentName truncates `<fullname>-<component>` to 63 characters, and
+   "functions-workers" is 8 characters longer than "functions" -- so once the
+   fullname reaches 52 characters BOTH tiers truncate to the same name. Verified:
+   at 52 the request tier renders `<52>-functions` (62 chars) and the worker tier
+   renders `<52>-functions-workers` truncated to 63 then trimSuffix'"'"'d back to the
+   identical 62-char string.
+
+   That is not a cosmetic clash. Two Deployments and two Services with one name
+   means whichever manifest helm applies last wins, both Kong upstreams resolve
+   to it, and the isolation this whole feature exists for silently disappears --
+   with nothing in the render to show for it. Reachable from a long Helm release
+   name or a long fullnameOverride, so it is refused rather than documented. */ -}}
+{{- /* Both sides through their helpers. This compared a helper-derived worker
+   name against a hand-inlined `componentName ... "functions"`, which is the same
+   drift _helpers.tpl added `pawtograder.edgeFunctions.host` to prevent: change
+   how the request tier is named and this guard would keep comparing against the
+   old expression and stop detecting the collision it exists for. */}}
+{{- $reqName := include "pawtograder.edgeFunctions.host" . }}
+{{- if eq $reqName $wkr }}
+{{- fail (printf "the worker tier's name collides with the request tier's: both render %q. componentName truncates to 63 characters, and once the release fullname reaches 52 characters \"-functions\" and \"-functions-workers\" truncate to the same string -- so the two Deployments and Services would overwrite each other and the tier isolation would silently not exist. Shorten the release name or fullnameOverride (currently %d characters) to at most 51." $reqName (len (include "pawtograder.fullname" .))) }}
+{{- end }}
+{{- /* hasKey, not `default`, so a literal 0 reaches the check below instead of
+   being silently replaced by the default of 2 (Sprig `default` treats 0 as
+   empty) -- same reason edge-functions-channels.yaml does this. Read from the RAW
+   block, never from the merged config, because 0 would not survive mergeOverwrite.
+   Resolved by the shared helper so the PDB and the availability alert, which gate
+   on the same number, cannot drift from it. */ -}}
+{{- $replicas := int (include "pawtograder.edgeFunctions.workerTier.replicas" .) }}
+{{- /* `replicas: 0` READS like "idle the tier" and is nothing of the kind, so it
+   is refused rather than documented. It does NOT return the four functions to the
+   request tier: Kong keeps routing those names here, deliberately, because the
+   routes must not vanish out from under a running deployment. So every pg_cron
+   poke gets a 502/503 from a Service with no endpoints and pgmq stops draining
+   for all four functions -- a full outage of the queue pipeline.
+
+   What makes it worth a `fail` rather than a comment is that it is the one state
+   where BOTH things that would tell you are suppressed by construction. The
+   render matrix, measured at the previous tip:
+
+       replicas: 2  ->  8 Kong route refs, Deployment, 1 PDB, 1 availability alert
+       replicas: 1  ->  8 Kong route refs, Deployment, 0 PDB, 1 availability alert
+       replicas: 0  ->  8 Kong route refs, Deployment(0), 0 PDB, 0 alerts
+
+   The PDB drops out because minAvailable: 1 against 0 replicas is a permanent
+   deadlock, and the alert drops out because its expression is
+   `replicas_available == 0`, which at a configured zero is true forever and would
+   page continuously. Both omissions are individually correct and together they
+   mean the outage is invisible. A template comment cannot help someone running
+   `helm upgrade --set edgeFunctions.workerTier.replicas=0`, which is exactly how
+   this would be reached.
+
+   `lt 1`, not `eq 0`, because the helper pipes through Sprig `int`: a negative
+   count is invalid to the apiserver, and a non-numeric value like "two" converts
+   to 0 rather than erroring, so both arrive here looking like a deliberate zero.
+   This also makes `gt $wtReplicas 0` in prometheus-rules.yaml unreachable while
+   the tier is enabled -- see the note there; it is kept as a backstop because the
+   two files can be edited independently. */ -}}
+{{- /* Fractional counts are refused BEFORE the `lt 1` check, because they survive
+   it. A values file carrying `replicas: 1.5` is a YAML float, and the helper's
+   Sprig `int` truncates it to 1 -- a render that succeeds, runs half the pods the
+   operator asked for, and silently drops the PodDisruptionBudget with them (it is
+   emitted only at 2 or more, so the drain protection this tier's runbook depends
+   on disappears without a word). Truncation toward zero also means 0.5 lands on
+   the zero path and reports "resolves to 0", blaming a value nobody wrote.
+   Compare the value against its own truncation rather than inspecting kindOf:
+   `--set` delivers "1.5" as a STRING while a values file delivers a float64, and
+   this catches both. A non-numeric string converts to 0 on both sides, so it
+   falls through to the `lt 1` check that already names it. */ -}}
+{{- if hasKey $wt "replicas" }}
+{{- if ne (float64 $wt.replicas) (float64 $replicas) }}
+{{- fail (printf "edgeFunctions.workerTier.replicas is %v, which is not a whole number. Helm would truncate it to %d and render that many pods -- and at 1 the PodDisruptionBudget is omitted entirely, so the worker tier loses the drain protection docs/operations/planned-maintenance.md relies on, with no error to say so. Set a whole number." $wt.replicas $replicas) }}
+{{- end }}
+{{- end }}
+{{- if lt $replicas 1 }}
+{{- fail (printf "edgeFunctions.workerTier.replicas resolves to %d, which is refused. This does NOT idle the tier: Kong would still route %s to it by path, so every pg_cron poke would hit a Service with no endpoints, pgmq would stop draining for all four, and BOTH things that would report it are suppressed at zero replicas -- the PodDisruptionBudget (minAvailable: 1 would deadlock) and PawtograderEdgeWorkerTierUnavailable (its `replicas_available == 0` would be permanently true and page continuously). To un-split and return these functions to the request tier, set edgeFunctions.workerTier.enabled: false, which removes the Deployment, the PDB and the Kong routes together in one helm upgrade. To run fewer pods, use 1." $replicas (join ", " $wt.functions)) }}
+{{- end }}
+{{- /* The tier shares the base image BY CONSTRUCTION, and `image` is deliberately
+   NOT on the override allowlist (so setting workerTier.image is a render error,
+   not a silent no-op).
+
+   An earlier revision honored a per-tier image, on the reasoning that canarying
+   worker code independently is useful. That was wrong twice over. It escaped
+   templates/validations.yaml, which enforces the production no-floating-tag rule
+   on web/edgeFunctions/migrations images only -- so `workerTier.image.tag=latest`
+   would have deployed a floating worker image in production, defeating
+   reproducible rollback for exactly the four functions that drain the queues.
+   And the mechanism for running a different image already exists: a CHANNEL is
+   an A/B of the whole function set on its own tag. A tier is a subset of the
+   SAME image reached by path; conflating the two bought a validation gap for a
+   capability that was already available elsewhere. */ -}}
+---
+{{ include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions-workers" "image" .Values.edgeFunctions.image "replicas" $replicas "autoscaling" false "overrides" $wt "tier" "workerTier") }}
+{{- end }}

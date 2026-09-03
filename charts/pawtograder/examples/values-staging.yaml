@@ -215,24 +215,100 @@ realtime:
 edgeFunctions:
   # per_request: each request gets its own isolate (no concurrent co-location),
   # so a burst can't pile multiple requests onto one shared heap and overshoot
-  # the 256MB cap. maxParallelism caps concurrent isolates/requests per pod
-  # (excess queue). Autoscaling (HPA, below) keeps enough warm pods that a burst
-  # spreads ~1 request/isolate. Together: lifecycle (EarlyDrop) + isolation +
-  # capacity = the supabase.com-style resilience.
+  # the 256MB cap. Note this does NOT mean the isolate is short-lived: under
+  # per_request the runtime retains and reuses it after the request and resets
+  # the wall clock per request (strategy_per_request.rs :199, :240-250 — EarlyDrop
+  # with oneshot == false sends UserWorkerMsgs::Idle rather than tearing down), so
+  # worker.timeoutMs bounds an IDLE isolate, not a busy one. The guarantee is that
+  # two requests never share a heap, not that the heap goes away.
+  # Autoscaling (HPA, below) keeps enough warm pods that a burst spreads
+  # ~1 request/isolate. Together: lifecycle (EarlyDrop) + isolation + capacity =
+  # the supabase.com-style resilience.
   policy: per_request
-  # 8, not 16: under per_request this is the cap on concurrent isolates per pod, and each isolate is
-  # admitted with its own memory budget. maxParallelism x worker.memoryLimitMb is what the runtime
-  # will admit and nothing enforces it, so once it exceeds the container limit the kernel OOM-kills
-  # PID 1 and every in-flight request dies at once (Kong then reports 502). At 8 x 256 MiB against
-  # the 4Gi limit set below the budget is 50%, which leaves a burst somewhere to go; 16 would have
-  # admitted the whole limit. Keep maxParallelism, worker.memoryLimitMb and resources.limits.memory
-  # consistent if you change any of them.
+  # 8, not 16. maxParallelism is PER SERVICE PATH, not per pod — edge-runtime keys active_workers
+  # by service path and gives each one its own Semaphore(max_parallelism) (pool.rs :242/:325/:169,
+  # v1.74.0 b1edf453) — so maxParallelism x worker.memoryLimitMb is a LOWER bound on resident
+  # isolate memory rather than what the runtime "will admit", and the real ceiling is
+  # (distinct paths this pod serves) x 8. Nothing enforces either: the runtime's protections are
+  # per-isolate, so once actual usage exceeds the container limit the kernel OOM-kills PID 1 and
+  # every in-flight request dies at once (Kong then reports 502). At 8 x 256 MiB against the 4Gi
+  # limit set below the CHARGED sum is 50%, which leaves a burst somewhere to go; 16 would have
+  # charged the whole limit. Raising it does not buy headroom — it lifts the ceiling on every path
+  # at once. Keep maxParallelism, worker.memoryLimitMb and resources.limits.memory consistent if
+  # you change any of them.
   maxParallelism: 8
   autoscaling:
+    # 2026-09-02: 12-20 -> 3-5, bounding staging's RAM RESERVATION across the
+    # request-memory change below. The request tripled (512Mi -> 1.5Gi) without the
+    # pods becoming more capable — the increase is the load-independent ~600Mi Deno
+    # baseline, not extra capacity — so the replica range had to come down with it.
+    #
+    # THE TOTALS ARE NOT MAINTAINED HERE ANY MORE, deliberately. This table has
+    # been wrong three times and three reviewers produced three different numbers
+    # for it, so the sum now lives in an assertion that DERIVES it from the render:
+    # `assert_edge_reservation` in charts/pawtograder/tests/render-guardrails.sh,
+    # which goes red when any term drifts (either replica bound, either memory
+    # request, a channel added or removed, or the worker tier turned off). The
+    # terms, which are what is worth reading here:
+    #
+    #     request tier    3-5 pods  x  1.5Gi   (HPA-managed; the only term that
+    #                                           has a floor and a ceiling)
+    #     canary channel  1 pod     x  1.5Gi   (inherits edgeFunctions.resources;
+    #                                           this is the term omitted twice)
+    #     worker tier     2 pods    x  1.5Gi   (its raised request — see the
+    #                                           workerTier note in values.yaml;
+    #                                           1Gi in an earlier draft of this PR,
+    #                                           which is the other reason the
+    #                                           table was wrong)
+    #
+    # Add them up if you need the figure; the assertion prints it, and it is the
+    # only copy of it that cannot go stale. For scale: before this change staging
+    # reserved 13 x 512Mi = 6.5GiB at the floor and 21 x 512Mi = 10.5GiB at the
+    # ceiling (13 and 21, not 12 and 20 — the canary channel was there too, at
+    # 512Mi, and there was no worker tier).
+    #
+    # WHAT THE RESIZE AVOIDED, with its scope stated because the version of this
+    # sentence that did not state it was wrong twice: keeping 12-20 while making
+    # every other change in this PR means 15 pods at the floor and 23 at the
+    # ceiling (12-20 request + 1 canary + 2 worker), all at 1.5Gi, so
+    # 22.5GiB / 34.5GiB. That is a ~3.5x jump at the floor over the 6.5GiB it
+    # replaced. This comment previously said 19.5/32.5, which counted only 13 and
+    # 21 pods (the worker tier left out) and whose ceiling was not even 21 x 1.5Gi.
+    #
+    # So the reservation is NOT flat, and the earlier claim that it was is
+    # withdrawn: the floor rises against the old 6.5GiB and the ceiling rises
+    # against the old 10.5GiB. The floor is what governs steady-state cost, so the
+    # number that moved most is the one the resizing was trying to hold still.
+    # Accepted rather than re-tuned: the node budget absorbs it, and CPU requests
+    # drop 2.8 cores over the same change. 5/3 is the same 1.67x scale ratio as
+    # 20/12, so burst BEHAVIOR is unchanged even though absolute headroom is not.
+    #
+    # What this costs in concurrency is NOT 20x8 -> 5x8. `maxParallelism` is per
+    # SERVICE PATH, not per pod — edge-runtime keys its worker registry by service
+    # path and gives each one its own Semaphore(max_parallelism) (pool.rs
+    # :242/:325/:169, v1.74.0) — so `replicas x maxParallelism` is not a
+    # concurrency figure at all. The per-pod ceiling is
+    # (distinct paths that pod serves) x 8, and the fleet ceiling scales with
+    # replicas from there. Fewer pods still means less total concurrency; the
+    # point is that the old arithmetic understated the per-pod ceiling and
+    # overstated what the replica change costs.
+    #
+    # NOTE: lowering these bounds does not, by itself, let a quiet fleet shrink,
+    # and whether staging can scale down on memory at all is UNRESOLVED — see the
+    # resources note below. The ceiling is what actually bounds staging's RAM
+    # either way, which is why both numbers moved and not just the floor.
     enabled: true
-    minReplicas: 12
-    maxReplicas: 20
-    targetMemoryUtilizationPercentage: 100
+    minReplicas: 3
+    maxReplicas: 5
+    # 80, not 100: the HPA controller applies a default 10% TOLERANCE, so a target of
+    # 100 is really a dead BAND of 90-110% and anything inside it moves nothing in
+    # either direction. 80 puts the band at 72-88%, and the memory request below is
+    # sized to straddle it: above idle/0.72 so a quiet fleet can scale down, below
+    # loaded/0.88 so a busy one can scale up. 100 is known-wrong at ANY request
+    # value for that reason. This matches the chart default — an overlay that sets
+    # 100 silently overrides it back to the configuration that pinned prod at
+    # maxReplicas for weeks.
+    targetMemoryUtilizationPercentage: 80
     targetCPUUtilizationPercentage: 200
   image:
     repository: ghcr.io/pawtograder/edge-functions
@@ -247,8 +323,41 @@ edgeFunctions:
   # 2s/5s CPU), matching supabase.com. With eszip bundling the per-isolate
   # baseline sits ~10x below the 256MB cap, so per_request isolation is cheap
   # and no per-isolate memory override is needed.
+  # 2026-09-01: request 512Mi -> 1.5Gi, tracking the chart default, paired with
+  # autoscaling.targetMemoryUtilizationPercentage 80 above. A memory-target HPA
+  # measures against the REQUEST, and the ~600Mi load-independent Deno baseline put
+  # an idle pod over 100% of 512Mi — which pinned the HPA at maxReplicas
+  # permanently, at any load, including none.
+  #
+  # OPEN, and stated as open because two earlier notes in this file asserted
+  # opposite answers: whether 1.5Gi + target 80 lets staging scale DOWN on memory.
+  # The arithmetic is not in doubt — the HPA's default 10% tolerance makes target
+  # 80 a dead band of 72-88%, so scaling down needs idle/request < 0.72, i.e.
+  # request > converged_idle_floor / 0.72. What is missing is staging's converged
+  # idle floor under THIS configuration, and it cannot be measured yet because
+  # this configuration is not deployed: staging currently runs the 0.3.17 values
+  # (12-20 replicas, 512Mi request, and the unbounded eszip cache that 0.4.0
+  # fixes), so today's numbers are not the ones this request will face.
+  #
+  # The two candidate answers and what decides between them:
+  #   * If staging's floor is below ~1106Mi (= 1536Mi x 0.72), 1.5Gi is coherent
+  #     and a quiet fleet scales down to minReplicas 3. This was the argument for
+  #     tracking the chart default: staging serves fewer distinct functions than
+  #     prod, and the floor scales with distinct functions served and cache size.
+  #   * If it is at or above that, the request sits inside the dead band and
+  #     staging pins at maxReplicas 5 regardless of load. Prod's measured floor is
+  #     ~1260Mi, which would land in this case — that is exactly why prod sets
+  #     1.8Gi (window 1750-1920Mi) rather than the default.
+  #
+  # Either way maxReplicas 5 is what bounds the reservation, so this is not
+  # urgent — but bounding the wedge with a lower ceiling is TRIAGE, not a fix, and
+  # should not be mistaken for one. Measure after the first deploy of 0.4.0: idle
+  # mean and min at low CPU on pods >24h old (the chart's own note is emphatic
+  # that shorter samples have been wrong three times), and if the floor is at or
+  # above 1106Mi raise this request to floor/0.72 rather than leaving the HPA
+  # pinned. See the resources note in charts/pawtograder/values.yaml.
   resources:
-    requests: { cpu: "200m", memory: "512Mi" }
+    requests: { cpu: "200m", memory: "1.5Gi" }
     limits:   { cpu: "2",    memory: "4Gi"   }
   envFromSecrets:
     - pawtograder-github-app
@@ -272,6 +381,29 @@ edgeFunctions:
   e2e:
     enabled: true
     mockGitHub: true
+  # Staging is where the tier split is validated before prod (prod-charts) takes
+  # it. See the workerTier block in charts/pawtograder/values.yaml for the
+  # reasoning and the sizing; everything here is the chart default except being
+  # on.
+  #
+  # What this changes: the four pg_cron-poked pgmq workers move off the 3-5
+  # request-tier replicas onto 2 dedicated pods, and Kong routes their function
+  # NAMES there. Nothing else moves, the policy stays per_request on both tiers,
+  # and `enabled: false` puts it back in one helm upgrade.
+  #
+  # Worth knowing before the next staging deploy: release-images.yml's
+  # deploy-staging runs `helm upgrade --wait`, which blocks on EVERY edge pod,
+  # this tier's included. A worker tier that cannot become ready turns an
+  # ordinary staging deploy red — the same trap the canary channel's `image.tag`
+  # comment above warns about. It inherits the request tier's envFromSecrets
+  # (the seven listed above) and gets the same two the workload template adds to
+  # every edge pod regardless of that list -- pawtograder-edge-functions, and
+  # pawtograder-redis for the worker lease, which is gated on redis.provider and
+  # NOT on envFromSecrets, so a per-tier envFromSecrets override could neither
+  # add nor remove it. Nine secretRefs in total, and the same readiness probe, so
+  # it comes up on the same terms the request tier does.
+  workerTier:
+    enabled: true
 
 web:
   image:
@@ -387,11 +519,20 @@ backup:
 # first `helm upgrade` that flips this RESTARTS postgres (a brief DB blip) —
 # apply it when NOT mid-load-test. The realtime/supavisor/web ServiceMonitors
 # need bearer tokens in the pawtograder-jwt secret (REALTIME_METRICS_BEARER,
-# SUPAVISOR_METRICS_BEARER, METRICS_SCRAPE_TOKEN); without them those targets
-# 401, but everything else works — incl. the edge /metrics endpoint, which is
-# unauthed (no METRICS_TOKEN set) and is the rate-limiting metrics source.
+# SUPAVISOR_METRICS_BEARER, METRICS_SCRAPE_TOKEN); ripley's pawtograder-jwt
+# carries all three, so those targets scrape.
+#
+# The edge /metrics endpoint is unauthed here (no METRICS_TOKEN set) and is the
+# rate-limiting metrics source, so edgeFunctionsMetricsAuth MUST be false. There
+# is no pawtograder-edge-functions Secret in that namespace at all — the k8s repo
+# dropped its ExternalSecret when this chart moved each integration to its own
+# envFromSecrets entry — and a ServiceMonitor referencing a Secret that does not
+# exist is rejected outright by the Prometheus Operator, `optional: true`
+# notwithstanding. That is what silently dark-ed every pawtograder_*_queue_size
+# series on staging.
 monitoring:
   enabled: true
+  edgeFunctionsMetricsAuth: false
   # Match the ripley kube-prometheus-stack release name so its ruleSelector
   # picks up the PrometheusRule the chart ships (backup / ESO / cert alerts).
   # kps on ripley uses an empty ruleSelector today (matches all), but set the
