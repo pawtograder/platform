@@ -238,9 +238,29 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    it:
 
    ```bash
-   # Confirm rules[0] is the WEB host (not the api host) before patching:
-   kubectl -n "$NS" get ingress pawtograder -o jsonpath='{.spec.rules[0].host}{"\n"}'
-
+   # HARD GATE, not a printed reminder. This block used to `get` the host and then
+   # `patch` unconditionally, under a comment saying "confirm rules[0] is the WEB
+   # host before patching" -- but an operator pasting the block does both in one
+   # go, so the confirmation was decorative. Putting the API on its own host is an
+   # overlay choice, not a chart guarantee, and if `rules[0]` is the API host the
+   # patch reroutes the API to the maintenance page: a different outage from the
+   # one you scheduled, and one the maintenance page then hides from you.
+   WEB_HOST="<the web hostname you expect, e.g. pawtograder.khoury.northeastern.edu>"
+   # Take the `get`'s EXIT STATUS, not just its output -- the same print-then-fail
+   # leak the fence gate had. Verified: with the API server returning output and
+   # THEN failing, the bare assignment left `got` populated, the compare passed,
+   # and the patch ran on an unverified read.
+   if ! got="$(kubectl -n "$NS" get ingress pawtograder -o jsonpath='{.spec.rules[0].host}')"; then
+     echo "STOP: could not read the ingress (RBAC, credentials, or an API error) -- not patching." >&2
+     exit 1
+   fi
+   if [ "$got" != "$WEB_HOST" ]; then
+     echo "STOP: rules[0].host is '$got', not the expected web host '$WEB_HOST'." >&2
+     echo "  Do NOT patch rules[0] -- find the web rule's index first. All rules, in order:" >&2
+     kubectl -n "$NS" get ingress pawtograder \
+       -o jsonpath='{range .spec.rules[*]}{.host}{"\n"}{end}' >&2
+     exit 1
+   fi
    kubectl -n "$NS" patch ingress pawtograder --type=json -p \
      '[{"op":"replace","path":"/spec/rules/0/http/paths/0/backend/service","value":{"name":"pawtograder-maintenance","port":{"number":8080}}}]'
    ```
@@ -783,9 +803,25 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
        pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS lag_bytes
        FROM pg_stat_replication WHERE usename = 'supabase_replication_admin';"
 
-   # Put the drained node back in service (drain leaves it cordoned):
-   kubectl uncordon <node>
-   kubectl get node <node>   # want: Ready, SchedulingDisabled cleared
+   # Put the drained node back in service (drain leaves it cordoned).
+   #
+   # GATED, because this block's heading says "Verify" and an operator runs a
+   # verify block to find out where things are -- including mid-window, before
+   # the maintenance is finished. An unguarded `uncordon` there ends the drain's
+   # protection early and lets pods reschedule onto a node you are still working
+   # on. So make it conditional on the thing this step is verifying anyway: the
+   # primary is back and writable. It is the only mutation in an otherwise
+   # read-only block, so it is the only one that needed this.
+   if out="$(kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+       -d postgres -tAc "SELECT pg_is_in_recovery(), current_setting('transaction_read_only'), txid_current();")" \
+     && [ "${out#f|off|}" != "$out" ]; then
+     kubectl uncordon <node>
+     kubectl get node <node>   # want: Ready, SchedulingDisabled cleared
+   else
+     echo "NOT uncordoning <node>: the primary is not confirmed writable (got '${out:-<no answer>}')." >&2
+     echo "  Finish the maintenance and re-run this block. Leaving the node cordoned is the" >&2
+     echo "  safe state -- it is what stops pods landing on a node you are still working on." >&2
+   fi
    ```
 
    When `postgres.replica.enabled`, `PawtograderReplicaNotStreaming` clears as
@@ -877,6 +913,23 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    the maintenance page only after the smoke checklist passes:
 
    ```bash
+   # Same gate as the step-1 patch, for the same reason: this writes to
+   # `rules[0]` and only the operator knows which rule that is. Getting it wrong
+   # in this direction points the API host at `pawtograder-web`, which serves
+   # plausible-looking 404s rather than an obvious outage.
+   WEB_HOST="<the same hostname you checked in step 1>"
+   # Take the `get`'s EXIT STATUS, not just its output -- the same print-then-fail
+   # leak the fence gate had. Verified: with the API server returning output and
+   # THEN failing, the bare assignment left `got` populated, the compare passed,
+   # and the patch ran on an unverified read.
+   if ! got="$(kubectl -n "$NS" get ingress pawtograder -o jsonpath='{.spec.rules[0].host}')"; then
+     echo "STOP: could not read the ingress (RBAC, credentials, or an API error) -- not patching." >&2
+     exit 1
+   fi
+   if [ "$got" != "$WEB_HOST" ]; then
+     echo "STOP: rules[0].host is '$got', not '$WEB_HOST'. Do NOT patch rules[0]." >&2
+     exit 1
+   fi
    kubectl -n "$NS" patch ingress pawtograder --type=json -p \
      '[{"op":"replace","path":"/spec/rules/0/http/paths/0/backend/service","value":{"name":"pawtograder-web","port":{"number":3000}}}]'
    # Optional: tear the page down again once traffic is back on the app.
