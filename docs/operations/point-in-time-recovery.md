@@ -119,7 +119,87 @@ is already warm.
    (
      set -euo pipefail
 
-     # Discover the write tiers by LABEL rather than naming them. A fixed list is
+     # 0. Pause pg_cron FIRST, and VERIFY the pause took. ~20 scheduled jobs
+     #    write in-DB every minute, independent of every app pod, so scaling
+     #    Deployments does NOT fence them -- and after the standby is promoted, every
+     #    commit the OLD primary's pg_cron makes lands on a timeline the new
+     #    primary will never have, and is lost silently. Only reachable when the
+     #    old primary is still up -- which is exactly the planned major-version
+     #    upgrade planned-maintenance.md routes to this procedure. If the primary
+     #    is genuinely gone, these three execs fail; that failure IS step 1's
+     #    precondition, so record it and move on rather than forcing the fence.
+     #    This step did not exist here until 2026-09-03. planned-maintenance.md
+     #    has had it since the write-fence audit, and its comment is the one that
+     #    matters here too: a fence that silently skipped its in-database writers
+     #    is the WORST version of this failure, because the app pods are all gone
+     #    and so everything looks quiet. Executed against a namespace with the
+     #    pods gone and 3 cron jobs active, this procedure's gate printed
+     #    "fence verified: no writer pods present" and ran `pg_ctl promote`.
+     #
+     #    Record the active jobids first: step 5 resumes exactly those, and an
+     #    `UPDATE cron.job SET active=true` with no WHERE would also enable jobs
+     #    that were disabled on purpose.
+     #
+     #    Then VERIFY, because this psql can fail in ways that leave the jobs
+     #    running (wrong pod name after a rename, RBAC on exec, a primary that is
+     #    not `-0`). The count is read WITHOUT a `| tr` pipeline: `set -o
+     #    pipefail` is in force here so a pipeline would in fact abort, but the
+     #    same line copied into `fenced()` below -- where it is not -- is how the
+     #    swallowed-exit-status bug got in, so both forms are written the same way.
+     if kubectl -n "$NS" get pod <release>-postgres-0 >/dev/null 2>&1; then
+       kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+         -d postgres -tAc "SELECT string_agg(jobid::text,',') FROM cron.job WHERE active;"
+       kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+         -d postgres -c "UPDATE cron.job SET active=false WHERE active;"
+       still_active="$(kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+         -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;")"
+       still_active="${still_active//[[:space:]]/}"
+     else
+       # GUARDED, because `set -e` would otherwise abort this fence on the most
+       # common promote of all -- the one where the primary is already gone. A
+       # step that fails when everything is correct is a step that gets skipped
+       # next time.
+       still_active=0
+       echo "no <release>-postgres-0 pod: the old primary is gone, so its pg_cron cannot fire."
+       echo "Confirm that in step 1 deliberately; do not infer it from this line."
+     fi
+     if [ "$still_active" != "0" ]; then
+       echo "STOP: $still_active pg_cron job(s) are still active -- in-database writers are NOT fenced." >&2
+       exit 1
+     fi
+
+     # 1. Record what to restore, and record it BEFORE anything is mutated:
+     #    writer Deployments + the realtime StatefulSet (name, kind and desired
+     #    replicas -- a `-o wide` snapshot is not machine-readable) and the
+     #    edge-functions HPA's YAML. Step 5 (“Scale writers back up (step 2 in reverse)”) said "step 2 in reverse" and had nothing to
+     #    reverse: this block captured no replica counts and no HPA.
+     #    `-l app.kubernetes.io/instance=<release>` scopes it to THIS release, so
+     #    an unrelated workload sharing the namespace is neither recorded nor
+     #    "restored".
+     STATE_DIR="/tmp/pitr-fence-$(date +%s)"; mkdir -p "$STATE_DIR"
+     kubectl -n "$NS" get deploy,statefulset -l "app.kubernetes.io/instance=<release>" \
+       -o jsonpath='{range .items[*]}{.kind}{"\t"}{.metadata.name}{"\t"}{.spec.replicas}{"\n"}{end}' \
+       > "$STATE_DIR/replicas.txt"
+     kubectl -n "$NS" get hpa -l "app.kubernetes.io/instance=<release>" -o yaml > "$STATE_DIR/hpa.yaml"
+     echo "prior state recorded in $STATE_DIR -- step 5 reads it back. Note the path down."
+
+     # 2. Delete the edge-functions HPA, now that it is recorded. NOT because
+     #    `kubectl scale --replicas=0` gets undone -- it does not: with
+     #    `spec.replicas: 0` and `minReplicas` non-zero the HPA controller reports
+     #    `ScalingActive=False` / `ScalingDisabled` and stops acting on the target
+     #    (scaling a workload back OFF zero needs the `HPAScaleToZero` gate, still
+     #    alpha; prod runs v1.32.13 without it). Delete it because the instant
+     #    anything sets `spec.replicas` off zero -- a partial restore, a deploy
+     #    run, a controller reconcile -- the HPA re-arms and drives the tier back
+     #    toward `minReplicas`, un-fencing it with no operator action. Reasoned
+     #    from the controller's documented scale-to-zero behaviour, not measured,
+     #    because measuring it means scaling prod.
+     #    `--ignore-not-found` because an install with autoscaling off has no HPA
+     #    and a NotFound would abort a fence that is otherwise fine; unlike
+     #    `scale`, `delete` really does take that flag.
+     kubectl -n "$NS" delete hpa <release>-functions --ignore-not-found
+
+     # 3. Discover the write tiers by LABEL rather than naming them. A fixed list is
      # wrong here in three separate ways, and each one leaves a writer running
      # through a window this step exists to close:
      #   * `edgeFunctions.workerTier` adds a SECOND edge Deployment
@@ -167,7 +247,23 @@ is already warm.
      # shellcheck disable=SC2086  # deliberate word-splitting: one kubectl call, N targets
      kubectl -n "$NS" scale $WRITERS --replicas=0
 
-     # Then WAIT, and wait LONG ENOUGH. `kubectl scale` only writes
+     # 4. Suspend the write-capable CronJobs before the long wait below, so none
+     #    FIRES during it or during the work that follows.
+     #    `audit-partitions` runs at 03:00 and writes DDL; the backup drills
+     #    restore into scratch databases on this same server. The `backup`
+     #    CronJob itself is left alone: pg_dump only reads. Suspending does not
+     #    stop a Job that is ALREADY running -- `fenced()` below refuses on that
+     #    separately, which is the half a suspend cannot cover.
+     #    Record each prior `suspend` value: some may be suspended on purpose.
+     for cj in audit-partitions backup-verify backup-restore-drill backup-pitr-drill; do
+       name="<release>-$cj"
+       if kubectl -n "$NS" get cronjob "$name" >/dev/null 2>&1; then
+         prior="$(kubectl -n "$NS" get cronjob "$name" -o jsonpath='{.spec.suspend}')"
+         printf '%s\t%s\n' "$name" "${prior:-false}" >> "$STATE_DIR/cronjobs.txt"
+         kubectl -n "$NS" patch cronjob "$name" --type=merge -p '{"spec":{"suspend":true}}'
+       fi
+     done
+     # 5. Then WAIT, and wait LONG ENOUGH. `kubectl scale` only writes
      # `.spec.replicas`; termination is asynchronous, so between the scale
      # returning and the last pod exiting there is a window in which a "fenced"
      # writer is still committing -- including a worker still draining pgmq into
@@ -203,7 +299,8 @@ is already warm.
          exit 1
        fi
      fi
-     echo "FENCED: every web/rest/auth/storage/edge/realtime pod is gone."
+
+     echo "FENCED: pg_cron paused, write CronJobs suspended, every web/rest/auth/storage/edge/realtime/meta/studio pod gone."
    )
    ```
 
@@ -337,8 +434,48 @@ is already warm.
    rebuilt primary. For an emergency, editing the `<release>-postgres` Service
    selector to match the replica pod's labels is the quickest redirect; record
    it so the values file is reconciled afterward.
-5. **Scale writers back up** (step 2 in reverse) and run the
-   [smoke checklist](./production-install.md#smoke-test).
+5. **Scale writers back up — step 2 in reverse, from what step 2 recorded.**
+   Note the pg_cron resume runs against the **new** primary (the promoted pod),
+   which is what `<release>-postgres` now selects after step 4; the jobids are
+   the ones step 2 printed, replicated across with the rest of the table:
+
+   ```bash
+   # $STATE_DIR did NOT survive step 2 -- it was assigned inside that step's
+   # `( set -euo pipefail )` subshell. Use the path that step printed; `ls -t`
+   # picks the newest if you did not note it down.
+   STATE_DIR="$(ls -dt /tmp/pitr-fence-* | head -1)"
+   [ -s "$STATE_DIR/replicas.txt" ] || { echo "no recorded state in $STATE_DIR -- do NOT guess replica counts" >&2; exit 1; }
+   echo "restoring from $STATE_DIR"
+
+   # 1. Resume pg_cron for exactly the jobids step 2 printed. `WHERE active`
+   #    with no id list would also enable jobs that were disabled on purpose.
+   kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+     -d postgres -c "UPDATE cron.job SET active=true WHERE jobid = ANY(ARRAY[<recorded-jobids>]::bigint[]);"
+
+   # 2. Restore each writer to its RECORDED replica count, by the recorded kind
+   #    so the realtime StatefulSet comes back too. Read it from the file; do not
+   #    hardcode.
+   while IFS=$'\t' read -r kind name replicas; do
+     kubectl -n "$NS" scale "${kind,,}" "$name" --replicas="$replicas"
+   done < "$STATE_DIR/replicas.txt"
+
+   # 3. Unsuspend the CronJobs to their PRIOR values (not blindly to false).
+   if [ -s "$STATE_DIR/cronjobs.txt" ]; then
+     while IFS=$'\t' read -r name prior; do
+       kubectl -n "$NS" patch cronjob "$name" --type=merge -p "{\"spec\":{\"suspend\":${prior}}}"
+     done < "$STATE_DIR/cronjobs.txt"
+   fi
+   ```
+
+   Then **recreate the deleted edge HPA by reconciling the Helm release**
+   (`helm upgrade` with the same values), not `kubectl autoscale`: the chart's
+   `edge-functions-hpa.yaml` is an `autoscaling/v2` HPA with **both** CPU and
+   memory Resource metrics plus custom scale-up/down behavior, none of which a
+   `kubectl autoscale` (CPU-target, v1-style) HPA reproduces. `$STATE_DIR/hpa.yaml`
+   is the record of what was there, for checking the reconcile put it back.
+
+   Then run the [smoke checklist](./production-install.md#smoke-test).
+
 6. **Rebuild a new standby.** After failover you have a single primary again.
    Delete the old primary's PVC and re-create the standby (it re-bootstraps from
    the new primary via `pg_basebackup`) so you are protected against the next
