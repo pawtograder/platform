@@ -136,6 +136,17 @@ is already warm.
      # regex is what keeps this from being a whole-release selector: `postgres`,
      # `kong`, `supavisor` and the maintenance page do not match it.
      #
+     # `meta` and `studio` ARE matched, and were not until 2026-09-03: both hold a
+     # direct Postgres connection as the `postgres` superuser (meta's PG_META_DB_*,
+     # studio's POSTGRES_HOST/POSTGRES_PASSWORD) to serve Studio's Database and
+     # SQL-editor pages, so an operator with a Studio tab open could commit DDL
+     # through a fence that counted only app tiers.
+     #
+     # `supavisor` stays out deliberately -- it originates no writes, it proxies
+     # them -- but note the consequence: its pooled Postgres port
+     # (`<release>-supavisor` :6543) stays reachable for the whole window, so an
+     # in-cluster client holding a pooled connection can still write.
+     #
      # Realtime is enumerated BY NAME rather than scaled with `-l`, which is the
      # other silent hole this block used to have: `kubectl scale statefulset -l
      # <selector>` prints "No resources found" and exits 0 when the selector
@@ -143,7 +154,7 @@ is already warm.
      # StatefulSet in the fence without failing anything.
      jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
      WRITE_DEPLOY="$(kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
-       | awk '$1 ~ /^(web|rest|auth|storage|functions)(-.+)?$/ { print "deploy/" $2 }')"
+       | awk '$1 ~ /^(web|rest|auth|storage|functions|meta|studio)(-.+)?$/ { print "deploy/" $2 }')"
      WRITE_STS="$(kubectl -n "$NS" get statefulset -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
        | awk '$1 ~ /^realtime(-.+)?$/ { print "statefulset/" $2 }')"
      WRITERS="$(printf '%s\n%s\n' "$WRITE_DEPLOY" "$WRITE_STS" | awk 'NF')"
@@ -178,7 +189,7 @@ is already warm.
      # If your overlay raises any of those three values, re-derive this: they are
      # in `charts/pawtograder/values.yaml` under `edgeFunctions`.
      PODS="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
-       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { print "pod/" $2 }')"
+       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime|meta|studio)(-.+)?$/ { print "pod/" $2 }')"
      # By NAME, not `-l`: `kubectl wait -l <selector>` exits non-zero with "no
      # matching resources found" when nothing matches, which is the NORMAL state
      # here once the pods are already gone -- and a step that fails when everything
@@ -208,7 +219,7 @@ is already warm.
    # gap between the two steps is however long the operator takes, and a
    # `helm upgrade`, an HPA, or a controller reconcile can put pods back in it.
    fenced() {
-     local jp pods left
+     local jp pods seen pg primary left active_jobs running_jobs crons
      jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
      # Take kubectl's EXIT STATUS, not just its output. A failed `get pod` -- an
      # expired token, the wrong context, a `get`-scoped role, a transient API 5xx --
@@ -220,13 +231,92 @@ is already warm.
        echo "NOT FENCED: could not list pods (RBAC, expired credentials, or an API error) -- refusing to continue." >&2
        return 1
      fi
+     # ASSERT WE ARE LOOKING AT THE RELEASE before concluding "no writers". An
+     # EMPTY pod list satisfies every check below, so a namespace typo or a wrong
+     # `<release>` substituted into this block read as `fence verified: no writer
+     # pods present` and ran the destructive command. Step 1's fence guards this
+     # (`if [ -z "$WRITERS" ] ... NOTHING MATCHED`) but THIS is a separate code
+     # block with its own `<release>` placeholder, filled in independently, so
+     # that guard does not cover it -- and unlike the `nameOverride` selector bug
+     # this reproduces from a plain namespace typo. A postgres pod is the assertion
+     # to make: it is the thing being protected, it is deliberately still running
+     # here, and on the promote path the standby (`postgres-replica`) stands in for
+     # a dead primary. Zero pods, or pods but no postgres, means the SELECTOR is
+     # empty -- not the cluster.
+     seen="$(printf '%s\n' "$pods" | awk 'NF { n++ } END { print n+0 }')"
+     pg="$(printf '%s\n' "$pods" | awk '$1 ~ /^postgres(-replica)?$/ { n++ } END { print n+0 }')"
+     if [ "$seen" -eq 0 ] || [ "$pg" -eq 0 ]; then
+       echo "NOT FENCED: the selector matched $seen pod(s) and $pg postgres pod(s)." >&2
+       echo "  An empty match is a wrong namespace or a wrong <release>, NOT a quiet cluster." >&2
+       return 1
+     fi
      left="$(printf '%s\n' "$pods" \
-       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { n++ } END { print n+0 }')"
+       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime|meta|studio)(-.+)?$/ { n++ } END { print n+0 }')"
      if [ "$left" -ne 0 ]; then
        echo "NOT FENCED: $left writer pod(s) still present -- refusing to continue." >&2
        return 1
      fi
-     echo "fence verified: no writer pods present"
+     # Suspending a CronJob does NOT stop a Job that is already running, and this
+     # gate has to cover the one that started a second before the suspend landed.
+     # `audit-partitions` (03:00) writes DDL; the backup drills restore into
+     # scratch databases on this same server. `.status.active` is absent rather
+     # than 0 when nothing is running, so the awk test is on a possibly-empty
+     # field -- which is why it is `$3 > 0` and not `$3 != 0`.
+     if ! active_jobs="$(kubectl -n "$NS" get job -l "app.kubernetes.io/instance=<release>" \
+       -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{" "}{.status.active}{"\n"}{end}')"; then
+       echo "NOT FENCED: could not list Jobs (RBAC or an API error) -- refusing to continue." >&2
+       return 1
+     fi
+     running_jobs="$(printf '%s\n' "$active_jobs" \
+       | awk '$3 > 0 && $1 ~ /^(audit-partitions|backup-verify|backup-restore-drill|backup-pitr-drill)$/ { print $2 }')"
+     if [ -n "$running_jobs" ]; then
+       echo "NOT FENCED: write-capable Job(s) still active -- refusing to continue:" >&2
+       printf '  %s\n' $running_jobs >&2
+       return 1
+     fi
+     # pg_cron is checked HERE, and until 2026-09-03 this procedure checked it
+     # nowhere. ~20 scheduled jobs commit in-DB every minute with no pod to
+     # scale, so the writer-pod count above cannot see them: with the app pods
+     # gone and 3 cron jobs active this gate printed `fence verified: no writer
+     # pods present` and ran `pg_ctl promote`.
+     #
+     # WHICH server to check is the whole subtlety, and it is why this is not a
+     # copy of the disaster-recovery check. `cron.job` rows live in the primary's
+     # database, and pg_cron's worker does not launch jobs while
+     # `pg_is_in_recovery()`, so the standby's replicated copy of that table
+     # proves nothing about what is RUNNING. So branch on the primary's presence,
+     # decided from the POD LIST above rather than from an exec that could fail
+     # for unrelated reasons:
+     #   * No `postgres` pod -> the old primary is gone, which is step 1's
+     #     precondition for promoting at all, so nothing can be firing its cron
+     #     jobs. Satisfied, and said out loud rather than silently skipped.
+     #   * `postgres` pod still present -> this is the planned major-version
+     #     upgrade that planned-maintenance.md routes here. The old primary is
+     #     ALIVE and its pg_cron keeps committing on the OLD timeline after the
+     #     promote -- commits on a timeline the new primary will never have, lost
+     #     silently. That is the split brain step 1 exists to prevent, so the
+     #     pause must be verified on the PRIMARY, not on the node being promoted.
+     primary="$(printf '%s\n' "$pods" | awk '$1 == "postgres" { n++ } END { print n+0 }')"
+     if [ "$primary" -eq 0 ]; then
+       echo "note: no primary pod present, so pg_cron cannot be firing -- which is the precondition for promoting."
+     else
+       # Take the exec's EXIT STATUS, and no pipeline, for the reason `get pod`
+       # above does: `crons="$(kubectl exec ... | tr -d '[:space:]')"` reports
+       # only `tr`'s status, and there is no `set -o pipefail` in a function
+       # pasted into an interactive shell, so an exec that printed a count and
+       # THEN failed (SPDY reset, API-server timeout) left `crons="0"` and passed.
+       if ! crons="$(kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+         -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;")"; then
+         echo "NOT FENCED: the old primary is STILL RUNNING and its cron.job could not be read -- refusing to promote." >&2
+         return 1
+       fi
+       crons="${crons//[[:space:]]/}"
+       if [ "$crons" != "0" ]; then
+         echo "NOT FENCED: $crons pg_cron job(s) active on the OLD primary -- promoting now strands their commits on the abandoned timeline. Refusing." >&2
+         return 1
+       fi
+     fi
+     echo "fence verified: postgres present, no writer pods, no active write Jobs, no active pg_cron jobs"
    }
 
    fenced && kubectl -n "$NS" exec -it <release>-postgres-replica-0 -c postgres -- \

@@ -132,12 +132,18 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
 
 - **The page is not a write fence.** The ingress patch reroutes the **web host
   only**; the **API/kong host stays open**, so the database is still reachable
-  until the writer tiers are actually stopped.
+  until the writer tiers are actually stopped. So is `supavisor`'s pooled
+  Postgres port — `<release>-supavisor` on `:6543` — which the fence leaves
+  running on purpose (a pooler originates no writes, it proxies them), so any
+  in-cluster client still holding a pooled connection can keep writing for the
+  whole window.
 - **Writes come from more than the obvious tiers.** `auth` (GoTrue) writes
-  sessions on every request; `edge-functions` is HPA-managed (a bare
-  `kubectl scale` is undone by the HPA — delete the HPA first); and **`pg_cron`**
-  fires DB-side jobs (gradebook recalculation, deadline checks, sync) with no pod
-  to scale — pause them with `UPDATE cron.job SET active=false`.
+  sessions on every request; `edge-functions` is HPA-managed (delete the HPA, for
+  the reason step 1 gives — which is _not_ that a `kubectl scale --replicas=0`
+  gets undone); `meta` and `studio` hold direct superuser connections behind
+  Studio's SQL editor; and **`pg_cron`** fires DB-side jobs (gradebook
+  recalculation, deadline checks, sync) with no pod to scale — pause them with
+  `UPDATE cron.job SET active=false`.
 - **The real gate is "zero writer pods", not "empty queue".** Everything is
   fenced in one step — page up + scale **all** writer tiers to 0 (`functions` incl.
   its HPA, `web`, `rest`, `auth`, `storage`, `realtime`, and channel deploys) —
@@ -157,8 +163,56 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
   directly.
 - Write-capable **CronJobs** (`audit-partitions`, the backup drills) are suspended
   for the window and restored afterward.
+- **`meta` and `studio` are writers too, and `maintenance.sh` does not scale
+  them.** Both hold a direct Postgres connection as the `postgres` superuser
+  (`meta`'s `PG_META_DB_*`, `studio`'s `POSTGRES_HOST`/`POSTGRES_PASSWORD`, both
+  from `secrets.names.postgres`) to serve Studio's Database and SQL-editor pages,
+  so an operator with a Studio tab open can commit DDL through a fence that
+  counted only app tiers. It needs a live session, so the likelihood is low and
+  the fix is two words in a regex — which the manual sequence below now has. The
+  script's `STABLE_WRITERS` list does **not** yet: until it does, scale
+  `<release>-meta` and `<release>-studio` to 0 by hand when you drive the window
+  with `maintenance.sh`.
 
 ### Manual reference sequence
+
+> **Before step 1: stop anything that can redeploy the release mid-window.** The
+> fence is a set of hand-made `spec.replicas: 0` values, a deleted HPA and four
+> suspended CronJobs. **A single `helm upgrade` puts all of it back in one
+> reconcile** — the unblock note under step 3 says exactly that, and the reason it
+> stops the drain first is that a `fenced` re-check can only _report_ restored
+> writers afterwards; it cannot pause a drain that is already evicting. The drain
+> itself is minutes long, so this is not a theoretical race.
+>
+> **Nothing below pauses that, and a runbook edit cannot pause it for you** — what
+> to pause depends on the deploy path, and the two paths fail differently:
+>
+> - **Push-based (Khoury production).** `prod-charts` deploys by a manually
+>   dispatched GitHub Actions workflow running `helm upgrade --install`; nothing
+>   reconciles on a timer, so the hazard is a _concurrent human deploy_, not a
+>   controller. Announce the window to everyone who can dispatch it, and if you
+>   can, gate the workflow for its duration (a required-reviewer environment, or
+>   simply telling people and watching the Actions tab).
+> - **Continuously reconciled (Fleet / Argo CD / Flux).** Here the writers come
+>   back on their own, inside one sync interval, whether or not anybody touches
+>   anything — so this is not optional. Suspend the sync source **before** step 1:
+>
+>   ```bash
+>   # Rancher Fleet:
+>   kubectl -n <fleet-ns> patch gitrepo <name> --type=merge -p '{"spec":{"paused":true}}'
+>   # Flux:
+>   flux suspend kustomization <name>
+>   # Argo CD:
+>   argocd app set <app> --sync-policy none
+>   ```
+>
+>   Resume in step 5, **after** the writers are restored (`paused:false` /
+>   `flux resume kustomization` / `--sync-policy automated`). A resume that lands
+>   before the restore just performs the restore for you, from committed state, at
+>   a moment you did not choose.
+>
+> Either way, **write down what you paused.** An un-resumed sync source is a
+> silent config-drift outage days later that looks nothing like this window.
 
 1. **Put up the maintenance page, then fence writes.** The chart ships a styled
    maintenance page (`maintenance.enabled`) — a tiny nginx Deployment behind the
@@ -222,16 +276,26 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    > input.
 
    **This reroutes the web host ONLY — it is not a write fence.** The API/kong
-   host is a separate ingress rule and stays open, so the page is a user-facing
-   banner, not protection for the database. Fencing writes is a separate step, and
-   scaling Deployments to zero does **not** by itself stop every writer:
+   host is a separate ingress rule and stays open — and so is the pooler's
+   `<release>-supavisor` Service on `:6543`, which the fence deliberately leaves
+   up, so an in-cluster client holding a pooled connection can still write. The
+   page is a user-facing banner, not protection for the database. Fencing writes
+   is a separate step, and scaling Deployments to zero does **not** by itself stop
+   every writer:
 
    - **auth** (GoTrue) writes sessions/refresh tokens on every request — it is a
      database writer, so a scale list that omits it leaves auth traffic writing.
-   - **edge-functions** is HPA-managed; `kubectl scale` is immediately undone by
-     the HorizontalPodAutoscaler, which scales it back toward `minReplicas`.
+   - **edge-functions** is HPA-managed. `kubectl scale --replicas=0` is _not_
+     immediately undone — with `spec.replicas: 0` and `minReplicas` non-zero the
+     HPA controller reports `ScalingActive=False` / `ScalingDisabled` and stops
+     acting on the target; scaling back _off_ zero is what needs the alpha
+     `HPAScaleToZero` gate, and prod runs v1.32.13 without it. Delete the HPA
+     anyway, because nothing may be able to **re-arm** it: see step 1's comment.
    - per-course **channel** Deployments (`<release>-web-<channel>`,
      `<release>-functions-<channel>`) are not in any fixed name list.
+   - **meta** and **studio** connect to Postgres directly as the `postgres`
+     superuser to serve Studio's Database and SQL-editor pages, so a tier list
+     built from "the app" misses them.
 
    So to actually fence writes, **record current replica counts, delete the HPA,
    and scale the writer tiers to 0**, so you can restore them exactly in step 5:
@@ -297,9 +361,23 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
      # regex is what keeps this from being the whole-release selector: it excludes
      # `maintenance` (the page you are about to serve), `kong`, `postgres` and
      # `supavisor`.
+     #
+     # `meta` and `studio` ARE in the regex, and were not until 2026-09-03. Both
+     # hold a direct Postgres connection as the `postgres` superuser (meta's
+     # PG_META_DB_*, studio's POSTGRES_HOST/POSTGRES_PASSWORD, both from
+     # `secrets.names.postgres`) to serve Studio's Database and SQL-editor pages,
+     # so an operator with a Studio tab open could commit DDL straight through a
+     # fence that counted only app tiers. It needs a live session, so the
+     # likelihood is low -- and the fix is two words in a regex.
+     #
+     # `supavisor` stays OUT on purpose: it originates no writes of its own, it
+     # proxies them. But that means its pooled Postgres port stays reachable
+     # (`<release>-supavisor` :6543) for the whole window, so any in-cluster
+     # client still holding a pooled connection can keep writing. Nothing the
+     # chart renders uses it by default; a bespoke workload might.
      jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
      WRITE_DEPLOY="$(kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
-       | awk '$1 ~ /^(web|rest|auth|storage|functions)(-.+)?$/ { print "deploy/" $2 }')"
+       | awk '$1 ~ /^(web|rest|auth|storage|functions|meta|studio)(-.+)?$/ { print "deploy/" $2 }')"
      WRITE_STS="$(kubectl -n "$NS" get statefulset -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
        | awk '$1 ~ /^realtime(-.+)?$/ { print "statefulset/" $2 }')"
      WRITERS="$(printf '%s\n%s\n' "$WRITE_DEPLOY" "$WRITE_STS" | awk 'NF')"
@@ -332,7 +410,7 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
      #    rather than "still writing". Re-derive if your overlay raises any of the
      #    three values (charts/pawtograder/values.yaml, under `edgeFunctions`).
      PODS="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
-       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { print "pod/" $2 }')"
+       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime|meta|studio)(-.+)?$/ { print "pod/" $2 }')"
      # By NAME, not `-l`: `kubectl wait -l <selector>` exits non-zero with "no
      # matching resources found" when nothing matches, which is the NORMAL state
      # here once the pods are already gone — and a step that fails when everything
@@ -380,7 +458,7 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    # pg_cron is checked too: it is fenced by a DB update rather than by a scale,
    # so it is the one writer that can come back without a pod appearing.
    fenced() {
-     local jp pods left crons
+     local jp pods seen pg left active_jobs running_jobs crons
      jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
      # Take kubectl's EXIT STATUS, not just its output. A failed `get pod` -- an
      # expired token, the wrong context, a `get`-scoped role, a transient API 5xx --
@@ -392,19 +470,70 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
        echo "NOT FENCED: could not list pods (RBAC, expired credentials, or an API error) -- refusing to drain." >&2
        return 1
      fi
+     # ASSERT WE ARE LOOKING AT THE RELEASE before concluding "no writers". An
+     # EMPTY pod list satisfies every check below, so a namespace typo or a wrong
+     # `<release>` substituted into this block read as `fence verified: no writer
+     # pods present` and ran the destructive command. Step 1's fence guards this
+     # (`if [ -z "$WRITERS" ] ... NOTHING MATCHED`) but THIS is a separate code
+     # block with its own `<release>` placeholder, filled in independently, so
+     # that guard does not cover it -- and unlike the `nameOverride` selector bug
+     # this reproduces from a plain namespace typo. A postgres pod is the assertion
+     # to make: it is the thing being protected, it is deliberately still running
+     # here, and on the promote path the standby (`postgres-replica`) stands in for
+     # a dead primary. Zero pods, or pods but no postgres, means the SELECTOR is
+     # empty -- not the cluster.
+     seen="$(printf '%s\n' "$pods" | awk 'NF { n++ } END { print n+0 }')"
+     pg="$(printf '%s\n' "$pods" | awk '$1 ~ /^postgres(-replica)?$/ { n++ } END { print n+0 }')"
+     if [ "$seen" -eq 0 ] || [ "$pg" -eq 0 ]; then
+       echo "NOT FENCED: the selector matched $seen pod(s) and $pg postgres pod(s)." >&2
+       echo "  An empty match is a wrong namespace or a wrong <release>, NOT a quiet cluster." >&2
+       return 1
+     fi
      left="$(printf '%s\n' "$pods" \
-       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { n++ } END { print n+0 }')"
+       | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime|meta|studio)(-.+)?$/ { n++ } END { print n+0 }')"
      if [ "$left" -ne 0 ]; then
        echo "NOT FENCED: $left writer pod(s) still present -- refusing to drain." >&2
        return 1
      fi
-     crons="$(kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
-       -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;" | tr -d '[:space:]')"
+     # Suspending a CronJob does NOT stop a Job that is already running, and the
+     # gate has to cover the one that started a second before the suspend landed.
+     # `audit-partitions` (03:00) writes DDL; the backup drills restore into
+     # scratch databases on this same server. `.status.active` is absent rather
+     # than 0 when nothing is running, so the awk test is on a possibly-empty
+     # field -- which is why it is `$3 > 0` and not `$3 != 0`.
+     if ! active_jobs="$(kubectl -n "$NS" get job -l "app.kubernetes.io/instance=<release>" \
+       -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{" "}{.status.active}{"\n"}{end}')"; then
+       echo "NOT FENCED: could not list Jobs (RBAC or an API error) -- refusing to drain." >&2
+       return 1
+     fi
+     running_jobs="$(printf '%s\n' "$active_jobs" \
+       | awk '$3 > 0 && $1 ~ /^(audit-partitions|backup-verify|backup-restore-drill|backup-pitr-drill)$/ { print $2 }')"
+     if [ -n "$running_jobs" ]; then
+       echo "NOT FENCED: write-capable Job(s) still active -- refusing to drain:" >&2
+       printf '  %s\n' $running_jobs >&2
+       return 1
+     fi
+     # Capture the exec's EXIT STATUS, and get the pipeline out of the way to do
+     # it. This was `crons="$(kubectl exec ... | tr -d '[:space:]')"`: a pipeline
+     # reports only the LAST command's status, `tr` always succeeds, and there is
+     # no `set -o pipefail` in a function an operator pastes into an interactive
+     # shell. So an exec that printed a count and THEN failed -- an SPDY stream
+     # reset, an API-server timeout while a node tears down, which is exactly the
+     # moment this gate runs -- left `crons="0"`, passed, and ran the command
+     # below on an unknown cron state. Narrow (an exec that fails with NO output
+     # was already caught: `crons=""` is not `"0"`, so the check refuses) but it
+     # lands on the destructive step.
+     if ! crons="$(kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+       -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;")"; then
+       echo "NOT FENCED: could not read cron.job (the exec failed) -- refusing to drain." >&2
+       return 1
+     fi
+     crons="${crons//[[:space:]]/}"
      if [ "$crons" != "0" ]; then
        echo "NOT FENCED: $crons pg_cron job(s) active -- refusing to drain." >&2
        return 1
      fi
-     echo "fence verified: no writer pods, no active pg_cron jobs"
+     echo "fence verified: postgres present, no writer pods, no active write Jobs, no active pg_cron jobs"
    }
 
    fenced && kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
@@ -457,7 +586,7 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    > #    `kubectl scale $WRITERS` would expand to a scale with no targets.
    > jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
    > WRITERS="$( { kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
-   >     | awk '$1 ~ /^(web|rest|auth|storage|functions)(-.+)?$/ { print "deploy/" $2 }'
+   >     | awk '$1 ~ /^(web|rest|auth|storage|functions|meta|studio)(-.+)?$/ { print "deploy/" $2 }'
    >   kubectl -n "$NS" get statefulset -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
    >     | awk '$1 ~ /^realtime(-.+)?$/ { print "statefulset/" $2 }'; } | awk 'NF')"
    > printf '%s\n' "$WRITERS"
@@ -473,7 +602,7 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    > # terminationGracePeriodSeconds is 430s: a shorter wait returns while a worker
    > # can still be draining pgmq into the primary you are about to evict.
    > PODS="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
-   >   | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { print "pod/" $2 }')"
+   >   | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime|meta|studio)(-.+)?$/ { print "pod/" $2 }')"
    > if [ -n "$PODS" ]; then
    >   # shellcheck disable=SC2086
    >   if ! kubectl -n "$NS" wait --for=delete $PODS --timeout=480s; then
