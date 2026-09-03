@@ -1369,6 +1369,26 @@ assert_refused "a negative replica count is refused" \
 assert_refused "a non-numeric replica count is refused, not read as 0" \
   "which is refused. This does NOT idle the tier" \
   "${WT[@]}" --set edgeFunctions.workerTier.replicas=two
+# A FRACTION survives the `lt 1` guard: Sprig `int` truncates 1.5 to 1, which is
+# a legal count, so the render succeeded, ran half the requested pods, and
+# dropped the PDB with them (emitted only at 2+). Both spellings are covered
+# because `--set` delivers "1.5" as a string while a values file delivers a
+# float64, and only the second is what an overlay would actually contain.
+assert_refused "a fractional replica count is refused, not truncated" \
+  "which is not a whole number" \
+  "${WT[@]}" --set edgeFunctions.workerTier.replicas=1.5
+FRACVALS="$(mktemp)"; printf 'edgeFunctions:\n  workerTier:\n    enabled: true\n    replicas: 2.5\n' >"$FRACVALS"
+if helm template t "$CHART" "${BASE[@]}" -f "$FRACVALS" >/dev/null 2>"$ERRFILE"; then
+  echo "FAIL [a fractional replica count in a VALUES FILE is refused]: rendered"
+  FAILED=1
+elif grep -qF "which is not a whole number" "$ERRFILE"; then
+  echo "ok   [a fractional replica count in a VALUES FILE is refused]"
+else
+  echo "FAIL [a fractional replica count in a VALUES FILE is refused]: refused for the wrong reason"
+  echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1 | cut -c1-120)"
+  FAILED=1
+fi
+rm -f "$FRACVALS"
 # The supported un-split, which the failure message points at. It must actually
 # work, and it must take the Kong routes with it -- otherwise the advice in the
 # message would leave the routes behind and produce the very outage it describes.

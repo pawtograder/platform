@@ -440,7 +440,23 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    > ```bash
    > helm upgrade <release> <chart> -n "$NS" --reuse-values \
    >   --set edgeFunctions.workerTier.enabled=false
+   >
+   > # THIS UPGRADE BREAKS THE FENCE. Re-apply it before the drain resumes.
+   > kubectl -n "$NS" delete hpa <release>-functions --ignore-not-found
+   > kubectl -n "$NS" scale $WRITERS --replicas=0
+   > fenced || echo "STOP: re-fence failed -- do not let the drain continue."
    > ```
+   >
+   > **`helm upgrade` reconciles the whole release, not just the worker tier.** It
+   > restores the fixed-replica writer Deployments step 1 scaled to zero and
+   > recreates the edge HPA step 1 deleted — step 5 relies on exactly that
+   > reconciliation to bring the fleet back, which is why it happens here too. So
+   > those writers can resume committing while the node drain and the database
+   > maintenance are still in flight, and the `fenced` gate above already ran: it
+   > guards the drain's START, not its middle. Re-run the two fence commands and
+   > re-verify before the drain continues. If the drain has already been
+   > interrupted and you are restarting it, the `fenced &&` chain covers you; if it
+   > is still running, the re-fence is the only thing that does.
    >
    > That removes the PDB, the Deployment **and** the Kong routes in one release,
    > which is what makes it safe: the four functions return to the request tier

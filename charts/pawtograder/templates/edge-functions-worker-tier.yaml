@@ -180,6 +180,22 @@ own admission budget and eszip cache.
    This also makes `gt $wtReplicas 0` in prometheus-rules.yaml unreachable while
    the tier is enabled -- see the note there; it is kept as a backstop because the
    two files can be edited independently. */ -}}
+{{- /* Fractional counts are refused BEFORE the `lt 1` check, because they survive
+   it. A values file carrying `replicas: 1.5` is a YAML float, and the helper's
+   Sprig `int` truncates it to 1 -- a render that succeeds, runs half the pods the
+   operator asked for, and silently drops the PodDisruptionBudget with them (it is
+   emitted only at 2 or more, so the drain protection this tier's runbook depends
+   on disappears without a word). Truncation toward zero also means 0.5 lands on
+   the zero path and reports "resolves to 0", blaming a value nobody wrote.
+   Compare the value against its own truncation rather than inspecting kindOf:
+   `--set` delivers "1.5" as a STRING while a values file delivers a float64, and
+   this catches both. A non-numeric string converts to 0 on both sides, so it
+   falls through to the `lt 1` check that already names it. */ -}}
+{{- if hasKey $wt "replicas" }}
+{{- if ne (float64 $wt.replicas) (float64 $replicas) }}
+{{- fail (printf "edgeFunctions.workerTier.replicas is %v, which is not a whole number. Helm would truncate it to %d and render that many pods -- and at 1 the PodDisruptionBudget is omitted entirely, so the worker tier loses the drain protection docs/operations/planned-maintenance.md relies on, with no error to say so. Set a whole number." $wt.replicas $replicas) }}
+{{- end }}
+{{- end }}
 {{- if lt $replicas 1 }}
 {{- fail (printf "edgeFunctions.workerTier.replicas resolves to %d, which is refused. This does NOT idle the tier: Kong would still route %s to it by path, so every pg_cron poke would hit a Service with no endpoints, pgmq would stop draining for all four, and BOTH things that would report it are suppressed at zero replicas -- the PodDisruptionBudget (minAvailable: 1 would deadlock) and PawtograderEdgeWorkerTierUnavailable (its `replicas_available == 0` would be permanently true and page continuously). To un-split and return these functions to the request tier, set edgeFunctions.workerTier.enabled: false, which removes the Deployment, the PDB and the Kong routes together in one helm upgrade. To run fewer pods, use 1." $replicas (join ", " $wt.functions)) }}
 {{- end }}
