@@ -189,10 +189,23 @@ image's inventory:
 
 ```bash
 # From a platform checkout at the SHA the target environment runs.
-for fn in notification-queue-processor github-async-worker \
-          discord-async-worker gradebook-column-recalculate; do
-  [ -f "supabase/functions/$fn/index.ts" ] && echo "ok   $fn" || echo "MISSING $fn"
-done
+#
+# Read the names from the routes that environment actually RENDERS, not from the
+# chart defaults: the whole point of this check is the case where a downstream
+# values file has changed workerTier.functions, and a hardcoded list prints four
+# reassuring `ok` lines for names nobody deploys.
+FNS="$(helm template <release> charts/pawtograder -f <downstream-values.yaml> \
+  --show-only templates/kong-config.yaml \
+  | grep -oE 'functions-v1-worker-[a-z0-9-]+' \
+  | sed 's/^functions-v1-worker-//' | sort -u)"
+
+if [ -z "$FNS" ]; then
+  echo "NO worker routes rendered -- the tier is off in these values, or the path is wrong." >&2
+else
+  for fn in $FNS; do
+    [ -f "supabase/functions/$fn/index.ts" ] && echo "ok      $fn" || echo "MISSING $fn"
+  done
+fi
 ```
 
 Two alerts are the backstop if this is missed, and between them they cover both

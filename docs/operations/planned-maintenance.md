@@ -435,50 +435,59 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    > both pods can and do land on one node, and draining that node needs the
    > budget it cannot get.
    >
-   > The unblock is to **un-split**, not to delete the PDB:
+   > The unblock is to **un-split**, not to delete the PDB — but the ORDER matters
+   > more than the command does, because the upgrade both unblocks the drain and
+   > un-fences the writers in the same reconciliation:
    >
    > ```bash
+   > # 1. STOP THE DRAIN FIRST. Ctrl-C the blocked `kubectl drain`.
+   > #    Disabling the tier deletes the PDB the drain is waiting on, so the drain
+   > #    resumes the instant it disappears -- in the same moment the reconciliation
+   > #    is restoring the writer Deployments and the edge HPA. Nothing may be
+   > #    draining while step 2 runs. The node stays cordoned (drain cordons before
+   > #    it evicts), so nothing reschedules onto it while you work.
+   >
+   > # 2. Un-split.
    > helm upgrade <release> <chart> -n "$NS" --reuse-values \
    >   --set edgeFunctions.workerTier.enabled=false
    >
-   > # THIS UPGRADE BREAKS THE FENCE. Re-apply it before the drain resumes.
-   > # $WRITERS does NOT survive from step 1 -- it was assigned inside that
-   > # step's `( set -euo pipefail )` subshell, so it is unset here and
-   > # `kubectl scale $WRITERS` would expand to a scale with no targets.
-   > # Rediscover, scale, then WAIT for the pods to actually be gone: scale
-   > # only writes .spec.replicas, and a writer keeps committing until its pod
-   > # exits.
+   > # 3. RE-FENCE, and verify before anything drains again.
+   > #    $WRITERS does NOT survive from step 1 -- it was assigned inside that
+   > #    step's `( set -euo pipefail )` subshell, so it is unset here and
+   > #    `kubectl scale $WRITERS` would expand to a scale with no targets.
    > jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
    > WRITERS="$( { kubectl -n "$NS" get deploy -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
    >     | awk '$1 ~ /^(web|rest|auth|storage|functions)(-.+)?$/ { print "deploy/" $2 }'
    >   kubectl -n "$NS" get statefulset -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
    >     | awk '$1 ~ /^realtime(-.+)?$/ { print "statefulset/" $2 }'; } | awk 'NF')"
    > printf '%s\n' "$WRITERS"
-   > [ -n "$WRITERS" ] || { echo "NOTHING MATCHED -- do not let the drain continue." >&2; exit 1; }
+   > [ -n "$WRITERS" ] || { echo "NOTHING MATCHED -- do not restart the drain." >&2; exit 1; }
    > kubectl -n "$NS" delete hpa <release>-functions --ignore-not-found
    > # shellcheck disable=SC2086
    > kubectl -n "$NS" scale $WRITERS --replicas=0
+   > # Longer than the writers' own termination window: the edge tier's
+   > # terminationGracePeriodSeconds is 430s, so a 180s wait returns while a worker
+   > # can still be draining pgmq into the primary you are about to evict.
    > kubectl -n "$NS" wait --for=delete pod \
-   >   -l "app.kubernetes.io/instance=<release>" --timeout=180s || true
+   >   -l "app.kubernetes.io/instance=<release>" --timeout=480s || true
    > if ! fenced; then
-   >   echo "STOP: re-fence failed. The drain is still running against live writers." >&2
+   >   echo "STOP: re-fence failed. Do NOT restart the drain." >&2
    >   exit 1
    > fi
+   >
+   > # 4. Only now restart the drain, through the same hard gate as before.
+   > fenced && kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
    > ```
    >
    > **`helm upgrade` reconciles the whole release, not just the worker tier.** It
    > restores the fixed-replica writer Deployments step 1 scaled to zero and
    > recreates the edge HPA step 1 deleted — step 5 relies on exactly that
-   > reconciliation to bring the fleet back, which is why it happens here too. So
-   > those writers can resume committing while the node drain and the database
-   > maintenance are still in flight, and the `fenced` gate above already ran: it
-   > guards the drain's START, not its middle. Re-run the block above and let it
-   > exit non-zero rather than reporting and continuing — an advisory `|| echo`
-   > here would leave the shell at exit 0 and the drain proceeding against live
-   > writers, which is the same fail-open shape the `fenced` helper itself was
-   > fixed for. If the drain has already been interrupted and you are restarting
-   > it, the `fenced &&` chain covers you; if it is still running, this block is
-   > the only thing that does.
+   > reconciliation to bring the fleet back, which is why it happens here too. Left
+   > running, the drain would resume the moment the PDB is deleted and race those
+   > restored writers to the primary, and a `fenced` check can only report that
+   > afterwards: it cannot pause a drain that is already evicting. That is why the
+   > drain is stopped in step 1 rather than re-fenced underneath. The `fenced &&`
+   > chain in step 4 is then the same gate that guarded the first attempt.
    >
    > That removes the PDB, the Deployment **and** the Kong routes in one release,
    > which is what makes it safe: the four functions return to the request tier
