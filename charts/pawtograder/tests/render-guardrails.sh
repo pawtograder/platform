@@ -22,7 +22,11 @@ CHART="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FAILED=0
 ERRFILE="$(mktemp)"
 OUTFILE="$(mktemp)"
-trap 'rm -f "$ERRFILE" "$OUTFILE"' EXIT
+# A throwaway copy of the chart with a different Chart.yaml `version`, built on
+# demand by bump_chart_version below. Declared here so the single EXIT trap
+# cleans it up whether or not that block ran.
+CHART_VERSION_BUMPED=""
+trap 'rm -f "$ERRFILE" "$OUTFILE"; if [ -n "$CHART_VERSION_BUMPED" ]; then rm -rf "$CHART_VERSION_BUMPED"; fi' EXIT
 
 # A production values set that renders clean. Each guard test adds ONE
 # dangerous override on top so the only reason a render can fail is that guard.
@@ -1027,10 +1031,40 @@ assert_absent "no worker-tier availability alert by default" \
 # pawtograder.postgresExporterQueries named template instead, and these three
 # assertions pin that: the primary's checksum must not move when the tier flips,
 # must not move on a chart-version bump, and must still move on a real config
-# edit. Delete the narrowing and the first one goes red.
-read_primary_checksum() {
-  helm template t "$CHART" "${BASE[@]}" "$@" --show-only templates/postgres-statefulset.yaml 2>"$ERRFILE" \
+# edit. Delete the narrowing and the first one goes red. The chart-version one
+# carries a PRECONDITION assertion of its own, because that is the one that was
+# unfalsifiable until 2026-09-03 -- see bump_chart_version.
+read_primary_checksum() { read_primary_checksum_from "$CHART" "$@"; }
+
+# Same, against an arbitrary chart directory, because the chart-version case has
+# to render a chart whose Chart.yaml genuinely differs.
+read_primary_checksum_from() {
+  local chartdir="$1"; shift
+  helm template t "$chartdir" "${BASE[@]}" "$@" --show-only templates/postgres-statefulset.yaml 2>"$ERRFILE" \
     | grep -m1 'checksum/config:' | awk '{print $2}'
+}
+
+# bump_chart_version <newversion> -> echoes the path of a throwaway chart copy
+# whose Chart.yaml carries that version.
+#
+# A chart-version bump MUST come from a real Chart.yaml. `helm template --version`
+# only selects a version when the chart argument is a repo/registry reference; for
+# a local chart DIRECTORY helm ignores the flag and keeps Chart.yaml's version.
+# Measured on this chart 2026-09-03: with no flag and with `--version 9.9.9` the
+# rendered StatefulSet carries `helm.sh/chart: pawtograder-0.4.0` both times, and
+# the primary's checksum/config is byte-identical -- necessarily, since the flag
+# changed nothing. The chart-version assertion below used to be written that way,
+# which made its two operands the same render by construction: `assert x == x`.
+# It stayed green through a break test that deliberately let the chart-version
+# label feed the digest, so it guarded nothing at all -- and it guards precisely
+# the property the 0.4.0 staging roll depends on (see the strip in
+# postgres-statefulset.yaml). An assertion that cannot fail is worse than none.
+bump_chart_version() {
+  local want="$1" dir
+  dir="$(mktemp -d)"
+  cp -R "$CHART/." "$dir/"
+  sed -i -E "s/^version:[[:space:]]*.*\$/version: $want/" "$dir/Chart.yaml"
+  echo "$dir"
 }
 
 assert_checksum_equal() {
@@ -1049,11 +1083,33 @@ assert_checksum_equal() {
 MON=(--set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps)
 CK_TIER_OFF="$(read_primary_checksum "${MON[@]}")"
 CK_TIER_ON="$(read_primary_checksum "${MON[@]}" --set edgeFunctions.workerTier.enabled=true)"
-CK_VERSION="$(read_primary_checksum "${MON[@]}" --version 9.9.9)"
+CHART_VERSION_BUMPED="$(bump_chart_version 9.9.9)"
+CK_VERSION="$(read_primary_checksum_from "$CHART_VERSION_BUMPED" "${MON[@]}")"
 CK_EDITED="$(read_primary_checksum "${MON[@]}" --set postgres.config.work_mem=64MB)"
 
 assert_checksum_equal "enabling the worker tier does NOT roll the Postgres primary" \
   "$CK_TIER_OFF" "$CK_TIER_ON"
+
+# PRECONDITION for the chart-version assertion below, and the whole reason that
+# assertion can fail now. Prove the bump reached the RENDER: if the copy or the
+# sed silently did nothing, CK_VERSION would be the same render as CK_TIER_OFF
+# and the assertion would be unfalsifiable again, which is exactly how the
+# `--version 9.9.9` form failed (see bump_chart_version). Checked on the
+# chart-version LABEL, because that label is the thing the strip in
+# postgres-statefulset.yaml exists to remove from the hash input.
+CHART_VERSION_BASE="$(sed -nE 's/^version:[[:space:]]*(.*)$/\1/p' "$CHART/Chart.yaml" | head -1)"
+if [ "$CHART_VERSION_BASE" = "9.9.9" ] || [ -z "$CHART_VERSION_BASE" ]; then
+  echo "FAIL [the chart-version fixture really renders a bumped version]: Chart.yaml version is '$CHART_VERSION_BASE'; pick a fixture version the chart does not already carry"
+  FAILED=1
+elif helm template t "$CHART_VERSION_BUMPED" "${BASE[@]}" "${MON[@]}" \
+       --show-only templates/postgres-statefulset.yaml >"$OUTFILE" 2>"$ERRFILE" \
+     && grep -qF 'helm.sh/chart: pawtograder-9.9.9' "$OUTFILE" \
+     && ! grep -qF "helm.sh/chart: pawtograder-$CHART_VERSION_BASE" "$OUTFILE"; then
+  echo "ok   [the chart-version fixture really renders a bumped version]"
+else
+  echo "FAIL [the chart-version fixture really renders a bumped version]: the bumped copy does not render version 9.9.9 -- the assertion below would be vacuous"
+  FAILED=1
+fi
 assert_checksum_equal "a chart-version bump does NOT roll the Postgres primary" \
   "$CK_TIER_OFF" "$CK_VERSION"
 if [ -n "$CK_EDITED" ] && [ "$CK_EDITED" != "$CK_TIER_OFF" ]; then
