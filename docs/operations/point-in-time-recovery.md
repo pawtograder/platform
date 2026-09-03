@@ -719,12 +719,41 @@ is already warm.
    fi
    ```
 
-   Then **recreate the deleted edge HPA by reconciling the Helm release**
-   (`helm upgrade` with the same values), not `kubectl autoscale`: the chart's
-   `edge-functions-hpa.yaml` is an `autoscaling/v2` HPA with **both** CPU and
-   memory Resource metrics plus custom scale-up/down behavior, none of which a
-   `kubectl autoscale` (CPU-target, v1-style) HPA reproduces. `$STATE_DIR/hpa.yaml`
-   is the record of what was there, for checking the reconcile put it back.
+   **Recreate the edge HPA from the recorded YAML — and do NOT `helm upgrade`
+   yet.** This is the one procedure where the reconcile that restores everything
+   else is actively dangerous, and it is worth being blunt about why:
+
+   ```bash
+   kubectl -n "$NS" apply -f "$STATE_DIR/hpa.yaml"
+   ```
+
+   `postgres-statefulset.yaml` renders the StatefulSet with **`replicas: 1`
+   hardcoded** — it is not a values knob, so there is no override that holds it
+   at 0 — and it renders the `<release>-postgres` Service with
+   `selector: app.kubernetes.io/component=postgres` in the **same template**. So
+   a `helm upgrade` at this point does two things at once: it restarts the
+   abandoned old primary that step 2's step 6 stopped, and it resets the Service
+   selector step 4 patched. Traffic moves off the promoted node back onto a node
+   holding stale data on a dead timeline, and both are archiving into one
+   `WALG_S3_PREFIX`. That is the same split brain the whole procedure is built
+   around, arriving via the command the other two runbooks tell you to run.
+
+   Applying `$STATE_DIR/hpa.yaml` is why step 2 recorded it. It is the exact
+   `autoscaling/v2` object — both Resource metrics and the custom scale-up/down
+   behavior, none of which a `kubectl autoscale` (CPU-target, v1-style) HPA
+   reproduces — without touching anything else in the release. If the apply is
+   rejected on server-populated metadata, strip `metadata.uid`,
+   `metadata.resourceVersion`, `metadata.creationTimestamp`, `metadata.generation`
+   and `status` and re-apply; nothing else in the object needs editing.
+
+   **Reconcile the release only after step 6**, once the promoted data is back
+   under the chart's normal primary identity and a rendered `replicas: 1` on
+   `<release>-postgres` is the state you actually want. Until then the cluster is
+   deliberately running a hand-patched Postgres identity, and every full
+   reconcile fights it. Note that this cuts both ways: a **push-based or
+   continuously-reconciled deploy path will do this to you unasked** — so the
+   deploy source must be paused for the whole window between step 2 and step 6,
+   the same pause planned-maintenance.md describes before its step 1.
 
    Then run the [smoke checklist](./production-install.md#smoke-test).
 
