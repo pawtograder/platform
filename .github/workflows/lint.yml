@@ -73,7 +73,7 @@ jobs:
       - name: Install promtool
         env:
           # The fixtures were run green against this exact version and against
-          # 2.53.3, so the suite is not relying on a behaviour specific to either.
+          # 2.53.3, so the suite is not relying on a behavior specific to either.
           PROM_VERSION: "3.14.0"
           # SHA-256 of prometheus-3.14.0.linux-amd64.tar.gz, pinned because this
           # job downloads a tarball over the network and then EXECUTES what comes

@@ -208,9 +208,19 @@ is already warm.
    # gap between the two steps is however long the operator takes, and a
    # `helm upgrade`, an HPA, or a controller reconcile can put pods back in it.
    fenced() {
-     local jp left
+     local jp pods left
      jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
-     left="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+     # Take kubectl's EXIT STATUS, not just its output. A failed `get pod` -- an
+     # expired token, the wrong context, a `get`-scoped role, a transient API 5xx --
+     # writes nothing to stdout, so `awk ... END { print n+0 }` still prints 0 and
+     # this gate reported "fence verified" and ran the command below. It failed
+     # OPEN, onto a destructive step, which is the one direction a fence must never
+     # fail. "I could not tell" is not "nothing is running".
+     if ! pods="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp")"; then
+       echo "NOT FENCED: could not list pods (RBAC, expired credentials, or an API error) -- refusing to continue." >&2
+       return 1
+     fi
+     left="$(printf '%s\n' "$pods" \
        | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { n++ } END { print n+0 }')"
      if [ "$left" -ne 0 ]; then
        echo "NOT FENCED: $left writer pod(s) still present -- refusing to continue." >&2

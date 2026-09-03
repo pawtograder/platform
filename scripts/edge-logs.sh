@@ -92,19 +92,34 @@ LOGQL="{namespace=\"${NAMESPACE}\", component=~\"${EDGE_LOG_COMPONENTS}\"}"
 # no extra API call. `-l` also replaces `deploy/pawtograder-functions`, which
 # hardcoded both the release name and the single-Deployment assumption.
 edge_pod_selector() {
-  local components
-  # `|| true` is load-bearing, not defensive. Under `set -euo pipefail` a grep
-  # that matches nothing exits 1, pipefail propagates that to the pipeline, and
-  # an assignment takes the substitution's status -- so the script would exit
-  # HERE and never reach the fallback below. Verified: without it the function
-  # aborts on an empty match instead of falling back.
-  components="$( { kubectl get deploy -n "$NAMESPACE" -l app.kubernetes.io/name=pawtograder \
-      -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{"\n"}{end}' 2>/dev/null \
-    | grep -E "^(${EDGE_LOG_COMPONENTS})\$" | sort -u | paste -sd, -; } || true)"
+  local rows name components
+  # DISCOVER the app.kubernetes.io/name value rather than hardcoding it, which is
+  # what this did and is the trap docs/operations/disaster-recovery.md spells out
+  # for its own fence: `pawtograder.name` is `default .Chart.Name .Values.nameOverride`,
+  # so on an install that sets nameOverride the label is NOT "pawtograder" and a
+  # fixed `-l app.kubernetes.io/name=pawtograder` matches nothing at all. The
+  # fallback below could not rescue that either, because it still emitted the
+  # hardcoded name -- so the tool printed no logs for a healthy fleet. The
+  # NAMESPACE is already the scope here, so the component set alone identifies the
+  # edge tiers; the name label is added only when the cluster says what it is.
+  #
+  # `|| true` is load-bearing, not defensive. Under `set -euo pipefail` a failed
+  # kubectl propagates through the pipeline, and an assignment takes the
+  # substitution's status -- so the script would exit HERE and never reach the
+  # fallback below.
+  rows="$( { kubectl get deploy -n "$NAMESPACE" \
+      -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/name}{" "}{.metadata.labels.app\.kubernetes\.io/component}{"\n"}{end}' 2>/dev/null \
+    | awk -v re="^(${EDGE_LOG_COMPONENTS})\$" '$2 ~ re { print }'; } || true)"
+  name="$(printf '%s\n' "$rows" | awk 'NF { print $1; exit }')"
+  components="$(printf '%s\n' "$rows" | awk 'NF { print $2 }' | sort -u | paste -sd, -)"
   # No Deployments found (wrong namespace, no RBAC): fall back to the two tiers
   # the chart always names, rather than emitting `in ()` which selects nothing.
   [ -z "$components" ] && components="$(printf '%s' "$EDGE_LOG_COMPONENTS" | tr '|' ',')"
-  echo "app.kubernetes.io/name=pawtograder,app.kubernetes.io/component in (${components})"
+  if [ -n "$name" ]; then
+    echo "app.kubernetes.io/name=${name},app.kubernetes.io/component in (${components})"
+  else
+    echo "app.kubernetes.io/component in (${components})"
+  fi
 }
 
 # `kubectl logs -l` REFUSES to run when the selector matches more pods than

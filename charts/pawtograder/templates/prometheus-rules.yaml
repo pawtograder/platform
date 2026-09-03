@@ -759,6 +759,13 @@ spec:
            is false is worse than no guard. */}}
         {{- $wtReplicas := int (include "pawtograder.edgeFunctions.workerTier.replicas" .) }}
         {{- if and (include "pawtograder.edgeFunctions.workerTier.enabled" .) (gt $wtReplicas 0) }}
+        {{- /* Resolved ONCE. Five expressions below have to render the byte-identical
+           string that kong-config.yaml dials and that the Deployment is named, and one
+           of them sits inside `range $fn` where the include has to be spelled `$`
+           rather than `.` -- a `.`-scoped copy there would resolve against the loop
+           variable. kong-config.yaml already hoists the same include for the same
+           reason. */}}
+        {{- $wkrHost := include "pawtograder.edgeFunctions.workers.host" . }}
         # The background-worker tier is routed by PATH: Kong sends the four worker function names
         # to it and nowhere else, so unlike the request tier there is no other pool to absorb the
         # traffic when it is down -- pgmq simply stops draining. None of the rules above can see
@@ -783,15 +790,15 @@ spec:
         # the missing series instead.
         - alert: PawtograderEdgeWorkerTierUnavailable
           expr: |
-            kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ include "pawtograder.edgeFunctions.workers.host" . }}"} == 0
-              or absent(kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ include "pawtograder.edgeFunctions.workers.host" . }}"})
+            kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ $wkrHost }}"} == 0
+              or absent(kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="{{ $wkrHost }}"})
           for: 5m
           labels:
             severity: critical
           annotations:
             summary: "Pawtograder edge worker tier has no available pods"
             description: >-
-              {{ include "pawtograder.edgeFunctions.workers.host" . }}
+              {{ $wkrHost }}
               in {{ $ns }} has had zero available replicas for 5m. Kong routes
               {{ join ", " .Values.edgeFunctions.workerTier.functions }} to this tier by path, so
               every call to those functions is failing -- including the pg_cron pokes that drain
@@ -946,7 +953,7 @@ spec:
           labels:
             severity: warning
             namespace: {{ $ns | quote }}
-            deployment: {{ include "pawtograder.edgeFunctions.workers.host" . | quote }}
+            deployment: {{ $wkrHost | quote }}
           annotations:
             summary: "Pawtograder edge worker tier is serving no traffic (the tier split may not be in effect)"
             description: >-
@@ -1047,7 +1054,7 @@ spec:
           labels:
             severity: warning
             namespace: {{ $ns | quote }}
-            deployment: {{ include "pawtograder.edgeFunctions.workers.host" $ | quote }}
+            deployment: {{ $wkrHost | quote }}
             route: {{ printf "functions-v1-worker-%s" $fn | quote }}
           annotations:
             summary: "Pawtograder edge worker route functions-v1-worker-{{ $fn }} is serving no traffic while its siblings are"

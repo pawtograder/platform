@@ -13,7 +13,7 @@
 # promtool compares annotations EXACTLY when exp_alerts is used, so a fixture in
 # that form pins every word of the description and goes red on prose edits —
 # which, in a chart whose comments and annotations are maintained as an ops log,
-# means the tests break on changes that cannot affect behaviour. Asserting on
+# means the tests break on changes that cannot affect behavior. Asserting on
 # ALERTS{alertstate=...} tests what these rules are actually for (does it fire,
 # when, and with which identifying labels) and leaves the prose free. The label
 # set IS pinned, because severity and the deployment/namespace identity are
@@ -71,7 +71,7 @@ tests:
   # pinning: absent() synthesises labels from the EQUALITY matchers in its
   # selector, so both namespace="default" and deployment="t-pawtograder-functions-workers"
   # survive even though no series exists. That is what makes the two arms of this
-  # rule produce identically-labelled alerts, so it deduplicates in Alertmanager
+  # rule produce identically labeled alerts, so it deduplicates in Alertmanager
   # instead of arriving as two distinct incidents — and it is why a description
   # referring to $labels.deployment would still render correctly here. It would
   # NOT survive a matcher rewritten as a regex (`deployment=~"..."`), which
@@ -389,7 +389,7 @@ tests:
   # rules firing on the other three.
   #
   # The first pokes are 502s on purpose: the worker Service has no ready
-  # endpoints yet, which is the documented behaviour in
+  # endpoints yet, which is the documented behavior in
   # docs/operations/incident-response.md. Kong counts a request against the route
   # it MATCHED regardless of the status it returns, so a 502 still proves the
   # route loaded — the rules must not require success, and a well-meaning edit

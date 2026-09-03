@@ -209,7 +209,7 @@ data:
          four do not even contend with each other (see the maxParallelism note in
          values.yaml -- --max-parallelism is per service path). Recorded because
          it was considered rather than overlooked, and because the mitigation is
-         a behaviour change on a live gateway: adding `rate-limiting` or
+         a behavior change on a live gateway: adding `rate-limiting` or
          `ip-restriction` here would break plugin parity with the catch-all and
          is not a cleanup to make in passing.
 

@@ -380,9 +380,19 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    # pg_cron is checked too: it is fenced by a DB update rather than by a scale,
    # so it is the one writer that can come back without a pod appearing.
    fenced() {
-     local jp left crons
+     local jp pods left crons
      jp='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/component}{" "}{.metadata.name}{"\n"}{end}'
-     left="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+     # Take kubectl's EXIT STATUS, not just its output. A failed `get pod` -- an
+     # expired token, the wrong context, a `get`-scoped role, a transient API 5xx --
+     # writes nothing to stdout, so `awk ... END { print n+0 }` still prints 0 and
+     # this gate reported "fence verified" and ran the command below. It failed
+     # OPEN, onto a destructive step, which is the one direction a fence must never
+     # fail. "I could not tell" is not "nothing is running".
+     if ! pods="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp")"; then
+       echo "NOT FENCED: could not list pods (RBAC, expired credentials, or an API error) -- refusing to drain." >&2
+       return 1
+     fi
+     left="$(printf '%s\n' "$pods" \
        | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { n++ } END { print n+0 }')"
      if [ "$left" -ne 0 ]; then
        echo "NOT FENCED: $left writer pod(s) still present -- refusing to drain." >&2

@@ -186,10 +186,15 @@ writing the limit the same way as the request beside it.
      recycling that keeps a pod inside the memory budget asserted below, so the
      pod runs against a budget that no longer holds and nothing reports it. */}}
 {{- if $ef.beforeUnload -}}
-{{- range $knob := list "memoryRatio" "cpuRatio" "wallClockRatio" -}}
+{{/* The values KEY is camelCase and the runtime FLAG is kebab-case, so the two
+     are carried separately. Interpolating the key into the flag name -- which
+     this did -- printed `--dispatch-beforeunload-cpuRatio`, a flag edge-runtime
+     does not have, in the one message whose whole job is to name the knob the
+     operator has to look at. */}}
+{{- range $knob, $flag := dict "memoryRatio" "memory-ratio" "cpuRatio" "cpu-ratio" "wallClockRatio" "wall-clock-ratio" -}}
 {{- $r := index $ef.beforeUnload $knob | float64 -}}
 {{- if or (le $r 0.0) (gt $r 100.0) -}}
-{{- fail (printf "%s.beforeUnload.%s is %v, which is not a usable ratio. It must be greater than 0 and at most 100. This value is passed to --dispatch-beforeunload-%s verbatim, so a non-numeric, zero, negative or over-100 value either CrashLoops the pod or silently switches OFF the EarlyDrop recycling that the memory budget below depends on -- a pod that never retires an isolate exceeds the sum this assertion just checked, and OOM-kills instead." $p $knob (index $ef.beforeUnload $knob) $knob) -}}
+{{- fail (printf "%s.beforeUnload.%s is %v, which is not a usable ratio. It must be greater than 0 and at most 100. This value is passed to --dispatch-beforeunload-%s verbatim, so a non-numeric, zero, negative or over-100 value either CrashLoops the pod or silently switches OFF the EarlyDrop recycling that the memory budget below depends on -- a pod that never retires an isolate exceeds the sum this assertion just checked, and OOM-kills instead." $p $knob (index $ef.beforeUnload $knob) $flag) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -227,9 +232,66 @@ writing the limit the same way as the request beside it.
 {{- if lt $coldMi $minColdMi -}}
 {{- fail (printf "%s.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (48.6MiB measured 2026-09-01). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $p $coldMi $minColdMi) -}}
 {{- end -}}
-{{/* Extra assertions that apply only to a ROUTED tier -- one Kong sends a known,
-     fixed set of function names to. The stable tier serves all 58 bundles and has
-     no route list, so `functions` is empty there and neither of these fires. */}}
+{{/* --max-parallelism IS PER SERVICE PATH, NOT PER POD. This assertion used to
+     require `2 x len(functions)` on the reasoning that a poke for one worker
+     would queue behind another. That failure mode cannot occur, and the
+     correction matters in both directions: the old form refused safe
+     configurations (5 routed names at maxParallelism 8 was rejected, demanding
+     10) and its remediation said "raise maxParallelism", which multiplies the
+     real per-path ceiling across EVERY path -- advice that increases the exposure
+     the memory budget already fails to bound.
+
+     Established from the runtime source, supabase/edge-runtime v1.74.0
+     (b1edf453), crates/base/src/worker/pool.rs -- read directly, not inferred
+     from behavior:
+
+       :242  active_workers: HashMap<String, ActiveWorkerRegistry>, keyed by
+             SERVICE PATH (the comment at :230 spells the mapping out).
+       :325  .entry(service_path).or_insert_with(||
+             ActiveWorkerRegistry::new(self.policy.max_parallelism)) -- every
+             distinct function name gets its OWN registry with a FULL allotment.
+       :169  that allotment is Semaphore::const_new(max_parallelism).
+       :341  permits are acquired per registry, stored in the worker profile at
+             :513, and released ONLY at :727 (profile.permit.take(), reached from
+             retire()). Nothing in the request path releases one, so a permit is
+             held for the ISOLATE's life, not the request's.
+       :343  in force_create mode the pool returns Create(None, tx) -- an isolate
+             holding no permit at all, with an in-source NOTE questioning exactly
+             that.
+
+     There is no global admission semaphore anywhere in the runtime. So function
+     A never waits on B's permits, and the per-POD ceiling is
+     (distinct paths served) x maxParallelism, not maxParallelism.
+
+     What remains true per path under per_worker: the isolate is reused across
+     requests, and beforeUnload recycling holds the retiring and the replacement
+     isolate for the same path at once. That needs 2 permits in ONE registry, and
+     is independent of how many functions are routed. Hence the constant.
+
+     Deliberately NOT scaled by $routed any more, and the message no longer
+     recommends raising the value. `metrics` needs no term here either: it gets
+     its own registry like everything else.
+
+     PLACEMENT, for the same reason the --policy guard above states it: this sat
+     inside `if $ef.functions` and so ran only on a ROUTED tier, even though
+     nothing it asserts is about routing -- one path needing two permits is a
+     property of per_worker, not of how many names Kong sends here. Since
+     `edgeFunctions.policy` DEFAULTS to per_worker, that left the request tier
+     and every preview able to render `--policy per_worker --max-parallelism 1`
+     clean while the identical pair on the worker tier was refused. It belongs
+     with the unconditional checks. */}}
+{{- if eq ($ef.policy | toString) "per_worker" -}}
+{{- if lt ($par | int) 2 -}}
+{{- fail (printf "%s.maxParallelism is %s, but policy per_worker needs at least 2. maxParallelism is per SERVICE PATH, not per pod (edge-runtime pool.rs keys active_workers by service path and gives each its own Semaphore(max_parallelism)), so this is not about how many functions the tier routes -- it is that ONE path needs two permits at once, because beforeUnload recycling holds the retiring isolate and its replacement together. Set it to at least 2. Note that RAISING it does not buy headroom safely: it raises the ceiling on EVERY path independently, so the pod's real isolate ceiling is (distinct paths served) x maxParallelism, which the memory budget does not bound." $p $par) -}}
+{{- end -}}
+{{- end -}}
+{{/* The one assertion that applies only to a ROUTED tier -- one Kong sends a
+     known, fixed set of function names to. The stable tier serves all 58 bundles
+     and has no route list, so `functions` is empty there and this does not fire.
+     Nothing else belongs in here: the per_worker/maxParallelism check used to,
+     and was wrong to, because it asserts a property of the POLICY rather than of
+     the routed set. Anything added below this `if` is worker-tier only, whether
+     or not it reads a worker-tier key. */}}
 {{- if $ef.functions -}}
 {{- $routed := len $ef.functions -}}
 {{/* A routed tier exists partly so it never evicts: it serves a handful of
@@ -266,50 +328,6 @@ writing the limit the same way as the request beside it.
 {{- if lt $cacheMi $cacheNeed -}}
 {{- fail (printf "%s.eszipCacheMaxMb is %dMi, below the %dMi needed to hold all %d hot bundles (%d routed + the `metrics` bundle that /metrics scrapes keep hot, x 37Mi median). A routed tier that evicts re-reads a bundle it will need again seconds later, which is the opposite of why the tier exists -- either raise the cache or shorten `functions`." $p $cacheMi $cacheNeed $hot $routed) -}}
 {{- end -}}
-{{/* --max-parallelism IS PER SERVICE PATH, NOT PER POD. This assertion used to
-     require `2 x len(functions)` on the reasoning that a poke for one worker
-     would queue behind another. That failure mode cannot occur, and the
-     correction matters in both directions: the old form refused safe
-     configurations (5 routed names at maxParallelism 8 was rejected, demanding
-     10) and its remediation said "raise maxParallelism", which multiplies the
-     real per-path ceiling across EVERY path -- advice that increases the exposure
-     the memory budget already fails to bound.
-
-     Established from the runtime source, supabase/edge-runtime v1.74.0
-     (b1edf453), crates/base/src/worker/pool.rs -- read directly, not inferred
-     from behaviour:
-
-       :242  active_workers: HashMap<String, ActiveWorkerRegistry>, keyed by
-             SERVICE PATH (the comment at :230 spells the mapping out).
-       :325  .entry(service_path).or_insert_with(||
-             ActiveWorkerRegistry::new(self.policy.max_parallelism)) -- every
-             distinct function name gets its OWN registry with a FULL allotment.
-       :169  that allotment is Semaphore::const_new(max_parallelism).
-       :341  permits are acquired per registry, stored in the worker profile at
-             :513, and released ONLY at :727 (profile.permit.take(), reached from
-             retire()). Nothing in the request path releases one, so a permit is
-             held for the ISOLATE's life, not the request's.
-       :343  in force_create mode the pool returns Create(None, tx) -- an isolate
-             holding no permit at all, with an in-source NOTE questioning exactly
-             that.
-
-     There is no global admission semaphore anywhere in the runtime. So function
-     A never waits on B's permits, and the per-POD ceiling is
-     (distinct paths served) x maxParallelism, not maxParallelism.
-
-     What remains true per path under per_worker: the isolate is reused across
-     requests, and beforeUnload recycling holds the retiring and the replacement
-     isolate for the same path at once. That needs 2 permits in ONE registry, and
-     is independent of how many functions are routed. Hence the constant.
-
-     Deliberately NOT scaled by $routed any more, and the message no longer
-     recommends raising the value. `metrics` needs no term here either: it gets
-     its own registry like everything else. */}}
-{{- if eq ($ef.policy | toString) "per_worker" -}}
-{{- if lt ($par | int) 2 -}}
-{{- fail (printf "%s.maxParallelism is %s, but policy per_worker needs at least 2. maxParallelism is per SERVICE PATH, not per pod (edge-runtime pool.rs keys active_workers by service path and gives each its own Semaphore(max_parallelism)), so this is not about how many functions the tier routes -- it is that ONE path needs two permits at once, because beforeUnload recycling holds the retiring isolate and its replacement together. Set it to at least 2. Note that RAISING it does not buy headroom safely: it raises the ceiling on EVERY path independently, so the pod's real isolate ceiling is (distinct paths served) x maxParallelism, which the memory budget does not bound." $p $par) -}}
-{{- end -}}
-{{- end -}}
 {{- end -}}
 {{/* The OTHER sizing invariant over this same block, asserted for the same reason
      the memory budget is: values.yaml states it in three comments
@@ -328,11 +346,21 @@ writing the limit the same way as the request beside it.
 {{- if lt $graceful $workerTimeoutS -}}
 {{- fail (printf "%s.gracefulExitTimeoutSeconds is %ds, below worker.timeoutMs (%dms = %ds). On SIGTERM the runtime stops intake and forcibly terminates after the graceful window, so the longest request it is willing to START cannot finish -- raise gracefulExitTimeoutSeconds to at least %d (and terminationGracePeriodSeconds above it), or lower worker.timeoutMs." $p $graceful ($ef.worker.timeoutMs | int) $workerTimeoutS $workerTimeoutS) -}}
 {{- end -}}
+{{- end -}}
+{{/* The SIGKILL backstop is checked UNCONDITIONALLY, outside the `graceful > 0`
+     gate above. It used to sit inside it, which made clearing
+     gracefulExitTimeoutSeconds -- the documented way to omit --graceful-exit-timeout
+     and the obvious first move for anyone trying to speed up rollouts -- switch
+     this check off rather than tighten it: `gracefulExitTimeoutSeconds: 0` with
+     `preStopSleepSeconds: 120` and `terminationGracePeriodSeconds: 30` rendered
+     clean, and the kubelet SIGKILLs 90s into the pod's own preStop sleep, before
+     edge-runtime has even seen SIGTERM. With a zero graceful window the invariant
+     is simply terminationGracePeriodSeconds >= preStopSleepSeconds, which is
+     still the thing worth asserting. */}}
 {{- $preStop := $ef.preStopSleepSeconds | default 0 | int -}}
 {{- $termGrace := $ef.terminationGracePeriodSeconds | default 30 | int -}}
 {{- if lt $termGrace (add $preStop $graceful) -}}
 {{- fail (printf "%s.terminationGracePeriodSeconds is %ds, below preStopSleepSeconds %ds + gracefulExitTimeoutSeconds %ds = %ds. terminationGracePeriodSeconds is only a SIGKILL BACKSTOP: below the sum the kubelet kills the container mid-drain, and these handlers act before they archive, so pgmq redelivers work whose side effect already happened (a duplicate notification email, a duplicate Discord post). Raise terminationGracePeriodSeconds to at least %d." $p $termGrace $preStop $graceful (add $preStop $graceful) (add $preStop $graceful)) -}}
-{{- end -}}
 {{- end -}}
 {{- $needMi := add $cacheMi $coldMi $isolatesMi $hostMi -}}
 {{- if and (gt $limitMi 0) (gt $needMi $limitMi) -}}

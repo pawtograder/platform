@@ -130,7 +130,19 @@ for f in "${fixtures[@]}"; do
   # promtool prints nothing per-unit on success, so the count comes from the
   # fixture. Reported because "SUCCESS" on a fixture that silently stopped being
   # parsed as tests would otherwise look identical to a real pass.
-  units="$(grep -cE '^  - interval:' "$f")"
+  # `grep -c` exits 1 on zero matches and this script has no `set -e`, so a
+  # fixture that stopped being parsed as tests would report "ok [x] 0 units
+  # passed" and leave the job green with no alert coverage at all -- the
+  # silently-inert failure this whole suite exists to close, reappearing one
+  # level up in the harness. Zero units is therefore a FAILURE, not a count.
+  units="$(grep -cE '^  - interval:' "$f" || true)"
+  if [ "${units:-0}" -eq 0 ]; then
+    echo "FAIL [$name]: no test units found (no '^  - interval:' entries)."
+    echo "      promtool exits 0 on a fixture with nothing to run, so this would"
+    echo "      otherwise pass with zero coverage. Check the fixture's indentation."
+    FAILED=1
+    continue
+  fi
   if promtool test rules "$WORK/$name" >"$WORK/test.out" 2>&1; then
     echo "ok   [$name] $units units passed"
   else

@@ -281,7 +281,7 @@ edgeFunctions:
     # number that moved most is the one the resizing was trying to hold still.
     # Accepted rather than re-tuned: the node budget absorbs it, and CPU requests
     # drop 2.8 cores over the same change. 5/3 is the same 1.67x scale ratio as
-    # 20/12, so burst BEHAVIOUR is unchanged even though absolute headroom is not.
+    # 20/12, so burst BEHAVIOR is unchanged even though absolute headroom is not.
     #
     # What this costs in concurrency is NOT 20x8 -> 5x8. `maxParallelism` is per
     # SERVICE PATH, not per pod — edge-runtime keys its worker registry by service
@@ -396,8 +396,12 @@ edgeFunctions:
   # this tier's included. A worker tier that cannot become ready turns an
   # ordinary staging deploy red — the same trap the canary channel's `image.tag`
   # comment above warns about. It inherits the request tier's envFromSecrets
-  # (all nine, including pawtograder-redis for the worker lease) and the same
-  # readiness probe, so it comes up on the same terms the request tier does.
+  # (the seven listed above) and gets the same two the workload template adds to
+  # every edge pod regardless of that list -- pawtograder-edge-functions, and
+  # pawtograder-redis for the worker lease, which is gated on redis.provider and
+  # NOT on envFromSecrets, so a per-tier envFromSecrets override could neither
+  # add nor remove it. Nine secretRefs in total, and the same readiness probe, so
+  # it comes up on the same terms the request tier does.
   workerTier:
     enabled: true
 

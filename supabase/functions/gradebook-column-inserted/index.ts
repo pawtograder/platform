@@ -24,14 +24,22 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 // inline specifier is the only thing that pins anything HERE.
 //
 // What this does NOT do, stated so the next reader does not assume otherwise:
-// it does not make the two gradebook functions agree. PER-FUNCTION locks are
-// tracked (`supabase/functions/gradebook-column-recalculate/deno.lock` is in
-// git) and the Dockerfile removes only the root one, so recalculate resolves
-// mathjs 14.9.1 deterministically while this file is now on 14.5.2 — a fixed
-// minor skew where there was a drifting major one. Closing it means either
-// bumping this pin to 14.9.1 or relaxing recalculate's lock, and neither should
-// happen without re-running the gradebook expression specs. `mcp-server` is
-// likewise still on `npm:minimatch@9`.
+// it does not make the two gradebook functions agree. One per-function lock is
+// tracked (`supabase/functions/gradebook-column-recalculate/deno.lock`) and the
+// Dockerfile removes only the root one, so recalculate resolves mathjs 14.9.1
+// deterministically while this file is now on 14.5.2 — a fixed minor skew where
+// there was a drifting major one. Closing it means either bumping this pin to
+// 14.9.1 or relaxing recalculate's lock, and neither should happen without
+// re-running the gradebook expression specs.
+//
+// That lock pins mathjs AND NOTHING ELSE, which is worth stating because the
+// paragraph above reads as though it pinned the whole function.
+// `npm:minimatch@^10.0.3` and `npm:@supabase/postgrest-js@^1.19.4` appear only
+// under `workspace.dependencies`, with no `specifiers` entry and no package in
+// the lock's `npm` section — so recalculate's minimatch still floats while this
+// file is pinned to 10.0.3, and those two functions are the WRITER and the
+// READER of the same `dependencies` column. `mcp-server` is likewise still on
+// `npm:minimatch@9`.
 //
 // And note the asymmetry that makes those inline pins load-bearing rather than
 // belt-and-braces: THIS directory has no tracked `deno.lock` of its own (only

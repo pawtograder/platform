@@ -1122,7 +1122,7 @@ edgeFunctions:
   # pod runs `--policy per_worker --max-parallelism 8`, and total container
   # restarts across all of them is 1. The ceiling is real but unrealized, because
   # a preview never serves anywhere near 58 distinct paths with resident isolates
-  # at once. Flipping the fleet-wide default is a behaviour change with an
+  # at once. Flipping the fleet-wide default is a behavior change with an
   # unmeasured throughput cost on the one workload that would feel it, and it does
   # not belong in a change about the worker tier.
   #

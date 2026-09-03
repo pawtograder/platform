@@ -188,6 +188,8 @@ fi
 # draining while the tool's last word was about the other tier. The patched tiers
 # need their status reported whatever happened to the others.
 rollout_failed=0
+ROLLED=""
+rollout_stalled=""
 # Timeout is DERIVED per deployment, because a fixed one was wrong in both
 # directions and the wrong direction that bit was "too short".
 #
@@ -222,12 +224,26 @@ for d in $PATCHED; do
   timeout=$((replicas * 60 + 300))
   [ "$timeout" -lt 600 ] && timeout=600
   echo "==> waiting for rollout: ${d} (${replicas} replicas, timeout ${timeout}s)"
-  kubectl rollout status "deploy/${d}" -n "$NAMESPACE" --timeout="${timeout}s" || rollout_failed=1
+  if kubectl rollout status "deploy/${d}" -n "$NAMESPACE" --timeout="${timeout}s"; then
+    ROLLED="$ROLLED $d"
+  else
+    rollout_failed=1
+    rollout_stalled="$rollout_stalled $d"
+  fi
 done
 
+# "Done." is per DEPLOYMENT and it has to mean what it says. This loop used to run
+# over $PATCHED, so a tier whose rollout timed out still got its own
+# "Done. <name> ... now runs <image>" line, followed by one generic "one or more
+# rollouts did not complete" -- an operator reading a per-Deployment success line
+# for the tier that is still on the old code, which is precisely the half-updated
+# fleet the rest of this block exists to surface.
 echo
-for d in $PATCHED; do
+for d in $ROLLED; do
   echo "Done. ${d} in ${NAMESPACE} now runs ${IMAGE_REF}"
+done
+for d in $rollout_stalled; do
+  echo "NOT ROLLED OUT: ${d} in ${NAMESPACE} was patched to ${IMAGE_REF} but its rollout did not complete -- some pods may still be on the previous image." >&2
 done
 if [ -n "$patch_failed" ]; then
   echo "SPLIT FLEET: these Deployments were NOT patched and are still on their previous image:${patch_failed}" >&2
