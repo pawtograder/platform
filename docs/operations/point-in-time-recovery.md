@@ -136,7 +136,7 @@ is already warm.
      #    pods gone and 3 cron jobs active, this procedure's gate printed
      #    "fence verified: no writer pods present" and ran `pg_ctl promote`.
      #
-     #    Record the active jobids first: step 5 resumes exactly those, and an
+     #    Record the active jobids first: step 6 resumes exactly those, and an
      #    `UPDATE cron.job SET active=true` with no WHERE would also enable jobs
      #    that were disabled on purpose.
      #
@@ -179,10 +179,10 @@ is already warm.
        # paused before the promote -- `UPDATE cron.job` needs a writable server
        # and the only one left is a standby in recovery. So do the half that is
        # possible: `cron.job` is replicated, so READ the active jobids off the
-       # STANDBY now (step 5 needs them, and after the promote they will have
+       # STANDBY now (step 6 needs them, and after the promote they will have
        # been set to false). Step 3 pauses them the instant the promoted node
        # leaves recovery, because a promoted node's pg_cron worker starts firing
-       # all ~20 jobs at once -- before step 4 has repointed any service and with
+       # all ~20 jobs at once -- before step 5 has repointed any service and with
        # every app writer still at 0.
        kubectl -n "$NS" exec <release>-postgres-replica-0 -c postgres -- psql -U supabase_admin \
          -d postgres -tAc "SELECT string_agg(jobid::text,',') FROM cron.job WHERE active;"
@@ -200,7 +200,7 @@ is already warm.
      #    and desired replicas -- a `-o wide` snapshot is not machine-readable,
      #    and the component column is what lets the restore loop re-check this
      #    file against the same allowlist) and the
-     #    edge-functions HPA. Step 5 said "step 2 in reverse" and had nothing
+     #    edge-functions HPA. Step 6 said "step 2 in reverse" and had nothing
      #    to reverse: this block captured no replica counts and no HPA at all.
      #
      #    FILTER THE CAPTURE THROUGH THE SAME ALLOWLIST THE FENCE USES. It was
@@ -215,7 +215,7 @@ is already warm.
      #    ON THIS PATH THAT WAS A SPLIT BRAIN, not just untidiness. The
      #    unfiltered capture recorded BOTH Postgres StatefulSets at their
      #    pre-failover counts, so `<release>-postgres` went into replicas.txt at
-     #    1. Step 6 scales the old primary to 0 and waits for it to exit; step 5
+     #    1. Step 3 scales the old primary to 0 and waits for it to exit; step 6
      #    then read replicas.txt and scaled it back to 1 -- before it had been
      #    rebuilt. It restarts as a SECOND writable primary on the abandoned
      #    timeline, archiving into the same `WALG_S3_PREFIX` as the promoted
@@ -255,7 +255,7 @@ is already warm.
        exit 1
      fi
      kubectl -n "$NS" get hpa -l "app.kubernetes.io/instance=<release>" -o yaml > "$STATE_DIR/hpa.yaml"
-     printf '\n>>> STATE_DIR=%s <<<  step 5 needs this EXACT path. Write it down.\n\n' "$STATE_DIR"
+     printf '\n>>> STATE_DIR=%s <<<  step 6 needs this EXACT path. Write it down.\n\n' "$STATE_DIR"
 
      # 2. Delete the edge-functions HPA, now that it is recorded. NOT because
      #    `kubectl scale --replicas=0` gets undone -- it does not: with
@@ -381,46 +381,106 @@ is already warm.
        fi
      fi
 
-     # 6. STOP THE OLD PRIMARY, and wait for its pod to actually go. Do this
-     #    LAST: steps 0 and 1 needed it alive to pause pg_cron and read state.
-     #
-     #    This step did not exist until 2026-09-03, and its absence made
-     #    everything above insufficient on the planned major-version path. Step 1
-     #    only "confirms the primary is really down" in prose. Nothing enforced
-     #    it, so `fenced` could pass with `<release>-postgres-0` up and Running:
-     #    the `<release>-postgres` Service still selects `component=postgres`, so
-     #    every in-cluster client that resolves it -- plus anything holding a
-     #    supavisor pooled connection, which this fence deliberately leaves up --
-     #    keeps committing to the OLD node. Promote on top of that and there are
-     #    two writable primaries sharing one `WALG_S3_PREFIX`, which is the split
-     #    brain step 1, the role-reversal warning under the promotion drill, and
-     #    the "no automatic leader election" note all exist to forbid.
-     #
-     #    The promotion drill has rehearsed this since it was written (step 3(a):
-     #    scale the StatefulSet to 0, then `wait --for=delete`). The real
-     #    procedure did not do the thing its own drill rehearses.
-     #
-     #    On the EMERGENCY path this is close to a no-op -- the pod is already
-     #    gone and `wait --for=delete` on a name that does not exist returns
-     #    immediately -- but it still pins the StatefulSet at 0 so nothing
-     #    reschedules it while you promote.
-     #
-     #    Safe now, and only now, because step 1 no longer records the Postgres
-     #    StatefulSets: `replicas.txt` is filtered to the writer allowlist, so
-     #    step 5's restore loop cannot scale this back to 1 behind your back.
-     kubectl -n "$NS" scale statefulset <release>-postgres --replicas=0
-     if ! kubectl -n "$NS" wait --for=delete pod/<release>-postgres-0 --timeout=180s; then
-       echo "STOP: <release>-postgres-0 is STILL PRESENT after 180s. Do NOT promote:" >&2
-       echo "  the <release>-postgres Service still selects it, so it can still be taking writes," >&2
-       echo "  and promoting now creates a second primary on a divergent timeline." >&2
-       exit 1
-     fi
-
-     echo "FENCED: pg_cron paused, write CronJobs suspended, every writer pod gone, OLD PRIMARY STOPPED."
+     echo "WRITERS FENCED: pg_cron paused, write CronJobs suspended, every writer pod gone."
+     echo "This block did NOT stop the old primary and has crossed no point of no return --"
+     echo "everything it did, a helm upgrade undoes. Step 3 is the irreversible one, and it is"
+     echo "a separate step on purpose so running this to orient yourself cannot trigger it."
    )
    ```
 
-3. **Promote the standby:**
+3. **Stop the old primary — THIS IS THE POINT OF NO RETURN.** Everything above
+   is reversible: `helm upgrade` puts the writers back. From here it is not.
+   Stopping the primary and promoting the standby branches a timeline, and the
+   old node's data is stale from that moment on. **Do not run this step to find
+   out where you are — run step 2 for that.**
+
+   It is a separate step for exactly that reason. It used to be step 6 _inside_
+   step 2's `( set -euo pipefail )` fence block, and that was wrong: "let me just
+   check whether we're fenced" is the single most likely way that block gets
+   executed, and it is what an operator does while still deciding whether to fail
+   over at all. A step 2 that stops production Postgres when someone was only
+   orienting themselves turns an information-gathering action into a destructive
+   one — a worse failure than one more numbered step. Step 2 now says so on the
+   way out, and `fenced` refuses to promote until this step has run, so the
+   ordering is still enforced; only the trigger moved.
+
+   **Order still matters.** This runs AFTER step 2, not before: step 2's step 0
+   needs the primary alive to pause pg_cron, and its step 1 needs it alive to
+   read the state it records.
+
+   ```bash
+   # WHY THIS IS REQUIRED, not just tidy. Step 1 "confirms the primary is really
+   # down" in prose and nothing enforced it, so `fenced` could pass with
+   # `<release>-postgres-0` up and Running: the `<release>-postgres` Service still
+   # selects `component=postgres`, so every in-cluster client that resolves that
+   # name -- plus anything holding a supavisor pooled connection on :6543, which
+   # the fence deliberately leaves up -- keeps committing to the OLD node.
+   # Promote on top of that and two writable primaries share one
+   # `WALG_S3_PREFIX`: the split brain step 1, the role-reversal warning under the
+   # promotion drill, and the "no automatic leader election" note all exist to
+   # forbid. On the planned major-version path from planned-maintenance.md the old
+   # primary is alive BY DESIGN, so this is the step that makes that path safe.
+   #
+   # The promotion drill has rehearsed this since it was written (its step 3(a):
+   # scale the StatefulSet to 0, then `wait --for=delete`). The real procedure did
+   # not do the thing its own drill rehearses.
+   #
+   # On the EMERGENCY path this is close to a no-op -- the pod is already gone and
+   # `wait --for=delete` on a name that does not exist returns immediately -- but
+   # it still pins the StatefulSet at 0 so nothing reschedules it while you
+   # promote.
+   #
+   # Safe to hold at 0 only because step 2's state capture no longer records the
+   # Postgres StatefulSets: `replicas.txt` is filtered to the writer allowlist, so
+   # step 6's restore loop cannot scale this back to 1 behind your back.
+   #
+   # 650s is DERIVED, and it was 180s -- under-budgeted by the same mistake the
+   # writer wait made at 300s. The primary's `terminationGracePeriodSeconds` is
+   # 600 (charts/pawtograder/values.yaml, `postgres`; no overlay overrides it),
+   # and the pod really can ride all of it: the `base-backup` and
+   # `postgres-exporter` sidecars have no preStop and no graceful SIGTERM
+   # handling, which is why postgres-statefulset.yaml records a needless primary
+   # restart as having "took the DB down ~10 min".
+   #     terminationGracePeriodSeconds 600s  kubelet SIGKILL backstop
+   #   + ~50s  container teardown and the pod object leaving the API
+   #   = 650s
+   # A 180s timeout would have fired on a perfectly healthy shutdown and told the
+   # operator "do NOT promote" in the middle of a real failover -- which is how a
+   # gate gets learned as noise and clicked through.
+   #
+   # RUN IT AS ONE `set -euo pipefail` SUBSHELL, for the reason step 2 does. A
+   # bare sequence here failed open twice in testing: a `kubectl scale` that
+   # errored (RBAC, a renamed StatefulSet) was ignored, and the `wait
+   # --for=delete` then returned successfully because the pod was already gone
+   # for some unrelated reason -- so the block printed "OLD PRIMARY STOPPED" with
+   # the StatefulSet still at 1, and the primary rescheduled underneath the
+   # promote. Wrapping it is not the thing that was wrong with this being inside
+   # step 2; being inside an OBSERVATIONAL block was.
+   (
+     set -euo pipefail
+     kubectl -n "$NS" scale statefulset <release>-postgres --replicas=0
+     # ASSERT the scale landed, rather than trusting that it returned. This is
+     # the positive check `wait --for=delete` cannot make: an absent pod proves
+     # nothing about `spec.replicas`, and `spec.replicas` is what stops it coming
+     # back while you promote.
+     want0="$(kubectl -n "$NS" get statefulset <release>-postgres -o jsonpath='{.spec.replicas}')"
+     if [ "$want0" != "0" ]; then
+       echo "STOP: <release>-postgres .spec.replicas is '$want0', not 0 -- the scale did not land." >&2
+       echo "  Do NOT promote: the StatefulSet will recreate the primary underneath you." >&2
+       exit 1
+     fi
+     if ! kubectl -n "$NS" wait --for=delete pod/<release>-postgres-0 --timeout=650s; then
+       echo "STOP: <release>-postgres-0 is STILL PRESENT after the full 650s shutdown window." >&2
+       echo "  Do NOT promote: the <release>-postgres Service still selects it, so it can still" >&2
+       echo "  be taking writes, and promoting now creates a second primary on a divergent" >&2
+       echo "  timeline with both archiving into the same WALG_S3_PREFIX." >&2
+       exit 1
+     fi
+     echo "OLD PRIMARY STOPPED. The point of no return is behind you; continue to step 4."
+   )
+   ```
+
+4. **Promote the standby:**
 
    ```bash
    # HARD GATE, and it is chained with `&&` on purpose: the destructive command
@@ -500,7 +560,7 @@ is already warm.
      #
      # So the pg_cron sub-check is gone from here, replaced by the stronger
      # condition that subsumes it: no primary pod, therefore no pg_cron on the
-     # primary and no client writes to it either. Step 2's step 6 is what makes this
+     # primary and no client writes to it either. Step 3 is what makes this
      # satisfiable (scale the StatefulSet to 0, wait for the pod), and it is safe
      # to hold at 0 because that step's state capture no longer records the
      # Postgres StatefulSets into `replicas.txt`.
@@ -513,9 +573,9 @@ is already warm.
        echo "NOT FENCED: the OLD PRIMARY ($primary pod) is still running -- refusing to promote." >&2
        echo "  The <release>-postgres Service still selects it, so it can still be taking writes." >&2
        echo "  Promoting now creates a second writable primary on a divergent timeline, both" >&2
-       echo "  archiving into the same WALG_S3_PREFIX. Run step 2's step 6 first:" >&2
+       echo "  archiving into the same WALG_S3_PREFIX. Run step 3 first:" >&2
        echo "    kubectl -n \"$NS\" scale statefulset <release>-postgres --replicas=0" >&2
-       echo "    kubectl -n \"$NS\" wait --for=delete pod/<release>-postgres-0 --timeout=180s" >&2
+       echo "    kubectl -n \"$NS\" wait --for=delete pod/<release>-postgres-0 --timeout=650s" >&2
        return 1
      fi
      # pg_cron: report, do not gate, and be explicit about why. `cron.job` rows
@@ -540,7 +600,7 @@ is already warm.
    # Promote and VERIFY as one sequence under `set -e`. The two loose commands
    # this replaces had three separate defects:
    #   * The `pg_is_in_recovery()` result was printed and never checked, so a
-   #     FAILED promote led straight into step 4 repointing every service at a
+   #     FAILED promote led straight into step 5 repointing every service at a
    #     standby still in recovery -- a read-only server, with all writers at 0.
    #   * The trailing psql MASKED the gate. Executed with `fenced` refusing, the
    #     promote was correctly skipped and the block still exited 0, because a
@@ -572,13 +632,13 @@ is already warm.
          echo "PROMOTED: out of recovery, writable, xid allocated -- $out"
          # PAUSE pg_cron ON THE NEW PRIMARY, immediately, before returning. The
          # node has just left recovery, so pg_cron's worker is now free to launch
-         # every job still marked active -- all ~20 at once, while step 4 has not
+         # every job still marked active -- all ~20 at once, while step 5 has not
          # repointed a single service and every app writer is still at 0. On the
          # planned path step 2 already paused them and it replicated, so this is
          # 0 rows and idempotent. On the emergency path step 2 could NOT pause
          # them (you cannot UPDATE a standby), so this is the only place it can
          # happen -- which is why it is here in code and not an obligation in
-         # prose. Step 2 recorded the jobids off the standby for step 5 to resume.
+         # prose. Step 2 recorded the jobids off the standby for step 6 to resume.
          kubectl -n "$NS" exec <release>-postgres-replica-0 -c postgres -- psql -U supabase_admin \
            -d postgres -c "UPDATE cron.job SET active=false WHERE active;"
          exit 0
@@ -586,7 +646,7 @@ is already warm.
        sleep 2
      done
      echo "PROMOTE UNVERIFIED after 60s: not confirmed out of recovery AND writable." >&2
-     echo "Do NOT repoint services in step 4 -- they would land on a read-only server." >&2
+     echo "Do NOT repoint services in step 5 -- they would land on a read-only server." >&2
      exit 1
    )
    ```
@@ -595,9 +655,9 @@ is already warm.
    the shared config) **starts archiving** to `WALG_S3_PREFIX` on a new
    timeline — so the archive continues from the new primary.
 
-4. **Repoint services at the new primary.** The services address the primary by
+5. **Repoint services at the new primary.** The services address the primary by
    the `<release>-postgres` Service name. The old primary is already stopped —
-   that moved into step 2's step 6, because it is a precondition of promoting at
+   that moved into step 3, because it is a precondition of promoting at
    all rather than a cutover detail, and `fenced` now refuses while its pod
    exists. So what is left here is the redirect:
 
@@ -608,13 +668,13 @@ is already warm.
    ```
 
    The cleaner end state is to promote the standby's data into a **rebuilt
-   primary** (step 6) so the chart's own identity holds again. This patch is the
+   primary** (step 7) so the chart's own identity holds again. This patch is the
    emergency redirect that gets writes flowing in the meantime — record it,
    because it is hand-owned state that a `helm upgrade` will revert (see the
-   warning in step 5).
+   warning in step 6).
 
-5. **Scale writers back up — step 2 in reverse, from what step 2 recorded.**
-   The pg_cron resume runs against the **new** primary, resolved from what step 4
+6. **Scale writers back up — step 2 in reverse, from what step 2 recorded.**
+   The pg_cron resume runs against the **new** primary, resolved from what step 5
    made the `<release>-postgres` Service select rather than from a hardcoded pod
    name; the jobids are the ones step 2 printed (from the old primary on the
    planned path, from the standby's replicated copy on the emergency one):
@@ -641,7 +701,7 @@ is already warm.
    grep -qx "release: <release>" "$STATE_DIR/META" || { echo "STOP: $STATE_DIR was recorded for a DIFFERENT release" >&2; exit 1; }
 
    # 1. RESOLVE THE PRIMARY POD, do not name it. This line said
-   #    `<release>-postgres-0` -- the pod step 2's step 6 scaled to zero and
+   #    `<release>-postgres-0` -- the pod step 3 scaled to zero and
    #    waited for, or that was already gone. The exec therefore returned
    #    NotFound, and because the failure sat above the loops that follow with
    #    nothing to stop them, every paused pg_cron job stayed DISABLED while the
@@ -649,7 +709,7 @@ is already warm.
    #    only symptom is gradebook recalculation, deadline checks and sync never
    #    running again. Nothing alerts on that.
    #
-   #    Ask the Service which pod is the primary now, because step 4 is what
+   #    Ask the Service which pod is the primary now, because step 5 is what
    #    decided: it patches `spec.selector.app.kubernetes.io/component`, so that
    #    field is the answer whether the cutover was the Service repoint or a
    #    rebuilt primary.
@@ -732,8 +792,8 @@ is already warm.
    at 0 — and it renders the `<release>-postgres` Service with
    `selector: app.kubernetes.io/component=postgres` in the **same template**. So
    a `helm upgrade` at this point does two things at once: it restarts the
-   abandoned old primary that step 2's step 6 stopped, and it resets the Service
-   selector step 4 patched. Traffic moves off the promoted node back onto a node
+   abandoned old primary that step 3 stopped, and it resets the Service
+   selector step 5 patched. Traffic moves off the promoted node back onto a node
    holding stale data on a dead timeline, and both are archiving into one
    `WALG_S3_PREFIX`. That is the same split brain the whole procedure is built
    around, arriving via the command the other two runbooks tell you to run.
@@ -746,18 +806,18 @@ is already warm.
    `metadata.resourceVersion`, `metadata.creationTimestamp`, `metadata.generation`
    and `status` and re-apply; nothing else in the object needs editing.
 
-   **Reconcile the release only after step 6**, once the promoted data is back
+   **Reconcile the release only after step 7**, once the promoted data is back
    under the chart's normal primary identity and a rendered `replicas: 1` on
    `<release>-postgres` is the state you actually want. Until then the cluster is
    deliberately running a hand-patched Postgres identity, and every full
    reconcile fights it. Note that this cuts both ways: a **push-based or
    continuously-reconciled deploy path will do this to you unasked** — so the
-   deploy source must be paused for the whole window between step 2 and step 6,
+   deploy source must be paused for the whole window between step 2 and step 7,
    the same pause planned-maintenance.md describes before its step 1.
 
    Then run the [smoke checklist](./production-install.md#smoke-test).
 
-6. **Rebuild a new standby.** After failover you have a single primary again.
+7. **Rebuild a new standby.** After failover you have a single primary again.
    Delete the old primary's PVC and re-create the standby (it re-bootstraps from
    the new primary via `pg_basebackup`) so you are protected against the next
    failure.
@@ -858,12 +918,19 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
    # (a) Fence the old primary, and WAIT for it to actually exit — scaling the
    #     StatefulSet to 0 does not prove drill-postgres-0 has stopped, and promoting
    #     while it is still up risks a split brain. The drill has done this since
-   #     it was written; the real procedure did not, until step 2's step 6 was
+   #     it was written; the real procedure did not, until step 3 was
    #     added on 2026-09-03 and `fenced` was taught to refuse while a primary
    #     pod exists. So this pair of lines is now a rehearsal of the real thing
    #     rather than a discipline the drill had to itself.
+   #     650s, not 120s, and DERIVED for the reason step 3 gives: the preview
+   #     overlay does not override `postgres.terminationGracePeriodSeconds`, so
+   #     the drill's primary has the same 600s grace window and the same two
+   #     preStop-less sidecars as production's. 120s was under-budgeted by the
+   #     same mistake the writer wait made at 300s -- and a drill that times out
+   #     on a healthy shutdown teaches the operator that this gate is noise,
+   #     which is the opposite of what a rehearsal is for.
    kubectl -n "$DRILL_NS" scale statefulset drill-postgres --replicas=0
-   kubectl -n "$DRILL_NS" wait --for=delete pod/drill-postgres-0 --timeout=120s
+   kubectl -n "$DRILL_NS" wait --for=delete pod/drill-postgres-0 --timeout=650s
    # (b) Promote the standby. pg_ctl refuses to run as root, and in THIS overlay
    #     `kubectl exec` enters as root, so drop to the postgres user. That is a
    #     property of the overlay, not of the image: the preview overlay used by
