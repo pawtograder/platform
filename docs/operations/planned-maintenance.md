@@ -336,30 +336,60 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
        exit 1
      fi
 
-     # 1. Record what to restore: writer Deployments + the realtime StatefulSet
-     #    (name, kind and desired replicas — a `-o wide` snapshot is not
-     #    machine-readable), and the HPA YAML.
+     # 1. Record what to restore, and record it BEFORE anything is mutated:
+     #    writer Deployments + the realtime StatefulSet (kind, name, component
+     #    and desired replicas -- a `-o wide` snapshot is not machine-readable,
+     #    and the component column is what lets the restore loop re-check this
+     #    file against the same allowlist) and the
+     #    edge-functions HPA. Step 5 restores from this file, so what is in it is
+     #    exactly what step 5 will scale.
      #
-     #    `-l app.kubernetes.io/instance=<release>` scopes this to THIS release.
-     #    Without it the snapshot picks up every Deployment and StatefulSet in the
-     #    namespace, and step 5 then "restores" whatever unrelated workload
-     #    happens to share it — to whatever replica count it had at fence time,
-     #    which is not step 5's business to set.
+     #    FILTER THE CAPTURE THROUGH THE SAME ALLOWLIST THE FENCE USES. It was
+     #    `get deploy,statefulset -l instance=<release>` with no component
+     #    filter, which is release-wide -- so it recorded `postgres`,
+     #    `postgres-replica`, `kong`, `supavisor`, `maintenance`, `imgproxy`,
+     #    `smtp-relay` and `redis` too, and the restore step then set every one
+     #    of them to its fence-time replica count. Three lines of comment above
+     #    claimed it recorded "writer Deployments + the realtime StatefulSet";
+     #    the code did something else. Here that meant step 5 setting the postgres
+     #    StatefulSet back to its fence-time replicas -- harmless only because it
+     #    was never scaled down; on the promote path in point-in-time-recovery.md
+     #    the identical capture restarted the abandoned old primary.
+     #    Recording only what the fence scales makes the restore structurally
+     #    incapable of touching anything else.
      #
-     #    Everything lands in ONE timestamped directory whose path is PRINTED,
-     #    because step 5 has to find it again and cannot inherit a variable across
-     #    this subshell. Step 5 read `done < /tmp/pg-maint-replicas-*.txt`: on the
-     #    SECOND window on the same jump host that glob matches two files and bash
-     #    refuses with `ambiguous redirect`, so the loop restored NOTHING and the
-     #    fleet stayed at 0 replicas behind the maintenance page, mid-outage.
-     #    Executed: one file rc=0 and both workloads restored; two files rc=1 and
-     #    zero scale calls issued.
-     STATE_DIR="/tmp/pg-maint-$(date +%s)"; mkdir -p "$STATE_DIR"
-     kubectl -n "$NS" get deploy,statefulset -l "app.kubernetes.io/instance=<release>" \
-       -o jsonpath='{range .items[*]}{.kind}{"\t"}{.metadata.name}{"\t"}{.spec.replicas}{"\n"}{end}' \
-       > "$STATE_DIR/replicas.txt"
+     #    `-l app.kubernetes.io/instance=<release>` still scopes it to THIS
+     #    release, so an unrelated workload sharing the namespace is neither
+     #    recorded nor "restored".
+     #
+     #    `mktemp -d`, not `/tmp/pg-maint-$(date +%s)`: two runs started in the
+     #    same second shared one directory, and the restore step's `ls -dt |
+     #    head -1` could then hand you an EARLIER run's state. The META file is
+     #    how the restore step proves it is reading the right run's directory
+     #    rather than trusting mtime.
+     STATE_DIR="$(mktemp -d "/tmp/pg-maint-XXXXXXXX")"
+     {
+       echo "procedure: planned-maintenance (postgres node bounce)"
+       echo "release: <release>"
+       echo "namespace: $NS"
+       echo "started: $(date -Is)"
+       echo "operator: ${USER:-unknown}@$(hostname)"
+     } > "$STATE_DIR/META"
+     jpr='{range .items[*]}{.kind}{"\t"}{.metadata.name}{"\t"}{.metadata.labels.app\.kubernetes\.io/component}{"\t"}{.spec.replicas}{"\n"}{end}'
+     # NOTE the redirect stays on the awk line. A continuation line that STARTS
+     # with `>` is a shell redirect to markdown and a blockquote marker to
+     # anything that strips prefixes -- including this repo's own block-extraction
+     # harness, which ate it and silently verified a pipeline with no output file.
+     kubectl -n "$NS" get deploy,statefulset -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jpr" \
+       | awk -F'\t' -v OFS='\t' '$3 ~ /^(web|rest|auth|storage|functions|realtime|meta|studio)(-.+)?$/ { print $1, $2, $3, $4 }' > "$STATE_DIR/replicas.txt"
+     # awk exits 0 on no matches, so the empty case needs its own guard -- the
+     # same "matched nothing" shape as the fence's NOTHING MATCHED below.
+     if [ ! -s "$STATE_DIR/replicas.txt" ]; then
+       echo "STOP: recorded ZERO writer workloads -- wrong release name or namespace. Nothing to restore later; do not proceed." >&2
+       exit 1
+     fi
      kubectl -n "$NS" get hpa -l "app.kubernetes.io/instance=<release>" -o yaml > "$STATE_DIR/hpa.yaml"
-     echo "prior state recorded in $STATE_DIR -- step 5 reads it back. Note the path down."
+     printf '\n>>> STATE_DIR=%s <<<  step 5 needs this EXACT path. Write it down.\n\n' "$STATE_DIR"
 
      # 2. DELETE the edge-functions HPA (recorded above), then scale the writer
      #    tiers to 0. It cannot be "paused" instead: minReplicas:0 needs the
@@ -766,23 +796,49 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
      to their **prior** values:
 
      ```bash
-     # $STATE_DIR did not survive step 1: it was assigned inside that step's
-     # `( set -euo pipefail )` subshell. Use the path step 1 printed; `ls -dt`
-     # picks the newest if you did not note it down.
+     # PASS THE PATH IN -- do not rediscover it. Step 1 printed
+     # `>>> STATE_DIR=... <<<`; export it or paste it here. `$STATE_DIR` does not
+     # survive step 1, which assigned it inside a `( set -euo pipefail )`
+     # subshell.
      #
-     # This was `done < /tmp/pg-maint-replicas-*.txt`, a GLOB in a redirect.
-     # Step 1 timestamps the filename deliberately, so the files accumulate: on
-     # the second window on the same jump host the glob matches two files, bash
-     # refuses with `ambiguous redirect`, and the loop restores NOTHING -- the
-     # fleet stays at 0 replicas behind the maintenance page, mid-outage, and the
-     # only signal is one line of stderr in a step that "ran".
-     STATE_DIR="$(ls -dt /tmp/pg-maint-* | head -1)"
-     [ -s "$STATE_DIR/replicas.txt" ] || { echo "no recorded state in $STATE_DIR -- do NOT guess replica counts" >&2; exit 1; }
-     echo "restoring from $STATE_DIR"
+     # This was `STATE_DIR="$(ls -dt /tmp/pg-maint-* | head -1)"`, and before that
+     # `done < /tmp/pg-maint-replicas-*.txt` -- a glob in a redirect, which on a
+     # second run refused with `ambiguous redirect` and restored NOTHING. `ls -dt`
+     # fixed that and left a subtler one: the directory name was
+     # `$(date +%s)`-suffixed, so two runs started in the SAME SECOND shared one
+     # directory, and mtime ordering can hand you an earlier run's state either
+     # way. `mktemp -d` makes the collision impossible; requiring the path makes
+     # choosing the wrong directory impossible; the META check below makes acting
+     # on someone else's run impossible.
+     : "${STATE_DIR:?set STATE_DIR to the exact path step 1 printed}"
+     [ -s "$STATE_DIR/replicas.txt" ] || { echo "no recorded writer state in $STATE_DIR -- do NOT guess replica counts" >&2; exit 1; }
+     cat "$STATE_DIR/META"        # confirm procedure/release/namespace/time before acting
+     grep -qx "namespace: $NS" "$STATE_DIR/META" || { echo "STOP: $STATE_DIR was recorded for a DIFFERENT namespace" >&2; exit 1; }
+     grep -qx "release: <release>" "$STATE_DIR/META" || { echo "STOP: $STATE_DIR was recorded for a DIFFERENT release" >&2; exit 1; }
 
      kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
        -d postgres -c "UPDATE cron.job SET active=true WHERE jobid = ANY(ARRAY[<recorded-jobids>]::bigint[]);"
-     while IFS=$'\t' read -r kind name replicas; do
+       # VALIDATE THE WHOLE FILE BEFORE SCALING ANYTHING, against the SAME allowlist
+     # the capture uses. The capture filters, so a file this runbook wrote cannot
+     # contain a non-writer -- but one hand-edited, copied from an older run, or
+     # written before the capture was filtered can, and this loop is the
+     # destructive end. Executed against a file carrying
+     # `StatefulSet pawtograder-postgres postgres 1`, the unguarded loop scaled
+     # Postgres back to 1. A PRE-PASS rather than a check inside the loop, so a
+     # bad row cannot be reached after some rows have already been scaled.
+     bad="$(awk -F'\t' '$3 !~ /^(web|rest|auth|storage|functions|realtime|meta|studio)(-.+)?$/ { print $1 "/" $2 " (component=" $3 ")" }' "$STATE_DIR/replicas.txt")"
+     if [ -n "$bad" ]; then
+       echo "STOP: $STATE_DIR/replicas.txt lists non-writer workloads. Scaling NOTHING:" >&2
+       echo "$bad" | sed 's/^/  /' >&2
+       echo "  Restoring Postgres from a state file is how the promote path restarted an" >&2
+       echo "  abandoned primary onto a dead timeline. Fix the file; do not run past this." >&2
+       exit 1
+     fi
+     # `component` is read only to consume the third field; the pre-pass above
+     # is what validates it. Named rather than `_` so the file format stays
+     # legible to whoever reads this next.
+     # shellcheck disable=SC2034  # positional field, checked in the pre-pass
+     while IFS=$'\t' read -r kind name component replicas; do
        kubectl -n "$NS" scale "${kind,,}" "$name" --replicas="$replicas"
      done < "$STATE_DIR/replicas.txt"
 
