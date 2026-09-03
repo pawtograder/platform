@@ -104,12 +104,43 @@ strategy early buys nothing at all. `OnDelete` has to stay in place until the
 window; the pod delete is what applies the template, and the second patch just
 returns the StatefulSet to its normal mode afterwards.
 
-Two more caveats, both load-bearing. The exporter sidecar keeps its previously
-mounted `queries.yaml` for as long as the pod lives, so this is safe only when
-the upgrade does not change the queries themselves — true for 0.4.0, where the
-rendered ConfigMap is byte-identical to 0.3.17 and only the hash's input
-narrowed, but confirm it with `helm diff` before assuming it on any later
-version. And while the StatefulSet sits on `OnDelete`, *every* postgres
+Two more caveats, both load-bearing.
+
+**First: safe only if the exporter's queries are unchanged — and not for the
+reason you would guess.** Deferring the roll is safe only when the upgrade does
+not change the postgres_exporter `queries.yaml` — true for 0.4.0, where the
+rendered ConfigMap is byte-identical to 0.3.17 and only the *input* to the
+primary's `checksum/config` narrowed, but confirm it with `helm diff` before
+assuming it on any later version.
+
+The reason is *not* that the sidecar keeps its previously mounted file. The
+ConfigMap is mounted at the directory `/etc/postgres-exporter` with **no
+`subPath`**, so the kubelet does refresh that file inside the live container
+shortly after the ConfigMap changes. What does not refresh is the *process*:
+postgres_exporter v0.18.0 reads `PG_EXPORTER_EXTEND_QUERY_PATH` once at startup
+and exposes no reload flag and no `/-/reload` endpoint, so a new file is never
+re-parsed. That is documented behaviour for the release the chart pins, not
+something verified against the exporter's source here — but it is the premise the
+`checksum/config` annotation exists on: a restart is the only way to pick up new
+queries, which is why the chart hashes them into the pod template at all.
+
+The trap that the wrong reason hides: during an `OnDelete` window,
+`kubectl exec <pod> -c postgres-exporter -- cat /etc/postgres-exporter/queries.yaml`
+shows the **new** file while the process is still serving the **old** parse. The
+file is not evidence about what the exporter is collecting. Check for the metric
+in Prometheus, not for the query in the file.
+
+The instructive contrast is in the same pod. The **main postgres container**
+mounts its config volume with a `subPath` for every entry (`postgresql.conf`,
+`pg_hba.conf`, and the four init scripts), and a `subPath` mount is a one-time
+copy the kubelet never updates. So for `postgresql.conf` or `pg_hba.conf` a
+ConfigMap edit does not reach the running container *at all* — there is no
+refreshed file to be misled by, and only the pod replacement applies it. Two
+mounts in one pod, two different staleness mechanisms, one operational
+conclusion: the restart is what applies config.
+
+**Second: `OnDelete` suspends every other postgres change too.** While the
+StatefulSet sits on `OnDelete`, *every* postgres
 pod-template change stops rolling, not just this one: an image bump, a resource
 change, a `postgresql.conf` edit all land silently and apply only on the next
 pod delete. The chart does not manage `updateStrategy`, so Helm will not restore
