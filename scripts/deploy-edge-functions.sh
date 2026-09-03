@@ -223,6 +223,33 @@ for d in $PATCHED; do
   esac
   timeout=$((replicas * 60 + 300))
   [ "$timeout" -lt 600 ] && timeout=600
+  # The 60s/replica term is calibrated on the REQUEST tier, whose drains are
+  # ~0.3s because its requests are short -- that is what the 24-pod prod deploy
+  # measured. The WORKER tier is the opposite: its pods hold leased pgmq batches,
+  # so using the full graceful-exit window is its NORMAL drain, not a pathological
+  # one. At 2 replicas the formula above yields the 600s floor while a serial
+  # rollout legitimately needs 2 x (preStop + graceful exit) ~= 840s, so a healthy
+  # worker-tier rollout timed out and reported failure.
+  #
+  # Floor it instead at "two full drain windows", read from the Deployment's own
+  # terminationGracePeriodSeconds rather than a hardcoded 430. Two, not N: the
+  # rollout is serial, but budgeting every replica a full drain is the
+  # 24 x 430s = 172min worst case this block deliberately refuses to size for. At
+  # 24 replicas the 60s/replica term already exceeds this floor, so the request
+  # tier is unchanged; at 2 it is what saves the rollout.
+  grace="$(kubectl get "deploy/${d}" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}' 2>/dev/null || echo "")"
+  case "$grace" in
+    '' | *[!0-9]*) grace=0 ;; # unreadable: keep the replica-derived timeout
+  esac
+  if [ "$grace" -gt 0 ]; then
+    drains="$replicas"
+    [ "$drains" -gt 2 ] && drains=2
+    # +30s per drain for the replacement pod reaching readiness (tcpSocket,
+    # initialDelay 5s + period 5s), +300s for a cold image pull on a new node.
+    drain_floor=$((drains * (grace + 30) + 300))
+    [ "$timeout" -lt "$drain_floor" ] && timeout="$drain_floor"
+  fi
   echo "==> waiting for rollout: ${d} (${replicas} replicas, timeout ${timeout}s)"
   if kubectl rollout status "deploy/${d}" -n "$NAMESPACE" --timeout="${timeout}s"; then
     ROLLED="$ROLLED $d"

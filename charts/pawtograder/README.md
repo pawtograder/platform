@@ -84,22 +84,36 @@ Kubernetes default of `RollingUpdate`; patching it to `OnDelete` lets the new po
 template land without restarting the primary:
 
 ```bash
+# BEFORE the upgrade
 kubectl patch statefulset <release>-postgres -n <ns> \
   -p '{"spec":{"updateStrategy":{"type":"OnDelete"}}}'
+
 helm upgrade ...          # new pod template is recorded; the primary keeps running
+
+# ... LATER, in the maintenance window, and not before:
+kubectl delete pod <release>-postgres-0 -n <ns>     # applies the new template
 kubectl patch statefulset <release>-postgres -n <ns> \
   -p '{"spec":{"updateStrategy":{"type":"RollingUpdate"}}}'
 ```
 
-Two caveats, both load-bearing. The exporter sidecar keeps its previously mounted
-`queries.yaml` until the pod is next deleted, so this is safe only when the
-upgrade does not change the queries themselves — true for 0.4.0, where the
+**Do not restore `RollingUpdate` straight after the upgrade.** The StatefulSet
+would then hold an outdated pod under a strategy whose whole job is to replace
+outdated pods, and the controller does exactly that — immediately, and outside
+any window. That is the restart this procedure exists to defer, so restoring the
+strategy early buys nothing at all. `OnDelete` has to stay in place until the
+window; the pod delete is what applies the template, and the second patch just
+returns the StatefulSet to its normal mode afterwards.
+
+Two more caveats, both load-bearing. The exporter sidecar keeps its previously
+mounted `queries.yaml` for as long as the pod lives, so this is safe only when
+the upgrade does not change the queries themselves — true for 0.4.0, where the
 rendered ConfigMap is byte-identical to 0.3.17 and only the hash's input
 narrowed, but confirm it with `helm diff` before assuming it on any later
-version. And because the chart does not manage `updateStrategy`, Helm will not
-revert the patch for you: leave it on `OnDelete` and every subsequent postgres
-pod-template change stops rolling too, silently. Patch it back in the same
-sitting. See
+version. And while the StatefulSet sits on `OnDelete`, *every* postgres
+pod-template change stops rolling, not just this one: an image bump, a resource
+change, a `postgresql.conf` edit all land silently and apply only on the next
+pod delete. The chart does not manage `updateStrategy`, so Helm will not restore
+it for you. Track it, and keep the window short. See
 [incident-response.md](../../docs/operations/incident-response.md).
 
 `autoscaling.targetMemoryUtilizationPercentage` is **unchanged** at 80: it was
