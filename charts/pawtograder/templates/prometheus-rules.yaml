@@ -834,9 +834,9 @@ spec:
            `metrics` FUNCTION (supabase/functions/metrics/index.ts) and gets back
            exactly what that function prints, which is pawtograder_* and nothing
            else. There is no code path by which a deno_* series reaches
-           Prometheus. The dashboard panels in dashboards/edge-functions.json that
-           select on it are consequently empty today -- pre-existing, not
-           introduced by this tier, and tracked separately.
+           Prometheus. The five dashboard panels in dashboards/edge-functions.json
+           that select on it are consequently empty today -- pre-existing, not
+           introduced by this tier, and tracked in #951.
 
            kong_http_requests_total is the right signal anyway, and not merely the
            available one: the question is "which upstream did the GATEWAY pick",

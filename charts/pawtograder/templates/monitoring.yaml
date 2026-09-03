@@ -617,15 +617,28 @@ spec:
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 {{- end }}
 ---
-# ServiceMonitor: edge-functions. edge-runtime v1.74 serves Prometheus metrics
-# (deno_http_requests_total, pawtograder_*) at /metrics on the http port,
-# optionally gated by a Bearer token — the runtime enforces METRICS_TOKEN only
-# when that env value is set (metrics/index.ts: no token => open /metrics).
-# The credential is `optional: true` so a deploy that DOESN'T set METRICS_TOKEN
-# (e.g. staging, where edge /metrics is intentionally unauthed) still scrapes:
-# without optional, the missing Secret key makes the Prometheus Operator reject
-# this whole ServiceMonitor, silently dropping the edge target (rate-limiting
-# dashboard goes dark). When the key IS present, the token is sent as required.
+# ServiceMonitor: edge-functions. /metrics on the http port serves the fifteen
+# `pawtograder_*` families and NOTHING ELSE — in particular no deno_* series.
+# This comment asserted the opposite (that edge-runtime v1.74 serves
+# deno_http_requests_total here) until 0.4.0. The claim was never true of THIS
+# image, whatever the upstream runtime does: it replaces the runtime's main
+# service with our own demuxer (images/edge-functions/main.ts), whose Deno.serve
+# handler dispatches EVERY path by its first segment, /metrics included. So a
+# scrape of /metrics runs the `metrics` FUNCTION and returns exactly what
+# supabase/functions/metrics/index.ts prints. Checked against live Prometheus
+# rather than inferred: of 3700 metric names in the cluster, zero begin with
+# `deno`. The five panels in dashboards/edge-functions.json that select on
+# deno_http_requests_total have therefore been empty since they were written —
+# pre-existing, and tracked in #951 rather than fixed here.
+#
+# Access is optionally gated by a Bearer token — the runtime enforces
+# METRICS_TOKEN only when that env value is set (metrics/index.ts: no token =>
+# open /metrics). The credential is `optional: true` so a deploy that DOESN'T
+# set METRICS_TOKEN (e.g. staging, where edge /metrics is intentionally
+# unauthed) still scrapes: without optional, the missing Secret key makes the
+# Prometheus Operator reject this whole ServiceMonitor, silently dropping the
+# edge target (rate-limiting dashboard goes dark). When the key IS present, the
+# token is sent as required.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -634,28 +647,50 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
 spec:
-  {{- /* TWO SHAPES, GATED ON THE TIER, and the gate is about the Postgres
-     PRIMARY rather than about monitoring.
+  {{- /* TWO SHAPES, GATED ON THE TIER. This gate USED TO BE about the Postgres
+     primary. As of 0.4.0 it is not, and the old reason is recorded here because
+     it is the reason the gate exists at all.
 
-     postgres-statefulset.yaml hashes the rendered text of this file (plus
-     postgres-config.yaml) into the primary's pod-template `checksum/config`,
-     stripping only lines carrying helm.sh/chart, app.kubernetes.io/version,
-     interval or scrapeTimeout. That strip exists so a chart bump or a
-     scrape-cadence tweak does not roll the database for no reason. An edit to
-     THIS selector matches none of those patterns, so when the matchExpressions
-     form below rendered unconditionally it moved the checksum on every install
-     — including installs with the worker tier off, which is every install
-     except staging — and rolled the primary (a write outage, and with the
-     sidecars' slow SIGTERM not a brief one) purely to add a value to a selector
-     they were not using. Measured, not predicted: tier-off
-     0.3.17 -> 0.4.0 moved it bffad95b -> 16bd9c55 with matchExpressions and the
-     relabeling unconditional, and is byte-identical with this gate in place.
+     WHAT IT WAS. postgres-statefulset.yaml hashed the rendered text of this whole
+     file (plus postgres-config.yaml) into the primary's pod-template
+     `checksum/config`, stripping only lines carrying helm.sh/chart,
+     app.kubernetes.io/version, interval or scrapeTimeout. An edit to THIS selector
+     matches none of those patterns, so when the matchExpressions form below
+     rendered unconditionally it moved the checksum on every install — including
+     installs with the worker tier off, which is every install except staging — and
+     rolled the primary (a write outage, and with the sidecars' slow SIGTERM not a
+     brief one) purely to add a value to a selector they were not using. Measured,
+     not predicted: tier-off 0.3.17 -> 0.4.0 moved it bffad95b -> 16bd9c55.
+
+     WHAT IT IS NOW. The hash was narrowed in the same release: it takes the
+     `pawtograder.postgresExporterQueries` named template, not this file, because
+     the queries file is the only thing in here the primary's exporter sidecar
+     actually reads. So this file's ServiceMonitors are no longer hashed and an
+     edit to this selector — or to any comment in this file — CANNOT move the
+     primary's checksum. Verified rather than assumed: editing the comment above
+     this ServiceMonitor leaves checksum/config unchanged at 0.4.0, and moved it at
+     50f71406. Do not re-derive a `hold this file still` argument from it; the
+     three checksum assertions in tests/render-guardrails.sh are what hold the
+     property now, and 0.4.0 rolls the primary exactly once regardless.
+
+     SO WHY KEEP THE GATE. The two halves have different amounts of reason left.
+     The RELABELING gate below still earns its keep on its own terms: with the tier
+     off it would stamp a constant edge_tier label onto every pawtograder_* series
+     on every install, and because a label is part of a series' identity that ENDS
+     each old series and starts a new one at the upgrade — a real, if small, cost
+     paid by every install that will never run the tier. The SELECTOR gate is now
+     close to cosmetic: with no functions-workers Service in the cluster, a
+     matchExpressions `In (functions, functions-workers)` selects exactly what the
+     exact matchLabels form selects, so the only thing the gate buys is that a
+     tier-off upgrade produces no ServiceMonitor diff for the Prometheus Operator
+     to reconcile. It is kept because it costs one `if`, it keeps the two halves
+     symmetrical, and both are pinned by the same pair of assertions — not because
+     anything breaks without it.
 
      So: when the tier is OFF, emit the ORIGINAL exact matchLabels shape, which
-     keeps the tier-off render of this file byte-identical to 0.3.17 and the
-     primary's checksum unmoved. When it is ON, the operator is already taking a
-     Kong roll and a new Deployment in that release, and the selector has real
-     work to do.
+     keeps the tier-off render of this file byte-identical to 0.3.17. When it is
+     ON, the operator is already taking a Kong roll and a new Deployment in that
+     release, and the selector has real work to do.
 
      Why the shape has to change at all when the tier is on: the worker tier
      carries component=functions-workers (edge-functions-worker-tier.yaml), and
@@ -687,11 +722,14 @@ spec:
          this series?" is expressible in PromQL. Adding a label cannot break
          existing selectors.
 
-         GATED for the same checksum reason as the selector above — this block is
-         three rendered lines, matches none of the strip patterns, and moved the
-         primary's checksum on its own. It is also meaningless when the tier is
-         off: with one tier every series would carry the same constant
-         edge_tier="functions".
+         GATED, and unlike the selector above this half still has a live reason.
+         The historical one — this block is three rendered lines, matches none of
+         the old strip patterns, and moved the primary's checksum on its own — is
+         retired with the narrowed hash. What remains is worse than cosmetic: with
+         one tier every series would carry the same constant edge_tier="functions",
+         and stamping it is not free, because a label is part of a series' identity
+         (see NOT INERT below). Gating it means an install that never enables the
+         tier never pays that cutover.
 
          NOT INERT, which an earlier version of this note got backwards and which
          matters before you enable the tier. `endpoints[].relabelings` is TARGET
@@ -699,7 +737,7 @@ spec:
          label set and every sample scraped from that target carries the result --
          not just the deno_* series this label was reached for. What the endpoint
          actually serves is the `metrics` FUNCTION's output (see below), so
-         enabling the tier stamps edge_tier onto all fourteen pawtograder_* series
+         enabling the tier stamps edge_tier onto all fifteen pawtograder_* series
          and, because a label is part of a series' identity, ENDS each old series
          and starts a new one at the cutover. Nothing numeric breaks: every
          consumer aggregates the label away (prometheus-rules.yaml uses
@@ -711,21 +749,19 @@ spec:
          scoped to a metric name.
 
          What IS true, and is the reason the label reads as constant today: there
-         is no deno_* series for it to distinguish.
-         The `#` comment at the top of this ServiceMonitor says edge-runtime
-         v1.74 serves deno_http_requests_total at /metrics; that is wrong, and it
-         is left in place only because it is a RENDERED comment and editing it
-         would move the Postgres checksum this gate exists to hold still (fix it
-         in a release that already rolls the primary). What actually happens:
-         this image replaces the runtime's main service with our own demuxer
-         (images/edge-functions/main.ts), whose Deno.serve handler dispatches
-         every path by its first segment — so a scrape of /metrics runs the
-         `metrics` FUNCTION and returns exactly what supabase/functions/metrics/
-         index.ts prints, which is pawtograder_* and nothing else. Confirmed
-         against live Prometheus: of 3700 metric names, zero begin with `deno`.
-         Consequences: the panels in dashboards/edge-functions.json that select
-         on deno_http_requests_total are empty (pre-existing, tracked
-         separately), and per-tier request rate is answered off Kong's own
+         is no deno_* series for it to distinguish. The `#` comment at the top of
+         this ServiceMonitor used to claim edge-runtime v1.74 serves
+         deno_http_requests_total at /metrics; it was wrong, and 0.4.0 corrects it
+         — see it for the mechanism and the live-Prometheus check. An earlier
+         revision of THIS note said the false claim had to stay because it was a
+         RENDERED comment whose edit would move the Postgres checksum. That
+         reasoning is dead twice over: the checksum no longer hashes this file (see
+         the gate note above), and 0.4.0 rolls the primary once anyway. Nothing in
+         this file is checksum-frozen, so a wrong comment in it is just a wrong
+         comment — fix it where you find it.
+         Consequences: the five panels in dashboards/edge-functions.json that
+         select on deno_http_requests_total are empty (pre-existing, tracked in
+         #951), and per-tier request rate is answered off Kong's own
          kong_http_requests_total instead — see
          PawtograderEdgeWorkerTierNoTraffic in prometheus-rules.yaml. The
          relabeling is kept rather than deleted because it costs one scrape-time
