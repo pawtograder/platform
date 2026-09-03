@@ -115,6 +115,28 @@ assert_rendered_lacks() {
   fi
 }
 
+# assert_rendered_count "<label>" "<template>" "<substring>" <n> <extra --set args...>
+# Like assert_rendered_contains but pins the NUMBER of occurrences. Used where the
+# same property has to hold at every sibling call site: "contains" is satisfied by
+# one of two, which is exactly how a half-applied fix passes a test suite.
+assert_rendered_count() {
+  local label="$1" template="$2" want="$3" n="$4"; shift 4
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local got
+  got="$(grep -cF -- "$want" "$OUTFILE")"
+  if [ "$got" != "$n" ]; then
+    echo "FAIL [$label]: found $got occurrence(s) of '$want', expected $n"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
 # assert_edge_envfrom_optional "<label>" "<template>" <extra --set args...>
 # Every Secret listed in edgeFunctions.envFromSecrets must render optional: true.
 # envFrom is one-shot and all-or-nothing: a single absent Secret puts the whole
@@ -736,6 +758,28 @@ assert_no_liveness_probe "postgres replica has no livenessProbe, keeps readiness
   --set postgres.replica.persistence.storageClass=lp \
   --set postgres.walg.enabled=true \
   --set postgres.walg.s3Prefix=s3://b/walg
+
+# THE MIGRATIONS JOB HAS TO OUTLIVE A PRIMARY ROLL, and 0.4.0 is the release that
+# forces one (the checksum/config narrowing in postgres-statefulset.yaml, pinned
+# by the three checksum assertions further down this file). Helm's kind
+# ordering applies the StatefulSet before the Job, so the primary's deletion
+# starts first and the Job is created seconds later: the Job's wait budget is what
+# decides whether an ordinary upgrade is a deploy or a red build.
+#
+# Both assertions together are the point. The first pins the DEFAULT budget at the
+# primary's whole grace window; the second proves the number is DERIVED from
+# postgres.terminationGracePeriodSeconds rather than a literal that happens to
+# equal grace/2 today -- a literal would survive the first assertion forever while
+# quietly under-budgeting any install that raises the grace period. Counted at 2
+# because BOTH init containers wait (see the false-ready note in
+# migrations-job.yaml); a fix applied to only one of two sibling call sites is the
+# recurring failure on this branch.
+echo "== the migrations Job outlives a full postgres grace window (0.4.0 rolls the primary) =="
+assert_rendered_count "migrations pg wait is 300 ticks x 2s = 600s at the default grace" \
+  templates/migrations-job.yaml "seq 1 300" 2
+assert_rendered_count "migrations pg wait is DERIVED from terminationGracePeriodSeconds" \
+  templates/migrations-job.yaml "seq 1 450" 2 \
+  --set postgres.terminationGracePeriodSeconds=900
 
 echo "== rendered hardening (redis securityContext, smtp-relay SA token) =="
 assert_rendered_contains "internal redis pod runs non-root with a securityContext" \
