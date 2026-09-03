@@ -194,9 +194,11 @@ and the long-lived API keys. Rotating it is disruptive by design:
 > with no recovery. Production refuses `secrets.autogenerate` for exactly this
 > reason. Keep an offline escrow of the JWT bundle separate from the cluster.
 
-### S3 credentials (`pawtograder-s3`)
+### S3 credentials (`secrets.names.s3`, `pawtograder-s3` by default)
 
-Used by storage (object serving) and the backup/verify/drill CronJobs. Rotate
+Used by storage (object serving) and the backup/verify/drill CronJobs. The
+Secret's name is a values knob, and it is overridden in production — Khoury's
+is `s3-credentials`, so read `secrets.names.s3` rather than the default. Rotate
 the key in your object store, update OpenBao, force ESO sync, `rollout restart`
 storage. The next backup Job picks up the new value on its own schedule; run a
 manual backup to confirm before the old key is revoked.
