@@ -447,7 +447,10 @@ nothing writes during the restore and no half-restored state is served.
        | awk '$3 > 0 && $1 ~ /^(audit-partitions|backup-verify|backup-restore-drill|backup-pitr-drill)$/ { print $2 }')"
      if [ -n "$running_jobs" ]; then
        echo "NOT FENCED: write-capable Job(s) still active -- refusing to continue:" >&2
-       printf '  %s\n' $running_jobs >&2
+       # `printf ... $running_jobs` relied on word-splitting to get one name per
+       # line, which the tightened lint gate flagged (SC2086). This form keeps
+       # the newlines without splitting, and matches the restore step's pre-pass.
+       printf '%s\n' "$running_jobs" | sed 's/^/  /' >&2
        return 1
      fi
      # pg_cron is checked HERE and not only in step 1, and until 2026-09-03 it was

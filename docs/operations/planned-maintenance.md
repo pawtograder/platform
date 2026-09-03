@@ -627,7 +627,10 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
        | awk '$3 > 0 && $1 ~ /^(audit-partitions|backup-verify|backup-restore-drill|backup-pitr-drill)$/ { print $2 }')"
      if [ -n "$running_jobs" ]; then
        echo "NOT FENCED: write-capable Job(s) still active -- refusing to drain:" >&2
-       printf '  %s\n' $running_jobs >&2
+       # `printf ... $running_jobs` relied on word-splitting to get one name per
+       # line, which the tightened lint gate flagged (SC2086). This form keeps
+       # the newlines without splitting, and matches the restore step's pre-pass.
+       printf '%s\n' "$running_jobs" | sed 's/^/  /' >&2
        return 1
      fi
      # Capture the exec's EXIT STATUS, and get the pipeline out of the way to do

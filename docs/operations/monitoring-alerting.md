@@ -153,8 +153,9 @@ Tunables live under `monitoring.prometheusRules` in `values.yaml`
   > when one of these fires, **check that Prometheus can see the namespace at all
   > before believing the alert**:
   >
-  > ```bash
+  > ```promql
   > # If this is also empty, you have a telemetry gap, not an outage.
+  > # (PromQL -- paste it into Prometheus's expression browser, not a shell.)
   > count(kube_deployment_status_replicas_available{namespace="$NS"})
   > ```
   >
