@@ -134,7 +134,8 @@ Tunables live under `monitoring.prometheusRules` in `values.yaml`
   separate `PawtograderWALArchiveFailing` alert covers a stalled WAL archive
   (pg_wal filling the primary's volume).
 
-  > **The `absent()` arms fire on telemetry gaps, and that is deliberate.** > `PawtograderBackupMissing` and `PawtograderEdgeWorkerTierUnavailable` are both
+  > **The `absent()` arms fire on telemetry gaps, and that is deliberate.** Both
+  > `PawtograderBackupMissing` and `PawtograderEdgeWorkerTierUnavailable` are
   > written as `<condition> or absent(<series>)`, because for both of them the
   > dangerous state produces **no series at all** rather than a bad value: a
   > CronJob that never ran emits no completion time, and a Deployment that was
@@ -181,7 +182,11 @@ Tunables live under `monitoring.prometheusRules` in `values.yaml`
 - **ExternalSecret** staleness is invisible by design: ESO serves the last-good
   value on a sync failure and only re-reads at `refreshInterval` (1h). A broken
   OpenBao path surfaces as a crash-looping pod at the _next_ restart, long after
-  the store actually broke — the alert catches it at break time.
+  the store actually broke — the alert catches it at break time. This alert only
+  exists where ESO does: on a SealedSecrets install (`externalSecret.enabled=false`,
+  which is how Khoury production is deployed) there is no `ExternalSecret`
+  resource and no `externalsecret_status_condition` series, so its silence means
+  "not applicable" rather than "healthy".
 - **Cert expiry** because a lapsed Studio/ingress cert takes the app offline and
   cert-manager renewal can fail quietly (DNS-01 solver, issuer trouble).
 

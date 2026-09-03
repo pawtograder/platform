@@ -1,10 +1,38 @@
 # Secrets Rotation
 
-How to rotate Pawtograder's production secrets, and what breaks while you do.
-Prod secrets are stored in **OpenBao** and synced into Kubernetes Secrets by the
-**External Secrets Operator (ESO)**. The chart mounts them by name and never
-generates them (`secrets.autogenerate` is refused in production). So rotation is
-always: **change the value in OpenBao → let ESO sync → restart the consumers.**
+> ## Which deployments this applies to — read this before running anything
+>
+> **Every command below assumes External Secrets Operator + OpenBao.** If your
+> install does not have them, `kubectl annotate externalsecret` errors on a
+> resource type that is not registered, and the OpenBao paths name nothing.
+>
+> - **ESO-based installs:** this document, as written.
+> - **SealedSecrets-based installs — including the Khoury production instance**
+>   deployed from the separate `prod-charts` repo: **this document does not
+>   apply.** That install sets `externalSecret.enabled=false`, so the chart
+>   renders no `ExternalSecret` at all; the cluster has no such resource type,
+>   only `bitnami.com/v1alpha1 SealedSecret`. Its secrets are five sealed
+>   manifests in `prod-charts/secrets/` (`pawtograder-{edge-functions,jwt,postgres,smtp,web}.sealed.yaml`),
+>   rotated by re-sealing with `prod-charts/scripts/seal.sh` and committing —
+>   there is no live sync step to force. Names differ too: prod's S3 secret is
+>   `s3-credentials`, not `pawtograder-s3`.
+>
+> This is **pre-existing drift, not something this document's last revision
+> introduced**, and a SealedSecrets rotation procedure is its own change rather
+> than a footnote here. What survives translation is everything below about
+> _which consumers to restart and how disruptive each rotation is_ — that is a
+> property of the chart, not of the secret store. What does not is every
+> OpenBao path and every `externalsecret` command.
+>
+> If you are on-call against the Khoury cluster: **stop here and ask.** That is a
+> better outcome than working through a procedure whose commands will error.
+
+How to rotate Pawtograder's production secrets, and what breaks while you do. On
+an ESO install, prod secrets are stored in **OpenBao** and synced into Kubernetes
+Secrets by the **External Secrets Operator (ESO)**. The chart mounts them by name
+and never generates them (`secrets.autogenerate` is refused in production). So
+rotation is always: **change the value in OpenBao → let ESO sync → restart the
+consumers.**
 
 Provisioning scripts (the source of truth for paths and keys):
 
@@ -48,9 +76,10 @@ Which consumers to restart, and how disruptive each is, depends on the secret.
 
 ### Integration credentials (low blast radius)
 
-GitHub App, Discord, Canvas, SMTP, Sentry, SIS, Redis, MCP — each lives at its
-own bundle path (`apps/pawtograder/<bundle>-<env>`) and is mounted into the web
-and/or edge-functions Secret. Rotate one without touching the others:
+GitHub App, Discord, Canvas, SMTP, Sentry, SIS, Redis, MCP, **AWS Chime** — each
+lives at its own bundle path (`apps/pawtograder/<bundle>-<env>`) and is mounted
+into the web and/or edge-functions Secret. Rotate one without touching the
+others:
 
 1. Update the bundle path in OpenBao (rerun `setup-openbao-edge-functions.sh`
    for that bundle, or patch the single key).
@@ -73,6 +102,16 @@ Notes per integration:
   credential details.
 - **SMTP password:** notifications and auth email pause between the provider
   change and the pod restart — rotate off-peak.
+- **AWS Chime (`aws-chime`):** this bundle was missing from this document
+  entirely until 2026-09-03, despite being live in prod. It holds
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_CHIME_EVENT_AUTH_TOKEN` and
+  `AWS_CHIME_SQS_QUEUE_ARN` (see `setup-openbao-edge-functions.sh`), and it lands
+  in the `pawtograder-edge-functions` Secret, which **both** edge tiers
+  `envFrom`. So rotating it means restarting `<release>-functions` **and**
+  `<release>-functions-workers` when `edgeFunctions.workerTier` is enabled —
+  `envFrom` is one-shot, so a tier left unrestarted presents the revoked AWS key
+  for the whole pod lifetime. Do not confuse this AWS pair with the storage/backup
+  one: see the S3 section below, which is a genuinely different credential.
 - **Redis (`redis.provider: shared`):** the shared `REDIS_URL` is not part of the
   web/edge bundle. It has its own OpenBao path (`apps/pawtograder/redis-production`
   in prod, set by `redis.shared.path`) and syncs into the `pawtograder-redis`
@@ -163,10 +202,24 @@ storage. The next backup Job picks up the new value on its own schedule; run a
 manual backup to confirm before the old key is revoked.
 
 Neither edge tier needs a restart here, and that is a real exception rather than
-the omission the Postgres step used to have: the edge workload's rendered
-environment carries no S3 or AWS credentials at all (checked against the
-manifest), because functions reach storage through Kong rather than the object
-store directly.
+the omission the Postgres step used to have. But **not** for the reason this
+section gave until 2026-09-03 — it claimed the edge workload's rendered
+environment "carries no S3 or AWS credentials at all", and the live prod manifest
+says otherwise: `pawtograder-edge-functions`, which both edge tiers `envFrom`,
+carries `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` among its 25 keys.
+
+The distinction is **credential identity, not credential absence.** The AWS pair
+in the edge environment comes from the `aws-chime` bundle and authenticates to
+Chime; the pair this section rotates is `secrets.names.s3`, consumed only by
+storage (via the shared S3 env helper) and the backup / verify / drill CronJobs.
+Two different keys that happen to share the AWS variable names. Rotating the S3
+key therefore does not touch anything either edge tier holds, so neither needs a
+restart. Rotating the **Chime** key does need both — that is the `aws-chime`
+entry above.
+
+Functions do reach storage through Kong rather than the object store directly,
+which is _why_ the S3 pair never had to be in their environment. That part of the
+old claim was right; "no AWS credentials at all" was not.
 
 ---
 

@@ -240,12 +240,19 @@ mixing them in would answer a triage question with lines from another build; set
 - Go straight to [disaster-recovery.md](./disaster-recovery.md) — "When
   backup-verify goes red" triages by log line.
 
-### Secrets / ESO
+### Secrets
 
 - Symptom: `PawtograderExternalSecretNotReady`, or a pod crash-looping on a
   missing/stale secret after a restart.
-- Go to [secrets-rotation.md](./secrets-rotation.md); check the ExternalSecret
-  status and the OpenBao path/role.
+- **First establish which secret store this install uses** — the two paths share
+  no commands. On an **ESO** install, check the ExternalSecret status and the
+  OpenBao path/role. On a **SealedSecrets** install — which includes the Khoury
+  production instance deployed from `prod-charts` — there is no `ExternalSecret`
+  resource type to query and `PawtograderExternalSecretNotReady` cannot fire;
+  inspect the `SealedSecret`/`Secret` pair and the sealed-secrets controller
+  instead.
+- Go to [secrets-rotation.md](./secrets-rotation.md), and read its scope note at
+  the top first: the procedure there is ESO-only.
 
 ---
 
