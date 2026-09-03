@@ -141,7 +141,23 @@ Two consequences worth knowing before you start pulling threads:
   and `helm upgrade` returns all four functions to the request tier: no DB
   change, no client change, no image rebuild. It does roll Kong.
 
-**Expected once, on the first upgrade that enables the tier:** the Kong config
+**Enabling the tier does NOT restart the Postgres primary.** It used to:
+`postgres-statefulset.yaml` hashed the rendered text of `templates/monitoring.yaml`
+into the primary's pod-template `checksum/config`, and enabling the tier widens
+the edge ServiceMonitor's selector to `component In (functions, functions-workers)`
+and adds the `edge_tier` relabeling, so the checksum moved and the StatefulSet
+rolled. The hash now takes only the postgres_exporter custom-queries named
+template — the one thing in that file the exporter sidecar mounts — so scrape
+wiring no longer reaches the database. The tier flip is free in both directions,
+and `tests/render-guardrails.sh` fails if that stops being true.
+
+**Expected once, on the upgrade onto 0.4.0 itself:** narrowing that hash moves the
+digest one time, for every install, tier on or off. That upgrade restarts the
+primary — a write outage — so schedule it. `charts/pawtograder/README.md` carries
+the `OnDelete` procedure for deferring the restart when a window is not available,
+along with the two conditions that make it safe.
+
+Also on the first upgrade that enables the tier: the Kong config
 checksum rolls Kong in the same release that creates the worker Deployment, so a
 new Kong pod can serve the four worker paths before that Deployment has ready
 endpoints — they return 502 until it does. Bounded by pod startup, and nothing is
@@ -195,7 +211,7 @@ alert rather than five.
 `scripts/edge-logs.sh` covers both tiers (it selects
 `component=~"functions|functions-workers"`), so `--function <name>` works
 regardless of which tier serves it. Deployment channels are deliberately outside
-that selector — they run their own image tag and the output is unlabelled, so
+that selector — they run their own image tag and the output is unlabeled, so
 mixing them in would answer a triage question with lines from another build; set
 `EDGE_LOG_COMPONENTS` to read one on purpose.
 

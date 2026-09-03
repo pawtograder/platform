@@ -1,17 +1,12 @@
-{{- if .Values.monitoring.enabled -}}
 {{- /*
-Monitoring wiring. Emits Prometheus Operator CRs (ServiceMonitor) for every
-component that exposes /metrics, plus the postgres_exporter custom-queries
-ConfigMap consumed by the sidecar in postgres-statefulset.yaml.
-
-We do NOT deploy our own Prometheus or Grafana — the cluster's
-kube-prometheus-stack auto-discovers ServiceMonitors in any namespace and the
-Grafana sidecar picks up ConfigMaps labeled `grafana_dashboard: "1"`.
-
-Each ServiceMonitor reuses the chart's selectorLabels so that even if a Service
-gets renamed, the operator still finds the right pod set.
+The postgres_exporter custom-queries ConfigMap, factored into a named template
+so postgres-statefulset.yaml can hash EXACTLY the bytes its exporter sidecar
+mounts. Hashing the whole of monitoring.yaml instead swept in every
+ServiceMonitor in the file, so unrelated scrape wiring — most recently the
+edge-functions worker tier — rolled the Postgres primary. Emitted below,
+unchanged, so the rendered ConfigMap is byte-identical to before the split.
 */ -}}
----
+{{- define "pawtograder.postgresExporterQueries" -}}
 # postgres_exporter — custom queries that surface supabase/pawtograder
 # semantics on top of the default pg_stat_database / pg_stat_user_tables
 # coverage. Keep query names stable: dashboards reference them.
@@ -525,6 +520,22 @@ data:
         - heap_bytes:
             usage: "GAUGE"
             description: "Heap size only (no indexes)"
+{{- end -}}
+{{- if .Values.monitoring.enabled -}}
+{{- /*
+Monitoring wiring. Emits Prometheus Operator CRs (ServiceMonitor) for every
+component that exposes /metrics, plus the postgres_exporter custom-queries
+ConfigMap consumed by the sidecar in postgres-statefulset.yaml.
+
+We do NOT deploy our own Prometheus or Grafana — the cluster's
+kube-prometheus-stack auto-discovers ServiceMonitors in any namespace and the
+Grafana sidecar picks up ConfigMaps labeled `grafana_dashboard: "1"`.
+
+Each ServiceMonitor reuses the chart's selectorLabels so that even if a Service
+gets renamed, the operator still finds the right pod set.
+*/ -}}
+---
+{{ include "pawtograder.postgresExporterQueries" . }}
 ---
 {{- /*
 Both of the following are gated on postgres.enabled: the sidecar they front only
@@ -682,8 +693,25 @@ spec:
          off: with one tier every series would carry the same constant
          edge_tier="functions".
 
-         KNOWN INERT TODAY, and recorded here so the next reader does not build
-         on it. There is currently NO deno_* series for this label to land on.
+         NOT INERT, which an earlier version of this note got backwards and which
+         matters before you enable the tier. `endpoints[].relabelings` is TARGET
+         relabeling (prometheus `relabel_configs`), so it rewrites the target's
+         label set and every sample scraped from that target carries the result --
+         not just the deno_* series this label was reached for. What the endpoint
+         actually serves is the `metrics` FUNCTION's output (see below), so
+         enabling the tier stamps edge_tier onto all fourteen pawtograder_* series
+         and, because a label is part of a series' identity, ENDS each old series
+         and starts a new one at the cutover. Nothing numeric breaks: every
+         consumer aggregates the label away (prometheus-rules.yaml uses
+         `max by (namespace, ...)`, dashboards/queues-and-workers.json uses
+         `max()`), but per-series functions over the boundary -- the
+         `deriv(pawtograder_async_dlq_size[10m])` panel is the one -- see a
+         discontinuity for one window. If you want the label WITHOUT that, the
+         field is `metricRelabelings`, which applies after the scrape and can be
+         scoped to a metric name.
+
+         What IS true, and is the reason the label reads as constant today: there
+         is no deno_* series for it to distinguish.
          The `#` comment at the top of this ServiceMonitor says edge-runtime
          v1.74 serves deno_http_requests_total at /metrics; that is wrong, and it
          is left in place only because it is a RENDERED comment and editing it

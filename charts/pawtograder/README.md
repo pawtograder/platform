@@ -49,12 +49,58 @@ that rendered fine on 0.3.x. Neither touches the cluster when it fires.
   fine on 0.3.x. Verified against the chart, not inferred from the regex. Spell
   the limit in whole `Mi` or `Gi` (`3584Mi`, not `3.5Gi`; `4Gi`, not `4G`).
 
-`edgeFunctions.resources.requests.memory` also moves 512Mi → 1.5Gi. Requests are
-what the scheduler reserves, so check that `autoscaling.minReplicas x 1.5Gi`
-still fits your node pool before upgrading — at the shipped `minReplicas: 12`
-that is 18Gi where it used to be 6Gi, and `updateStrategy` is
+`edgeFunctions.resources.requests.memory` also moves 512Mi to 1.5Gi in the chart
+default, and to 1.8Gi in both prod overlays. Requests are what the scheduler
+reserves, so re-check the edge tier's total against your node pool before
+upgrading. At the chart's own defaults (`replicas: 2`, autoscaling off) that is
+3Gi where it used to be 1Gi. On a fleet shaped like `values-prod.yaml`, which
+sets `minReplicas: 12` / `maxReplicas: 24` at 1.8Gi, it is 21.6GiB at the floor
+and 43.2GiB at the ceiling, against 6GiB and 12GiB before. `updateStrategy` is
 `maxUnavailable: 0`, so a pod that cannot be scheduled stalls the rollout rather
-than replacing an old one.
+than replacing an old one. `edgeFunctions.workerTier`, if you enable it, adds
+its own 2 x 1.5Gi on top of all of that.
+
+**Upgrading to 0.4.0 restarts the Postgres primary once**, whether or not you
+enable the worker tier. The primary's pod-template `checksum/config` used to hash
+the whole rendered `monitoring.yaml`; it now hashes only the postgres_exporter
+custom-queries named template, which is the sole part of that file the exporter
+sidecar mounts. Narrowing the hash input moves the digest once, so the first
+`helm upgrade` onto 0.4.0 rolls the StatefulSet — a write outage the chart's own
+notes put at ~10 min. Schedule it as a maintenance window rather than as an
+ordinary `helm upgrade`.
+
+What that one roll buys: enabling `edgeFunctions.workerTier` afterwards no longer
+touches the database, and neither does any future ServiceMonitor or scrape-cadence
+edit. Before the narrowing, turning the tier on widened the edge ServiceMonitor's
+selector to `component In (functions, functions-workers)` and added an `edge_tier`
+relabeling, neither of which matched the checksum's strip patterns, so the tier
+flip alone rolled the primary. `tests/render-guardrails.sh` now pins the
+invariance in both directions: the checksum must not move on the tier flip or on
+a chart-version bump, and must still move on a real config edit.
+
+If the maintenance window is genuinely unavailable, the restart can be deferred.
+The chart renders no `updateStrategy` for the Postgres StatefulSet, so it runs the
+Kubernetes default of `RollingUpdate`; patching it to `OnDelete` lets the new pod
+template land without restarting the primary:
+
+```bash
+kubectl patch statefulset <release>-postgres -n <ns> \
+  -p '{"spec":{"updateStrategy":{"type":"OnDelete"}}}'
+helm upgrade ...          # new pod template is recorded; the primary keeps running
+kubectl patch statefulset <release>-postgres -n <ns> \
+  -p '{"spec":{"updateStrategy":{"type":"RollingUpdate"}}}'
+```
+
+Two caveats, both load-bearing. The exporter sidecar keeps its previously mounted
+`queries.yaml` until the pod is next deleted, so this is safe only when the
+upgrade does not change the queries themselves — true for 0.4.0, where the
+rendered ConfigMap is byte-identical to 0.3.17 and only the hash's input
+narrowed, but confirm it with `helm diff` before assuming it on any later
+version. And because the chart does not manage `updateStrategy`, Helm will not
+revert the patch for you: leave it on `OnDelete` and every subsequent postgres
+pod-template change stops rolling too, silently. Patch it back in the same
+sitting. See
+[incident-response.md](../../docs/operations/incident-response.md).
 
 `autoscaling.targetMemoryUtilizationPercentage` is **unchanged** at 80: it was
 already 80 in 0.3.17 (#948). What moved in 0.4.0 is the three example

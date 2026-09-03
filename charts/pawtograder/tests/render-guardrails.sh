@@ -899,7 +899,7 @@ assert_edge_reservation "values-staging: total edge memory reservation is 9.0GiB
 # running on the request tier (silent no-op). Too MANY and a request-tier function
 # is diverted onto a 2-pod tier sized for four background consumers --
 # autograder-create-submission is the one that would hurt, being the hot student
-# submission path, and it is used as the probe here for that reason. The behaviour
+# submission path, and it is used as the probe here for that reason. The behavior
 # is correct today (verified against live Kong 3.9.1); this closes the coverage
 # hole, it does not fix a bug.
 assert_worker_route_set() {
@@ -1018,6 +1018,58 @@ assert_absent "no worker-tier Kong routes by default" "functions-v1-worker-"
 assert_absent "no worker-tier availability alert by default" \
   "PawtograderEdgeWorkerTierUnavailable" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+# THE POSTGRES-PRIMARY TRIPWIRE. postgres-statefulset.yaml hashes the exporter
+# custom-queries into the primary's pod-template checksum/config, because the
+# exporter sidecar mounts that file and reads it ONLY at startup. It used to hash
+# the whole of monitoring.yaml, which also carries every ServiceMonitor in the
+# chart -- so adding the worker tier's selector and relabeling to the edge
+# ServiceMonitor rolled the DATABASE. The hash now takes the
+# pawtograder.postgresExporterQueries named template instead, and these three
+# assertions pin that: the primary's checksum must not move when the tier flips,
+# must not move on a chart-version bump, and must still move on a real config
+# edit. Delete the narrowing and the first one goes red.
+read_primary_checksum() {
+  helm template t "$CHART" "${BASE[@]}" "$@" --show-only templates/postgres-statefulset.yaml 2>"$ERRFILE" \
+    | grep -m1 'checksum/config:' | awk '{print $2}'
+}
+
+assert_checksum_equal() {
+  local label="$1" a="$2" b="$3"
+  if [ -z "$a" ] || [ -z "$b" ]; then
+    echo "FAIL [$label]: could not read checksum/config from the rendered StatefulSet"
+    FAILED=1
+  elif [ "$a" = "$b" ]; then
+    echo "ok   [$label]"
+  else
+    echo "FAIL [$label]: checksum/config moved ($a vs $b) -- the Postgres primary will roll"
+    FAILED=1
+  fi
+}
+
+MON=(--set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps)
+CK_TIER_OFF="$(read_primary_checksum "${MON[@]}")"
+CK_TIER_ON="$(read_primary_checksum "${MON[@]}" --set edgeFunctions.workerTier.enabled=true)"
+CK_VERSION="$(read_primary_checksum "${MON[@]}" --version 9.9.9)"
+CK_EDITED="$(read_primary_checksum "${MON[@]}" --set postgres.config.work_mem=64MB)"
+
+assert_checksum_equal "enabling the worker tier does NOT roll the Postgres primary" \
+  "$CK_TIER_OFF" "$CK_TIER_ON"
+assert_checksum_equal "a chart-version bump does NOT roll the Postgres primary" \
+  "$CK_TIER_OFF" "$CK_VERSION"
+if [ -n "$CK_EDITED" ] && [ "$CK_EDITED" != "$CK_TIER_OFF" ]; then
+  echo "ok   [a real postgres.config edit still rolls the primary]"
+else
+  echo "FAIL [a real postgres.config edit still rolls the primary]: checksum did not move -- the hash is inert"
+  FAILED=1
+fi
+
+# The tier-off render staying byte-identical no longer protects the database, but
+# it still keeps installs that never enable the tier from churning their
+# ServiceMonitor on upgrade, so the `if` gates stay pinned.
+assert_rendered_lacks "tier-off ServiceMonitor carries no worker-tier selector" \
+  templates/monitoring.yaml "functions-workers" "${MON[@]}"
+assert_rendered_lacks "tier-off ServiceMonitor carries no edge_tier relabeling" \
+  templates/monitoring.yaml "edge_tier" "${MON[@]}"
 
 echo "== background-worker tier renders its own isolation config =="
 assert_rendered_contains "worker tier renders a Deployment" \
@@ -1166,6 +1218,20 @@ assert_renders "per_worker at maxParallelism 6 with 4 routed names is accepted" 
 assert_renders "per_worker at exactly 2 is accepted" \
   "${WT[@]}" --set edgeFunctions.workerTier.policy=per_worker \
   --set edgeFunctions.workerTier.maxParallelism=2
+# THE REQUEST TIER TOO, and this is the case the guard used to miss entirely: it
+# sat inside `if $ef.functions`, so it ran only on a ROUTED tier. Nothing it
+# asserts is about routing -- one path needing two permits is a property of
+# per_worker -- and `edgeFunctions.policy` DEFAULTS to per_worker, so
+# `--set edgeFunctions.maxParallelism=1` rendered clean on the tier that serves
+# every student request while the identical pair on workerTier was refused. Pinned
+# on the request tier (no --set of workerTier at all) so the placement cannot
+# regress. Same class as the --policy guard, whose comment already records this
+# trap being hit once.
+assert_refused "per_worker below 2 is refused on the REQUEST tier as well" \
+  "needs at least 2" \
+  --set edgeFunctions.maxParallelism=1
+assert_renders "per_request at maxParallelism 1 is still accepted (the guard is per_worker only)" \
+  --set edgeFunctions.policy=per_request --set edgeFunctions.maxParallelism=1
 # Each tier has its OWN budget. A failure that named edgeFunctions.* would send
 # the reader to the wrong values block, which defeats the point of the assertion.
 assert_refused "the worker tier's budget failure names the worker tier" \
@@ -1381,6 +1447,20 @@ assert_refused "a graceful window shorter than worker.timeoutMs is refused" \
 assert_renders "raising the whole drain window together is accepted" \
   "${WT[@]}" --set edgeFunctions.workerTier.gracefulExitTimeoutSeconds=900 \
   --set edgeFunctions.workerTier.terminationGracePeriodSeconds=930
+# The SIGKILL backstop must be checked even with NO graceful window. This sat
+# inside `if gt $graceful 0`, so clearing gracefulExitTimeoutSeconds -- the
+# documented way to omit --graceful-exit-timeout, and the obvious first move for
+# anyone trying to speed up rollouts -- switched the check off instead of
+# tightening it, and a 120s preStop under a 30s grace period rendered clean. The
+# kubelet then SIGKILLs 90s into the pod's own drain hook, before edge-runtime has
+# even seen SIGTERM.
+assert_refused "preStop longer than the SIGKILL backstop is refused even at graceful 0" \
+  "below preStopSleepSeconds" \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=0 \
+  --set edgeFunctions.preStopSleepSeconds=120 \
+  --set edgeFunctions.terminationGracePeriodSeconds=30
+assert_renders "graceful 0 with a preStop the backstop covers is accepted" \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=0
 
 # Routed names are interpolated into a Kong REGEX path, so a metacharacter either
 # over-matches at a segment boundary (silently executing a different function) or
