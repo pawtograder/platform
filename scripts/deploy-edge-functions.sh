@@ -243,8 +243,18 @@ for d in $PATCHED; do
     '' | *[!0-9]*) grace=0 ;; # unreadable: keep the replica-derived timeout
   esac
   if [ "$grace" -gt 0 ]; then
-    drains="$replicas"
-    [ "$drains" -gt 2 ] && drains=2
+    # How many of those windows land on the critical path differs by tier, and
+    # the cap is why: the request tier's drains are ~0.3s, so budgeting a full
+    # window for each of its 24 replicas would be the 172-minute worst case this
+    # block refuses to size for -- two is a floor there, and its 60s/replica term
+    # exceeds that floor anyway. The WORKER tier is the case the cap gets wrong:
+    # leased batches can be active on every old pod, so a serial rollout of N
+    # replicas genuinely needs N full windows, and `replicas` is operator-settable
+    # above 2. Budget all of them there.
+    case "$d" in
+      *-workers) drains="$replicas" ;;
+      *) drains="$replicas"; [ "$drains" -gt 2 ] && drains=2 ;;
+    esac
     # +30s per drain for the replacement pod reaching readiness (tcpSocket,
     # initialDelay 5s + period 5s), +300s for a cold image pull on a new node.
     drain_floor=$((drains * (grace + 30) + 300))

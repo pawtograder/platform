@@ -465,11 +465,22 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    > kubectl -n "$NS" delete hpa <release>-functions --ignore-not-found
    > # shellcheck disable=SC2086
    > kubectl -n "$NS" scale $WRITERS --replicas=0
-   > # Longer than the writers' own termination window: the edge tier's
-   > # terminationGracePeriodSeconds is 430s, so a 180s wait returns while a worker
+   > # Wait for the WRITER pods by name, exactly as step 1 does. A release-wide
+   > # `-l app.kubernetes.io/instance=<release>` would also wait on postgres, kong
+   > # and the maintenance page -- which are all deliberately still running -- so it
+   > # could only ever burn the full timeout before the fence check ran, adding 8
+   > # minutes to an outage. 480s because the edge tier's
+   > # terminationGracePeriodSeconds is 430s: a shorter wait returns while a worker
    > # can still be draining pgmq into the primary you are about to evict.
-   > kubectl -n "$NS" wait --for=delete pod \
-   >   -l "app.kubernetes.io/instance=<release>" --timeout=480s || true
+   > PODS="$(kubectl -n "$NS" get pod -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jp" \
+   >   | awk '$1 ~ /^(web|rest|auth|storage|functions|realtime)(-.+)?$/ { print "pod/" $2 }')"
+   > if [ -n "$PODS" ]; then
+   >   # shellcheck disable=SC2086
+   >   if ! kubectl -n "$NS" wait --for=delete $PODS --timeout=480s; then
+   >     echo "STOP: writer pods STILL PRESENT after the full drain window. Do NOT restart the drain." >&2
+   >     exit 1
+   >   fi
+   > fi
    > if ! fenced; then
    >   echo "STOP: re-fence failed. Do NOT restart the drain." >&2
    >   exit 1
