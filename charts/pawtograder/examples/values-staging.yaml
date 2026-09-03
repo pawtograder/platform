@@ -519,11 +519,20 @@ backup:
 # first `helm upgrade` that flips this RESTARTS postgres (a brief DB blip) —
 # apply it when NOT mid-load-test. The realtime/supavisor/web ServiceMonitors
 # need bearer tokens in the pawtograder-jwt secret (REALTIME_METRICS_BEARER,
-# SUPAVISOR_METRICS_BEARER, METRICS_SCRAPE_TOKEN); without them those targets
-# 401, but everything else works — incl. the edge /metrics endpoint, which is
-# unauthed (no METRICS_TOKEN set) and is the rate-limiting metrics source.
+# SUPAVISOR_METRICS_BEARER, METRICS_SCRAPE_TOKEN); ripley's pawtograder-jwt
+# carries all three, so those targets scrape.
+#
+# The edge /metrics endpoint is unauthed here (no METRICS_TOKEN set) and is the
+# rate-limiting metrics source, so edgeFunctionsMetricsAuth MUST be false. There
+# is no pawtograder-edge-functions Secret in that namespace at all — the k8s repo
+# dropped its ExternalSecret when this chart moved each integration to its own
+# envFromSecrets entry — and a ServiceMonitor referencing a Secret that does not
+# exist is rejected outright by the Prometheus Operator, `optional: true`
+# notwithstanding. That is what silently dark-ed every pawtograder_*_queue_size
+# series on staging.
 monitoring:
   enabled: true
+  edgeFunctionsMetricsAuth: false
   # Match the ripley kube-prometheus-stack release name so its ruleSelector
   # picks up the PrometheusRule the chart ships (backup / ESO / cert alerts).
   # kps on ripley uses an empty ruleSelector today (matches all), but set the

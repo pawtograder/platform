@@ -633,12 +633,27 @@ spec:
 #
 # Access is optionally gated by a Bearer token — the runtime enforces
 # METRICS_TOKEN only when that env value is set (metrics/index.ts: no token =>
-# open /metrics). The credential is `optional: true` so a deploy that DOESN'T
-# set METRICS_TOKEN (e.g. staging, where edge /metrics is intentionally
-# unauthed) still scrapes: without optional, the missing Secret key makes the
-# Prometheus Operator reject this whole ServiceMonitor, silently dropping the
-# edge target (rate-limiting dashboard goes dark). When the key IS present, the
-# token is sent as required.
+# open /metrics).
+#
+# The authorization block is gated on monitoring.edgeFunctionsMetricsAuth, NOT
+# on `optional: true`. `optional` does not do what the previous version of this
+# comment claimed: the Prometheus Operator resolves the credential while
+# SELECTING the ServiceMonitor, and a missing Secret OR a missing key rejects
+# the whole object —
+#   endpoints[0]: authorization: failed to get authorization token of type
+#   "Bearer": unable to get secret "pawtograder-edge-functions": secrets
+#   "pawtograder-edge-functions" not found
+# A rejected ServiceMonitor yields no scrape pool at all. Not a "down" target —
+# an absent one, with nothing in Prometheus to notice. On ripley staging that
+# dark-ed every pawtograder_*_queue_size series and the whole pawtograder.app
+# alert group that reads them, from the day the k8s repo dropped the
+# edge-functions ExternalSecret (this chart having moved each integration to its
+# own envFromSecrets entry). Preview namespaces hit the same rejection via the
+# missing key rather than the missing Secret.
+#
+# So set edgeFunctionsMetricsAuth=false wherever METRICS_TOKEN is unset. Getting
+# it wrong the other way fails LOUDLY — the target 401s and shows as down —
+# which is the failure mode to prefer.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -782,12 +797,13 @@ spec:
         - sourceLabels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
           targetLabel: edge_tier
       {{- end }}
+      {{- if .Values.monitoring.edgeFunctionsMetricsAuth }}
       authorization:
         type: Bearer
         credentials:
           name: {{ .Values.secrets.names.edgeFunctions }}
           key: METRICS_TOKEN
-          optional: true
+      {{- end }}
 ---
 # ServiceMonitor: GoTrue (auth). /metrics on the dedicated metrics
 # port (9100); requires GOTRUE_METRICS_EXPORTER=prometheus, set in

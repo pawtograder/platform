@@ -1964,6 +1964,20 @@ monitoring:
   scrapeInterval: 30s
   scrapeTimeout: 10s
 
+  # Send a Bearer token when scraping the edge-functions /metrics endpoint.
+  #
+  # Must be true if and only if secrets.names.edgeFunctions actually carries a
+  # METRICS_TOKEN key. The Prometheus Operator resolves the credential while
+  # selecting the ServiceMonitor and rejects the ENTIRE object when the Secret
+  # or key is absent — `optional: true` is not honoured there. A rejected
+  # ServiceMonitor produces no scrape pool and no "down" target, so the edge
+  # metrics simply vanish, taking the pawtograder.app alert group with them.
+  #
+  # Default true, matching an install with the full edge-functions Secret. Set
+  # false on deploys that leave METRICS_TOKEN unset — the edge runtime serves
+  # /metrics openly in that case, so no token is needed.
+  edgeFunctionsMetricsAuth: true
+
   # Per-component ServiceMonitor toggles (all default on). Set one false when a
   # component doesn't expose a scrapeable /metrics endpoint in your topology, so
   # Prometheus doesn't flag it perpetually "down". e.g. storage-api serves
