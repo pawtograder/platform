@@ -175,13 +175,20 @@ is already warm.
          -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;")"
        still_active="${still_active//[[:space:]]/}"
      else
-       # GUARDED, because `set -e` would otherwise abort this fence on the most
-       # common promote of all -- the one where the primary is already gone. A
-       # step that fails when everything is correct is a step that gets skipped
-       # next time.
+       # EMERGENCY path: the primary is genuinely gone, and pg_cron CANNOT be
+       # paused before the promote -- `UPDATE cron.job` needs a writable server
+       # and the only one left is a standby in recovery. So do the half that is
+       # possible: `cron.job` is replicated, so READ the active jobids off the
+       # STANDBY now (step 5 needs them, and after the promote they will have
+       # been set to false). Step 3 pauses them the instant the promoted node
+       # leaves recovery, because a promoted node's pg_cron worker starts firing
+       # all ~20 jobs at once -- before step 4 has repointed any service and with
+       # every app writer still at 0.
+       kubectl -n "$NS" exec <release>-postgres-replica-0 -c postgres -- psql -U supabase_admin \
+         -d postgres -tAc "SELECT string_agg(jobid::text,',') FROM cron.job WHERE active;"
        still_active=0
-       echo "no <release>-postgres-0 pod: the old primary is gone, so its pg_cron cannot fire."
-       echo "Confirm that in step 1 deliberately; do not infer it from this line."
+       echo "no <release>-postgres-0 pod: the old primary is gone, so its pg_cron cannot be firing"
+       echo "and cannot be paused from here. Step 3 pauses it on the promoted node."
      fi
      if [ "$still_active" != "0" ]; then
        echo "STOP: $still_active pg_cron job(s) are still active -- in-database writers are NOT fenced." >&2
@@ -189,19 +196,66 @@ is already warm.
      fi
 
      # 1. Record what to restore, and record it BEFORE anything is mutated:
-     #    writer Deployments + the realtime StatefulSet (name, kind and desired
-     #    replicas -- a `-o wide` snapshot is not machine-readable) and the
-     #    edge-functions HPA's YAML. Step 5 (“Scale writers back up (step 2 in reverse)”) said "step 2 in reverse" and had nothing to
-     #    reverse: this block captured no replica counts and no HPA.
-     #    `-l app.kubernetes.io/instance=<release>` scopes it to THIS release, so
-     #    an unrelated workload sharing the namespace is neither recorded nor
-     #    "restored".
-     STATE_DIR="/tmp/pitr-fence-$(date +%s)"; mkdir -p "$STATE_DIR"
-     kubectl -n "$NS" get deploy,statefulset -l "app.kubernetes.io/instance=<release>" \
-       -o jsonpath='{range .items[*]}{.kind}{"\t"}{.metadata.name}{"\t"}{.spec.replicas}{"\n"}{end}' \
-       > "$STATE_DIR/replicas.txt"
+     #    writer Deployments + the realtime StatefulSet (kind, name, component
+     #    and desired replicas -- a `-o wide` snapshot is not machine-readable,
+     #    and the component column is what lets the restore loop re-check this
+     #    file against the same allowlist) and the
+     #    edge-functions HPA. Step 5 said "step 2 in reverse" and had nothing
+     #    to reverse: this block captured no replica counts and no HPA at all.
+     #
+     #    FILTER THE CAPTURE THROUGH THE SAME ALLOWLIST THE FENCE USES. It was
+     #    `get deploy,statefulset -l instance=<release>` with no component
+     #    filter, which is release-wide -- so it recorded `postgres`,
+     #    `postgres-replica`, `kong`, `supavisor`, `maintenance`, `imgproxy`,
+     #    `smtp-relay` and `redis` too, and the restore step then set every one
+     #    of them to its fence-time replica count. Three lines of comment above
+     #    claimed it recorded "writer Deployments + the realtime StatefulSet";
+     #    the code did something else.
+     #
+     #    ON THIS PATH THAT WAS A SPLIT BRAIN, not just untidiness. The
+     #    unfiltered capture recorded BOTH Postgres StatefulSets at their
+     #    pre-failover counts, so `<release>-postgres` went into replicas.txt at
+     #    1. Step 6 scales the old primary to 0 and waits for it to exit; step 5
+     #    then read replicas.txt and scaled it back to 1 -- before it had been
+     #    rebuilt. It restarts as a SECOND writable primary on the abandoned
+     #    timeline, archiving into the same `WALG_S3_PREFIX` as the promoted
+     #    node, which is the exact outcome step 1's precondition and the
+     #    role-reversal warning under the promotion drill both exist to forbid.
+     #    Recording only what the fence scales makes the restore structurally
+     #    incapable of touching anything else.
+     #
+     #    `-l app.kubernetes.io/instance=<release>` still scopes it to THIS
+     #    release, so an unrelated workload sharing the namespace is neither
+     #    recorded nor "restored".
+     #
+     #    `mktemp -d`, not `/tmp/pitr-fence-$(date +%s)`: two runs started in the
+     #    same second shared one directory, and the restore step's `ls -dt |
+     #    head -1` could then hand you an EARLIER run's state. The META file is
+     #    how the restore step proves it is reading the right run's directory
+     #    rather than trusting mtime.
+     STATE_DIR="$(mktemp -d "/tmp/pitr-fence-XXXXXXXX")"
+     {
+       echo "procedure: manual failover (promote the standby)"
+       echo "release: <release>"
+       echo "namespace: $NS"
+       echo "started: $(date -Is)"
+       echo "operator: ${USER:-unknown}@$(hostname)"
+     } > "$STATE_DIR/META"
+     jpr='{range .items[*]}{.kind}{"\t"}{.metadata.name}{"\t"}{.metadata.labels.app\.kubernetes\.io/component}{"\t"}{.spec.replicas}{"\n"}{end}'
+     # NOTE the redirect stays on the awk line. A continuation line that STARTS
+     # with `>` is a shell redirect to markdown and a blockquote marker to
+     # anything that strips prefixes -- including this repo's own block-extraction
+     # harness, which ate it and silently verified a pipeline with no output file.
+     kubectl -n "$NS" get deploy,statefulset -l "app.kubernetes.io/instance=<release>" -o jsonpath="$jpr" \
+       | awk -F'\t' -v OFS='\t' '$3 ~ /^(web|rest|auth|storage|functions|realtime|meta|studio)(-.+)?$/ { print $1, $2, $3, $4 }' > "$STATE_DIR/replicas.txt"
+     # awk exits 0 on no matches, so the empty case needs its own guard -- the
+     # same "matched nothing" shape as the fence's NOTHING MATCHED below.
+     if [ ! -s "$STATE_DIR/replicas.txt" ]; then
+       echo "STOP: recorded ZERO writer workloads -- wrong release name or namespace. Nothing to restore later; do not proceed." >&2
+       exit 1
+     fi
      kubectl -n "$NS" get hpa -l "app.kubernetes.io/instance=<release>" -o yaml > "$STATE_DIR/hpa.yaml"
-     echo "prior state recorded in $STATE_DIR -- step 5 reads it back. Note the path down."
+     printf '\n>>> STATE_DIR=%s <<<  step 5 needs this EXACT path. Write it down.\n\n' "$STATE_DIR"
 
      # 2. Delete the edge-functions HPA, now that it is recorded. NOT because
      #    `kubectl scale --replicas=0` gets undone -- it does not: with
@@ -327,7 +381,42 @@ is already warm.
        fi
      fi
 
-     echo "FENCED: pg_cron paused, write CronJobs suspended, every web/rest/auth/storage/edge/realtime/meta/studio pod gone."
+     # 6. STOP THE OLD PRIMARY, and wait for its pod to actually go. Do this
+     #    LAST: steps 0 and 1 needed it alive to pause pg_cron and read state.
+     #
+     #    This step did not exist until 2026-09-03, and its absence made
+     #    everything above insufficient on the planned major-version path. Step 1
+     #    only "confirms the primary is really down" in prose. Nothing enforced
+     #    it, so `fenced` could pass with `<release>-postgres-0` up and Running:
+     #    the `<release>-postgres` Service still selects `component=postgres`, so
+     #    every in-cluster client that resolves it -- plus anything holding a
+     #    supavisor pooled connection, which this fence deliberately leaves up --
+     #    keeps committing to the OLD node. Promote on top of that and there are
+     #    two writable primaries sharing one `WALG_S3_PREFIX`, which is the split
+     #    brain step 1, the role-reversal warning under the promotion drill, and
+     #    the "no automatic leader election" note all exist to forbid.
+     #
+     #    The promotion drill has rehearsed this since it was written (step 3(a):
+     #    scale the StatefulSet to 0, then `wait --for=delete`). The real
+     #    procedure did not do the thing its own drill rehearses.
+     #
+     #    On the EMERGENCY path this is close to a no-op -- the pod is already
+     #    gone and `wait --for=delete` on a name that does not exist returns
+     #    immediately -- but it still pins the StatefulSet at 0 so nothing
+     #    reschedules it while you promote.
+     #
+     #    Safe now, and only now, because step 1 no longer records the Postgres
+     #    StatefulSets: `replicas.txt` is filtered to the writer allowlist, so
+     #    step 5's restore loop cannot scale this back to 1 behind your back.
+     kubectl -n "$NS" scale statefulset <release>-postgres --replicas=0
+     if ! kubectl -n "$NS" wait --for=delete pod/<release>-postgres-0 --timeout=180s; then
+       echo "STOP: <release>-postgres-0 is STILL PRESENT after 180s. Do NOT promote:" >&2
+       echo "  the <release>-postgres Service still selects it, so it can still be taking writes," >&2
+       echo "  and promoting now creates a second primary on a divergent timeline." >&2
+       exit 1
+     fi
+
+     echo "FENCED: pg_cron paused, write CronJobs suspended, every writer pod gone, OLD PRIMARY STOPPED."
    )
    ```
 
@@ -362,11 +451,11 @@ is already warm.
      # (`if [ -z "$WRITERS" ] ... NOTHING MATCHED`) but THIS is a separate code
      # block with its own `<release>` placeholder, filled in independently, so
      # that guard does not cover it -- and unlike the `nameOverride` selector bug
-     # this reproduces from a plain namespace typo. A postgres pod is the assertion
-     # to make: it is the thing being protected, it is deliberately still running
-     # here, and on the promote path the standby (`postgres-replica`) stands in for
-     # a dead primary. Zero pods, or pods but no postgres, means the SELECTOR is
-     # empty -- not the cluster.
+     # this reproduces from a plain namespace typo. A postgres-FAMILY pod is the
+     # assertion to make, and on this path it is specifically the STANDBY: the old
+     # primary is required to be gone (see below), so `postgres-replica` is the pod
+     # that proves the selector found the release. Zero pods, or pods but nothing
+     # postgres-shaped, means the SELECTOR is empty -- not the cluster.
      seen="$(printf '%s\n' "$pods" | awk 'NF { n++ } END { print n+0 }')"
      pg="$(printf '%s\n' "$pods" | awk '$1 ~ /^postgres(-replica)?$/ { n++ } END { print n+0 }')"
      if [ "$seen" -eq 0 ] || [ "$pg" -eq 0 ]; then
@@ -398,49 +487,54 @@ is already warm.
        printf '  %s\n' $running_jobs >&2
        return 1
      fi
-     # pg_cron is checked HERE, and until 2026-09-03 this procedure checked it
-     # nowhere. ~20 scheduled jobs commit in-DB every minute with no pod to
-     # scale, so the writer-pod count above cannot see them: with the app pods
-     # gone and 3 cron jobs active this gate printed `fence verified: no writer
-     # pods present` and ran `pg_ctl promote`.
+     # THE OLD PRIMARY MUST BE GONE. This is step 1's stated precondition, and
+     # nothing enforced it until 2026-09-03. The first version of this arm was
+     # weaker AND wrong-shaped: with the primary present it accepted "zero active
+     # pg_cron jobs" as sufficient and let the promote proceed. It is not
+     # sufficient. A running `<release>-postgres-0` is still selected by the
+     # `<release>-postgres` Service (`component=postgres`), so every in-cluster
+     # client that resolves that name -- and anything holding a supavisor pooled
+     # connection on :6543, which this fence leaves up on purpose -- can still
+     # commit to it, with or without pg_cron. Promote on top of a live primary and
+     # you have two writable nodes archiving into one `WALG_S3_PREFIX`.
      #
-     # WHICH server to check is the whole subtlety, and it is why this is not a
-     # copy of the disaster-recovery check. `cron.job` rows live in the primary's
-     # database, and pg_cron's worker does not launch jobs while
-     # `pg_is_in_recovery()`, so the standby's replicated copy of that table
-     # proves nothing about what is RUNNING. So branch on the primary's presence,
-     # decided from the POD LIST above rather than from an exec that could fail
-     # for unrelated reasons:
-     #   * No `postgres` pod -> the old primary is gone, which is step 1's
-     #     precondition for promoting at all, so nothing can be firing its cron
-     #     jobs. Satisfied, and said out loud rather than silently skipped.
-     #   * `postgres` pod still present -> this is the planned major-version
-     #     upgrade that planned-maintenance.md routes here. The old primary is
-     #     ALIVE and its pg_cron keeps committing on the OLD timeline after the
-     #     promote -- commits on a timeline the new primary will never have, lost
-     #     silently. That is the split brain step 1 exists to prevent, so the
-     #     pause must be verified on the PRIMARY, not on the node being promoted.
+     # So the pg_cron sub-check is gone from here, replaced by the stronger
+     # condition that subsumes it: no primary pod, therefore no pg_cron on the
+     # primary and no client writes to it either. Step 2's step 6 is what makes this
+     # satisfiable (scale the StatefulSet to 0, wait for the pod), and it is safe
+     # to hold at 0 because that step's state capture no longer records the
+     # Postgres StatefulSets into `replicas.txt`.
+     #
+     # Decided from the POD LIST already fetched above, not from a fresh probe --
+     # one `get pod` failure is already handled, and a second call is a second
+     # thing that can fail open.
      primary="$(printf '%s\n' "$pods" | awk '$1 == "postgres" { n++ } END { print n+0 }')"
-     if [ "$primary" -eq 0 ]; then
-       echo "note: no primary pod present, so pg_cron cannot be firing -- which is the precondition for promoting."
-     else
-       # Take the exec's EXIT STATUS, and no pipeline, for the reason `get pod`
-       # above does: `crons="$(kubectl exec ... | tr -d '[:space:]')"` reports
-       # only `tr`'s status, and there is no `set -o pipefail` in a function
-       # pasted into an interactive shell, so an exec that printed a count and
-       # THEN failed (SPDY reset, API-server timeout) left `crons="0"` and passed.
-       if ! crons="$(kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
-         -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;")"; then
-         echo "NOT FENCED: the old primary is STILL RUNNING and its cron.job could not be read -- refusing to promote." >&2
-         return 1
-       fi
-       crons="${crons//[[:space:]]/}"
-       if [ "$crons" != "0" ]; then
-         echo "NOT FENCED: $crons pg_cron job(s) active on the OLD primary -- promoting now strands their commits on the abandoned timeline. Refusing." >&2
-         return 1
-       fi
+     if [ "$primary" -ne 0 ]; then
+       echo "NOT FENCED: the OLD PRIMARY ($primary pod) is still running -- refusing to promote." >&2
+       echo "  The <release>-postgres Service still selects it, so it can still be taking writes." >&2
+       echo "  Promoting now creates a second writable primary on a divergent timeline, both" >&2
+       echo "  archiving into the same WALG_S3_PREFIX. Run step 2's step 6 first:" >&2
+       echo "    kubectl -n \"$NS\" scale statefulset <release>-postgres --replicas=0" >&2
+       echo "    kubectl -n \"$NS\" wait --for=delete pod/<release>-postgres-0 --timeout=180s" >&2
+       return 1
      fi
-     echo "fence verified: postgres present, no writer pods, no active write Jobs, no active pg_cron jobs"
+     # pg_cron: report, do not gate, and be explicit about why. `cron.job` rows
+     # are replicated, so this reads the standby's copy -- which says what the
+     # promoted node will START DOING the moment it leaves recovery, not what is
+     # running now (pg_cron's worker does not launch jobs while
+     # `pg_is_in_recovery()`). It cannot be a gate: on the emergency path there is
+     # no writable server to pause them ON before the promote, so a hard refusal
+     # here would block exactly the failover this procedure exists for. The
+     # promote sequence below pauses them immediately after verification instead,
+     # which is enforcement in code rather than an obligation in prose.
+     if ! crons="$(kubectl -n "$NS" exec <release>-postgres-replica-0 -c postgres -- psql -U supabase_admin \
+       -d postgres -tAc "SELECT count(*) FROM cron.job WHERE active;")"; then
+       echo "NOT FENCED: could not read cron.job on the standby (the exec failed) -- refusing to promote." >&2
+       return 1
+     fi
+     crons="${crons//[[:space:]]/}"
+     echo "fence verified: old primary stopped, standby present, no writer pods, no active write Jobs"
+     echo "  ($crons pg_cron job(s) still marked active -- the promote sequence pauses them right after it verifies)"
    }
 
    # Promote and VERIFY as one sequence under `set -e`. The two loose commands
@@ -476,6 +570,17 @@ is already warm.
              "SELECT pg_is_in_recovery(), current_setting('transaction_read_only'), txid_current();")" \
           && [ "${out#f|off|}" != "$out" ]; then
          echo "PROMOTED: out of recovery, writable, xid allocated -- $out"
+         # PAUSE pg_cron ON THE NEW PRIMARY, immediately, before returning. The
+         # node has just left recovery, so pg_cron's worker is now free to launch
+         # every job still marked active -- all ~20 at once, while step 4 has not
+         # repointed a single service and every app writer is still at 0. On the
+         # planned path step 2 already paused them and it replicated, so this is
+         # 0 rows and idempotent. On the emergency path step 2 could NOT pause
+         # them (you cannot UPDATE a standby), so this is the only place it can
+         # happen -- which is why it is here in code and not an obligation in
+         # prose. Step 2 recorded the jobids off the standby for step 5 to resume.
+         kubectl -n "$NS" exec <release>-postgres-replica-0 -c postgres -- psql -U supabase_admin \
+           -d postgres -c "UPDATE cron.job SET active=false WHERE active;"
          exit 0
        fi
        sleep 2
@@ -491,38 +596,122 @@ is already warm.
    timeline — so the archive continues from the new primary.
 
 4. **Repoint services at the new primary.** The services address the primary by
-   the `<release>-postgres` Service name. Fastest cutover: scale the old primary
-   StatefulSet to 0 and point the `<release>-postgres` Service selector at the
-   promoted pod, **or** (cleaner, GitOps) promote the standby's data into a
-   rebuilt primary. For an emergency, editing the `<release>-postgres` Service
-   selector to match the replica pod's labels is the quickest redirect; record
-   it so the values file is reconciled afterward.
-5. **Scale writers back up — step 2 in reverse, from what step 2 recorded.**
-   Note the pg_cron resume runs against the **new** primary (the promoted pod),
-   which is what `<release>-postgres` now selects after step 4; the jobids are
-   the ones step 2 printed, replicated across with the rest of the table:
+   the `<release>-postgres` Service name. The old primary is already stopped —
+   that moved into step 2's step 6, because it is a precondition of promoting at
+   all rather than a cutover detail, and `fenced` now refuses while its pod
+   exists. So what is left here is the redirect:
 
    ```bash
-   # $STATE_DIR did NOT survive step 2 -- it was assigned inside that step's
-   # `( set -euo pipefail )` subshell. Use the path that step printed; `ls -t`
-   # picks the newest if you did not note it down.
-   STATE_DIR="$(ls -dt /tmp/pitr-fence-* | head -1)"
-   [ -s "$STATE_DIR/replicas.txt" ] || { echo "no recorded state in $STATE_DIR -- do NOT guess replica counts" >&2; exit 1; }
-   echo "restoring from $STATE_DIR"
+   kubectl -n "$NS" patch svc <release>-postgres --type=merge -p \
+     '{"spec":{"selector":{"app.kubernetes.io/component":"postgres-replica"}}}'
+   kubectl -n "$NS" get svc <release>-postgres -o jsonpath='{.spec.selector}{"\n"}'
+   ```
 
-   # 1. Resume pg_cron for exactly the jobids step 2 printed. `WHERE active`
+   The cleaner end state is to promote the standby's data into a **rebuilt
+   primary** (step 6) so the chart's own identity holds again. This patch is the
+   emergency redirect that gets writes flowing in the meantime — record it,
+   because it is hand-owned state that a `helm upgrade` will revert (see the
+   warning in step 5).
+
+5. **Scale writers back up — step 2 in reverse, from what step 2 recorded.**
+   The pg_cron resume runs against the **new** primary, resolved from what step 4
+   made the `<release>-postgres` Service select rather than from a hardcoded pod
+   name; the jobids are the ones step 2 printed (from the old primary on the
+   planned path, from the standby's replicated copy on the emergency one):
+
+   ```bash
+   # PASS THE PATH IN -- do not rediscover it. Step 2 printed
+   # `>>> STATE_DIR=... <<<`; export it or paste it here. `$STATE_DIR` does not
+   # survive step 2, which assigned it inside a `( set -euo pipefail )`
+   # subshell.
+   #
+   # This was `STATE_DIR="$(ls -dt /tmp/pitr-fence-* | head -1)"`, and before that
+   # `done < /tmp/pitr-fence-replicas-*.txt` -- a glob in a redirect, which on a
+   # second run refused with `ambiguous redirect` and restored NOTHING. `ls -dt`
+   # fixed that and left a subtler one: the directory name was
+   # `$(date +%s)`-suffixed, so two runs started in the SAME SECOND shared one
+   # directory, and mtime ordering can hand you an earlier run's state either
+   # way. `mktemp -d` makes the collision impossible; requiring the path makes
+   # choosing the wrong directory impossible; the META check below makes acting
+   # on someone else's run impossible.
+   : "${STATE_DIR:?set STATE_DIR to the exact path step 2 printed}"
+   [ -s "$STATE_DIR/replicas.txt" ] || { echo "no recorded writer state in $STATE_DIR -- do NOT guess replica counts" >&2; exit 1; }
+   cat "$STATE_DIR/META"        # confirm procedure/release/namespace/time before acting
+   grep -qx "namespace: $NS" "$STATE_DIR/META" || { echo "STOP: $STATE_DIR was recorded for a DIFFERENT namespace" >&2; exit 1; }
+   grep -qx "release: <release>" "$STATE_DIR/META" || { echo "STOP: $STATE_DIR was recorded for a DIFFERENT release" >&2; exit 1; }
+
+   # 1. RESOLVE THE PRIMARY POD, do not name it. This line said
+   #    `<release>-postgres-0` -- the pod step 2's step 6 scaled to zero and
+   #    waited for, or that was already gone. The exec therefore returned
+   #    NotFound, and because the failure sat above the loops that follow with
+   #    nothing to stop them, every paused pg_cron job stayed DISABLED while the
+   #    app writers and CronJobs came back: a silently half-restored system whose
+   #    only symptom is gradebook recalculation, deadline checks and sync never
+   #    running again. Nothing alerts on that.
+   #
+   #    Ask the Service which pod is the primary now, because step 4 is what
+   #    decided: it patches `spec.selector.app.kubernetes.io/component`, so that
+   #    field is the answer whether the cutover was the Service repoint or a
+   #    rebuilt primary.
+   PG_COMPONENT="$(kubectl -n "$NS" get svc <release>-postgres \
+     -o jsonpath='{.spec.selector.app\.kubernetes\.io/component}')"
+   PRIMARY_POD="$(kubectl -n "$NS" get pod \
+     -l "app.kubernetes.io/instance=<release>,app.kubernetes.io/component=$PG_COMPONENT" \
+     -o jsonpath='{.items[0].metadata.name}')"
+   if [ -z "$PRIMARY_POD" ]; then
+     echo "STOP: the <release>-postgres Service selects component='$PG_COMPONENT' and no pod matches." >&2
+     echo "  Step 4 did not complete. Do NOT restore writers onto a Service with no primary." >&2
+     exit 1
+   fi
+   echo "primary is $PRIMARY_POD (Service selects component=$PG_COMPONENT)"
+
+   #    And prove it is WRITABLE before trying to write to it -- a repoint at the
+   #    wrong selector, or a promote that did not take, both land here as a
+   #    read-only server, and `UPDATE cron.job` against one fails in a way easy
+   #    to skim past.
+   if ! pgstate="$(kubectl -n "$NS" exec "$PRIMARY_POD" -c postgres -- psql -U supabase_admin \
+       -d postgres -tAc "SELECT pg_is_in_recovery(), current_setting('transaction_read_only');")" \
+     || [ "${pgstate#f|off}" = "$pgstate" ]; then
+     echo "STOP: $PRIMARY_POD is not a writable primary (got '${pgstate:-<no answer>}')." >&2
+     echo "  Fix the promote/repoint first; restoring writers onto a read-only primary just 500s." >&2
+     exit 1
+   fi
+
+   # 2. Resume pg_cron for exactly the jobids step 2 printed. `WHERE active`
    #    with no id list would also enable jobs that were disabled on purpose.
-   kubectl -n "$NS" exec <release>-postgres-0 -c postgres -- psql -U supabase_admin \
+   kubectl -n "$NS" exec "$PRIMARY_POD" -c postgres -- psql -U supabase_admin \
      -d postgres -c "UPDATE cron.job SET active=true WHERE jobid = ANY(ARRAY[<recorded-jobids>]::bigint[]);"
 
-   # 2. Restore each writer to its RECORDED replica count, by the recorded kind
+   # 3. Restore each writer to its RECORDED replica count, by the recorded kind
    #    so the realtime StatefulSet comes back too. Read it from the file; do not
-   #    hardcode.
-   while IFS=$'\t' read -r kind name replicas; do
+   #    hardcode. `replicas.txt` holds ONLY the writer allowlist, so this loop
+   #    cannot scale `<release>-postgres` back to 1 and restart the abandoned
+   #    old primary -- which is what it did before the capture was filtered.
+     # VALIDATE THE WHOLE FILE BEFORE SCALING ANYTHING, against the SAME allowlist
+   # the capture uses. The capture filters, so a file this runbook wrote cannot
+   # contain a non-writer -- but one hand-edited, copied from an older run, or
+   # written before the capture was filtered can, and this loop is the
+   # destructive end. Executed against a file carrying
+   # `StatefulSet pawtograder-postgres postgres 1`, the unguarded loop scaled
+   # Postgres back to 1. A PRE-PASS rather than a check inside the loop, so a
+   # bad row cannot be reached after some rows have already been scaled.
+   bad="$(awk -F'\t' '$3 !~ /^(web|rest|auth|storage|functions|realtime|meta|studio)(-.+)?$/ { print $1 "/" $2 " (component=" $3 ")" }' "$STATE_DIR/replicas.txt")"
+   if [ -n "$bad" ]; then
+     echo "STOP: $STATE_DIR/replicas.txt lists non-writer workloads. Scaling NOTHING:" >&2
+     echo "$bad" | sed 's/^/  /' >&2
+     echo "  Restoring Postgres from a state file is how the promote path restarted an" >&2
+     echo "  abandoned primary onto a dead timeline. Fix the file; do not run past this." >&2
+     exit 1
+   fi
+   # `component` is read only to consume the third field; the pre-pass above
+   # is what validates it. Named rather than `_` so the file format stays
+   # legible to whoever reads this next.
+   # shellcheck disable=SC2034  # positional field, checked in the pre-pass
+   while IFS=$'\t' read -r kind name component replicas; do
      kubectl -n "$NS" scale "${kind,,}" "$name" --replicas="$replicas"
    done < "$STATE_DIR/replicas.txt"
 
-   # 3. Unsuspend the CronJobs to their PRIOR values (not blindly to false).
+   # 4. Unsuspend the CronJobs to their PRIOR values (not blindly to false).
    if [ -s "$STATE_DIR/cronjobs.txt" ]; then
      while IFS=$'\t' read -r name prior; do
        kubectl -n "$NS" patch cronjob "$name" --type=merge -p "{\"spec\":{\"suspend\":${prior}}}"
@@ -639,7 +828,11 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
        FROM pg_stat_replication WHERE usename='supabase_replication_admin';"
    # (a) Fence the old primary, and WAIT for it to actually exit — scaling the
    #     StatefulSet to 0 does not prove drill-postgres-0 has stopped, and promoting
-   #     while it is still up risks a split brain.
+   #     while it is still up risks a split brain. The drill has done this since
+   #     it was written; the real procedure did not, until step 2's step 6 was
+   #     added on 2026-09-03 and `fenced` was taught to refuse while a primary
+   #     pod exists. So this pair of lines is now a rehearsal of the real thing
+   #     rather than a discipline the drill had to itself.
    kubectl -n "$DRILL_NS" scale statefulset drill-postgres --replicas=0
    kubectl -n "$DRILL_NS" wait --for=delete pod/drill-postgres-0 --timeout=120s
    # (b) Promote the standby. pg_ctl refuses to run as root, and in THIS overlay
