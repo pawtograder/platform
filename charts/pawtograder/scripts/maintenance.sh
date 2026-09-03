@@ -75,10 +75,45 @@ FUNCTIONS_HPA="${RELEASE}-functions"
 STATE_CM="${RELEASE}-maintenance-state"
 INSTANCE_LABEL="app.kubernetes.io/instance=${RELEASE}"
 
-# Writer Deployments fenced (scaled to 0) in one step (channels web-*/functions-*
-# are discovered at runtime). `functions` is included here so it is captured,
-# scaled, gated, and restored uniformly with the rest.
-STABLE_WRITERS=(functions web rest auth storage realtime)
+# Writer workloads fenced (scaled to 0) in one step. Channels (component
+# web-<channel> / functions-<channel>) are discovered at runtime by prefix, and so
+# is the 0.4.0 background-worker tier: its component is `functions-workers`, which
+# the `^functions-` channel prefix already matches, so it needs no entry here.
+# `functions` is listed so the request tier is captured, scaled, gated and
+# restored uniformly with the rest.
+#
+# `meta` AND `studio` ARE IN THIS LIST, and were not until 2026-09-03. That
+# omission made this script's fence WEAKER than the manual sequence in
+# docs/operations/planned-maintenance.md that it is supposed to supersede: an
+# operator driving the window with the script left two SUPERUSER Postgres writers
+# running through a window the script then reported as fenced.
+#   - meta   (templates/meta.yaml)   PG_META_DB_HOST / _USER / _PASSWORD
+#   - studio (templates/studio.yaml) POSTGRES_HOST / _PORT / _DB / _PASSWORD,
+#                                    under the comment "Direct postgres access
+#                                    for the Database/SQL editor pages"
+# Both read POSTGRES_PASSWORD from the same Secret key as every other tier -- so
+# they hold the superuser credential, not a scoped one -- and both default to
+# enabled (values.yaml meta.enabled / studio.enabled), and both were running in
+# live prod when this was found.
+#
+# Studio is here ON PURPOSE. The one argument for leaving it out, that nobody uses
+# Studio during a maintenance window, is exactly backwards: the SQL editor is what
+# someone reaches for to LOOK AT THE DATABASE during an incident, which is
+# precisely when the fence has to hold. Fencing it does mean the Studio ingress
+# has no ready endpoints for the duration and that host serves the ingress
+# controller's own 503; that is the intended posture for a window, not a
+# regression. `up` restores it from the state ConfigMap like everything else.
+#
+# DELIBERATELY ABSENT, so nobody "completes" this list by adding them:
+#   - postgres / postgres-replica: the database itself. discover_writers queries
+#     StatefulSets too (realtime is one), so these WOULD be matched and scaled if
+#     their components appeared here. They must never appear here.
+#   - supavisor: a connection POOLER, not an originator of writes. Scaling it
+#     fences nothing -- every tier in this chart dials postgres directly -- and it
+#     would only break the operator's own psql path.
+#   - imgproxy, kong, redis, smtp-relay: checked rather than assumed; none has any
+#     DB reference in its rendered pod template in any of the six example overlays.
+STABLE_WRITERS=(functions web rest auth storage realtime meta studio)
 
 # Write-capable CronJobs to suspend for the window (component suffixes).
 SUSPEND_CRONJOBS=(audit-partitions backup-restore-drill backup-pitr-drill backup-verify)
@@ -182,6 +217,40 @@ discover_writers() {
         channel = (comp ~ /^web-/ || comp ~ /^functions-/)
         if (comp ~ stable || channel) print kind, nm, rep
       }'
+}
+
+# FAIL CLOSED WHEN DISCOVERY FINDS NOTHING, OR MISSES A WRITER THAT EXISTS.
+#
+# discover_writers selects on `app.kubernetes.io/instance=<release>` AND a
+# component match. Either half can silently select NOTHING -- a wrong --release,
+# a namespace whose release is named differently, a chart that stops stamping the
+# instance label -- and every downstream step TOLERATES an empty list: the scale
+# loop is skipped, the pod gate reads zero rows and sums 0 running / 0 unreadable,
+# and `down` prints SAFE TO BOUNCE having fenced nothing at all. Executed rather
+# than reasoned: with the selector stubbed to return no rows, the script reached
+# "SAFE TO BOUNCE" with zero `kubectl scale` calls.
+#
+# The check is NAME-based on purpose, so that it does not depend on the same label
+# selector it is checking. `<release>-<component>` is how this script already
+# derives PG_POD, MAINT_SVC and FUNCTIONS_HPA, and `down` has already died at its
+# precondition if `${RELEASE}-postgres-0` does not resolve -- so the naming
+# assumption is one the script has already validated by the time we get here.
+#
+# A stable writer that EXISTS by name but is absent from the label-selected list
+# means the SELECTOR is wrong, not that the tier is off: a tier disabled in values
+# has no workload at all, so the existence probe skips it and no false refusal
+# results.
+verify_writer_discovery() {
+  local file="$1" w missing=""
+  [ -s "$file" ] || die "writer discovery matched NOTHING in ${NAMESPACE} for release '${RELEASE}' (label ${INSTANCE_LABEL}). Refusing to fence: every later step treats an empty list as 'already terminated' and would report SAFE TO BOUNCE without fencing anything. Check --namespace/--release."
+  for w in "${STABLE_WRITERS[@]}"; do
+    if k get deploy "${RELEASE}-${w}" >/dev/null 2>&1 \
+       || k get statefulset "${RELEASE}-${w}" >/dev/null 2>&1; then
+      cut -f2 "$file" | grep -qxF "${RELEASE}-${w}" \
+        || missing="${missing}${missing:+, }${RELEASE}-${w}"
+    fi
+  done
+  [ -z "$missing" ] || die "these writer workloads exist but were NOT matched by the discovery selector (${INSTANCE_LABEL} + component): ${missing}. Refusing to fence: they would keep writing through a window this script would then report as fenced."
 }
 
 # ----------------------------------------------------------------------------
@@ -386,7 +455,11 @@ cmd_down() {
     fi
   fi
   # writer/channel/functions replica counts (functions is in STABLE_WRITERS).
+  # Verified before ANY mutation: the state ConfigMap below is the first write, so
+  # a refusal here leaves the cluster untouched.
   discover_writers > "$tmp/deploy_replicas"
+  verify_writer_discovery "$tmp/deploy_replicas"
+  log "writers to fence: $(cut -f2 "$tmp/deploy_replicas" | tr '\n' ' ')"
   # CronJob prior suspend states (suspended in step 3; captured now so state is
   # complete before we persist and mutate).
   : > "$tmp/cronjobs_suspend"
@@ -415,7 +488,38 @@ cmd_down() {
   #    exists), so a failure here can never strand cron in the disabled state.
   step "2/6 pg_cron" "pausing scheduled jobs"
   psql_exec "UPDATE cron.job SET active=false WHERE active;"
-  ok "pg_cron paused"
+  # VERIFY THE PAUSE TOOK, positively, before anything downstream treats the DB
+  # as fenced. `set -euo pipefail` plus ON_ERROR_STOP=1 do make a psql_exec
+  # failure propagate, so this is not closing a hole -- it is closing the gap
+  # between "the UPDATE returned 0" and "no cron job is active", which are not the
+  # same statement. A row inserted between the read in step 1 and this UPDATE, or
+  # a job whose `active` flag is set by something else, is invisible to the first
+  # and caught by the second.
+  #
+  # It also matters because this is the ONE writer class the fence cannot see
+  # later: steps 3-5 fence by scaling workloads and gate on pod counts, and
+  # pg_cron has no pod. If it is still running, every app pod is gone and the
+  # cluster looks perfectly quiet while ~20 scheduled jobs keep writing in-DB.
+  # docs/operations/planned-maintenance.md verifies the same thing in its manual
+  # step 0 and re-checks it in its fence gate; the script is the recommended path,
+  # so it gets the stronger check too.
+  #
+  # FAIL-CLOSED ON AN UNREADABLE COUNT, separately from a non-zero one. psql_ro
+  # swallows errors and returns "" by design, so "" must be an abort and not a
+  # falsy compare -- the two cases get different messages because they need
+  # different operator actions.
+  if $DRY_RUN; then
+    log "[dry-run] would verify cron.job has no active rows after the pause"
+  else
+    local still_active
+    still_active="$(psql_ro "SELECT count(*) FROM cron.job WHERE active;")"
+    if ! [[ "$still_active" =~ ^[0-9]+$ ]]; then
+      die "could not read cron.job after pausing it (got '${still_active:-<empty>}'). The in-database writers are UNVERIFIED; do not bounce. State is already captured in configmap/${STATE_CM}, so '$0 up' will restore cron."
+    elif [ "$still_active" -ne 0 ]; then
+      die "pg_cron pause did not take: ${still_active} job(s) still active after the UPDATE. Do not bounce -- these write to the primary with no pod to scale. State is captured in configmap/${STATE_CM}; investigate, then re-run '$0 down'."
+    fi
+  fi
+  ok "pg_cron paused (verified: 0 active jobs)"
 
   # 3. Fence: put the maintenance page up AND scale EVERY writer tier to 0 in one
   #    step. Producers on the web host see the 503 page; edge-runtime's
