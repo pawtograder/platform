@@ -383,6 +383,37 @@ to_mib() {
 # wholesale (channels[] carries only `image` and `replicas` -- see
 # edge-functions-channels.yaml), which is what makes one request figure exact for
 # all of them.
+#
+# WHAT THIS DELIBERATELY DOES NOT MEASURE: THE ROLLOUT PEAK. Both figures are
+# STEADY STATE. There is no maxSurge term and no incumbent-fleet term, so the
+# number an operator most needs before the 0.3.17 -> 0.4.0 upgrade -- the peak --
+# is not in this assertion, and cannot be: the incumbent replica count is a
+# cluster fact, not a chart fact. It is written down in README.md ("Peak edge
+# memory during the 0.4.0 rollout") instead, and the two factors of that
+# derivation that ARE renderable -- maxSurge and maxUnavailable -- are pinned at
+# the call site.
+#
+# The short version, because a reader here should not have to go and find it. The
+# rendered edge Deployment omits spec.replicas when the HPA owns it, so an upgrade
+# does not reset the live replica count: the request tier rolls at whatever the
+# HPA last set (staging sat at its old maxReplicas 20), NOT at the new
+# maxReplicas 5. With maxUnavailable 0 / maxSurge 1 an old pod only goes away once
+# its 1.5Gi replacement is Ready, so the pod COUNT stays at N+1 while the MIX
+# shifts from 512Mi pods to 1.5Gi ones:
+#
+#     request tier peak   1 x 512Mi + 20 x 1536Mi   = 31232Mi
+#   + canary surge        1 x 512Mi +  1 x 1536Mi   =  2048Mi
+#   + worker tier         2 x 1536Mi (all new)      =  3072Mi
+#   -------------------------------------------------------
+#                                                     36352Mi = 35.5GiB
+#
+# against 10.5GiB of edge memory requests before the upgrade and 12.0GiB after it.
+# That is an upper BOUND rather than an estimate: whether the HPA's
+# 300s scale-down stabilization window closes in time to clip it is a rate
+# question, and node budgeting should not depend on winning it. THE DIAGNOSTIC
+# TRAP, which is the part that costs an hour at 2am: with maxUnavailable 0 an
+# unschedulable pod STALLS Pending rather than failing, so a node-capacity
+# shortfall presents as a rollout that is simply not progressing.
 assert_edge_reservation() {
   local label="$1" want_floor="$2" want_ceil="$3"; shift 3
   local req_mem wt_mem mn mx wt_reps ch_reps
@@ -934,6 +965,23 @@ assert_rendered_contains "values-staging: the canary channel is a third edge pod
 # only one in this file that is not typed by hand somewhere else too.
 assert_edge_reservation "values-staging: total edge memory reservation is 9.0GiB floor / 12.0GiB ceiling" \
   9216 12288 \
+  -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
+  --set global.environment=staging
+# THE TWO RENDERABLE FACTORS OF THE ROLLOUT PEAK the assertion above cannot cover
+# (see "WHAT THIS DELIBERATELY DOES NOT MEASURE" on assert_edge_reservation, and
+# "Peak edge memory during the 0.4.0 rollout" in README.md). maxUnavailable 0 is
+# what makes the peak additive at all -- an old 512Mi pod survives until its 1.5Gi
+# replacement is Ready -- and it is also what makes a node-capacity shortfall
+# present as a STALLED rollout rather than a failed one. maxSurge 1 is what keeps
+# the peak to one extra pod instead of a 25% burst of them. Pinned so the number
+# in the README stops being derivable the moment either factor changes, rather
+# than silently becoming wrong.
+assert_rendered_contains "values-staging: request tier rolls at maxUnavailable 0 (peak is additive)" \
+  templates/edge-functions.yaml "maxUnavailable: 0" \
+  -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
+  --set global.environment=staging
+assert_rendered_contains "values-staging: request tier rolls at maxSurge 1 (peak is one extra pod)" \
+  templates/edge-functions.yaml "maxSurge: 1" \
   -f "$CHART/examples/values-staging.yaml" "${OVERLAY_FILL[@]}" \
   --set global.environment=staging
 

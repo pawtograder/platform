@@ -60,6 +60,62 @@ and 43.2GiB at the ceiling, against 6GiB and 12GiB before. `updateStrategy` is
 than replacing an old one. `edgeFunctions.workerTier`, if you enable it, adds
 its own 2 x 1.5Gi on top of all of that.
 
+#### Peak edge memory during the 0.4.0 rollout
+
+Every figure above is **steady state**. The rollout itself peaks well above both
+the old and the new steady state, and this is the number to size nodes against.
+
+The chart omits `spec.replicas` from the edge Deployment whenever the HPA owns it,
+so `helm upgrade` does **not** reset the live replica count: the request tier
+rolls out at whatever the HPA last set it to, not at the new `maxReplicas`. With
+`maxUnavailable: 0` / `maxSurge: 1`, an incumbent 512Mi pod survives until its
+1.5Gi replacement is `Ready`, so the pod *count* stays at `N+1` while the *mix*
+shifts. The peak is therefore bounded by
+
+```
+peak = 1 x old_request                       # the last un-replaced incumbent
+     + N_live x new_request                   # N_live = live replicas at upgrade time
+     + (old_request + new_request) x channels # each channel surges by one pod
+     + workerTier_replicas x workerTier_request
+```
+
+For a fleet shaped like `values-staging.yaml`, which sat at its old
+`maxReplicas: 20` with a 512Mi request and one canary channel:
+
+| term | arithmetic | total |
+| --- | --- | --- |
+| request tier | `1 x 512Mi + 20 x 1.5Gi` | 31232Mi |
+| canary channel surge | `1 x 512Mi + 1 x 1.5Gi` | 2048Mi |
+| worker tier (new, schedules at once) | `2 x 1.5Gi` | 3072Mi |
+| **peak** | | **36352Mi ≈ 35.5GiB** |
+
+against **10.5GiB** of edge memory requests before the upgrade and 12.0GiB after
+it. That is an upper bound rather than an estimate: the HPA does clamp the fleet
+to the new `maxReplicas`, but not until its scale-down stabilization window (300s
+by default) has closed, and whether that clips the peak is a race between the
+window and the pod-replacement rate. Do not budget nodes on winning it.
+
+**The cheap mitigation is to remove the transient instead of provisioning for
+it.** Lower the HPA's ceiling *before* the upgrade and let the fleet shrink at the
+old, small request:
+
+```bash
+kubectl patch hpa <release>-functions -n <ns> \
+  -p '{"spec":{"maxReplicas":5}}'
+kubectl get deploy <release>-functions -n <ns> -w   # wait for it to settle at <= 5
+helm upgrade ...                                    # now rolls 5 pods, not 20
+```
+
+**The diagnostic trap.** With `maxUnavailable: 0` an unschedulable pod goes
+`Pending` and *stalls* — nothing fails, so a node-capacity shortfall presents as a
+rollout that is merely not progressing. Every Deployment in this chart renders
+`progressDeadlineSeconds: 1200`, so it does eventually surface as
+`ProgressDeadlineExceeded` on the Deployment, which names the real problem — but
+only if your `helm --timeout` is longer than 20 minutes. Below that, helm's own
+deadline expires first and you get an undiagnosable `context deadline exceeded`
+instead. (This is why the staging auto-deploy in `.github/workflows/release-images.yml`
+uses `--timeout 25m`.)
+
 **Upgrading to 0.4.0 restarts the Postgres primary once**, whether or not you
 enable the worker tier. The primary's pod-template `checksum/config` used to hash
 the whole rendered `monitoring.yaml`; it now hashes only the postgres_exporter
