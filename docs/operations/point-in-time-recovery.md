@@ -81,12 +81,12 @@ kubectl -n "$NS" logs <release>-postgres-0 -c base-backup | tail
 
 # 3. The standby is streaming (run on the PRIMARY):
 kubectl -n "$NS" exec -it <release>-postgres-0 -c postgres -- \
-  psql -U supabase_admin -c "SELECT application_name, state, sync_state,
+  psql -U supabase_admin -d postgres -c "SELECT application_name, state, sync_state,
     write_lag, replay_lag FROM pg_stat_replication;"
 
 # 4. The standby is in recovery and caught up (run on the STANDBY):
 kubectl -n "$NS" exec -it <release>-postgres-replica-0 -c postgres -- \
-  psql -U supabase_admin -c "SELECT pg_is_in_recovery(),
+  psql -U supabase_admin -d postgres -c "SELECT pg_is_in_recovery(),
     now() - pg_last_xact_replay_timestamp() AS replay_delay;"
 ```
 
@@ -416,11 +416,47 @@ is already warm.
      echo "fence verified: postgres present, no writer pods, no active write Jobs, no active pg_cron jobs"
    }
 
-   fenced && kubectl -n "$NS" exec -it <release>-postgres-replica-0 -c postgres -- \
-     pg_ctl promote -D /var/lib/postgresql/data/pgdata
-   # Confirm it left recovery (returns f):
-   kubectl -n "$NS" exec -it <release>-postgres-replica-0 -c postgres -- \
-     psql -U supabase_admin -tAc "SELECT pg_is_in_recovery();"
+   # Promote and VERIFY as one sequence under `set -e`. The two loose commands
+   # this replaces had three separate defects:
+   #   * The `pg_is_in_recovery()` result was printed and never checked, so a
+   #     FAILED promote led straight into step 4 repointing every service at a
+   #     standby still in recovery -- a read-only server, with all writers at 0.
+   #   * The trailing psql MASKED the gate. Executed with `fenced` refusing, the
+   #     promote was correctly skipped and the block still exited 0, because a
+   #     block's status is its last command's. The refusal was invisible.
+   #   * That psql had no `-d postgres`, so it connected to a database named
+   #     after the role: `FATAL: database "supabase_admin" does not exist`. Every
+   #     other psql in these runbooks passes `-d postgres`.
+   # And `pg_is_in_recovery() = f` is necessary but NOT sufficient -- the same
+   # argument planned-maintenance.md makes for its post-bounce check. Also
+   # confirm the node is not read-only and can allocate an xid: `txid_current()`
+   # errors on a read-only or in-recovery server and succeeds on a writable
+   # primary, so it is the check that fails when a promote silently did not take.
+   #
+   # `pg_ctl promote` runs BARE here, with no `su postgres`, and that is correct
+   # for this overlay -- see the note at the promotion drill's step 3(b), which
+   # needs the opposite.
+   (
+     set -euo pipefail
+     fenced
+     kubectl -n "$NS" exec <release>-postgres-replica-0 -c postgres -- \
+       pg_ctl promote -D /var/lib/postgresql/data/pgdata
+     # POLL: pg_ctl returns once the trigger is written, not once the node is
+     # out of recovery, so asking once races the promotion.
+     for _ in $(seq 1 30); do
+       if out="$(kubectl -n "$NS" exec <release>-postgres-replica-0 -c postgres -- \
+           psql -U supabase_admin -d postgres -tAc \
+             "SELECT pg_is_in_recovery(), current_setting('transaction_read_only'), txid_current();")" \
+          && [ "${out#f|off|}" != "$out" ]; then
+         echo "PROMOTED: out of recovery, writable, xid allocated -- $out"
+         exit 0
+       fi
+       sleep 2
+     done
+     echo "PROMOTE UNVERIFIED after 60s: not confirmed out of recovery AND writable." >&2
+     echo "Do NOT repoint services in step 4 -- they would land on a read-only server." >&2
+     exit 1
+   )
    ```
 
    On promotion the node leaves recovery and (because `archive_mode=on` is in
@@ -579,8 +615,15 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
    #     while it is still up risks a split brain.
    kubectl -n "$DRILL_NS" scale statefulset drill-postgres --replicas=0
    kubectl -n "$DRILL_NS" wait --for=delete pod/drill-postgres-0 --timeout=120s
-   # (b) Promote the standby. pg_ctl refuses to run as root, and `kubectl exec`
-   #     enters as the image's root user, so drop to the postgres user.
+   # (b) Promote the standby. pg_ctl refuses to run as root, and in THIS overlay
+   #     `kubectl exec` enters as root, so drop to the postgres user. That is a
+   #     property of the overlay, not of the image: the preview overlay used by
+   #     this drill sets no `runAsUser`, while prod's postgres pods run
+   #     `runAsUser: 101, runAsNonRoot: true` -- exec there already enters AS
+   #     postgres and bare `pg_ctl promote` is correct, which is why the real
+   #     failover above runs it bare. Check `securityContext` in your overlay
+   #     before copying either form: getting it backwards in a real failover
+   #     means the promote errors out with every writer already at 0.
    kubectl -n "$DRILL_NS" exec drill-postgres-replica-0 -c postgres -- \
      su postgres -c "pg_ctl promote -D /var/lib/postgresql/data/pgdata"
    # (c) Repoint the write Service at the promoted pod (edit the selector to the
