@@ -1332,6 +1332,46 @@ assert_refused "a duplicated worker function name is refused" \
 assert_refused "an unrecognized override key is refused, not ignored" \
   "is not an overridable per-tier key" \
   "${WT[@]}" --set edgeFunctions.workerTier.polciy=oneshot
+
+# A QUOTED BOOLEAN ON THE ROLLBACK LEVER. Go templates treat every non-empty
+# string as truthy, so before 2026-09-03 `enabled: "false"` rendered the worker
+# Deployment, its PDB, its alerts and all four Kong worker routes while the
+# operator believed the tier was off. Measured, not reasoned: 19 `functions-workers`
+# occurrences in the render at `--set-string ...enabled=false`.
+#
+# This is the worst key in the chart for that to happen on. `enabled: false` is
+# the documented un-split lever and the recommended rollback -- the runbooks send
+# an on-call person to it mid-incident, and `replicas: 0` is refused at render
+# time specifically to steer them here -- so the one path we tell people to reach
+# for under pressure failed silently, and in the direction of "looks disabled,
+# still routing".
+#
+# BOTH string forms are pinned, and that is the point rather than thoroughness for
+# its own sake: coercing `"false"` to false would fix the case above and create its
+# mirror, where `"true"` silently DISABLES a tier someone asked for. A refusal is
+# the only behaviour that is correct in both directions, so both directions get an
+# assertion.
+#
+# The two REAL booleans are asserted elsewhere in this file and deliberately not
+# duplicated here: `enabled=true` renders the Deployment ("worker tier renders a
+# Deployment"), `enabled=false` renders nothing ("the un-split the failure message
+# recommends actually renders" / "removes the Kong worker routes too"), and
+# `workerTier: null` still renders clean ("workerTier: null renders as if the tier
+# were disabled") -- that last one is the property the `| default dict` idiom in
+# the helper exists for, and it has to survive this validation.
+assert_refused "a quoted workerTier.enabled=\"false\" is refused, not read as true" \
+  "edgeFunctions.workerTier.enabled must be a YAML boolean" \
+  --set-string edgeFunctions.workerTier.enabled=false
+assert_refused "a quoted workerTier.enabled=\"true\" is refused too (no coercion either way)" \
+  "edgeFunctions.workerTier.enabled must be a YAML boolean" \
+  --set-string edgeFunctions.workerTier.enabled=true
+# The SIBLING read on the same line of the helper. It has the identical hazard and
+# is caught today only incidentally, by NOTES.txt passing it to `ternary` -- which
+# aborts with "wrong type for value; expected bool; got string" and names no key.
+# Pinned so the message keeps naming the key.
+assert_refused "a quoted edgeFunctions.enabled is refused with the key named" \
+  "edgeFunctions.enabled must be a YAML boolean" \
+  --set-string edgeFunctions.enabled=false
 # A routed tier exists partly so it never evicts: it serves a handful of bundles,
 # all of them hot. Sized off the MEDIAN bundle (37Mi), not the largest: the
 # routed set is KNOWN at render time, so charging the largest for every member

@@ -317,8 +317,52 @@ Usage:
   {{- $n := int (include "pawtograder.edgeFunctions.workerTier.replicas" .) }}
   {{- $host := include "pawtograder.edgeFunctions.workers.host" . }}
 */}}
+{{/*
+assertBoolValue — refuse a non-boolean where the chart means a boolean, and name
+the key while doing it.
+
+WHY THIS EXISTS. Go templates treat ANY non-empty string as truthy, so
+`enabled: "false"` (quoted in an overlay, or anything that arrives through
+`--set-string`) is TRUE. For edgeFunctions.workerTier.enabled that was a silent
+footgun in the worst possible direction: measured 2026-09-03, a render with
+`--set-string edgeFunctions.workerTier.enabled=false` produced the worker
+Deployment, its PDB, its alerts and all four Kong worker routes -- while the
+operator believed the tier was off.
+
+That matters more than a normal type slip because `enabled: false` is the
+DOCUMENTED un-split lever and the recommended rollback: the runbooks send an
+on-call person to it to return the four functions to the request tier during an
+incident, and `replicas: 0` is refused at render time (see the `lt $replicas 1`
+fail in edge-functions-worker-tier.yaml) specifically to steer them here. So the
+one path we tell people to reach for under pressure was the one that failed
+silently if they quoted the value.
+
+FAIL, NOT COERCE. Treating `"false"` as false would fix that case and introduce
+its mirror: `enabled: "true"` would then silently DISABLE a tier someone asked
+for. Same bug, other direction, and harder to notice. A render-time refusal
+naming the key is the only answer that is right in both directions.
+
+nil is NOT an error here: an ABSENT key means "inherit the default", which is a
+different statement from a wrong type. That is also what keeps
+`edgeFunctions.workerTier: null` rendering (the `| default dict` idiom below
+exists for exactly that) instead of aborting the whole render.
+*/}}
+{{- define "pawtograder.assertBoolValue" -}}
+{{- if and (not (kindIs "invalid" .value)) (not (kindIs "bool" .value)) -}}
+{{- fail (printf "%s must be a YAML boolean (true/false), got %s %#v. Go templates treat every non-empty string as TRUE, so a quoted %#v would ENABLE what you meant to disable -- silently, and this key is the documented rollback lever. Remove the quotes in your values file, and use --set (not --set-string) on the command line." .path (kindOf .value) .value .value) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.edgeFunctions.workerTier.enabled" -}}
 {{- $wt := .Values.edgeFunctions.workerTier | default dict -}}
+{{/* Both operands of the `and` are validated, not just the tier's. Fixing one of
+     two sibling reads on the same line is this branch's recurring failure, and
+     edgeFunctions.enabled has the identical string-truthiness hazard -- it is
+     caught today only INCIDENTALLY, by NOTES.txt passing it to `ternary`, which
+     aborts with a bare "wrong type for value; expected bool; got string" that
+     names no key. */}}
+{{- include "pawtograder.assertBoolValue" (dict "path" "edgeFunctions.enabled" "value" .Values.edgeFunctions.enabled) -}}
+{{- include "pawtograder.assertBoolValue" (dict "path" "edgeFunctions.workerTier.enabled" "value" $wt.enabled) -}}
 {{- if and .Values.edgeFunctions.enabled $wt.enabled -}}true{{- end -}}
 {{- end -}}
 
