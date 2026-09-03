@@ -101,9 +101,11 @@ pull on the new node.
 sequence below with live status output and exact-restore state capture. Use it as
 the primary path; the numbered steps that follow are the underlying reference (and
 the fallback if you need to do it by hand). Its `down` does, in order: pause
-pg_cron → (page up + scale every writer tier to 0, in one fence) → suspend
-write CronJobs → block until all writer pods terminate → report SAFE TO BOUNCE /
-NOT READY. `up` is the reverse (writable preflight → restore writers/channels →
+pg_cron **and verify the pause took** → (page up + scale every writer tier to 0,
+in one fence) → suspend write CronJobs → block until all writer pods terminate →
+report SAFE TO BOUNCE / NOT READY. The pg_cron verification is the same check the
+manual step 0 makes and `fenced` re-makes, for the same reason: pg_cron is the
+one writer class the pod-count gates cannot see. `up` is the reverse (writable preflight → restore writers/channels →
 unsuspend CronJobs → re-apply the functions HPA → resume pg_cron → drop the page
 last).
 
@@ -163,16 +165,14 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
   directly.
 - Write-capable **CronJobs** (`audit-partitions`, the backup drills) are suspended
   for the window and restored afterward.
-- **`meta` and `studio` are writers too, and `maintenance.sh` does not scale
-  them.** Both hold a direct Postgres connection as the `postgres` superuser
-  (`meta`'s `PG_META_DB_*`, `studio`'s `POSTGRES_HOST`/`POSTGRES_PASSWORD`, both
-  from `secrets.names.postgres`) to serve Studio's Database and SQL-editor pages,
-  so an operator with a Studio tab open can commit DDL through a fence that
-  counted only app tiers. It needs a live session, so the likelihood is low and
-  the fix is two words in a regex — which the manual sequence below now has. The
-  script's `STABLE_WRITERS` list does **not** yet: until it does, scale
-  `<release>-meta` and `<release>-studio` to 0 by hand when you drive the window
-  with `maintenance.sh`.
+- **`meta` and `studio` are database writers, and both paths now fence them.**
+  Both hold a direct Postgres connection as the `postgres` superuser (`meta`'s
+  `PG_META_DB_*`, `studio`'s `POSTGRES_HOST`/`POSTGRES_PASSWORD`, both from
+  `secrets.names.postgres`) to serve Studio's Database and SQL-editor pages, so
+  an operator with a Studio tab open could commit DDL through a fence that
+  counted only app tiers. It needs a live session, so the likelihood was low and
+  the fix was two words in a regex. The manual sequence below matches them, and
+  so does the script's `STABLE_WRITERS`.
 
 ### Manual reference sequence
 
