@@ -1207,9 +1207,21 @@ assert_edge_metrics_encoding() {
     echo "FAIL [$label]: no gzip decode path; res.text() on an encoded body yields U+FFFD mojibake"
     bad=1
   fi
-  # An encoding it cannot decode must pass the response through untouched.
-  if ! grep -qE 'unsupported content-encoding' "$src"; then
-    echo "FAIL [$label]: no pass-through for an unsupported content-encoding"
+  # An encoding it cannot decode must pass the response through untouched. Match
+  # the CONTROL FLOW, not the log line: a branch that keeps the diagnostic but
+  # loses its `return res` would corrupt exactly the bodies this is protecting,
+  # and a message-only grep cannot tell the difference. Require `return res`
+  # within the few lines following the diagnostic, before the branch closes.
+  if ! awk '
+      /unsupported content-encoding/ { seen = 1; n = 0; next }
+      seen {
+        n++
+        if ($0 ~ /return res;/) { found = 1; exit }
+        if (n > 4 || $0 ~ /^[[:space:]]*}[[:space:]]*$/) { seen = 0 }
+      }
+      END { exit !found }
+    ' "$src"; then
+    echo "FAIL [$label]: unsupported-encoding branch does not return res; the response would be corrupted"
     bad=1
   fi
   if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi

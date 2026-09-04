@@ -1420,7 +1420,7 @@ budget, zero restarts and zero `OOMKilled`, 412 MiB peak working set.
   produced the expected shape, with the route label as the parameterized pattern
   and the status bucketed:
 
-  ```
+  ```text
   web_http_request_duration_seconds_bucket{le="0.5",route="/api/lti/jwks",method="GET",status="5xx"} 4
   ```
 
@@ -1466,7 +1466,7 @@ storage-api serves `/metrics` only on the admin app or in multitenant mode, and
 that a single-tenant deploy necessarily 404s. Read off the dist bundle in
 `supabase/storage-api:v1.48.26`, that is backwards:
 
-```
+```text
 app.js              plugins.metrics({ enabledEndpoint: !isMultitenant, ... })
 plugins/metrics.js  if (prometheusMetricsEnabled) register(metricsEndpoint)
                       -> if (enabledEndpoint) fastify.get("/metrics", ...)
@@ -1477,7 +1477,7 @@ Single-tenant is the mode where the **main** app serves it, gated only on
 `PROMETHEUS_METRICS_ENABLED`. So the flag was set, deployed to staging as
 revision 89, and the storage tier went into CrashLoopBackOff:
 
-```
+```text
 "Reply was already sent, did you forget to \"return reply\" in the \"/metrics\" (GET) route?"
 Error [ERR_HTTP_HEADERS_SENT]: Cannot write headers after they are sent to the client
   -> uncaughtException -> PID 1 exits
@@ -1496,6 +1496,20 @@ had been protecting. Verifying the mechanism against the bundle was necessary
 but not sufficient -- the missing step was checking what the endpoint does when
 called, not just whether it is registered.
 
+And there is a second, independent reason, which the crashloop masked: **that
+port is publicly routed.** Kong's `storage-v1` service maps `/storage/v1/` to
+`storage:5000/` with `strip_path: true` and a `cors` plugin only -- no auth --
+and the API-host ingress sends every path to Kong. Confirmed from outside the
+cluster: `https://api.staging.pawtograder.net/storage/v1/metrics` reaches
+storage-api's own router (it returns storage-api's 404 JSON, not Kong's) while
+`/storage/v1/status` returns 200. Had the handler worked, the flag would have
+published internal telemetry to the internet unauthenticated. Anyone who
+"fixes" the crashloop by patching storage-api still has this problem.
+
+Credit where due: the crashloop was found by deploying it, but the public-route
+exposure was caught in review, not by testing. Two independent fatal flaws in a
+three-line change whose mechanism had been verified against the shipped bundle.
+
 Resolution: ship neither the flag nor the ServiceMonitor.
 `monitoring.serviceMonitors.storage` now defaults to **false**, because a
 permanently-DOWN 404 target is itself a defect -- it trains everyone to ignore a
@@ -1503,7 +1517,8 @@ DOWN storage row. Storage metrics remain uncollected. The route worth trying is
 the admin app on `ADMIN_PORT` (5001), which registers the same handler behind a
 different hook chain, but that needs its own container port, Service port and
 ServiceMonitor, and the admin app also exposes tenant/migration/s3-credential
-routes -- an exposure decision, not a `monitoring.enabled` side effect.
+routes -- an exposure decision, not a `monitoring.enabled` side effect. It is at
+least not behind the Kong storage route.
 
 ### 12.4 Standing checks to add to §8.0
 

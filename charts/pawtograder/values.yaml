@@ -1833,6 +1833,16 @@ monitoring:
     # Enabling the flag therefore does not produce metrics, it takes the storage
     # tier down on a ~30s scrape interval. Verified on staging 2026-09-04.
     #
+    # AND, independently: /metrics on the main app is PUBLICLY REACHABLE. Kong's
+    # storage-v1 service routes /storage/v1/ to storage:5000/ with
+    # strip_path: true and a cors plugin only -- no auth -- and the API-host
+    # ingress sends every path to Kong. So the endpoint would answer at
+    # https://<api host>/storage/v1/metrics from the internet, unauthenticated.
+    # Confirmed against staging: that URL reaches storage-api's own router (it
+    # returns storage-api's 404 JSON, not Kong's) while /storage/v1/status
+    # returns 200. Anyone "fixing" the crashloop by patching storage-api would
+    # still be publishing internal telemetry.
+    #
     # So we ship neither the flag nor the ServiceMonitor. Leaving the
     # ServiceMonitor on without the flag is merely a permanently-DOWN target (a
     # 404), which is what shipped before and what this default fixes: a target

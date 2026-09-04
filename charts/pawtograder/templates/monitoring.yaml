@@ -749,11 +749,18 @@ spec:
 # before, and a target that can never succeed trains everyone to ignore a DOWN
 # storage row.
 #
+# There is a second, independent reason never to enable it on the main app: that
+# port is PUBLICLY ROUTED. Kong's storage-v1 service maps /storage/v1/ to
+# storage:5000/ with strip_path: true and a cors plugin only, so /metrics would
+# answer at https://<api host>/storage/v1/metrics unauthenticated. Confirmed
+# against staging -- that URL reaches storage-api's own router.
+#
 # The route worth trying for real storage metrics is the ADMIN app on ADMIN_PORT
-# (5001), which registers the same handler behind a different hook chain. That
-# needs its own container port, Service port and ServiceMonitor, and the admin
-# app also exposes tenant/migration/s3-credential routes -- a deliberate
-# exposure decision, not a monitoring.enabled side effect.
+# (5001), which registers the same handler behind a different hook chain and is
+# NOT behind the Kong storage route. That needs its own container port, Service
+# port and ServiceMonitor, and the admin app also exposes
+# tenant/migration/s3-credential routes -- a deliberate exposure decision, not a
+# monitoring.enabled side effect.
 {{- if dig "serviceMonitors" "storage" false .Values.monitoring }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
