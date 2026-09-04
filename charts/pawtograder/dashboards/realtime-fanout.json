@@ -50,7 +50,7 @@
       "id": 3,
       "type": "stat",
       "title": "Server broadcasts / s (1m)",
-      "description": "realtime.send() calls emitted from the Next.js web app, derived from web_realtime_broadcast_total.",
+      "description": "Server-initiated realtime.send() rate. NO DATA TODAY: web_realtime_broadcast_total has no producer. The counter was declared in lib/metrics.ts and never incremented, and has now been removed \u2014 broadcasts are emitted by Postgres triggers, not by web code, so the replacement series comes from a postgres_exporter custom query. See docs/operations/metrics-gap-remediation.md \u00a74 (WS-APP).",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
@@ -89,7 +89,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Server-initiated broadcasts by channel class",
-      "description": "Per-channel broadcast rate from web_realtime_broadcast_total. channel_class is set at the call site (e.g. submission_comments, office_hours).",
+      "description": "Per-channel broadcast rate. NO DATA TODAY \u2014 same missing producer as \"Server broadcasts / s\": web_realtime_broadcast_total was never incremented and has been removed from lib/metrics.ts. The channel_class breakdown has to be reconstructed on the trigger side when the postgres_exporter query lands (docs/operations/metrics-gap-remediation.md \u00a74, WS-APP).",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [

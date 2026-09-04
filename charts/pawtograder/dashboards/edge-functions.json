@@ -64,11 +64,11 @@
         "regex": "/pawtograder-.*/",
         "refresh": 1,
         "current": {
-          "selected": true,
-          "text": "pawtograder-staging",
-          "value": "pawtograder-staging"
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
         },
-        "includeAll": false,
+        "includeAll": true,
         "multi": false
       }
     ]
@@ -283,12 +283,13 @@
       ]
     },
     {
-      "id": 30,
+      "id": 50,
       "type": "timeseries",
-      "title": "Web app's calls to edge functions",
+      "title": "Pod restarts (30m)",
+      "description": "A restart here kills PID 1, so every in-flight request on that pod dies at once and Kong returns 502 to the caller \u2014 including the grading runner. Spikes here line up with 502 spikes to the second.",
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 8,
         "x": 0,
         "y": 30
       },
@@ -299,35 +300,7 @@
       "targets": [
         {
           "refId": "A",
-          "legendFormat": "{{function}} ({{status}})",
-          "expr": "sum by(function, status)(rate(web_edge_function_invocation_total[1m]))"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops"
-        }
-      }
-    },
-    {
-      "id": 50,
-      "type": "timeseries",
-      "title": "Pod restarts (30m)",
-      "description": "A restart here kills PID 1, so every in-flight request on that pod dies at once and Kong returns 502 to the caller \u2014 including the grading runner. Spikes here line up with 502 spikes to the second.",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 38
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\", container=\"functions\"}[30m])",
+          "expr": "increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\", container=\"functions\"}[30m])",
           "legendFormat": "{{pod}}"
         }
       ]
@@ -341,7 +314,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 38
+        "y": 30
       },
       "datasource": {
         "type": "prometheus",
@@ -350,7 +323,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", container=\"functions\"} / on(namespace, pod, container) kube_pod_container_resource_limits{namespace=\"$namespace\", container=\"functions\", resource=\"memory\"})",
+          "expr": "max by (pod) (container_memory_working_set_bytes{namespace=~\"$namespace\", container=\"functions\"} / on(namespace, pod, container) kube_pod_container_resource_limits{namespace=~\"$namespace\", container=\"functions\", resource=\"memory\"})",
           "legendFormat": "{{pod}}"
         }
       ],
@@ -369,7 +342,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 38
+        "y": 30
       },
       "datasource": {
         "type": "prometheus",
@@ -378,7 +351,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (pod) (kube_pod_container_status_last_terminated_reason{namespace=\"$namespace\", container=\"functions\", reason=\"OOMKilled\"})",
+          "expr": "max by (pod) (kube_pod_container_status_last_terminated_reason{namespace=~\"$namespace\", container=\"functions\", reason=\"OOMKilled\"})",
           "legendFormat": "{{pod}}"
         }
       ]
@@ -392,7 +365,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 38
       },
       "datasource": {
         "type": "prometheus",
@@ -401,12 +374,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", container=\"functions\"})",
+          "expr": "max by (pod) (container_memory_working_set_bytes{namespace=~\"$namespace\", container=\"functions\"})",
           "legendFormat": "mem {{pod}}"
         },
         {
           "refId": "B",
-          "expr": "max by (pod) (time() - kube_pod_start_time{namespace=\"$namespace\"})",
+          "expr": "max by (pod) (time() - kube_pod_start_time{namespace=~\"$namespace\"})",
           "legendFormat": "age {{pod}}"
         }
       ],
@@ -425,7 +398,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 54
+        "y": 46
       },
       "datasource": {
         "type": "loki",
@@ -440,7 +413,7 @@
           },
           "editorMode": "code",
           "queryType": "range",
-          "expr": "{namespace=\"$namespace\", component=\"functions\"} |~ \"\\[fn=(${fn:pipe})\\]\""
+          "expr": "{namespace=~\"$namespace\", component=\"functions\"} |~ \"\\[fn=(${fn:pipe})\\]\""
         }
       ],
       "options": {

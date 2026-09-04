@@ -19,12 +19,7 @@ type MetricsBundle = {
   rpcDuration: Histogram<string>;
   rpcErrors: Counter<string>;
   submissionCreated: Counter<string>;
-  submissionMutated: Counter<string>;
   gradingActions: Counter<string>;
-  rubricCheckActions: Counter<string>;
-  officeHoursEvents: Counter<string>;
-  realtimeBroadcasts: Counter<string>;
-  edgeFunctionInvocations: Counter<string>;
 
   // Workflow business gauges. Refreshed from the DB at scrape time —
   // see refreshWorkflowMetrics() below. These are the user-facing
@@ -97,13 +92,6 @@ async function initIfNeeded(): Promise<MetricsBundle | null> {
     registers: [registry]
   });
 
-  const submissionMutated = new promClient.Counter({
-    name: "web_submission_mutated_total",
-    help: "Submission row mutations from the web app (re-grade, retract, swap).",
-    labelNames: ["class_id", "action"],
-    registers: [registry]
-  });
-
   const gradingActions = new promClient.Counter({
     name: "web_grading_action_total",
     help: "Grading actions taken by graders (comment, mark, release).",
@@ -111,33 +99,38 @@ async function initIfNeeded(): Promise<MetricsBundle | null> {
     registers: [registry]
   });
 
-  const rubricCheckActions = new promClient.Counter({
-    name: "web_rubric_check_action_total",
-    help: "Rubric check apply / unapply events.",
-    labelNames: ["class_id", "action"],
-    registers: [registry]
-  });
-
-  const officeHoursEvents = new promClient.Counter({
-    name: "web_office_hours_event_total",
-    help: "Office-hours queue events emitted from the app (request, claim, close).",
-    labelNames: ["class_id", "event"],
-    registers: [registry]
-  });
-
-  const realtimeBroadcasts = new promClient.Counter({
-    name: "web_realtime_broadcast_total",
-    help: "Server-initiated realtime broadcasts via realtime.send().",
-    labelNames: ["channel_class"],
-    registers: [registry]
-  });
-
-  const edgeFunctionInvocations = new promClient.Counter({
-    name: "web_edge_function_invocation_total",
-    help: "Edge function invocations made from the web app.",
-    labelNames: ["function", "status"],
-    registers: [registry]
-  });
+  // ----- Deliberately absent: five business counters that used to be
+  // declared here and were never incremented from a single call site.
+  // The web tier is structurally the wrong producer for all of them, so
+  // they are not "TODO: instrument" — re-adding them here would recreate
+  // metrics that can only ever read zero. The correct producer is:
+  //
+  //   web_submission_mutated_total    → postgres_exporter custom query
+  //   web_rubric_check_action_total   → postgres_exporter custom query
+  //   web_office_hours_event_total    → postgres_exporter custom query
+  //     Business writes in this app go browser → PostgREST directly (there
+  //     are exactly two "use server" files and both are auth-only), so no
+  //     server-side code path ever observes a submission mutation, a rubric
+  //     check apply/unapply, or an office-hours queue event. Count them
+  //     where the rows land: charts/pawtograder/templates/monitoring.yaml,
+  //     modelled on the existing pawtograder_active_submissions block.
+  //
+  //   web_realtime_broadcast_total    → postgres_exporter custom query
+  //     Broadcasts are emitted by Postgres triggers calling realtime.send(),
+  //     not by web code. (realtime-fanout.json still has two panels on this
+  //     name; they read empty today and will be retargeted at the exporter
+  //     query.)
+  //
+  //   web_edge_function_invocation_total → a producer on the functions pods
+  //     lib/edgeFunctions.ts invokeEdgeFunction is the one shared wrapper,
+  //     but the large majority of its importers are "use client", so the
+  //     web tier would only ever see a small slice of real traffic.
+  //     Authoritative per-function counts come from the edge runtime itself.
+  //     Instrumenting the wrapper is also actively harmful: its dynamic
+  //     import would pull prom-client into the client bundle regardless of
+  //     the isNode() guard.
+  //
+  // See docs/operations/metrics-gap-remediation.md §4 (WS-APP, WS-EDGE).
 
   // ----- Workflow business gauges -----
   // These are refreshed on every /api/metrics scrape via
@@ -191,12 +184,7 @@ async function initIfNeeded(): Promise<MetricsBundle | null> {
     rpcDuration,
     rpcErrors,
     submissionCreated,
-    submissionMutated,
     gradingActions,
-    rubricCheckActions,
-    officeHoursEvents,
-    realtimeBroadcasts,
-    edgeFunctionInvocations,
     workflowRunsRecent,
     workflowQueueSeconds,
     workflowRunSeconds,
@@ -279,9 +267,19 @@ export async function timeRpc<T>(
 //   web_workflow_runs_recent  : 2 windows × ~6 conclusions = ~12 series
 //   web_workflow_queue_seconds: 3 quantiles                = 3 series
 //   web_workflow_run_seconds  : 2 quantiles                = 2 series
-//   web_workflow_errors_recent: capped at 30 distinct names per class
+//   web_workflow_errors_recent: bounded by the RPC's LIMIT 200
 //
-// For a deployment with 100 active classes that's ~5k series — well under
+// Note the errors cap is GLOBAL, not per class: metrics_workflow_errors_by_name
+// (supabase/migrations/20260529190000_workflow_metrics_rpcs.sql) groups by
+// (class_id, name), orders by count DESC and takes the top 200 rows across all
+// classes. That bounds the series count hard, but it is a top-N, so during an
+// error storm in one class that class's rows can fill the whole budget and
+// every other class silently drops out of the gauge. A gap here is therefore
+// not evidence that a class had no errors. The family is reset on each
+// successful refresh, so a dropped class disappears rather than going stale.
+//
+// For a deployment with 100 active classes that's ~1.7k series (200 error rows
+// plus ~17 per class from the other three families) — well under
 // kube-prometheus-stack defaults.
 export async function refreshWorkflowMetrics(): Promise<void> {
   const m = await initIfNeeded();
