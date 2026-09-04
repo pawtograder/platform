@@ -1827,6 +1827,21 @@ monitoring:
   # metrics; set web.metricsLeader.enabled=true to actually get them.
   allowMissingWorkflowMetrics: false
 
+  # Acknowledge that something OUTSIDE this chart scrapes the metrics leader.
+  # ONLY relevant with web.metricsLeader.enabled=true and
+  # monitoring.serviceMonitors.metricsLeader=false.
+  #
+  # The leader refreshes the workflow gauges ONLY while serving a scrape of
+  # /api/metrics (app/api/metrics/route.ts calls refreshWorkflowMetrics()).
+  # There is no background timer. With its ServiceMonitor switched off, nothing
+  # ever calls it, so the pod runs, costs memory, and produces exactly nothing —
+  # the same silent blindness allowMissingWorkflowMetrics exists to prevent,
+  # reached through a different door. templates/validations.yaml refuses that
+  # combination unless you set this to confirm you have your own scrape config
+  # (a hand-written ServiceMonitor, a PodMonitor, or a static scrape target)
+  # pointed at the leader Service with the METRICS_SCRAPE_TOKEN bearer.
+  allowUnscrapedMetricsLeader: false
+
   # Alerting rules (Prometheus Operator PrometheusRule) for backup failure /
   # staleness, ExternalSecret sync failure, and TLS cert expiry — the
   # operational alerts PRODUCTION-READINESS deferred to cluster monitoring.

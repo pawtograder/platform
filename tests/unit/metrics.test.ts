@@ -12,7 +12,14 @@
  *   3. a FAILED refresh does not advance the timestamp (otherwise one bad
  *      minute of database backs the leader off for five, and the gauges go flat
  *      in a way that is indistinguishable from "nothing ran");
- *   4. an interval of 0 disables throttling.
+ *   4. an interval of 0 disables throttling;
+ *   5. two CONCURRENT calls share one pass. The timestamp throttle alone is a
+ *      check-then-act race: both callers read the old timestamp before either
+ *      finishes and both run all five aggregates, which is exactly the
+ *      multiplied DB load the throttle exists to bound. A second Prometheus or
+ *      an overlapping curl loop reaches this every time;
+ *   6. a FAILED pass still clears the in-flight promise, so one rejection does
+ *      not wedge every future refresh.
  *
  * The Supabase admin client is mocked at the module boundary so no test here
  * touches a database.
@@ -25,7 +32,7 @@ jest.mock("@/utils/supabase/client", () => ({
 }));
 
 type GlobalWithMetrics = typeof globalThis & {
-  __pawtograderMetrics?: { lastWorkflowRefreshMs: number };
+  __pawtograderMetrics?: { lastWorkflowRefreshMs: number; workflowRefreshInFlight?: Promise<void> };
 };
 
 // Every RPC resolves successfully with no rows unless a test says otherwise.
@@ -115,6 +122,60 @@ describe("refreshWorkflowMetrics throttle", () => {
 
     // ...and the successful pass DOES arm the throttle.
     expect((globalThis as GlobalWithMetrics).__pawtograderMetrics?.lastWorkflowRefreshMs).toBe(Date.now());
+  });
+
+  it("runs ONE pass when two callers arrive concurrently", async () => {
+    process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS = "300";
+    const { refreshWorkflowMetrics } = await loadMetrics();
+
+    // Hold every RPC open so both callers are inside refreshWorkflowMetrics()
+    // at the same time — the race is only observable while a pass is running.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    rpc.mockImplementation(async () => {
+      await gate;
+      return { data: [], error: null };
+    });
+
+    const a = refreshWorkflowMetrics();
+    const b = refreshWorkflowMetrics();
+    // Let both reach the await before anything resolves.
+    await Promise.resolve();
+    release();
+    await Promise.all([a, b]);
+
+    // Five aggregate RPCs, issued once — not ten.
+    expect(rpc.mock.calls.length).toBe(5);
+    expect((globalThis as GlobalWithMetrics).__pawtograderMetrics?.lastWorkflowRefreshMs).toBe(Date.now());
+
+    // The second caller must have WAITED for the pass rather than skipping it:
+    // a scrape that returns before the registry is populated exports an empty
+    // body, which reads on a dashboard exactly like "this pod is not scraped".
+    rpc.mockReset();
+    rpcSucceeds();
+    jest.setSystemTime(Date.now() + 301_000);
+    await refreshWorkflowMetrics();
+    expect(rpc.mock.calls.length).toBe(5);
+  });
+
+  it("clears the in-flight pass when the refresh throws", async () => {
+    process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS = "300";
+    const { refreshWorkflowMetrics } = await loadMetrics();
+
+    // Reject rather than resolve with { error }: this is the path where
+    // Promise.allSettled is not what catches it, so it exercises the finally.
+    rpc.mockRejectedValue(new Error("connection refused"));
+    await expect(refreshWorkflowMetrics()).resolves.toBeUndefined();
+    expect((globalThis as GlobalWithMetrics).__pawtograderMetrics?.workflowRefreshInFlight).toBeUndefined();
+    expect((globalThis as GlobalWithMetrics).__pawtograderMetrics?.lastWorkflowRefreshMs).toBe(0);
+
+    // A wedged in-flight promise would make every later refresh a no-op.
+    rpc.mockReset();
+    rpcSucceeds();
+    await refreshWorkflowMetrics();
+    expect(rpc.mock.calls.length).toBe(5);
   });
 
   it("disables throttling when the interval is 0", async () => {

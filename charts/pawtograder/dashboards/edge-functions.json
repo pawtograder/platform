@@ -36,24 +36,6 @@
         "regex": ""
       },
       {
-        "name": "fn",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "${datasource}"
-        },
-        "query": "label_values(pawtograder_edge_requests_total, function)",
-        "refresh": 1,
-        "current": {
-          "selected": false,
-          "text": "All",
-          "value": "$__all"
-        },
-        "includeAll": true,
-        "multi": true,
-        "description": "Function label domain is closed at image-build time by the demuxer's boot-time allowlist (charts/pawtograder/images/edge-functions/main.ts); anything off that list reports as \"_unknown\"."
-      },
-      {
         "name": "namespace",
         "label": "Namespace",
         "type": "query",
@@ -72,7 +54,25 @@
         "includeAll": true,
         "multi": false,
         "sort": 1,
-        "description": "Backed by the PROMETHEUS datasource, deliberately. This variable is interpolated into kube-state-metrics and cAdvisor expressions; it used to be a Loki label_values query, which worked only because both label sets happen to contain the same namespace string. Scoping Loki log collection down would have emptied the value list and blanked every Prometheus panel here for a reason unrelated to Prometheus. The regex bounds All to pawtograder-* namespaces, and exactly one exists per environment, so All resolves correctly in every environment."
+        "description": "Scopes EVERY Prometheus query on this dashboard, not just the kube-state ones. The pawtograder_edge_* series carry a namespace label because the prometheus-operator ServiceMonitor scrape path (Grafana Alloy's prometheus.operator.servicemonitors in this cluster) sets it from __meta_kubernetes_namespace on every target, and none of the chart's ServiceMonitors override the relabeling. Without the matcher, one datasource holding staging, previews and production summed all of them into the headline traffic, error and latency panels while only the kube-state and Loki panels honoured the selector. $fn is derived from the namespace-scoped series so the function list follows the selection too."
+      },
+      {
+        "name": "fn",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(pawtograder_edge_requests_total{namespace=~\"$namespace\"}, function)",
+        "refresh": 1,
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "includeAll": true,
+        "multi": true,
+        "description": "Function label domain is closed at image-build time by the demuxer's boot-time allowlist (charts/pawtograder/images/edge-functions/main.ts); anything off that list reports as \"_unknown\"."
       }
     ]
   },
@@ -94,7 +94,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(pawtograder_edge_requests_total{function=~\"$fn\"}[1m]))"
+          "expr": "sum(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\"}[1m]))"
         }
       ],
       "fieldConfig": {
@@ -120,7 +120,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(pawtograder_edge_requests_total{function=~\"$fn\", status=~\"5..\"}[5m])) / clamp_min(sum(rate(pawtograder_edge_requests_total{function=~\"$fn\"}[5m])), 0.001)"
+          "expr": "sum(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\", status=~\"5..\"}[5m])) / clamp_min(sum(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m])), 0.001)"
         }
       ],
       "fieldConfig": {
@@ -163,7 +163,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by(le)(rate(pawtograder_edge_request_duration_seconds_bucket[5m])))"
+          "expr": "histogram_quantile(0.95, sum by(le)(rate(pawtograder_edge_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))"
         }
       ],
       "fieldConfig": {
@@ -171,7 +171,7 @@
           "unit": "s"
         }
       },
-      "description": "POD-WIDE, across all functions: pawtograder_edge_request_duration_seconds has no function label, so the $fn selector is deliberately absent here — adding it would match nothing and the panel would go blank. Per-function latency is the panel below, as a mean. This measures TIME TO HEADERS, not full response time: the demuxer sees the response when headers are ready and a streaming body finishes later."
+      "description": "POD-WIDE, across all functions: pawtograder_edge_request_duration_seconds{namespace=~\"$namespace\"} has no function label, so the $fn selector is deliberately absent here — adding it would match nothing and the panel would go blank. Per-function latency is the panel below, as a mean. This measures TIME TO HEADERS, not full response time: the demuxer sees the response when headers are ready and a streaming body finishes later."
     },
     {
       "id": 4,
@@ -190,7 +190,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(pawtograder_edge_user_workers_active)"
+          "expr": "sum(pawtograder_edge_user_workers_active{namespace=~\"$namespace\"})"
         }
       ],
       "fieldConfig": {
@@ -218,7 +218,7 @@
         {
           "refId": "A",
           "legendFormat": "{{function}}",
-          "expr": "sum by(function)(rate(pawtograder_edge_requests_total[1m]))"
+          "expr": "sum by(function)(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\"}[1m]))"
         }
       ],
       "fieldConfig": {
@@ -245,12 +245,12 @@
         {
           "refId": "mean",
           "legendFormat": "mean {{function}}",
-          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total[5m])) / clamp_min(sum by(function)(rate(pawtograder_edge_requests_total[5m])), 0.001)"
+          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\"}[5m])) / clamp_min(sum by(function)(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\"}[5m])), 0.001)"
         },
         {
           "refId": "spent",
           "legendFormat": "time spent {{function}}",
-          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total[5m]))"
+          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\"}[5m]))"
         }
       ],
       "fieldConfig": {
@@ -258,7 +258,7 @@
           "unit": "s"
         }
       },
-      "description": "Mean time-to-headers per function, and the share of total demuxer time each function accounts for. NOT quantiles: pawtograder_edge_request_duration_seconds is pod-wide and carries no function label. DECIDED 2026-09-03 — adding that label takes the edge tier from ~8.6k to ~37k series, every one of them per-pod, so an HPA excursion to 64 replicas doubles the count at exactly the moment of load. If someone later adds the label deliberately, these are the expressions this panel used to carry:\n\n  histogram_quantile(0.50, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))\n  histogram_quantile(0.95, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))\n  histogram_quantile(0.99, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
+      "description": "Mean time-to-headers per function, and the share of total demuxer time each function accounts for. NOT quantiles: pawtograder_edge_request_duration_seconds{namespace=~\"$namespace\"} is pod-wide and carries no function label. DECIDED 2026-09-03 — adding that label takes the edge tier from ~8.6k to ~37k series, every one of them per-pod, so an HPA excursion to 64 replicas doubles the count at exactly the moment of load. If someone later adds the label deliberately, these are the expressions this panel used to carry:\n\n  histogram_quantile(0.50, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket{namespace=~\"$namespace\", function=~\"$fn\"}[5m])))\n  histogram_quantile(0.95, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket{namespace=~\"$namespace\", function=~\"$fn\"}[5m])))\n  histogram_quantile(0.99, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket{namespace=~\"$namespace\", function=~\"$fn\"}[5m])))"
     },
     {
       "id": 12,
@@ -279,12 +279,12 @@
         {
           "refId": "errors",
           "legendFormat": "errors {{kind}}",
-          "expr": "sum by(kind)(rate(pawtograder_edge_worker_errors_total[5m]))"
+          "expr": "sum by(kind)(rate(pawtograder_edge_worker_errors_total{namespace=~\"$namespace\"}[5m]))"
         },
         {
           "refId": "retired",
           "legendFormat": "workers retired",
-          "expr": "sum(rate(pawtograder_edge_user_workers_retired_total[5m]))"
+          "expr": "sum(rate(pawtograder_edge_user_workers_retired_total{namespace=~\"$namespace\"}[5m]))"
         }
       ],
       "fieldConfig": {
@@ -312,7 +312,7 @@
           "refId": "A",
           "format": "table",
           "instant": true,
-          "expr": "topk(15, sum by(function, status)(increase(pawtograder_edge_requests_total{status=~\"4..|5..\"}[1h])))"
+          "expr": "topk(15, sum by(function, status)(increase(pawtograder_edge_requests_total{namespace=~\"$namespace\", status=~\"4..|5..\"}[1h])))"
         }
       ]
     },
@@ -419,12 +419,12 @@
         {
           "refId": "cache",
           "legendFormat": "eszip cache {{pod}}",
-          "expr": "sum by(pod)(pawtograder_edge_eszip_cache_bytes)"
+          "expr": "sum by(pod)(pawtograder_edge_eszip_cache_bytes{namespace=~\"$namespace\"})"
         },
         {
           "refId": "heap",
           "legendFormat": "main heap {{pod}}",
-          "expr": "sum by(pod)(pawtograder_edge_main_worker_heap_bytes{stat=\"used\"})"
+          "expr": "sum by(pod)(pawtograder_edge_main_worker_heap_bytes{namespace=~\"$namespace\", stat=\"used\"})"
         }
       ],
       "fieldConfig": {

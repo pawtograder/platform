@@ -26,20 +26,38 @@ type MetricsBundle = {
   workflowRunsRecent: Gauge<string>; // labels: class_id, conclusion, window
   workflowQueueSeconds: Gauge<string>; // labels: class_id, quantile
   workflowRunSeconds: Gauge<string>; // labels: class_id, quantile
-  workflowErrorsRecent: Gauge<string>; // labels: class_id, name
+  workflowErrorsRecent: Gauge<string>; // labels: class_id, category, window
   workflowRefreshDuration: Histogram<string>; // observed when refresh runs
   workflowRefreshErrors: Counter<string>;
+  // Unix seconds of the last fully successful refresh. Emitted unconditionally
+  // once a refresh has succeeded, INCLUDING when every aggregate returned zero
+  // rows — that is the point. See the alerting note at refreshWorkflowMetrics().
+  workflowRefreshLastSuccess: Gauge<string>;
 
   // Epoch-ms of the last SUCCESSFUL refreshWorkflowMetrics() pass. 0 means
   // "never refreshed", so the first call always runs. See the throttle at the
   // top of refreshWorkflowMetrics().
   lastWorkflowRefreshMs: number;
+
+  // The refresh pass currently running, if any. Concurrent callers await THIS
+  // rather than starting a second pass — the timestamp throttle alone is a
+  // check-then-act race (two scrapes both read the old timestamp before either
+  // finishes and both run all five aggregates). Cleared in a finally, on both
+  // success and failure, so one rejection cannot wedge every future refresh.
+  workflowRefreshInFlight?: Promise<void>;
 };
 
 // We attach state to globalThis so it survives Next.js's per-request
 // module instantiation in dev (and route-handler re-imports in prod).
 type GlobalWithMetrics = typeof globalThis & {
   __pawtograderMetrics?: MetricsBundle;
+  // The in-progress init, if any. initIfNeeded() awaits a dynamic import before
+  // it can publish the bundle, and two concurrent callers that both arrive
+  // during that window would otherwise each build a whole registry — the second
+  // overwriting the first, leaving the two callers holding DIFFERENT bundles.
+  // That silently breaks anything keyed off the bundle (the single-flight
+  // refresh below) and drops whatever the first caller had already recorded.
+  __pawtograderMetricsInit?: Promise<MetricsBundle>;
 };
 
 const g = globalThis as GlobalWithMetrics;
@@ -51,7 +69,14 @@ function isNode(): boolean {
 async function initIfNeeded(): Promise<MetricsBundle | null> {
   if (!isNode()) return null;
   if (g.__pawtograderMetrics) return g.__pawtograderMetrics;
+  if (g.__pawtograderMetricsInit) return g.__pawtograderMetricsInit;
+  g.__pawtograderMetricsInit = buildBundle().finally(() => {
+    g.__pawtograderMetricsInit = undefined;
+  });
+  return g.__pawtograderMetricsInit;
+}
 
+async function buildBundle(): Promise<MetricsBundle> {
   const promClient = await import("prom-client");
   const registry = new promClient.Registry();
   promClient.collectDefaultMetrics({ register: registry, prefix: "web_" });
@@ -159,8 +184,14 @@ async function initIfNeeded(): Promise<MetricsBundle | null> {
 
   const workflowErrorsRecent = new promClient.Gauge({
     name: "web_workflow_errors_recent",
-    help: "workflow_run_error rows logged in the recent window, by class + error name.",
-    labelNames: ["class_id", "name", "window"],
+    help: "workflow_run_error rows logged in the recent window, by class + closed error category.",
+    labelNames: ["class_id", "category", "window"],
+    registers: [registry]
+  });
+
+  const workflowRefreshLastSuccess = new promClient.Gauge({
+    name: "web_workflow_metrics_last_success_timestamp_seconds",
+    help: "Unix time of the last fully successful workflow-metrics refresh. Emitted even when every aggregate returns zero rows, so absence means the producer is broken rather than idle.",
     registers: [registry]
   });
 
@@ -190,6 +221,7 @@ async function initIfNeeded(): Promise<MetricsBundle | null> {
     workflowErrorsRecent,
     workflowRefreshDuration,
     workflowRefreshErrors,
+    workflowRefreshLastSuccess,
     lastWorkflowRefreshMs: 0
   };
 
@@ -341,24 +373,53 @@ export function classifySupabase(result: unknown): { status: string; errorCode?:
 // cardinality; the older "1h" gauge is a strict subset of that window.
 // Both DB calls run in parallel; an error in one doesn't kill the other.
 //
-// Cardinality budget per class:
+// Cardinality budget per class — every bound here is STRUCTURAL, imposed by a
+// closed set of label values, not by a row limit:
 //   web_workflow_runs_recent  : 2 windows × ~6 conclusions = ~12 series
 //   web_workflow_queue_seconds: 3 quantiles                = 3 series
 //   web_workflow_run_seconds  : 2 quantiles                = 2 series
-//   web_workflow_errors_recent: bounded by the RPC's LIMIT 200
+//   web_workflow_errors_recent: 7 categories × 1 window    = 7 series
 //
-// Note the errors cap is GLOBAL, not per class: metrics_workflow_errors_by_name
-// (supabase/migrations/20260529190000_workflow_metrics_rpcs.sql) groups by
-// (class_id, name), orders by count DESC and takes the top 200 rows across all
-// classes. That bounds the series count hard, but it is a top-N, so during an
-// error storm in one class that class's rows can fill the whole budget and
-// every other class silently drops out of the gauge. A gap here is therefore
-// not evidence that a class had no errors. The family is reset on each
-// successful refresh, so a dropped class disappears rather than going stale.
+// The error family used to carry workflow_run_error.name, which is the
+// student-visible sentence — free text, capped only at 500 chars, and several
+// producers embed a commit sha in it. The old RPC's LIMIT 200 did not bound
+// that: it caps ONE call, while Prometheus retains every series it has ever
+// seen, so an error storm with distinct messages minted hundreds of new series
+// per refresh interval. It was also a global top-N, so one noisy class could
+// evict every other class from the gauge.
 //
-// For a deployment with 100 active classes that's ~1.7k series (200 error rows
-// plus ~17 per class from the other three families) — well under
+// metrics_workflow_errors_by_category
+// (supabase/migrations/20260904130000_workflow_error_category_metrics.sql)
+// groups by a CASE that can only ever emit a literal from
+// WORKFLOW_ERROR_CATEGORIES below, with no top-N. The full message stays in the
+// database and on the instructor-facing workflow-errors page; it is not a label.
+// WORKFLOW_ERROR_CATEGORIES is applied again on this side so an older or
+// hand-edited RPC cannot widen the label domain either.
+//
+// For a deployment with 100 active classes that's ~2.4k series — well under
 // kube-prometheus-stack defaults.
+// The CLOSED set of web_workflow_errors_recent `category` label values. Must
+// stay in step with the CASE in metrics_workflow_errors_by_category; anything
+// the RPC returns that is not in this list is recorded as "other" rather than
+// becoming a new series. That double bound is deliberate — the migration is the
+// primary mechanism, this is what makes a stale database unable to break the
+// cardinality budget.
+export const WORKFLOW_ERROR_CATEGORIES = [
+  "file_too_large",
+  "submission_too_large",
+  "empty_submission",
+  "after_due_date",
+  "missing_grader_result",
+  "grader",
+  "other"
+] as const;
+
+const WORKFLOW_ERROR_CATEGORY_SET: ReadonlySet<string> = new Set(WORKFLOW_ERROR_CATEGORIES);
+
+export function normalizeWorkflowErrorCategory(value: unknown): string {
+  return typeof value === "string" && WORKFLOW_ERROR_CATEGORY_SET.has(value) ? value : "other";
+}
+
 // Minimum seconds between two real DB refreshes, from
 // METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS (chart:
 // web.metricsLeader.refreshIntervalSeconds). Default 300. A literal 0 disables
@@ -378,6 +439,36 @@ export async function refreshWorkflowMetrics(): Promise<void> {
   const m = await initIfNeeded();
   if (!m) return;
 
+  // Single-flight. The timestamp throttle below is a check-then-act race on its
+  // own: two concurrent authorized scrapes (a second Prometheus, an overlapping
+  // curl loop, a slow refresh that outlives its scrape interval) both read the
+  // old lastWorkflowRefreshMs before either pass finishes, and each launches all
+  // five aggregate RPCs. That multiplies exactly the expensive DB work the
+  // throttle exists to bound, under exactly the conditions that produced it.
+  //
+  // Concurrent callers therefore await the SAME pass. The promise is stored on
+  // the global bundle (not a module-local) for the same reason the registry is:
+  // Next.js re-instantiates modules per request in dev and on route-handler
+  // re-import in prod.
+  //
+  // Cleared in a finally, on success AND failure, so one rejection cannot wedge
+  // every future refresh. runWorkflowRefresh() already swallows RPC errors into
+  // web_workflow_metrics_refresh_errors_total, so a rejection here would mean
+  // something unexpected; it propagates to whoever is awaiting rather than being
+  // hidden, and the next call starts a fresh pass either way.
+  if (m.workflowRefreshInFlight) {
+    await m.workflowRefreshInFlight;
+    return;
+  }
+
+  const pass = runWorkflowRefresh(m).finally(() => {
+    m.workflowRefreshInFlight = undefined;
+  });
+  m.workflowRefreshInFlight = pass;
+  await pass;
+}
+
+async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
   // Throttle. The gauges are .set()-persisted in the registry between scrapes,
   // so returning here still exports the last-good values — a scrape served from
   // a value up to one interval old is correct, not stale data.
@@ -421,7 +512,7 @@ export async function refreshWorkflowMetrics(): Promise<void> {
       // Run duration percentiles over the last hour.
       client.rpc("metrics_workflow_run_percentiles", { window_hours: 1 }),
       // Errors over the last hour.
-      client.rpc("metrics_workflow_errors_by_name", { window_hours: 1 })
+      client.rpc("metrics_workflow_errors_by_category", { window_hours: 1 })
     ]);
 
     // Reset each family only after we know its fetch succeeded — otherwise
@@ -497,7 +588,7 @@ export async function refreshWorkflowMetrics(): Promise<void> {
         m.workflowErrorsRecent.set(
           {
             class_id: String((row as { class_id: number | string }).class_id),
-            name: String((row as { name: string }).name),
+            category: normalizeWorkflowErrorCategory((row as { category?: unknown }).category),
             window: "1h"
           },
           Number((row as { count: number }).count)
@@ -516,6 +607,16 @@ export async function refreshWorkflowMetrics(): Promise<void> {
     end();
     if (allOk) {
       m.lastWorkflowRefreshMs = Date.now();
+      // The liveness sentinel. Set on every fully successful pass INCLUDING one
+      // where every aggregate returned zero rows — an idle deployment (a fresh
+      // install, a weekend, between terms) legitimately produces no completed
+      // workflow runs, so the labelled gauges have no samples at all and
+      // absent(web_workflow_runs_recent) would fire a guaranteed false warning.
+      // This series is unconditional, so its absence means "the leader is not
+      // running or not being scraped", which is the condition worth alerting on.
+      // See PawtograderWorkflowMetricsStale in
+      // charts/pawtograder/templates/prometheus-rules.yaml.
+      m.workflowRefreshLastSuccess.set(Date.now() / 1000);
     }
   }
 }

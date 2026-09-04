@@ -9,7 +9,10 @@ keyed off global.environment (dev | preview | staging | production):
                  without monitoring/web (a pod that can export nothing);
                  monitoring on a multi-replica web tier with NO leader
                  (nine permanently empty app-business panels — cleared with
-                 monitoring.allowMissingWorkflowMetrics); Studio ingress
+                 monitoring.allowMissingWorkflowMetrics); a leader whose
+                 ServiceMonitor is switched off (same empty panels, because the
+                 refresh only runs during a scrape — cleared with
+                 monitoring.allowUnscrapedMetricsLeader); Studio ingress
                  without an auth layer (full DB control behind a bare URL).
   staging+prod — secrets.create (plaintext key material in helm release
                  history); migrations.resetOnDrift (wipes schema public +
@@ -74,6 +77,26 @@ values verbatim.
 */ -}}
 {{- if and .Values.monitoring.enabled (gt (int .Values.web.replicas) 1) (not .Values.web.metricsLeader.enabled) (not .Values.web.workflowMetricsLeader) (not .Values.monitoring.allowMissingWorkflowMetrics) -}}
 {{- fail "monitoring.enabled=true with web.replicas > 1 and no metrics leader exports NO workflow metrics: web_workflow_runs_recent, web_workflow_queue_seconds, web_workflow_run_seconds and web_workflow_errors_recent are populated only by the pod holding METRICS_WORKFLOW_REFRESH_LEADER, and nothing here sets it (web.workflowMetricsLeader is refused above 1 replica). The nine workflow panels on the `app-business` Grafana dashboard will render permanently empty, which reads identically to \"no workflow runs happened\". FIX: set `web.metricsLeader.enabled: true` to run the dedicated 1-replica leader. OR, to ship without workflow metrics on purpose, set `monitoring.allowMissingWorkflowMetrics: true`. (Single-replica installs instead set `web.workflowMetricsLeader: true`.)" -}}
+{{- end -}}
+
+{{- /*
+The leader enabled but its ServiceMonitor switched off. Rule 4 above covers
+"no leader at all"; this is the same outcome one setting further along.
+
+refreshWorkflowMetrics() runs only while /api/metrics is being served — there is
+no background timer anywhere in lib/metrics.ts. With
+monitoring.serviceMonitors.metricsLeader=false the leader's ServiceMonitor is
+not rendered (templates/monitoring.yaml), so nothing ever calls that route on
+the leader, so the gauges are never populated. The pod is running and healthy
+and the dashboard is empty, which is the hardest version of this failure to
+diagnose.
+
+Acknowledgement rather than a hard fail, following
+monitoring.externalPostgresExporter: scraping the leader from a scrape config
+this chart does not own is a legitimate setup the chart cannot detect.
+*/ -}}
+{{- if and .Values.web.metricsLeader.enabled .Values.monitoring.enabled (not (dig "serviceMonitors" "metricsLeader" true .Values.monitoring)) (not .Values.monitoring.allowUnscrapedMetricsLeader) -}}
+{{- fail "web.metricsLeader.enabled=true with monitoring.serviceMonitors.metricsLeader=false renders a metrics leader that NOTHING SCRAPES. refreshWorkflowMetrics() only runs while /api/metrics is being served (there is no background timer), so with no ServiceMonitor the leader pod runs, costs memory and exports nothing — the same permanently empty app-business workflow panels that monitoring.allowMissingWorkflowMetrics guards, reached a different way. FIX: set `monitoring.serviceMonitors.metricsLeader: true`. OR, if your own scrape config (a hand-written ServiceMonitor, a PodMonitor, or a static target with the METRICS_SCRAPE_TOKEN bearer) already points at the leader Service, set `monitoring.allowUnscrapedMetricsLeader: true` to confirm." -}}
 {{- end -}}
 
 {{- if and .Values.studio.enabled .Values.studio.ingressEnabled (not .Values.studio.basicAuth.enabled) (not .Values.studio.allowUnauthenticatedIngress) -}}

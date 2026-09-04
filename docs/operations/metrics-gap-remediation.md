@@ -117,11 +117,58 @@ Populates the 9 workflow panels on `app-business`.
 - App-side refresh throttle in `lib/metrics.ts`
   (`METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS`, default 300). This is the only
   bound that survives a second Prometheus or a manual `curl` loop.
+  **Revised after review:** a timestamp comparison alone is check-then-act. Two
+  concurrent scrapes both read the old `lastWorkflowRefreshMs` before either
+  pass finishes, and each launches all five aggregates — multiplying exactly the
+  DB work the throttle exists to bound, under exactly the conditions (a second
+  Prometheus, an overlapping curl loop, a refresh slower than the scrape
+  interval) that motivate it. The refresh is now single-flight: the in-progress
+  pass is stored on the global metrics bundle and concurrent callers `await` it.
+  Semantics preserved — a failed pass still does not advance the timestamp, and
+  the promise is cleared in a `finally` on both success and failure so one
+  rejection cannot wedge every future refresh. `initIfNeeded()` needed the same
+  treatment: it awaits a dynamic import before publishing the bundle, so two
+  cold-start callers each built a whole registry and the second overwrote the
+  first, leaving the two holding different bundles. Covered by two new cases in
+  `tests/unit/metrics.test.ts`.
 - **DB migration: two partial indexes on `public.workflow_runs`**
-  (`completed_at`, `in_progress_at`). Verified missing; all three workflow RPCs
-  are currently seq scans. Without these, the leader is the `76ca0bb8` pathology
+  (`completed_at`, `in_progress_at`). Verified missing; the three
+  `workflow_runs`-backed RPCs (`metrics_workflow_runs_by_conclusion`,
+  `metrics_workflow_queue_percentiles`, `metrics_workflow_run_percentiles`) are
+  currently seq scans. The fourth RPC the leader calls,
+  `metrics_workflow_errors_by_category`, reads `public.workflow_run_error`,
+  whose `created_at` is already indexed (`idx_workflow_run_error_created_at`, 20250801174131) and needs no new index. Without these, the leader is the `76ca0bb8` pathology
   (77.7% of DB exec time) at 1/32 scale.
-- Four new `validations.yaml` rules. Note `validations.yaml:25` **already**
+- **Revised after review: `web_workflow_errors_recent` no longer carries
+  `workflow_run_error.name`.** That column is the student-visible sentence —
+  free text, capped only at 500 characters by `workflow_run_error_name_length`,
+  and `buildTooLargeErrorName()` and `recordRejectedPush()` embed a commit sha
+  in it — so every oversized or late push minted a new label value. The RPC's
+  `LIMIT 200` did not bound that: it caps the rows returned by **one call**,
+  while each refresh resets the gauge and may select a different top-200 and
+  Prometheus retains every series it has ever seen. It was also a global top-N,
+  so one noisy class could evict every other class from the gauge.
+  `20260904130000_workflow_error_category_metrics.sql` adds
+  `metrics_workflow_errors_by_category`, which groups by a `CASE` that can only
+  emit a literal from a closed list derived from `workflow_run_error.data`
+  (`error_type` / `type`), with no top-N;
+  `normalizeWorkflowErrorCategory()` in `lib/metrics.ts` applies the same closed
+  set on the app side so a stale or hand-edited RPC cannot widen it either. The
+  bound is now structural in both places rather than documented.
+  **Cardinality budget, per class:** 12 (`runs_recent`) + 3
+  (`queue_seconds`) + 2 (`run_seconds`) + 7 (`errors_recent`) = 24 series, so
+  ~2.4k at 100 active classes — up from the old nominal ~1.7k, but bounded,
+  which the old number was not. `metrics_workflow_errors_by_name` is left in
+  place, unused, so a rollback to the previous web image still works.
+- Five new `validations.yaml` rules (four as planned, plus one added in review:
+  `web.metricsLeader.enabled=true` with
+  `monitoring.serviceMonitors.metricsLeader=false` is refused unless
+  `monitoring.allowUnscrapedMetricsLeader=true`. The refresh runs only while
+  `/api/metrics` is being served — there is no background timer — so with no
+  ServiceMonitor the leader pod is healthy and exports nothing, which is the
+  same permanently-empty dashboard rule 4 exists to prevent, reached through a
+  different door. `render-guardrails.sh` asserts both the refusal and the
+  acknowledgement path). Note `validations.yaml:25` **already**
   hard-fails `workflowMetricsLeader=true` + `replicas>1`, so the original
   triple-counting concern was never reachable.
 - Chart bump to 0.3.18.
@@ -147,9 +194,22 @@ adding to the plan above:
   create-by-hand-first escape route.
 - Two alert rules, not one: `PawtograderWorkflowMetricsRefreshFailing`
   (`rate(web_workflow_metrics_refresh_errors_total[15m]) > 0`) covers "refreshes
-  are failing"; `PawtograderWorkflowMetricsStale`
-  (`absent(web_workflow_runs_recent)`, gated on the leader being enabled) covers
-  the different failure of "nothing is scraping the leader at all".
+  are failing"; `PawtograderWorkflowMetricsStale` covers the different failure of
+  "nothing is scraping the leader at all".
+  **Revised after review:** `PawtograderWorkflowMetricsStale` originally read
+  `absent(web_workflow_runs_recent)`, which is a guaranteed FALSE warning on a
+  healthy deployment. That gauge only has samples once some class completed a
+  workflow run inside the window; a prom-client labelled gauge that was never
+  `.set()` emits nothing, so a fresh install, a weekend or the gap between terms
+  — and this platform is idle for months — fires it after 30 minutes. It now
+  alerts on `absent(web_workflow_metrics_last_success_timestamp_seconds)`, an
+  unlabelled sentinel that `refreshWorkflowMetrics()` sets at the end of every
+  fully successful pass **including one where every aggregate returned zero
+  rows**. Absence of that series means the producer is broken or unscraped,
+  which is the only condition worth waking someone for. A sentinel inside
+  `web_workflow_runs_recent` itself was rejected: `$class_id` is a
+  `label_values()` variable and the topk panel sums by `class_id`, so a magic
+  class would appear in the dropdown and in the ranking.
 - Rule 4 forced a values change in three shipped example overlays:
   `values-prod.yaml` and `values-prod-noeso.yaml` now enable the dedicated leader
   (the recommended answer at `replicas: 3`), and `values-staging.yaml` enables it
@@ -210,10 +270,13 @@ importers are `"use client"`. The web tier is the wrong producer.
   prom-client into the client bundle via the dynamic import, `isNode()` guard
   notwithstanding.
 
-**Cost question — RESOLVED, measured.** See "As shipped" below. Short version:
-the submissions counter costs nothing because option (2) already exists in the
-schema, and the grading-actions scan measured 348 ms at deliberately generous
-prod scale, which `cache_seconds: 300` turns into a ~0.12% duty cycle.
+**Cost question — RESOLVED, measured, then superseded on correctness grounds.**
+See "As shipped" below. Short version: both series now read trigger-maintained
+counter columns on `class_metrics_totals`, so neither scans and neither needs
+`cache_seconds`. The grading scan that `cache_seconds: 300` was sized for
+(348 ms at deliberately generous prod scale, a ~0.12% duty cycle) is gone —
+not because of cost, but because a `COUNT(*)` over tables that get hard-deleted
+is not a counter.
 
 **As shipped** (2026-09-04, branch `metrics-pr0-cleanup`, chart 0.3.18 — no
 further bump):
@@ -262,65 +325,79 @@ after such a delete, and that is fine — every panel reads it through
 It is also free: one row per class, no scan of the submissions heap, so no
 `cache_seconds`.
 
-#### Grading actions: option (1), `cache_seconds: 300`, measured
+#### Grading actions: option (2) after all — trigger-maintained counters
 
-`UNION ALL` over `submission_comments`, `submission_file_comments`,
-`submission_artifact_comments` (kind `rubric_check` when `rubric_check_id IS NOT
-NULL`, else `comment`) and `submission_reviews WHERE released` (kind `release`).
-Column names verified against `utils/supabase/SupabaseTypes.d.ts`: all three
-comment tables carry `class_id`, `rubric_check_id` and `deleted_at`;
-`submission_reviews` carries `class_id` and `released` but **no** `deleted_at`.
+**Revised after review.** As first shipped this was a live `UNION ALL` `COUNT(*)`
+over `submission_comments`, `submission_file_comments`,
+`submission_artifact_comments` and `submission_reviews WHERE released`, measured
+at 348 ms at synthetic prod scale (100 classes, 500k submissions, 1.5M
+`submission_comments`, 400k `submission_file_comments`, 100k
+`submission_artifact_comments`, 400k `submission_reviews`; 333 MB of comment
+heap; parallel seq scans, no index helps a full-table `GROUP BY`) and served
+from `cache_seconds: 300`. The seeded dev database ran it in 0.96 ms.
 
-**Measured** with `EXPLAIN (ANALYZE, BUFFERS)`:
+That query is **not a counter**. It can decrease two ways, and Prometheus reads
+any decrease as a counter reset, which `rate()`/`increase()` render as a phantom
+burst the size of the whole remaining total:
 
-| Query                         | Seeded dev DB (6 classes, 322 submissions, 1,045 comments) | Synthetic prod scale\* |
-| ----------------------------- | ---------------------------------------------------------- | ---------------------- |
-| submissions (as `COUNT(*)`)   | 0.44 ms                                                    | 223 ms                 |
-| grading actions (`UNION ALL`) | 0.96 ms                                                    | **348 ms**             |
+1. **Hard deletes.** `public.delete_assignment_with_all_data()`
+   (`20260109094216_fix-delete-assignment-jsonb-bug.sql`, lines ~107-170)
+   hard-deletes all three comment tables and `submission_reviews` for the
+   assignment. Verified against that migration and confirmed as the current
+   definition — nothing supersedes it. The "soft deletes are counted on purpose"
+   reasoning was right about `deleted_at` and simply did not reach this path.
+2. **Bulk unrelease.** `submission_reviews.released` is mutable and
+   `unrelease_all_grading_reviews_for_assignment()` flips a whole assignment back
+   to `false`. This was previously accepted and documented, but the blast radius
+   was understated: the "Grading actions (1h)" stat and the "Top classes by
+   recent activity" table sum **across** kinds, so a bulk unrelease corrupted
+   those too, not just the by-kind series.
 
-\* 100 classes, 500k submissions, 1.5M `submission_comments`, 400k
-`submission_file_comments`, 100k `submission_artifact_comments`, 400k
-`submission_reviews`; 333 MB of comment heap. Plan is parallel seq scans on all
-four tables — there is no index that helps a full-table `GROUP BY`, so this does
-not improve with tuning.
+Documenting either one is not enough for a panel read during a grading crunch:
+it does not render as "stale", it renders as a large spike.
 
-348 ms at the 30 s ServiceMonitor interval is ~1.2% of a core spent here
-forever, which is the shape of the `database_ram_metrics()` pathology (77.7% of
-prod DB exec time). `cache_seconds: 300` makes it 348 ms per 5 minutes, a
-**~0.12% duty cycle**, and every panel reading it uses a 1h or 1m window so
-5-minute freshness is invisible. Option (2) for this one would cost a migration
-plus trigger overhead on every comment insert — new work on the grading hot path
-in production — to save 0.12% of one core. Not taken. Revisit if the comment
-tables grow an order of magnitude past the numbers above.
+**The earlier cost objection turned out to be false.** WS-APP rejected a
+trigger-maintained counter as "a new trigger on the comment insert hot path to
+save 0.12% of one core". That trigger already exists.
+`class_metrics_submission_comments_counter()`
+(`20250928001347_class_metrics_performance.sql`) has fired `AFTER INSERT` on all
+four comment tables since September 2025.
+`20260904140000_grading_action_counters.sql` adds three columns to
+`class_metrics_totals` and one more column to the single-row `UPDATE` that
+trigger already issues — no new trigger, no new per-row invocation, no extra
+statement. `submission_reviews` gets the one genuinely new trigger, scoped
+`AFTER UPDATE OF released ... WHEN (NEW.released AND NOT OLD.released)`, so it is
+not entered for the score / `completed_at` / rubric-assignment updates that make
+up nearly all of that table's write volume.
 
-**Counter monotonicity.** The query counts **all** rows including
-`deleted_at IS NOT NULL`. The comment tables use soft deletes; filtering them out
-would make the counter fall on every deleted comment. A grading action that was
-later retracted still happened. `render-guardrails.sh` asserts the filter is
-absent from the rendered `queries.yaml`.
+So the choice was between two documented caveats plus a dashboard that would
+have to drop `kind="release"` from its cross-kind panels, and one migration that
+makes all three kinds genuinely monotonic. The migration wins, and it is
+strictly cheaper at steady state than what it replaces.
 
-**One kind is knowingly not monotonic: `release`.** `submission_reviews.released`
-is a mutable boolean and `unrelease_all_grading_reviews_for_assignment()` flips
-it back to `false` in bulk from the instructor UI. There is no release-_event_
-row anywhere in the schema to count instead — `completed_at` is no better, since
-several review-assignment RPCs reset it to `NULL`. So a bulk unrelease produces
-one spurious spike on the by-kind panel. Fixing it properly means a new
-`AFTER UPDATE` trigger on `submission_reviews` maintaining a counter column,
-i.e. new work on the grading hot path to make a rare administrative action read
-correctly on one series of one panel. Documented in the query comment and the
-panel description rather than fixed. **This is a deviation from the "counters
-must be monotonic" rule, taken deliberately and in one bounded place.**
+Consequences:
 
-**Verified end to end**, not just rendered: `queries.yaml` was extracted from
-`helm template` and mounted into the pinned
-`quay.io/prometheuscommunity/postgres-exporter:v0.18.0` against the local
-Supabase database. `pg_exporter_last_scrape_error` is 0 and the emitted names and
-label sets are exactly what the dashboard queries —
-`pawtograder_submissions_created_total{class_id,server}` and
-`pawtograder_grading_actions_total{class_id,kind,server}`, one series per class
-on the submissions side and three per class on the grading side, so the `topk`
-addition matches on every class. That check exists to catch a `<block>_<column>`
-naming surprise before staging, and it is the cheapest one available.
+- **No `cache_seconds`.** It is a one-row-per-class read now. That matters
+  beyond CPU: a 300 s cache on a counter makes `rate(...[1m])` alternate between
+  a flat zero and the whole five-minute increment in one sample.
+- `submission_regrade_request_comments` stays excluded from the two comment
+  counters (it keeps feeding `submission_comments_total` as before). Students
+  write those; they are not grading actions, and the scan being replaced did not
+  count them either. Keeping the meaning identical across the switch is what
+  makes the counter continuous rather than stepping.
+- The backfill counts surviving rows, so it starts below the true historical
+  action count. That is a constant offset and cancels under `increase()`/
+  `rate()`, the same argument that already justified
+  `class_metrics_totals.submissions_total`.
+- `render-guardrails.sh` now asserts the block reads the three counter columns
+  and `public.class_metrics_totals`, contains no `COUNT(*)`/`UNION ALL`, and sets
+  no `cache_seconds`. The old assertion that the literal `deleted_at IS NULL` was
+  absent is gone with the scan it guarded.
+
+**Counter monotonicity, restated.** These count grading **actions**, not
+surviving rows. A retracted comment, a deleted assignment and an unreleased
+review all still happened, and none of them moves the counter. There is no
+longer a knowingly non-monotonic dimension in this family.
 
 #### `web_http_*`
 
@@ -365,6 +442,25 @@ share one label), and `lti_upsert_line_item` / `sis_sync_enrollment` in
 - `classifySupabase()` is the shared classifier so no call site re-derives it and
   reaches for `.message`. It takes `unknown` rather than a structural type so it
   stays assignable to `timeRpc`'s generic `classify` for any result type.
+- **Revised after review: two of the SSR loaders were recording failures as
+  successes.** `getUserRolesForCourseUntimed` and `getCourseUntimed` discard the
+  PostgREST `error` and return only `data`, and both were classified with a
+  constant `() => ({ status: "ok" })`. PostgREST failures resolve as
+  `{ data: null, error }` rather than rejecting, so an RLS or SQL error recorded
+  `status="ok"` and never incremented `web_supabase_rpc_errors_total` — the new
+  SSR error panel was structurally blind. The `*Untimed` inner functions now
+  return a `{ value, error }` envelope so `classifySupabase` can see the error;
+  the exported functions unwrap it, so their runtime contract is byte-for-byte
+  what it was. **Deliberately not converted to throwing**: callers read
+  `undefined`/`null` as "not enrolled" / "no such course", and throwing would
+  turn a transient DB error into a 500 on pages that currently degrade.
+  `fetchCourseControllerData` and `fetchAssignmentControllerData` are correct as
+  they stand — every read in them goes through `fetchAllPages()`, which throws,
+  so `ok` is the right classifier and `timeRpc`'s catch path records
+  `code="throw"`. **The audit found no other instance**: the two aggregate RPCs
+  in `lib/ssr-course-dashboard.ts` and the two in `lib/lti/*` already pass
+  `classifySupabase` against the raw PostgREST envelope and were never
+  affected.
 
 #### New panels — the metrics would otherwise be invisible
 
@@ -534,6 +630,23 @@ reimplementing them anyway.
   `pawtograder_edge_main_worker_heap_bytes{stat="used"}` to the memory panel,
   decomposing working set into cache vs main-isolate heap vs isolates.
 
+**Revised after review: every `pawtograder_edge_*` expression now carries
+`namespace=~"$namespace"`, and so does the `$fn` variable query.** With
+`$namespace` defaulting to `All`, the headline traffic / error / latency /
+worker panels had no namespace matcher at all, so a datasource holding staging,
+previews and production summed all of them together while only the kube-state
+and Loki panels honoured the selector. The label is present on this scrape path:
+prometheus-operator-style ServiceMonitor discovery (Grafana Alloy's
+`prometheus.operator.servicemonitors` here) sets `namespace` from
+`__meta_kubernetes_namespace` on every target, and none of the chart's
+ServiceMonitors override the relabeling — the same reason §8.0's
+`count({namespace="pawtograder-prod"})` baseline works. `$namespace` was also
+moved ahead of `$fn` in the variable list, since `$fn` now depends on it.
+**`edge-soak.json` does not have this defect**: it queries no
+`pawtograder_edge_*` series at all — every one of its expressions is
+kube-state-metrics or Loki, and all 16 already carry `namespace=~"$ns"` from the
+PR-0 fix.
+
 **As shipped** (2026-09-04). `edge-functions.json` was rewritten onto the
 `pawtograder_edge_*` names: the `$fn` variable, invocations, error rate, top
 errors and per-function invocations move over directly; P95 latency **drops its
@@ -678,11 +791,16 @@ functions, then **assert on label-set shape, not just non-emptiness**.
       (maintenance `main-20260727-f9233a4c`), `web.replicas: 3`,
       `channels[0].web.image.tag: canary-725fa70b`. **This is the rollback pair —
       do not GC those Harbor tags.**
-- [ ] Confirm the four `metrics_workflow_*` RPCs exist in the prod DB.
-      `20260529190000_workflow_metrics_rpcs.sql` predates the deployed migrations
-      tag so it is almost certainly applied — **check, don't assume**, or the
-      leader ships and increments `web_workflow_metrics_refresh_errors_total`
-      forever.
+- [ ] Confirm all four RPCs the leader calls exist in the prod DB, by name:
+      `metrics_workflow_runs_by_conclusion`, `metrics_workflow_queue_percentiles`
+      and `metrics_workflow_run_percentiles` (from
+      `20260529190000_workflow_metrics_rpcs.sql`, which predates the deployed
+      migrations tag so it is almost certainly applied), plus
+      `metrics_workflow_errors_by_category` (new, in
+      `20260904130000_workflow_error_category_metrics.sql`, so it is definitely
+      not applied yet). **Check, don't assume** — a missing one makes the leader
+      increment `web_workflow_metrics_refresh_errors_total` forever. Gate 3 uses
+      the same four names; do not let the two lists drift.
 - [ ] Get the class count from the live `pawtograder_classes_real_classes`
       series. This is the multiplier for every cardinality budget.
 - [ ] Confirm `platform/Dockerfile` still contains the literal
@@ -710,9 +828,15 @@ must render and one that must fail — plus a render of the _unmodified current_
 Gate 5 is a formality rather than a surprise.
 
 **Gate 3 — Index / query-plan proof (needs DB access).** `EXPLAIN (ANALYZE,
-BUFFERS)` the three workflow RPCs against the **prod streaming replica** (already
+BUFFERS)` all four RPCs — `metrics_workflow_runs_by_conclusion`,
+`metrics_workflow_queue_percentiles`, `metrics_workflow_run_percentiles`,
+`metrics_workflow_errors_by_category` — against the **prod streaming replica** (already
 deployed, read-only — no need to stand up a shadow namespace). Pass = index scans
-and total refresh well under the 10s scrape timeout; target <1s.
+and total refresh well under the 10s scrape timeout; target <1s. The two new
+indexes cover the first three; `metrics_workflow_errors_by_category` should
+already be an index scan on `idx_workflow_run_error_created_at`, so it is the
+control case — if that one seq-scans, the window predicate is not being pushed
+down and the plans for the other three are suspect too.
 **Decide here:** `CREATE INDEX CONCURRENTLY` is unusable (§2). Either create
 non-concurrently and accept an `ACCESS EXCLUSIVE` lock on `workflow_runs` for the
 build duration, or create out-of-band by hand and make the migration
@@ -782,6 +906,18 @@ the change did what it claimed.
   `web_workflow_run_seconds` = `{0.5, 0.95}`. **The asymmetry is intentional in
   `lib/metrics.ts` — verify it, don't "fix" it.**
 - `increase(web_workflow_metrics_refresh_errors_total[30m]) == 0`
+- `count(web_workflow_metrics_last_success_timestamp_seconds) == 1` and
+  `time() - web_workflow_metrics_last_success_timestamp_seconds` stays under one
+  refresh interval plus one scrape interval. **This, not
+  `count(web_workflow_runs_recent) > 0`, is the liveness check on an idle
+  deployment**: the sentinel is emitted on every successful refresh even when
+  every aggregate returns zero rows, which is why
+  `PawtograderWorkflowMetricsStale` now alerts on its absence. On staging,
+  verify it appears BEFORE seeding any `workflow_runs` rows — that is the case
+  the old `absent(web_workflow_runs_recent)` rule got wrong.
+- `count(count by (category)(web_workflow_errors_recent))` ≤ 7, and every value
+  is drawn from `WORKFLOW_ERROR_CATEGORIES` in `lib/metrics.ts`. A value outside
+  that list means the RPC and the app disagree.
 - **`count(count by (pod)(web_workflow_runs_recent)) == 1`**, sustained over
   10 min. Point reads can return 2 right after a leader restart while the old
   pod's series age out.
@@ -803,6 +939,11 @@ the change did what it claimed.
   can drop _other_ queries too
 - `web_supabase_rpc_*` will be **sparse** given that business writes bypass the
   server. Decide the expected value before looking; sparseness is not failure.
+- `pawtograder_grading_actions_total` must be **flat or rising, never falling**.
+  The cheap way to prove it: delete a throwaway assignment that has grading
+  comments on staging and confirm the series does not move. Under the old
+  `COUNT(*)` form it would have dropped by the comment count and `increase()`
+  would have rendered a burst the size of the class total.
 
 ### 8.3 WS-EDGE
 
@@ -857,25 +998,28 @@ mid-flight, so this is headroom, not a fix — schedule edge deploys accordingly
 
 ## 10. Decisions made
 
-| Decision                                    | Resolution                                                                                      |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Build producers vs. trim dashboards         | **Build producers** (2026-09-03)                                                                |
-| Per-function latency quantiles              | **No.** Do not ship the flag. (2026-09-03)                                                      |
-| Shadow prod deploy via canary channel       | **Not possible** — ship dark + flip gates (§6)                                                  |
-| Where the edge counter lives                | `main.ts` collects, intercepts `/metrics`, appends on 200                                       |
-| Leader scrape wiring                        | Distinct `component: metrics-leader` + its own ServiceMonitor                                   |
-| Most `web_*` business counters              | **Delete** — web tier is the wrong producer                                                     |
-| Fix canary-not-scraped                      | **Separately**, after this effort                                                               |
-| Breaking validation rule                    | **Ship with an escape hatch** (2026-09-04)                                                      |
-| `values-tartangrader.yaml`                  | **Update the example**; nobody is using it, so no deprecation period (2026-09-04)               |
-| Postgres restart on `queries.yaml` change   | **Test in staging** rather than inferring from the render (2026-09-04)                          |
-| Deploy `--timeout`                          | **Raised 15m → 25m** (2026-09-04, `prod-charts/.github/workflows/deploy.yml`)                   |
-| Staging load generation                     | **Manual**, by Jon (2026-09-04)                                                                 |
-| Who runs the `[OPS]` checks                 | **Jon + Claude together**, live during each gate (2026-09-04)                                   |
-| WS-APP metric names                         | **Rename to `pawtograder_*`** and edit the six panels (2026-09-04)                              |
-| WS-APP exporter query cost                  | **`cache_seconds: 300`** on the grading scan; submissions needs no cache (2026-09-04)           |
-| `realtime-fanout.json` panels 3 and 11      | **Delete.** No monotonic trigger-side producer exists (2026-09-04)                              |
-| Wave 1 vs wave 2 on failing example renders | **Wave 1 was right.** The prod failures are a pre-existing placeholder, not rule 4 (2026-09-04) |
+| Decision                                    | Resolution                                                                                                                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build producers vs. trim dashboards         | **Build producers** (2026-09-03)                                                                                                                                    |
+| Per-function latency quantiles              | **No.** Do not ship the flag. (2026-09-03)                                                                                                                          |
+| Shadow prod deploy via canary channel       | **Not possible** — ship dark + flip gates (§6)                                                                                                                      |
+| Where the edge counter lives                | `main.ts` collects, intercepts `/metrics`, appends on 200                                                                                                           |
+| Leader scrape wiring                        | Distinct `component: metrics-leader` + its own ServiceMonitor                                                                                                       |
+| Most `web_*` business counters              | **Delete** — web tier is the wrong producer                                                                                                                         |
+| Fix canary-not-scraped                      | **Separately**, after this effort                                                                                                                                   |
+| Breaking validation rule                    | **Ship with an escape hatch** (2026-09-04)                                                                                                                          |
+| `values-tartangrader.yaml`                  | **Update the example**; nobody is using it, so no deprecation period (2026-09-04)                                                                                   |
+| Postgres restart on `queries.yaml` change   | **Test in staging** rather than inferring from the render (2026-09-04)                                                                                              |
+| Deploy `--timeout`                          | **Raised 15m → 25m** (2026-09-04, `prod-charts/.github/workflows/deploy.yml`)                                                                                       |
+| Staging load generation                     | **Manual**, by Jon (2026-09-04)                                                                                                                                     |
+| Who runs the `[OPS]` checks                 | **Jon + Claude together**, live during each gate (2026-09-04)                                                                                                       |
+| WS-APP metric names                         | **Rename to `pawtograder_*`** and edit the six panels (2026-09-04)                                                                                                  |
+| WS-APP exporter query cost                  | **No scan, no cache.** Both series read trigger-maintained `class_metrics_totals` columns (2026-09-04, revised in review)                                           |
+| Grading-actions monotonicity (F6/CR1)       | **Option (a)**: three counter columns + one scoped trigger. The "new trigger on the hot path" objection was false — the comment trigger already exists (2026-09-04) |
+| Workflow error label (F1)                   | **Closed category** from `workflow_run_error.data`, not `name`. `LIMIT 200` bounded one call, never the label domain (2026-09-04)                                   |
+| `PawtograderWorkflowMetricsStale` (F7)      | **Sentinel**, not `absent()` on a data-dependent gauge. The old rule false-fired on any quiet window (2026-09-04)                                                   |
+| `realtime-fanout.json` panels 3 and 11      | **Delete.** No monotonic trigger-side producer exists (2026-09-04)                                                                                                  |
+| Wave 1 vs wave 2 on failing example renders | **Wave 1 was right.** The prod failures are a pre-existing placeholder, not rule 4 (2026-09-04)                                                                     |
 
 ### Resolutions, expanded
 

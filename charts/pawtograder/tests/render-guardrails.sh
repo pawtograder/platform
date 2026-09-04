@@ -878,8 +878,18 @@ assert_rendered_contains "leader ServiceMonitor selects component metrics-leader
   templates/monitoring.yaml "app.kubernetes.io/component: metrics-leader" \
   "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
 # Toggleable like serviceMonitors.storage, and absent entirely without a leader.
+# The toggle now needs the acknowledgement too — see the assert_refused below.
 assert_rendered_lacks "no leader ServiceMonitor when the toggle is off" \
   templates/monitoring.yaml "component: metrics-leader" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true \
+  --set monitoring.serviceMonitors.metricsLeader=false \
+  --set monitoring.allowUnscrapedMetricsLeader=true
+# A leader nobody scrapes exports NOTHING: refreshWorkflowMetrics() runs only
+# while /api/metrics is being served, so with no ServiceMonitor the pod is
+# healthy and the dashboard is empty. Same outcome as having no leader at all,
+# one setting further along, and it must be refused the same way.
+assert_refused "leader enabled with its ServiceMonitor switched off" \
+  "renders a metrics leader that NOTHING SCRAPES" \
   "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true \
   --set monitoring.serviceMonitors.metricsLeader=false
 assert_rendered_lacks "no leader ServiceMonitor without a leader" \
@@ -999,20 +1009,56 @@ assert_rendered_contains "grading block emits pawtograder_grading_actions_total"
   templates/monitoring.yaml "pawtograder_grading_actions:" \
   --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
   --set monitoring.prometheusRules.labels.release=kps
-# The full-table GROUP BY over the comment tables measures ~350ms at prod scale.
-# Without cache_seconds it runs at the scrape interval, which is how
-# database_ram_metrics() became 77.7% of production DB execution time.
-assert_rendered_contains "the grading-actions scan is served from the exporter cache" \
-  templates/monitoring.yaml "cache_seconds: 300" \
-  --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
-  --set monitoring.prometheusRules.labels.release=kps
-# Soft-deleted comments must stay in the count: filtering them out makes a
-# COUNTER go down, which Prometheus reads as a reset and rate() renders as a
-# spike the size of the remaining total.
-assert_rendered_lacks "grading-actions query does not filter soft-deleted rows" \
-  templates/monitoring.yaml "deleted_at IS NULL" \
-  --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
-  --set monitoring.prometheusRules.labels.release=kps
+# assert_grading_actions_source
+# The grading-actions block must read the trigger-maintained counter columns on
+# class_metrics_totals, never a live COUNT(*) over the comment tables. A COUNT(*)
+# is not monotonic: delete_assignment_with_all_data() hard-deletes all three
+# comment tables and submission_reviews, and unrelease_all_grading_reviews_for_-
+# assignment() flips released back to false in bulk. Prometheus reads either
+# decrease as a counter RESET and renders the next scrape as a spike the size of
+# the whole remaining total — on panels that sum across kinds, so it corrupts the
+# stat and the topk table too, not just the by-kind series. See
+# supabase/migrations/20260904140000_grading_action_counters.sql.
+#
+# cache_seconds must be ABSENT from this block. It is now a one-row-per-class
+# read, and a cached counter is worse than a slow one: 300s of freeze makes
+# rate(...[1m]) alternate between zero and five minutes of increment in one
+# sample.
+assert_grading_actions_source() {
+  local label="grading-actions block reads the monotonic counter columns"
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+      --set monitoring.prometheusRules.labels.release=kps \
+      --show-only templates/monitoring.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    FAILED=1
+    return
+  fi
+  local stanza
+  stanza="$(awk -v b="    pawtograder_grading_actions:" '
+    $0 == b { inb = 1; next }
+    inb && /^    [^ ]/ { exit }
+    inb { print }
+  ' "$OUTFILE")"
+  local bad=0
+  local col
+  for col in grading_actions_comment_total grading_actions_rubric_check_total grading_actions_release_total public.class_metrics_totals; do
+    if ! printf '%s\n' "$stanza" | grep -qF "$col"; then
+      echo "FAIL [$label]: block does not read $col"
+      bad=1
+    fi
+  done
+  if printf '%s\n' "$stanza" | grep -qE 'COUNT\(\*\)|UNION ALL'; then
+    echo "FAIL [$label]: block still scans the comment tables"
+    bad=1
+  fi
+  if printf '%s\n' "$stanza" | grep -qF "cache_seconds"; then
+    echo "FAIL [$label]: block sets cache_seconds; a cached counter breaks short-window rate()"
+    bad=1
+  fi
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
+}
+assert_grading_actions_source
 
 echo
 if [ "$FAILED" -ne 0 ]; then

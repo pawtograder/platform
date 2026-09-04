@@ -128,7 +128,7 @@
       "id": 4,
       "type": "stat",
       "title": "Grading actions (1h)",
-      "description": "pawtograder_grading_actions_total, from the postgres_exporter custom query in charts/pawtograder/templates/monitoring.yaml. Was web_grading_action_total, which never emitted: grading comments are written through a browser Supabase client in lib/TableController.ts.",
+      "description": "pawtograder_grading_actions_total, from the postgres_exporter custom query in charts/pawtograder/templates/monitoring.yaml. Was web_grading_action_total, which never emitted: grading comments are written through a browser Supabase client in lib/TableController.ts. Sums across all three kinds; safe to do so because every kind is now a trigger-maintained event counter that never decreases (see supabase/migrations/20260904140000_grading_action_counters.sql). The earlier COUNT(*) form fell on assignment deletion and on a bulk unrelease, which Prometheus read as a counter reset and increase() rendered as a phantom burst on this stat too, not just on the by-kind panel.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -224,6 +224,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Submissions created / minute (by class)",
+      "description": "pawtograder_submissions_created_total reads class_metrics_totals.submissions_total, a trigger-maintained insert counter, so it is uncached and monotonic. THE [5m] WINDOW IS DELIBERATE \u2014 do not shorten it. The exporter is scraped every 30s, so a [1m] window holds exactly two samples and one missed scrape blanks the panel. * 60 converts per-second back to per-minute.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -238,7 +239,7 @@
         {
           "refId": "A",
           "legendFormat": "class {{class_id}}",
-          "expr": "sum by(class_id)(rate(pawtograder_submissions_created_total{class_id=~\"$class_id\"}[1m])) * 60"
+          "expr": "sum by(class_id)(rate(pawtograder_submissions_created_total{class_id=~\"$class_id\"}[5m])) * 60"
         }
       ],
       "fieldConfig": {
@@ -251,7 +252,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Grading actions / minute (by kind)",
-      "description": "kind is comment (free-text), rubric_check (comment carrying a rubric_check_id) or release (submission_reviews currently released). Soft-deleted comments are counted on purpose so the counter never decreases. kind=release is the one non-monotonic series: a bulk unrelease flips submission_reviews.released back to false and shows up here as one spurious spike. Served from the exporter cache with cache_seconds: 300, so the finest real resolution is 5 minutes.",
+      "description": "kind is comment (free-text), rubric_check (comment carrying a rubric_check_id) or release (a submission_reviews release event). All three come from trigger-maintained counter columns on class_metrics_totals and count ACTIONS, not surviving rows: a retracted comment, a deleted assignment and a bulk unrelease all leave the counter where it was, so none of them reads as a counter reset. THE [5m] WINDOW IS DELIBERATE \u2014 do not shorten it. The exporter is scraped every 30s, so a [1m] window holds exactly two samples and one missed scrape blanks the panel. * 60 converts per-second back to per-minute.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -266,7 +267,7 @@
         {
           "refId": "A",
           "legendFormat": "{{kind}}",
-          "expr": "sum by(kind)(rate(pawtograder_grading_actions_total{class_id=~\"$class_id\"}[1m])) * 60"
+          "expr": "sum by(kind)(rate(pawtograder_grading_actions_total{class_id=~\"$class_id\"}[5m])) * 60"
         }
       ],
       "fieldConfig": {
@@ -665,8 +666,8 @@
     {
       "id": 70,
       "type": "table",
-      "title": "Top workflow errors in the last 1h",
-      "description": "Aggregated by workflow_run_error.name across class_id.",
+      "title": "Workflow errors by category in the last 1h",
+      "description": "web_workflow_errors_recent, grouped by a CLOSED error category, not by workflow_run_error.name. The name column is the student-visible sentence \u2014 free text capped only at 500 characters, and several producers embed a commit sha in it \u2014 so as a Prometheus label it minted a new series per distinct message and Prometheus keeps every series it has ever seen. The categories come from workflow_run_error.data (error_type / type) via metrics_workflow_errors_by_category and can only be file_too_large, submission_too_large, empty_submission, after_due_date, missing_grader_result, grader or other. For the actual messages, use the instructor Workflow Errors page or query workflow_run_error directly \u2014 the detail is in the database and the logs, deliberately not in a label.",
       "gridPos": {
         "h": 9,
         "w": 24,

@@ -525,97 +525,79 @@ data:
 
     # Grading actions, per class and kind. Backs the "Grading actions (1h)" stat,
     # the "Grading actions / minute (by kind)" timeseries and the same
-    # "Top classes by recent activity" table. Replaces web_grading_action_total
-    # for the same reason as above: grading comments are written by
-    # lib/TableController.ts through a BROWSER Supabase client, so no server-side
-    # code path ever sees one.
+    # "Top classes by recent activity" table. Replaces web_grading_action_total,
+    # which never emitted: grading comments are written by lib/TableController.ts
+    # through a BROWSER Supabase client, so no server-side code path sees one.
     #
-    # COUNTER MONOTONICITY — the deliberate part. All three comment tables use
-    # SOFT deletes (deleted_at). This query counts every row INCLUDING
-    # deleted_at IS NOT NULL. Adding a not-yet-deleted filter on deleted_at would
-    # look more correct and would be a bug: deleting a comment makes the count go
-    # DOWN, Prometheus reads that as a counter reset, and rate() renders the next
-    # scrape as a spike the size of the whole remaining total. (render-guardrails.sh
-    # asserts the literal filter is absent, so do not reintroduce it in a comment
-    # either.)
-    # A grading action that was later retracted still happened.
+    # SOURCE: three trigger-maintained counter columns on
+    # public.class_metrics_totals, not a COUNT(*) over the comment tables. Same
+    # pattern as pawtograder_submissions_created above, and for the same reason:
+    # this is a COUNTER, so the only property that matters is that it never goes
+    # down. The scan this replaced could go down two ways, and Prometheus reads
+    # either as a counter reset and renders the next scrape as a spike the size
+    # of the whole remaining total:
     #
-    # kind="release" is the one dimension that is NOT strictly monotonic, and it
-    # is included knowingly. `submission_reviews.released` is a mutable boolean,
-    # and unrelease_all_grading_reviews_for_assignment() flips it back to false
-    # in bulk. There is no release-EVENT row anywhere in the schema to count
-    # instead — completed_at is reset to NULL by several review-assignment RPCs,
-    # so it is no better. A bulk unrelease will therefore produce one spurious
-    # spike on the by-kind panel. The alternative is a new AFTER UPDATE trigger
-    # on submission_reviews maintaining a counter column, i.e. new work on the
-    # grading hot path in production to make a rare administrative action read
-    # correctly on one series of one panel. Not worth it; documented instead.
+    #   1. public.delete_assignment_with_all_data() HARD-deletes all three
+    #      comment tables and submission_reviews. Counting soft-deleted rows
+    #      (which the old query did, deliberately) does not help here — the rows
+    #      are gone.
+    #   2. submission_reviews.released is mutable and
+    #      unrelease_all_grading_reviews_for_assignment() flips a whole
+    #      assignment back to false. The stat and topk panels sum ACROSS kinds,
+    #      so that corrupted them too, not just the by-kind series.
     #
-    # COST: this is the one block here that scans. Measured with
-    # EXPLAIN (ANALYZE, BUFFERS) against a synthetic database at deliberately
-    # generous prod scale (100 classes, 500k submissions, 1.5M
-    # submission_comments, 400k submission_file_comments, 100k
-    # submission_artifact_comments, 400k submission_reviews; 333 MB of comment
-    # heap): 348 ms, parallel seq scans, no index available or useful for a
-    # full-table GROUP BY. On the seeded dev database it is 0.96 ms.
+    # Both are fixed at the source by
+    # supabase/migrations/20260904140000_grading_action_counters.sql: the comment
+    # counters are incremented by the AFTER INSERT trigger that has run on those
+    # tables since 20250928001347 (one more column on an UPDATE it already
+    # issues — no new trigger), and releases are counted as EVENTS by a scoped
+    # AFTER UPDATE OF released trigger. Nothing decrements any of them, so a
+    # deletion or a bulk unrelease is now invisible to rate() instead of being a
+    # phantom burst.
     #
-    # 348 ms at the 30s ServiceMonitor interval would be ~1.2% of a core spent
-    # here forever, which is how database_ram_metrics() became 77.7% of prod DB
-    # exec time (see the SCOPE block in supabase/functions/metrics/index.ts).
-    # cache_seconds: 300 makes it 348 ms per 5 minutes = ~0.12% duty cycle, and
-    # every panel that reads this uses a 1h or 1m window, so 5-minute freshness
-    # is invisible. Cached metrics are re-emitted on every scrape, so Prometheus
-    # sees no staleness gap. A trigger-maintained counter table would be cheaper
-    # still, but it costs a migration plus trigger overhead on every comment
-    # insert to save 0.12% of one core; revisit only if the comment tables grow
-    # an order of magnitude past the numbers above.
+    # These count grading ACTIONS, not surviving rows: a retracted comment, a
+    # deleted assignment and an unreleased review all still happened. The
+    # absolute value drifts above the live row count over time, which is fine —
+    # every panel reads this through increase()/rate() where a constant offset
+    # cancels.
+    #
+    # COST: one row per class, no heap scan, so NO cache_seconds. That matters
+    # beyond CPU: the previous cache_seconds: 300 froze the counter for five
+    # minutes at a time, so rate(...[1m]) at a 30s scrape alternated between a
+    # flat zero and the whole five-minute increment in one sample. The panels
+    # still use a 5m window (see their descriptions) because a 30s scrape gives
+    # a 1m window only two samples.
     #
     # Driven off public.classes CROSS JOINed with the three kinds so every class
-    # emits all three series, zero-filled. Same reason as the block above: the
-    # topk panel adds the two metrics together and PromQL drops unmatched
-    # label sets.
+    # emits all three series, zero-filled. Load-bearing for the topk panel, which
+    # adds this metric to pawtograder_submissions_created_total and PromQL drops
+    # any class_id present on only one side.
     #
-    # All four tables only exist in the application database.
+    # public.classes and public.class_metrics_totals only exist in the
+    # application database.
     pawtograder_grading_actions:
       query: |
         SELECT c.id::text AS class_id,
                k.kind,
-               COALESCE(a.n, 0)::float AS total
+               CASE k.kind
+                 WHEN 'comment'      THEN COALESCE(t.grading_actions_comment_total, 0)
+                 WHEN 'rubric_check' THEN COALESCE(t.grading_actions_rubric_check_total, 0)
+                 ELSE                     COALESCE(t.grading_actions_release_total, 0)
+               END::float AS total
         FROM public.classes c
         CROSS JOIN (VALUES ('comment'), ('rubric_check'), ('release')) AS k(kind)
-        LEFT JOIN (
-          SELECT class_id, kind, COUNT(*) AS n
-          FROM (
-            SELECT class_id,
-                   CASE WHEN rubric_check_id IS NOT NULL THEN 'rubric_check' ELSE 'comment' END AS kind
-            FROM public.submission_comments
-            UNION ALL
-            SELECT class_id,
-                   CASE WHEN rubric_check_id IS NOT NULL THEN 'rubric_check' ELSE 'comment' END
-            FROM public.submission_file_comments
-            UNION ALL
-            SELECT class_id,
-                   CASE WHEN rubric_check_id IS NOT NULL THEN 'rubric_check' ELSE 'comment' END
-            FROM public.submission_artifact_comments
-            UNION ALL
-            SELECT class_id, 'release'
-            FROM public.submission_reviews
-            WHERE released
-          ) x
-          GROUP BY class_id, kind
-        ) a ON a.class_id = c.id AND a.kind = k.kind
+        LEFT JOIN public.class_metrics_totals t ON t.class_id = c.id
       master: true
-      cache_seconds: 300
       metrics:
         - class_id:
             usage: "LABEL"
             description: "Class ID"
         - kind:
             usage: "LABEL"
-            description: "comment (free-text grading comment), rubric_check (comment carrying a rubric_check_id), or release (submission_reviews currently released)"
+            description: "comment (free-text grading comment), rubric_check (comment carrying a rubric_check_id), or release (a submission_reviews release event)"
         - total:
             usage: "COUNTER"
-            description: "Grading actions of this kind in this class; soft-deleted rows are INCLUDED so the counter never decreases"
+            description: "Grading actions of this kind ever taken in this class; trigger-maintained and never decremented, so deleting an assignment or bulk-unreleasing does not look like a counter reset"
 
     pawtograder_help_queue_depth:
       query: |

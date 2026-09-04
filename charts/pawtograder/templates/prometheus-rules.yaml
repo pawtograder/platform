@@ -633,31 +633,48 @@ spec:
               idx_workflow_runs_completed_at / idx_workflow_runs_in_progress_at
               indexes exist).
 {{- if .Values.web.metricsLeader.enabled }}
-        # The family is not being exported AT ALL. Distinct from the rule above:
-        # that one fires when refreshes fail, this one fires when nothing is
-        # scraping the leader (Service selector wrong, ServiceMonitor not
-        # discovered, METRICS_SCRAPE_TOKEN absent so /api/metrics 503s, or the
-        # leader pod is down). absent() is only meaningful with the leader
-        # enabled — without it, the absence is the configured state.
+        # The leader is not exporting AT ALL. Distinct from the rule above: that
+        # one fires when refreshes fail, this one fires when nothing is scraping
+        # the leader (Service selector wrong, ServiceMonitor not discovered or
+        # disabled via monitoring.serviceMonitors.metricsLeader, METRICS_SCRAPE_TOKEN
+        # absent so /api/metrics 503s, or the leader pod is down).
         #
-        # `for` is long because the gauge only appears once a refresh has run and
-        # set() at least one sample, which after a leader restart takes until the
-        # first refresh plus the first scrape.
+        # NOT absent(web_workflow_runs_recent). That gauge only has samples once
+        # a class has completed a workflow run inside the window: a prom-client
+        # labelled gauge that was never .set() emits nothing, and
+        # metrics_workflow_runs_by_conclusion legitimately returns zero rows on a
+        # fresh install, over a weekend, or between terms — this platform is idle
+        # for months at a time. The old expression therefore fired a guaranteed
+        # false warning on a healthy quiet deployment, which is worse than no
+        # rule: it trains people to ignore this group.
+        #
+        # web_workflow_metrics_last_success_timestamp_seconds is an unlabelled
+        # sentinel set by refreshWorkflowMetrics() (lib/metrics.ts) at the end of
+        # every fully successful pass, INCLUDING one where every aggregate
+        # returned zero rows. Its absence therefore means the producer is broken
+        # or unscraped, never that nothing happened.
+        #
+        # `for` is long because the sentinel only appears after the first
+        # successful refresh AND the first scrape that follows it, which after a
+        # leader restart is up to one refresh interval.
         - alert: PawtograderWorkflowMetricsStale
           expr: |
-            absent(web_workflow_runs_recent{namespace="{{ $ns }}"})
+            absent(web_workflow_metrics_last_success_timestamp_seconds{namespace="{{ $ns }}"})
           for: {{ .Values.monitoring.prometheusRules.workflowMetricsAbsentFor | default "30m" }}
           labels:
             severity: warning
           annotations:
-            summary: "Pawtograder workflow metrics absent while the metrics leader is enabled"
+            summary: "Pawtograder workflow metrics producer absent while the metrics leader is enabled"
             description: >-
               web.metricsLeader.enabled is true in {{ $ns }} but
-              web_workflow_runs_recent has had no samples for
+              web_workflow_metrics_last_success_timestamp_seconds has had no samples for
               {{ .Values.monitoring.prometheusRules.workflowMetricsAbsentFor | default "30m" }}.
-              The nine workflow panels on app-business are empty. Check that the
+              That series is emitted on every successful refresh even when there
+              were no workflow runs, so this is a producer failure, not a quiet
+              window. The nine workflow panels on app-business are empty. Check that the
               {{ include "pawtograder.componentName" (dict "ctx" . "component" "metrics-leader") }}
-              pod is running, that its ServiceMonitor was discovered, and that
+              pod is running, that monitoring.serviceMonitors.metricsLeader is not
+              disabled and its ServiceMonitor was discovered, and that
               METRICS_SCRAPE_TOKEN is present in the {{ .Values.secrets.names.jwt }}
               Secret (/api/metrics returns 503 without it).
 {{- end }}
