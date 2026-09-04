@@ -1,7 +1,9 @@
 # Metrics gap remediation — tracking doc
 
-**Status:** WS-LEADER, WS-EDGE and WS-APP (with the WS-DASH dashboards) all
-implemented on `metrics-pr0-cleanup` (chart 0.3.18, gates off). Nothing deployed.
+**Status:** all four workstreams merged as #952 (chart 0.3.18) and deployed to
+`pawtograder-staging` on 2026-09-04. Staging validation found two scrape
+regressions, fixed on `fix/metrics-scrape-gzip-and-storage` (chart 0.3.19); see
+§12. Prod gates still unflipped.
 **Opened:** 2026-09-03
 **Scope:** platform (chart, app, edge image, migrations) + prod-charts (values, deploy)
 **Target:** Khoury production, namespace `pawtograder-prod`
@@ -1379,3 +1381,155 @@ object state, and Jon for anything needing psql or port-forward.
    it runs without cluster access. If the plugin turns out to be present, use it
    at Gate 5 as a bonus; if not, nothing in the plan changes. Cheapest way to
    find out is a `helm plugin list` line in the next workflow run.
+
+---
+
+## 12. Staging validation, 2026-09-04 (helm revision 88, chart 0.3.18)
+
+Deployed to `pawtograder-staging` on ripley at 16:43 UTC, image tag
+`staging-1a6f224`. The rollout itself was clean: chart 0.3.18 on every pod, the
+`metrics-leader` Deployment + Service + ServiceMonitor present, `EDGE_METRICS=1`
+on both edge channels, and all eight dashboard ConfigMaps updated in place.
+
+### 12.1 What passed
+
+Revisions 89 and 90 (chart 0.3.19, tag
+`fix-metrics-scrape-gzip-and-storage-84a5b11`) then deployed the fixes; the edge
+result below is measured against revision 90.
+
+**Edge scrape, after the fix.** Every `pawtograder-staging` target reads `up`,
+including all edge pods, and the endpoint behaves correctly on the Prometheus
+path (bearer token + `Accept-Encoding: gzip`): 200, body begins `1f 8b 08 00`,
+gunzips cleanly, 36 `pawtograder_edge_*` samples plus 19 pre-existing
+queue/bottleneck/breaker samples, zero U+FFFD bytes, and the same metric-family
+set as the uncompressed response. 5 distinct `function` label values (invoked
+functions, not the ~55 known ones), 496 edge series total against the ~8.6k
+budget, zero restarts and zero `OOMKilled`, 412 MiB peak working set.
+
+- **Leader.** Exactly one pod exports the workflow family
+  (`count(count by (pod)(web_workflow_runs_recent)) == 1`). The sentinel
+  `web_workflow_metrics_last_success_timestamp_seconds` is present with
+  `count == 1` and an age of 150s, inside one refresh plus one scrape. 16
+  refreshes, **zero** `web_workflow_metrics_refresh_errors_total` series,
+  refresh p95 0.94s against a 10s scrape timeout.
+- **WS-APP.** `pawtograder_submissions_created_total` (148 series) and
+  `pawtograder_grading_actions_total` (444 series) both live, from exactly one
+  exporter instance, with the `pawtograder_*` family count intact at 21.
+- **`web_http_*`.** Verified by request rather than by inspection, because on an
+  idle staging the family is legitimately absent. Hitting `/api/lti/jwks`
+  produced the expected shape, with the route label as the parameterized pattern
+  and the status bucketed:
+
+  ```text
+  web_http_request_duration_seconds_bucket{le="0.5",route="/api/lti/jwks",method="GET",status="5xx"} 4
+  ```
+
+### 12.2 Four §8.1 sub-checks read empty, and that is correct
+
+`web_workflow_queue_seconds`, `web_workflow_run_seconds`,
+`web_workflow_errors_recent`, and the `window="1h"` half of
+`web_workflow_runs_recent` were all empty. All four are 1h-window aggregates
+(`lib/metrics.ts`), and staging had no workflow runs inside that hour: the 24h
+window read 501 success + 2 failure for `class_id=1`. A gauge that is never
+`.set()` emits no sample, so an idle hour is indistinguishable from a broken
+RPC by inspection alone.
+
+**Do not sign off on these four from a point read.** Seed or trigger workflow
+runs and re-check inside the same hour, or the check is vacuous.
+
+### 12.3 Two regressions found, fixed separately
+
+**(a) The edge target went DOWN, taking the pre-existing series with it.**
+`up{job="pawtograder-functions"}` flipped 1 to 0 across all 16 pods three
+minutes after the rollout, with `lastError: gzip: invalid header`.
+
+Prometheus scrapes with `Accept-Encoding: gzip`; the demuxer forwards the
+request verbatim, so the worker's body arrives gzip-encoded, and the append
+path's `res.text()` decoded DEFLATE bytes as UTF-8 and re-emitted the result
+under the inherited `content-encoding: gzip`. Recognizable from the body's
+first bytes: `1f ef bf bd 08 00`, the gzip magic with `8b` replaced by U+FFFD.
+
+Two things about this are worth carrying forward. First, plain `curl` sends no
+`Accept-Encoding` at all, so the functional test in §8.3 passed against a code
+path Prometheus never takes: **testing an exposition endpoint with bare `curl`
+proves nothing.** Second, the blast radius was the whole target, not just the
+new series. The `pawtograder_async_*`, `pawtograder_bottleneck_*` and
+`pawtograder_circuit_breaker_*` families come off that same endpoint, so
+`queues-and-workers` and `rate-limiting` went dark for staging too and the
+queue-depth alerts went blind. The values still rendering in Grafana came from
+the `pawtograder-preview-pr-*` namespaces, which run older images. That is an
+easy thing to mistake for a healthy staging.
+
+**(b) `storage` had been DOWN for 24h+ on a 404, and the fix that looked
+obvious takes the tier down.** The ServiceMonitor's comment asserted that
+storage-api serves `/metrics` only on the admin app or in multitenant mode, and
+that a single-tenant deploy necessarily 404s. Read off the dist bundle in
+`supabase/storage-api:v1.48.26`, that is backwards:
+
+```text
+app.js              plugins.metrics({ enabledEndpoint: !isMultitenant, ... })
+plugins/metrics.js  if (prometheusMetricsEnabled) register(metricsEndpoint)
+                      -> if (enabledEndpoint) fastify.get("/metrics", ...)
+config.js:252       prometheusMetricsEnabled = PROMETHEUS_METRICS_ENABLED === "true"
+```
+
+Single-tenant is the mode where the **main** app serves it, gated only on
+`PROMETHEUS_METRICS_ENABLED`. So the flag was set, deployed to staging as
+revision 89, and the storage tier went into CrashLoopBackOff:
+
+```text
+"Reply was already sent, did you forget to \"return reply\" in the \"/metrics\" (GET) route?"
+Error [ERR_HTTP_HEADERS_SENT]: Cannot write headers after they are sent to the client
+  -> uncaughtException -> PID 1 exits
+```
+
+`handleMetricsRequest` writes the reply without returning it, so fastify's
+`onSend` chain double-writes the response head. The route exists and the
+handler is fatally broken, on a ~30s scrape interval. Reverted in revision 90;
+storage recovered with no further restarts.
+
+The uncomfortable part is that the original advice ("set the toggle false") was
+correct, and its stated mechanism was wrong. A wrong mechanism attached to a
+right conclusion is worse than no comment at all: it presents as an error to
+correct, and correcting it broke production behaviour that the wrong reasoning
+had been protecting. Verifying the mechanism against the bundle was necessary
+but not sufficient -- the missing step was checking what the endpoint does when
+called, not just whether it is registered.
+
+And there is a second, independent reason, which the crashloop masked: **that
+port is publicly routed.** Kong's `storage-v1` service maps `/storage/v1/` to
+`storage:5000/` with `strip_path: true` and a `cors` plugin only -- no auth --
+and the API-host ingress sends every path to Kong. Confirmed from outside the
+cluster: `https://api.staging.pawtograder.net/storage/v1/metrics` reaches
+storage-api's own router (it returns storage-api's 404 JSON, not Kong's) while
+`/storage/v1/status` returns 200. Had the handler worked, the flag would have
+published internal telemetry to the internet unauthenticated. Anyone who
+"fixes" the crashloop by patching storage-api still has this problem.
+
+Credit where due: the crashloop was found by deploying it, but the public-route
+exposure was caught in review, not by testing. Two independent fatal flaws in a
+three-line change whose mechanism had been verified against the shipped bundle.
+
+Resolution: ship neither the flag nor the ServiceMonitor.
+`monitoring.serviceMonitors.storage` now defaults to **false**, because a
+permanently-DOWN 404 target is itself a defect -- it trains everyone to ignore a
+DOWN storage row. Storage metrics remain uncollected. The route worth trying is
+the admin app on `ADMIN_PORT` (5001), which registers the same handler behind a
+different hook chain, but that needs its own container port, Service port and
+ServiceMonitor, and the admin app also exposes tenant/migration/s3-credential
+routes -- an exposure decision, not a `monitoring.enabled` side effect. It is at
+least not behind the Kong storage route.
+
+### 12.4 Standing checks to add to §8.0
+
+Baseline capture missed both regressions because it counted series rather than
+checking targets. Add:
+
+- `up{namespace="<ns>"} == 0`: enumerate every DOWN target by job **before**
+  reading any panel, and treat a target that was already down as in scope, not
+  as background.
+- For each target's `lastError` in the Prometheus targets API, not just `up`.
+  `gzip: invalid header` and `404 Not Found` are both invisible in `up` alone.
+- `curl -H 'Accept-Encoding: gzip' <pod>:<port>/metrics | gunzip`: must
+  actually decompress. Run this against any endpoint with a proxy, demuxer, or
+  rewrite in front of it.

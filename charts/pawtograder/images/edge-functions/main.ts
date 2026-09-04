@@ -933,10 +933,41 @@ Deno.serve(async (req: Request) => {
       }
       if (appended !== null) {
         try {
-          const body = await res.text();
+          // The worker's response may be COMPRESSED. Prometheus scrapes with
+          // `Accept-Encoding: gzip`, and worker.fetch(req) forwards the request
+          // verbatim (deliberately -- see the note above callWorker), so the
+          // runtime hands back a gzip-encoded body whenever the scraper asked
+          // for one. `res.text()` on that decodes raw DEFLATE bytes as UTF-8:
+          // every invalid byte becomes U+FFFD, and the result then shipped
+          // under the inherited `content-encoding: gzip` -- so Prometheus got
+          // `gzip: invalid header` and dropped the ENTIRE target, including the
+          // pawtograder_* queue series that predate this file.
+          //
+          // Plain `curl` sends no Accept-Encoding at all, which is why the
+          // uncompressed path tested clean and only Prometheus ever saw this.
+          //
+          // Decompress here rather than stripping Accept-Encoding from the
+          // forwarded request: the request object must stay untouched.
+          const encoding = (res.headers.get("content-encoding") ?? "").trim().toLowerCase();
+          let body: string;
+          if (encoding === "" || encoding === "identity") {
+            body = await res.text();
+          } else if (encoding === "gzip" && res.body) {
+            body = await new Response(res.body.pipeThrough(new DecompressionStream("gzip"))).text();
+          } else {
+            // Some other/unsupported encoding (or a declared encoding with no
+            // body). Appending would corrupt it exactly as above, so pass the
+            // worker response through untouched and lose only the edge series.
+            console.error(`[edge-metrics] unsupported content-encoding ${JSON.stringify(encoding)}, passing through`);
+            return res;
+          }
           const headers = new Headers(res.headers);
           // The body length changed; a stale content-length would truncate it.
           headers.delete("content-length");
+          // We are returning PLAINTEXT. Leaving a stale content-encoding here is
+          // the bug described above; the runtime re-applies compression per the
+          // caller's Accept-Encoding on the way out.
+          headers.delete("content-encoding");
           return new Response(body + appended, { status: res.status, statusText: res.statusText, headers });
         } catch (e) {
           console.error("[edge-metrics] could not read worker response body:", e);

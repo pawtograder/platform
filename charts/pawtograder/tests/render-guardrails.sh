@@ -1104,6 +1104,130 @@ assert_grading_actions_source() {
 }
 assert_grading_actions_source
 
+echo "== storage-api /metrics must stay OFF on this image =="
+# PROMETHEUS_METRICS_ENABLED registers GET /metrics on storage-api's main app,
+# and handleMetricsRequest then writes the reply without returning it, so
+# fastify double-writes the head on the first scrape: ERR_HTTP_HEADERS_SENT ->
+# uncaughtException -> PID 1 exits. Setting the flag does not yield metrics, it
+# crashloops the storage tier on the scrape interval (staging, 2026-09-04).
+#
+# So the flag must never render, and the ServiceMonitor must not render by
+# default either -- without the flag it is a permanently-DOWN 404 target.
+assert_rendered_lacks "storage never sets PROMETHEUS_METRICS_ENABLED (crashloops the pod)" \
+  templates/storage.yaml "PROMETHEUS_METRICS_ENABLED" \
+  --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+  --set monitoring.prometheusRules.labels.release=kps
+
+# assert_no_storage_servicemonitor
+# Whole-chart render: with monitoring fully on, there must be no storage
+# ServiceMonitor. Anchored on the ServiceMonitor kind so the storage Service and
+# Deployment (which legitimately render) cannot satisfy or defeat it.
+assert_no_storage_servicemonitor() {
+  local label="no storage ServiceMonitor by default"
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+      --set monitoring.prometheusRules.labels.release=kps \
+      >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    FAILED=1
+    return
+  fi
+  if awk '/^kind: ServiceMonitor$/{sm=1} /^  name: t-pawtograder-storage$/{if(sm)found=1} /^---$/{sm=0} END{exit !found}' "$OUTFILE"; then
+    echo "FAIL [$label]: a storage ServiceMonitor rendered; without the flag it is a permanent 404 target"
+    FAILED=1
+    return
+  fi
+  # Sanity: the same render must still contain OTHER ServiceMonitors, or the
+  # assertion above would pass simply because monitoring did not render at all.
+  if ! grep -qE '^kind: ServiceMonitor$' "$OUTFILE"; then
+    echo "FAIL [$label]: no ServiceMonitors at all; assertion is not testing anything"
+    FAILED=1
+    return
+  fi
+  echo "ok   [$label]"
+}
+assert_no_storage_servicemonitor
+
+# Opt-in still works, for a deploy that scrapes the admin app or runs a fixed
+# image. The toggle is the documented escape hatch, so it must not rot.
+#
+# NOT assert_rendered_contains "kind: ServiceMonitor": monitoring.yaml renders
+# several of them, so that would pass whether or not the storage one appeared.
+assert_storage_servicemonitor_optin() {
+  local label="storage ServiceMonitor renderable on explicit opt-in"
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+      --set monitoring.prometheusRules.labels.release=kps \
+      --set monitoring.serviceMonitors.storage=true \
+      >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    FAILED=1
+    return
+  fi
+  if awk '/^kind: ServiceMonitor$/{sm=1} /^  name: t-pawtograder-storage$/{if(sm)found=1} /^---$/{sm=0} END{exit !found}' "$OUTFILE"; then
+    echo "ok   [$label]"
+  else
+    echo "FAIL [$label]: opt-in did not render a storage ServiceMonitor; the escape hatch is broken"
+    FAILED=1
+  fi
+}
+assert_storage_servicemonitor_optin
+
+echo "== edge /metrics demuxer must not re-emit a decoded body as encoded =="
+# assert_edge_metrics_encoding
+# Source-shape assertion (like assert_grading_actions_source above), on
+# images/edge-functions/main.ts rather than on a render. A functional test needs
+# the real runtime image AND a reachable Postgres for the metrics worker to
+# return 200, so it cannot run in chart CI, but the regression it guards took
+# down the whole edge target once already and would do so silently again.
+#
+# The bug: the append path did `await res.text()` and reused the worker's
+# headers. Prometheus scrapes with `Accept-Encoding: gzip` and the request is
+# forwarded verbatim, so the worker's body arrives gzip-encoded; .text() decoded
+# DEFLATE bytes as UTF-8 (every bad byte -> U+FFFD) and shipped the mojibake
+# under the inherited `content-encoding: gzip`. Prometheus: `gzip: invalid
+# header`, target DOWN, and every pawtograder_* queue series off that same
+# endpoint went with it. Plain curl sends no Accept-Encoding, so the manual test
+# passed.
+assert_edge_metrics_encoding() {
+  local label="append path handles content-encoding" bad=0
+  local src="$CHART/images/edge-functions/main.ts"
+  if [ ! -f "$src" ]; then
+    echo "FAIL [$label]: $src not found"
+    FAILED=1
+    return
+  fi
+  # The rewrite must drop content-encoding, since what it returns is plaintext.
+  if ! grep -qE 'headers\.delete\("content-encoding"\)' "$src"; then
+    echo "FAIL [$label]: rewrite does not delete content-encoding; a gzip scrape will be corrupted"
+    bad=1
+  fi
+  # ...and it must actually decode a gzip body rather than stringifying it.
+  if ! grep -qF 'DecompressionStream("gzip")' "$src"; then
+    echo "FAIL [$label]: no gzip decode path; res.text() on an encoded body yields U+FFFD mojibake"
+    bad=1
+  fi
+  # An encoding it cannot decode must pass the response through untouched. Match
+  # the CONTROL FLOW, not the log line: a branch that keeps the diagnostic but
+  # loses its `return res` would corrupt exactly the bodies this is protecting,
+  # and a message-only grep cannot tell the difference. Require `return res`
+  # within the few lines following the diagnostic, before the branch closes.
+  if ! awk '
+      /unsupported content-encoding/ { seen = 1; n = 0; next }
+      seen {
+        n++
+        if ($0 ~ /return res;/) { found = 1; exit }
+        if (n > 4 || $0 ~ /^[[:space:]]*}[[:space:]]*$/) { seen = 0 }
+      }
+      END { exit !found }
+    ' "$src"; then
+    echo "FAIL [$label]: unsupported-encoding branch does not return res; the response would be corrupted"
+    bad=1
+  fi
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
+}
+assert_edge_metrics_encoding
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"
