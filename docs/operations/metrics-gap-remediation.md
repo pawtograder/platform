@@ -1,7 +1,8 @@
 # Metrics gap remediation — tracking doc
 
-**Status:** WS-LEADER implemented on `metrics-pr0-cleanup` (chart 0.3.18, gates
-off). WS-APP / WS-EDGE / WS-DASH still to write. Nothing deployed.
+**Status:** WS-LEADER and WS-EDGE (with the WS-DASH edge dashboards) implemented
+on `metrics-pr0-cleanup` (chart 0.3.18, gates off). WS-APP still to write.
+Nothing deployed.
 **Opened:** 2026-09-03
 **Scope:** platform (chart, app, edge image, migrations) + prod-charts (values, deploy)
 **Target:** Khoury production, namespace `pawtograder-prod`
@@ -220,9 +221,9 @@ seq scan. Preference order: (1) `cache_seconds: 300` on the exporter blocks;
 
 - **`main.ts` intercepts `/metrics` and appends its own series to the metrics
   function's 200 response.** Auth is inherited for free (`METRICS_TOKEN` stays
-  enforced by the user worker; append only on 200). No chart plumbing change.
-  Blast radius is one `try/catch` — if rendering throws, the untouched response
-  passes through and the queues dashboard cannot break.
+  enforced by the user worker; append only on 200). Blast radius is one
+  `try/catch` — if rendering throws, the untouched response passes through and
+  the queues dashboard cannot break.
 - **The 500 path must stay a 500.** `prometheus-rules.yaml:222` documents that
   `PawtograderPostgresUnavailable` exists _because_ the metrics function returns
   500 when its first DB RPC fails. Do not "improve" this into a partial 200 — it
@@ -246,42 +247,89 @@ routed by Kong). Keying a map on it verbatim is an unbounded, remotely-driven
 a cardinality bomb. **Bound it with a closed allowlist** read from `ESZIP_DIR` at
 boot; anything else records as `function="_unknown"`.
 
-**Metrics to emit** (all `pawtograder_*`, all per-pod; do not resurrect
-`deno_http_*`):
-
-`pawtograder_edge_requests_total{function,status}` ·
-`pawtograder_edge_request_duration_seconds` (pod-wide histogram) ·
-`pawtograder_edge_function_seconds_total{function}` ·
-`pawtograder_edge_worker_errors_total{function,kind}` ·
-`pawtograder_edge_user_workers_active` · `_retired_total` ·
-`_requests_received_total` / `_handled_total` ·
-`pawtograder_edge_main_worker_heap_bytes{stat}` ·
-`pawtograder_edge_eszip_cache_{bytes,entries,hits_total,misses_total,evictions_total}`
-
-Buckets: `0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 400, +Inf`.
-`le=400` sits on `EDGE_WORKER_TIMEOUT_MS` so "hit the worker timeout" reads as
-`+Inf − le=400` rather than being smeared.
-
 > **DECIDED 2026-09-03: no per-function latency quantiles.** Adding `function` to
 > the histogram takes the edge tier from ~8.6k to ~37k series, and every one is
 > per-pod, so an HPA excursion to 64 replicas doubles it at exactly the moment of
 > load. Per-function _counts_ and `rate(seconds_total)/rate(requests_total)`
 > (mean latency, and share of total time spent) answer "which function is the
 > problem" well enough. **Do not ship the `perFunctionLatency` values flag** —
-> an unused flag is an invitation. Panel 11 becomes "Mean latency by function"
-> plus "Time spent per function"; keep the p50/p95/p99 expressions in the panel
-> _description_ for anyone who later wants to add the label deliberately.
+> an unused flag is an invitation.
 
-Resulting budget: **~8.6k series typical, ~22k ceiling.**
+**As shipped** (2026-09-04, branch `metrics-pr0-cleanup`, chart 0.3.18 — no
+further bump; WS-LEADER already moved it):
+
+- `EdgeRuntime.getRuntimeMetrics()` **verified present** on the pinned
+  `supabase/edge-runtime:v1.74.0` by running the image: `Object.keys(EdgeRuntime)`
+  is `ai, userWorkers, getRuntimeMetrics, applySupabaseTag, systemMemoryInfo,
+raiseSegfault, miCollect, scheduleTermination`, and the call returns exactly the
+  documented shape (`mainWorkerHeapStats`, `eventWorkerHeapStats`,
+  `activeUserWorkersCount`, `retiredUserWorkersCount`, `receivedRequestsCount`,
+  `handledRequestsCount`). Heap fields are `usedHeapSize` / `totalHeapSize` /
+  `externalMemory`, which is what `stat=` maps onto. It is guarded by a 1s
+  `Promise.race` — a scrape must never hang on it, so a timeout drops the runtime
+  gauges for that scrape and emits the counters anyway.
+- **The allowlist reads BOTH directories, not just `ESZIP_DIR`.** A function
+  shipped without a bundle still runs (main.ts falls back to raw `servicePath`),
+  so `/home/deno/functions` is read as well; otherwise such a function would
+  report as `_unknown` and the label would be wrong rather than merely bounded.
+  Both reads are synchronous and happen before `Deno.serve()` accepts anything.
+- The invariant comment sits directly under the eszip-leak note, because the
+  contrast is the point: that map's keys were function names too, but its values
+  were 19-59MB buffers and its key set was request-driven. Here the values are
+  fixed-size `Float64Array`s plus a status map capped at 32, and the key set is
+  closed at image-build time.
+- Metrics landed as planned, plus two the plan did not name:
+  `pawtograder_edge_eszip_cold_bytes` and `_cold_queue_depth`. Both are free
+  (`coldBytes` and `coldQueue.length` already exist) and they instrument the one
+  term of the container memory budget that has never been observable — a
+  sustained non-zero queue depth means `eszipColdLoadHeadroomMb` is undersized,
+  which today is only visible as latency.
+- `EDGE_METRICS_BUCKETS` is validated the way `byteBudget()` validates its
+  inputs: non-finite, non-positive or non-monotonic rejects loudly and falls back
+  to the default, because `histogram_quantile()` over a non-monotonic bucket set
+  returns plausible garbage rather than failing.
+- Hot path adds no second `Date.now()` — the elapsed value the access log already
+  computes is reused. Steady state is allocation-free: every accumulator is
+  pre-allocated at boot.
+- **Time to headers, not full response time**, stated in the `# HELP` string.
+  `worker.fetch()` resolves when headers are ready; capturing end-of-body needs a
+  per-request `TransformStream`, which allocates on the hot path and perturbs the
+  stream pass-through `main.ts` warns about.
+- **Verified end to end against the real image**, not just rendered: an
+  unauthorized scrape returns 401 with nothing appended; a forced 500 returns 500
+  with nothing appended; `EDGE_METRICS` unset emits no `pawtograder_edge_*` at
+  all; a request for an unknown path segment records as `function="_unknown"`; and
+  a malformed `EDGE_METRICS_BUCKETS` logs the rejection and falls back.
+- **Landed cardinality: ~270 series/pod**, i.e. **~8.6k at 32 replicas**, ~22k
+  ceiling — the budget above, unchanged. The arithmetic is written out in
+  `values.yaml` next to the gate, with the warning that it is per-pod and doubles
+  when the HPA doubles.
+- **Gate: `edgeFunctions.metrics.enabled`, default `false`**, rendered as the
+  `EDGE_METRICS` env var (runtime, not build-time). `values-staging.yaml` sets it
+  `true`. `render-guardrails.sh` asserts the gate renders 0/1 correctly, that
+  `EDGE_METRICS_BUCKETS` is strictly increasing, and that its top finite bucket is
+  `>= worker.timeoutMs/1000` — with a negative case (`timeoutMs=900000` against
+  the default buckets) proving the assertion actually fires.
+- The ~85KB collector does not move the memory budget; it is recorded in the
+  `_edge-functions-workload.tpl` inventory comment as absorbed by the ~90Mi host
+  term rather than added as a line, so the next person reconciling that sum finds
+  it accounted for.
+- **No CI Deno type-check covers this file.** `npm run typecheck:functions` and
+  the `deno-unit-tests` job both scope to `supabase/functions/`;
+  `charts/pawtograder/images/edge-functions/main.ts` is outside both. It was
+  checked by hand with `deno check` under `lib: [deno.window, dom, esnext]` —
+  clean, and clean on the pre-change file too. Without that lib setting the file
+  reports 17 errors before the change and 24 after, all of them cascades from
+  `Deno` being unresolvable; that is a missing lib, not a regression.
 
 **Also required:** fix the two false comments (`monitoring.yaml:610`,
 `main.ts:70`), and extend the SCOPE block in
 `supabase/functions/metrics/index.ts` to say the edge tier's own series are
-appended by the demuxer and must not be reimplemented there.
-
-**Gate:** `edgeFunctions.metrics.enabled` → an env var read in `main.ts`, default
-off in prod for the first deploy. Must be a runtime env var, not a build-time
-constant.
+appended by the demuxer and must not be reimplemented there. **Done** — the
+SCOPE block now also explains _why_ a user worker cannot produce them
+(`getRuntimeMetrics()` is main-worker only; the eszip cache and the request loop
+are not visible from an isolate), which is the part that stops someone
+reimplementing them anyway.
 
 ### WS-DASH — dashboard fixes
 
@@ -298,6 +346,34 @@ constant.
 - Add `pawtograder_edge_eszip_cache_bytes` and
   `pawtograder_edge_main_worker_heap_bytes{stat="used"}` to the memory panel,
   decomposing working set into cache vs main-isolate heap vs isolates.
+
+**As shipped** (2026-09-04). `edge-functions.json` was rewritten onto the
+`pawtograder_edge_*` names: the `$fn` variable, invocations, error rate, top
+errors and per-function invocations move over directly; P95 latency **drops its
+`{function=~"$fn"}` selector** (the label does not exist and the panel would go
+blank) and says so in its description; panel 11 becomes "Mean latency by
+function" plus "Time spent per function", keeping the p50/p95/p99 expressions in
+its description for anyone who later adds the label deliberately; a new "Worker
+retirements & demuxer errors" panel fills the slot PR-0 freed. `gridPos.y` was
+re-flowed — 13 panels, contiguous, no overlaps or gaps. PR-0's `includeAll: true`
+/ `current = All` `$namespace` fix and its seven `=~` matchers are preserved.
+
+Both dashboard bugs PR-0 left open are **RESOLVED**:
+
+1. **`edge-soak.json`'s `ns` variable** hard-coded `"pawtograder-staging"` as its
+   `current` with `includeAll: false` — the identical prod-renders-empty bug.
+   Fixed to the `postgres-deep-dive.json` convention (`includeAll: true`,
+   `current = All`/`$__all`, `regex: pawtograder.*`, `sort: 1`). It **did** hit
+   the trap PR-0 warned about: every one of its matchers used `=`, which matches
+   nothing against `$__all`. All 16 were flipped to `=~`, including the Loki
+   stream selectors.
+2. **`edge-functions.json`'s `$namespace` was a Loki query variable** feeding
+   seven Prometheus kube-state-metrics expressions. It now queries the
+   **Prometheus** datasource (`label_values(kube_pod_info, namespace)`, regex
+   `pawtograder.*`), matching `postgres-deep-dive.json`. The `loki` **datasource**
+   variable stays for the logs panel, which still interpolates `$namespace` —
+   that direction is safe, because the value list no longer depends on Loki's
+   label cardinality. The variable carries a description recording why.
 
 ---
 

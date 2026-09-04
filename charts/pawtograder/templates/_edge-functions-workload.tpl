@@ -30,7 +30,13 @@ So the sum is asserted at render time rather than documented and hoped for:
       <= resources.limits.memory
 
 The host term is measured, not guessed: a freshly started pod with an empty
-cache sits at ~87Mi.
+cache sits at ~87Mi. It also absorbs the pawtograder_edge_* metrics collector
+added in chart 0.3.18: its state is bounded at image-build time to one
+fixed-size numeric array plus a <=32-entry status map per allowlisted function,
+~85KB total for ~56 functions. That is inside the rounding error of the ~90Mi
+host term, so it is NOT a separate line in this sum -- recorded here so the next
+person reconciling these numbers finds it accounted for rather than discovering
+it.
 
 The cold-load term covers bundle buffers that residentBytes does NOT count: a
 bundle being read for a cache miss, and one the LRU evicted or refused while a
@@ -264,6 +270,20 @@ spec:
             # holds these bytes from before a cold read until create() returns.
             - name: EDGE_ESZIP_COLD_LOAD_MAX_BYTES
               value: {{ mul $ctx.Values.edgeFunctions.eszipColdLoadHeadroomMb 1048576 | quote }}
+            # Per-request pawtograder_edge_* metrics, collected by main.ts and
+            # appended to the metrics function's /metrics response. A RUNTIME
+            # switch, not a build-time constant, so it is flipped by a values
+            # change rather than an image rebuild. Default off: the deploy plan
+            # ships this dark to prod and enables it in a later, separate deploy
+            # so the cardinality delta has a single attributable cause.
+            - name: EDGE_METRICS
+              value: {{ ternary "1" "0" $ctx.Values.edgeFunctions.metrics.enabled | quote }}
+            # Latency histogram bounds in seconds. The top finite bucket must be
+            # >= worker.timeoutMs/1000 or every request that hits the worker
+            # timeout lands in +Inf and the upper quantiles become an
+            # extrapolation; render-guardrails.sh asserts that.
+            - name: EDGE_METRICS_BUCKETS
+              value: {{ join "," $ctx.Values.edgeFunctions.metrics.buckets | quote }}
             # JWT_SECRET here is NOT the deployment's HS256 shared secret. The
             # only consumer inside the edge runtime is _shared/MCPAuth.ts, which
             # mints short-lived per-user RLS JWTs for MCP and the CLI — with

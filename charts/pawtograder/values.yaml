@@ -1237,6 +1237,50 @@ edgeFunctions:
   # Deliberately NOT reduced alongside eszipCacheMaxMb above: this term covers
   # COLD reads, and halving the cache makes cold reads more frequent, not less.
   eszipColdLoadHeadroomMb: 256
+  # Per-request edge-tier metrics (pawtograder_edge_*), collected by the main.ts
+  # demuxer and appended to the `metrics` function's /metrics response. No new
+  # port, probe or scrape target: the existing edge-functions ServiceMonitor
+  # already scrapes that path, and METRICS_TOKEN keeps guarding it because the
+  # demuxer only appends to a 200 the user worker already authorized.
+  #
+  # DEFAULT false, deliberately. The rollout plan ships this dark to production
+  # and turns it on in a LATER, SEPARATE deploy, so the cardinality delta and any
+  # memory movement have exactly one attributable cause. Staging enables it (see
+  # examples/values-staging.yaml) because that is where it gets exercised.
+  #
+  # Cardinality, because this is the number that decides whether it is safe:
+  # every series is PER POD, since each pod is its own scrape target.
+  #
+  #   requests_total          ~55 functions x ~4 observed status codes = ~220
+  #   function_seconds_total  ~55
+  #   worker_errors_total     ~55 x 3 kinds, sparse in practice           = ~10
+  #   duration_seconds        14 buckets + _sum + _count                  = ~16
+  #   eszip + runtime gauges                                              = ~12
+  #                                                                  ~270 / pod
+  #
+  # At the 32 replicas production pins the edge HPA to, that is ~8.6k series
+  # typical. The ceiling -- every function invoked on every pod with a wider
+  # spread of status codes -- is ~22k.
+  #
+  # THAT NUMBER DOUBLES WHEN THE HPA DOUBLES. It is per-pod, so an excursion to
+  # 64 replicas doubles the edge tier's contribution at exactly the moment the
+  # fleet is under load. Budget against maxReplicas, not against the steady-state
+  # replica count.
+  #
+  # The `function` label domain is closed at IMAGE BUILD time (main.ts reads the
+  # eszip and function directories once at boot; anything else records as
+  # "_unknown"), so no request can grow it. The `status` domain is capped at 32
+  # per function. Both bounds exist because /functions/v1/* is publicly routed
+  # and the path segment is attacker-controlled -- see the long note in main.ts.
+  metrics:
+    enabled: false
+    # Latency histogram bounds, in seconds. NOT Prometheus' defaults: those top
+    # out at 10s while worker.timeoutMs is 400s, which would put this tier's
+    # entire tail in +Inf. The top finite bucket sits ON the worker lifetime so
+    # "hit the worker timeout" reads as (+Inf - le=400) instead of smearing.
+    # render-guardrails.sh asserts monotonicity and that the top bucket is
+    # >= worker.timeoutMs/1000; raise it alongside any timeout increase.
+    buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 400]
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)

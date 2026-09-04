@@ -34,6 +34,24 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
  * time combined and drive paging alerts where scrape-interval freshness matters, and the
  * Bottleneck/Upstash snapshots read Redis rather than Postgres. Moving them is a possible follow-up,
  * not a cost problem.
+ *
+ * WHAT IS NOT HERE, AND MUST NOT BE ADDED HERE: the edge tier's own
+ * pawtograder_edge_* series (per-function request counts and durations,
+ * user-worker and eszip-cache gauges). Those are produced by the demuxer,
+ * charts/pawtograder/images/edge-functions/main.ts, which APPENDS its exposition
+ * to this handler's 200 response before it leaves the pod. That is not a
+ * stylistic split. This file runs in a USER WORKER: it cannot see the demuxer's
+ * request loop, it cannot see the eszip cache, and EdgeRuntime.getRuntimeMetrics()
+ * is installed only on the main worker, so it cannot read worker counts or the
+ * main isolate's heap either. Anything reimplemented here would be a per-isolate
+ * fiction, not a per-pod measurement.
+ *
+ * The append happens only on a 200, which is what makes authenticateRequest()
+ * below the single credential check for the whole endpoint. It also means the
+ * 500 this handler returns when its first RPC fails stays a 500 — see
+ * charts/pawtograder/templates/prometheus-rules.yaml, where
+ * PawtograderPostgresUnavailable exists BECAUSE of that behaviour. Do not soften
+ * it into a partial 200.
  */
 
 /** Best-effort cap for untyped RPCs so a slow DB cannot stall the scrape. */

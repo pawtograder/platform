@@ -606,10 +606,25 @@ spec:
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 {{- end }}
 ---
-# ServiceMonitor: edge-functions. edge-runtime v1.74 serves Prometheus metrics
-# (deno_http_requests_total, pawtograder_*) at /metrics on the http port,
-# optionally gated by a Bearer token — the runtime enforces METRICS_TOKEN only
-# when that env value is set (metrics/index.ts: no token => open /metrics).
+# ServiceMonitor: edge-functions.
+#
+# The edge RUNTIME serves no Prometheus metrics of its own — it never has. An
+# earlier version of this comment claimed deno_http_* came from the runtime, and
+# the edge-functions dashboard was built on that claim, which is why it rendered
+# completely empty for its entire life. What actually happens:
+#
+#   * /metrics on the http port is demuxed like any other function path, to the
+#     `metrics` user worker (supabase/functions/metrics/index.ts), which emits
+#     the pawtograder_* queue and circuit-breaker series.
+#   * charts/pawtograder/images/edge-functions/main.ts then APPENDS its own
+#     pawtograder_edge_* series (per-function request counts, a pod-wide latency
+#     histogram, eszip-cache and user-worker gauges) to that response before
+#     returning it. Gated by edgeFunctions.metrics.enabled.
+#
+# METRICS_TOKEN is enforced by the user worker, not by the runtime and not by
+# the demuxer — which is exactly why the demuxer appends only to a 200. An
+# unauthorized scrape gets its 401 back with nothing added. With no token set,
+# /metrics is open (metrics/index.ts: no token => no auth).
 # The credential is `optional: true` so a deploy that DOESN'T set METRICS_TOKEN
 # (e.g. staging, where edge /metrics is intentionally unauthed) still scrapes:
 # without optional, the missing Secret key makes the Prometheus Operator reject

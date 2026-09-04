@@ -889,6 +889,103 @@ assert_rendered_lacks "no leader ServiceMonitor without a leader" \
 echo "== _web-workload.tpl refactor is a no-op for web.yaml and web-channels.yaml =="
 assert_web_render_unchanged
 
+# assert_edge_metrics_buckets
+# EDGE_METRICS_BUCKETS is a histogram definition rendered from a values list, and
+# a histogram whose bounds are not strictly increasing is not a histogram:
+# histogram_quantile() consumes the cumulative _bucket series and returns
+# plausible-looking garbage rather than failing, so a bad list is invisible at
+# every layer above this one.
+#
+# The second half is the one that actually bites. edgeFunctions.worker.timeoutMs
+# is the worker LIFETIME (400s by default). If the top FINITE bucket sits below
+# that, every request that runs to the worker timeout lands in +Inf, and every
+# quantile above wherever the real mass ends becomes an extrapolation off the last
+# finite bound -- p95 and p99 stop meaning anything at exactly the moment the tier
+# is in trouble. Raising worker.timeoutMs without extending the buckets is the
+# realistic way to get there, which is why this is asserted rather than commented,
+# and why the check is derived from the rendered timeout rather than hard-coded.
+assert_edge_metrics_buckets() {
+  local label="EDGE_METRICS_BUCKETS is monotonic and covers worker.timeoutMs"
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set edgeFunctions.metrics.enabled=true \
+      "$@" --show-only templates/edge-functions.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local buckets timeout_ms
+  buckets="$(grep -A1 -E '^[[:space:]]*- name: EDGE_METRICS_BUCKETS$' "$OUTFILE" \
+              | grep -E '^[[:space:]]*value:' \
+              | head -1 | sed -E 's/^[[:space:]]*value:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/')"
+  timeout_ms="$(grep -A1 -E '^[[:space:]]*- name: EDGE_WORKER_TIMEOUT_MS$' "$OUTFILE" \
+              | grep -E '^[[:space:]]*value:' \
+              | head -1 | sed -E 's/^[[:space:]]*value:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/')"
+  if [ -z "$buckets" ]; then
+    echo "FAIL [$label]: EDGE_METRICS_BUCKETS is not rendered at all"
+    FAILED=1
+    return
+  fi
+  if [ -z "$timeout_ms" ]; then
+    echo "FAIL [$label]: EDGE_WORKER_TIMEOUT_MS is not rendered, so the top bucket cannot be checked"
+    FAILED=1
+    return
+  fi
+  local prev="" top="" b
+  local bad=0
+  IFS=',' read -ra _BUCKETS <<< "$buckets"
+  for b in "${_BUCKETS[@]}"; do
+    b="$(echo "$b" | tr -d '[:space:]')"
+    if [ -z "$b" ] || ! echo "$b" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
+      echo "FAIL [$label]: bucket bound $(printf '%q' "$b") is not a positive number"
+      bad=1
+      break
+    fi
+    if [ -n "$prev" ] && ! awk -v a="$prev" -v c="$b" 'BEGIN{exit !(c>a)}'; then
+      echo "FAIL [$label]: buckets are not strictly increasing ($prev then $b) in: $buckets"
+      bad=1
+      break
+    fi
+    prev="$b"
+    top="$b"
+  done
+  if [ "$bad" -ne 0 ]; then FAILED=1; return; fi
+  if ! awk -v top="$top" -v ms="$timeout_ms" 'BEGIN{exit !(top >= ms/1000)}'; then
+    echo "FAIL [$label]: top finite bucket ${top}s is below worker.timeoutMs (${timeout_ms}ms)."
+    echo "       Every request that hits the worker timeout would land in +Inf and the upper"
+    echo "       quantiles would be an extrapolation. Extend edgeFunctions.metrics.buckets."
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+echo "== edge metrics histogram buckets =="
+assert_edge_metrics_buckets
+# A raised worker timeout with the default bucket list must be caught, not
+# silently produce unusable quantiles.
+FAILED_BEFORE="$FAILED"
+FAILED=0
+assert_edge_metrics_buckets --set edgeFunctions.worker.timeoutMs=900000 >/dev/null 2>&1
+if [ "$FAILED" -eq 0 ]; then
+  echo "FAIL [buckets shorter than the worker lifetime are refused]: the check passed but should have failed"
+  FAILED=1
+else
+  echo "ok   [buckets shorter than the worker lifetime are refused]"
+  FAILED=0
+fi
+FAILED="$FAILED_BEFORE"
+
+# The gate must actually gate: no EDGE_METRICS_BUCKETS consumer without it, but
+# the env var itself renders either way (the collector reads EDGE_METRICS, not
+# the presence of the bucket list) so a values-only flip needs no pod respec
+# beyond the one variable.
+assert_env_value "EDGE_METRICS off by default" \
+  templates/edge-functions.yaml EDGE_METRICS 0
+assert_env_value "EDGE_METRICS on when enabled" \
+  templates/edge-functions.yaml EDGE_METRICS 1 \
+  --set edgeFunctions.metrics.enabled=true
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"
