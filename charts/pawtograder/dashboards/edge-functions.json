@@ -233,7 +233,7 @@
       "title": "Mean latency by function",
       "gridPos": {
         "h": 9,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 13
       },
@@ -246,11 +246,6 @@
           "refId": "mean",
           "legendFormat": "mean {{function}}",
           "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m])) / clamp_min(sum by(function)(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m])), 0.001)"
-        },
-        {
-          "refId": "spent",
-          "legendFormat": "time spent {{function}}",
-          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m]))"
         }
       ],
       "fieldConfig": {
@@ -258,13 +253,47 @@
           "unit": "s"
         }
       },
-      "description": "Mean time-to-headers per function, and the share of total demuxer time each function accounts for. NOT quantiles: pawtograder_edge_request_duration_seconds{namespace=~\"$namespace\"} is pod-wide and carries no function label. DECIDED 2026-09-03 — adding that label takes the edge tier from ~8.6k to ~37k series, every one of them per-pod, so an HPA excursion to 64 replicas doubles the count at exactly the moment of load. If someone later adds the label deliberately, these are the expressions this panel used to carry:\n\n  histogram_quantile(0.50, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket{namespace=~\"$namespace\", function=~\"$fn\"}[5m])))\n  histogram_quantile(0.95, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket{namespace=~\"$namespace\", function=~\"$fn\"}[5m])))\n  histogram_quantile(0.99, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket{namespace=~\"$namespace\", function=~\"$fn\"}[5m])))"
+      "description": "rate(function_seconds_total) / rate(requests_total): seconds of demuxer time per request, which is TIME TO HEADERS rather than full response time (worker.fetch resolves when headers are ready). This used to share a panel with the time-spent series; they are not the same unit and the shared axis flattened this one into the floor — see 'Share of tier time by function' beside it. The per-function latency HISTOGRAM deliberately does not exist: adding `function` to it takes the edge tier from ~8.6k to ~37k series, all per-pod, doubling on every HPA excursion. If it is ever added, the quantiles are histogram_quantile(0.5|0.95|0.99, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket[5m])))."
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Share of tier time by function",
+      "description": "Each function's share of all demuxer time, stacked to 100%. This is the 'where is the tier's time going' panel: a function can be fast per request and still dominate the tier by volume, and mean latency beside it cannot show that. The numerator, sum by(function)(rate(pawtograder_edge_function_seconds_total[5m])), is function-seconds per wall-clock second — i.e. mean CONCURRENT executions, a dimensionless number that can exceed 1 and is NOT a duration. It was previously plotted raw on the mean-latency axis, where Grafana rendered a value of 20 as '20 seconds' and squashed the real latency series flat. Divided by the fleet total it becomes a genuine share; the axis unit is set explicitly to percentunit rather than inferred. If you want the absolute figure (how many worker slots a function occupies on average), query the numerator on its own in Explore.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{function}}",
+          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m])) / clamp_min(scalar(sum(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\"}[5m]))), 0.001)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        }
+      }
     },
     {
       "id": 12,
       "type": "timeseries",
       "title": "Worker retirements & demuxer errors",
-      "description": "Retirements are NORMAL: the runtime recycles an isolate as it approaches its memory, CPU-time or wall-clock limit, and a healthy fleet retires constantly. The errors are the signal. retired_retry means a request landed on an about-to-die worker and was retried on a fresh one (recovered, but a sustained rise means isolates are being retired faster than they are used). cancelled means the supervisor killed a worker mid-request and the caller got a 503. internal is everything else, and is always worth reading the logs for.",
+      "description": "Two different scopes on purpose. The error series carries a `function` label and honours $fn. The retirement series does not: pawtograder_edge_user_workers_retired_total is a pod-wide counter from EdgeRuntime.getRuntimeMetrics() with no function dimension, so it stays fleet-wide however $fn is set — filtering it would silently return the same number under a different label. The three metrics that carry `function` are pawtograder_edge_requests_total, pawtograder_edge_function_seconds_total and pawtograder_edge_worker_errors_total; every panel that reads one of them applies $fn.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -279,7 +308,7 @@
         {
           "refId": "errors",
           "legendFormat": "errors {{kind}}",
-          "expr": "sum by(kind)(rate(pawtograder_edge_worker_errors_total{namespace=~\"$namespace\"}[5m]))"
+          "expr": "sum by(kind)(rate(pawtograder_edge_worker_errors_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m]))"
         },
         {
           "refId": "retired",

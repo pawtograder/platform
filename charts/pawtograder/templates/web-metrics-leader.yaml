@@ -49,6 +49,24 @@ user-traffic path — see the audit in values.yaml under web.metricsLeader.
    match the pod itself. A user-supplied affinity still wins. */}}
 {{- $_ := set $cfg "spreadAcrossNodes" false }}
 {{- $image := mergeOverwrite (deepCopy .Values.web.image) ($ml.image | default (dict)) }}
+{{- /* SINGLE-LEADER INVARIANT, and the one hole in it.
+
+   validations.yaml refuses metricsLeader.enabled together with
+   workflowMetricsLeader, so no rendered state has two leaders. But this
+   Deployment and the web Deployment are reconciled INDEPENDENTLY, so a single
+   values change that turns one off and the other on leaves a window in which
+   this pod is already serving scrapes and the old web pod carrying
+   METRICS_WORKFLOW_REFRESH_LEADER has not yet terminated. Both refresh, both
+   export, every workflow panel reads double.
+
+   No render-time rule can see it: each end state is legal and the illegal one
+   exists only between two reconciles. It is documented as a two-stage upgrade
+   in values.yaml next to both flags and in
+   docs/operations/metrics-gap-remediation.md, and detected after the fact by
+   count(count by (pod)(web_workflow_runs_recent)) == 1 (that check exists
+   precisely because point reads can return 2 during a transition). The
+   doubling is transient and self-healing -- these are gauges reset on every
+   refresh, so nothing is corrupted once the old pod goes away. */}}
 {{- include "pawtograder.web.workload" (dict
       "ctx" .
       "component" "metrics-leader"

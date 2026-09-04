@@ -1443,6 +1443,34 @@ web:
   # The two are mutually exclusive; enabling both is refused (both would
   # refresh the same RPCs and export the same global gauges, so sum() over
   # the family double-counts every value).
+  #
+  # SWITCHING BETWEEN THE TWO MECHANISMS IS A TWO-STAGE UPGRADE. Doing it in one
+  # values change (workflowMetricsLeader: false + metricsLeader.enabled: true,
+  # deployed together) is legal at render time and momentarily WRONG at runtime:
+  # they are separate Deployments reconciled independently, so the new leader can
+  # start answering scrapes while the web rolling update has not yet terminated
+  # the old pod that still carries METRICS_WORKFLOW_REFRESH_LEADER. For the
+  # length of that overlap both run the aggregate RPCs and Prometheus scrapes two
+  # copies of every global gauge, so every workflow panel reads DOUBLE and the DB
+  # load is doubled with it. No render-time rule can catch this — each individual
+  # state is legal, and the illegal state exists only between two reconciles.
+  #
+  #   Stage 1: set workflowMetricsLeader: false (or metricsLeader.enabled: false,
+  #            going the other way), deploy, wait for the rollout to complete.
+  #   Stage 2: enable the other one, deploy.
+  #
+  # Stage 1 leaves a window with NO leader and empty workflow panels, which is
+  # the correct direction to fail — under-reporting reads as an outage, whereas
+  # a 2x over-report reads as a real traffic spike. Note that stage 1 will be
+  # refused by validations.yaml unless you also set
+  # monitoring.allowMissingWorkflowMetrics: true for that one deploy.
+  #
+  # If it does happen: the doubling is TRANSIENT and self-healing — it ends the
+  # moment the old pod terminates, and nothing is corrupted, because these are
+  # gauges reset on every refresh rather than counters. Do not go looking for a
+  # traffic event. The acceptance check that detects it after the fact is
+  # `count(count by (pod)(web_workflow_runs_recent)) == 1` sustained over 10
+  # minutes (docs/operations/metrics-gap-remediation.md §8.1).
   workflowMetricsLeader: false
 
   # ---------------------------------------------------------------------------
@@ -1470,6 +1498,11 @@ web:
   # Requires monitoring.enabled (that is what injects METRICS_SCRAPE_TOKEN;
   # without it /api/metrics returns 503 and the leader is a pod that costs
   # memory and does nothing). validations.yaml refuses the combination.
+  #
+  # Switching to or from web.workflowMetricsLeader is a TWO-STAGE upgrade — see
+  # the note next to that flag above. One values change flipping both at once
+  # renders fine and transiently runs two leaders, which doubles every workflow
+  # panel and the DB load behind it.
   metricsLeader:
     enabled: false
 

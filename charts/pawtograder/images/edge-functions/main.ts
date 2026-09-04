@@ -887,7 +887,21 @@ Deno.serve(async (req: Request) => {
   if (ACCESS_LOG) {
     console.log(`[fn=${serviceName}] ${req.method} ${url.pathname} -> ${res.status} ${elapsedMs}ms`);
   }
-  if (EDGE_METRICS) {
+  // The scrape itself is NOT traffic. Every ServiceMonitor poll routes through
+  // serviceName="metrics" like any other function, so recording it here made the
+  // monitoring system its own busiest client: 32 pods on a 30s interval is
+  // ~1.07 RPS of synthetic requests, plus latency samples in the pod-wide
+  // histogram, plus a steady stream of guaranteed 200s that dilute the
+  // fleet-wide 5xx ratio on the `edge-functions` dashboard -- worst during quiet
+  // periods, which is exactly when that ratio should be most sensitive. The web
+  // tier already excludes /api/metrics from web_http_* (lib/routeMetrics.ts
+  // is not applied to that route); this is the same rule.
+  //
+  // Worker errors are still recorded for the scrape path (see callWorker above),
+  // deliberately. Those are not synthetic-success dilution -- a metrics function
+  // that is failing to start is exactly what you want visible, and it is the one
+  // failure that also blanks this pod's own exposition.
+  if (EDGE_METRICS && !isMetricsScrape) {
     recordRequest(functionLabel, res.status, elapsedMs / 1000);
   }
 

@@ -160,6 +160,31 @@ Populates the 9 workflow panels on `app-business`.
   ~2.4k at 100 active classes — up from the old nominal ~1.7k, but bounded,
   which the old number was not. `metrics_workflow_errors_by_name` is left in
   place, unused, so a rollback to the previous web image still works.
+- **Operational gap, documented not fixed (D4): switching leader mechanisms is a
+  two-stage upgrade.** `validations.yaml` refuses both leaders at once, so no
+  rendered state has two. But the dedicated leader and the web tier are separate
+  Deployments reconciled independently, so one values change that flips
+  `workflowMetricsLeader: false` and `metricsLeader.enabled: true` together
+  leaves a window where the new leader is already serving scrapes and the old web
+  pod still carries `METRICS_WORKFLOW_REFRESH_LEADER`. Both refresh, Prometheus
+  scrapes two copies of every global gauge, and every workflow panel reads
+  **double** with the DB load doubled behind it. No render-time rule can catch
+  it: each end state is legal and the illegal one exists only between two
+  reconciles.
+  **Stage 1** turns the outgoing mechanism off and deploys — which needs
+  `monitoring.allowMissingWorkflowMetrics: true` for that one deploy, since rule
+  4 now applies at any replica count. **Stage 2** enables the incoming one. Stage
+  1 leaves a window with no leader and empty panels, which is the correct
+  direction to fail: under-reporting reads as an outage, whereas a 2x
+  over-report reads as a real traffic spike and sends someone hunting an event
+  that never happened.
+  If it does happen it is **transient and self-healing** — it ends when the old
+  pod terminates, and nothing is corrupted, because these are gauges reset on
+  every refresh rather than counters. §8.1's
+  `count(count by (pod)(web_workflow_runs_recent)) == 1` sustained over 10
+  minutes already detects it after the fact; that check was written for exactly
+  this shape. Recorded in `values.yaml` next to both flags and in a
+  `{{/* */}}` block in `web-metrics-leader.yaml`.
 - **Rule 4 applies at ANY replica count (C2).** It was gated on
   `web.replicas > 1`, which skipped the most ordinary install there is:
   `monitoring.enabled=true`, one replica, both leader settings at their default
@@ -265,12 +290,30 @@ partition the failure space between them.
   both as-is and with the leader enabled) and requires `cmp` equality. As of
   implementation: **18 renders compared, zero differences.**
 - One normalization is applied before that comparison, and it matters: the
-  `helm.sh/chart: pawtograder-<version>` label. It is on every manifest and it
-  changes by construction on every chart bump — meaning **a chart-version bump
-  alone already rolls every Deployment in this chart**, independent of anything
-  in this effort. Comparing that label would make the assertion fail on the
-  version bump and never on the template change it exists to catch. Nothing else
-  is normalized: emitted `#` comments and whitespace are compared byte for byte.
+  `helm.sh/chart: pawtograder-<version>` label. It is on the **pod template** of
+  every stateless workload and changes by construction on every chart bump, so
+  **a chart-version bump alone already rolls the whole stateless tier**,
+  independent of anything in this effort. Comparing that label would make the
+  assertion fail on the version bump and never on the template change it exists
+  to catch. Nothing else is normalized: emitted `#` comments and whitespace are
+  compared byte for byte.
+- **What "the whole stateless tier" means, verified by render** (13 workloads on
+  the prod overlay): `web` (3), `web-canary` (1), `functions` (~32 under the
+  HPA), `rest` (3), `kong` (2), `auth` (2), `storage` (2), `maintenance` (2),
+  `imgproxy`, `meta`, `redis`, `studio` (1 each) — and `realtime`, which is a
+  **StatefulSet with 3 replicas**. Realtime is the one that is user-visible: a
+  roll drops every websocket, and every connected browser re-subscribes. That is
+  a different class of event from an edge-pod roll and it was not called out
+  anywhere before.
+- **`pawtograder-postgres` and `pawtograder-postgres-replica` do NOT roll, by
+  design.** `postgres-statefulset.yaml` and `postgres-replica.yaml` build their
+  pod-template labels with `pawtograder.componentStableLabels`, which omits
+  `helm.sh/chart` and `app.kubernetes.io/version` — the helper exists because the
+  full label set used to roll the primary on every chart bump and took the
+  database down ~10 minutes through slow sidecar SIGTERM, and the comment at
+  `postgres-statefulset.yaml:38` records it. So the migrations Job is the only
+  part of this deploy that goes near Postgres. Do not "tidy" those two label
+  blocks back into `componentLabels`.
 
 ### WS-APP — business metrics move to postgres_exporter
 
@@ -670,6 +713,21 @@ reimplementing them anyway.
   `pawtograder_edge_main_worker_heap_bytes{stat="used"}` to the memory panel,
   decomposing working set into cache vs main-isolate heap vs isolates.
 
+**Revised after review (D1): the scrape is no longer counted as traffic.**
+`recordRequest()` ran before the `isMetricsScrape` branch, so every
+ServiceMonitor poll — routed through `serviceName="metrics"` like any other
+function — was recorded as an edge request with a latency sample. At 32 pods on a
+30s interval that is ~1.07 RPS of synthetic, guaranteed-200 traffic diluting the
+fleet-wide 5xx ratio, worst during quiet periods when that ratio should be most
+sensitive. The web tier already excludes `/api/metrics` from `web_http_*`; this
+is the same rule. Checked for the same ordering elsewhere: the `_unknown` bucket
+is unaffected (`metrics` is a real function and is on the boot-time allowlist),
+and the eszip gauges are unaffected in the sense that matters — the metrics
+function's bundle genuinely is resident, so counting it is correct. Worker errors
+on the scrape path are still recorded, deliberately: those are not
+synthetic-success dilution, and a metrics function failing to start is the one
+failure that also blanks this pod's own exposition.
+
 **Revised after review (C1): `app-business.json` got the same treatment.** It had
 no namespace variable and no matcher on any panel, so a Grafana whose datasource
 covers several deployments — previews are exactly that shape, see
@@ -680,6 +738,33 @@ pattern (Prometheus datasource, `label_values(kube_pod_info, namespace)`, regex
 `pawtograder.*`, `includeAll` with `All` as the default) and applied to **all 30
 targets** — both the `web_*` families and the postgres*exporter `pawtograder*\*`ones, since both are ServiceMonitor-scraped and both carry the label.`$class_id` is now derived from the namespace-scoped series so the class list
 follows the selection.
+
+**Revised after review (D2/D3): the last `$fn` gap, and a units collision.**
+Only three edge series carry a `function` label —
+`pawtograder_edge_requests_total`, `pawtograder_edge_function_seconds_total` and
+`pawtograder_edge_worker_errors_total` — and after C5 the worker-errors target on
+panel 12 was the last one not applying `$fn`, so a selected function could be
+blamed for another's error spike. Fixed. The retirement target on the same panel
+stays fleet-wide and now says why in its description:
+`pawtograder_edge_user_workers_retired_total` is a pod-wide runtime counter with
+no function dimension, so filtering it would return the same number under a
+misleading label. That completes the sweep; `main.ts` is the authority for which
+series carry the label.
+
+The units collision was a planning error, not an implementation one. "Mean
+latency by function" (seconds per request) and "Time spent per function"
+(`rate(function_seconds_total)`, function-seconds per wall-clock second — i.e.
+mean concurrent executions, dimensionless and freely above 1) shared one panel
+and one axis. A function averaging 2s at 10 RPS plots as `20`, which Grafana
+labels "20 seconds" and which squashes the real latency series into the floor.
+Split into two panels: **Mean latency by function** (unit `s`) and **Share of
+tier time by function**, the latter divided by the fleet total, unit
+`percentunit`, stacked. The share form was chosen over plotting concurrency
+because "where is the tier's time going" is the question the panel exists to
+answer, and a share answers it directly — a function can be fast per request and
+still dominate the tier by volume. Both units are set explicitly rather than
+inferred, and the raw numerator is named in the description for anyone who wants
+absolute worker occupancy.
 
 **Revised after review (C5): panel 11 honours `$fn` again.** Neither side of the
 mean-latency expression nor the time-spent target carried `function=~"$fn"`, so
@@ -785,9 +870,16 @@ structure the `_web-workload.tpl` refactor was one item among several in a PR
 that would get its own review pass. In a single PR it is the **only ungated
 item** — everything else in this effort sits behind a values gate defaulting off,
 so on the deploy that ships this chart, the refactor is the sole thing that can
-change a running workload. If `web.yaml` or `web-channels.yaml` render even one
-byte differently, a deploy advertised as purely additive performs a full rolling
-restart of three prod web replicas plus the live canary. The check therefore runs
+change a running workload's SPEC.
+
+Be precise about what the check does and does not buy, because the obvious
+reading is wrong: the web pods roll on this deploy **either way**. The
+`helm.sh/chart` label bump rolls the entire stateless tier by itself (see §4).
+What byte-identity buys is that the pods coming back are the same pods — same
+env, same probes, same volumes, same resources — so the rollout is a like-for-like
+replacement rather than a silent respec of the user-facing tier riding along
+inside a deploy advertised as purely additive. A diff here is a change nobody
+reviewed as a change. The check therefore runs
 in CI (`charts/pawtograder/tests/render-guardrails.sh`, invoked by
 `.github/workflows/lint.yml`) and a diff fails the build. It is not something to
 eyeball once and move on from.
@@ -878,9 +970,11 @@ functions, then **assert on label-set shape, not just non-emptiness**.
 `web.yaml` and `web-channels.yaml` from `main` and from the PR-1 branch against
 `values-prod.yaml` and every other consumer values file, and diff. Pass = the
 `pawtograder-web` and `pawtograder-web-canary` Deployments/Services are
-byte-identical; only additions appear elsewhere. **Any diff means a full rolling
-restart of 3 prod web replicas + canary on a supposedly additive deploy.** Wire
-the assertion into `tests/render-guardrails.sh` so CI enforces it forever.
+byte-identical; only additions appear elsewhere. **Any diff means the web tier is
+silently RESPEC'd on a supposedly additive deploy.** Not "means it restarts" —
+the chart-version bump restarts it regardless (§4). The point is that the pods
+that come back should differ from the current ones in nothing but that label.
+Wire the assertion into `tests/render-guardrails.sh` so CI enforces it forever.
 
 **Gate 2 — Validation matrix (local).** For each new rule, one combination that
 must render and one that must fail — plus a render of the _unmodified current_
@@ -921,6 +1015,26 @@ not refuse the deploy.
 green, target census unchanged, edge memory and replica count flat for 60 min,
 `count({__name__=~"web_workflow_.*"})` still 0 (proving the gate works). Soak at
 least one class-active day.
+
+**Expect a full stateless-tier roll, and schedule for it.** This is a chart
+version bump, and `helm.sh/chart` sits on the pod template of all 13 stateless
+workloads (§4), so every one of them rolls — regardless of which image tags
+moved. A deploy where the web pods did _not_ restart would mean the chart version
+did not change, i.e. something went wrong. Do not read the restarts as a
+regression; read a _missing_ restart as one.
+
+- **`realtime` is the user-visible one.** It is a StatefulSet with 3 replicas,
+  and rolling it drops every websocket; every connected browser reconnects and
+  re-subscribes. That is a real, if brief, user-facing event and it is the reason
+  "pick a low-traffic window, not near an assignment deadline" is in the
+  pre-flight. An edge roll is invisible; this one is not.
+- **The data tier is untouched.** `pawtograder-postgres` and
+  `pawtograder-postgres-replica` deliberately omit `helm.sh/chart` from their pod
+  labels (`componentStableLabels`, after an incident where the full label set
+  took the database down ~10 minutes on every bump), so the migrations Job is the
+  only thing in this deploy that goes near Postgres. If either Postgres pod
+  restarts on this deploy, that is a genuine finding — stop and investigate
+  rather than attributing it to the version bump.
 
 **Gate 7 — Flip the leader.** One value, one deploy. Pass = §8.1. Rollback =
 flip back; a 1-replica Deployment serving no ingress traffic is the cheapest
@@ -1082,6 +1196,9 @@ mid-flight, so this is headroom, not a fix — schedule edge deploys accordingly
 | Rule 4 replica gate (C2)                    | **Removed.** Applies to any enabled web tier; the replica count picks the mechanism, not the need (2026-09-04)                                                      |
 | Stale-alert rendering (C3)                  | **Either leader mechanism**, with the mechanism named in the annotation (2026-09-04)                                                                                |
 | `app-business.json` namespace scoping (C1)  | **Added**, mirroring `edge-functions.json`, across both metric families (2026-09-04)                                                                                |
+| Metrics scrape counted as edge traffic (D1) | **Excluded.** ~1.07 RPS of synthetic 200s was diluting the fleet 5xx ratio (2026-09-04)                                                                             |
+| Mean latency + time-spent on one axis (D3)  | **Split into two panels**; time-spent normalised to a share, units set explicitly (2026-09-04)                                                                      |
+| Leader-mechanism switch (D4)                | **Two-stage upgrade, documented.** No render-time rule can see the transient overlap (2026-09-04)                                                                   |
 | `realtime-fanout.json` panels 3 and 11      | **Delete.** No monotonic trigger-side producer exists (2026-09-04)                                                                                                  |
 | Wave 1 vs wave 2 on failing example renders | **Wave 1 was right.** The prod failures are a pre-existing placeholder, not rule 4 (2026-09-04)                                                                     |
 
