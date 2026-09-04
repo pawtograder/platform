@@ -408,6 +408,58 @@ after such a delete, and that is fine — every panel reads it through
 It is also free: one row per class, no scan of the submissions heap, so no
 `cache_seconds`.
 
+#### Privilege hardening on `class_metrics_totals`
+
+Both exporter queries now read `public.class_metrics_totals`, which makes it
+authoritative for two exported counters, so
+`20260904150000_restrict_class_metrics_totals.sql` narrows its privileges to the
+roles that actually use it: `service_role` and the `supabase_admin` connection
+the postgres_exporter sidecar runs as. `anon` and `authenticated` had ALL on the
+table, inherited from the schema-wide
+`ALTER DEFAULT PRIVILEGES ... GRANT ALL ON TABLES` in
+`20250330003141_remote_schema.sql:3593`; nothing in the application uses it —
+outside `supabase/migrations` it appears only in the generated
+`SupabaseTypes.d.ts`, in no view and in no other function. RLS is enabled with no
+policies as a backstop in case that default ever re-grants the table. The one
+reader RPC, `get_all_class_metrics()`, is narrowed the same way; it is
+`SECURITY DEFINER`, so the table revoke alone would not have covered it, and it
+has no callers either.
+
+**Order matters, and the naive version breaks the app.** All 20
+`class_metrics_*` counter trigger functions were `SECURITY INVOKER`, so they run
+as whoever issued the INSERT — normally `authenticated`, since these counters are
+maintained off ordinary student and staff writes through PostgREST. Revoking
+UPDATE first would make the trigger fail and abort the user's INSERT; enabling
+RLS first would make the trigger's UPDATE match zero rows and silently stop the
+counters, which is worse. So the functions become `SECURITY DEFINER` with
+`search_path` pinned to `''` **first**, via `ALTER FUNCTION` rather than a body
+rewrite (no body text changes, so there is nothing to mistranscribe across 20
+functions, and every table reference in them is already schema-qualified). They
+are owned by `postgres`, which owns the table, and the table is not
+`FORCE ROW LEVEL SECURITY`, so they keep writing after RLS is on. Do not add
+`FORCE` here without re-testing every trigger. Note also that
+`CREATE OR REPLACE FUNCTION` resets both attributes — a later migration that
+redefines one of these must restate them.
+
+**Verified against a full `supabase db reset`**, not just a render: a row was
+inserted as `authenticated` into each of the 22 tables carrying one of these
+triggers, and 20 of the 22 counters advanced. The two that did not
+(`notifications`, `user_roles`) behave identically with the functions reverted to
+their pre-change form, so they are unaffected by this — see the note below. As
+`anon` and as `authenticated`, SELECT / INSERT / UPDATE / DELETE on the table and
+EXECUTE on `get_all_class_metrics()` are all refused; `service_role` still reads
+the table and the exporter query still returns its three rows per class over a
+real `supabase_admin` connection.
+
+**Pre-existing, unrelated, worth a separate issue:**
+`class_metrics_notifications_counter` and `class_metrics_user_roles_counter` both
+guard their work with `IF NEW IS NOT NULL THEN ...`. PostgreSQL evaluates
+`record IS NOT NULL` row-wise — it is true only when _every_ field is non-null —
+so for any real row with a nullable column unset the guard is false, the derived
+flag stays NULL, and the counter adds nothing. That is why
+`notifications_unread` reads 0 against 33 seeded notifications. It predates this
+branch, is untouched by it, and is out of scope here.
+
 #### Grading actions: option (2) after all — trigger-maintained counters
 
 **Revised after review.** As first shipped this was a live `UNION ALL` `COUNT(*)`
