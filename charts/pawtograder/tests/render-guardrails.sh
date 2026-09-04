@@ -1104,6 +1104,94 @@ assert_grading_actions_source() {
 }
 assert_grading_actions_source
 
+echo "== storage-api /metrics is a two-condition endpoint =="
+# The storage ServiceMonitor scrapes /metrics on the MAIN app port. storage-api
+# registers that route only when PROMETHEUS_METRICS_ENABLED=true (and only in
+# single-tenant mode, which is the mode this chart deploys). Ship the
+# ServiceMonitor without the flag and the target is permanently DOWN on a 404 --
+# which is exactly how it shipped, for 24h+ in staging.
+#
+# These two assertions keep the ServiceMonitor and the flag from drifting apart:
+# whatever turns one on must turn the other on.
+assert_env_value "storage sets PROMETHEUS_METRICS_ENABLED with monitoring on" \
+  templates/storage.yaml PROMETHEUS_METRICS_ENABLED true \
+  --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+  --set monitoring.prometheusRules.labels.release=kps
+assert_rendered_lacks "storage omits PROMETHEUS_METRICS_ENABLED with monitoring off" \
+  templates/storage.yaml "PROMETHEUS_METRICS_ENABLED" \
+  --set monitoring.enabled=false
+
+# assert_storage_scrape_paired
+# The ServiceMonitor and the env var must appear together. Renders the whole
+# chart once with monitoring on and asserts that if a storage ServiceMonitor
+# exists, the storage Deployment carries the flag.
+assert_storage_scrape_paired() {
+  local label="storage ServiceMonitor never ships without the flag"
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+      --set monitoring.prometheusRules.labels.release=kps \
+      >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    FAILED=1
+    return
+  fi
+  if ! grep -qE '^[[:space:]]*name: t-pawtograder-storage$' "$OUTFILE"; then
+    echo "FAIL [$label]: no storage ServiceMonitor rendered; assertion is not testing anything"
+    FAILED=1
+    return
+  fi
+  if ! grep -qF "PROMETHEUS_METRICS_ENABLED" "$OUTFILE"; then
+    echo "FAIL [$label]: storage ServiceMonitor rendered but PROMETHEUS_METRICS_ENABLED did not"
+    FAILED=1
+    return
+  fi
+  echo "ok   [$label]"
+}
+assert_storage_scrape_paired
+
+echo "== edge /metrics demuxer must not re-emit a decoded body as encoded =="
+# assert_edge_metrics_encoding
+# Source-shape assertion (like assert_grading_actions_source above), on
+# images/edge-functions/main.ts rather than on a render. A functional test needs
+# the real runtime image AND a reachable Postgres for the metrics worker to
+# return 200, so it cannot run in chart CI, but the regression it guards took
+# down the whole edge target once already and would do so silently again.
+#
+# The bug: the append path did `await res.text()` and reused the worker's
+# headers. Prometheus scrapes with `Accept-Encoding: gzip` and the request is
+# forwarded verbatim, so the worker's body arrives gzip-encoded; .text() decoded
+# DEFLATE bytes as UTF-8 (every bad byte -> U+FFFD) and shipped the mojibake
+# under the inherited `content-encoding: gzip`. Prometheus: `gzip: invalid
+# header`, target DOWN, and every pawtograder_* queue series off that same
+# endpoint went with it. Plain curl sends no Accept-Encoding, so the manual test
+# passed.
+assert_edge_metrics_encoding() {
+  local label="append path handles content-encoding" bad=0
+  local src="$CHART/images/edge-functions/main.ts"
+  if [ ! -f "$src" ]; then
+    echo "FAIL [$label]: $src not found"
+    FAILED=1
+    return
+  fi
+  # The rewrite must drop content-encoding, since what it returns is plaintext.
+  if ! grep -qE 'headers\.delete\("content-encoding"\)' "$src"; then
+    echo "FAIL [$label]: rewrite does not delete content-encoding; a gzip scrape will be corrupted"
+    bad=1
+  fi
+  # ...and it must actually decode a gzip body rather than stringifying it.
+  if ! grep -qF 'DecompressionStream("gzip")' "$src"; then
+    echo "FAIL [$label]: no gzip decode path; res.text() on an encoded body yields U+FFFD mojibake"
+    bad=1
+  fi
+  # An encoding it cannot decode must pass the response through untouched.
+  if ! grep -qE 'unsupported content-encoding' "$src"; then
+    echo "FAIL [$label]: no pass-through for an unsupported content-encoding"
+    bad=1
+  fi
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
+}
+assert_edge_metrics_encoding
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"

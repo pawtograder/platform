@@ -99,6 +99,24 @@ spec:
               value: "true"
             - name: IMGPROXY_URL
               value: "http://{{ include "pawtograder.imgproxy.host" . }}:{{ .Values.imgproxy.service.port }}"
+            {{- if .Values.monitoring.enabled }}
+            # storage-api registers GET /metrics on the MAIN app (this container's
+            # http port) only when BOTH hold:
+            #   * PROMETHEUS_METRICS_ENABLED=true          -> config.js prometheusMetricsEnabled
+            #   * enabledEndpoint, which is `!isMultitenant` -> app.js
+            # We are single-tenant (MULTI_TENANT unset), so the second is already
+            # true and this flag is the only thing standing between the
+            # ServiceMonitor and a 200. Without it the route is simply not
+            # registered and the scrape 404s, which is a Prometheus target DOWN,
+            # not merely absent metrics.
+            #
+            # NB the mode logic runs the opposite way to intuition: multitenant is
+            # where the main app STOPS serving /metrics (it moves to the admin app
+            # on ADMIN_PORT). Verified against the dist bundle in
+            # supabase/storage-api:v1.48.26.
+            - name: PROMETHEUS_METRICS_ENABLED
+              value: "true"
+            {{- end }}
             {{- if eq .Values.storage.backend "s3" }}
             - name: STORAGE_BACKEND
               value: s3

@@ -711,11 +711,25 @@ spec:
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 {{- end }}
 ---
-# ServiceMonitor: storage-api. /metrics on the http port. Toggleable via
-# monitoring.serviceMonitors.storage: storage-api only exposes /metrics on its
-# admin app (ADMIN_PORT) or in multitenant mode — a single-tenant deploy serving
-# only :5000 returns 404, so Prometheus would flag it perpetually down. Set the
-# toggle false there.
+# ServiceMonitor: storage-api. /metrics on the http port.
+#
+# This comment used to say the opposite -- that /metrics lives only on the admin
+# app (ADMIN_PORT) or in multitenant mode, and that a single-tenant deploy on
+# :5000 necessarily 404s. That is backwards, and it cost this target 24h+ of
+# being DOWN in staging while the "expected" explanation sat right here. Read
+# off the dist bundle in supabase/storage-api:v1.48.26:
+#
+#   app.js         plugins.metrics({ enabledEndpoint: !isMultitenant, ... })
+#   plugins/metrics.js  if (prometheusMetricsEnabled) register(metricsEndpoint)
+#                       -> if (enabledEndpoint) fastify.get("/metrics", ...)
+#   config.js      prometheusMetricsEnabled = PROMETHEUS_METRICS_ENABLED === "true"
+#
+# So single-tenant is the mode where the MAIN app serves it; multitenant is
+# where it moves to the admin app. The 404 was PROMETHEUS_METRICS_ENABLED being
+# unset, which storage.yaml now sets whenever monitoring.enabled=true.
+#
+# Still toggleable via monitoring.serviceMonitors.storage for a deploy that
+# genuinely cannot serve it (multitenant, or an image predating the flag).
 {{- if dig "serviceMonitors" "storage" true .Values.monitoring }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
