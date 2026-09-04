@@ -1393,6 +1393,19 @@ on both edge channels, and all eight dashboard ConfigMaps updated in place.
 
 ### 12.1 What passed
 
+Revisions 89 and 90 (chart 0.3.19, tag
+`fix-metrics-scrape-gzip-and-storage-84a5b11`) then deployed the fixes; the edge
+result below is measured against revision 90.
+
+**Edge scrape, after the fix.** Every `pawtograder-staging` target reads `up`,
+including all edge pods, and the endpoint behaves correctly on the Prometheus
+path (bearer token + `Accept-Encoding: gzip`): 200, body begins `1f 8b 08 00`,
+gunzips cleanly, 36 `pawtograder_edge_*` samples plus 19 pre-existing
+queue/bottleneck/breaker samples, zero U+FFFD bytes, and the same metric-family
+set as the uncompressed response. 5 distinct `function` label values (invoked
+functions, not the ~55 known ones), 496 edge series total against the ~8.6k
+budget, zero restarts and zero `OOMKilled`, 412 MiB peak working set.
+
 - **Leader.** Exactly one pod exports the workflow family
   (`count(count by (pod)(web_workflow_runs_recent)) == 1`). The sentinel
   `web_workflow_metrics_last_success_timestamp_seconds` is present with
@@ -1447,23 +1460,50 @@ queue-depth alerts went blind. The values still rendering in Grafana came from
 the `pawtograder-preview-pr-*` namespaces, which run older images. That is an
 easy thing to mistake for a healthy staging.
 
-**(b) `storage` had been DOWN for 24h+ on a 404, for a reason this repo
-documented backwards.** The ServiceMonitor's own comment asserted that
+**(b) `storage` had been DOWN for 24h+ on a 404, and the fix that looked
+obvious takes the tier down.** The ServiceMonitor's comment asserted that
 storage-api serves `/metrics` only on the admin app or in multitenant mode, and
 that a single-tenant deploy necessarily 404s. Read off the dist bundle in
-`supabase/storage-api:v1.48.26`, the opposite holds:
+`supabase/storage-api:v1.48.26`, that is backwards:
 
 ```
 app.js              plugins.metrics({ enabledEndpoint: !isMultitenant, ... })
 plugins/metrics.js  if (prometheusMetricsEnabled) register(metricsEndpoint)
                       -> if (enabledEndpoint) fastify.get("/metrics", ...)
-config.js           prometheusMetricsEnabled = PROMETHEUS_METRICS_ENABLED === "true"
+config.js:252       prometheusMetricsEnabled = PROMETHEUS_METRICS_ENABLED === "true"
 ```
 
-Single-tenant is the mode where the **main** app serves it. The 404 was
-`PROMETHEUS_METRICS_ENABLED` never being set. A wrong comment is worse than no
-comment here: it supplied a ready explanation for a real outage and kept anyone
-from looking further.
+Single-tenant is the mode where the **main** app serves it, gated only on
+`PROMETHEUS_METRICS_ENABLED`. So the flag was set, deployed to staging as
+revision 89, and the storage tier went into CrashLoopBackOff:
+
+```
+"Reply was already sent, did you forget to \"return reply\" in the \"/metrics\" (GET) route?"
+Error [ERR_HTTP_HEADERS_SENT]: Cannot write headers after they are sent to the client
+  -> uncaughtException -> PID 1 exits
+```
+
+`handleMetricsRequest` writes the reply without returning it, so fastify's
+`onSend` chain double-writes the response head. The route exists and the
+handler is fatally broken, on a ~30s scrape interval. Reverted in revision 90;
+storage recovered with no further restarts.
+
+The uncomfortable part is that the original advice ("set the toggle false") was
+correct, and its stated mechanism was wrong. A wrong mechanism attached to a
+right conclusion is worse than no comment at all: it presents as an error to
+correct, and correcting it broke production behaviour that the wrong reasoning
+had been protecting. Verifying the mechanism against the bundle was necessary
+but not sufficient -- the missing step was checking what the endpoint does when
+called, not just whether it is registered.
+
+Resolution: ship neither the flag nor the ServiceMonitor.
+`monitoring.serviceMonitors.storage` now defaults to **false**, because a
+permanently-DOWN 404 target is itself a defect -- it trains everyone to ignore a
+DOWN storage row. Storage metrics remain uncollected. The route worth trying is
+the admin app on `ADMIN_PORT` (5001), which registers the same handler behind a
+different hook chain, but that needs its own container port, Service port and
+ServiceMonitor, and the admin app also exposes tenant/migration/s3-credential
+routes -- an exposure decision, not a `monitoring.enabled` side effect.
 
 ### 12.4 Standing checks to add to §8.0
 

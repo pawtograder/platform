@@ -1104,29 +1104,26 @@ assert_grading_actions_source() {
 }
 assert_grading_actions_source
 
-echo "== storage-api /metrics is a two-condition endpoint =="
-# The storage ServiceMonitor scrapes /metrics on the MAIN app port. storage-api
-# registers that route only when PROMETHEUS_METRICS_ENABLED=true (and only in
-# single-tenant mode, which is the mode this chart deploys). Ship the
-# ServiceMonitor without the flag and the target is permanently DOWN on a 404 --
-# which is exactly how it shipped, for 24h+ in staging.
+echo "== storage-api /metrics must stay OFF on this image =="
+# PROMETHEUS_METRICS_ENABLED registers GET /metrics on storage-api's main app,
+# and handleMetricsRequest then writes the reply without returning it, so
+# fastify double-writes the head on the first scrape: ERR_HTTP_HEADERS_SENT ->
+# uncaughtException -> PID 1 exits. Setting the flag does not yield metrics, it
+# crashloops the storage tier on the scrape interval (staging, 2026-09-04).
 #
-# These two assertions keep the ServiceMonitor and the flag from drifting apart:
-# whatever turns one on must turn the other on.
-assert_env_value "storage sets PROMETHEUS_METRICS_ENABLED with monitoring on" \
-  templates/storage.yaml PROMETHEUS_METRICS_ENABLED true \
+# So the flag must never render, and the ServiceMonitor must not render by
+# default either -- without the flag it is a permanently-DOWN 404 target.
+assert_rendered_lacks "storage never sets PROMETHEUS_METRICS_ENABLED (crashloops the pod)" \
+  templates/storage.yaml "PROMETHEUS_METRICS_ENABLED" \
   --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
   --set monitoring.prometheusRules.labels.release=kps
-assert_rendered_lacks "storage omits PROMETHEUS_METRICS_ENABLED with monitoring off" \
-  templates/storage.yaml "PROMETHEUS_METRICS_ENABLED" \
-  --set monitoring.enabled=false
 
-# assert_storage_scrape_paired
-# The ServiceMonitor and the env var must appear together. Renders the whole
-# chart once with monitoring on and asserts that if a storage ServiceMonitor
-# exists, the storage Deployment carries the flag.
-assert_storage_scrape_paired() {
-  local label="storage ServiceMonitor never ships without the flag"
+# assert_no_storage_servicemonitor
+# Whole-chart render: with monitoring fully on, there must be no storage
+# ServiceMonitor. Anchored on the ServiceMonitor kind so the storage Service and
+# Deployment (which legitimately render) cannot satisfy or defeat it.
+assert_no_storage_servicemonitor() {
+  local label="no storage ServiceMonitor by default"
   if ! helm template t "$CHART" "${BASE[@]}" \
       --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
       --set monitoring.prometheusRules.labels.release=kps \
@@ -1135,19 +1132,46 @@ assert_storage_scrape_paired() {
     FAILED=1
     return
   fi
-  if ! grep -qE '^[[:space:]]*name: t-pawtograder-storage$' "$OUTFILE"; then
-    echo "FAIL [$label]: no storage ServiceMonitor rendered; assertion is not testing anything"
+  if awk '/^kind: ServiceMonitor$/{sm=1} /^  name: t-pawtograder-storage$/{if(sm)found=1} /^---$/{sm=0} END{exit !found}' "$OUTFILE"; then
+    echo "FAIL [$label]: a storage ServiceMonitor rendered; without the flag it is a permanent 404 target"
     FAILED=1
     return
   fi
-  if ! grep -qF "PROMETHEUS_METRICS_ENABLED" "$OUTFILE"; then
-    echo "FAIL [$label]: storage ServiceMonitor rendered but PROMETHEUS_METRICS_ENABLED did not"
+  # Sanity: the same render must still contain OTHER ServiceMonitors, or the
+  # assertion above would pass simply because monitoring did not render at all.
+  if ! grep -qE '^kind: ServiceMonitor$' "$OUTFILE"; then
+    echo "FAIL [$label]: no ServiceMonitors at all; assertion is not testing anything"
     FAILED=1
     return
   fi
   echo "ok   [$label]"
 }
-assert_storage_scrape_paired
+assert_no_storage_servicemonitor
+
+# Opt-in still works, for a deploy that scrapes the admin app or runs a fixed
+# image. The toggle is the documented escape hatch, so it must not rot.
+#
+# NOT assert_rendered_contains "kind: ServiceMonitor": monitoring.yaml renders
+# several of them, so that would pass whether or not the storage one appeared.
+assert_storage_servicemonitor_optin() {
+  local label="storage ServiceMonitor renderable on explicit opt-in"
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+      --set monitoring.prometheusRules.labels.release=kps \
+      --set monitoring.serviceMonitors.storage=true \
+      >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    FAILED=1
+    return
+  fi
+  if awk '/^kind: ServiceMonitor$/{sm=1} /^  name: t-pawtograder-storage$/{if(sm)found=1} /^---$/{sm=0} END{exit !found}' "$OUTFILE"; then
+    echo "ok   [$label]"
+  else
+    echo "FAIL [$label]: opt-in did not render a storage ServiceMonitor; the escape hatch is broken"
+    FAILED=1
+  fi
+}
+assert_storage_servicemonitor_optin
 
 echo "== edge /metrics demuxer must not re-emit a decoded body as encoded =="
 # assert_edge_metrics_encoding

@@ -726,11 +726,35 @@ spec:
 #
 # So single-tenant is the mode where the MAIN app serves it; multitenant is
 # where it moves to the admin app. The 404 was PROMETHEUS_METRICS_ENABLED being
-# unset, which storage.yaml now sets whenever monitoring.enabled=true.
+# unset.
 #
-# Still toggleable via monitoring.serviceMonitors.storage for a deploy that
-# genuinely cannot serve it (multitenant, or an image predating the flag).
-{{- if dig "serviceMonitors" "storage" true .Values.monitoring }}
+# But DO NOT set that flag on this image. It registers the route, and then the
+# first scrape kills the pod:
+#
+#   "Reply was already sent, did you forget to \"return reply\" in the
+#    \"/metrics\" (GET) route?"
+#   Error [ERR_HTTP_HEADERS_SENT]: Cannot write headers after they are sent
+#     -> uncaughtException -> PID 1 exits -> CrashLoopBackOff
+#
+# handleMetricsRequest writes the reply without returning it, so fastify's
+# onSend chain double-writes the head. Confirmed on staging 2026-09-04: setting
+# the flag crashlooped the storage tier on the ~30s scrape interval. The old
+# advice ("set the toggle false") was therefore right -- only its stated
+# mechanism was wrong, and a wrong mechanism is what made it look safe to
+# "correct".
+#
+# So monitoring.serviceMonitors.storage defaults to FALSE (values.yaml carries
+# the full note). Shipping the ServiceMonitor without the flag is not harmless
+# either: it is a permanently-DOWN target on a 404, which is what shipped
+# before, and a target that can never succeed trains everyone to ignore a DOWN
+# storage row.
+#
+# The route worth trying for real storage metrics is the ADMIN app on ADMIN_PORT
+# (5001), which registers the same handler behind a different hook chain. That
+# needs its own container port, Service port and ServiceMonitor, and the admin
+# app also exposes tenant/migration/s3-credential routes -- a deliberate
+# exposure decision, not a monitoring.enabled side effect.
+{{- if dig "serviceMonitors" "storage" false .Values.monitoring }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

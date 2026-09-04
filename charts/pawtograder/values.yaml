@@ -1815,11 +1815,37 @@ monitoring:
 
   # Per-component ServiceMonitor toggles (all default on). Set one false when a
   # component doesn't expose a scrapeable /metrics endpoint in your topology, so
-  # Prometheus doesn't flag it perpetually "down". e.g. storage-api serves
-  # /metrics only on its admin app / in multitenant mode; disable it on a
-  # single-tenant deploy.
+  # Prometheus doesn't flag it perpetually "down".
   serviceMonitors:
-    storage: true
+    # OFF by default, and this is not a cardinality or noise decision -- it is
+    # the only safe setting on supabase/storage-api v1.48.26.
+    #
+    # /metrics on the main app is registered when PROMETHEUS_METRICS_ENABLED is
+    # set (single-tenant registers it on the main app; multitenant moves it to
+    # ADMIN_PORT). But the handler does not `return reply`, so fastify's onSend
+    # chain double-writes the response head on the first scrape:
+    #
+    #   "Reply was already sent, did you forget to \"return reply\" in the
+    #    \"/metrics\" (GET) route?"
+    #   Error [ERR_HTTP_HEADERS_SENT]: Cannot write headers after they are sent
+    #     -> uncaughtException -> PID 1 exits -> CrashLoopBackOff
+    #
+    # Enabling the flag therefore does not produce metrics, it takes the storage
+    # tier down on a ~30s scrape interval. Verified on staging 2026-09-04.
+    #
+    # So we ship neither the flag nor the ServiceMonitor. Leaving the
+    # ServiceMonitor on without the flag is merely a permanently-DOWN target (a
+    # 404), which is what shipped before and what this default fixes: a target
+    # that cannot succeed is worse than no target, because it trains everyone to
+    # ignore a DOWN storage row.
+    #
+    # To actually collect these, the route to try is the ADMIN app on ADMIN_PORT
+    # (default 5001), which registers the same handler but a different hook
+    # chain. That needs its own container port, Service port and ServiceMonitor,
+    # and the admin app also exposes tenant/migration/s3-credential routes, so
+    # exposing it even cluster-internally is a deliberate tradeoff -- not
+    # something to switch on as a side effect of monitoring.enabled.
+    storage: false
     # ServiceMonitor for the dedicated metrics-leader Deployment. Only rendered
     # when web.metricsLeader.enabled is also true, so leaving this on costs
     # nothing on installs that do not run a leader.
