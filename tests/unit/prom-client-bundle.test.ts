@@ -89,6 +89,39 @@ function valueImportSpecifiers(src: string): string[] {
 describe("prom-client stays out of the client bundle", () => {
   const files = SOURCE_DIRS.flatMap((d) => walk(join(ROOT, d)));
 
+  // Does the file open with a "use client" directive, ignoring leading
+  // whitespace and comments?
+  //
+  // Deliberately a hand-rolled scanner rather than a regex. The obvious pattern
+  // -- ^\s*(?://[^\n]*\n|/\*[\s\S]*?\*/\s*)*["']use client["'] -- nests a lazy
+  // quantifier inside a starred alternation, so a file starting with "/*"
+  // followed by many repetitions of "*//*" makes the engine backtrack
+  // exponentially (CodeQL js/redos, flagged on PR #952). This walk is linear and
+  // has no backtracking at all.
+  function hasUseClientDirective(src: string): boolean {
+    let i = 0;
+    for (;;) {
+      if (i >= src.length) return false;
+      const c = src[i];
+      if (c === " " || c === "\t" || c === "\r" || c === "\n") {
+        i++;
+      } else if (c === "/" && src[i + 1] === "/") {
+        const nl = src.indexOf("\n", i + 2);
+        if (nl === -1) return false;
+        i = nl + 1;
+      } else if (c === "/" && src[i + 1] === "*") {
+        const end = src.indexOf("*/", i + 2);
+        // Unterminated block comment: nothing after it can be a directive.
+        if (end === -1) return false;
+        i = end + 2;
+      } else {
+        break;
+      }
+    }
+    const rest = src.slice(i, i + 14);
+    return rest.startsWith('"use client"') || rest.startsWith("'use client'");
+  }
+
   // target (repo-relative) -> files that import it
   const importers = new Map<string, Set<string>>();
   const isClientModule = new Map<string, boolean>();
@@ -96,7 +129,7 @@ describe("prom-client stays out of the client bundle", () => {
   for (const file of files) {
     const src = readFileSync(file, "utf8");
     const rel = relative(ROOT, file);
-    isClientModule.set(rel, /^\s*(?:\/\/[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*["']use client["']/.test(src));
+    isClientModule.set(rel, hasUseClientDirective(src));
     for (const spec of valueImportSpecifiers(src)) {
       const target = resolveSpecifier(file, spec);
       if (!target) continue;
