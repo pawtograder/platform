@@ -726,6 +726,48 @@ spec:
           name: {{ .Values.secrets.names.jwt }}
           key: SUPAVISOR_METRICS_BEARER
 {{- end }}
+{{- if and .Values.web.metricsLeader.enabled (dig "serviceMonitors" "metricsLeader" true .Values.monitoring) }}
+---
+# ServiceMonitor: the dedicated metrics-leader Deployment
+# (templates/web-metrics-leader.yaml). Same endpoint and same bearer credential
+# as the web ServiceMonitor below — it is the same image — but selected on
+# `component: metrics-leader`, which is the ONLY thing that separates the two
+# scrape targets.
+#
+# No metric relabeling here, deliberately. The workflow gauges are only ever
+# .set() on the pod that holds METRICS_WORKFLOW_REFRESH_LEADER, and a prom-client
+# labelled gauge that has never been .set() emits ZERO samples — so ordinary web
+# pods contribute nothing to a sum() over web_workflow_* by construction, and a
+# metricRelabelConfigs block dropping those families from the web job would be
+# dead weight. Worse, the obvious `web_workflow_.*` regex would also drop
+# web_workflow_metrics_refresh_errors_total, which is the one series that tells
+# you the leader is broken.
+#
+# The `interval` deliberately need not be fast: refreshWorkflowMetrics() is
+# throttled to web.metricsLeader.refreshIntervalSeconds app-side, so scraping
+# faster than that just re-reads gauges that have not moved.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "metrics-leader") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "metrics-leader") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "metrics-leader") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /api/metrics
+      interval: {{ .Values.web.metricsLeader.scrapeInterval | default .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.web.metricsLeader.scrapeTimeout | default .Values.monitoring.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.secrets.names.jwt }}
+          key: METRICS_SCRAPE_TOKEN
+{{- end }}
 ---
 # ServiceMonitor: web (Next.js /api/metrics). Static bearer; the app does
 # a constant-time string compare. See app/api/metrics/route.ts.

@@ -301,10 +301,18 @@ web:
     description: "PawtograderNext — the next generation of Pawtograder course operations"
     tagline: "The next generation of your pawsome course companion"
     colorPalette: "teal"
-  # Multiple web replicas → leader flag stays off; if you need workflow
-  # metrics on staging, drop web.replicas to 1 and flip this true (see
-  # values-preview.yaml for the pattern).
+  # Multiple web replicas → the single-pod leader flag stays off (the chart
+  # refuses it above 1 replica). values-preview.yaml shows that pattern, which
+  # is the right one for a 1-replica install.
   # workflowMetricsLeader: true
+  #
+  # Staging runs the DEDICATED leader instead, and is the only environment that
+  # exercises this path before production: a separate 1-replica Deployment on
+  # component `metrics-leader`, off every user-traffic path, with its own
+  # Service + ServiceMonitor. Everything unset here (placement, image, security
+  # context) is inherited from the web block above.
+  metricsLeader:
+    enabled: true
 
 migrations:
   image:

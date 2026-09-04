@@ -168,6 +168,13 @@ postgres:
 # drains, and baseline security contexts. Pin image tags per release.
 web:
   replicas: 3
+  # Dedicated 1-replica workflow-metrics leader (chart 0.3.18+). Required at
+  # web.replicas > 1: nothing else populates the nine workflow panels on the
+  # `app-business` dashboard, and templates/validations.yaml refuses a
+  # multi-replica web tier with monitoring on and no leader (the alternative is
+  # to acknowledge the gap with monitoring.allowMissingWorkflowMetrics: true).
+  metricsLeader:
+    enabled: true
   image:
     repository: ghcr.io/pawtograder/web
     tag: ""             # ← pin per release: vX.Y.Z or <branch>-<sha>

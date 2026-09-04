@@ -1,0 +1,60 @@
+{{- /*
+Dedicated workflow-metrics leader.
+
+A 1-replica Deployment running the same web image as the stable web tier, with
+METRICS_WORKFLOW_REFRESH_LEADER=true, so /api/metrics refreshes the DB-backed
+workflow gauges (web_workflow_runs_recent, web_workflow_queue_seconds,
+web_workflow_run_seconds, web_workflow_errors_recent) exactly once per cluster.
+It exists because those gauges are global aggregates: every pod that refreshes
+them queries the same rows and exports the same values, so N leaders means N x
+the DB load and an N x over-count under sum(). validations.yaml already refuses
+web.workflowMetricsLeader with web.replicas > 1, which left multi-replica
+installs (Khoury production runs web.replicas: 3) with no way to populate the
+`app-business` dashboard at all. This is that way.
+
+Two constraints here are deliberate and are NOT oversights:
+
+  1. `replicas` is NOT exposed as a value. It is the literal 1 below. There is
+     no legitimate reason to run two of these: a second replica doubles the
+     query load on public.workflow_runs and double-counts every global gauge,
+     which is the precise failure this workload was created to avoid. An
+     unexposed knob cannot be turned by someone scaling "for HA"; a leader
+     outage costs at most one refresh interval of gauge staleness, which is not
+     an availability problem worth a second pod. Deployment (not StatefulSet)
+     because there is no identity or storage to preserve.
+
+  2. The rollout strategy is forced to Recreate (metricsLeader.updateStrategy,
+     defaulted). RollingUpdate would stand the replacement pod up BEFORE
+     terminating the old one, so for those seconds two pods hold the leader env
+     var and constraint 1 is violated on every deploy. Recreate trades a few
+     seconds of gauge staleness during a rollout, which is free given a 300s
+     default refresh interval, for never having two leaders.
+
+The `metrics-leader` component label is what keeps this pod off every
+user-traffic path — see the audit in values.yaml under web.metricsLeader.
+*/ -}}
+{{- if and .Values.web.enabled .Values.web.metricsLeader.enabled }}
+{{- $ml := .Values.web.metricsLeader }}
+{{- /* Inherit the whole web pod shape, then override only placement/resource
+   keys the leader block declares. Sprig mergeOverwrite skips EMPTY source
+   values, so the `{}` / `[]` / `""` defaults in values.yaml inherit rather than
+   clobber. `pick` bounds what can be overridden: merging the block wholesale
+   would drag `enabled` and `replicas` into the pod config and deep-merge
+   updateStrategy (leaving web's rollingUpdate keys attached to type: Recreate,
+   which the apiserver rejects). */}}
+{{- $cfg := mergeOverwrite (deepCopy .Values.web) (pick $ml "resources" "nodeSelector" "tolerations" "affinity" "priorityClassName" "extraEnv") }}
+{{- $_ := set $cfg "updateStrategy" ($ml.updateStrategy | default (dict "type" "Recreate")) }}
+{{- /* Nothing to spread across nodes at one replica; suppress the inherited
+   soft anti-affinity so the scheduler is not handed a term that can only ever
+   match the pod itself. A user-supplied affinity still wins. */}}
+{{- $_ := set $cfg "spreadAcrossNodes" false }}
+{{- $image := mergeOverwrite (deepCopy .Values.web.image) ($ml.image | default (dict)) }}
+{{- include "pawtograder.web.workload" (dict
+      "ctx" .
+      "component" "metrics-leader"
+      "image" $image
+      "replicas" 1
+      "config" $cfg
+      "workflowLeader" true
+      "refreshIntervalSeconds" (ternary $ml.refreshIntervalSeconds 300 (hasKey $ml "refreshIntervalSeconds"))) }}
+{{- end }}

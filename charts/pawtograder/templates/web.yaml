@@ -4,5 +4,9 @@ templates/_web-workload.tpl so extra deployment channels (.Values.channels,
 rendered by templates/web-channels.yaml) reuse the exact same pod spec.
 */ -}}
 {{- if .Values.web.enabled }}
-{{- include "pawtograder.web.workload" (dict "ctx" . "component" "web" "image" .Values.web.image "replicas" .Values.web.replicas) }}
+{{- /* No "config": the workload template falls back to .Values.web, so this
+   renders byte-identically to before the config arg existed. workflowLeader is
+   passed explicitly (rather than read inside the template) so each call site
+   owns the answer — validations.yaml still refuses true with replicas > 1. */ -}}
+{{- include "pawtograder.web.workload" (dict "ctx" . "component" "web" "image" .Values.web.image "replicas" .Values.web.replicas "workflowLeader" .Values.web.workflowMetricsLeader) }}
 {{- end }}

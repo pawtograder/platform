@@ -36,6 +36,15 @@ BASE=(
   --set backup.enabled=false
   --set storage.backend=file
   --set studio.enabled=false
+  # One web replica. Chart 0.3.18 added a guard that refuses monitoring.enabled
+  # with web.replicas > 1 and no metrics leader (nothing would populate the
+  # web_workflow_* families), and roughly a dozen cases below enable monitoring
+  # to exercise a guard that has nothing to do with workflow metrics. Pinning
+  # the baseline to one replica keeps that new rule dormant for them instead of
+  # sprinkling monitoring.allowMissingWorkflowMetrics through unrelated tests.
+  # Every case that actually exercises the rule sets its own replica count after
+  # this (helm's last-`--set`-wins), so nothing is masked.
+  --set web.replicas=1
 )
 
 render() { helm template t "$CHART" "${BASE[@]}" "$@" >/dev/null 2>"$ERRFILE"; }
@@ -218,6 +227,134 @@ assert_hpa_utilization() {
   else
     echo "ok   [$label]"
   fi
+}
+
+
+# assert_web_render_unchanged
+# templates/_web-workload.tpl is shared by templates/web.yaml (the production web
+# tier) and templates/web-channels.yaml (the live canary channel). Chart 0.3.18
+# parameterized it — a `config` arg for the pod shape, a `workflowLeader` arg, a
+# `refreshIntervalSeconds` arg — so a dedicated metrics-leader Deployment could
+# reuse the exact same pod spec. That refactor is only safe if it is a NO-OP for
+# the two pre-existing call sites.
+#
+# It is not a stylistic concern. A single byte of difference in those manifests is
+# a full rolling restart of every prod web replica plus the canary on a deploy
+# that was advertised as purely additive, and the ONLY ungated item in that
+# change (everything else sits behind web.metricsLeader.enabled, default false).
+#
+# So: render both templates from the chart as it exists in git at the merge base
+# and from the working tree, against every consumer values file, and require the
+# bytes to match. Note that emitted `#` YAML comments count — if you reword the
+# explanatory comment next to an env var, this fires. That is deliberate: the
+# check is only trustworthy if it is exact, and a comment reword is trivially
+# reverted or moved into a {{/* */}} template comment, which is not emitted.
+#
+# ONE normalization is applied before comparing: the `helm.sh/chart:
+# pawtograder-<version>` label, which every manifest carries and which changes on
+# every chart bump by construction. That label is genuinely part of the pod
+# template, so a chart-version bump DOES roll every Deployment in this chart —
+# that is pre-existing behaviour of the chart and true of any release, not
+# something a template refactor can cause or avoid. Comparing it would make the
+# assertion fail on the version bump and never on the thing it exists to catch.
+# Nothing else is normalized; emitted `#` YAML comments and whitespace are
+# compared exactly.
+#
+# Skipped (not failed) when git or the base ref is unavailable, so the script
+# still runs from a tarball; CI runs it from a checkout, where it does execute.
+WEB_RENDER_BASE_REF="${WEB_RENDER_BASE_REF:-2b8defc1}"
+assert_web_render_unchanged() {
+  local label="web.yaml + web-channels.yaml render byte-identically to $WEB_RENDER_BASE_REF"
+  local repo
+  repo="$(cd "$CHART/../.." && pwd)"
+  if ! command -v git >/dev/null 2>&1 || ! git -C "$repo" rev-parse --verify --quiet "$WEB_RENDER_BASE_REF^{commit}" >/dev/null; then
+    echo "skip [$label]: git or base ref $WEB_RENDER_BASE_REF unavailable"
+    return
+  fi
+  local tmp base_chart
+  tmp="$(mktemp -d)"
+  base_chart="$tmp/base/charts/pawtograder"
+  mkdir -p "$tmp/base"
+  if ! git -C "$repo" archive "$WEB_RENDER_BASE_REF" charts/pawtograder | tar -x -C "$tmp/base" 2>/dev/null; then
+    echo "skip [$label]: could not export the chart at $WEB_RENDER_BASE_REF"
+    rm -rf "$tmp"
+    return
+  fi
+
+  # Values files this chart is actually consumed with. Anything under examples/
+  # is in scope; the real production overlay lives in the prod-charts repo and is
+  # included when that checkout is present next to this one.
+  local -a vsets=()
+  local f
+  for f in "$CHART"/examples/values-*.yaml; do
+    [ -e "$f" ] && vsets+=("$f")
+  done
+  # The branding skin is only meaningful layered on a base overlay.
+  vsets+=("$CHART/examples/values-staging.yaml,$CHART/examples/values-tartangrader.yaml")
+  vsets+=("")   # chart defaults
+  local prod_overlay="$repo/../prod-charts/values/values-prod.yaml"
+  if [ -f "$prod_overlay" ]; then
+    vsets+=("$prod_overlay")
+    # ...and the same overlay with the new leader turned on, which is the state
+    # production is meant to end up in. Enabling the leader must ALSO leave the
+    # web/channel manifests untouched, or flipping that gate is a web restart.
+    vsets+=("$prod_overlay|--set web.metricsLeader.enabled=true")
+  fi
+
+  # Pins that make the shipped example overlays render at all (they carry
+  # deliberate REPLACE_ME placeholders), plus the rule-4 acknowledgement so a
+  # values file that has not yet adopted the leader still renders on both sides.
+  # The pre-refactor chart ignores unknown values keys, so these are inert there.
+  local -a pins=(
+    --set monitoring.prometheusRules.labels.release=kps
+    --set web.image.tag=v1.0.0
+    --set edgeFunctions.image.tag=v1.0.0
+    --set migrations.image.tag=v1.0.0
+    --set postgres.persistence.storageClass=fast
+    --set postgres.walg.s3Prefix=s3://b/walg
+    --set backup.enabled=false
+    --set monitoring.allowMissingWorkflowMetrics=true
+  )
+
+  # Chart version on each side, for the label normalization described above.
+  local base_ver head_ver
+  base_ver="$(awk '/^version:/ { print $2; exit }' "$base_chart/Chart.yaml")"
+  head_ver="$(awk '/^version:/ { print $2; exit }' "$CHART/Chart.yaml")"
+
+  local bad=0 n=0 vs tmpl
+  for vs in "${vsets[@]}"; do
+    local -a args=() extra=()
+    local files="${vs%%|*}" over="" IFS_SAVE
+    case "$vs" in *"|"*) over="${vs#*|}" ;; esac
+    # shellcheck disable=SC2206
+    [ -n "$over" ] && extra=($over)
+    local ff
+    IFS=',' read -ra ffs <<< "$files"
+    for ff in "${ffs[@]}"; do [ -n "$ff" ] && args+=(-f "$ff"); done
+    for tmpl in web.yaml web-channels.yaml; do
+      local a="$tmp/a" b="$tmp/b"
+      helm template pawtograder "$base_chart" "${args[@]}" "${pins[@]}" "${extra[@]}" \
+        --namespace pawtograder-prod --show-only "templates/$tmpl" >"$a" 2>"$a.err"
+      local rca=$?
+      helm template pawtograder "$CHART" "${args[@]}" "${pins[@]}" "${extra[@]}" \
+        --namespace pawtograder-prod --show-only "templates/$tmpl" >"$b" 2>"$b.err"
+      local rcb=$?
+      sed -i "s/pawtograder-${base_ver}/pawtograder-CHARTVERSION/g" "$a"
+      sed -i "s/pawtograder-${head_ver}/pawtograder-CHARTVERSION/g" "$b"
+      n=$((n + 1))
+      if [ "$rca" -ne "$rcb" ]; then
+        echo "FAIL [$label]: $tmpl with '${vs:-<defaults>}' changed render status ($rca -> $rcb)"
+        head -1 "$b.err"
+        bad=1
+      elif [ "$rca" -eq 0 ] && ! cmp -s "$a" "$b"; then
+        echo "FAIL [$label]: $tmpl differs with values '${vs:-<defaults>}'"
+        diff -u "$a" "$b" | head -40
+        bad=1
+      fi
+    done
+  done
+  rm -rf "$tmp"
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label] ($n renders compared)"; fi
 }
 
 echo "== baseline =="
@@ -614,6 +751,143 @@ assert_refused "cold-load allowance below the largest bundle is refused" \
 echo "== edge-function HPA targets are pinned (dead-band sizing, 2026-08-28) =="
 assert_hpa_utilization "memory target renders 80, not 100" memory 80
 assert_hpa_utilization "cpu target renders 200" cpu 200
+
+# -----------------------------------------------------------------------------
+# Workflow-metrics leader (chart 0.3.18)
+# -----------------------------------------------------------------------------
+# A prod-shaped install: monitoring on, several web replicas. Under those values
+# the four workflow gauge families have no producer unless a leader exists, which
+# is what the guards below are about.
+LEADER_BASE=(
+  --set monitoring.enabled=true
+  --set monitoring.prometheusRules.labels.release=kps
+  --set web.replicas=3
+)
+
+echo "== metrics-leader validations =="
+# Rule 1: the two leader mechanisms are mutually exclusive. Pinned at replicas=1
+# so the pre-existing replicas>1 guard cannot be the thing that refuses it —
+# otherwise this case would pass for the wrong reason.
+assert_refused "both leader mechanisms at once" \
+  "mutually exclusive" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set web.replicas=1 --set web.metricsLeader.enabled=true --set web.workflowMetricsLeader=true
+# Rule 2: without monitoring there is no METRICS_SCRAPE_TOKEN, so /api/metrics
+# 503s and the leader is a pod that costs memory and does nothing.
+assert_refused "metrics leader without monitoring" \
+  "requires monitoring.enabled=true" \
+  --set web.metricsLeader.enabled=true
+# Rule 3: the leader IS the web image and reuses the web pod shape.
+assert_refused "metrics leader without the web tier" \
+  "requires web.enabled=true" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set web.enabled=false --set web.metricsLeader.enabled=true
+# Rule 4: multi-replica + monitoring + no leader = nine permanently empty panels.
+# This one is a BREAKING upgrade for installs already in that state, so the
+# message must name the exact values that clear it; assert on both.
+assert_refused "multi-replica web with monitoring and no leader" \
+  "exports NO workflow metrics" "${LEADER_BASE[@]}"
+assert_refused "rule 4 names the leader value that fixes it" \
+  "web.metricsLeader.enabled: true" "${LEADER_BASE[@]}"
+assert_refused "rule 4 names the escape hatch" \
+  "monitoring.allowMissingWorkflowMetrics: true" "${LEADER_BASE[@]}"
+
+echo "== metrics-leader renders =="
+assert_renders "prod shape with the dedicated leader renders" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+assert_renders "prod shape without a leader renders once acknowledged" \
+  "${LEADER_BASE[@]}" --set monitoring.allowMissingWorkflowMetrics=true
+# The single-pod flag is NOT deprecated: on one replica it is strictly better
+# than a dedicated leader (no extra pod) and must keep working.
+assert_renders "single-replica install may still use web.workflowMetricsLeader" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set web.replicas=1 --set web.workflowMetricsLeader=true
+
+echo "== the leader env vars land on the leader and NOWHERE else =="
+assert_env_value "leader renders METRICS_WORKFLOW_REFRESH_LEADER=true" \
+  templates/web-metrics-leader.yaml METRICS_WORKFLOW_REFRESH_LEADER true \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+assert_env_value "leader renders the refresh interval" \
+  templates/web-metrics-leader.yaml METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS 300 \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+assert_env_value "refresh interval is settable" \
+  templates/web-metrics-leader.yaml METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS 60 \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true \
+  --set web.metricsLeader.refreshIntervalSeconds=60
+# The whole point of the dedicated leader is that the ordinary web replicas are
+# NOT leaders. If this leaks into web.yaml, three pods refresh the same RPCs and
+# every workflow gauge reads 4x under sum().
+assert_rendered_lacks "web.yaml carries no leader env" \
+  templates/web.yaml "METRICS_WORKFLOW_REFRESH_LEADER" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+assert_rendered_lacks "web.yaml carries no refresh-interval env" \
+  templates/web.yaml "METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+# A channel must never become a second leader; web-channels.yaml hard-codes false.
+assert_rendered_lacks "channels carry no leader env" \
+  templates/web-channels.yaml "METRICS_WORKFLOW_REFRESH_LEADER" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true \
+  --set 'channels[0].name=canary' \
+  --set 'channels[0].web.image.tag=v1.0.0' \
+  --set 'channels[0].web.hostname=canary.pawtograder.example.com' \
+  --set channelWildcardTlsSecret=wildcard-tls
+
+echo "== leader pod shape: exactly one replica, Recreate rollout =="
+# Both are structural, not tuning. Two leaders double the DB load and double-count
+# every global gauge; RollingUpdate briefly runs two leaders on every deploy,
+# which is the same failure on a timer. `replicas` is deliberately not a value.
+assert_rendered_contains "leader renders replicas: 1" \
+  templates/web-metrics-leader.yaml "replicas: 1" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+assert_rendered_contains "leader renders strategy type Recreate" \
+  templates/web-metrics-leader.yaml "type: Recreate" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+# ...and NOT a rollingUpdate block: a deep merge of web's updateStrategy over the
+# leader's would leave maxSurge/maxUnavailable attached to type: Recreate, which
+# the apiserver rejects outright.
+assert_rendered_lacks "leader renders no rollingUpdate block" \
+  templates/web-metrics-leader.yaml "rollingUpdate" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+# `replicas` must not be reachable as a value: if someone adds the key later,
+# this catches it before two leaders reach a cluster.
+assert_rendered_contains "web.metricsLeader.replicas is not a knob" \
+  templates/web-metrics-leader.yaml "replicas: 1" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true \
+  --set web.metricsLeader.replicas=4
+
+echo "== leader component label keeps it off every user-traffic path =="
+# The distinct component label is the ONLY thing separating the leader from the
+# web tier: same image, same port, same Service shape. If the leader's Service
+# selector ever says component: web it silently joins the ingress backend's
+# endpoints and starts serving students.
+assert_rendered_contains "leader Service selects component metrics-leader" \
+  templates/web-metrics-leader.yaml "app.kubernetes.io/component: metrics-leader" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+assert_rendered_lacks "leader manifest never claims component web" \
+  templates/web-metrics-leader.yaml "app.kubernetes.io/component: web" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+assert_rendered_contains "web Service still selects component web" \
+  templates/web.yaml "app.kubernetes.io/component: web" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+assert_rendered_lacks "web manifest never claims component metrics-leader" \
+  templates/web.yaml "app.kubernetes.io/component: metrics-leader" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+
+echo "== leader ServiceMonitor =="
+assert_rendered_contains "leader ServiceMonitor selects component metrics-leader" \
+  templates/monitoring.yaml "app.kubernetes.io/component: metrics-leader" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+# Toggleable like serviceMonitors.storage, and absent entirely without a leader.
+assert_rendered_lacks "no leader ServiceMonitor when the toggle is off" \
+  templates/monitoring.yaml "component: metrics-leader" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true \
+  --set monitoring.serviceMonitors.metricsLeader=false
+assert_rendered_lacks "no leader ServiceMonitor without a leader" \
+  templates/monitoring.yaml "component: metrics-leader" \
+  "${LEADER_BASE[@]}" --set monitoring.allowMissingWorkflowMetrics=true
+
+echo "== _web-workload.tpl refactor is a no-op for web.yaml and web-channels.yaml =="
+assert_web_render_unchanged
 
 echo
 if [ "$FAILED" -ne 0 ]; then

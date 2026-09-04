@@ -31,6 +31,11 @@ type MetricsBundle = {
   workflowErrorsRecent: Gauge<string>; // labels: class_id, name
   workflowRefreshDuration: Histogram<string>; // observed when refresh runs
   workflowRefreshErrors: Counter<string>;
+
+  // Epoch-ms of the last SUCCESSFUL refreshWorkflowMetrics() pass. 0 means
+  // "never refreshed", so the first call always runs. See the throttle at the
+  // top of refreshWorkflowMetrics().
+  lastWorkflowRefreshMs: number;
 };
 
 // We attach state to globalThis so it survives Next.js's per-request
@@ -190,7 +195,8 @@ async function initIfNeeded(): Promise<MetricsBundle | null> {
     workflowRunSeconds,
     workflowErrorsRecent,
     workflowRefreshDuration,
-    workflowRefreshErrors
+    workflowRefreshErrors,
+    lastWorkflowRefreshMs: 0
   };
 
   return g.__pawtograderMetrics;
@@ -281,9 +287,44 @@ export async function timeRpc<T>(
 // For a deployment with 100 active classes that's ~1.7k series (200 error rows
 // plus ~17 per class from the other three families) — well under
 // kube-prometheus-stack defaults.
+// Minimum seconds between two real DB refreshes, from
+// METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS (chart:
+// web.metricsLeader.refreshIntervalSeconds). Default 300. A literal 0 disables
+// the throttle and is meant for tests only. Anything unparseable falls back to
+// the default rather than to 0 — a typo must not silently remove the bound.
+export const DEFAULT_WORKFLOW_REFRESH_INTERVAL_SECONDS = 300;
+
+function refreshIntervalMs(): number {
+  const raw = process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS;
+  if (raw === undefined || raw === "") return DEFAULT_WORKFLOW_REFRESH_INTERVAL_SECONDS * 1000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_WORKFLOW_REFRESH_INTERVAL_SECONDS * 1000;
+  return n * 1000;
+}
+
 export async function refreshWorkflowMetrics(): Promise<void> {
   const m = await initIfNeeded();
   if (!m) return;
+
+  // Throttle. The gauges are .set()-persisted in the registry between scrapes,
+  // so returning here still exports the last-good values — a scrape served from
+  // a value up to one interval old is correct, not stale data.
+  //
+  // This is deliberately NOT the ServiceMonitor's job. The scrape interval is a
+  // cluster-side setting; this is the only bound that survives a second
+  // Prometheus, a hand-edited ServiceMonitor, or an operator running a curl loop
+  // against /api/metrics. Without it, /api/metrics is an unauthenticated-shaped
+  // amplifier for five aggregate queries over public.workflow_runs.
+  const intervalMs = refreshIntervalMs();
+  if (intervalMs > 0 && m.lastWorkflowRefreshMs > 0 && Date.now() - m.lastWorkflowRefreshMs < intervalMs) {
+    return;
+  }
+
+  // Set only on a fully successful pass (see the end of this function). A failed
+  // refresh must NOT advance the clock: otherwise a database that is briefly
+  // unreachable backs the leader off for a full interval instead of retrying on
+  // the next scrape, turning a 30-second blip into 5 minutes of flat gauges.
+  let allOk = true;
   const end = m.workflowRefreshDuration.startTimer();
   try {
     const { createAdminClient } = await import("@/utils/supabase/client");
@@ -335,6 +376,7 @@ export async function refreshWorkflowMetrics(): Promise<void> {
       }
     } else {
       m.workflowRefreshErrors.inc({ step: "workflow_runs_1h" });
+      allOk = false;
     }
     if (runs24hOk) {
       for (const row of runs24h.value.data ?? []) {
@@ -349,6 +391,7 @@ export async function refreshWorkflowMetrics(): Promise<void> {
       }
     } else {
       m.workflowRefreshErrors.inc({ step: "workflow_runs_24h" });
+      allOk = false;
     }
 
     if (queue.status === "fulfilled" && !queue.value.error) {
@@ -361,6 +404,7 @@ export async function refreshWorkflowMetrics(): Promise<void> {
       }
     } else {
       m.workflowRefreshErrors.inc({ step: "queue_seconds" });
+      allOk = false;
     }
 
     if (run.status === "fulfilled" && !run.value.error) {
@@ -372,6 +416,7 @@ export async function refreshWorkflowMetrics(): Promise<void> {
       }
     } else {
       m.workflowRefreshErrors.inc({ step: "run_seconds" });
+      allOk = false;
     }
 
     if (errors1h.status === "fulfilled" && !errors1h.value.error) {
@@ -388,12 +433,17 @@ export async function refreshWorkflowMetrics(): Promise<void> {
       }
     } else {
       m.workflowRefreshErrors.inc({ step: "errors_1h" });
+      allOk = false;
     }
   } catch {
     // Don't let metric collection failures bubble up — the scrape should
     // still return whatever is currently in the registry.
     m.workflowRefreshErrors.inc({ step: "refresh" });
+    allOk = false;
   } finally {
     end();
+    if (allOk) {
+      m.lastWorkflowRefreshMs = Date.now();
+    }
   }
 }

@@ -598,6 +598,69 @@ spec:
               server no longer existing at all; check public.discord_circuit_breakers.last_reason and
               trip_count, and the class's discord_membership_status rows. A trip_count above 1 means
               the guild has re-tripped after its window expired, so nobody has fixed it yet.
+    - name: pawtograder.workflowmetrics
+      rules:
+        # The metrics leader is failing to refresh the workflow gauges.
+        #
+        # Today a broken leader is completely SILENT: refreshWorkflowMetrics()
+        # swallows its errors so a scrape still returns the registry, and the
+        # gauges simply stop moving. On the `app-business` dashboard that is
+        # indistinguishable from a quiet night with no workflow runs — which is
+        # exactly what a quiet night looks like, so nobody investigates.
+        # web_workflow_metrics_refresh_errors_total is the only signal that the
+        # flat line is a failure rather than a fact.
+        #
+        # rate() over 15m rather than increase(): one transient RPC failure that
+        # recovers on the next refresh should not page. The refresh runs at most
+        # once per METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS (300s default), so a
+        # sustained non-zero rate over 15m is roughly three consecutive failures.
+        - alert: PawtograderWorkflowMetricsRefreshFailing
+          expr: |
+            sum by (step) (rate(web_workflow_metrics_refresh_errors_total{namespace="{{ $ns }}"}[15m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder workflow metrics refresh failing (step {{`{{ $labels.step }}`}})"
+            description: >-
+              The workflow-metrics refresh in {{ $ns }} has been failing at step
+              {{`{{ $labels.step }}`}} for 15m, so web_workflow_runs_recent,
+              web_workflow_queue_seconds, web_workflow_run_seconds and
+              web_workflow_errors_recent are frozen at their last-good values and the
+              app-business dashboard is showing history, not now. Usual causes: the
+              metrics_workflow_* RPCs missing from the database, the service-role key
+              being wrong, or the queries timing out (check the
+              idx_workflow_runs_completed_at / idx_workflow_runs_in_progress_at
+              indexes exist).
+{{- if .Values.web.metricsLeader.enabled }}
+        # The family is not being exported AT ALL. Distinct from the rule above:
+        # that one fires when refreshes fail, this one fires when nothing is
+        # scraping the leader (Service selector wrong, ServiceMonitor not
+        # discovered, METRICS_SCRAPE_TOKEN absent so /api/metrics 503s, or the
+        # leader pod is down). absent() is only meaningful with the leader
+        # enabled — without it, the absence is the configured state.
+        #
+        # `for` is long because the gauge only appears once a refresh has run and
+        # set() at least one sample, which after a leader restart takes until the
+        # first refresh plus the first scrape.
+        - alert: PawtograderWorkflowMetricsStale
+          expr: |
+            absent(web_workflow_runs_recent{namespace="{{ $ns }}"})
+          for: {{ .Values.monitoring.prometheusRules.workflowMetricsAbsentFor | default "30m" }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder workflow metrics absent while the metrics leader is enabled"
+            description: >-
+              web.metricsLeader.enabled is true in {{ $ns }} but
+              web_workflow_runs_recent has had no samples for
+              {{ .Values.monitoring.prometheusRules.workflowMetricsAbsentFor | default "30m" }}.
+              The nine workflow panels on app-business are empty. Check that the
+              {{ include "pawtograder.componentName" (dict "ctx" . "component" "metrics-leader") }}
+              pod is running, that its ServiceMonitor was discovered, and that
+              METRICS_SCRAPE_TOKEN is present in the {{ .Values.secrets.names.jwt }}
+              Secret (/api/metrics returns 503 without it).
+{{- end }}
     - name: pawtograder.edgefunctions
       rules:
         # Edge-function pods being OOM-killed.
