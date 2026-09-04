@@ -19,8 +19,14 @@ channel's host based on classes.deployment_channel.
 {{- /* hasKey, not `default 1`: Sprig `default` treats 0 as empty, which would
    render replicas: 0 as 1 and make a channel impossible to idle to zero. */ -}}
 {{- $replicas := ternary $c.web.replicas 1 (hasKey $c.web "replicas") }}
+{{- /* workflowLeader is hard-coded false: a channel must NEVER be a metrics
+   leader. Channel replica counts are per-channel and unbounded, channel pods are
+   not scraped today (their component label is web-<name>), and a canary running
+   the refresh would double every global workflow gauge against the SAME database
+   the stable tier reads. No "config" either — this renders byte-identically to
+   before the arg existed. */ -}}
 ---
-{{ include "pawtograder.web.workload" (dict "ctx" $ "component" (printf "web-%s" $c.name) "image" $image "replicas" $replicas) }}
+{{ include "pawtograder.web.workload" (dict "ctx" $ "component" (printf "web-%s" $c.name) "image" $image "replicas" $replicas "workflowLeader" false) }}
 {{- end }}
 {{- end }}
 {{- end }}

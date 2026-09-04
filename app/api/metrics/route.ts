@@ -6,7 +6,7 @@
 // returns 503 so we don't leak metrics on hostile networks.
 
 import { createHash, timingSafeEqual } from "node:crypto";
-import { getMetrics, refreshWorkflowMetrics } from "@/lib/metrics";
+import { getMetrics, isWorkflowRefreshLeader, refreshWorkflowMetrics } from "@/lib/metrics";
 
 // prom-client uses Node-only APIs (process.cpuUsage, V8 GC hooks).
 export const runtime = "nodejs";
@@ -59,12 +59,16 @@ export async function GET(req: Request): Promise<Response> {
   // The chart sets the env var on a single dedicated replica (or on
   // index 0 of a StatefulSet, etc.). Other replicas still expose
   // node/process gauges from the same registry; only the workflow
-  // family is leader-gated.
+  // family is leader-gated. lib/metrics.ts reads the SAME predicate
+  // when it builds the registry, so a non-leader process does not even
+  // register web_workflow_metrics_last_success_timestamp_seconds — an
+  // unlabelled gauge is exported as 0 the moment it is registered, and
+  // a fleet-wide 0 would make the absence alert permanently silent.
   //
   // Failures are swallowed inside the helper and surfaced as
   // web_workflow_metrics_refresh_errors_total so the scrape itself
   // never fails just because the DB is slow.
-  if (process.env.METRICS_WORKFLOW_REFRESH_LEADER === "true") {
+  if (isWorkflowRefreshLeader()) {
     await refreshWorkflowMetrics();
   }
 

@@ -1237,6 +1237,50 @@ edgeFunctions:
   # Deliberately NOT reduced alongside eszipCacheMaxMb above: this term covers
   # COLD reads, and halving the cache makes cold reads more frequent, not less.
   eszipColdLoadHeadroomMb: 256
+  # Per-request edge-tier metrics (pawtograder_edge_*), collected by the main.ts
+  # demuxer and appended to the `metrics` function's /metrics response. No new
+  # port, probe or scrape target: the existing edge-functions ServiceMonitor
+  # already scrapes that path, and METRICS_TOKEN keeps guarding it because the
+  # demuxer only appends to a 200 the user worker already authorized.
+  #
+  # DEFAULT false, deliberately. The rollout plan ships this dark to production
+  # and turns it on in a LATER, SEPARATE deploy, so the cardinality delta and any
+  # memory movement have exactly one attributable cause. Staging enables it (see
+  # examples/values-staging.yaml) because that is where it gets exercised.
+  #
+  # Cardinality, because this is the number that decides whether it is safe:
+  # every series is PER POD, since each pod is its own scrape target.
+  #
+  #   requests_total          ~55 functions x ~4 observed status codes = ~220
+  #   function_seconds_total  ~55
+  #   worker_errors_total     ~55 x 3 kinds, sparse in practice           = ~10
+  #   duration_seconds        14 buckets + _sum + _count                  = ~16
+  #   eszip + runtime gauges                                              = ~12
+  #                                                                  ~270 / pod
+  #
+  # At the 32 replicas production pins the edge HPA to, that is ~8.6k series
+  # typical. The ceiling -- every function invoked on every pod with a wider
+  # spread of status codes -- is ~22k.
+  #
+  # THAT NUMBER DOUBLES WHEN THE HPA DOUBLES. It is per-pod, so an excursion to
+  # 64 replicas doubles the edge tier's contribution at exactly the moment the
+  # fleet is under load. Budget against maxReplicas, not against the steady-state
+  # replica count.
+  #
+  # The `function` label domain is closed at IMAGE BUILD time (main.ts reads the
+  # eszip and function directories once at boot; anything else records as
+  # "_unknown"), so no request can grow it. The `status` domain is capped at 32
+  # per function. Both bounds exist because /functions/v1/* is publicly routed
+  # and the path segment is attacker-controlled -- see the long note in main.ts.
+  metrics:
+    enabled: false
+    # Latency histogram bounds, in seconds. NOT Prometheus' defaults: those top
+    # out at 10s while worker.timeoutMs is 400s, which would put this tier's
+    # entire tail in +Inf. The top finite bucket sits ON the worker lifetime so
+    # "hit the worker timeout" reads as (+Inf - le=400) instead of smearing.
+    # render-guardrails.sh asserts monotonicity and that the top bucket is
+    # >= worker.timeoutMs/1000; raise it alongside any timeout increase.
+    buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 400]
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)
@@ -1382,10 +1426,136 @@ web:
   # When true, /api/metrics refreshes the DB-backed workflow gauges
   # (workflow runs, queue/run percentiles, recent errors) on every
   # scrape. Set on AT MOST ONE pod across the deploy — multiple replicas
-  # with this on multiply DB load and over-count gauges. Safe to enable
-  # for single-replica installs (previews); for multi-replica prod
-  # leave off here and run a dedicated 1-replica metrics-leader.
+  # with this on multiply DB load and over-count gauges.
+  #
+  # Which of the two leader mechanisms to use:
+  #
+  #   web.replicas == 1  -> use THIS flag. It is strictly better than the
+  #     dedicated leader on a single-replica install: no extra pod, no extra
+  #     memory, and templates/validations.yaml already refuses it above 1
+  #     replica, so it cannot silently start double-counting. This is the
+  #     right answer for previews and small single-replica production
+  #     installs, and it is NOT deprecated.
+  #
+  #   web.replicas > 1   -> leave this false and set metricsLeader.enabled
+  #     below. validations.yaml hard-fails this flag with replicas > 1.
+  #
+  # The two are mutually exclusive; enabling both is refused (both would
+  # refresh the same RPCs and export the same global gauges, so sum() over
+  # the family double-counts every value).
+  #
+  # SWITCHING BETWEEN THE TWO MECHANISMS IS A TWO-STAGE UPGRADE. Doing it in one
+  # values change (workflowMetricsLeader: false + metricsLeader.enabled: true,
+  # deployed together) is legal at render time and momentarily WRONG at runtime:
+  # they are separate Deployments reconciled independently, so the new leader can
+  # start answering scrapes while the web rolling update has not yet terminated
+  # the old pod that still carries METRICS_WORKFLOW_REFRESH_LEADER. For the
+  # length of that overlap both run the aggregate RPCs and Prometheus scrapes two
+  # copies of every global gauge, so every workflow panel reads DOUBLE and the DB
+  # load is doubled with it. No render-time rule can catch this — each individual
+  # state is legal, and the illegal state exists only between two reconciles.
+  #
+  #   Stage 1: set workflowMetricsLeader: false (or metricsLeader.enabled: false,
+  #            going the other way), deploy, wait for the rollout to complete.
+  #   Stage 2: enable the other one, deploy.
+  #
+  # Stage 1 leaves a window with NO leader and empty workflow panels, which is
+  # the correct direction to fail — under-reporting reads as an outage, whereas
+  # a 2x over-report reads as a real traffic spike. Note that stage 1 will be
+  # refused by validations.yaml unless you also set
+  # monitoring.allowMissingWorkflowMetrics: true for that one deploy.
+  #
+  # If it does happen: the doubling is TRANSIENT and self-healing — it ends the
+  # moment the old pod terminates, and nothing is corrupted, because these are
+  # gauges reset on every refresh rather than counters. Do not go looking for a
+  # traffic event. The acceptance check that detects it after the fact is
+  # `count(count by (pod)(web_workflow_runs_recent)) == 1` sustained over 10
+  # minutes (docs/operations/metrics-gap-remediation.md §8.1).
   workflowMetricsLeader: false
+
+  # ---------------------------------------------------------------------------
+  # Dedicated metrics-leader Deployment (templates/web-metrics-leader.yaml)
+  # ---------------------------------------------------------------------------
+  # A 1-replica Deployment running the SAME web image with
+  # METRICS_WORKFLOW_REFRESH_LEADER=true, under its own component label
+  # (`metrics-leader`) and its own Service + ServiceMonitor. It exists so a
+  # multi-replica web tier can still export the workflow gauges without any web
+  # replica becoming a leader.
+  #
+  # The distinct component label is what keeps it off every user-traffic path:
+  # the web Service selects component=web, the Ingress backend resolves to the
+  # web Service, the web ServiceMonitor selects component=web, the
+  # allow-ingress-controller NetworkPolicy allows only web/kong/studio/
+  # maintenance, the PDB and web pod anti-affinity are both keyed on
+  # component=web, and the `helm test` smoke job hits the web Service by name.
+  # The allow-monitoring NetworkPolicy is release-wide, so the leader IS
+  # scrapeable. Do not "simplify" the component label back to `web`.
+  #
+  # No metric relabeling is configured or needed: a prom-client labelled gauge
+  # that was never .set() emits zero samples, so ordinary web pods contribute
+  # nothing to a sum() over the workflow families by construction.
+  #
+  # Requires monitoring.enabled (that is what injects METRICS_SCRAPE_TOKEN;
+  # without it /api/metrics returns 503 and the leader is a pod that costs
+  # memory and does nothing). validations.yaml refuses the combination.
+  #
+  # Switching to or from web.workflowMetricsLeader is a TWO-STAGE upgrade — see
+  # the note next to that flag above. One values change flipping both at once
+  # renders fine and transiently runs two leaders, which doubles every workflow
+  # panel and the DB load behind it.
+  metricsLeader:
+    enabled: false
+
+    # Merged OVER web.image. Omit (or leave {}) to track the web image exactly,
+    # which is almost always what you want — the leader is the same app.
+    image: {}
+    #   repository: ghcr.io/pawtograder/web
+    #   tag: ""
+    #   pullPolicy: IfNotPresent
+
+    # Floor on how often refreshWorkflowMetrics() actually queries the DB,
+    # independent of how often anything scrapes /api/metrics. Rendered as
+    # METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS. The gauges are .set()-persisted
+    # between scrapes, so serving a value up to this old is correct, not stale
+    # data. 0 disables the throttle (tests only — it removes the only bound that
+    # survives a second Prometheus or a curl loop against /api/metrics).
+    refreshIntervalSeconds: 300
+
+    # ServiceMonitor scrape cadence for the leader. "" => monitoring.scrapeInterval
+    # / monitoring.scrapeTimeout. There is little point scraping much faster than
+    # refreshIntervalSeconds: the gauges will not have changed.
+    scrapeInterval: ""
+    scrapeTimeout: ""
+
+    # Deliberately smaller than web.resources: this pod serves no user traffic.
+    # It runs one Next.js process that answers /api/metrics and nothing else.
+    resources:
+      requests: { cpu: "50m", memory: "512Mi" }
+      limits: { cpu: "500m", memory: "1Gi" }
+
+    # Recreate, NOT RollingUpdate, and this is not a default worth changing:
+    # RollingUpdate stands the new leader up before tearing the old one down, so
+    # for those seconds TWO pods hold the leader env var, both refresh the same
+    # RPCs, and both export the same global gauges — the exact double-count the
+    # single-leader design exists to prevent. Recreate trades a few seconds of
+    # gauge staleness for that, which is free against a 300s refresh interval.
+    updateStrategy:
+      type: Recreate
+
+    # Placement / priority. Anything left empty inherits the corresponding
+    # web.* value (and then global.*), so the leader lands wherever web lands
+    # unless you say otherwise.
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    priorityClassName: ""
+
+    # Extra env vars for the leader pod only. Replaces web.extraEnv when
+    # non-empty; leave [] to inherit it.
+    extraEnv: []
+
+    # NOTE: `replicas` is deliberately NOT a value here. See the header comment
+    # in templates/web-metrics-leader.yaml.
   replicas: 2
   image:
     repository: ghcr.io/pawtograder/web
@@ -1650,6 +1820,10 @@ monitoring:
   # single-tenant deploy.
   serviceMonitors:
     storage: true
+    # ServiceMonitor for the dedicated metrics-leader Deployment. Only rendered
+    # when web.metricsLeader.enabled is also true, so leaving this on costs
+    # nothing on installs that do not run a leader.
+    metricsLeader: true
 
   # Acknowledge that a postgres_exporter you manage is pointed at an externally
   # managed database. ONLY relevant with postgres.enabled=false.
@@ -1671,6 +1845,35 @@ monitoring:
   # rendered when postgres.enabled=false (they would select no pods and sit
   # permanently "down"), so supply your own ServiceMonitor for your exporter.
   externalPostgresExporter: false
+
+  # Acknowledge that this install exports NO workflow metrics.
+  #
+  # With monitoring.enabled=true and web.replicas > 1 and neither leader
+  # mechanism on (web.workflowMetricsLeader / web.metricsLeader.enabled),
+  # nothing populates web_workflow_runs_recent, web_workflow_queue_seconds,
+  # web_workflow_run_seconds or web_workflow_errors_recent, and the nine
+  # workflow panels on the `app-business` Grafana dashboard render permanently
+  # empty — indistinguishable from "no workflow runs happened".
+  #
+  # templates/validations.yaml REFUSES that combination rather than shipping a
+  # dashboard that lies. Set this true to say you know and do not want the
+  # metrics; set web.metricsLeader.enabled=true to actually get them.
+  allowMissingWorkflowMetrics: false
+
+  # Acknowledge that something OUTSIDE this chart scrapes the metrics leader.
+  # ONLY relevant with web.metricsLeader.enabled=true and
+  # monitoring.serviceMonitors.metricsLeader=false.
+  #
+  # The leader refreshes the workflow gauges ONLY while serving a scrape of
+  # /api/metrics (app/api/metrics/route.ts calls refreshWorkflowMetrics()).
+  # There is no background timer. With its ServiceMonitor switched off, nothing
+  # ever calls it, so the pod runs, costs memory, and produces exactly nothing —
+  # the same silent blindness allowMissingWorkflowMetrics exists to prevent,
+  # reached through a different door. templates/validations.yaml refuses that
+  # combination unless you set this to confirm you have your own scrape config
+  # (a hand-written ServiceMonitor, a PodMonitor, or a static scrape target)
+  # pointed at the leader Service with the METRICS_SCRAPE_TOKEN bearer.
+  allowUnscrapedMetricsLeader: false
 
   # Alerting rules (Prometheus Operator PrometheusRule) for backup failure /
   # staleness, ExternalSecret sync failure, and TLS cert expiry — the
@@ -1742,6 +1945,12 @@ monitoring:
     edgeFunctionRestarts30m: 2
     # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.
     edgeFunctionMemoryRatio: 0.85
+    # How long web_workflow_runs_recent may be entirely ABSENT, while
+    # web.metricsLeader.enabled is true, before PawtograderWorkflowMetricsStale
+    # fires. Generous by design: the gauge only exists once a refresh has run and
+    # .set() at least one sample, so a leader restart legitimately produces a gap
+    # of one refresh interval plus one scrape.
+    workflowMetricsAbsentFor: 30m
     # Fraction of a node's ALLOCATABLE memory, used by this release's own pods, above which
     # PawtograderEdgeFunctionsNodeMemoryHigh fires. Covers the axis every other rule here misses:
     # the kernel can OOM-kill a pod that is nowhere near its own limit, because the NODE is full.

@@ -4,8 +4,17 @@ Render-time guard rails. This template emits no resources — it exists to
 keyed off global.environment (dev | preview | staging | production):
 
   any env      — workflowMetricsLeader on multi-replica web (over-counts
-                 gauges + multiplies DB load); Studio ingress without an
-                 auth layer (full DB control behind a bare URL).
+                 gauges + multiplies DB load); the two metrics-leader
+                 mechanisms enabled at once, or the dedicated leader
+                 without monitoring/web (a pod that can export nothing);
+                 monitoring on an enabled web tier with NO leader of either
+                 kind, at any replica count (nine permanently empty
+                 app-business panels — cleared with
+                 monitoring.allowMissingWorkflowMetrics); a leader whose
+                 ServiceMonitor is switched off (same empty panels, because the
+                 refresh only runs during a scrape — cleared with
+                 monitoring.allowUnscrapedMetricsLeader); Studio ingress
+                 without an auth layer (full DB control behind a bare URL).
   staging+prod — secrets.create (plaintext key material in helm release
                  history); migrations.resetOnDrift (wipes schema public +
                  auth.users + vault.secrets and replays from scratch —
@@ -24,6 +33,79 @@ keyed off global.environment (dev | preview | staging | production):
 
 {{- if and .Values.web.enabled .Values.web.workflowMetricsLeader (gt (int .Values.web.replicas) 1) -}}
 {{- fail "web.workflowMetricsLeader requires web.replicas=1 — every leader replica refreshes the DB-backed workflow gauges on each scrape, multiplying DB load and over-counting. Run a dedicated 1-replica metrics leader instead (see values.yaml)." -}}
+{{- end -}}
+
+{{- /*
+The two leader mechanisms are mutually exclusive. web.workflowMetricsLeader sets
+METRICS_WORKFLOW_REFRESH_LEADER on the web pod itself; web.metricsLeader.enabled
+renders a separate 1-replica Deployment with the same variable. Both on means two
+workloads refresh the same metrics_workflow_* RPCs against the same rows and
+export the same global gauges, so every panel that sums the family reads double.
+*/ -}}
+{{- if and .Values.web.metricsLeader.enabled .Values.web.workflowMetricsLeader -}}
+{{- fail "web.metricsLeader.enabled=true and web.workflowMetricsLeader=true are mutually exclusive — both would refresh the same metrics_workflow_* RPCs and export the same global gauges, so sum() over web_workflow_runs_recent / web_workflow_queue_seconds / web_workflow_run_seconds / web_workflow_errors_recent double-counts every value. Pick one: set web.workflowMetricsLeader=false and keep the dedicated leader (correct for web.replicas > 1), or set web.metricsLeader.enabled=false and keep the flag (correct, and cheaper, for a single-replica install)." -}}
+{{- end -}}
+
+{{- /*
+The leader is useless without monitoring. METRICS_SCRAPE_TOKEN is only injected
+into the pod when monitoring.enabled (see templates/_web-workload.tpl), and
+app/api/metrics/route.ts returns 503 when that env var is absent — so the leader
+would never be scraped, never refresh, and simply cost a pod's worth of memory.
+*/ -}}
+{{- if and .Values.web.metricsLeader.enabled (not .Values.monitoring.enabled) -}}
+{{- fail "web.metricsLeader.enabled=true requires monitoring.enabled=true — METRICS_SCRAPE_TOKEN is only injected when monitoring is on, and /api/metrics returns 503 without it, so the leader would refresh nothing and export nothing while still costing a pod. Set monitoring.enabled=true, or set web.metricsLeader.enabled=false." -}}
+{{- end -}}
+
+{{- if and .Values.web.metricsLeader.enabled (not .Values.web.enabled) -}}
+{{- fail "web.metricsLeader.enabled=true requires web.enabled=true — the leader runs the web image and reuses the web pod shape (templates/web-metrics-leader.yaml includes pawtograder.web.workload). Set web.enabled=true, or set web.metricsLeader.enabled=false." -}}
+{{- end -}}
+
+{{- /*
+Monitoring on + web enabled + NO leader of either kind = the `app-business`
+dashboard ships with nine permanently empty panels. Nothing populates the
+web_workflow_* families in that configuration, because nothing sets
+METRICS_WORKFLOW_REFRESH_LEADER on any workload.
+
+NOT gated on replicas > 1, deliberately. It was, and that left the most ordinary
+install of all silently broken: monitoring.enabled=true, web.replicas=1, both
+leader settings at their default false. The predicate was skipped, the web
+ServiceMonitor scraped happily, and every workflow family stayed empty without
+anyone having to acknowledge anything. The replica count is what decides WHICH
+leader mechanism is correct (workflowMetricsLeader at 1 replica, the dedicated
+Deployment above that) — it was never what decided whether one is needed.
+
+This is a BREAKING upgrade for any install already in that state (Khoury
+production is), which is why it ships with an explicit acknowledgement rather
+than silently. It follows the studio.allowUnauthenticatedIngress /
+monitoring.externalPostgresExporter precedent above: the chart cannot tell "we
+don't want workflow metrics" from "we thought we had them", so it asks.
+
+There is no "deploy inert" for a render-time fail — the deploy is REFUSED, not
+degraded, and that includes a rollback deploy. The message therefore names both
+values verbatim.
+*/ -}}
+{{- if and .Values.monitoring.enabled .Values.web.enabled (not .Values.web.metricsLeader.enabled) (not .Values.web.workflowMetricsLeader) (not .Values.monitoring.allowMissingWorkflowMetrics) -}}
+{{- fail "monitoring.enabled=true with no metrics leader exports NO workflow metrics: web_workflow_runs_recent, web_workflow_queue_seconds, web_workflow_run_seconds and web_workflow_errors_recent are populated only by the pod holding METRICS_WORKFLOW_REFRESH_LEADER, and nothing here sets it. The nine workflow panels on the `app-business` Grafana dashboard will render permanently empty, which reads identically to \"no workflow runs happened\". FIX: at web.replicas=1, set `web.workflowMetricsLeader: true` (no extra pod). Above 1 replica that flag is refused, so set `web.metricsLeader.enabled: true` to run the dedicated 1-replica leader. OR, to ship without workflow metrics on purpose, set `monitoring.allowMissingWorkflowMetrics: true`." -}}
+{{- end -}}
+
+{{- /*
+The leader enabled but its ServiceMonitor switched off. Rule 4 above covers
+"no leader at all"; this is the same outcome one setting further along.
+
+refreshWorkflowMetrics() runs only while /api/metrics is being served — there is
+no background timer anywhere in lib/metrics.ts. With
+monitoring.serviceMonitors.metricsLeader=false the leader's ServiceMonitor is
+not rendered (templates/monitoring.yaml), so nothing ever calls that route on
+the leader, so the gauges are never populated. The pod is running and healthy
+and the dashboard is empty, which is the hardest version of this failure to
+diagnose.
+
+Acknowledgement rather than a hard fail, following
+monitoring.externalPostgresExporter: scraping the leader from a scrape config
+this chart does not own is a legitimate setup the chart cannot detect.
+*/ -}}
+{{- if and .Values.web.metricsLeader.enabled .Values.monitoring.enabled (not (dig "serviceMonitors" "metricsLeader" true .Values.monitoring)) (not .Values.monitoring.allowUnscrapedMetricsLeader) -}}
+{{- fail "web.metricsLeader.enabled=true with monitoring.serviceMonitors.metricsLeader=false renders a metrics leader that NOTHING SCRAPES. refreshWorkflowMetrics() only runs while /api/metrics is being served (there is no background timer), so with no ServiceMonitor the leader pod runs, costs memory and exports nothing — the same permanently empty app-business workflow panels that monitoring.allowMissingWorkflowMetrics guards, reached a different way. FIX: set `monitoring.serviceMonitors.metricsLeader: true`. OR, if your own scrape config (a hand-written ServiceMonitor, a PodMonitor, or a static target with the METRICS_SCRAPE_TOKEN bearer) already points at the leader Service, set `monitoring.allowUnscrapedMetricsLeader: true` to confirm." -}}
 {{- end -}}
 
 {{- if and .Values.studio.enabled .Values.studio.ingressEnabled (not .Values.studio.basicAuth.enabled) (not .Values.studio.allowUnauthenticatedIngress) -}}

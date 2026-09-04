@@ -470,6 +470,135 @@ data:
             usage: "GAUGE"
             description: "Number of submissions currently marked is_active=true in this class"
 
+    # Submissions ever created, per class. Backs the "Submissions created (1h)"
+    # stat, the "Submissions created / minute (by class)" timeseries and the
+    # "Top classes by recent activity" table on the app-business dashboard.
+    #
+    # This replaces web_submission_created_total, which never emitted a sample:
+    # submissions are created overwhelmingly by the autograder-create-submission
+    # edge function and otherwise by the browser talking to PostgREST, so the web
+    # tier never observes the event. Named pawtograder_* rather than keeping the
+    # web_ prefix on purpose — a web_ metric produced by postgres_exporter is a
+    # standing lie about where to look when it breaks.
+    #
+    # SOURCE: class_metrics_totals.submissions_total, not COUNT(*) over
+    # public.submissions. This is a COUNTER, so the only property that matters is
+    # that it never goes down. class_metrics_totals is maintained by an AFTER
+    # INSERT trigger (class_metrics_submissions_trg,
+    # supabase/migrations/20250928001347_class_metrics_performance.sql) that only
+    # ever increments, and there is no DELETE trigger — so deleting an assignment
+    # and cascading away its submissions leaves this value where it was. A live
+    # COUNT(*) would DROP, and Prometheus reads a drop as a counter reset, which
+    # makes rate() report the whole post-delete total as a spike. The absolute
+    # value can therefore drift from the true row count; that is fine, because
+    # every panel reads this through increase()/rate() and a constant offset
+    # cancels. The same migration backfills the column from the real count, so
+    # the two agree on any database that has run it.
+    #
+    # It is also free: one row per class, no scan of the submissions heap, so no
+    # cache_seconds is needed. Measured on the seeded dev database (6 classes):
+    # 0.4 ms for the equivalent COUNT(*) join; the counter-table read is a
+    # 100-row seq scan and does not grow with submission volume.
+    #
+    # Driven off public.classes with a LEFT JOIN so EVERY class emits a series,
+    # including one with zero submissions. That is load-bearing for the
+    # "Top classes by recent activity" panel: it adds this metric to
+    # pawtograder_grading_actions_total, and PromQL binary arithmetic drops any
+    # class_id present on only one side.
+    #
+    # public.classes and public.class_metrics_totals only exist in the
+    # application database.
+    pawtograder_submissions_created:
+      query: |
+        SELECT c.id::text AS class_id,
+               COALESCE(t.submissions_total, 0)::float AS total
+        FROM public.classes c
+        LEFT JOIN public.class_metrics_totals t ON t.class_id = c.id
+      master: true
+      metrics:
+        - class_id:
+            usage: "LABEL"
+            description: "Class ID"
+        - total:
+            usage: "COUNTER"
+            description: "Submissions ever created in this class (monotonic; from the class_metrics_totals insert counter)"
+
+    # Grading actions, per class and kind. Backs the "Grading actions (1h)" stat,
+    # the "Grading actions / minute (by kind)" timeseries and the same
+    # "Top classes by recent activity" table. Replaces web_grading_action_total,
+    # which never emitted: grading comments are written by lib/TableController.ts
+    # through a BROWSER Supabase client, so no server-side code path sees one.
+    #
+    # SOURCE: three trigger-maintained counter columns on
+    # public.class_metrics_totals, not a COUNT(*) over the comment tables. Same
+    # pattern as pawtograder_submissions_created above, and for the same reason:
+    # this is a COUNTER, so the only property that matters is that it never goes
+    # down. The scan this replaced could go down two ways, and Prometheus reads
+    # either as a counter reset and renders the next scrape as a spike the size
+    # of the whole remaining total:
+    #
+    #   1. public.delete_assignment_with_all_data() HARD-deletes all three
+    #      comment tables and submission_reviews. Counting soft-deleted rows
+    #      (which the old query did, deliberately) does not help here — the rows
+    #      are gone.
+    #   2. submission_reviews.released is mutable and
+    #      unrelease_all_grading_reviews_for_assignment() flips a whole
+    #      assignment back to false. The stat and topk panels sum ACROSS kinds,
+    #      so that corrupted them too, not just the by-kind series.
+    #
+    # Both are fixed at the source by
+    # supabase/migrations/20260904140000_grading_action_counters.sql: the comment
+    # counters are incremented by the AFTER INSERT trigger that has run on those
+    # tables since 20250928001347 (one more column on an UPDATE it already
+    # issues — no new trigger), and releases are counted as EVENTS by a scoped
+    # AFTER UPDATE OF released trigger. Nothing decrements any of them, so a
+    # deletion or a bulk unrelease is now invisible to rate() instead of being a
+    # phantom burst.
+    #
+    # These count grading ACTIONS, not surviving rows: a retracted comment, a
+    # deleted assignment and an unreleased review all still happened. The
+    # absolute value drifts above the live row count over time, which is fine —
+    # every panel reads this through increase()/rate() where a constant offset
+    # cancels.
+    #
+    # COST: one row per class, no heap scan, so NO cache_seconds. That matters
+    # beyond CPU: the previous cache_seconds: 300 froze the counter for five
+    # minutes at a time, so rate(...[1m]) at a 30s scrape alternated between a
+    # flat zero and the whole five-minute increment in one sample. The panels
+    # still use a 5m window (see their descriptions) because a 30s scrape gives
+    # a 1m window only two samples.
+    #
+    # Driven off public.classes CROSS JOINed with the three kinds so every class
+    # emits all three series, zero-filled. Load-bearing for the topk panel, which
+    # adds this metric to pawtograder_submissions_created_total and PromQL drops
+    # any class_id present on only one side.
+    #
+    # public.classes and public.class_metrics_totals only exist in the
+    # application database.
+    pawtograder_grading_actions:
+      query: |
+        SELECT c.id::text AS class_id,
+               k.kind,
+               CASE k.kind
+                 WHEN 'comment'      THEN COALESCE(t.grading_actions_comment_total, 0)
+                 WHEN 'rubric_check' THEN COALESCE(t.grading_actions_rubric_check_total, 0)
+                 ELSE                     COALESCE(t.grading_actions_release_total, 0)
+               END::float AS total
+        FROM public.classes c
+        CROSS JOIN (VALUES ('comment'), ('rubric_check'), ('release')) AS k(kind)
+        LEFT JOIN public.class_metrics_totals t ON t.class_id = c.id
+      master: true
+      metrics:
+        - class_id:
+            usage: "LABEL"
+            description: "Class ID"
+        - kind:
+            usage: "LABEL"
+            description: "comment (free-text grading comment), rubric_check (comment carrying a rubric_check_id), or release (a submission_reviews release event)"
+        - total:
+            usage: "COUNTER"
+            description: "Grading actions of this kind ever taken in this class; trigger-maintained and never decremented, so deleting an assignment or bulk-unreleasing does not look like a counter reset"
+
     pawtograder_help_queue_depth:
       query: |
         SELECT class_id::text,
@@ -606,10 +735,25 @@ spec:
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 {{- end }}
 ---
-# ServiceMonitor: edge-functions. edge-runtime v1.74 serves Prometheus metrics
-# (deno_http_requests_total, pawtograder_*) at /metrics on the http port,
-# optionally gated by a Bearer token — the runtime enforces METRICS_TOKEN only
-# when that env value is set (metrics/index.ts: no token => open /metrics).
+# ServiceMonitor: edge-functions.
+#
+# The edge RUNTIME serves no Prometheus metrics of its own — it never has. An
+# earlier version of this comment claimed deno_http_* came from the runtime, and
+# the edge-functions dashboard was built on that claim, which is why it rendered
+# completely empty for its entire life. What actually happens:
+#
+#   * /metrics on the http port is demuxed like any other function path, to the
+#     `metrics` user worker (supabase/functions/metrics/index.ts), which emits
+#     the pawtograder_* queue and circuit-breaker series.
+#   * charts/pawtograder/images/edge-functions/main.ts then APPENDS its own
+#     pawtograder_edge_* series (per-function request counts, a pod-wide latency
+#     histogram, eszip-cache and user-worker gauges) to that response before
+#     returning it. Gated by edgeFunctions.metrics.enabled.
+#
+# METRICS_TOKEN is enforced by the user worker, not by the runtime and not by
+# the demuxer — which is exactly why the demuxer appends only to a 200. An
+# unauthorized scrape gets its 401 back with nothing added. With no token set,
+# /metrics is open (metrics/index.ts: no token => no auth).
 # The credential is `optional: true` so a deploy that DOESN'T set METRICS_TOKEN
 # (e.g. staging, where edge /metrics is intentionally unauthed) still scrapes:
 # without optional, the missing Secret key makes the Prometheus Operator reject
@@ -725,6 +869,48 @@ spec:
         credentials:
           name: {{ .Values.secrets.names.jwt }}
           key: SUPAVISOR_METRICS_BEARER
+{{- end }}
+{{- if and .Values.web.metricsLeader.enabled (dig "serviceMonitors" "metricsLeader" true .Values.monitoring) }}
+---
+# ServiceMonitor: the dedicated metrics-leader Deployment
+# (templates/web-metrics-leader.yaml). Same endpoint and same bearer credential
+# as the web ServiceMonitor below — it is the same image — but selected on
+# `component: metrics-leader`, which is the ONLY thing that separates the two
+# scrape targets.
+#
+# No metric relabeling here, deliberately. The workflow gauges are only ever
+# .set() on the pod that holds METRICS_WORKFLOW_REFRESH_LEADER, and a prom-client
+# labelled gauge that has never been .set() emits ZERO samples — so ordinary web
+# pods contribute nothing to a sum() over web_workflow_* by construction, and a
+# metricRelabelConfigs block dropping those families from the web job would be
+# dead weight. Worse, the obvious `web_workflow_.*` regex would also drop
+# web_workflow_metrics_refresh_errors_total, which is the one series that tells
+# you the leader is broken.
+#
+# The `interval` deliberately need not be fast: refreshWorkflowMetrics() is
+# throttled to web.metricsLeader.refreshIntervalSeconds app-side, so scraping
+# faster than that just re-reads gauges that have not moved.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "metrics-leader") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "metrics-leader") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "metrics-leader") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /api/metrics
+      interval: {{ .Values.web.metricsLeader.scrapeInterval | default .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.web.metricsLeader.scrapeTimeout | default .Values.monitoring.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.secrets.names.jwt }}
+          key: METRICS_SCRAPE_TOKEN
 {{- end }}
 ---
 # ServiceMonitor: web (Next.js /api/metrics). Static bearer; the app does

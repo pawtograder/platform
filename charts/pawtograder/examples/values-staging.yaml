@@ -220,6 +220,13 @@ edgeFunctions:
   # spreads ~1 request/isolate. Together: lifecycle (EarlyDrop) + isolation +
   # capacity = the supabase.com-style resilience.
   policy: per_request
+  # Edge-tier per-function metrics ON here. Chart default is false so the first
+  # production deploy of chart 0.3.18 is inert; staging is where the label shape,
+  # the cardinality delta and the memory behaviour actually get exercised before
+  # that gate is flipped in prod. Buckets inherit the chart default (top finite
+  # bucket 400s = worker.timeoutMs).
+  metrics:
+    enabled: true
   # 8, not 16: under per_request this is the cap on concurrent isolates per pod, and each isolate is
   # admitted with its own memory budget. maxParallelism x worker.memoryLimitMb is what the runtime
   # will admit and nothing enforces it, so once it exceeds the container limit the kernel OOM-kills
@@ -301,10 +308,18 @@ web:
     description: "PawtograderNext — the next generation of Pawtograder course operations"
     tagline: "The next generation of your pawsome course companion"
     colorPalette: "teal"
-  # Multiple web replicas → leader flag stays off; if you need workflow
-  # metrics on staging, drop web.replicas to 1 and flip this true (see
-  # values-preview.yaml for the pattern).
+  # Multiple web replicas → the single-pod leader flag stays off (the chart
+  # refuses it above 1 replica). values-preview.yaml shows that pattern, which
+  # is the right one for a 1-replica install.
   # workflowMetricsLeader: true
+  #
+  # Staging runs the DEDICATED leader instead, and is the only environment that
+  # exercises this path before production: a separate 1-replica Deployment on
+  # component `metrics-leader`, off every user-traffic path, with its own
+  # Service + ServiceMonitor. Everything unset here (placement, image, security
+  # context) is inherited from the web block above.
+  metricsLeader:
+    enabled: true
 
 migrations:
   image:

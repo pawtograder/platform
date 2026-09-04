@@ -598,6 +598,104 @@ spec:
               server no longer existing at all; check public.discord_circuit_breakers.last_reason and
               trip_count, and the class's discord_membership_status rows. A trip_count above 1 means
               the guild has re-tripped after its window expired, so nobody has fixed it yet.
+    - name: pawtograder.workflowmetrics
+      rules:
+        # The metrics leader is failing to refresh the workflow gauges.
+        #
+        # Today a broken leader is completely SILENT: refreshWorkflowMetrics()
+        # swallows its errors so a scrape still returns the registry, and the
+        # gauges simply stop moving. On the `app-business` dashboard that is
+        # indistinguishable from a quiet night with no workflow runs — which is
+        # exactly what a quiet night looks like, so nobody investigates.
+        # web_workflow_metrics_refresh_errors_total is the only signal that the
+        # flat line is a failure rather than a fact.
+        #
+        # rate() over 15m rather than increase(): one transient RPC failure that
+        # recovers on the next refresh should not page. The refresh runs at most
+        # once per METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS (300s default), so a
+        # sustained non-zero rate over 15m is roughly three consecutive failures.
+        - alert: PawtograderWorkflowMetricsRefreshFailing
+          expr: |
+            sum by (step) (rate(web_workflow_metrics_refresh_errors_total{namespace="{{ $ns }}"}[15m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder workflow metrics refresh failing (step {{`{{ $labels.step }}`}})"
+            description: >-
+              The workflow-metrics refresh in {{ $ns }} has been failing at step
+              {{`{{ $labels.step }}`}} for 15m, so web_workflow_runs_recent,
+              web_workflow_queue_seconds, web_workflow_run_seconds and
+              web_workflow_errors_recent are frozen at their last-good values and the
+              app-business dashboard is showing history, not now. Usual causes: the
+              metrics_workflow_* RPCs missing from the database, the service-role key
+              being wrong, or the queries timing out (check the
+              idx_workflow_runs_completed_at / idx_workflow_runs_in_progress_at
+              indexes exist).
+{{- if or .Values.web.metricsLeader.enabled .Values.web.workflowMetricsLeader }}
+{{- $leaderKind := ternary "the dedicated metrics-leader Deployment (web.metricsLeader.enabled)" "the web Deployment itself (web.workflowMetricsLeader, single-replica mode)" .Values.web.metricsLeader.enabled }}
+{{- $leaderPod := ternary (include "pawtograder.componentName" (dict "ctx" . "component" "metrics-leader")) (include "pawtograder.componentName" (dict "ctx" . "component" "web")) .Values.web.metricsLeader.enabled }}
+        # The leader is not exporting AT ALL. Distinct from the rule above: that
+        # one fires when refreshes fail, this one fires when nothing is scraping
+        # the leader (Service selector wrong, ServiceMonitor not discovered or
+        # disabled via monitoring.serviceMonitors.metricsLeader, METRICS_SCRAPE_TOKEN
+        # absent so /api/metrics 503s, or the leader pod is down).
+        #
+        # Rendered for EITHER leader mechanism. It previously rendered only for
+        # the dedicated Deployment, which left the supported single-replica mode
+        # (web.workflowMetricsLeader=true) with no absence coverage at all: if
+        # that web target is not scraped, its token is missing, or the pod is
+        # down, web_workflow_metrics_refresh_errors_total is absent too, so the
+        # other rule in this group cannot fire either and the outage is
+        # completely silent. $leaderKind above puts the mechanism actually in
+        # play into the annotation, because the remedy differs.
+        #
+        # The sentinel is registered ONLY on a process holding
+        # METRICS_WORKFLOW_REFRESH_LEADER (lib/metrics.ts), which is what keeps
+        # absent() meaningful: an unlabelled prom-client gauge is exported as 0
+        # the moment it is registered, so registering it on every web pod would
+        # make this expression permanently false.
+        #
+        # NOT absent(web_workflow_runs_recent). That gauge only has samples once
+        # a class has completed a workflow run inside the window: a prom-client
+        # labelled gauge that was never .set() emits nothing, and
+        # metrics_workflow_runs_by_conclusion legitimately returns zero rows on a
+        # fresh install, over a weekend, or between terms — this platform is idle
+        # for months at a time. The old expression therefore fired a guaranteed
+        # false warning on a healthy quiet deployment, which is worse than no
+        # rule: it trains people to ignore this group.
+        #
+        # web_workflow_metrics_last_success_timestamp_seconds is an unlabelled
+        # sentinel set by refreshWorkflowMetrics() (lib/metrics.ts) at the end of
+        # every fully successful pass, INCLUDING one where every aggregate
+        # returned zero rows. Its absence therefore means the producer is broken
+        # or unscraped, never that nothing happened.
+        #
+        # `for` is long because the sentinel only appears after the first
+        # successful refresh AND the first scrape that follows it, which after a
+        # leader restart is up to one refresh interval.
+        - alert: PawtograderWorkflowMetricsStale
+          expr: |
+            absent(web_workflow_metrics_last_success_timestamp_seconds{namespace="{{ $ns }}"})
+          for: {{ .Values.monitoring.prometheusRules.workflowMetricsAbsentFor | default "30m" }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder workflow metrics producer absent while a metrics leader is enabled"
+            description: >-
+              The workflow-metrics leader in {{ $ns }} is {{ $leaderKind }}, but
+              web_workflow_metrics_last_success_timestamp_seconds has had no samples for
+              {{ .Values.monitoring.prometheusRules.workflowMetricsAbsentFor | default "30m" }}.
+              That series is emitted on every successful refresh even when there
+              were no workflow runs, and only by the leader process, so this is a
+              producer failure and not a quiet window. The nine workflow panels on
+              app-business are empty. Check that the {{ $leaderPod }} pod is running,
+              that its ServiceMonitor was discovered
+              {{- if .Values.web.metricsLeader.enabled }} (and that
+              monitoring.serviceMonitors.metricsLeader is not disabled){{- end }}, and that
+              METRICS_SCRAPE_TOKEN is present in the {{ .Values.secrets.names.jwt }}
+              Secret (/api/metrics returns 503 without it).
+{{- end }}
     - name: pawtograder.edgefunctions
       rules:
         # Edge-function pods being OOM-killed.

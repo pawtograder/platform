@@ -315,6 +315,16 @@ jobs:
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL: http://localhost:3001
         run: npm run build
 
+      # prom-client is Node-only and lib/metrics.ts imports it dynamically, so
+      # webpack will happily split it into a CLIENT chunk if anything under a
+      # "use client" boundary ever imports the metrics helpers — the isNode()
+      # guard is a runtime check and does not prevent the split. This is the
+      # only place in CI a production build already exists, so the grep costs
+      # nothing here. tests/unit/prom-client-bundle.test.ts is the fast static
+      # counterpart that runs without a build.
+      - name: Assert prom-client is not in the client bundle
+        run: scripts/check-prom-client-bundle.sh
+
       - name: Wait for Playwright install
         run: |
           set -euo pipefail

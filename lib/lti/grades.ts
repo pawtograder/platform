@@ -18,6 +18,7 @@ import { type AgsScore } from "./types";
 import { ensureLineItem, publishScore, retractScore } from "./ags";
 import { ltiAdminClient, type LtiDb } from "./db";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
+import { classifySupabase, timeRpc } from "@/lib/metrics";
 
 type GradeSyncStateInsert = Database["public"]["Tables"]["lti_grade_sync_state"]["Insert"];
 
@@ -173,7 +174,12 @@ export async function syncAssignmentGrades(
   // (context_link_id, gradebook_column_id) unique constraints are resolved
   // atomically — a PostgREST upsert can only declare one arbiter and would abort
   // the push if a gradebook column was reassigned between assignments.
-  const { data: lineItemId, error: liErr } = await db.rpc("lti_upsert_line_item", {
+  // web_supabase_rpc_*: reached from the live /api/lti/push-grades route.
+  // Built here and awaited inside timeRpc: a PostgREST builder is lazy and does
+  // not issue the request until it is awaited, so the timer still covers the
+  // whole round trip. (Building it inline inside the callback re-infers the
+  // argument literal against timeRpc's generic and loses the RPC arg types.)
+  const upsertLineItem = db.rpc("lti_upsert_line_item", {
     p_context_link_id: ctx.id,
     p_class_id: classId,
     p_assignment_id: assignment.id,
@@ -182,6 +188,11 @@ export async function syncAssignmentGrades(
     p_label: assignment.title,
     p_score_maximum: scoreMaximum
   });
+  const { data: lineItemId, error: liErr } = await timeRpc(
+    "lti_upsert_line_item",
+    async () => await upsertLineItem,
+    classifySupabase
+  );
   if (liErr) throw liErr;
   if (lineItemId == null) throw new Error("lti_upsert_line_item returned no id");
 

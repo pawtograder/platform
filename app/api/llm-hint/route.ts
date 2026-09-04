@@ -10,7 +10,7 @@ import * as Sentry from "@sentry/nextjs";
 import { GraderResultTestExtraData, LLMRateLimitConfig } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { timeHttp } from "@/lib/metrics";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 type GradrResultTestWithGraderResults = GetResult<
   Database["public"],
@@ -291,9 +291,9 @@ async function checkRateLimits(
   return null; // No rate limiting issues
 }
 
-export async function POST(request: NextRequest): Promise<Response> {
-  return timeHttp("/api/llm-hint", "POST", () => llmHintHandler(request));
-}
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const POST = withRouteMetrics("/api/llm-hint", llmHintHandler);
 
 async function llmHintHandler(request: NextRequest) {
   try {

@@ -7,6 +7,7 @@ import "server-only";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import type { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { classifySupabase, timeRpc } from "@/lib/metrics";
 
 export type ManageAssignmentsOverviewRow = Database["public"]["Views"]["assignment_overview"]["Row"];
 
@@ -63,7 +64,15 @@ export async function fetchInstructorDashboardBundle(
     { data: workflowStatsDay, error: workflowStatsDayError },
     { data: recentErrors, error: recentErrorsError }
   ] = await Promise.all([
-    supabase.rpc("get_instructor_dashboard_overview_metrics", { p_class_id: courseId }),
+    // web_supabase_rpc_*: the two aggregate RPCs on this page are the slowest
+    // server-side DB calls in the app. The plain .from() reads beside them are
+    // not timed — they are indexed single-table selects and would only dilute
+    // the histogram. `rpc` labels come from the closed RPC_LABELS union.
+    timeRpc(
+      "ssr_dashboard_overview_metrics",
+      async () => await supabase.rpc("get_instructor_dashboard_overview_metrics", { p_class_id: courseId }),
+      classifySupabase
+    ),
     supabase
       .from("help_requests")
       .select("*")
@@ -77,8 +86,16 @@ export async function fetchInstructorDashboardBundle(
       .eq("class_id", courseId)
       .is("deleted_at", null)
       .in("status", ["published", "closed"]),
-    supabase.rpc("get_workflow_statistics", { p_class_id: courseId, p_duration_hours: 1 }),
-    supabase.rpc("get_workflow_statistics", { p_class_id: courseId, p_duration_hours: 24 }),
+    timeRpc(
+      "ssr_workflow_statistics",
+      async () => await supabase.rpc("get_workflow_statistics", { p_class_id: courseId, p_duration_hours: 1 }),
+      classifySupabase
+    ),
+    timeRpc(
+      "ssr_workflow_statistics",
+      async () => await supabase.rpc("get_workflow_statistics", { p_class_id: courseId, p_duration_hours: 24 }),
+      classifySupabase
+    ),
     supabase
       .from("workflow_run_error")
       .select(

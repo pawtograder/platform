@@ -669,6 +669,53 @@ Prometheus or Grafana itself.
 | realtime         | `:4000 /metrics`         | HS256 JWT in `pawtograder-jwt:REALTIME_METRICS_BEARER` |
 | supavisor        | `:4000 /metrics`         | HS256 JWT in `pawtograder-jwt:SUPAVISOR_METRICS_BEARER` |
 | web (Next.js)    | `:3000 /api/metrics`     | bearer in `pawtograder-jwt:METRICS_SCRAPE_TOKEN` |
+| metrics-leader   | `:3000 /api/metrics`     | same bearer (only when `web.metricsLeader.enabled`) |
+
+### Workflow metrics and the metrics leader
+
+The four `web_workflow_*` families behind the workflow panels on the
+**App Business** dashboard are DB-derived global aggregates: every pod that
+refreshes them runs the same `metrics_workflow_*` RPCs over the same rows and
+exports the same values. So exactly one pod in the release may hold
+`METRICS_WORKFLOW_REFRESH_LEADER`, or the queries multiply and `sum()`
+over-counts. There are two ways to arrange that, and which one is right is
+purely a function of `web.replicas`:
+
+| `web.replicas` | Use | Why |
+|---|---|---|
+| 1 | `web.workflowMetricsLeader: true` | Free. No extra pod, no extra memory, and `templates/validations.yaml` refuses the flag above one replica so it cannot silently start double-counting. Correct for previews and small single-replica installs. **Not deprecated.** |
+| > 1 | `web.metricsLeader.enabled: true` | Renders `templates/web-metrics-leader.yaml`: a dedicated 1-replica Deployment running the same web image, under component `metrics-leader`, with its own Service and ServiceMonitor. |
+
+Setting both is refused. So is `monitoring.enabled: true` with
+`web.replicas > 1` and neither — that combination ships a dashboard with nine
+permanently empty panels, which reads exactly like "no workflow runs happened".
+Acknowledge it deliberately with `monitoring.allowMissingWorkflowMetrics: true`
+if you do not want the metrics.
+
+Two things about the leader Deployment are structural rather than tuning:
+
+- **`replicas` is not exposed as a value.** It is the literal `1`. A second
+  replica doubles the query load on `public.workflow_runs` and double-counts
+  every gauge — the precise failure the workload exists to prevent.
+- **The rollout strategy is `Recreate`.** RollingUpdate would run two leaders for
+  the few seconds of every deploy. A few seconds of gauge staleness is free
+  against the 300s default refresh interval.
+
+The `metrics-leader` component label is what keeps the pod off every
+user-traffic path: the web Service, the Ingress backend, the web ServiceMonitor,
+the `allow-ingress-controller` NetworkPolicy, the PDB, web pod anti-affinity and
+the `helm test` smoke job all select `component: web` or the web Service by name.
+The release-wide `allow-monitoring` NetworkPolicy does include it, so it is
+scrapeable. No metric relabeling is configured, and none is needed: a prom-client
+labelled gauge that was never `.set()` emits zero samples, so ordinary web pods
+contribute nothing to a `sum()` over the workflow families by construction.
+
+Independently of scrape frequency, the app throttles the actual DB refresh to
+`web.metricsLeader.refreshIntervalSeconds` (rendered as
+`METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS`, default 300). That is the only bound
+that survives a second Prometheus, a hand-edited ServiceMonitor, or a `curl` loop
+against `/api/metrics`. A failed refresh does not arm the throttle, so a database
+blip is retried on the next scrape rather than backed off for five minutes.
 
 The postgres exporter ships custom queries that surface pawtograder-specific
 gauges (active submissions per class, help_request queue depth, total class

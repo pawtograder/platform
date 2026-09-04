@@ -5,10 +5,11 @@
  */
 import { NextResponse } from "next/server";
 import { getPublicJwks } from "@/lib/lti/keys";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+async function getHandler() {
   try {
     const jwks = await getPublicJwks();
     return NextResponse.json(jwks, {
@@ -18,3 +19,7 @@ export async function GET() {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const GET = withRouteMetrics("/api/lti/jwks", getHandler, "GET");
