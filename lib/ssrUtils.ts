@@ -3,6 +3,7 @@ import "server-only";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { parseViewAsCookieValue, viewAsCookieName } from "@/lib/viewAs";
 import { classScopedTableTags, courseTag } from "@/lib/next-cache-tags";
+import { timeRpc } from "@/lib/metrics";
 import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import type {
@@ -111,7 +112,7 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
   );
   return client;
 }
-export async function getUserRolesForCourse(course_id: number, user_id: string): Promise<UserRoleData | undefined> {
+async function getUserRolesForCourseUntimed(course_id: number, user_id: string): Promise<UserRoleData | undefined> {
   // The per-user tag is kept for targeted invalidation, but nothing emits it: the `user_roles`
   // trigger emits the class+role form. Without those two the 60s TTL was the only thing that
   // ever refreshed a role change.
@@ -232,7 +233,7 @@ export async function getEffectiveCourseIdentity(
   };
 }
 
-export async function getCourse(course_id: number) {
+async function getCourseUntimed(course_id: number) {
   const client = await createClientWithCaching({ tags: [courseTag(course_id)] });
   const course = await client.from("classes").select("*").eq("id", course_id).eq("archived", false).single();
   return course.data;
@@ -292,7 +293,7 @@ async function fetchAllPages<T>(
  * @param user_id Optional user ID for user-specific data (notifications, etc)
  * @returns CourseControllerInitialData object with all pre-loaded data
  */
-export async function fetchCourseControllerData(
+async function fetchCourseControllerDataUntimed(
   course_id: number,
   role: "instructor" | "student" | "grader" | "admin"
 ): Promise<CourseControllerInitialData> {
@@ -544,7 +545,7 @@ export async function fetchCourseControllerData(
  * @param assignment_id The assignment ID to fetch data for
  * @returns AssignmentControllerInitialData object with all pre-loaded data
  */
-export async function fetchAssignmentControllerData(
+async function fetchAssignmentControllerDataUntimed(
   assignment_id: number,
   isStaff: boolean
 ): Promise<AssignmentControllerInitialData> {
@@ -642,4 +643,42 @@ export async function fetchAssignmentControllerData(
     rubricChecks,
     rubricCheckReferences
   };
+}
+
+// ---------------------------------------------------------------------------
+// web_supabase_rpc_* instrumentation.
+//
+// These four are the SSR boundary: everything an RSC page render costs on the
+// server-side database path goes through one of them. RSC renders themselves
+// are not timed — there is no seam short of middleware, and middleware is Edge
+// (see lib/routeMetrics.ts) — so this family is the substitute signal.
+//
+// Each `rpc` label is a hardcoded constant from the closed RPC_LABELS union in
+// lib/metrics.ts. The loaders below throw rather than returning a PostgREST
+// { error } envelope, so status is "ok" on return and timeRpc's catch path
+// records status="error" with code="throw".
+// ---------------------------------------------------------------------------
+
+const ok = () => ({ status: "ok" });
+
+export function getUserRolesForCourse(course_id: number, user_id: string): Promise<UserRoleData | undefined> {
+  return timeRpc("ssr_user_roles", () => getUserRolesForCourseUntimed(course_id, user_id), ok);
+}
+
+export function getCourse(course_id: number) {
+  return timeRpc("ssr_course", () => getCourseUntimed(course_id), ok);
+}
+
+export function fetchCourseControllerData(
+  course_id: number,
+  role: "instructor" | "student" | "grader" | "admin"
+): Promise<CourseControllerInitialData> {
+  return timeRpc("ssr_course_controller", () => fetchCourseControllerDataUntimed(course_id, role), ok);
+}
+
+export function fetchAssignmentControllerData(
+  assignment_id: number,
+  isStaff: boolean
+): Promise<AssignmentControllerInitialData> {
+  return timeRpc("ssr_assignment_controller", () => fetchAssignmentControllerDataUntimed(assignment_id, isStaff), ok);
 }

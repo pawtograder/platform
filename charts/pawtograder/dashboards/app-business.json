@@ -101,6 +101,7 @@
       "id": 3,
       "type": "stat",
       "title": "Submissions created (1h)",
+      "description": "pawtograder_submissions_created_total, from the postgres_exporter custom query in charts/pawtograder/templates/monitoring.yaml. Was web_submission_created_total, which never emitted: submissions are created by the autograder-create-submission edge function and by the browser talking to PostgREST, so the web tier never observes one.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -114,7 +115,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(web_submission_created_total{class_id=~\"$class_id\"}[1h]))"
+          "expr": "sum(increase(pawtograder_submissions_created_total{class_id=~\"$class_id\"}[1h]))"
         }
       ],
       "fieldConfig": {
@@ -127,6 +128,7 @@
       "id": 4,
       "type": "stat",
       "title": "Grading actions (1h)",
+      "description": "pawtograder_grading_actions_total, from the postgres_exporter custom query in charts/pawtograder/templates/monitoring.yaml. Was web_grading_action_total, which never emitted: grading comments are written through a browser Supabase client in lib/TableController.ts.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -140,7 +142,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(web_grading_action_total{class_id=~\"$class_id\"}[1h]))"
+          "expr": "sum(increase(pawtograder_grading_actions_total{class_id=~\"$class_id\"}[1h]))"
         }
       ],
       "fieldConfig": {
@@ -236,7 +238,7 @@
         {
           "refId": "A",
           "legendFormat": "class {{class_id}}",
-          "expr": "sum by(class_id)(rate(web_submission_created_total{class_id=~\"$class_id\"}[1m])) * 60"
+          "expr": "sum by(class_id)(rate(pawtograder_submissions_created_total{class_id=~\"$class_id\"}[1m])) * 60"
         }
       ],
       "fieldConfig": {
@@ -249,6 +251,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Grading actions / minute (by kind)",
+      "description": "kind is comment (free-text), rubric_check (comment carrying a rubric_check_id) or release (submission_reviews currently released). Soft-deleted comments are counted on purpose so the counter never decreases. kind=release is the one non-monotonic series: a bulk unrelease flips submission_reviews.released back to false and shows up here as one spurious spike. Served from the exporter cache with cache_seconds: 300, so the finest real resolution is 5 minutes.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -263,7 +266,7 @@
         {
           "refId": "A",
           "legendFormat": "{{kind}}",
-          "expr": "sum by(kind)(rate(web_grading_action_total{class_id=~\"$class_id\"}[1m])) * 60"
+          "expr": "sum by(kind)(rate(pawtograder_grading_actions_total{class_id=~\"$class_id\"}[1m])) * 60"
         }
       ],
       "fieldConfig": {
@@ -325,6 +328,7 @@
       "id": 30,
       "type": "table",
       "title": "Top classes by recent activity (1h)",
+      "description": "sum by(class_id) is applied to each metric BEFORE the addition. Adding the raw increase() vectors does not work: pawtograder_grading_actions_total carries a kind label that pawtograder_submissions_created_total does not, so PromQL finds no matching label sets and the panel returns empty. Both exporter queries are driven off public.classes so every class emits a zero-filled series on both sides and no class drops out of the sum.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -340,7 +344,7 @@
           "refId": "A",
           "format": "table",
           "instant": true,
-          "expr": "topk(20, sum by(class_id)(increase(web_submission_created_total[1h]) + increase(web_grading_action_total[1h])))"
+          "expr": "topk(20, sum by(class_id)(increase(pawtograder_submissions_created_total[1h])) + sum by(class_id)(increase(pawtograder_grading_actions_total[1h])))"
         }
       ]
     },
@@ -681,6 +685,187 @@
           "expr": "topk(15, web_workflow_errors_recent{class_id=~\"$class_id\", window=\"1h\"})"
         }
       ]
+    },
+    {
+      "id": 80,
+      "type": "row",
+      "title": "Web tier (Next.js server)",
+      "description": "Produced by prom-client inside the pawtograder-web pods and scraped from /api/metrics \u2014 the same target as the workflow row above, which is why these live here rather than on their own dashboard. NONE of these panels honour $class_id: the route and rpc labels are hardcoded patterns with no class dimension, deliberately, because a per-course label on a 12-bucket histogram is unbounded cardinality driven by a public URL. Everything is summed across pods; break out by pod in Explore if you suspect one replica.",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      },
+      "collapsed": false
+    },
+    {
+      "id": 81,
+      "type": "timeseries",
+      "title": "SSR Supabase RPC p95 (by rpc)",
+      "description": "95th percentile of the server-side Supabase calls wrapped by timeRpc (lib/ssrUtils.ts, lib/ssr-course-dashboard.ts, lib/lti/*). This is the closest thing to \"how slow is an RSC page render\" that exists: RSC renders themselves have no instrumentation seam short of middleware, and middleware is the Edge runtime where prom-client does not run. Expect this to be SPARSE \u2014 most business reads in this app go browser to PostgREST and never touch the server.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{rpc}}",
+          "expr": "histogram_quantile(0.95, sum by(le,rpc)(rate(web_supabase_rpc_duration_seconds_bucket[5m])))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "id": 82,
+      "type": "timeseries",
+      "title": "SSR Supabase RPC errors / sec (by rpc, code)",
+      "description": "code is a Postgres SQLSTATE, the literal \"throw\" when the call rejected rather than returning an error envelope, or \"unknown\". It is never an error message: normalizeRpcErrorCode() in lib/metrics.ts collapses anything not matching /^[0-9A-Z]{5}$/, because a PostgREST message embeds the offending value and would be unbounded cardinality on a counter.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{rpc}} / {{code}}",
+          "expr": "sum by(rpc,code)(rate(web_supabase_rpc_errors_total[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 83,
+      "type": "timeseries",
+      "title": "API route p95 latency (by route)",
+      "description": "95th percentile per route handler under app/api. route is the literal parameterized App Router pattern hardcoded per file (e.g. /api/calendar/[course_id]) \u2014 never the request path. /api/tunnel (Sentry, high volume, no diagnostic value) and /api/metrics (the self-scrape) are deliberately not instrumented.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 67
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{route}}",
+          "expr": "histogram_quantile(0.95, sum by(le,route)(rate(web_http_request_duration_seconds_bucket[5m])))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "id": 84,
+      "type": "timeseries",
+      "title": "API route requests / sec (by route, status class)",
+      "description": "status is bucketed to 2xx/4xx/5xx rather than the exact code. The exact code is in Sentry and the access log; carrying it here would roughly double the http family for no signal any panel reads.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 67
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{route}} {{status}}",
+          "expr": "sum by(route,status)(rate(web_http_request_duration_seconds_count[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 85,
+      "type": "timeseries",
+      "title": "API route 5xx rate (by route)",
+      "description": "Handler failures. A throw that escapes a route handler is recorded here as 5xx by timeHttp's catch path, so this covers unhandled exceptions as well as deliberate 500 responses.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 75
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{route}}",
+          "expr": "sum by(route)(rate(web_http_request_duration_seconds_count{status=\"5xx\"}[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 86,
+      "type": "timeseries",
+      "title": "API requests in flight (by route)",
+      "description": "web_http_in_flight_requests summed across web pods. A route that climbs and does not come back down is a handler that is not completing \u2014 the long-running ones here are /api/lti/push-grades and /api/lti/sync-roster (maxDuration 300) and /api/llm-hint.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 75
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{route}}",
+          "expr": "sum by(route)(web_http_in_flight_requests)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        }
+      }
     }
   ],
   "description": "Autograder workflow panels (runs, queue latency, workflow_run_error counts) are DB-backed and are refreshed only by a web pod running with METRICS_WORKFLOW_REFRESH_LEADER set (web.workflowMetricsLeader, which requires web.replicas=1). Without a leader anywhere in the deploy these panels are instrumented, scraped, and permanently empty \u2014 which reads as 'no workflow activity' rather than 'not being collected'."

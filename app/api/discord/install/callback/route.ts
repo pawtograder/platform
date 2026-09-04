@@ -34,6 +34,7 @@ import {
   verifyInstallState
 } from "@/lib/discordInstallState";
 import { exchangeInstallCode, lookupGuildAsBot, manageDiscordPageUrl, redirectOrigin } from "@/lib/discordInstall";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 export const dynamic = "force-dynamic";
 
@@ -68,7 +69,7 @@ function clearNonce(response: NextResponse): NextResponse {
   return response;
 }
 
-export async function GET(request: NextRequest) {
+async function getHandler(request: NextRequest) {
   const scope = Sentry.getCurrentScope();
   scope.setTag("endpoint", "discord_install_callback");
 
@@ -321,3 +322,7 @@ export async function GET(request: NextRequest) {
     NextResponse.redirect(manageDiscordPageUrl(request, classId, { installed: moved ? "moved" : "1" }), { status: 302 })
   );
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const GET = withRouteMetrics("/api/discord/install/callback", getHandler);

@@ -27,7 +27,7 @@
       "type": "stat",
       "title": "Phoenix connections",
       "description": "Aggregate Phoenix connection count across all realtime replicas. Tracks active WebSocket + HTTP keepalive sessions.",
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         { "refId": "A", "expr": "sum(phoenix_connections_total{job=\"pawtograder-realtime\"})" }
@@ -39,7 +39,7 @@
       "type": "stat",
       "title": "Tenants connected",
       "description": "Distinct Supabase realtime tenants with at least one active client. Self-hosted pawtograder has one tenant per deploy.",
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         { "refId": "A", "expr": "sum(realtime_tenants_connected{job=\"pawtograder-realtime\"})" }
@@ -47,23 +47,11 @@
       "fieldConfig": { "defaults": { "unit": "none" } }
     },
     {
-      "id": 3,
-      "type": "stat",
-      "title": "Server broadcasts / s (1m)",
-      "description": "Server-initiated realtime.send() rate. NO DATA TODAY: web_realtime_broadcast_total has no producer. The counter was declared in lib/metrics.ts and never incremented, and has now been removed \u2014 broadcasts are emitted by Postgres triggers, not by web code, so the replacement series comes from a postgres_exporter custom query. See docs/operations/metrics-gap-remediation.md \u00a74 (WS-APP).",
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "targets": [
-        { "refId": "A", "expr": "sum(rate(web_realtime_broadcast_total[1m]))" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
-    },
-    {
       "id": 4,
       "type": "stat",
       "title": "Erlang reductions / s",
       "description": "Reduction-count delta across all realtime replicas — a coarse proxy for VM workload (every function call increments reductions).",
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         { "refId": "A", "expr": "sum(rate(beam_stats_reduction_count{job=\"pawtograder-realtime\"}[1m]))" }
@@ -74,7 +62,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Phoenix connections by replica",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
@@ -84,22 +72,6 @@
         }
       ],
       "fieldConfig": { "defaults": { "unit": "none", "min": 0 } }
-    },
-    {
-      "id": 11,
-      "type": "timeseries",
-      "title": "Server-initiated broadcasts by channel class",
-      "description": "Per-channel broadcast rate. NO DATA TODAY \u2014 same missing producer as \"Server broadcasts / s\": web_realtime_broadcast_total was never incremented and has been removed from lib/metrics.ts. The channel_class breakdown has to be reconstructed on the trigger side when the postgres_exporter query lands (docs/operations/metrics-gap-remediation.md \u00a74, WS-APP).",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "targets": [
-        {
-          "refId": "A",
-          "legendFormat": "{{channel_class}}",
-          "expr": "sum by(channel_class)(rate(web_realtime_broadcast_total[1m]))"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
     },
     {
       "id": 20,
@@ -185,5 +157,6 @@
       ],
       "fieldConfig": { "defaults": { "unit": "Bps" } }
     }
-  ]
+  ],
+  "description": "DELETED 2026-09-04 (WS-APP): the two web_realtime_broadcast_total panels (\"Server broadcasts / s\" and \"Server-initiated broadcasts by channel class\") are gone rather than retargeted at a postgres_exporter query. Three reasons, in order. (1) The only trigger-side row a broadcast produces is an insert into realtime.messages, which is DAILY-PARTITIONED with short retention \u2014 a COUNT over it falls every time a partition is dropped, and Prometheus reads a falling counter as a reset, so it cannot back a rate() panel at all. (2) The windowed-gauge alternative means scanning the highest-write table in the database on every scrape, which is precisely the database_ram_metrics() pathology that cost 77.7% of production DB execution time (see the SCOPE block in supabase/functions/metrics/index.ts). (3) channel_class would have to be reconstructed by parsing realtime.messages.topic, which embeds class and resource ids, so the label would be loosely bounded by user-controlled data. Everything else on this dashboard comes from the realtime container's own /metrics endpoint (job=\"pawtograder-realtime\"); if broadcast counts are wanted back, that is where they belong, not in a database scan."
 }

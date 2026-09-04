@@ -986,6 +986,34 @@ assert_env_value "EDGE_METRICS on when enabled" \
   templates/edge-functions.yaml EDGE_METRICS 1 \
   --set edgeFunctions.metrics.enabled=true
 
+echo "== WS-APP business metrics come from postgres_exporter, not the web tier =="
+# postgres_exporter names a series <block>_<column>, so the block name and the
+# column name TOGETHER are the metric name the dashboard queries. Renaming
+# either half silently blanks six panels on app-business.json, and nothing else
+# in this repo connects the two. These four assertions are that connection.
+assert_rendered_contains "submissions block emits pawtograder_submissions_created_total" \
+  templates/monitoring.yaml "pawtograder_submissions_created:" \
+  --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+  --set monitoring.prometheusRules.labels.release=kps
+assert_rendered_contains "grading block emits pawtograder_grading_actions_total" \
+  templates/monitoring.yaml "pawtograder_grading_actions:" \
+  --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+  --set monitoring.prometheusRules.labels.release=kps
+# The full-table GROUP BY over the comment tables measures ~350ms at prod scale.
+# Without cache_seconds it runs at the scrape interval, which is how
+# database_ram_metrics() became 77.7% of production DB execution time.
+assert_rendered_contains "the grading-actions scan is served from the exporter cache" \
+  templates/monitoring.yaml "cache_seconds: 300" \
+  --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+  --set monitoring.prometheusRules.labels.release=kps
+# Soft-deleted comments must stay in the count: filtering them out makes a
+# COUNTER go down, which Prometheus reads as a reset and rate() renders as a
+# spike the size of the remaining total.
+assert_rendered_lacks "grading-actions query does not filter soft-deleted rows" \
+  templates/monitoring.yaml "deleted_at IS NULL" \
+  --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
+  --set monitoring.prometheusRules.labels.release=kps
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"

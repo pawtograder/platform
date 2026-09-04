@@ -18,8 +18,6 @@ type MetricsBundle = {
   httpInFlight: Gauge<string>;
   rpcDuration: Histogram<string>;
   rpcErrors: Counter<string>;
-  submissionCreated: Counter<string>;
-  gradingActions: Counter<string>;
 
   // Workflow business gauges. Refreshed from the DB at scrape time —
   // see refreshWorkflowMetrics() below. These are the user-facing
@@ -90,25 +88,23 @@ async function initIfNeeded(): Promise<MetricsBundle | null> {
     registers: [registry]
   });
 
-  const submissionCreated = new promClient.Counter({
-    name: "web_submission_created_total",
-    help: "Submissions created (counted in the create-submission code path).",
-    labelNames: ["class_id"],
-    registers: [registry]
-  });
-
-  const gradingActions = new promClient.Counter({
-    name: "web_grading_action_total",
-    help: "Grading actions taken by graders (comment, mark, release).",
-    labelNames: ["class_id", "kind"],
-    registers: [registry]
-  });
-
-  // ----- Deliberately absent: five business counters that used to be
+  // ----- Deliberately absent: seven business counters that used to be
   // declared here and were never incremented from a single call site.
   // The web tier is structurally the wrong producer for all of them, so
   // they are not "TODO: instrument" — re-adding them here would recreate
   // metrics that can only ever read zero. The correct producer is:
+  //
+  //   web_submission_created_total    → pawtograder_submissions_created_total
+  //   web_grading_action_total        → pawtograder_grading_actions_total
+  //     These two were the only non-workflow web_* series the app-business
+  //     dashboard actually queried, and they were also never incremented.
+  //     Submissions are created by supabase/functions/autograder-create-
+  //     submission (a Deno edge function); grading comments are written from
+  //     lib/TableController.ts through a BROWSER Supabase client. Both now
+  //     come from postgres_exporter custom queries in monitoring.yaml, under
+  //     pawtograder_* names — a web_-prefixed metric produced by the exporter
+  //     would send the next person debugging it to the wrong tier. The six
+  //     dashboard panels were renamed to match (WS-APP).
   //
   //   web_submission_mutated_total    → postgres_exporter custom query
   //   web_rubric_check_action_total   → postgres_exporter custom query
@@ -188,8 +184,6 @@ async function initIfNeeded(): Promise<MetricsBundle | null> {
     httpInFlight,
     rpcDuration,
     rpcErrors,
-    submissionCreated,
-    gradingActions,
     workflowRunsRecent,
     workflowQueueSeconds,
     workflowRunSeconds,
@@ -208,16 +202,33 @@ export async function getMetrics() {
   return initIfNeeded();
 }
 
+// Bucket an HTTP status code into a status CLASS: "2xx" / "4xx" / "5xx".
+//
+// This is applied unconditionally inside timeHttp rather than left to callers,
+// because the label it feeds is on a 12-bucket histogram: every distinct status
+// value costs 14 series per route per method. Exact codes roughly double the
+// http family for no diagnostic gain — nothing on the dashboards distinguishes
+// a 401 from a 403, and the exact code is in the Sentry event and the access
+// log for anyone who needs it. Anything outside 100-599 (a handler returning a
+// nonsense status) lands in "other" rather than inventing a bucket.
+export function bucketStatus(status: number): string {
+  if (!Number.isFinite(status)) return "other";
+  const klass = Math.floor(status / 100);
+  if (klass < 1 || klass > 5) return "other";
+  return `${klass}xx`;
+}
+
 // Time-an-HTTP-handler helper. Returns the handler return value.
 // Safe to wrap every API route. Status defaults to 200 when the handler
-// returns; if it throws we record status=500 and re-throw.
+// returns; if it throws we record status=5xx and re-throw.
 export async function timeHttp<T>(
   route: string,
   method: string,
   fn: () => Promise<T>,
   // Pass the actual status when the handler returns a Response so we can
   // label correctly (Next.js Route Handlers return Response). Falls back
-  // to inspecting the Response object if T extends Response.
+  // to inspecting the Response object if T extends Response. The value is
+  // bucketed by bucketStatus() before it becomes a label.
   statusOf?: (result: T) => number
 ): Promise<T> {
   const m = await initIfNeeded();
@@ -227,21 +238,73 @@ export async function timeHttp<T>(
   try {
     const result = await fn();
     const status = statusOf?.(result) ?? (result instanceof Response ? result.status : 200);
-    end({ status: String(status) });
+    end({ status: bucketStatus(status) });
     return result;
   } catch (e) {
-    end({ status: "500" });
+    // A throw that escapes the handler is a 500 to the client, whatever
+    // Next.js ends up serialising.
+    end({ status: "5xx" });
     throw e;
   } finally {
     m.httpInFlight.dec({ route });
   }
 }
 
+// Normalize whatever a caller hands us into a BOUNDED `code` label value for
+// web_supabase_rpc_errors_total.
+//
+// This exists because the obvious call site is
+//   classify: (r) => ({ status: "error", errorCode: r.error?.message })
+// and a PostgREST error message is free-form, frequently contains the offending
+// value, and is therefore unbounded cardinality on a counter — the classic way
+// to take a Prometheus down. Postgres SQLSTATEs are exactly five characters of
+// [0-9A-Z]; anything that is not one of those (a message, a PostgREST "PGRST116"
+// style code, undefined) collapses to "unknown". The literal "throw" is the one
+// deliberate exception, distinguishing "the call rejected" from "the call
+// resolved with an error payload".
+const SQLSTATE_RE = /^[0-9A-Z]{5}$/;
+
+// The CLOSED set of `rpc` label values. web_supabase_rpc_duration_seconds is an
+// 11-bucket histogram with a status label, so each entry here costs ~26 series
+// per pod; the counter adds a few more. Keeping this a union type rather than
+// `string` means adding a call site is a deliberate edit to this list that a
+// reviewer sees, instead of a label that quietly appears in production.
+//
+// Cap: ~15. If this list wants to grow past that, the answer is almost always a
+// coarser label, not a longer list.
+export const RPC_LABELS = [
+  // SSR boundary — lib/ssrUtils.ts, lib/ssr-course-dashboard.ts. These are the
+  // slowest server-side DB calls in the app and the only substitute signal for
+  // RSC page render cost (there is no seam to time an RSC render; see
+  // lib/routeMetrics.ts).
+  "ssr_user_roles",
+  "ssr_course",
+  "ssr_course_controller",
+  "ssr_assignment_controller",
+  "ssr_dashboard_overview_metrics",
+  "ssr_workflow_statistics",
+  // LTI — lib/lti/grades.ts, lib/lti/roster.ts. Reached from the live
+  // /api/lti/push-grades and /api/lti/sync-roster route handlers.
+  "lti_upsert_line_item",
+  "lti_sis_sync_enrollment"
+] as const;
+
+export type RpcLabel = (typeof RPC_LABELS)[number];
+
+export function normalizeRpcErrorCode(code: unknown): string {
+  if (code === "throw") return "throw";
+  if (typeof code !== "string") return "unknown";
+  return SQLSTATE_RE.test(code) ? code : "unknown";
+}
+
 // Time-a-Supabase-call helper. Use sparingly — wrap the boundary RPCs
-// in TableController, not every read. status is "ok" / "error" / a PG
-// SQLSTATE if you have one.
+// at the SSR entry points, not every read. status is "ok" / "error";
+// errorCode should be a PG SQLSTATE and is normalized either way.
+//
+// The `rpc` label is a HARDCODED short constant per call site, never a value
+// derived from the request. See lib/ssrUtils.ts for the allowlist.
 export async function timeRpc<T>(
-  rpc: string,
+  rpc: RpcLabel,
   fn: () => Promise<T>,
   classify: (result: T) => { status: string; errorCode?: string }
 ): Promise<T> {
@@ -252,13 +315,22 @@ export async function timeRpc<T>(
     const result = await fn();
     const c = classify(result);
     end({ status: c.status });
-    if (c.errorCode) m.rpcErrors.inc({ rpc, code: c.errorCode });
+    if (c.errorCode !== undefined) m.rpcErrors.inc({ rpc, code: normalizeRpcErrorCode(c.errorCode) });
     return result;
   } catch (e) {
     end({ status: "error" });
     m.rpcErrors.inc({ rpc, code: "throw" });
     throw e;
   }
+}
+
+// Convenience classifier for the overwhelmingly common shape: a Supabase
+// PostgrestResponse-like `{ error }`. Keeps every call site from re-deriving
+// the same three lines (and from reaching for error.message).
+export function classifySupabase(result: unknown): { status: string; errorCode?: string } {
+  const error = (result as { error?: { code?: string | null } | null } | null | undefined)?.error;
+  if (!error) return { status: "ok" };
+  return { status: "error", errorCode: error.code ?? "unknown" };
 }
 
 // Refresh the workflow gauges from public.workflow_runs and
