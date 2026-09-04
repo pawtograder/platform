@@ -678,9 +678,7 @@ labels, and independently generated `class_id`s, from different environments int
 one graph that read as production. A `$namespace` variable was added on the same
 pattern (Prometheus datasource, `label_values(kube_pod_info, namespace)`, regex
 `pawtograder.*`, `includeAll` with `All` as the default) and applied to **all 30
-targets** — both the `web_*` families and the postgres_exporter `pawtograder_*`
-ones, since both are ServiceMonitor-scraped and both carry the label.
-`$class_id` is now derived from the namespace-scoped series so the class list
+targets** — both the `web_*` families and the postgres*exporter `pawtograder*\*`ones, since both are ServiceMonitor-scraped and both carry the label.`$class_id` is now derived from the namespace-scoped series so the class list
 follows the selection.
 
 **Revised after review (C5): panel 11 honours `$fn` again.** Neither side of the
