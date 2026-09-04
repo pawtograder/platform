@@ -173,7 +173,15 @@ Populates the 9 workflow panels on `app-business`.
   reconciles.
   **Stage 1** turns the outgoing mechanism off and deploys — which needs
   `monitoring.allowMissingWorkflowMetrics: true` for that one deploy, since rule
-  4 now applies at any replica count. **Stage 2** enables the incoming one. Stage
+  4 now applies at any replica count. **Stage 2** enables the incoming one **and
+  sets `allowMissingWorkflowMetrics` back to `false` in the same commit.**
+  Leaving the bypass on is not cosmetic: it is the acknowledgement that rule 4
+  exists to force, so a later change that disables both leaders would render
+  cleanly and the workflow dashboards would go quiet with nothing objecting —
+  the precise silent-blindness failure this whole workstream was opened to fix.
+  Treat the bypass as scoped to the single Stage 1 deploy, and check it is back
+  to `false` as part of Stage 2's acceptance.
+  Stage
   1 leaves a window with no leader and empty panels, which is the correct
   direction to fail: under-reporting reads as an outage, whereas a 2x
   over-report reads as a real traffic spike and sends someone hunting an event
