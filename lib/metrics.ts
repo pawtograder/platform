@@ -29,10 +29,17 @@ type MetricsBundle = {
   workflowErrorsRecent: Gauge<string>; // labels: class_id, category, window
   workflowRefreshDuration: Histogram<string>; // observed when refresh runs
   workflowRefreshErrors: Counter<string>;
-  // Unix seconds of the last fully successful refresh. Emitted unconditionally
-  // once a refresh has succeeded, INCLUDING when every aggregate returned zero
-  // rows — that is the point. See the alerting note at refreshWorkflowMetrics().
-  workflowRefreshLastSuccess: Gauge<string>;
+  // Unix seconds of the last fully successful refresh, INCLUDING one where
+  // every aggregate returned zero rows — that is the point. See the alerting
+  // note at refreshWorkflowMetrics().
+  //
+  // Registered ONLY on a leader process. An unlabelled prom-client gauge is
+  // initialized to 0 and exported the moment it is registered, before any
+  // .set(), so registering it everywhere would make every ordinary web pod
+  // export `web_workflow_metrics_last_success_timestamp_seconds 0` and
+  // absent() could never fire — the alert would be permanently silent exactly
+  // when the leader is broken. See isWorkflowRefreshLeader().
+  workflowRefreshLastSuccess?: Gauge<string>;
 
   // Epoch-ms of the last SUCCESSFUL refreshWorkflowMetrics() pass. 0 means
   // "never refreshed", so the first call always runs. See the throttle at the
@@ -64,6 +71,13 @@ const g = globalThis as GlobalWithMetrics;
 
 function isNode(): boolean {
   return process.env.NEXT_RUNTIME === "nodejs" || typeof process.env.NEXT_RUNTIME === "undefined";
+}
+
+// Whether THIS process is the one that refreshes the DB-backed workflow gauges.
+// Exported so app/api/metrics/route.ts and the registry agree on one definition
+// rather than each spelling out the env var.
+export function isWorkflowRefreshLeader(): boolean {
+  return process.env.METRICS_WORKFLOW_REFRESH_LEADER === "true";
 }
 
 async function initIfNeeded(): Promise<MetricsBundle | null> {
@@ -189,11 +203,19 @@ async function buildBundle(): Promise<MetricsBundle> {
     registers: [registry]
   });
 
-  const workflowRefreshLastSuccess = new promClient.Gauge({
-    name: "web_workflow_metrics_last_success_timestamp_seconds",
-    help: "Unix time of the last fully successful workflow-metrics refresh. Emitted even when every aggregate returns zero rows, so absence means the producer is broken rather than idle.",
-    registers: [registry]
-  });
+  // Leader-only, and the conditional is load-bearing — see the field comment on
+  // MetricsBundle. The env var is the SAME one app/api/metrics/route.ts gates
+  // refreshWorkflowMetrics() on, so a process that would never refresh also
+  // never claims to have refreshed. It is read once, here, because the registry
+  // is built once per process and the variable is fixed for a pod's lifetime
+  // (instrumentation.ts warms this at boot).
+  const workflowRefreshLastSuccess = isWorkflowRefreshLeader()
+    ? new promClient.Gauge({
+        name: "web_workflow_metrics_last_success_timestamp_seconds",
+        help: "Unix time of the last fully successful workflow-metrics refresh. Emitted even when every aggregate returns zero rows, so absence means the producer is broken rather than idle. Exported only by the metrics-leader process.",
+        registers: [registry]
+      })
+    : undefined;
 
   const workflowRefreshDuration = new promClient.Histogram({
     name: "web_workflow_metrics_refresh_seconds",
@@ -616,7 +638,10 @@ async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
       // running or not being scraped", which is the condition worth alerting on.
       // See PawtograderWorkflowMetricsStale in
       // charts/pawtograder/templates/prometheus-rules.yaml.
-      m.workflowRefreshLastSuccess.set(Date.now() / 1000);
+      // Optional: undefined on a non-leader process, which cannot reach this
+      // path through /api/metrics anyway (the route gates the whole refresh on
+      // the same variable).
+      m.workflowRefreshLastSuccess?.set(Date.now() / 1000);
     }
   }
 }

@@ -632,12 +632,29 @@ spec:
               being wrong, or the queries timing out (check the
               idx_workflow_runs_completed_at / idx_workflow_runs_in_progress_at
               indexes exist).
-{{- if .Values.web.metricsLeader.enabled }}
+{{- if or .Values.web.metricsLeader.enabled .Values.web.workflowMetricsLeader }}
+{{- $leaderKind := ternary "the dedicated metrics-leader Deployment (web.metricsLeader.enabled)" "the web Deployment itself (web.workflowMetricsLeader, single-replica mode)" .Values.web.metricsLeader.enabled }}
+{{- $leaderPod := ternary (include "pawtograder.componentName" (dict "ctx" . "component" "metrics-leader")) (include "pawtograder.componentName" (dict "ctx" . "component" "web")) .Values.web.metricsLeader.enabled }}
         # The leader is not exporting AT ALL. Distinct from the rule above: that
         # one fires when refreshes fail, this one fires when nothing is scraping
         # the leader (Service selector wrong, ServiceMonitor not discovered or
         # disabled via monitoring.serviceMonitors.metricsLeader, METRICS_SCRAPE_TOKEN
         # absent so /api/metrics 503s, or the leader pod is down).
+        #
+        # Rendered for EITHER leader mechanism. It previously rendered only for
+        # the dedicated Deployment, which left the supported single-replica mode
+        # (web.workflowMetricsLeader=true) with no absence coverage at all: if
+        # that web target is not scraped, its token is missing, or the pod is
+        # down, web_workflow_metrics_refresh_errors_total is absent too, so the
+        # other rule in this group cannot fire either and the outage is
+        # completely silent. $leaderKind above puts the mechanism actually in
+        # play into the annotation, because the remedy differs.
+        #
+        # The sentinel is registered ONLY on a process holding
+        # METRICS_WORKFLOW_REFRESH_LEADER (lib/metrics.ts), which is what keeps
+        # absent() meaningful: an unlabelled prom-client gauge is exported as 0
+        # the moment it is registered, so registering it on every web pod would
+        # make this expression permanently false.
         #
         # NOT absent(web_workflow_runs_recent). That gauge only has samples once
         # a class has completed a workflow run inside the window: a prom-client
@@ -664,17 +681,18 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "Pawtograder workflow metrics producer absent while the metrics leader is enabled"
+            summary: "Pawtograder workflow metrics producer absent while a metrics leader is enabled"
             description: >-
-              web.metricsLeader.enabled is true in {{ $ns }} but
+              The workflow-metrics leader in {{ $ns }} is {{ $leaderKind }}, but
               web_workflow_metrics_last_success_timestamp_seconds has had no samples for
               {{ .Values.monitoring.prometheusRules.workflowMetricsAbsentFor | default "30m" }}.
               That series is emitted on every successful refresh even when there
-              were no workflow runs, so this is a producer failure, not a quiet
-              window. The nine workflow panels on app-business are empty. Check that the
-              {{ include "pawtograder.componentName" (dict "ctx" . "component" "metrics-leader") }}
-              pod is running, that monitoring.serviceMonitors.metricsLeader is not
-              disabled and its ServiceMonitor was discovered, and that
+              were no workflow runs, and only by the leader process, so this is a
+              producer failure and not a quiet window. The nine workflow panels on
+              app-business are empty. Check that the {{ $leaderPod }} pod is running,
+              that its ServiceMonitor was discovered
+              {{- if .Values.web.metricsLeader.enabled }} (and that
+              monitoring.serviceMonitors.metricsLeader is not disabled){{- end }}, and that
               METRICS_SCRAPE_TOKEN is present in the {{ .Values.secrets.names.jwt }}
               Secret (/api/metrics returns 503 without it).
 {{- end }}

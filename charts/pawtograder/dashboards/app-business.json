@@ -1,6 +1,6 @@
 {
   "uid": "pawtograder-app-business",
-  "title": "Pawtograder \u00b7 App Business Metrics",
+  "title": "Pawtograder · App Business Metrics",
   "tags": [
     "pawtograder",
     "business"
@@ -26,13 +26,34 @@
         "regex": ""
       },
       {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(kube_pod_info, namespace)",
+        "regex": "pawtograder.*",
+        "refresh": 1,
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "includeAll": true,
+        "multi": false,
+        "sort": 1,
+        "description": "Scopes every panel on this dashboard. Both families here are scraped through ServiceMonitors (pawtograder_* from the postgres_exporter sidecar, web_* from the web pods and the metrics leader at /api/metrics), and prometheus-operator-style discovery sets namespace from __meta_kubernetes_namespace on every target; none of the chart's ServiceMonitors override the relabeling. Without this, a Grafana whose datasource covers several deployments (previews are exactly that shape - see charts/pawtograder/examples/values-preview.yaml) merged identically named routes and rpc labels, and independently generated class_ids, from different environments into one graph that looked like production. The regex bound is what makes the All default safe. $class_id is derived from the namespace-scoped series so the class list follows the selection."
+      },
+      {
         "name": "class_id",
         "type": "query",
         "datasource": {
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "query": "label_values(pawtograder_active_submissions_active_count, class_id)",
+        "query": "label_values(pawtograder_active_submissions_active_count{namespace=~\"$namespace\"}, class_id)",
         "refresh": 1,
         "current": {
           "selected": false,
@@ -62,7 +83,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "pawtograder_classes_real_classes"
+          "expr": "pawtograder_classes_real_classes{namespace=~\"$namespace\"}"
         }
       ],
       "fieldConfig": {
@@ -88,7 +109,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(pawtograder_active_submissions_active_count{class_id=~\"$class_id\"})"
+          "expr": "sum(pawtograder_active_submissions_active_count{namespace=~\"$namespace\", class_id=~\"$class_id\"})"
         }
       ],
       "fieldConfig": {
@@ -101,7 +122,7 @@
       "id": 3,
       "type": "stat",
       "title": "Submissions created (1h)",
-      "description": "pawtograder_submissions_created_total, from the postgres_exporter custom query in charts/pawtograder/templates/monitoring.yaml. Was web_submission_created_total, which never emitted: submissions are created by the autograder-create-submission edge function and by the browser talking to PostgREST, so the web tier never observes one.",
+      "description": "pawtograder_submissions_created_total{namespace=~\"$namespace\"}, from the postgres_exporter custom query in charts/pawtograder/templates/monitoring.yaml. Was web_submission_created_total, which never emitted: submissions are created by the autograder-create-submission edge function and by the browser talking to PostgREST, so the web tier never observes one.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -115,7 +136,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(pawtograder_submissions_created_total{class_id=~\"$class_id\"}[1h]))"
+          "expr": "sum(increase(pawtograder_submissions_created_total{namespace=~\"$namespace\", class_id=~\"$class_id\"}[1h]))"
         }
       ],
       "fieldConfig": {
@@ -128,7 +149,7 @@
       "id": 4,
       "type": "stat",
       "title": "Grading actions (1h)",
-      "description": "pawtograder_grading_actions_total, from the postgres_exporter custom query in charts/pawtograder/templates/monitoring.yaml. Was web_grading_action_total, which never emitted: grading comments are written through a browser Supabase client in lib/TableController.ts. Sums across all three kinds; safe to do so because every kind is now a trigger-maintained event counter that never decreases (see supabase/migrations/20260904140000_grading_action_counters.sql). The earlier COUNT(*) form fell on assignment deletion and on a bulk unrelease, which Prometheus read as a counter reset and increase() rendered as a phantom burst on this stat too, not just on the by-kind panel.",
+      "description": "pawtograder_grading_actions_total{namespace=~\"$namespace\"}, from the postgres_exporter custom query in charts/pawtograder/templates/monitoring.yaml. Was web_grading_action_total, which never emitted: grading comments are written through a browser Supabase client in lib/TableController.ts. Sums across all three kinds; safe to do so because every kind is now a trigger-maintained event counter that never decreases (see supabase/migrations/20260904140000_grading_action_counters.sql). The earlier COUNT(*) form fell on assignment deletion and on a bulk unrelease, which Prometheus read as a counter reset and increase() rendered as a phantom burst on this stat too, not just on the by-kind panel.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -142,7 +163,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(pawtograder_grading_actions_total{class_id=~\"$class_id\"}[1h]))"
+          "expr": "sum(increase(pawtograder_grading_actions_total{namespace=~\"$namespace\", class_id=~\"$class_id\"}[1h]))"
         }
       ],
       "fieldConfig": {
@@ -168,7 +189,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(pawtograder_help_queue_depth_open_count{class_id=~\"$class_id\"})"
+          "expr": "sum(pawtograder_help_queue_depth_open_count{namespace=~\"$namespace\", class_id=~\"$class_id\"})"
         }
       ],
       "fieldConfig": {
@@ -211,7 +232,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(pawtograder_help_queue_depth_in_progress_count{class_id=~\"$class_id\"})"
+          "expr": "sum(pawtograder_help_queue_depth_in_progress_count{namespace=~\"$namespace\", class_id=~\"$class_id\"})"
         }
       ],
       "fieldConfig": {
@@ -224,7 +245,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Submissions created / minute (by class)",
-      "description": "pawtograder_submissions_created_total reads class_metrics_totals.submissions_total, a trigger-maintained insert counter, so it is uncached and monotonic. THE [5m] WINDOW IS DELIBERATE \u2014 do not shorten it. The exporter is scraped every 30s, so a [1m] window holds exactly two samples and one missed scrape blanks the panel. * 60 converts per-second back to per-minute.",
+      "description": "pawtograder_submissions_created_total{namespace=~\"$namespace\"} reads class_metrics_totals.submissions_total, a trigger-maintained insert counter, so it is uncached and monotonic. THE [5m] WINDOW IS DELIBERATE — do not shorten it. The exporter is scraped every 30s, so a [1m] window holds exactly two samples and one missed scrape blanks the panel. * 60 converts per-second back to per-minute.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -239,7 +260,7 @@
         {
           "refId": "A",
           "legendFormat": "class {{class_id}}",
-          "expr": "sum by(class_id)(rate(pawtograder_submissions_created_total{class_id=~\"$class_id\"}[5m])) * 60"
+          "expr": "sum by(class_id)(rate(pawtograder_submissions_created_total{namespace=~\"$namespace\", class_id=~\"$class_id\"}[5m])) * 60"
         }
       ],
       "fieldConfig": {
@@ -252,7 +273,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Grading actions / minute (by kind)",
-      "description": "kind is comment (free-text), rubric_check (comment carrying a rubric_check_id) or release (a submission_reviews release event). All three come from trigger-maintained counter columns on class_metrics_totals and count ACTIONS, not surviving rows: a retracted comment, a deleted assignment and a bulk unrelease all leave the counter where it was, so none of them reads as a counter reset. THE [5m] WINDOW IS DELIBERATE \u2014 do not shorten it. The exporter is scraped every 30s, so a [1m] window holds exactly two samples and one missed scrape blanks the panel. * 60 converts per-second back to per-minute.",
+      "description": "kind is comment (free-text), rubric_check (comment carrying a rubric_check_id) or release (a submission_reviews release event). All three come from trigger-maintained counter columns on class_metrics_totals and count ACTIONS, not surviving rows: a retracted comment, a deleted assignment and a bulk unrelease all leave the counter where it was, so none of them reads as a counter reset. THE [5m] WINDOW IS DELIBERATE — do not shorten it. The exporter is scraped every 30s, so a [1m] window holds exactly two samples and one missed scrape blanks the panel. * 60 converts per-second back to per-minute.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -267,7 +288,7 @@
         {
           "refId": "A",
           "legendFormat": "{{kind}}",
-          "expr": "sum by(kind)(rate(pawtograder_grading_actions_total{class_id=~\"$class_id\"}[5m])) * 60"
+          "expr": "sum by(kind)(rate(pawtograder_grading_actions_total{namespace=~\"$namespace\", class_id=~\"$class_id\"}[5m])) * 60"
         }
       ],
       "fieldConfig": {
@@ -294,7 +315,7 @@
         {
           "refId": "A",
           "legendFormat": "class {{class_id}}",
-          "expr": "pawtograder_active_submissions_active_count{class_id=~\"$class_id\"}"
+          "expr": "pawtograder_active_submissions_active_count{namespace=~\"$namespace\", class_id=~\"$class_id\"}"
         }
       ]
     },
@@ -316,12 +337,12 @@
         {
           "refId": "open",
           "legendFormat": "open class {{class_id}}",
-          "expr": "pawtograder_help_queue_depth_open_count{class_id=~\"$class_id\"}"
+          "expr": "pawtograder_help_queue_depth_open_count{namespace=~\"$namespace\", class_id=~\"$class_id\"}"
         },
         {
           "refId": "ip",
           "legendFormat": "in-progress class {{class_id}}",
-          "expr": "pawtograder_help_queue_depth_in_progress_count{class_id=~\"$class_id\"}"
+          "expr": "pawtograder_help_queue_depth_in_progress_count{namespace=~\"$namespace\", class_id=~\"$class_id\"}"
         }
       ]
     },
@@ -329,7 +350,7 @@
       "id": 30,
       "type": "table",
       "title": "Top classes by recent activity (1h)",
-      "description": "sum by(class_id) is applied to each metric BEFORE the addition. Adding the raw increase() vectors does not work: pawtograder_grading_actions_total carries a kind label that pawtograder_submissions_created_total does not, so PromQL finds no matching label sets and the panel returns empty. Both exporter queries are driven off public.classes so every class emits a zero-filled series on both sides and no class drops out of the sum.",
+      "description": "sum by(class_id) is applied to each metric BEFORE the addition. Adding the raw increase() vectors does not work: pawtograder_grading_actions_total{namespace=~\"$namespace\"} carries a kind label that pawtograder_submissions_created_total{namespace=~\"$namespace\"} does not, so PromQL finds no matching label sets and the panel returns empty. Both exporter queries are driven off public.classes so every class emits a zero-filled series on both sides and no class drops out of the sum.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -345,7 +366,7 @@
           "refId": "A",
           "format": "table",
           "instant": true,
-          "expr": "topk(20, sum by(class_id)(increase(pawtograder_submissions_created_total[1h])) + sum by(class_id)(increase(pawtograder_grading_actions_total[1h])))"
+          "expr": "topk(20, sum by(class_id)(increase(pawtograder_submissions_created_total{namespace=~\"$namespace\"}[1h])) + sum by(class_id)(increase(pawtograder_grading_actions_total{namespace=~\"$namespace\"}[1h])))"
         }
       ]
     },
@@ -378,7 +399,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(web_workflow_runs_recent{class_id=~\"$class_id\", window=\"1h\"})"
+          "expr": "sum(web_workflow_runs_recent{namespace=~\"$namespace\", class_id=~\"$class_id\", window=\"1h\"})"
         }
       ],
       "fieldConfig": {
@@ -404,7 +425,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(web_workflow_runs_recent{class_id=~\"$class_id\", conclusion!~\"success|skipped\", window=\"1h\"}) / clamp_min(sum(web_workflow_runs_recent{class_id=~\"$class_id\", window=\"1h\"}), 1)"
+          "expr": "sum(web_workflow_runs_recent{namespace=~\"$namespace\", class_id=~\"$class_id\", conclusion!~\"success|skipped\", window=\"1h\"}) / clamp_min(sum(web_workflow_runs_recent{namespace=~\"$namespace\", class_id=~\"$class_id\", window=\"1h\"}), 1)"
         }
       ],
       "fieldConfig": {
@@ -447,7 +468,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(web_workflow_queue_seconds{class_id=~\"$class_id\", quantile=\"0.95\"})"
+          "expr": "max(web_workflow_queue_seconds{namespace=~\"$namespace\", class_id=~\"$class_id\", quantile=\"0.95\"})"
         }
       ],
       "fieldConfig": {
@@ -490,7 +511,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(web_workflow_run_seconds{class_id=~\"$class_id\", quantile=\"0.95\"})"
+          "expr": "max(web_workflow_run_seconds{namespace=~\"$namespace\", class_id=~\"$class_id\", quantile=\"0.95\"})"
         }
       ],
       "fieldConfig": {
@@ -535,7 +556,7 @@
         {
           "refId": "A",
           "legendFormat": "{{conclusion}}",
-          "expr": "sum by(conclusion)(web_workflow_runs_recent{class_id=~\"$class_id\", window=\"1h\"})"
+          "expr": "sum by(conclusion)(web_workflow_runs_recent{namespace=~\"$namespace\", class_id=~\"$class_id\", window=\"1h\"})"
         }
       ],
       "fieldConfig": {
@@ -562,7 +583,7 @@
         {
           "refId": "A",
           "legendFormat": "class {{class_id}}",
-          "expr": "sum by(class_id)(web_workflow_runs_recent{class_id=~\"$class_id\", conclusion!~\"success|skipped\", window=\"1h\"}) / clamp_min(sum by(class_id)(web_workflow_runs_recent{class_id=~\"$class_id\", window=\"1h\"}), 1)"
+          "expr": "sum by(class_id)(web_workflow_runs_recent{namespace=~\"$namespace\", class_id=~\"$class_id\", conclusion!~\"success|skipped\", window=\"1h\"}) / clamp_min(sum by(class_id)(web_workflow_runs_recent{namespace=~\"$namespace\", class_id=~\"$class_id\", window=\"1h\"}), 1)"
         }
       ],
       "fieldConfig": {
@@ -609,17 +630,17 @@
         {
           "refId": "p50",
           "legendFormat": "p50 class {{class_id}}",
-          "expr": "web_workflow_queue_seconds{class_id=~\"$class_id\", quantile=\"0.5\"}"
+          "expr": "web_workflow_queue_seconds{namespace=~\"$namespace\", class_id=~\"$class_id\", quantile=\"0.5\"}"
         },
         {
           "refId": "p95",
           "legendFormat": "p95 class {{class_id}}",
-          "expr": "web_workflow_queue_seconds{class_id=~\"$class_id\", quantile=\"0.95\"}"
+          "expr": "web_workflow_queue_seconds{namespace=~\"$namespace\", class_id=~\"$class_id\", quantile=\"0.95\"}"
         },
         {
           "refId": "p99",
           "legendFormat": "p99 class {{class_id}}",
-          "expr": "web_workflow_queue_seconds{class_id=~\"$class_id\", quantile=\"0.99\"}"
+          "expr": "web_workflow_queue_seconds{namespace=~\"$namespace\", class_id=~\"$class_id\", quantile=\"0.99\"}"
         }
       ],
       "fieldConfig": {
@@ -633,7 +654,7 @@
       "id": 61,
       "type": "timeseries",
       "title": "Workflow run duration (P50/P95) by class",
-      "description": "Time from in_progress_at to completed_at \u2014 actual grader execution.",
+      "description": "Time from in_progress_at to completed_at — actual grader execution.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -648,12 +669,12 @@
         {
           "refId": "p50",
           "legendFormat": "p50 class {{class_id}}",
-          "expr": "web_workflow_run_seconds{class_id=~\"$class_id\", quantile=\"0.5\"}"
+          "expr": "web_workflow_run_seconds{namespace=~\"$namespace\", class_id=~\"$class_id\", quantile=\"0.5\"}"
         },
         {
           "refId": "p95",
           "legendFormat": "p95 class {{class_id}}",
-          "expr": "web_workflow_run_seconds{class_id=~\"$class_id\", quantile=\"0.95\"}"
+          "expr": "web_workflow_run_seconds{namespace=~\"$namespace\", class_id=~\"$class_id\", quantile=\"0.95\"}"
         }
       ],
       "fieldConfig": {
@@ -667,7 +688,7 @@
       "id": 70,
       "type": "table",
       "title": "Workflow errors by category in the last 1h",
-      "description": "web_workflow_errors_recent, grouped by a CLOSED error category, not by workflow_run_error.name. The name column is the student-visible sentence \u2014 free text capped only at 500 characters, and several producers embed a commit sha in it \u2014 so as a Prometheus label it minted a new series per distinct message and Prometheus keeps every series it has ever seen. The categories come from workflow_run_error.data (error_type / type) via metrics_workflow_errors_by_category and can only be file_too_large, submission_too_large, empty_submission, after_due_date, missing_grader_result, grader or other. For the actual messages, use the instructor Workflow Errors page or query workflow_run_error directly \u2014 the detail is in the database and the logs, deliberately not in a label.",
+      "description": "web_workflow_errors_recent{namespace=~\"$namespace\"}, grouped by a CLOSED error category, not by workflow_run_error.name. The name column is the student-visible sentence — free text capped only at 500 characters, and several producers embed a commit sha in it — so as a Prometheus label it minted a new series per distinct message and Prometheus keeps every series it has ever seen. The categories come from workflow_run_error.data (error_type / type) via metrics_workflow_errors_by_category and can only be file_too_large, submission_too_large, empty_submission, after_due_date, missing_grader_result, grader or other. For the actual messages, use the instructor Workflow Errors page or query workflow_run_error directly — the detail is in the database and the logs, deliberately not in a label.",
       "gridPos": {
         "h": 9,
         "w": 24,
@@ -683,7 +704,7 @@
           "refId": "A",
           "format": "table",
           "instant": true,
-          "expr": "topk(15, web_workflow_errors_recent{class_id=~\"$class_id\", window=\"1h\"})"
+          "expr": "topk(15, web_workflow_errors_recent{namespace=~\"$namespace\", class_id=~\"$class_id\", window=\"1h\"})"
         }
       ]
     },
@@ -691,7 +712,7 @@
       "id": 80,
       "type": "row",
       "title": "Web tier (Next.js server)",
-      "description": "Produced by prom-client inside the pawtograder-web pods and scraped from /api/metrics \u2014 the same target as the workflow row above, which is why these live here rather than on their own dashboard. NONE of these panels honour $class_id: the route and rpc labels are hardcoded patterns with no class dimension, deliberately, because a per-course label on a 12-bucket histogram is unbounded cardinality driven by a public URL. Everything is summed across pods; break out by pod in Explore if you suspect one replica.",
+      "description": "Produced by prom-client inside the pawtograder-web pods and scraped from /api/metrics — the same target as the workflow row above, which is why these live here rather than on their own dashboard. NONE of these panels honour $class_id: the route and rpc labels are hardcoded patterns with no class dimension, deliberately, because a per-course label on a 12-bucket histogram is unbounded cardinality driven by a public URL. Everything is summed across pods; break out by pod in Explore if you suspect one replica.",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -704,7 +725,7 @@
       "id": 81,
       "type": "timeseries",
       "title": "SSR Supabase RPC p95 (by rpc)",
-      "description": "95th percentile of the server-side Supabase calls wrapped by timeRpc (lib/ssrUtils.ts, lib/ssr-course-dashboard.ts, lib/lti/*). This is the closest thing to \"how slow is an RSC page render\" that exists: RSC renders themselves have no instrumentation seam short of middleware, and middleware is the Edge runtime where prom-client does not run. Expect this to be SPARSE \u2014 most business reads in this app go browser to PostgREST and never touch the server.",
+      "description": "95th percentile of the server-side Supabase calls wrapped by timeRpc (lib/ssrUtils.ts, lib/ssr-course-dashboard.ts, lib/lti/*). This is the closest thing to \"how slow is an RSC page render\" that exists: RSC renders themselves have no instrumentation seam short of middleware, and middleware is the Edge runtime where prom-client does not run. Expect this to be SPARSE — most business reads in this app go browser to PostgREST and never touch the server.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -719,7 +740,7 @@
         {
           "refId": "A",
           "legendFormat": "{{rpc}}",
-          "expr": "histogram_quantile(0.95, sum by(le,rpc)(rate(web_supabase_rpc_duration_seconds_bucket[5m])))"
+          "expr": "histogram_quantile(0.95, sum by(le,rpc)(rate(web_supabase_rpc_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))"
         }
       ],
       "fieldConfig": {
@@ -747,7 +768,7 @@
         {
           "refId": "A",
           "legendFormat": "{{rpc}} / {{code}}",
-          "expr": "sum by(rpc,code)(rate(web_supabase_rpc_errors_total[5m]))"
+          "expr": "sum by(rpc,code)(rate(web_supabase_rpc_errors_total{namespace=~\"$namespace\"}[5m]))"
         }
       ],
       "fieldConfig": {
@@ -760,7 +781,7 @@
       "id": 83,
       "type": "timeseries",
       "title": "API route p95 latency (by route)",
-      "description": "95th percentile per route handler under app/api. route is the literal parameterized App Router pattern hardcoded per file (e.g. /api/calendar/[course_id]) \u2014 never the request path. /api/tunnel (Sentry, high volume, no diagnostic value) and /api/metrics (the self-scrape) are deliberately not instrumented.",
+      "description": "95th percentile per route handler under app/api. route is the literal parameterized App Router pattern hardcoded per file (e.g. /api/calendar/[course_id]) — never the request path. /api/tunnel (Sentry, high volume, no diagnostic value) and /api/metrics (the self-scrape) are deliberately not instrumented.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -775,7 +796,7 @@
         {
           "refId": "A",
           "legendFormat": "{{route}}",
-          "expr": "histogram_quantile(0.95, sum by(le,route)(rate(web_http_request_duration_seconds_bucket[5m])))"
+          "expr": "histogram_quantile(0.95, sum by(le,route)(rate(web_http_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))"
         }
       ],
       "fieldConfig": {
@@ -803,7 +824,7 @@
         {
           "refId": "A",
           "legendFormat": "{{route}} {{status}}",
-          "expr": "sum by(route,status)(rate(web_http_request_duration_seconds_count[5m]))"
+          "expr": "sum by(route,status)(rate(web_http_request_duration_seconds_count{namespace=~\"$namespace\"}[5m]))"
         }
       ],
       "fieldConfig": {
@@ -831,7 +852,7 @@
         {
           "refId": "A",
           "legendFormat": "{{route}}",
-          "expr": "sum by(route)(rate(web_http_request_duration_seconds_count{status=\"5xx\"}[5m]))"
+          "expr": "sum by(route)(rate(web_http_request_duration_seconds_count{namespace=~\"$namespace\", status=\"5xx\"}[5m]))"
         }
       ],
       "fieldConfig": {
@@ -844,7 +865,7 @@
       "id": 86,
       "type": "timeseries",
       "title": "API requests in flight (by route)",
-      "description": "web_http_in_flight_requests summed across web pods. A route that climbs and does not come back down is a handler that is not completing \u2014 the long-running ones here are /api/lti/push-grades and /api/lti/sync-roster (maxDuration 300) and /api/llm-hint.",
+      "description": "web_http_in_flight_requests{namespace=~\"$namespace\"} summed across web pods. A route that climbs and does not come back down is a handler that is not completing — the long-running ones here are /api/lti/push-grades and /api/lti/sync-roster (maxDuration 300) and /api/llm-hint.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -859,7 +880,7 @@
         {
           "refId": "A",
           "legendFormat": "{{route}}",
-          "expr": "sum by(route)(web_http_in_flight_requests)"
+          "expr": "sum by(route)(web_http_in_flight_requests{namespace=~\"$namespace\"})"
         }
       ],
       "fieldConfig": {
@@ -869,5 +890,5 @@
       }
     }
   ],
-  "description": "Autograder workflow panels (runs, queue latency, workflow_run_error counts) are DB-backed and are refreshed only by a web pod running with METRICS_WORKFLOW_REFRESH_LEADER set (web.workflowMetricsLeader, which requires web.replicas=1). Without a leader anywhere in the deploy these panels are instrumented, scraped, and permanently empty \u2014 which reads as 'no workflow activity' rather than 'not being collected'."
+  "description": "Autograder workflow panels (runs, queue latency, workflow_run_error counts) are DB-backed and are refreshed only by a web pod running with METRICS_WORKFLOW_REFRESH_LEADER set (web.workflowMetricsLeader, which requires web.replicas=1). Without a leader anywhere in the deploy these panels are instrumented, scraped, and permanently empty — which reads as 'no workflow activity' rather than 'not being collected'."
 }

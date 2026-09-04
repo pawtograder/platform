@@ -218,7 +218,7 @@
         {
           "refId": "A",
           "legendFormat": "{{function}}",
-          "expr": "sum by(function)(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\"}[1m]))"
+          "expr": "sum by(function)(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\"}[1m]))"
         }
       ],
       "fieldConfig": {
@@ -245,12 +245,12 @@
         {
           "refId": "mean",
           "legendFormat": "mean {{function}}",
-          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\"}[5m])) / clamp_min(sum by(function)(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\"}[5m])), 0.001)"
+          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m])) / clamp_min(sum by(function)(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m])), 0.001)"
         },
         {
           "refId": "spent",
           "legendFormat": "time spent {{function}}",
-          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\"}[5m]))"
+          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m]))"
         }
       ],
       "fieldConfig": {
@@ -312,7 +312,7 @@
           "refId": "A",
           "format": "table",
           "instant": true,
-          "expr": "topk(15, sum by(function, status)(increase(pawtograder_edge_requests_total{namespace=~\"$namespace\", status=~\"4..|5..\"}[1h])))"
+          "expr": "topk(15, sum by(function, status)(increase(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\", status=~\"4..|5..\"}[1h])))"
         }
       ]
     },

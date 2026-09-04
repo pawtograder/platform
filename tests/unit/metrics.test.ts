@@ -21,6 +21,13 @@
  *   6. a FAILED pass still clears the in-flight promise, so one rejection does
  *      not wedge every future refresh.
  *
+ * A separate block covers the refresh-success sentinel. An unlabelled
+ * prom-client gauge is exported as 0 the moment it is REGISTERED, before any
+ * .set(), so registering it on every web pod would make
+ * absent(web_workflow_metrics_last_success_timestamp_seconds) permanently false
+ * — the alert would be silent exactly when the leader is broken. It is
+ * therefore registered only when METRICS_WORKFLOW_REFRESH_LEADER=true.
+ *
  * The Supabase admin client is mocked at the module boundary so no test here
  * touches a database.
  */
@@ -30,6 +37,8 @@ const rpc = jest.fn();
 jest.mock("@/utils/supabase/client", () => ({
   createAdminClient: () => ({ rpc })
 }));
+
+const SENTINEL = "web_workflow_metrics_last_success_timestamp_seconds";
 
 type GlobalWithMetrics = typeof globalThis & {
   __pawtograderMetrics?: { lastWorkflowRefreshMs: number; workflowRefreshInFlight?: Promise<void> };
@@ -212,5 +221,96 @@ describe("refreshWorkflowMetrics throttle", () => {
     jest.setSystemTime(Date.now() + 299_000);
     await again.refreshWorkflowMetrics();
     expect(rpc.mock.calls.length).toBe(n);
+  });
+});
+
+describe("web_workflow_metrics_last_success_timestamp_seconds", () => {
+  const OLD_INTERVAL = process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS;
+  const OLD_LEADER = process.env.METRICS_WORKFLOW_REFRESH_LEADER;
+
+  beforeEach(() => {
+    rpc.mockReset();
+    rpcSucceeds();
+    delete (globalThis as GlobalWithMetrics).__pawtograderMetrics;
+    process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS = "0";
+  });
+
+  afterEach(() => {
+    if (OLD_INTERVAL === undefined) {
+      delete process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS;
+    } else {
+      process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS = OLD_INTERVAL;
+    }
+    if (OLD_LEADER === undefined) {
+      delete process.env.METRICS_WORKFLOW_REFRESH_LEADER;
+    } else {
+      process.env.METRICS_WORKFLOW_REFRESH_LEADER = OLD_LEADER;
+    }
+  });
+
+  // Render one metric rather than registry.metrics(): the registry also carries
+  // collectDefaultMetrics(), and its event-loop-lag collector needs
+  // setImmediate, which the jsdom test environment does not provide.
+  async function renderSentinel(mod: typeof import("@/lib/metrics")) {
+    const registry = (await mod.getMetrics())!.registry;
+    if (!registry.getSingleMetric(SENTINEL)) return null;
+    return await registry.getSingleMetricAsString(SENTINEL);
+  }
+
+  function sampleValue(rendered: string): number {
+    const line = rendered.split("\n").find((l) => l.startsWith(`${SENTINEL} `));
+    expect(line).toBeDefined();
+    return Number(line!.split(" ")[1]);
+  }
+
+  it("is not registered at all by a non-leader process", async () => {
+    delete process.env.METRICS_WORKFLOW_REFRESH_LEADER;
+    const mod = await loadMetrics();
+
+    // Even after a successful refresh. A non-leader never reaches the refresh
+    // through /api/metrics, but it must not be able to poison the series if it
+    // did — and, more to the point, the failure mode needs no refresh at all:
+    // an unlabelled gauge exports a 0 sample the moment it is REGISTERED, which
+    // would make absent() on this series permanently false across the fleet.
+    await mod.refreshWorkflowMetrics();
+    expect(await renderSentinel(mod)).toBeNull();
+  });
+
+  it("is exported by a leader process once a refresh succeeds", async () => {
+    process.env.METRICS_WORKFLOW_REFRESH_LEADER = "true";
+    const mod = await loadMetrics();
+
+    await mod.refreshWorkflowMetrics();
+    expect(sampleValue((await renderSentinel(mod))!)).toBeGreaterThan(0);
+  });
+
+  it("is set even when every aggregate returns zero rows", async () => {
+    // The entire point of the sentinel. An idle deployment (fresh install,
+    // weekend, between terms) completes no workflow runs, so the labelled
+    // gauges have no samples at all and absent() on THEM false-fires.
+    process.env.METRICS_WORKFLOW_REFRESH_LEADER = "true";
+    const mod = await loadMetrics();
+
+    rpc.mockResolvedValue({ data: [], error: null });
+    await mod.refreshWorkflowMetrics();
+
+    const registry = (await mod.getMetrics())!.registry;
+    expect(await registry.getSingleMetricAsString("web_workflow_runs_recent")).not.toContain(
+      "web_workflow_runs_recent{"
+    );
+    expect(sampleValue((await renderSentinel(mod))!)).toBeGreaterThan(0);
+  });
+
+  it("stays at 0 when the refresh fails", async () => {
+    process.env.METRICS_WORKFLOW_REFRESH_LEADER = "true";
+    const mod = await loadMetrics();
+
+    rpcFails();
+    await mod.refreshWorkflowMetrics();
+
+    // Registered but never set, so it reads 0. absent() therefore does NOT fire
+    // on a leader whose database is down — that case belongs to
+    // PawtograderWorkflowMetricsRefreshFailing, which is why both rules exist.
+    expect(sampleValue((await renderSentinel(mod))!)).toBe(0);
   });
 });

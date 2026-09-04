@@ -7,8 +7,9 @@ keyed off global.environment (dev | preview | staging | production):
                  gauges + multiplies DB load); the two metrics-leader
                  mechanisms enabled at once, or the dedicated leader
                  without monitoring/web (a pod that can export nothing);
-                 monitoring on a multi-replica web tier with NO leader
-                 (nine permanently empty app-business panels — cleared with
+                 monitoring on an enabled web tier with NO leader of either
+                 kind, at any replica count (nine permanently empty
+                 app-business panels — cleared with
                  monitoring.allowMissingWorkflowMetrics); a leader whose
                  ServiceMonitor is switched off (same empty panels, because the
                  refresh only runs during a scrape — cleared with
@@ -60,10 +61,18 @@ would never be scraped, never refresh, and simply cost a pod's worth of memory.
 {{- end -}}
 
 {{- /*
-Multi-replica web + monitoring on + NO leader of either kind = the `app-business`
+Monitoring on + web enabled + NO leader of either kind = the `app-business`
 dashboard ships with nine permanently empty panels. Nothing populates the
-web_workflow_* families in that configuration: web.workflowMetricsLeader is
-refused above 1 replica by the guard above, and metricsLeader.enabled is off.
+web_workflow_* families in that configuration, because nothing sets
+METRICS_WORKFLOW_REFRESH_LEADER on any workload.
+
+NOT gated on replicas > 1, deliberately. It was, and that left the most ordinary
+install of all silently broken: monitoring.enabled=true, web.replicas=1, both
+leader settings at their default false. The predicate was skipped, the web
+ServiceMonitor scraped happily, and every workflow family stayed empty without
+anyone having to acknowledge anything. The replica count is what decides WHICH
+leader mechanism is correct (workflowMetricsLeader at 1 replica, the dedicated
+Deployment above that) — it was never what decided whether one is needed.
 
 This is a BREAKING upgrade for any install already in that state (Khoury
 production is), which is why it ships with an explicit acknowledgement rather
@@ -75,8 +84,8 @@ There is no "deploy inert" for a render-time fail — the deploy is REFUSED, not
 degraded, and that includes a rollback deploy. The message therefore names both
 values verbatim.
 */ -}}
-{{- if and .Values.monitoring.enabled (gt (int .Values.web.replicas) 1) (not .Values.web.metricsLeader.enabled) (not .Values.web.workflowMetricsLeader) (not .Values.monitoring.allowMissingWorkflowMetrics) -}}
-{{- fail "monitoring.enabled=true with web.replicas > 1 and no metrics leader exports NO workflow metrics: web_workflow_runs_recent, web_workflow_queue_seconds, web_workflow_run_seconds and web_workflow_errors_recent are populated only by the pod holding METRICS_WORKFLOW_REFRESH_LEADER, and nothing here sets it (web.workflowMetricsLeader is refused above 1 replica). The nine workflow panels on the `app-business` Grafana dashboard will render permanently empty, which reads identically to \"no workflow runs happened\". FIX: set `web.metricsLeader.enabled: true` to run the dedicated 1-replica leader. OR, to ship without workflow metrics on purpose, set `monitoring.allowMissingWorkflowMetrics: true`. (Single-replica installs instead set `web.workflowMetricsLeader: true`.)" -}}
+{{- if and .Values.monitoring.enabled .Values.web.enabled (not .Values.web.metricsLeader.enabled) (not .Values.web.workflowMetricsLeader) (not .Values.monitoring.allowMissingWorkflowMetrics) -}}
+{{- fail "monitoring.enabled=true with no metrics leader exports NO workflow metrics: web_workflow_runs_recent, web_workflow_queue_seconds, web_workflow_run_seconds and web_workflow_errors_recent are populated only by the pod holding METRICS_WORKFLOW_REFRESH_LEADER, and nothing here sets it. The nine workflow panels on the `app-business` Grafana dashboard will render permanently empty, which reads identically to \"no workflow runs happened\". FIX: at web.replicas=1, set `web.workflowMetricsLeader: true` (no extra pod). Above 1 replica that flag is refused, so set `web.metricsLeader.enabled: true` to run the dedicated 1-replica leader. OR, to ship without workflow metrics on purpose, set `monitoring.allowMissingWorkflowMetrics: true`." -}}
 {{- end -}}
 
 {{- /*

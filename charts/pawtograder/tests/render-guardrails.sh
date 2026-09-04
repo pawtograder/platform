@@ -36,15 +36,20 @@ BASE=(
   --set backup.enabled=false
   --set storage.backend=file
   --set studio.enabled=false
-  # One web replica. Chart 0.3.18 added a guard that refuses monitoring.enabled
-  # with web.replicas > 1 and no metrics leader (nothing would populate the
-  # web_workflow_* families), and roughly a dozen cases below enable monitoring
-  # to exercise a guard that has nothing to do with workflow metrics. Pinning
-  # the baseline to one replica keeps that new rule dormant for them instead of
-  # sprinkling monitoring.allowMissingWorkflowMetrics through unrelated tests.
-  # Every case that actually exercises the rule sets its own replica count after
-  # this (helm's last-`--set`-wins), so nothing is masked.
+  # One web replica, and the workflow-metrics gap acknowledged. Chart 0.3.18
+  # added a guard that refuses monitoring.enabled with no metrics leader of
+  # either kind, and roughly a dozen cases below enable monitoring to exercise a
+  # guard that has nothing to do with workflow metrics.
+  #
+  # Pinning to one replica used to be enough to keep that rule dormant. It is
+  # not any more, and that was the bug: the rule was gated on replicas > 1, so
+  # the single most ordinary install — monitoring on, one replica, no leader —
+  # slipped through silently. The acknowledgement is the honest way to say "this
+  # case is not about workflow metrics". Every case that actually exercises the
+  # rule sets it back to false after this (helm's last-`--set`-wins), so nothing
+  # is masked.
   --set web.replicas=1
+  --set monitoring.allowMissingWorkflowMetrics=true
 )
 
 render() { helm template t "$CHART" "${BASE[@]}" "$@" >/dev/null 2>"$ERRFILE"; }
@@ -762,6 +767,8 @@ LEADER_BASE=(
   --set monitoring.enabled=true
   --set monitoring.prometheusRules.labels.release=kps
   --set web.replicas=3
+  # Undo the baseline acknowledgement: this block is where rule 4 is under test.
+  --set monitoring.allowMissingWorkflowMetrics=false
 )
 
 echo "== metrics-leader validations =="
@@ -782,15 +789,28 @@ assert_refused "metrics leader without the web tier" \
   "requires web.enabled=true" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
   --set web.enabled=false --set web.metricsLeader.enabled=true
-# Rule 4: multi-replica + monitoring + no leader = nine permanently empty panels.
-# This one is a BREAKING upgrade for installs already in that state, so the
-# message must name the exact values that clear it; assert on both.
+# Rule 4: monitoring + an enabled web tier + no leader = nine permanently empty
+# panels. This one is a BREAKING upgrade for installs already in that state, so
+# the message must name the exact values that clear it; assert on both.
 assert_refused "multi-replica web with monitoring and no leader" \
   "exports NO workflow metrics" "${LEADER_BASE[@]}"
 assert_refused "rule 4 names the leader value that fixes it" \
   "web.metricsLeader.enabled: true" "${LEADER_BASE[@]}"
 assert_refused "rule 4 names the escape hatch" \
   "monitoring.allowMissingWorkflowMetrics: true" "${LEADER_BASE[@]}"
+# ...and at ONE replica, which is the case the rule used to skip. Nothing sets
+# METRICS_WORKFLOW_REFRESH_LEADER here either, the web ServiceMonitor scrapes
+# happily, and every workflow family stays empty — the silent configuration the
+# rule exists to catch, previously reachable without acknowledging anything.
+assert_refused "single-replica web with monitoring and no leader" \
+  "exports NO workflow metrics" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set web.replicas=1 --set monitoring.allowMissingWorkflowMetrics=false
+# The single-replica remedy is the flag, and the message must say so.
+assert_refused "rule 4 names the single-replica remedy" \
+  "set \`web.workflowMetricsLeader: true\`" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set web.replicas=1 --set monitoring.allowMissingWorkflowMetrics=false
 
 echo "== metrics-leader renders =="
 assert_renders "prod shape with the dedicated leader renders" \
@@ -801,7 +821,31 @@ assert_renders "prod shape without a leader renders once acknowledged" \
 # than a dedicated leader (no extra pod) and must keep working.
 assert_renders "single-replica install may still use web.workflowMetricsLeader" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
-  --set web.replicas=1 --set web.workflowMetricsLeader=true
+  --set web.replicas=1 --set web.workflowMetricsLeader=true \
+  --set monitoring.allowMissingWorkflowMetrics=false
+
+# The absence alert must render for EITHER leader mechanism. It used to be gated
+# on the dedicated Deployment alone, which left single-replica installs with no
+# coverage at all: if that web target is not scraped, the refresh-errors counter
+# is absent too, so neither rule in the group can fire.
+assert_rendered_contains "stale alert renders for the in-web leader" \
+  templates/prometheus-rules.yaml "alert: PawtograderWorkflowMetricsStale" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set web.replicas=1 --set web.workflowMetricsLeader=true \
+  --set monitoring.allowMissingWorkflowMetrics=false
+assert_rendered_contains "stale alert names the in-web mechanism" \
+  templates/prometheus-rules.yaml "web.workflowMetricsLeader, single-replica mode" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set web.replicas=1 --set web.workflowMetricsLeader=true \
+  --set monitoring.allowMissingWorkflowMetrics=false
+assert_rendered_contains "stale alert names the dedicated mechanism" \
+  templates/prometheus-rules.yaml "web.metricsLeader.enabled" \
+  "${LEADER_BASE[@]}" --set web.metricsLeader.enabled=true
+# With no leader at all the absence alert is meaningless — absence IS the
+# configured state — so it must not render.
+assert_rendered_lacks "no stale alert without a leader" \
+  templates/prometheus-rules.yaml "alert: PawtograderWorkflowMetricsStale" \
+  "${LEADER_BASE[@]}" --set monitoring.allowMissingWorkflowMetrics=true
 
 echo "== the leader env vars land on the leader and NOWHERE else =="
 assert_env_value "leader renders METRICS_WORKFLOW_REFRESH_LEADER=true" \

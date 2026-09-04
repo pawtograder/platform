@@ -160,6 +160,21 @@ Populates the 9 workflow panels on `app-business`.
   ~2.4k at 100 active classes — up from the old nominal ~1.7k, but bounded,
   which the old number was not. `metrics_workflow_errors_by_name` is left in
   place, unused, so a rollback to the previous web image still works.
+- **Rule 4 applies at ANY replica count (C2).** It was gated on
+  `web.replicas > 1`, which skipped the most ordinary install there is:
+  `monitoring.enabled=true`, one replica, both leader settings at their default
+  `false`. Nothing sets `METRICS_WORKFLOW_REFRESH_LEADER`, the web ServiceMonitor
+  scrapes happily, and every workflow family stays permanently empty — with no
+  acknowledgement required. The replica count decides _which_ leader mechanism is
+  correct, never _whether_ one is needed. Blast radius audited: every
+  `examples/*.yaml` was rendered plain and with `--set monitoring.enabled=true`,
+  before and after. `values-preview.yaml` already sets
+  `workflowMetricsLeader: true` on its single replica; staging and both prod
+  overlays enable the dedicated leader; `values-tartangrader.yaml` renders under
+  its documented layering. The only behaviour change is that
+  `render-guardrails.sh`'s `BASE` can no longer keep the rule dormant by pinning
+  `web.replicas=1` — it now sets `monitoring.allowMissingWorkflowMetrics=true`,
+  and the cases that exercise the rule set it back to `false`.
 - Five new `validations.yaml` rules (four as planned, plus one added in review:
   `web.metricsLeader.enabled=true` with
   `monitoring.serviceMonitors.metricsLeader=false` is refused unless
@@ -196,20 +211,45 @@ adding to the plan above:
   (`rate(web_workflow_metrics_refresh_errors_total[15m]) > 0`) covers "refreshes
   are failing"; `PawtograderWorkflowMetricsStale` covers the different failure of
   "nothing is scraping the leader at all".
-  **Revised after review:** `PawtograderWorkflowMetricsStale` originally read
-  `absent(web_workflow_runs_recent)`, which is a guaranteed FALSE warning on a
-  healthy deployment. That gauge only has samples once some class completed a
-  workflow run inside the window; a prom-client labelled gauge that was never
-  `.set()` emits nothing, so a fresh install, a weekend or the gap between terms
-  — and this platform is idle for months — fires it after 30 minutes. It now
-  alerts on `absent(web_workflow_metrics_last_success_timestamp_seconds)`, an
-  unlabelled sentinel that `refreshWorkflowMetrics()` sets at the end of every
-  fully successful pass **including one where every aggregate returned zero
-  rows**. Absence of that series means the producer is broken or unscraped,
-  which is the only condition worth waking someone for. A sentinel inside
-  `web_workflow_runs_recent` itself was rejected: `$class_id` is a
-  `label_values()` variable and the topk panel sums by `class_id`, so a magic
-  class would appear in the dropdown and in the ranking.
+  **Also revised (C3):** the rule now renders for **either** leader mechanism, not
+  just the dedicated Deployment. Gated on `metricsLeader.enabled` alone it left the
+  supported single-replica mode (`web.workflowMetricsLeader=true`) with no absence
+  coverage at all — and that gap is total, because if the web target is not
+  scraped then `web_workflow_metrics_refresh_errors_total` is absent too, so the
+  _other_ rule in the group cannot fire either. The annotation names which
+  mechanism is in play and which pod to look at, since the remedy differs.
+
+**Revised after review:** `PawtograderWorkflowMetricsStale` originally read
+`absent(web_workflow_runs_recent)`, which is a guaranteed FALSE warning on a
+healthy deployment. That gauge only has samples once some class completed a
+workflow run inside the window; a prom-client labelled gauge that was never
+`.set()` emits nothing, so a fresh install, a weekend or the gap between terms
+— and this platform is idle for months — fires it after 30 minutes. It now
+alerts on `absent(web_workflow_metrics_last_success_timestamp_seconds)`, an
+unlabelled sentinel that `refreshWorkflowMetrics()` sets at the end of every
+fully successful pass **including one where every aggregate returned zero
+rows**. Absence of that series means the producer is broken or unscraped,
+which is the only condition worth waking someone for. A sentinel inside
+`web_workflow_runs_recent` itself was rejected: `$class_id` is a
+`label_values()` variable and the topk panel sums by `class_id`, so a magic
+class would appear in the dropdown and in the ranking.
+**Second revision (C4):** the sentinel is registered **only when
+`METRICS_WORKFLOW_REFRESH_LEADER=true`**. An unlabelled prom-client gauge is
+initialized and exported as `0` the moment it is registered, before any
+`.set()`, so registering it on every web pod made
+`absent(...)` permanently false — the alert would have been silent exactly
+when the leader was down, and the "exactly one pod exports this" invariant was
+broken too. `lib/metrics.ts` exports `isWorkflowRefreshLeader()` and
+`app/api/metrics/route.ts` now calls it, so the registry and the refresh gate
+cannot drift apart. Four cases in `tests/unit/metrics.test.ts` pin it,
+including "a non-leader process registers no such metric at all" — asserted on
+the metric being _absent_, not on it reading zero, because a zero sample is
+the failure.
+A leader whose database is down still exports the sentinel at `0` (registered,
+never set), so `absent()` does not fire for that case — which is correct:
+that is `PawtograderWorkflowMetricsRefreshFailing`'s job, and the two rules
+partition the failure space between them.
+
 - Rule 4 forced a values change in three shipped example overlays:
   `values-prod.yaml` and `values-prod-noeso.yaml` now enable the dedicated leader
   (the recommended answer at `replicas: 3`), and `values-staging.yaml` enables it
@@ -630,6 +670,28 @@ reimplementing them anyway.
   `pawtograder_edge_main_worker_heap_bytes{stat="used"}` to the memory panel,
   decomposing working set into cache vs main-isolate heap vs isolates.
 
+**Revised after review (C1): `app-business.json` got the same treatment.** It had
+no namespace variable and no matcher on any panel, so a Grafana whose datasource
+covers several deployments — previews are exactly that shape, see
+`examples/values-preview.yaml` — merged identically named `route` and `rpc`
+labels, and independently generated `class_id`s, from different environments into
+one graph that read as production. A `$namespace` variable was added on the same
+pattern (Prometheus datasource, `label_values(kube_pod_info, namespace)`, regex
+`pawtograder.*`, `includeAll` with `All` as the default) and applied to **all 30
+targets** — both the `web_*` families and the postgres_exporter `pawtograder_*`
+ones, since both are ServiceMonitor-scraped and both carry the label.
+`$class_id` is now derived from the namespace-scoped series so the class list
+follows the selection.
+
+**Revised after review (C5): panel 11 honours `$fn` again.** Neither side of the
+mean-latency expression nor the time-spent target carried `function=~"$fn"`, so
+selecting a function did not filter the panel that replaced one which did. Fixed,
+and applied to the other two per-function breakdowns for consistency —
+"Invocations per function" and "Top errors by function" had the same omission. A
+variable that filters some breakdown panels and not others is the same class of
+bug. Panel 3 (P95 latency) still drops `$fn` deliberately: the histogram carries
+no `function` label and the panel would go blank, which its description records.
+
 **Revised after review: every `pawtograder_edge_*` expression now carries
 `namespace=~"$namespace"`, and so does the `$fn` variable query.** With
 `$namespace` defaulting to `All`, the headline traffic / error / latency /
@@ -1018,6 +1080,10 @@ mid-flight, so this is headroom, not a fix — schedule edge deploys accordingly
 | Grading-actions monotonicity (F6/CR1)       | **Option (a)**: three counter columns + one scoped trigger. The "new trigger on the hot path" objection was false — the comment trigger already exists (2026-09-04) |
 | Workflow error label (F1)                   | **Closed category** from `workflow_run_error.data`, not `name`. `LIMIT 200` bounded one call, never the label domain (2026-09-04)                                   |
 | `PawtograderWorkflowMetricsStale` (F7)      | **Sentinel**, not `absent()` on a data-dependent gauge. The old rule false-fired on any quiet window (2026-09-04)                                                   |
+| Sentinel registration (C4)                  | **Leader-only.** An unlabelled gauge exports 0 on registration, so fleet-wide registration made `absent()` permanently false (2026-09-04)                           |
+| Rule 4 replica gate (C2)                    | **Removed.** Applies to any enabled web tier; the replica count picks the mechanism, not the need (2026-09-04)                                                      |
+| Stale-alert rendering (C3)                  | **Either leader mechanism**, with the mechanism named in the annotation (2026-09-04)                                                                                |
+| `app-business.json` namespace scoping (C1)  | **Added**, mirroring `edge-functions.json`, across both metric families (2026-09-04)                                                                                |
 | `realtime-fanout.json` panels 3 and 11      | **Delete.** No monotonic trigger-side producer exists (2026-09-04)                                                                                                  |
 | Wave 1 vs wave 2 on failing example renders | **Wave 1 was right.** The prod failures are a pre-existing placeholder, not rule 4 (2026-09-04)                                                                     |
 
