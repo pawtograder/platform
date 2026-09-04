@@ -1403,10 +1403,13 @@ on both edge channels, and all eight dashboard ConfigMaps updated in place.
   `pawtograder_grading_actions_total` (444 series) both live, from exactly one
   exporter instance, with the `pawtograder_*` family count intact at 21.
 - **`web_http_*`.** Verified by request rather than by inspection, because on an
-  idle staging the family is legitimately absent: hitting `/api/lti/jwks`
-  produced `web_http_request_duration_seconds_bucket{route="/api/lti/jwks",
-  method="GET",status="5xx"}`. The route label is the parameterized pattern and
-  the status is bucketed, as designed.
+  idle staging the family is legitimately absent. Hitting `/api/lti/jwks`
+  produced the expected shape, with the route label as the parameterized pattern
+  and the status bucketed:
+
+  ```
+  web_http_request_duration_seconds_bucket{le="0.5",route="/api/lti/jwks",method="GET",status="5xx"} 4
+  ```
 
 ### 12.2 Four §8.1 sub-checks read empty, and that is correct
 
