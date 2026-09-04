@@ -73,7 +73,35 @@ $$;
 COMMENT ON FUNCTION public.metrics_workflow_errors_by_category(numeric) IS
   'workflow_run_error rows in the last N hours, grouped by class and a CLOSED error category derived from data->>''error_type'' / data->>''type''. Replaces metrics_workflow_errors_by_name, whose `name` label was free text and unbounded over time. Driver for web_workflow_errors_recent.';
 
+-- Privileges. GRANT alone is NOT sufficient here.
+--
+-- 20250330003141_remote_schema.sql:3593-3596 sets
+--   ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+--     GRANT ALL ON FUNCTIONS TO anon, authenticated;
+-- so a function created in this schema is granted EXECUTE to anon and
+-- authenticated the moment it exists, on top of PostgreSQL's own implicit
+-- EXECUTE for PUBLIC. Because these metrics functions are SECURITY DEFINER they
+-- run as the owner and see every class, bypassing RLS -- so without an explicit
+-- REVOKE any signed-in user, and via the anon grant any unauthenticated caller
+-- with the anon key, could read cross-class workflow aggregates. The repo
+-- already uses this REVOKE-then-GRANT pattern for privileged helpers; see
+-- 20250803015833_github-assignment-repo-triggers.sql:33-34.
+REVOKE ALL ON FUNCTION public.metrics_workflow_errors_by_category(numeric) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.metrics_workflow_errors_by_category(numeric) TO service_role;
+
+-- Same defect, same feature: the four RPCs added in
+-- 20260529190000_workflow_metrics_rpcs.sql granted service_role without ever
+-- revoking the default anon/authenticated grants. They are already applied in
+-- production and are only actually called once this release enables the metrics
+-- leader, so they are closed here rather than left for a follow-up.
+REVOKE ALL ON FUNCTION public.metrics_workflow_runs_by_conclusion(numeric) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.metrics_workflow_queue_percentiles(numeric)  FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.metrics_workflow_run_percentiles(numeric)    FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.metrics_workflow_errors_by_name(numeric)     FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.metrics_workflow_runs_by_conclusion(numeric) TO service_role;
+GRANT EXECUTE ON FUNCTION public.metrics_workflow_queue_percentiles(numeric)  TO service_role;
+GRANT EXECUTE ON FUNCTION public.metrics_workflow_run_percentiles(numeric)    TO service_role;
+GRANT EXECUTE ON FUNCTION public.metrics_workflow_errors_by_name(numeric)     TO service_role;
 
 COMMENT ON FUNCTION public.metrics_workflow_errors_by_name(numeric) IS
   'SUPERSEDED by metrics_workflow_errors_by_category. The `name` column is free text (500-char cap only) and several producers embed a commit sha in it, so using it as a Prometheus label is unbounded cardinality; the LIMIT 200 here caps one call, not the label domain over time. Kept only so a rollback to an older web image still works. Do not add new callers.';
