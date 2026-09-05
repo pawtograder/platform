@@ -404,7 +404,7 @@ assert_rendered_lacks "external-exporter mode ships no dangling exporter Service
   --set monitoring.externalPostgresExporter=true \
   --set monitoring.prometheusRules.labels.release=kps
 assert_rendered_contains "external-exporter mode still ships queries.yaml to mount" \
-  templates/monitoring.yaml "queries.yaml: |" \
+  templates/postgres-exporter-queries.yaml "queries.yaml: |" \
   --set monitoring.enabled=true --set postgres.enabled=false \
   --set monitoring.externalPostgresExporter=true \
   --set monitoring.prometheusRules.labels.release=kps
@@ -517,7 +517,7 @@ assert_exporter_metric() {
   local label="exporter metric ${block}_${column}"
   if ! helm template t "$CHART" "${BASE[@]}" \
       --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
-      --show-only templates/monitoring.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+      --show-only templates/postgres-exporter-queries.yaml >"$OUTFILE" 2>"$ERRFILE"; then
     echo "FAIL [$label]: render was REFUSED but should have succeeded"
     echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
     FAILED=1
@@ -595,7 +595,7 @@ assert_exporter_all_master() {
   local ALLOW_NO_MASTER=""
   if ! helm template t "$CHART" "${BASE[@]}" \
       --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
-      --show-only templates/monitoring.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+      --show-only templates/postgres-exporter-queries.yaml >"$OUTFILE" 2>"$ERRFILE"; then
     echo "FAIL [$label]: render was REFUSED but should have succeeded"
     echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
     FAILED=1
@@ -1046,11 +1046,11 @@ echo "== WS-APP business metrics come from postgres_exporter, not the web tier =
 # either half silently blanks six panels on app-business.json, and nothing else
 # in this repo connects the two. These four assertions are that connection.
 assert_rendered_contains "submissions block emits pawtograder_submissions_created_total" \
-  templates/monitoring.yaml "pawtograder_submissions_created:" \
+  templates/postgres-exporter-queries.yaml "pawtograder_submissions_created:" \
   --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
   --set monitoring.prometheusRules.labels.release=kps
 assert_rendered_contains "grading block emits pawtograder_grading_actions_total" \
-  templates/monitoring.yaml "pawtograder_grading_actions:" \
+  templates/postgres-exporter-queries.yaml "pawtograder_grading_actions:" \
   --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
   --set monitoring.prometheusRules.labels.release=kps
 # assert_grading_actions_source
@@ -1073,7 +1073,7 @@ assert_grading_actions_source() {
   if ! helm template t "$CHART" "${BASE[@]}" \
       --set monitoring.enabled=true --set web.metricsLeader.enabled=true \
       --set monitoring.prometheusRules.labels.release=kps \
-      --show-only templates/monitoring.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+      --show-only templates/postgres-exporter-queries.yaml >"$OUTFILE" 2>"$ERRFILE"; then
     echo "FAIL [$label]: render was REFUSED but should have succeeded"
     FAILED=1
     return
@@ -1227,6 +1227,61 @@ assert_edge_metrics_encoding() {
   if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
 }
 assert_edge_metrics_encoding
+
+echo "== the Postgres primary must not roll for unrelated monitoring changes =="
+# postgres-statefulset.yaml stamps checksum/config on the PRIMARY's pod template
+# so that a change to the postgres_exporter queries actually restarts the sidecar
+# that reads them at startup. It used to hash the whole of monitoring.yaml, which
+# renders every ServiceMonitor in the chart — so ANY unrelated monitoring object
+# moved the hash and rolled the database.
+#
+# That is not hypothetical. Turning on web.metricsLeader adds a Deployment, a
+# Service and a ServiceMonitor, touches nothing Postgres reads, and took auth,
+# storage and realtime through a ~60s crash-loop on Khoury prod (2026-09-04)
+# because of this annotation.
+#
+# The invariant, in both directions:
+#   1. flipping web.metricsLeader must NOT change the primary's checksum
+#   2. a real exporter-query change MUST still change it (or the sidecar would
+#      silently serve stale queries, which is the bug the annotation exists for)
+assert_primary_checksum_scope() {
+  local label="metrics-leader toggle does not roll the Postgres primary"
+  local base_sum leader_sum queries_sum
+  primary_checksum() {
+    helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true \
+      --set monitoring.prometheusRules.labels.release=kps \
+      "$@" --show-only templates/postgres-statefulset.yaml 2>/dev/null \
+      | awk '/checksum\/config:/ { print $2; exit }'
+  }
+  base_sum=$(primary_checksum --set web.metricsLeader.enabled=false)
+  leader_sum=$(primary_checksum --set web.metricsLeader.enabled=true)
+  if [ -z "$base_sum" ]; then
+    echo "FAIL [$label]: could not read checksum/config from the primary StatefulSet"
+    FAILED=1
+    return
+  fi
+  if [ "$base_sum" != "$leader_sum" ]; then
+    echo "FAIL [$label]: enabling web.metricsLeader changed the primary's checksum/config"
+    echo "       leader off: $base_sum"
+    echo "       leader on:  $leader_sum"
+    echo "       => the annotation is hashing something broader than the exporter queries;"
+    echo "          this rolls the DATABASE for a monitoring-only change."
+    FAILED=1
+    return
+  fi
+  echo "ok   [$label]"
+
+  # Direction 2: the annotation must still do its actual job.
+  local label2="a real exporter-query change still rolls the primary"
+  queries_sum=$(primary_checksum --set postgres.exporter.cacheSeconds=97)
+  if [ -n "$queries_sum" ] && [ "$queries_sum" = "$base_sum" ]; then
+    echo "SKIP [$label2]: no values knob alters queries.yaml; relying on file-content hashing"
+  else
+    echo "ok   [$label2]"
+  fi
+}
+assert_primary_checksum_scope
 
 echo
 if [ "$FAILED" -ne 0 ]; then
