@@ -1272,11 +1272,42 @@ assert_primary_checksum_scope() {
   fi
   echo "ok   [$label]"
 
-  # Direction 2: the annotation must still do its actual job.
+  # Direction 2: the annotation must still do its actual job. Narrowing the hash
+  # is only correct if a REAL exporter-query change still restarts the sidecar —
+  # otherwise this "fix" would trade a spurious restart for a silently stale
+  # exporter, which is the failure the annotation exists to prevent.
+  #
+  # There is no values knob that alters queries.yaml, so drive it from the
+  # template itself: copy the chart, perturb the rendered ConfigMap content, and
+  # require the checksum to move. A values-based probe would silently no-op (and
+  # did, in review) because the flag it set does not exist in the chart.
   local label2="a real exporter-query change still rolls the primary"
-  queries_sum=$(primary_checksum --set postgres.exporter.cacheSeconds=97)
-  if [ -n "$queries_sum" ] && [ "$queries_sum" = "$base_sum" ]; then
-    echo "SKIP [$label2]: no values knob alters queries.yaml; relying on file-content hashing"
+  local tmpchart
+  tmpchart=$(mktemp -d)
+  cp -r "$CHART/." "$tmpchart/"
+  if ! sed -i 's/Heap size only (no indexes)/Heap size only (no indexes) GUARDRAIL-PROBE/' \
+       "$tmpchart/templates/postgres-exporter-queries.yaml" \
+     || ! grep -q "GUARDRAIL-PROBE" "$tmpchart/templates/postgres-exporter-queries.yaml"; then
+    echo "FAIL [$label2]: could not perturb postgres-exporter-queries.yaml (anchor text moved?)"
+    FAILED=1
+    rm -rf "$tmpchart"
+    return
+  fi
+  queries_sum=$(helm template t "$tmpchart" "${BASE[@]}" \
+    --set monitoring.enabled=true \
+    --set monitoring.prometheusRules.labels.release=kps \
+    --set web.metricsLeader.enabled=false \
+    --show-only templates/postgres-statefulset.yaml 2>/dev/null \
+    | awk '/checksum\/config:/ { print $2; exit }')
+  rm -rf "$tmpchart"
+  if [ -z "$queries_sum" ]; then
+    echo "FAIL [$label2]: perturbed chart did not render a checksum"
+    FAILED=1
+  elif [ "$queries_sum" = "$base_sum" ]; then
+    echo "FAIL [$label2]: changing a query left checksum/config at $base_sum"
+    echo "       => the exporter ConfigMap is no longer in the hash; the sidecar"
+    echo "          would keep serving its old queries after an upgrade."
+    FAILED=1
   else
     echo "ok   [$label2]"
   fi
