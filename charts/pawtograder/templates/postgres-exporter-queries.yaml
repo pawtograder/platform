@@ -1,0 +1,661 @@
+{{- if .Values.monitoring.enabled -}}
+{{- /*
+postgres_exporter custom-queries ConfigMap, mounted by the exporter SIDECAR in
+postgres-statefulset.yaml and read by it ONLY at startup.
+
+Kept in its OWN template file, deliberately. postgres-statefulset.yaml hashes
+this file into the primary's `checksum/config` so that adding or altering a
+collector actually restarts the sidecar that reads it. It used to hash the whole
+of monitoring.yaml, which meant every UNRELATED object in that file — a new
+ServiceMonitor for some other component — also moved the hash and rolled the
+PRIMARY DATABASE. Enabling web.metricsLeader did exactly that: a ~60s outage
+with auth, storage and realtime crash-looping, for a change that touches nothing
+in the database (observed on Khoury prod, 2026-09-04).
+
+So: anything that belongs in the primary's restart hash goes in this file.
+Anything that does not belongs in monitoring.yaml. Do not merge them back.
+*/ -}}
+---
+# postgres_exporter — custom queries that surface supabase/pawtograder
+# semantics on top of the default pg_stat_database / pg_stat_user_tables
+# coverage. Keep query names stable: dashboards reference them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-exporter") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-exporter") | nindent 4 }}
+data:
+  queries.yaml: |
+    pg_replication_slots:
+      query: |
+        SELECT slot_name,
+               (active)::int AS active,
+               COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn), 0)::float AS lag_bytes
+        FROM pg_replication_slots
+      master: true
+      metrics:
+        - slot_name:
+            usage: "LABEL"
+            description: "Replication slot name"
+        - active:
+            usage: "GAUGE"
+            description: "1 if the slot is currently active, 0 otherwise"
+        - lag_bytes:
+            usage: "GAUGE"
+            description: "WAL bytes between current_wal_lsn and the slot's confirmed_flush_lsn"
+
+    # Streaming-standby health, from the PRIMARY side. The chart creates NO
+    # physical replication slot (see docs/operations/point-in-time-recovery.md),
+    # so pg_replication_slots is empty and its lag_bytes series never appears —
+    # standby lag must be read from pg_stat_replication instead. streaming_standbys
+    # drives PawtograderReplicaNotStreaming; max_replay_lag_bytes drives
+    # PawtograderReplicaLagHigh. Emitted as pawtograder_replication_*.
+    #
+    # Standby-safe: pg_current_wal_lsn() ERRORS in recovery and would 500 the
+    # whole /metrics endpoint on a standby. Today only the primary is scraped (the
+    # postgres-exporter Service selects component=postgres; the replica pod is
+    # component=postgres-replica and carries no exporter sidecar), so this runs on
+    # the primary and never in recovery — but the pg_is_in_recovery() guard makes
+    # it harmless even if an exporter is ever added to the replica: on a standby
+    # the CASE takes the THEN branch and the LSN subquery is never evaluated. The
+    # outer SELECT always returns exactly one row so the series is stable.
+    #
+    # PHYSICAL standbys only: pg_stat_replication has one row per WAL sender, which
+    # includes LOGICAL replication clients. This is a wal_level=logical Supabase
+    # stack, and Realtime streams via logical replication as user `supabase_admin`
+    # (realtime.yaml DB_USER) — counting those rows would let a live Realtime
+    # connection mask a dead physical standby, and skew the lag max. The physical
+    # standby authenticates as `supabase_replication_admin` (postgres-replica.yaml
+    # primary_conninfo / postgres-config.yaml), so filter on that role.
+    pawtograder_replication:
+      query: |
+        SELECT
+          (SELECT count(*) FROM pg_stat_replication
+             WHERE state = 'streaming' AND usename = 'supabase_replication_admin')::float
+            AS streaming_standbys,
+          COALESCE(
+            CASE WHEN pg_is_in_recovery() THEN 0
+                 ELSE (SELECT max(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn))
+                       FROM pg_stat_replication
+                       WHERE usename = 'supabase_replication_admin')
+            END, 0)::float AS max_replay_lag_bytes
+      master: true
+      metrics:
+        - streaming_standbys:
+            usage: "GAUGE"
+            description: "Physical standbys (supabase_replication_admin) in state=streaming per pg_stat_replication (primary side)"
+        - max_replay_lag_bytes:
+            usage: "GAUGE"
+            description: "Max WAL bytes between the primary's current LSN and any physical standby's replay_lsn (0 on a standby)"
+
+    # WAL-G continuous archiving health. With postgres.walg.enabled the primary
+    # runs archive_command=wal-g wal-push; if that keeps failing, unarchived WAL
+    # piles up in pg_wal and can fill the volume (write outage). last_attempt_failed
+    # drives the PawtograderWALArchiveFailing alert; wal_dir_bytes is for
+    # dashboards. Harmless when archiving is off (archiver counters stay 0).
+    # Query key = metric prefix, so metrics are pawtograder_wal_archiving_*.
+    pawtograder_wal_archiving:
+      query: |
+        SELECT
+          archived_count::float AS archived_count,
+          failed_count::float AS failed_count,
+          CASE
+            WHEN last_failed_time IS NOT NULL
+             AND (last_archived_time IS NULL OR last_failed_time > last_archived_time)
+            THEN 1 ELSE 0
+          END::float AS last_attempt_failed,
+          COALESCE((SELECT SUM(size) FROM pg_ls_waldir()), 0)::float AS wal_dir_bytes
+        FROM pg_stat_archiver
+      master: true
+      metrics:
+        - archived_count:
+            usage: "COUNTER"
+            description: "WAL segments successfully archived since stats reset"
+        - failed_count:
+            usage: "COUNTER"
+            description: "Failed archive attempts since stats reset"
+        - last_attempt_failed:
+            usage: "GAUGE"
+            description: "1 if the most recent archive_command attempt failed (last_failed_time newer than last_archived_time)"
+        - wal_dir_bytes:
+            usage: "GAUGE"
+            description: "Total bytes currently in pg_wal (unarchived WAL accumulates here when archiving fails)"
+
+    # Connection-budget saturation. Counts client backends against max_connections;
+    # PostgREST pools (rest.dbPool × replicas), supavisor, GoTrue, realtime,
+    # storage and this exporter all share the budget (postgres.config.max_connections,
+    # default 400). The backend_type filter matters: walsenders, autovacuum
+    # workers, and parallel workers draw from their own pools (max_wal_senders,
+    # autovacuum_max_workers, max_worker_processes), so counting them would
+    # inflate the ratio and page for saturation that isn't there. Drives the
+    # PawtograderPostgresConnections* alerts. master:true so auto-discovered
+    # per-database servers (PG_EXPORTER_AUTO_DISCOVER_DATABASES) don't re-export
+    # the cluster-wide count. Note the re-exports would NOT be separable: the
+    # `server` label is parseFingerprint(dsn), host:port only, with no database
+    # name, so identical label sets collide and the exporter's registry returns
+    # HTTP 500 for the whole /metrics endpoint. See the AUTO-DISCOVERY note below.
+    pawtograder_db_connections:
+      query: |
+        SELECT (SELECT COUNT(*) FROM pg_stat_activity WHERE backend_type = 'client backend')::float AS used,
+               (SELECT setting::float FROM pg_settings WHERE name = 'max_connections') AS max,
+               (SELECT setting::float FROM pg_settings WHERE name = 'superuser_reserved_connections') AS reserved
+      master: true
+      metrics:
+        - used:
+            usage: "GAUGE"
+            description: "Current client backends across all databases (the connections max_connections governs)"
+        - max:
+            usage: "GAUGE"
+            description: "max_connections setting — the hard ceiling on total backends"
+        - reserved:
+            usage: "GAUGE"
+            description: "superuser_reserved_connections — slots reserved for superusers, shrinking the app-usable ceiling"
+
+    # =========================================================================
+    # Global database state, moved here from the `metrics` edge function
+    # (supabase/functions/metrics/index.ts).
+    #
+    # WHY: the edge-functions ServiceMonitor at the bottom of this file selects
+    # the functions *Service*, and Prometheus scrapes EVERY pod endpoint behind
+    # a Service. Prod pins the functions HPA at 32 replicas, so a 30s interval
+    # meant ~1.07 scrapes/sec of that /metrics handler, each one calling
+    # database_ram_metrics() and vacuum_health_check(). Measured over a 42-day
+    # pg_stat_statements window:
+    #
+    #   database_ram_metrics()  3,036,749 calls  360.6 ms mean  77.7% of ALL
+    #                                                           database exec time
+    #   vacuum_health_check()   3,036,995 calls   32.8 ms mean   7.1%
+    #
+    # database_ram_metrics() is that expensive because it scans pg_buffercache:
+    # one row per buffer descriptor, and shared_buffers = 4GB means 524,288
+    # descriptors per call. The data is GLOBAL database state — byte-identical
+    # from every pod — so 31 of every 32 scrapes were pure waste, and they
+    # produced 32 duplicate copies of every series (which is why the dashboard
+    # panels all wrap in max()).
+    #
+    # The exporter sidecar is scraped ONCE (one postgres pod, one endpoint), so
+    # the same series now cost 1/32 as much and arrive un-duplicated.
+    #
+    # Metric AND label names are reproduced exactly: postgres_exporter names
+    # each metric `<block>_<column>`, so the block/column splits below are
+    # chosen to land on the names the Grafana panels already query, not for
+    # elegance. Don't "tidy" a block name without regrading the dashboards.
+    #
+    # Long → wide: database_ram_metrics() returned long format
+    # (metric_name, metric_labels jsonb, metric_value). This exporter needs
+    # WIDE format — one row per label set, each numeric column becoming a
+    # metric — so `SELECT * FROM database_ram_metrics()` cannot work. The
+    # queries below reproduce its semantics against the underlying sources
+    # directly, which is also this file's house style (see
+    # pawtograder_db_connections above).
+    #
+    # The exporter connects as supabase_admin (postgres-statefulset.yaml
+    # DATA_SOURCE_USER), which initdb creates as the bootstrap SUPERUSER, so no
+    # extra grant is needed for pg_buffercache (normally pg_monitor-gated) or
+    # for the SECURITY DEFINER vacuum_health_check().
+    # =========================================================================
+
+    # Buffer-cache bytes per relation. Reproduces database_ram_metrics()'s
+    # 'buffer_cache_bytes' rows: same >1 MiB floor, same top-20 cut, same
+    # unqualified `relname` label. GROUP BY relname (not oid) is what the RPC
+    # did, and it also guarantees one row per label set — duplicate series make
+    # the exporter's registry return HTTP 500 for the ENTIRE /metrics endpoint,
+    # taking down all postgres metrics (see the pg_stat_statements_top note).
+    #
+    # public.pg_buffercache is schema-qualified on purpose: migrations
+    # 20260722000000 / 20260722120000 pin the extension to `public` (relocating
+    # it if a base image put it in `extensions`), so qualify rather than trust
+    # the exporter connection's search_path.
+    #
+    # cache_seconds: the 524,288-descriptor scan is the whole reason this moved,
+    # and buffer-pool composition changes slowly, so serve it from the
+    # exporter's per-namespace cache and re-run the scan at most once every 5
+    # minutes. `cache_seconds` is honoured for user queries by the pinned
+    # exporter (v0.18.0, monitoring.postgresExporter.image.tag) and needs no
+    # flag; cached metrics are re-emitted on every scrape, so Prometheus sees
+    # no staleness gap.
+    #
+    # master: true — pg_buffercache is the CLUSTER's shared buffer pool. With
+    # PG_EXPORTER_AUTO_DISCOVER_DATABASES=true, without this the expensive scan
+    # would be repeated once per discovered database. See the AUTO-DISCOVERY note
+    # below: the `server` label does NOT distinguish them, so the re-exports
+    # collide rather than separate.
+    pawtograder_db_buffer_cache:
+      query: |
+        SELECT c.relname,
+               (count(*) * 8192)::float AS bytes
+        FROM public.pg_buffercache b
+        JOIN pg_class c ON c.relfilenode = b.relfilenode
+        WHERE b.reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
+        GROUP BY c.relname
+        HAVING count(*) * 8192 > 1048576
+        ORDER BY count(*) DESC
+        LIMIT 20
+      master: true
+      cache_seconds: 300
+      metrics:
+        - relname:
+            usage: "LABEL"
+            description: "Relation name, unqualified (pg_buffercache joins pg_class by relfilenode)"
+        - bytes:
+            usage: "GAUGE"
+            description: "Bytes of shared buffer cache held by this relation (8 KiB per buffer); relations over 1 MiB only, top 20"
+
+    # Total buffer-cache bytes in use by the current database. Deliberately its
+    # own block rather than a second column above: the per-relation query is
+    # capped (>1 MiB, LIMIT 20) so sum() over it is NOT the total, and folding
+    # the total into that block would stamp a `relname` label onto a series the
+    # dashboards query bare. Block `pawtograder_db_buffer_cache_total` + column
+    # `used_bytes` is what yields pawtograder_db_buffer_cache_total_used_bytes.
+    # Same cache_seconds / master rationale as above.
+    pawtograder_db_buffer_cache_total:
+      query: |
+        SELECT (count(*) * 8192)::float AS used_bytes
+        FROM public.pg_buffercache
+        WHERE reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
+      master: true
+      cache_seconds: 300
+      metrics:
+        - used_bytes:
+            usage: "GAUGE"
+            description: "Total bytes of shared buffer cache held by the current database"
+
+    # Dead tuples per table — the input to every vacuum/bloat judgement.
+    # Block `pawtograder_db_dead` + column `tuples` is the only split that
+    # reproduces the existing metric name pawtograder_db_dead_tuples exactly;
+    # the odd word break is deliberate, not a typo.
+    #
+    # sum()/GROUP BY relname: pg_stat_user_tables.relname is unqualified and
+    # the view spans public, auth, storage and realtime, so two same-named
+    # tables in different schemas would emit the same label set twice and 500
+    # the whole endpoint. Summing is also the honest reading of a
+    # `relname`-only label. No cache_seconds — pg_stat_user_tables is an
+    # in-memory stats view, and 30s freshness is what vacuum triage wants.
+    #
+    # master: true — pg_stat_user_tables is per-database; auto-discovery would
+    # otherwise re-export other databases' tables under a `server` label.
+    pawtograder_db_dead:
+      query: |
+        SELECT relname,
+               sum(n_dead_tup)::float AS tuples
+        FROM pg_stat_user_tables
+        WHERE n_dead_tup > 100
+        GROUP BY relname
+        ORDER BY sum(n_dead_tup) DESC
+        LIMIT 20
+      master: true
+      metrics:
+        - relname:
+            usage: "LABEL"
+            description: "Table name, unqualified (summed across schemas when the name repeats)"
+        - tuples:
+            usage: "GAUGE"
+            description: "Dead tuples awaiting vacuum; tables over 100 only, top 20"
+
+    # Vacuum health. Wraps public.vacuum_health_check() (defined in
+    # 20260325000000_autovacuum_tuning.sql): overdue vacuums, XID wraparound
+    # risk, dead-tuple bloat, and large never-vacuumed tables. The function
+    # returns only text columns, so `alert` is a synthetic 1 — the label set is
+    # the payload, exactly as the edge function emitted it.
+    #
+    # Label names are load-bearing (docs/grafana-dashboard-vacuum-health.json
+    # filters on severity): check_name → `check` (quoted, CHECK is a reserved
+    # word and cannot be a bare alias), relname → `table_name`.
+    #
+    # DISTINCT: the xid_wraparound_risk branch scans pg_class across every
+    # schema, so two same-named relations would produce an identical label set
+    # and 500 the whole /metrics endpoint.
+    #
+    # The NOT EXISTS fallback row keeps the series continuously present when the
+    # database is healthy, matching the edge function's
+    # {check="none",severity="ok",table_name="none"} 0 sentinel. MATERIALIZED so
+    # the 32.8 ms function runs once per scrape, not twice.
+    #
+    # No cache_seconds: this is the alerting-relevant signal and it is cheap at
+    # one target (32.8 ms / 30s is a ~0.1% duty cycle, against ~1.07 calls/sec
+    # before).
+    #
+    # master: true — the function exists only in the application database;
+    # auto-discovered databases would raise "function does not exist" on every
+    # scrape and permanently light up pg_exporter_last_scrape_error.
+    pawtograder_vacuum:
+      query: |
+        WITH health AS MATERIALIZED (
+          SELECT DISTINCT check_name AS "check", severity, relname AS table_name, 1::float AS alert
+          FROM public.vacuum_health_check()
+        )
+        SELECT * FROM health
+        UNION ALL
+        SELECT 'none', 'ok', 'none', 0::float
+        WHERE NOT EXISTS (SELECT 1 FROM health)
+      master: true
+      metrics:
+        - check:
+            usage: "LABEL"
+            description: "Which check fired: vacuum_overdue, xid_wraparound_risk, high_dead_tuple_ratio, never_vacuumed_large_table, or none"
+        - severity:
+            usage: "LABEL"
+            description: "warning or critical; ok on the healthy sentinel row"
+        - table_name:
+            usage: "LABEL"
+            description: "Relation the check fired on; none on the healthy sentinel row"
+        - alert:
+            usage: "GAUGE"
+            description: "1 while this vacuum health alert is active, 0 on the healthy sentinel row"
+
+    pg_stat_statements_top:
+      # Aggregate by queryid. pg_stat_statements holds one row PER
+      # (userid, dbid, toplevel, queryid), so selecting queryid + query text
+      # directly yields several rows with the same (queryid, query_preview)
+      # label set whenever a statement runs under more than one role/db. The
+      # exporter's client library rejects duplicate series with "collected
+      # before with the same name and label values" and returns HTTP 500 for
+      # the ENTIRE /metrics endpoint — taking down all postgres metrics. Summing
+      # per queryid collapses those rows to one unique series each; mean is
+      # recomputed as the weighted total/calls. Skip NULL queryids (untracked).
+      query: |
+        SELECT queryid::text,
+               LEFT(MIN(query), 80) AS query_preview,
+               SUM(calls) AS calls,
+               SUM(total_exec_time) AS total_exec_time,
+               SUM(total_exec_time) / NULLIF(SUM(calls), 0) AS mean_exec_time,
+               SUM(rows) AS rows
+        FROM pg_stat_statements
+        WHERE queryid IS NOT NULL
+        GROUP BY queryid
+        ORDER BY SUM(total_exec_time) DESC
+        LIMIT 20
+      # pg_stat_statements is CLUSTER-wide — one shared hash table covering every
+      # database — so auto-discovery would re-export the same top-20 statements
+      # once per discovered database. See the auto-discovery note below.
+      master: true
+      metrics:
+        - queryid:
+            usage: "LABEL"
+            description: "pg_stat_statements query id"
+        - query_preview:
+            usage: "LABEL"
+            description: "First 80 chars of the normalized statement"
+        - calls:
+            usage: "COUNTER"
+            description: "Number of times the statement has been executed"
+        - total_exec_time:
+            usage: "COUNTER"
+            description: "Total time spent executing the statement, in ms"
+        - mean_exec_time:
+            usage: "GAUGE"
+            description: "Mean time per execution, in ms"
+        - rows:
+            usage: "COUNTER"
+            description: "Total rows touched by the statement"
+
+    # =========================================================================
+    # AUTO-DISCOVERY: why every block in this file sets master: true.
+    #
+    # The sidecar runs with PG_EXPORTER_AUTO_DISCOVER_DATABASES=true
+    # (postgres-statefulset.yaml), which makes the exporter enumerate databases
+    # and run the custom queries against EACH one. Without `master: true` a
+    # block runs once per discovered database.
+    #
+    # That is wrong for every query here: they are either cluster-wide
+    # (pg_stat_statements, pg_buffercache, pg_settings, pg_stat_replication) or
+    # specific to the APPLICATION database (public.classes, public.submissions,
+    # public.help_requests, and the pawtograder_* functions). Re-running them
+    # elsewhere either duplicates the same numbers or errors on a missing
+    # relation.
+    #
+    # Whether that actually bites depends on the Postgres image. The discovery
+    # query is
+    #   SELECT datname FROM pg_database
+    #    WHERE datallowconn AND NOT datistemplate AND datname != current_database()
+    #
+    # On the CURRENTLY DEPLOYED supabase/postgres 17.4.x there is nothing for it
+    # to find: the only databases are `postgres`, `template0` and `template1`,
+    # and templates are excluded — so these blocks only ever run against the
+    # application database and are LATENT. Confirmed on the live prod exporter:
+    # pg_exporter_last_scrape_error is 0 and there is exactly one `server` label
+    # value (127.0.0.1:5432) across the whole scrape.
+    #
+    # On 17.6.x and later, Supabase adds `_supabase` and `storage_vectors`
+    # (verified against 17.6.1.132). At that point pg_stat_statements,
+    # public.classes, public.submissions and public.help_requests would raise
+    # "relation does not exist" once per discovered database on every scrape —
+    # standing pg_exporter_last_scrape_error plus log noise — and
+    # pawtograder_table_sizes would run against the wrong databases.
+    #
+    # So master: true is a PREREQUISITE FOR THE NEXT POSTGRES IMAGE BUMP, not a
+    # fix for something failing today. The second reason is worse than noise:
+    # the `server` label is only host:port — parseFingerprint(dsn) concatenates
+    # host and port and does NOT include the database name — so databases
+    # discovered on one instance are indistinguishable by label. The first time
+    # one of these queries returns a row from a second database, the result is
+    # not a mis-ranked topk but a genuinely DUPLICATE label set, and that makes
+    # the exporter's registry return HTTP 500 for the ENTIRE /metrics endpoint
+    # (see pg_stat_statements_top above), taking down all postgres metrics.
+    #
+    # Rule of thumb: a new block here needs master: true unless it genuinely
+    # means something different per database.
+    # =========================================================================
+    pawtograder_classes:
+      query: |
+        SELECT COUNT(*) FILTER (WHERE NOT is_demo)::float AS real_classes,
+               COUNT(*) FILTER (WHERE is_demo)::float AS demo_classes,
+               COUNT(*)::float AS total_classes
+        FROM public.classes
+      # public.classes only exists in the application database.
+      master: true
+      metrics:
+        - real_classes:
+            usage: "GAUGE"
+            description: "Number of non-demo classes"
+        - demo_classes:
+            usage: "GAUGE"
+            description: "Number of demo classes (seeded fixtures)"
+        - total_classes:
+            usage: "GAUGE"
+            description: "Total class count"
+
+    pawtograder_active_submissions:
+      query: |
+        SELECT class_id::text,
+               COUNT(*)::float AS active_count
+        FROM public.submissions
+        WHERE is_active = true
+        GROUP BY class_id
+      # public.submissions only exists in the application database.
+      master: true
+      metrics:
+        - class_id:
+            usage: "LABEL"
+            description: "Class ID"
+        - active_count:
+            usage: "GAUGE"
+            description: "Number of submissions currently marked is_active=true in this class"
+
+    # Submissions ever created, per class. Backs the "Submissions created (1h)"
+    # stat, the "Submissions created / minute (by class)" timeseries and the
+    # "Top classes by recent activity" table on the app-business dashboard.
+    #
+    # This replaces web_submission_created_total, which never emitted a sample:
+    # submissions are created overwhelmingly by the autograder-create-submission
+    # edge function and otherwise by the browser talking to PostgREST, so the web
+    # tier never observes the event. Named pawtograder_* rather than keeping the
+    # web_ prefix on purpose — a web_ metric produced by postgres_exporter is a
+    # standing lie about where to look when it breaks.
+    #
+    # SOURCE: class_metrics_totals.submissions_total, not COUNT(*) over
+    # public.submissions. This is a COUNTER, so the only property that matters is
+    # that it never goes down. class_metrics_totals is maintained by an AFTER
+    # INSERT trigger (class_metrics_submissions_trg,
+    # supabase/migrations/20250928001347_class_metrics_performance.sql) that only
+    # ever increments, and there is no DELETE trigger — so deleting an assignment
+    # and cascading away its submissions leaves this value where it was. A live
+    # COUNT(*) would DROP, and Prometheus reads a drop as a counter reset, which
+    # makes rate() report the whole post-delete total as a spike. The absolute
+    # value can therefore drift from the true row count; that is fine, because
+    # every panel reads this through increase()/rate() and a constant offset
+    # cancels. The same migration backfills the column from the real count, so
+    # the two agree on any database that has run it.
+    #
+    # It is also free: one row per class, no scan of the submissions heap, so no
+    # cache_seconds is needed. Measured on the seeded dev database (6 classes):
+    # 0.4 ms for the equivalent COUNT(*) join; the counter-table read is a
+    # 100-row seq scan and does not grow with submission volume.
+    #
+    # Driven off public.classes with a LEFT JOIN so EVERY class emits a series,
+    # including one with zero submissions. That is load-bearing for the
+    # "Top classes by recent activity" panel: it adds this metric to
+    # pawtograder_grading_actions_total, and PromQL binary arithmetic drops any
+    # class_id present on only one side.
+    #
+    # public.classes and public.class_metrics_totals only exist in the
+    # application database.
+    pawtograder_submissions_created:
+      query: |
+        SELECT c.id::text AS class_id,
+               COALESCE(t.submissions_total, 0)::float AS total
+        FROM public.classes c
+        LEFT JOIN public.class_metrics_totals t ON t.class_id = c.id
+      master: true
+      metrics:
+        - class_id:
+            usage: "LABEL"
+            description: "Class ID"
+        - total:
+            usage: "COUNTER"
+            description: "Submissions ever created in this class (monotonic; from the class_metrics_totals insert counter)"
+
+    # Grading actions, per class and kind. Backs the "Grading actions (1h)" stat,
+    # the "Grading actions / minute (by kind)" timeseries and the same
+    # "Top classes by recent activity" table. Replaces web_grading_action_total,
+    # which never emitted: grading comments are written by lib/TableController.ts
+    # through a BROWSER Supabase client, so no server-side code path sees one.
+    #
+    # SOURCE: three trigger-maintained counter columns on
+    # public.class_metrics_totals, not a COUNT(*) over the comment tables. Same
+    # pattern as pawtograder_submissions_created above, and for the same reason:
+    # this is a COUNTER, so the only property that matters is that it never goes
+    # down. The scan this replaced could go down two ways, and Prometheus reads
+    # either as a counter reset and renders the next scrape as a spike the size
+    # of the whole remaining total:
+    #
+    #   1. public.delete_assignment_with_all_data() HARD-deletes all three
+    #      comment tables and submission_reviews. Counting soft-deleted rows
+    #      (which the old query did, deliberately) does not help here — the rows
+    #      are gone.
+    #   2. submission_reviews.released is mutable and
+    #      unrelease_all_grading_reviews_for_assignment() flips a whole
+    #      assignment back to false. The stat and topk panels sum ACROSS kinds,
+    #      so that corrupted them too, not just the by-kind series.
+    #
+    # Both are fixed at the source by
+    # supabase/migrations/20260904140000_grading_action_counters.sql: the comment
+    # counters are incremented by the AFTER INSERT trigger that has run on those
+    # tables since 20250928001347 (one more column on an UPDATE it already
+    # issues — no new trigger), and releases are counted as EVENTS by a scoped
+    # AFTER UPDATE OF released trigger. Nothing decrements any of them, so a
+    # deletion or a bulk unrelease is now invisible to rate() instead of being a
+    # phantom burst.
+    #
+    # These count grading ACTIONS, not surviving rows: a retracted comment, a
+    # deleted assignment and an unreleased review all still happened. The
+    # absolute value drifts above the live row count over time, which is fine —
+    # every panel reads this through increase()/rate() where a constant offset
+    # cancels.
+    #
+    # COST: one row per class, no heap scan, so NO cache_seconds. That matters
+    # beyond CPU: the previous cache_seconds: 300 froze the counter for five
+    # minutes at a time, so rate(...[1m]) at a 30s scrape alternated between a
+    # flat zero and the whole five-minute increment in one sample. The panels
+    # still use a 5m window (see their descriptions) because a 30s scrape gives
+    # a 1m window only two samples.
+    #
+    # Driven off public.classes CROSS JOINed with the three kinds so every class
+    # emits all three series, zero-filled. Load-bearing for the topk panel, which
+    # adds this metric to pawtograder_submissions_created_total and PromQL drops
+    # any class_id present on only one side.
+    #
+    # public.classes and public.class_metrics_totals only exist in the
+    # application database.
+    pawtograder_grading_actions:
+      query: |
+        SELECT c.id::text AS class_id,
+               k.kind,
+               CASE k.kind
+                 WHEN 'comment'      THEN COALESCE(t.grading_actions_comment_total, 0)
+                 WHEN 'rubric_check' THEN COALESCE(t.grading_actions_rubric_check_total, 0)
+                 ELSE                     COALESCE(t.grading_actions_release_total, 0)
+               END::float AS total
+        FROM public.classes c
+        CROSS JOIN (VALUES ('comment'), ('rubric_check'), ('release')) AS k(kind)
+        LEFT JOIN public.class_metrics_totals t ON t.class_id = c.id
+      master: true
+      metrics:
+        - class_id:
+            usage: "LABEL"
+            description: "Class ID"
+        - kind:
+            usage: "LABEL"
+            description: "comment (free-text grading comment), rubric_check (comment carrying a rubric_check_id), or release (a submission_reviews release event)"
+        - total:
+            usage: "COUNTER"
+            description: "Grading actions of this kind ever taken in this class; trigger-maintained and never decremented, so deleting an assignment or bulk-unreleasing does not look like a counter reset"
+
+    pawtograder_help_queue_depth:
+      query: |
+        SELECT class_id::text,
+               COUNT(*) FILTER (WHERE status = 'open')::float AS open_count,
+               COUNT(*) FILTER (WHERE status = 'in_progress')::float AS in_progress_count
+        FROM public.help_requests
+        WHERE created_at > NOW() - INTERVAL '24 hours'
+        GROUP BY class_id
+      # public.help_requests only exists in the application database.
+      master: true
+      metrics:
+        - class_id:
+            usage: "LABEL"
+            description: "Class ID"
+        - open_count:
+            usage: "GAUGE"
+            description: "Help requests in open state in the last 24h"
+        - in_progress_count:
+            usage: "GAUGE"
+            description: "Help requests being actively handled in the last 24h"
+
+    # Note: autograder workflow business metrics (run counts by
+    # conclusion, queue/run duration percentiles, error tallies) are
+    # NOT surfaced here. They live in the web app's /api/metrics route
+    # (lib/metrics.ts → refreshWorkflowMetrics) so they can carry the
+    # same labels and naming conventions as other app-level signals.
+
+    pawtograder_table_sizes:
+      query: |
+        SELECT n.nspname || '.' || c.relname AS relation,
+               pg_total_relation_size(c.oid)::float AS total_bytes,
+               pg_relation_size(c.oid)::float AS heap_bytes
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('r', 'p')
+          AND n.nspname IN ('public', 'auth', 'storage', 'realtime')
+          AND pg_total_relation_size(c.oid) > 10485760
+        ORDER BY pg_total_relation_size(c.oid) DESC
+        LIMIT 30
+      # pg_class is per-database, and the public/auth/storage/realtime schemas
+      # this filters on are the application database's. Without master:true the
+      # top-30 cut would be computed per discovered database, so the dashboard's
+      # unfiltered `topk(30, pawtograder_table_sizes_total_bytes)` could rank
+      # tables from different databases against each other.
+      master: true
+      metrics:
+        - relation:
+            usage: "LABEL"
+            description: "Schema-qualified table or partition name"
+        - total_bytes:
+            usage: "GAUGE"
+            description: "Total size including indexes and TOAST"
+        - heap_bytes:
+            usage: "GAUGE"
+            description: "Heap size only (no indexes)"
+{{- end }}

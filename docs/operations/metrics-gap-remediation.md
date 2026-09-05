@@ -1289,6 +1289,56 @@ and check whether it restarted. If it does, **every WS-APP deploy is a brief pro
 DB blip** and Gate 8 must be scheduled off-peak. Record the answer here when
 known.
 
+**ANSWERED, on prod, 2026-09-04 (Gate 6, helm revision 79). Yes — and worse than
+Q3 assumed.** `pawtograder-postgres-0` start time moved 2026-08-28T11:54:19Z ->
+2026-09-05T01:22:48Z on a deploy that changed no Postgres config at all. Blast
+radius, all within 01:22:57-01:23:39 and all self-recovered: gotrue x3 restarts,
+realtime x3, storage x2, `lastExit=Error` on each as their database went away.
+Zero OOMKills; replication resumed streaming at 0.000205s lag.
+
+The mechanism is NOT the exporter queries, which is why Q3 framed it too
+narrowly. `postgres-statefulset.yaml` hashed the whole of the rendered
+`monitoring.yaml` into the primary's `checksum/config`, and `monitoring.yaml`
+renders **every ServiceMonitor in the chart**. So the trigger was not "a
+`queries.yaml` change" but "any monitoring change whatsoever" — including
+`web.metricsLeader.enabled: true`, which adds a Deployment, a Service and a
+ServiceMonitor and touches nothing Postgres reads. Gate 7 would have rolled the
+database a second time for a pure observability toggle.
+
+The `interval`/`scrapeTimeout` entries in that annotation's regex strip were an
+earlier, narrower run at the same problem: they exempted a scrape-cadence tweak
+but not a whole new object.
+
+**Fixed in chart 0.3.20:** the exporter ConfigMap moved to its own template,
+`postgres-exporter-queries.yaml`, and the annotation hashes only that plus
+`postgres-config.yaml`. Verified both directions — flipping `web.metricsLeader`
+now leaves the checksum at `463d817b…` unchanged, and the rendered `queries.yaml`
+is byte-identical across the refactor (sha `40c8df3e7b2a8b65`, 15 queries before
+and after). Locked in by `assert_primary_checksum_scope` in
+`tests/render-guardrails.sh`, which was confirmed to FAIL against the old
+annotation before being committed.
+
+Adopting 0.3.20 costs exactly one more primary roll, because the hash _input_
+changes even though its _content_ does not. That is the same single roll Gate 7
+was going to cost anyway.
+
+After it, the rule is narrower than "monitoring changes are free", and the
+distinction is the whole point of the fix:
+
+| change                                                            | rolls the primary?  |
+| ----------------------------------------------------------------- | ------------------- |
+| a new/edited ServiceMonitor or anything else in `monitoring.yaml` | **no**              |
+| `web.metricsLeader` and other observability toggles               | **no**              |
+| a query added/edited in `postgres-exporter-queries.yaml`          | **yes — by design** |
+| `postgres-config.yaml` (postgresql.conf / pg_hba)                 | **yes — by design** |
+
+The last two rows are not a leftover. The exporter sidecar reads `queries.yaml`
+**only at startup**, so a query change that did not restart it would leave the
+sidecar serving the old query set while the mounted file said otherwise — a
+silently stale exporter, which is worse than a restart. `assert_primary_checksum_scope`
+asserts both rows: that the leader toggle does _not_ move the checksum, and that
+a real query change _does_.
+
 **Load generation (Q5).** Manual. This means Gate 4's assertions must be run
 _while_ load is being generated, not after — the counters are cumulative but the
 `rate()`-based panels need a live window. Coordinate the timing rather than

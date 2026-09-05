@@ -121,7 +121,7 @@ spec:
       rules:
         # WAL-G archiving is failing: the most recent `archive_command` attempt
         # errored and has not since succeeded (pawtograder_wal_archiving metric
-        # from the postgres_exporter query in monitoring.yaml). With
+        # from the postgres_exporter query in postgres-exporter-queries.yaml). With
         # archive_mode=on, unarchived WAL accumulates in pg_wal and can fill the
         # primary's PVC, halting all writes. Fires before the disk fills so there
         # is time to fix the object store / credentials. The `absent()` arm makes
@@ -154,7 +154,7 @@ spec:
       rules:
         # Fewer standbys streaming than configured (postgres.replica.replicas =
         # {{ $wantStandbys }}). streaming_standbys is the primary-side count from
-        # pg_stat_replication (pawtograder_replication query in monitoring.yaml) —
+        # pg_stat_replication (pawtograder_replication query in postgres-exporter-queries.yaml) —
         # NOT pg_replication_slots, which is empty because the chart creates no
         # slot. Comparing to the configured count (not a hard-coded 1) catches a
         # DEGRADED topology: with replicas>1, losing one standby while another
@@ -264,7 +264,7 @@ spec:
               series that vanish when the database is gone. Runbook:
               docs/operations/monitoring-alerting.md.
         # Connection-budget saturation. pawtograder_db_connections (postgres_exporter
-        # query in monitoring.yaml) reports used backends against max_connections;
+        # query in postgres-exporter-queries.yaml) reports used backends against max_connections;
         # the ratio is compared to a percent threshold. max() not sum(): there is a
         # single primary and max() collapses any residual per-`server` label
         # duplication from the exporter's auto-discovery. No absent() arm — an
