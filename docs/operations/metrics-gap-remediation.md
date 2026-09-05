@@ -1318,8 +1318,8 @@ and after). Locked in by `assert_primary_checksum_scope` in
 `tests/render-guardrails.sh`, which was confirmed to FAIL against the old
 annotation before being committed.
 
-Adopting 0.3.20 costs exactly one more primary roll, because the hash *input*
-changes even though its *content* does not. That is the same single roll Gate 7
+Adopting 0.3.20 costs exactly one more primary roll, because the hash _input_
+changes even though its _content_ does not. That is the same single roll Gate 7
 was going to cost anyway; after it, monitoring-only changes are free.
 
 **Load generation (Q5).** Manual. This means Gate 4's assertions must be run
