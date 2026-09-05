@@ -1320,7 +1320,24 @@ annotation before being committed.
 
 Adopting 0.3.20 costs exactly one more primary roll, because the hash _input_
 changes even though its _content_ does not. That is the same single roll Gate 7
-was going to cost anyway; after it, monitoring-only changes are free.
+was going to cost anyway.
+
+After it, the rule is narrower than "monitoring changes are free", and the
+distinction is the whole point of the fix:
+
+| change                                                            | rolls the primary?  |
+| ----------------------------------------------------------------- | ------------------- |
+| a new/edited ServiceMonitor or anything else in `monitoring.yaml` | **no**              |
+| `web.metricsLeader` and other observability toggles               | **no**              |
+| a query added/edited in `postgres-exporter-queries.yaml`          | **yes — by design** |
+| `postgres-config.yaml` (postgresql.conf / pg_hba)                 | **yes — by design** |
+
+The last two rows are not a leftover. The exporter sidecar reads `queries.yaml`
+**only at startup**, so a query change that did not restart it would leave the
+sidecar serving the old query set while the mounted file said otherwise — a
+silently stale exporter, which is worse than a restart. `assert_primary_checksum_scope`
+asserts both rows: that the leader toggle does _not_ move the checksum, and that
+a real query change _does_.
 
 **Load generation (Q5).** Manual. This means Gate 4's assertions must be run
 _while_ load is being generated, not after — the counters are cumulative but the
