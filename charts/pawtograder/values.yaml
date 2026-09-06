@@ -222,6 +222,10 @@ secrets:
     # Backward-compatible alias for edgeFunctionsBundles. Prefer setting
     # edgeFunctionsBundles explicitly in new overlays.
     bundles: []
+    # Exam/quiz features need the `exam-vision` bundle here: the worker's
+    # getExamVisionProvider() fails closed when EXAM_VISION_PROVIDER is unset, so an
+    # overlay that enables exam grading without this bundle errors every OCR and
+    # template-extraction job instead of silently producing placeholder OCR.
     webBundles: []                # usually: web, llm, discord
                                   #   `discord` belongs here as well as in
                                   #   edgeFunctionsBundles: DISCORD_APPLICATION_ID

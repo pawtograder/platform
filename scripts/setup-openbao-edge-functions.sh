@@ -88,6 +88,13 @@ declare -A BUNDLE_KEYS=(
   [github-app]="GITHUB_APP_ID GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET GITHUB_PRIVATE_KEY_STRING GITHUB_WEBHOOK_SECRET EVENTBRIDGE_SECRET"
   [aws-chime]="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_CHIME_EVENT_AUTH_TOKEN AWS_CHIME_SQS_QUEUE_ARN"
   [discord]="DISCORD_APPLICATION_ID DISCORD_BOT_TOKEN"
+  # Exam OCR / vision. EXAM_VISION_PROVIDER is REQUIRED wherever exam features are enabled:
+  # getExamVisionProvider() fails closed on an unset value rather than silently falling back to
+  # the offline fake provider (which returned placeholder OCR that looked like a successful
+  # scan). Set it to "gemini" with GOOGLE_API_KEY, or to "fake" for a deployment that should not
+  # do real OCR. EXAM_OCR_API_KEY, EXAM_GEMINI_MODEL, EXAM_OCR_RPM and EXAM_GEMINI_RPM are
+  # optional overrides.
+  [exam-vision]="EXAM_VISION_PROVIDER GOOGLE_API_KEY EXAM_OCR_API_KEY EXAM_GEMINI_MODEL EXAM_OCR_RPM EXAM_GEMINI_RPM"
   [canvas]="CANVAS_API_KEY CANVAS_API_URL"
   [sis]="SIS_API_URL SIS_AUTH_TOKEN"
   [smtp]="SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASSWORD SMTP_FROM SMTP_REPLY_TO"
