@@ -753,22 +753,26 @@ assert_refused "cold-load allowance below the largest bundle is refused" \
 # default drifts, an install silently gets a different pgmq fan-out or visibility
 # timeout than the one that was measured on 2026-09-07 (58 create_repo messages,
 # 88 minutes to drain, 20 of 58 re-read against the 300s timeout).
-echo "== github-async-worker drain tuning: defaults, overrides, and the VT invariant =="
+echo "== github-async-worker drain tuning: defaults, overrides, and BOTH batch ceilings =="
 assert_env_value "drain concurrency defaults to today's hardcoded 4" \
   templates/edge-functions.yaml GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY 4
 assert_env_value "visibility timeout defaults to today's hardcoded 300s" \
   templates/edge-functions.yaml GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS 300
-# An explicit override has to actually reach the pod, and both have to move
-# together: 8 x 120 = 960 is the smallest timeout the invariant allows at 8.
+# An explicit override has to actually reach the pod, and ALL THREE numbers have
+# to move together: 8 x 120 = 960 is the smallest visibility timeout AND the
+# smallest isolate lifetime the invariants allow at 8.
+TUNE8=(
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960
+  --set edgeFunctions.worker.timeoutMs=960000
+)
 assert_env_value "drain concurrency is settable" \
   templates/edge-functions.yaml GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY 8 \
-  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
-  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960
+  "${TUNE8[@]}"
 assert_env_value "visibility timeout is settable" \
   templates/edge-functions.yaml GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS 960 \
-  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
-  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960
-# The invariant: the visibility timeout must cover a whole batch of `n`, not one
+  "${TUNE8[@]}"
+# Ceiling 1: the visibility timeout must cover a whole batch of `n`, not one
 # message. Raising concurrency alone is the change that LOOKS like a throughput
 # fix and actually multiplies mid-flight redeliveries, so it is refused outright.
 assert_refused "raising concurrency without raising the visibility timeout is refused" \
@@ -778,15 +782,50 @@ assert_refused "a partially-raised visibility timeout is still refused" \
   "requires visibilityTimeoutSeconds >= 720" \
   --set edgeFunctions.githubAsyncWorker.drainConcurrency=6 \
   --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=719
-assert_renders "concurrency 6 renders at exactly 6 x 120s" \
+# Ceiling 2: the ISOLATE LIFETIME (worker.timeoutMs, 400s by default) must also
+# cover the modelled batch. This is a config-coherence rule — budgeting a batch
+# longer than the isolate that runs it cannot hold as advice, because an overrun
+# would skip the archive calls — and it is NOT a claim that isolates are being
+# truncated today (that was measured and retracted). A raised concurrency plus a
+# raised visibility timeout with the lifetime left at 400s is the incoherent
+# combination this chart's example used to recommend.
+assert_refused "8/960 with the default 400s isolate lifetime is refused" \
+  "requires edgeFunctions.worker.timeoutMs >= 960000" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960
+assert_renders "8/960 renders once the isolate lifetime covers the batch" \
+  "${TUNE8[@]}"
+# The same trap one step down, and the fix that does not touch concurrency at
+# all: 4 x 120 = 480 needs BOTH timeouts, because the model's 480s budget for a
+# batch of 4 does not fit the 400s lifetime. (Only the exact 4/300 pair below is
+# exempt from that arithmetic.)
+assert_refused "raising only the visibility timeout at n=4 still leaves the isolate too short" \
+  "requires edgeFunctions.worker.timeoutMs >= 480000" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=480
+assert_renders "4/480 renders with a 480s isolate lifetime" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=480 \
+  --set edgeFunctions.worker.timeoutMs=480000
+assert_renders "concurrency 6 renders at exactly 6 x 120s on both ceilings" \
   --set edgeFunctions.githubAsyncWorker.drainConcurrency=6 \
-  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=720
-# ...but the default pair (4, 300) also violates it and must keep rendering: it is
-# the measured status quo, deliberately grandfathered, or every existing install
-# would be refused. The rule only bites above the default concurrency.
-assert_renders "the default pair renders even though 300 < 4 x 120" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=720 \
+  --set edgeFunctions.worker.timeoutMs=720000
+# ...but the EXACT legacy pair (4, 300) violates both ceilings and must keep
+# rendering: it is what was hardcoded in the worker, so every install is already
+# running it and refusing it would refuse every upgrade. The exemption is that
+# pair ONLY. It used to be gated on `n > 4`, which let 4/60 and 1/60 through — a
+# 60s timeout re-serves a ~280s create_repo four times over while it is still in
+# flight, which is strictly worse than the status quo it was grandfathering.
+assert_renders "the exact legacy pair 4/300 still renders" \
   --set edgeFunctions.githubAsyncWorker.drainConcurrency=4 \
   --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=300
+assert_refused "4/60 is refused (not covered by the legacy exemption)" \
+  "requires visibilityTimeoutSeconds >= 480" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=4 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=60
+assert_refused "1/60 is refused (not covered by the legacy exemption)" \
+  "requires visibilityTimeoutSeconds >= 120" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=1 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=60
 # Bounds. 0 is the dangerous one: it drains NOTHING while the lease is held and
 # every heartbeat stays green, which reads as a hung queue rather than as a
 # misconfiguration.

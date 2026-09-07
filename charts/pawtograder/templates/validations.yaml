@@ -201,10 +201,32 @@ serialize through the shared Bottleneck limiters), so raising it against an
 unraised timeout makes that worse, not better, and would push read_ct toward
 the worker's poison-pill threshold with LEGITIMATE provisioning work.
 
-The rule deliberately only bites when drainConcurrency is raised ABOVE the
-default: the default pair (4, 300) violates the invariant and is the measured
-status quo, preserved so a chart upgrade changes nothing on its own. Refusing
-it would refuse every existing install.
+THERE ARE TWO CEILINGS, not one, and both have to cover the batch:
+
+  visibilityTimeoutSeconds  >= drainConcurrency x 120
+  worker.timeoutMs / 1000   >= drainConcurrency x 120
+
+The second one is the isolate lifetime handed to EdgeRuntime as workerTimeoutMs
+(charts/pawtograder/images/edge-functions/main.ts). It is a CONFIG-COHERENCE
+rule: budgeting a batch longer than the isolate that runs it is incoherent
+advice, because if the batch ever did overrun, Promise.allSettled would not
+reach the archive calls and successful work would redeliver. Under n x 120
+against the 400s default the largest coherent concurrency is THREE, which is
+why the exact legacy pair below is exempt and everything else is checked.
+(beforeUnload.wallClockRatio=50 also asks the isolate to retire at HALF the
+lifetime, ~200s at 400s; workerRun.ts's bounded-mode budget comment cites that
+number.) This rule asserts nothing about live behaviour — the claim that
+isolates are currently truncated mid-batch was measured and retracted; the
+runtime's wall-clock recycle count is flat at ~200/hour regardless of burst.
+
+GRANDFATHERING IS NARROW ON PURPOSE: only the EXACT legacy pair (4, 300) is
+exempt, because that is the configuration that was hardcoded in the worker and
+is therefore already running everywhere — refusing it would refuse every
+existing install and break the "a chart upgrade changes nothing" contract. Any
+other combination is a deliberate act and gets both invariants enforced. An
+earlier version of this rule was gated on `n > 4`, which let 4/60 and 1/60
+through: a 60s timeout re-serves a create_repo (~280s, measured) four times over
+while it is still in flight, which is strictly worse than the status quo.
 
 Bounds are refused rather than clamped here so a typo is visible at deploy time.
 asyncWorkerTuning.ts clamps the same bounds at runtime, because these can also
@@ -228,7 +250,15 @@ reach the pod through edgeFunctions.envFromSecrets, which the chart never sees.
 {{- if or (lt $vt 60) (gt $vt 1800) -}}
 {{- fail (printf "edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=%d is outside 60-1800. Below 60s a single create_repo (~105s of serialized GitHub work, measured 2026-09-07) is guaranteed to be re-served while still in flight; above 1800s the timeout becomes the RECOVERY LATENCY for a message whose isolate really died, and 1800s is already 1.5x the PawtograderQueueOldestMessageAging window so a genuinely stuck message still pages someone." $vt) -}}
 {{- end -}}
-{{- if and (gt $n 4) (lt $vt (mul $n 120)) -}}
-{{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency=%d requires visibilityTimeoutSeconds >= %d (%d x 120s/message), but it is %d. The visibility timeout must cover a whole batch of %d, not one message: the batch runs concurrently but its GitHub calls serialize through the shared Bottleneck limiters, so batch wall clock grows with concurrency (measured 2026-09-07: ~420s for a batch of 4, which already re-read 20 of 58 messages against a 300s timeout). Raising concurrency against a short timeout multiplies mid-flight redeliveries and walks read_ct toward the poison-pill DLQ with legitimate provisioning work. Set visibilityTimeoutSeconds: %d." $n (mul $n 120) $n $vt $n (mul $n 120)) -}}
+{{- $need := mul $n 120 -}}
+{{- $isLegacyPair := and (eq $n 4) (eq $vt 300) -}}
+{{- if not $isLegacyPair -}}
+{{- if lt $vt $need -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency=%d requires visibilityTimeoutSeconds >= %d (%d x 120s/message), but it is %d. The visibility timeout must cover the whole batch (%d concurrent messages), not a single message: the batch runs concurrently but its GitHub calls serialize through the fleet-wide per-org Bottleneck content limiter, so batch wall clock grows with concurrency (measured 2026-09-07: ~420s for a batch of 4, create_repo p50 279.5s, which already re-read 20 of 58 messages against a 300s timeout). A timeout below the batch re-serves messages that are still in flight, multiplying duplicate GitHub work and walking read_ct toward the poison-pill DLQ with legitimate provisioning work. Set visibilityTimeoutSeconds: %d. (Only the exact legacy pair 4/300 is exempt from this rule, because that is what every install is already running.)" $n $need $n $vt $n $need) -}}
+{{- end -}}
+{{- $lifetimeMs := .Values.edgeFunctions.worker.timeoutMs | int -}}
+{{- if lt (div $lifetimeMs 1000) $need -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency=%d requires edgeFunctions.worker.timeoutMs >= %d (%ds = %d x 120s/message), but it is %d (%ds). worker.timeoutMs is the ISOLATE LIFETIME (main.ts passes it to EdgeRuntime as workerTimeoutMs), and the whole batch runs inside ONE leaseholder isolate: if the batch outlives it the isolate is killed before Promise.allSettled reaches the archive calls, so every message in flight is re-provisioned from scratch on redelivery. Note beforeUnload.wallClockRatio=%v asks the isolate to retire at half the lifetime, so treat the lifetime as the hard cap and not the budget. Raising it lengthens EVERY function's isolate lifetime in this pod, and gracefulExitTimeoutSeconds (%v) / terminationGracePeriodSeconds (%v) must stay above it or a rollout cuts the drain off anyway — so the concurrency bump is a coupled change, not a one-line one." $n (mul $need 1000) $need $n $lifetimeMs (div $lifetimeMs 1000) .Values.edgeFunctions.beforeUnload.wallClockRatio .Values.edgeFunctions.gracefulExitTimeoutSeconds .Values.edgeFunctions.terminationGracePeriodSeconds) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

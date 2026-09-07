@@ -24,7 +24,8 @@ import {
   MAX_DRAIN_CONCURRENCY,
   MIN_VISIBILITY_TIMEOUT_SECONDS,
   MAX_VISIBILITY_TIMEOUT_SECONDS,
-  PER_MESSAGE_VT_BUDGET_SECONDS
+  PER_MESSAGE_VT_BUDGET_SECONDS,
+  ISOLATE_LIFETIME_ENV
 } from "@/supabase/functions/_shared/asyncWorkerTuning";
 
 function env(vars: Record<string, string | undefined>) {
@@ -187,5 +188,52 @@ describe("the visibility-timeout-vs-concurrency invariant", () => {
     expect(t.drainConcurrency).toBe(8);
     const invariant = t.issues.find((i) => i.kind === "invariant");
     expect(invariant?.message).toContain("960");
+  });
+});
+
+describe("the second ceiling: isolate lifetime vs concurrency (config coherence)", () => {
+  it("flags the default concurrency against the shipped 400s isolate lifetime", () => {
+    // A coherence check, not an observation: n x 120 budgets 480s for a batch of
+    // 4 while EDGE_WORKER_TIMEOUT_MS=400000 allows 400s, so the pair cannot both
+    // be right. Nothing here claims isolates are actually being truncated — that
+    // claim was measured and retracted (see the module header).
+    const t = resolveAsyncWorkerTuning(env({ [ISOLATE_LIFETIME_ENV]: "400000" }));
+    const lifetime = t.issues.filter((i) => i.kind === "invariant" && i.env === ISOLATE_LIFETIME_ENV);
+    expect(lifetime).toHaveLength(1);
+    expect(lifetime[0].effective).toBe(400);
+    expect(lifetime[0].message).toContain("480000");
+  });
+
+  it("stays silent once the lifetime covers the batch", () => {
+    const t = resolveAsyncWorkerTuning(env({ [ISOLATE_LIFETIME_ENV]: "480000" }));
+    expect(t.issues.filter((i) => i.env === ISOLATE_LIFETIME_ENV)).toHaveLength(0);
+  });
+
+  it("scales with concurrency, and reports both ceilings independently", () => {
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "300",
+        [ISOLATE_LIFETIME_ENV]: "400000"
+      })
+    );
+    expect(t.issues.filter((i) => i.kind === "invariant").map((i) => i.env)).toEqual([
+      VISIBILITY_TIMEOUT_ENV,
+      ISOLATE_LIFETIME_ENV
+    ]);
+  });
+
+  it("skips the check rather than guessing when the lifetime is absent or unparseable", () => {
+    for (const vars of [{}, { [ISOLATE_LIFETIME_ENV]: "" }, { [ISOLATE_LIFETIME_ENV]: "400s" }]) {
+      const t = resolveAsyncWorkerTuning(env(vars));
+      expect(t.issues.filter((i) => i.env === ISOLATE_LIFETIME_ENV)).toHaveLength(0);
+    }
+  });
+
+  it("never treats the lifetime as a knob it can change", () => {
+    const t = resolveAsyncWorkerTuning(env({ [ISOLATE_LIFETIME_ENV]: "1000" }));
+    expect(Object.keys(t)).toEqual(["drainConcurrency", "visibilityTimeoutSeconds", "issues"]);
+    expect(t.drainConcurrency).toBe(4);
+    expect(t.visibilityTimeoutSeconds).toBe(300);
   });
 });

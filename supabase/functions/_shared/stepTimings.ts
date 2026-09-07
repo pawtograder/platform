@@ -49,11 +49,21 @@
 /** Reads one environment variable. Injectable for tests. */
 export type StepTimingsEnvReader = (key: string) => string | undefined;
 
+// Reached through `globalThis` rather than naming `Deno` directly, and that is load-bearing for the
+// WEB build, not a style choice. tsconfig.json excludes `supabase/`, but a file it excludes is still
+// pulled into the program when an INCLUDED file imports it — and `tests/unit/*.test.ts` sits under
+// the root `**/*.ts` include and imports this module. So a bare `Deno.env.get` here fails
+// `next build` with "Cannot find name 'Deno'" even though `deno check` is perfectly happy, which is
+// exactly how it reached CI unnoticed. Note the irony: keeping this module dependency-free (so Jest
+// can exercise it) is what puts it in the Next program at all; the sibling modules that reference
+// `Deno` freely all carry `npm:`/`jsr:` specifiers that make TypeScript skip them.
+type DenoEnvGlobal = { Deno?: { env?: { get?: (key: string) => string | undefined } } };
+
 const denoEnv: StepTimingsEnvReader = (key) => {
   try {
-    // `Deno` is absent under Jest and `Deno.env.get` throws without --allow-env. Either way the
-    // debug toggle is a nice-to-have; never let reading it break the operation being measured.
-    return Deno.env.get(key);
+    // Absent under Jest, and `Deno.env.get` throws without --allow-env. Either way the debug toggle
+    // is a nice-to-have; never let reading it break the operation being measured.
+    return (globalThis as DenoEnvGlobal).Deno?.env?.get?.(key);
   } catch {
     return undefined;
   }
@@ -96,8 +106,33 @@ export type StepTimingsSnapshot = {
   /** Name of the step with the largest total, or null if no step was recorded. */
   slowest_step: string | null;
   slowest_ms: number;
-  /** Name of the step that threw, if any. */
+  /**
+   * True when an error escaped the whole operation (see `noteEscapingError`).
+   *
+   * NOT "some step threw". Most steps in this path throw as a matter of routine: `waitForRepoReady`
+   * polls a freshly generated repo and normally collects several 404/409s before the ref appears,
+   * the duplicate-repository path is entered BY catching a 422, and `finalizeRepo` treats
+   * patch_repo_settings / enable_actions / the ruleset as non-essential and logs-and-continues. An
+   * earlier version flagged all of those, so a completely healthy create_repo emitted a snapshot
+   * labelled as failed — which is worse than no signal when the whole point is to read 58 of these
+   * lines looking for a latency outlier.
+   */
+  error_escaped: boolean;
+  /**
+   * The timed step the escaping error came from, when it is attributable — i.e. the error object
+   * that escaped is the SAME object a timed step threw. Null when nothing escaped, and also null
+   * when the escaping error was raised outside any timed step (e.g. `waitForRepoReady`'s
+   * "did not become ready" UserVisibleError, which is thrown after its loop rather than by one of
+   * the timed requests inside it; `error_escaped` is still true, and the
+   * `wait_for_repo_ready_attempts` counter tells that story instead).
+   */
   failed_step: string | null;
+  /**
+   * True when this snapshot was taken mid-operation rather than at `finish()`. Handled-failure
+   * Sentry captures attach one of these, since Sentry applies scope data at CAPTURE time and those
+   * captures happen long before the operation ends.
+   */
+  partial: boolean;
   /** Caller-supplied low-cardinality context (org, creation_method, ...). */
   meta: StepTimingsMeta;
 };
@@ -159,6 +194,14 @@ export class StepTimings {
   private readonly counters = new Map<string, number>();
   private readonly meta: StepTimingsMeta;
   private failedStep: string | null = null;
+  private errorEscaped = false;
+  /**
+   * The most recent throw seen by `time()`, kept ONLY so an escaping error can be attributed back
+   * to the step that raised it, by object identity. Holding the error itself is deliberate: matching
+   * on identity is what distinguishes "this 404 was caught and retried" from "this 404 is the error
+   * that killed the job".
+   */
+  private lastThrow: { step: string; error: unknown } | null = null;
   private finished = false;
 
   constructor(op: string, options: StepTimingsOptions = {}) {
@@ -178,9 +221,15 @@ export class StepTimings {
   /**
    * Run `fn`, record how long it took under `step`, and return/throw EXACTLY what `fn` did.
    *
-   * On throw the elapsed time is still recorded and the step is marked as the failing one, then the
-   * original error is re-thrown unmodified — the instrumentation must never mask, wrap, or delay an
-   * error, and a failed run is precisely when the breakdown of the steps that DID complete matters.
+   * On throw the elapsed time is still recorded and the original error is re-thrown unmodified —
+   * the instrumentation must never mask, wrap, or delay an error, and a failed run is precisely
+   * when the breakdown of the steps that DID complete matters.
+   *
+   * A throw here does NOT mark the operation as failed. It only remembers the error so that, IF the
+   * same error later escapes the whole operation, `noteEscapingError` can attribute it to this
+   * step. Callers in this codebase catch and recover from most step failures on purpose (poll
+   * misses, the duplicate-repo path, the non-essential finalize settings), and flagging those would
+   * label every healthy run as broken.
    */
   async time<T>(step: string, fn: () => Promise<T> | T): Promise<T> {
     const started = this.readClock();
@@ -189,7 +238,7 @@ export class StepTimings {
       result = await fn();
     } catch (error) {
       this.add(step, this.readClock() - started);
-      this.markFailed(step);
+      this.rememberThrow(step, error);
       throw error;
     }
     this.add(step, this.readClock() - started);
@@ -239,16 +288,32 @@ export class StepTimings {
     }
   }
 
-  /** Mark `step` as the one that failed. Idempotent: the FIRST failure wins. */
-  markFailed(step: string): void {
+  /**
+   * Record that `error` escaped the whole operation. Call from the operation wrapper's `catch`
+   * (before re-throwing) — that is the only place that knows an error was NOT recovered from.
+   *
+   * Attribution is by object identity against the last throw a timed step produced, so a recovered
+   * poll miss can never be mistaken for the fatal error, and an error re-thrown by the caller (e.g.
+   * `throw createErr` after inspecting it) is still attributed to the step that originally raised
+   * it. Idempotent: the first escaping error wins.
+   */
+  noteEscapingError(error: unknown): void {
     try {
-      if (this.failedStep === null) this.failedStep = step;
+      if (this.errorEscaped) return;
+      this.errorEscaped = true;
+      if (this.lastThrow && this.lastThrow.error === error) {
+        this.failedStep = this.lastThrow.step;
+      }
     } catch {
       /* instrumentation must never throw */
     }
   }
 
-  /** Current view of the timings. Safe to call at any point, including mid-operation. */
+  /**
+   * Current view of the timings. Safe to call at any point, including mid-operation: it only READS
+   * the accumulators, so taking a partial snapshot for a handled-failure Sentry capture cannot
+   * double-count a step, truncate the final line, or interfere with `finish()`.
+   */
   snapshot(): StepTimingsSnapshot {
     const steps: Record<string, number> = {};
     const repeated: Record<string, number> = {};
@@ -279,7 +344,11 @@ export class StepTimings {
       unaccounted_ms: total - accounted,
       slowest_step: slowestStep,
       slowest_ms: slowestMs,
+      error_escaped: this.errorEscaped,
       failed_step: this.failedStep,
+      // `finish()` flips `finished` BEFORE taking its snapshot, so the final line is never marked
+      // partial and every mid-operation snapshot is.
+      partial: !this.finished,
       meta: { ...this.meta }
     };
   }
@@ -312,6 +381,14 @@ export class StepTimings {
       return snapshot;
     } catch {
       return undefined;
+    }
+  }
+
+  private rememberThrow(step: string, error: unknown): void {
+    try {
+      this.lastThrow = { step, error };
+    } catch {
+      /* instrumentation must never throw */
     }
   }
 

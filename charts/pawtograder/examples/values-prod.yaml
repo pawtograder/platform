@@ -210,13 +210,47 @@ edgeFunctions:
   # visibility timeout. Correct outcome, terrible latency. At ~0.6 msg/min a 585-student
   # enrollment burst is ~15 hours.
   #
-  # To double throughput and stop the mid-flight redeliveries, raise BOTH — the timeout has to
-  # cover a whole batch of drainConcurrency (x120s/message), and the render is refused if it does
-  # not:
+  # There are TWO ceilings over the batch, and the render is refused if either is broken:
+  # visibilityTimeoutSeconds >= drainConcurrency x 120 AND worker.timeoutMs/1000 >= the same.
+  # worker.timeoutMs is the ISOLATE LIFETIME, and the whole batch runs in one isolate: a
+  # configuration whose modelled batch outlives it is incoherent, because if it ever did overrun
+  # the archive calls would not run and successful work would redeliver. Under n x 120 against the
+  # 400s default the largest coherent concurrency is THREE, so a raised visibility timeout ALWAYS
+  # has to bring worker.timeoutMs with it. This is a coherence rule only: the claim that isolates
+  # are currently being truncated mid-batch was measured and retracted (the runtime's wall-clock
+  # recycle log is flat at ~200/hour whether or not a burst is running, which is baseline churn
+  # from leased mode's resident isolate). The 300s visibility timeout remains the established
+  # cause of the re-reads.
+  #
+  # So the cheapest correct first move here is NOT to raise concurrency. It is to leave
+  # drainConcurrency at 4 and lift both timeouts to cover the modelled batch:
+  #
+  #   githubAsyncWorker:
+  #     drainConcurrency: 4
+  #     visibilityTimeoutSeconds: 480   # 4 x 120
+  #   worker:
+  #     timeoutMs: 480000               # the isolate must outlive the batch
+  #   gracefulExitTimeoutSeconds: 490   # >= worker.timeoutMs
+  #   terminationGracePeriodSeconds: 510 # >= preStopSleepSeconds + gracefulExitTimeout
+  #
+  # Doubling throughput on top of that means moving all of it again, together — 8 x 120 = 960:
   #
   #   githubAsyncWorker:
   #     drainConcurrency: 8
-  #     visibilityTimeoutSeconds: 960   # 8 x 120
+  #     visibilityTimeoutSeconds: 960
+  #   worker:
+  #     timeoutMs: 960000
+  #   gracefulExitTimeoutSeconds: 970
+  #   terminationGracePeriodSeconds: 990
+  #
+  # Do NOT set drainConcurrency: 8 with worker.timeoutMs left at 400000. That combination is
+  # incoherent — a batch modelled at 960s inside a 400s isolate — and the chart refuses it. Stated
+  # the other way round: if worker.timeoutMs stays at the 400000 default, the largest coherent
+  # drainConcurrency is 3, so under the current isolate lifetime there is NO throughput increase
+  # available from this knob alone. Raising the lifetime is the price of raising concurrency.
+  # Be deliberate about the blast radius before choosing it: worker.timeoutMs is per-isolate for
+  # EVERY function in this pod, and a 960s lifetime means isolates live 2.4x longer and accumulate
+  # correspondingly more heap on a tier that has OOM-killed PID 1 twice.
   #
   # Do it as its own deploy, ahead of a known release burst rather than during one, and watch
   # pgmq queue depth, the edge pods' memory (all 8 handlers share ONE 256MiB leaseholder isolate),

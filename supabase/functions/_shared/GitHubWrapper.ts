@@ -1481,6 +1481,11 @@ function attachStepTimingsToScope(snapshot: StepTimingsSnapshot, scope?: Sentry.
   scope.setTag("step_timings_op", snapshot.op);
   scope.setTag("step_timings_slowest_step", snapshot.slowest_step ?? "none");
   scope.setTag("step_timings_total_bucket", bucketDurationMs(snapshot.total_ms));
+  // A partial snapshot is a mid-operation view (see attachHandledFailureTimings), so its total and
+  // its step list are both incomplete by construction. Tag it, or the two kinds of event are
+  // indistinguishable in Bugsink and someone will read a partial total as an operation duration.
+  scope.setTag("step_timings_partial", String(snapshot.partial));
+  scope.setTag("step_timings_error_escaped", String(snapshot.error_escaped));
   if (snapshot.failed_step) {
     scope.setTag("step_timings_failed_step", snapshot.failed_step);
   }
@@ -1496,6 +1501,35 @@ function attachStepTimingsToScope(snapshot: StepTimingsSnapshot, scope?: Sentry.
     level: "info",
     data: snapshot as unknown as Record<string, unknown>
   });
+}
+
+/**
+ * Attach the timings so far to the scope for a HANDLED failure that is about to be reported and
+ * then recovered from.
+ *
+ * Sentry applies scope data at CAPTURE time. `createRepo` attaches its finished snapshot in a
+ * `finally` at the very end, so every `Sentry.captureException` that happens mid-operation — and in
+ * this file those are exactly the interesting ones: patch_repo_settings, enable_actions, the
+ * ruleset, the rulesets-list read, the staff-roster read, each of which is deliberately
+ * log-and-continue — would otherwise arrive in Bugsink with no timing context at all. Attaching a
+ * partial snapshot first is cheap (a read of the accumulators) and cannot affect the final one:
+ * `snapshot()` does not mutate, and `finish()` remains single-shot, so the summary log line is
+ * still emitted exactly once with the complete numbers.
+ */
+function attachHandledFailureTimings(
+  timings: StepTimings | undefined,
+  scope: Sentry.Scope | undefined,
+  handledStep: string
+): void {
+  if (!timings || !scope) return;
+  try {
+    attachStepTimingsToScope(timings.snapshot(), scope);
+    // The step whose failure was handled here. NOT `failed_step`, which is reserved for an error
+    // that escaped the whole operation.
+    scope.setTag("step_timings_handled_failure_step", handledStep);
+  } catch {
+    /* diagnostics must never break the operation they describe */
+  }
 }
 
 /**
@@ -1535,6 +1569,7 @@ async function finalizeRepo(
   } catch (patchErr) {
     console.error("Error patching repo settings (squash merge / template flag)", patchErr);
     scope?.setTag("patch_repo_settings_failed", "true");
+    attachHandledFailureTimings(timings, scope, "patch_repo_settings");
     Sentry.captureException(patchErr, scope);
   }
   // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
@@ -1557,6 +1592,7 @@ async function finalizeRepo(
   } catch (actionsErr) {
     console.error("Error enabling GitHub Actions", actionsErr);
     scope?.setTag("enable_actions_failed", "true");
+    attachHandledFailureTimings(timings, scope, "enable_actions");
     Sentry.captureException(actionsErr, scope);
   }
   // Resolve the repo's actual default branch rather than assuming `main`: a FORK inherits the
@@ -1606,6 +1642,7 @@ async function finalizeRepo(
     // Log but don't fail repo creation if ruleset creation fails
     console.error("Error applying branch protection ruleset", rulesetError);
     scope?.setTag("ruleset_creation_failed", "true");
+    attachHandledFailureTimings(timings, scope, "branch_protection_ruleset");
     Sentry.captureException(rulesetError, scope);
   }
 
@@ -1641,6 +1678,13 @@ export async function createRepo(
   });
   try {
     return await createRepoInstrumented(org, repoName, template_repo, options, scope, timings);
+  } catch (error) {
+    // The ONLY place that knows an error was not recovered from. Individual steps throw routinely
+    // (poll misses on a freshly generated repo, the 422 that opens the duplicate-repo path, the
+    // non-essential finalize settings), and every one of those is caught downstream — so `time()`
+    // deliberately does not flag them and this catch promotes the one that actually escaped.
+    timings.noteEscapingError(error);
+    throw error;
   } finally {
     timings.finish((snapshot) => attachStepTimingsToScope(snapshot, scope));
   }
@@ -1952,6 +1996,7 @@ export async function applyBranchProtectionRuleset(
     } else {
       // List failures shouldn't kill repo creation. Fall through assuming none.
       console.warn(`Could not list rulesets for ${org}/${repoName}:`, e);
+      attachHandledFailureTimings(timings, scope, "ruleset_list");
       Sentry.captureException(e, scope);
       existingRulesetId = null;
       existingRules = null;
@@ -3082,6 +3127,11 @@ export async function syncRepoPermissions(
       options,
       timings
     );
+  } catch (error) {
+    // Same reasoning as createRepo: flag only what escapes. This path recovers from a missing staff
+    // team on purpose (TeamNotFoundError degrades to "do not remove anyone" and carries on).
+    timings.noteEscapingError(error);
+    throw error;
   } finally {
     timings.finish((snapshot) => attachStepTimingsToScope(snapshot, _scope));
   }
@@ -3168,6 +3218,8 @@ async function syncRepoPermissionsInstrumented(
     scope?.setTag("staff_team_roster", "unavailable");
     Sentry.withScope((s) => {
       s.setFingerprint(["staff-team-roster-unavailable"]);
+      // Attach to the FORKED scope this capture actually uses, not to `scope`.
+      attachHandledFailureTimings(timings, s, "staff_team_members");
       Sentry.captureException(err, s);
     });
     console.error(`Could not read staff team for ${org}/${courseSlug}; not removing any collaborators`, err);

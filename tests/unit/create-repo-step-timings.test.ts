@@ -131,7 +131,7 @@ describe("StepTimings.time", () => {
 });
 
 describe("StepTimings failure behavior", () => {
-  it("still reports the steps that completed when a later step throws", async () => {
+  it("still reports the steps that completed when an error escapes the operation", async () => {
     const { clock, lines, timings } = harness();
     const boom = new Error("GitHub said no");
 
@@ -145,11 +145,77 @@ describe("StepTimings failure behavior", () => {
         return Promise.reject(boom);
       })
     ).rejects.toBe(boom);
+    timings.noteEscapingError(boom); // what createRepo's catch does before re-throwing
 
     timings.finish();
     const snapshot = parseSummary(lines);
     expect(snapshot.steps).toEqual({ patch_repo_settings: 200, get_head_sha: 93_000 });
+    expect(snapshot.error_escaped).toBe(true);
     expect(snapshot.failed_step).toBe("get_head_sha");
+  });
+
+  it("does NOT flag a step whose error was caught and recovered from", async () => {
+    // The shape of waitForRepoReady: a freshly generated repo 404s on the first polls, the loop
+    // swallows those and retries, and the operation succeeds. Flagging that would label every
+    // healthy create_repo as failed — which is what this instrumentation is being read to rule out.
+    const { clock, lines, timings } = harness();
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      timings.count("wait_for_repo_ready_attempts");
+      try {
+        await timings.time("wait_for_repo_ready_requests", () => {
+          clock.advance(300);
+          return Promise.reject(Object.assign(new Error("Not Found"), { status: 404 }));
+        });
+      } catch {
+        // caught and retried, exactly like the real poll loop
+      }
+    }
+    timings.count("wait_for_repo_ready_attempts");
+    await timings.time("wait_for_repo_ready_requests", () => {
+      clock.advance(250);
+      return Promise.resolve(undefined);
+    });
+
+    timings.finish();
+    const snapshot = parseSummary(lines);
+    expect(snapshot.error_escaped).toBe(false);
+    expect(snapshot.failed_step).toBeNull();
+    // The time and the attempt count are still recorded — the misses are measured, just not blamed.
+    expect(snapshot.steps.wait_for_repo_ready_requests).toBe(850);
+    expect(snapshot.counts.wait_for_repo_ready_attempts).toBe(3);
+    expect(snapshot.repeated.wait_for_repo_ready_requests).toBe(3);
+  });
+
+  it("flags an escaping error raised outside any timed step, without attributing it", async () => {
+    // waitForRepoReady's "did not become ready" UserVisibleError is thrown after its loop, not by
+    // one of the timed requests inside it. It must still be flagged; it just cannot be pinned on a
+    // step, and inventing one would be a lie.
+    const { timings } = harness();
+    await timings.time("wait_for_repo_ready_requests", () => Promise.resolve(undefined));
+    timings.noteEscapingError(new Error("Repo org/repo did not become ready in time"));
+    const snapshot = timings.snapshot();
+    expect(snapshot.error_escaped).toBe(true);
+    expect(snapshot.failed_step).toBeNull();
+  });
+
+  it("attributes an error the caller inspected and re-threw to its originating step", async () => {
+    // createRepo's catch re-throws the SAME object (`throw createErr`) after classifying it.
+    const { timings } = harness();
+    const createErr = new Error("boom");
+    await expect(timings.time("template_generate", () => Promise.reject(createErr))).rejects.toBe(createErr);
+    timings.noteEscapingError(createErr);
+    expect(timings.snapshot().failed_step).toBe("template_generate");
+  });
+
+  it("does not attribute an escaping error that a recovered step merely happens to precede", async () => {
+    const { timings } = harness();
+    const recovered = new Error("404 that was retried");
+    await expect(timings.time("wait_for_repo_ready_requests", () => Promise.reject(recovered))).rejects.toBe(recovered);
+    timings.noteEscapingError(new Error("something else entirely"));
+    const snapshot = timings.snapshot();
+    expect(snapshot.error_escaped).toBe(true);
+    expect(snapshot.failed_step).toBeNull();
   });
 
   it("re-throws the ORIGINAL error object, unmodified", async () => {
@@ -182,13 +248,20 @@ describe("StepTimings failure behavior", () => {
         throw boom;
       })
     ).rejects.toBe(boom);
+    // Not flagged yet: the caller may still recover.
+    expect(timings.snapshot().failed_step).toBeNull();
+    timings.noteEscapingError(boom);
     expect(timings.snapshot().failed_step).toBe("get_octokit");
   });
 
-  it("keeps the FIRST failing step when several fail", async () => {
+  it("keeps the FIRST escaping error when noteEscapingError is called more than once", async () => {
     const { timings } = harness();
-    await expect(timings.time("first", () => Promise.reject(new Error("a")))).rejects.toThrow("a");
-    await expect(timings.time("second", () => Promise.reject(new Error("b")))).rejects.toThrow("b");
+    const first = new Error("a");
+    const second = new Error("b");
+    await expect(timings.time("first", () => Promise.reject(first))).rejects.toThrow("a");
+    timings.noteEscapingError(first);
+    await expect(timings.time("second", () => Promise.reject(second))).rejects.toThrow("b");
+    timings.noteEscapingError(second);
     expect(timings.snapshot().failed_step).toBe("first");
   });
 });
@@ -229,6 +302,34 @@ describe("StepTimings cannot break the operation it measures", () => {
     });
     await expect(timings.time("get_octokit", () => Promise.resolve("ok"))).resolves.toBe("ok");
     expect(() => timings.finish()).not.toThrow();
+  });
+
+  it("supports a partial snapshot mid-operation without disturbing the final one", async () => {
+    // What a handled-failure Sentry capture attaches: Sentry applies scope data at capture time, so
+    // patch_repo_settings / enable_actions / ruleset events need the breakdown as it stands then.
+    const { clock, lines, timings } = harness();
+    await timings.time("template_generate", () => {
+      clock.advance(4_896);
+      return Promise.resolve(undefined);
+    });
+
+    const partial = timings.snapshot();
+    expect(partial.partial).toBe(true);
+    expect(partial.steps).toEqual({ template_generate: 4_896 });
+    expect(lines).toHaveLength(0); // a partial snapshot logs nothing
+
+    await timings.time("get_head_sha", () => {
+      clock.advance(390);
+      return Promise.resolve(undefined);
+    });
+    timings.finish();
+
+    const final = parseSummary(lines);
+    expect(final.partial).toBe(false);
+    // Not double-counted and not truncated by the partial read.
+    expect(final.steps).toEqual({ template_generate: 4_896, get_head_sha: 390 });
+    expect(final.repeated).toEqual({});
+    expect(final.total_ms).toBe(5_286);
   });
 
   it("is idempotent: a second finish() does not emit a second line", () => {

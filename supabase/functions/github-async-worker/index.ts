@@ -2583,15 +2583,22 @@ function getTuning(scope: Sentry.Scope) {
   const misconfigured = tuning.issues.filter((i) => i.kind !== "invariant");
   if (misconfigured.length > 0) {
     const s = scope.clone();
+    s.setLevel("warning");
     s.setTag("async_worker_tuning_rejected", "true");
     s.setContext("async_worker_tuning", {
       drain_concurrency: tuning.drainConcurrency,
       visibility_timeout_seconds: tuning.visibilityTimeoutSeconds,
       issues: misconfigured.map((i) => i.message)
     });
+    // The scope goes POSITIONALLY, and the level goes ON the scope. This worker
+    // builds its own Sentry.Scope rather than using the SDK's current scope, so
+    // an options-object second argument (`{ level: "warning" }`) is applied to
+    // the CURRENT scope and silently drops every tag and context set above —
+    // the event would arrive with only the count in its message. Same shape as
+    // the captureException/captureMessage calls elsewhere in this file.
     Sentry.captureMessage(
       `github-async-worker: rejected ${misconfigured.length} configured drain tuning value(s); running on bounded values`,
-      { level: "warning" }
+      s
     );
   }
   return tuning;

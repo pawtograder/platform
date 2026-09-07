@@ -34,10 +34,53 @@
  *     was margin, but a burst several times longer would not have any, and the
  *     work that would get dead-lettered is LEGITIMATE provisioning.
  *
- * THE INVARIANT, which is the part that must survive future edits:
+ * THE INVARIANT, which is the part that must survive future edits. There are
+ * TWO ceilings over the same quantity, and a batch has to fit under BOTH:
  *
- *   The visibility timeout must exceed the worst-case time to process a WHOLE
- *   BATCH OF `n`, not the worst case for a single message.
+ *   visibility timeout    >= worst-case time to process a whole batch of `n`
+ *   isolate lifetime      >= worst-case time to process a whole batch of `n`
+ *
+ * i.e. neither is about a single message. The second ceiling is
+ * `EDGE_WORKER_TIMEOUT_MS` (chart: `edgeFunctions.worker.timeoutMs`, 400s),
+ * which the demuxer hands to EdgeRuntime as `workerTimeoutMs`. The whole batch
+ * runs inside ONE leaseholder isolate, so if the batch outlives that lifetime
+ * the isolate dies before `Promise.allSettled` reaches the archive calls: the
+ * repos got created and the messages never got archived, so pgmq redelivers and
+ * the work is redone. Note also that `beforeUnload.wallClockRatio: 50` asks the
+ * isolate to retire at HALF the lifetime (~200s at 400s) — workerRun.ts's
+ * bounded-mode budget comment cites that same ~200s — so 400s is the hard cap,
+ * not the budget.
+ *
+ * WHAT THE SECOND CEILING IS AND IS NOT. It is a CONFIG-COHERENCE rule: a
+ * visibility timeout the isolate cannot outlive is incoherent advice, whatever
+ * the runtime happens to be doing. `n * 120` and a 400s lifetime give an honest
+ * maximum coherent `n` of THREE (3 x 120 = 360 <= 400; 4 x 120 = 480 > 400), so
+ * even the shipped default of 4 sits just outside the conservative model — which
+ * is exactly why the chart grandfathers the EXACT legacy pair (4, 300) and
+ * checks everything else. Raising the visibility timeout without raising
+ * `edgeFunctions.worker.timeoutMs` produces a combination that cannot hold, and
+ * the chart refuses it.
+ *
+ * IT IS NOT A CLAIM THAT ISOLATES ARE BEING KILLED MID-BATCH TODAY. An earlier
+ * version of this comment said that, and it was MEASURED AND RETRACTED
+ * (2026-09-07). The runtime logs `wall clock duraiton reached: isolate: <id>`
+ * (the typo is the runtime's), and hourly counts across the functions pods were
+ * FLAT at ~200/hour before, during and after the 58-repo burst (197 at 03:00,
+ * 242 at 04:00, 225 at 05:00, 192 idle at 12:00). That is baseline churn:
+ * leased mode deliberately keeps a resident isolate polling, so it reaches the
+ * 400s wall clock and recycles roughly every 3.5 minutes per pod. Nothing in
+ * that signal ties a termination to an unarchived message, so mid-batch
+ * truncation is UNPROVEN and the ~20% bump during the burst is not its
+ * signature. The 300s visibility timeout remains the established cause of the
+ * 20-of-58 re-reads.
+ *
+ * Note also that the linear `n * 120` model is a deliberately CONSERVATIVE
+ * upper bound. The measured ~420s cadence is a completion cadence, not a proven
+ * handler duration — it includes idle-poll and re-poke latency — and a
+ * perfectly parallel batch of 4 create_repos at p50 279.5s would be ~280-300s,
+ * which fits inside 400s. The conservative model is kept because the fleet-wide
+ * content limiter makes the batch partially serial (below) and because erring
+ * toward a longer timeout costs nothing but recovery latency.
  *
  * A batch is not "n independent messages in parallel" in wall-clock terms. The
  * GitHub calls inside the handlers funnel through the shared `Bottleneck`
@@ -67,6 +110,14 @@
 export const DRAIN_CONCURRENCY_ENV = "GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY";
 /** Env var read for the pgmq visibility timeout (chart: edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds). */
 export const VISIBILITY_TIMEOUT_ENV = "GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS";
+/**
+ * The isolate lifetime, read only to CHECK the second ceiling — this module
+ * never sets it. Rendered by the same chart template that renders the two knobs
+ * above (chart: edgeFunctions.worker.timeoutMs), so it is present in the same
+ * container env; when it is absent (local `supabase functions serve`, tests) the
+ * check is skipped rather than guessed at.
+ */
+export const ISOLATE_LIFETIME_ENV = "EDGE_WORKER_TIMEOUT_MS";
 
 /** Today's hardcoded `n`. Keeping this as the default is what makes the change inert until configured. */
 export const DEFAULT_DRAIN_CONCURRENCY = 4;
@@ -318,6 +369,33 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
         `~7min for a batch of 4). Messages will be re-read while still in flight — that is the ` +
         `read_ct>1 on 20 of 58 messages from that incident. Raise ${VISIBILITY_TIMEOUT_ENV} to >= ${required}.`
     });
+  }
+
+  // Second ceiling: the isolate lifetime. A configuration whose modelled batch
+  // outlives the isolate is incoherent — if it ever did overrun, the archive
+  // calls would not run and successful work would redeliver — so it is reported
+  // on the same footing as the visibility timeout. This is a coherence check,
+  // NOT evidence that isolates are being truncated: see the header for the
+  // measurement that retracted that claim. Checked here as well as in the chart
+  // because the chart cannot see values that arrive via envFromSecrets.
+  const lifetimeRaw = env.get(ISOLATE_LIFETIME_ENV);
+  if (lifetimeRaw !== undefined && /^\d+$/.test(lifetimeRaw.trim())) {
+    const lifetimeSeconds = Math.floor(Number(lifetimeRaw.trim()) / 1000);
+    if (lifetimeSeconds < required) {
+      issues.push({
+        env: ISOLATE_LIFETIME_ENV,
+        raw: lifetimeRaw,
+        effective: lifetimeSeconds,
+        kind: "invariant",
+        message:
+          `isolate lifetime ${lifetimeSeconds}s (${ISOLATE_LIFETIME_ENV}) is below the ${required}s a ` +
+          `batch of ${n.value} can take. The whole batch runs in ONE isolate, so it will be killed ` +
+          `before the archive calls run and every in-flight message will be re-provisioned on ` +
+          `redelivery. Raise edgeFunctions.worker.timeoutMs to >= ${required * 1000} (and keep ` +
+          `gracefulExitTimeoutSeconds / terminationGracePeriodSeconds above it). Note ` +
+          `beforeUnload.wallClockRatio asks the isolate to retire at half this.`
+      });
+    }
   }
 
   return { drainConcurrency: n.value, visibilityTimeoutSeconds: vt.value, issues };
