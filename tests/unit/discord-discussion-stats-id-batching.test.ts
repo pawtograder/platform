@@ -20,11 +20,11 @@ import {
   countUnresolvedAuthorMessages,
   fetchAuthorNamesInChunks,
   type AuthorRow
-} from "../../supabase/functions/discord-discussion-stats-update/idBatching";
+} from "@/supabase/functions/discord-discussion-stats-update/idBatching";
 // The byte accounting is shared with the CLI's paging limits, so the bound is pinned
 // against the same estimator the CLI's own test uses. This is a test-only import; the
 // edge function itself does not reach into another function's code.
-import { estimateInFilterBytes } from "../../supabase/functions/cli/utils/pagingLimits";
+import { estimateInFilterBytes } from "@/supabase/functions/cli/utils/pagingLimits";
 
 /** Conservative ceiling: proxies commonly cap a request line + headers at 8 KB. */
 const SAFE_URL_BUDGET_BYTES = 4096;
@@ -75,7 +75,22 @@ describe("chunkIds", () => {
   });
 
   it("rejects a non-positive chunk size rather than looping forever", () => {
-    expect(() => chunkIds(uuids(3), 0)).toThrow(/positive chunk size/);
+    expect(() => chunkIds(uuids(3), 0)).toThrow(/positive integer chunk size/);
+    expect(() => chunkIds(uuids(3), -1)).toThrow(/positive integer chunk size/);
+  });
+
+  // NaN and Infinity both slip past a bare `size <= 0`, and each fails SILENTLY in a
+  // different direction: NaN yields one empty chunk (no names, no recorded failures, so
+  // every author silently becomes "Anonymous" and the run still claims 0 errors), while
+  // Infinity yields one unbounded chunk, which is the URI-too-long bug again. A fractional
+  // size produces boundaries that no longer correspond to the byte budget the number was
+  // derived from.
+  it.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["a fraction", 2.5]
+  ])("rejects %s, which would otherwise fail silently", (_label, size) => {
+    expect(() => chunkIds(uuids(3), size as number)).toThrow(/positive integer chunk size/);
   });
 });
 

@@ -1953,29 +1953,63 @@ async function handlePushToStudentRepo(
       // indistinguishable from the batch. Fall 2026's CS 2000 has ~585 students, i.e. several
       // thousand such events on day one.
       //
-      // The classification itself is an INFERENCE, not a measurement: that those 412 deliveries
-      // carried `created: true` / an all-zero `before` follows from how a template-generated
-      // repository's first push must look, but the payloads retrievable from that incident are
-      // truncated, so it was never confirmed against them. The `repo_not_ready_kind` tag below is
-      // how to confirm it — after the next release, an all-`provisioning_in_flight` batch is the
-      // expected shape, and any `readiness_write_failed` in it deserves a look.
+      // What the split rests on, and what it deliberately does NOT rest on.
+      //
+      // The tempting discriminator is the shape of the push: case 1 is by construction the creation
+      // of the default branch, so it arrives with `created: true` and an all-zero `before`. That is
+      // insufficient, and an earlier version of this branch was wrong for exactly that reason. When
+      // GitHub created the repository and our readiness write then FAILED, the delivery being
+      // rejected is still that same branch-creation push — and a redelivery carries a byte-identical
+      // payload, so `created: true` never stops being true. Classifying on shape alone would report
+      // case 2 as expected forever, permanently hiding the one failure this branch exists to surface.
+      //
+      // So the shape is only a necessary condition, and the decision rests on independent evidence
+      // that creation is still running: `payload.repository.created_at`, GitHub's own per-repository
+      // creation timestamp, which must fall inside a finalize window (see
+      // PROVISIONING_IN_FLIGHT_WINDOW_MS). That is NOT the grace window on `repositories.created_at`
+      // rejected earlier, and the difference matters: our row is stamped when the whole release is
+      // enqueued, so its age grows with the size of the batch (~96 minutes for the last of 58, many
+      // hours for 585). GitHub creates the repository INSIDE our createRepo call, so its timestamp
+      // measures that one repository's own remaining finalize time — ~275s to the readiness write,
+      // ~8.7 minutes worst case traced — and does not grow with the batch at all.
+      //
+      // Every uncertainty resolves to the visible side: no timestamp, an unusable one, or a push onto
+      // existing history is `readiness_write_failed`. A mislabelled error event costs ten seconds of
+      // triage; a hidden readiness failure costs student submissions.
+      //
+      // One inference remains, and it is only about the volume, not the logic: that those 412
+      // deliveries carried `created: true` / an all-zero `before` follows from how a
+      // template-generated repository's first push must look, but the payloads retrievable from that
+      // incident are truncated, so it was never confirmed against them. The tags below are how to
+      // confirm it — after the next release, an all-`provisioning_in_flight` batch is the expected
+      // shape, and any `readiness_write_failed` in it deserves a look at `repo_not_ready_reason`.
       //
       // Do not "fix" this by deleting the throw or by loosening the sha comparison above: neither is
       // broken. The sha comparison is the fast path for a provisioning push whose readiness write
       // HAS landed; this branch is the same push arriving before it landed.
-      const unreadyKind = classifyUnreadyRepoPush({ created: payload.created, before: payload.before });
+      const unready = classifyUnreadyRepoPush({
+        created: payload.created,
+        before: payload.before,
+        repositoryCreatedAt: payload.repository?.created_at,
+        repositoryPushedAt: payload.repository?.pushed_at
+      });
       scope.setTag("push_direct_retry_reason", "repo_not_github_ready");
-      scope.setTag("repo_not_ready_kind", unreadyKind);
-      if (unreadyKind === "provisioning_in_flight") {
+      scope.setTag("repo_not_ready_kind", unready.kind);
+      scope.setTag("repo_not_ready_reason", unready.reason);
+      if (unready.repoAgeMs !== undefined) {
+        scope.setTag("repo_age_seconds", String(Math.round(unready.repoAgeMs / 1000)));
+      }
+      if (unready.kind === "provisioning_in_flight") {
         console.log(
           `Rejecting delivery for ${repoName}@${payload.after}: repository creation is still in flight (this is the ` +
-            `branch-creation push, and the readiness write has not landed yet). EventBridge will redeliver, and the ` +
-            `retry will recognize it as the starter-template push once synced_repo_sha is recorded.`
+            `branch-creation push, GitHub created the repository ${Math.round((unready.repoAgeMs ?? 0) / 1000)}s ago, ` +
+            `and the readiness write has not landed yet). EventBridge will redeliver, and the retry will recognize ` +
+            `it as the starter-template push once synced_repo_sha is recorded.`
         );
         throw new ExpectedRetryError(
-          `${repoName} is not marked ready yet and ${payload.after} created the default branch, so repository ` +
-            `provisioning is still in flight; rejecting this delivery so EventBridge retries it once provisioning ` +
-            `is recorded`,
+          `${repoName} is not marked ready yet, ${payload.after} created the default branch and GitHub created the ` +
+            `repository within the provisioning window, so creation is still in flight; rejecting this delivery so ` +
+            `EventBridge retries it once provisioning is recorded`,
           {
             name: "RepoProvisioningInFlightError",
             level: "info",
@@ -1983,9 +2017,14 @@ async function handlePushToStudentRepo(
           }
         );
       }
+      // Reached when the push is not the branch creation, when GitHub created this repository too long
+      // ago for creation to still be running, or when its creation timestamp is unusable. All three
+      // mean the same thing operationally: readiness was never recorded for a repository that exists,
+      // so the student's pushes are being rejected and only the reconciler (or a human) will fix it.
       throw new Error(
-        `${repoName} is not marked ready yet, but ${payload.after} is not the starter-template commit either, so ` +
-          `this is student work; rejecting this delivery so EventBridge retries it once provisioning is recorded`
+        `${repoName} is not marked ready yet, but ${payload.after} is not a push from provisioning either ` +
+          `(${unready.reason}), so this is student work on a repository whose readiness was never recorded; ` +
+          `rejecting this delivery so EventBridge retries it once provisioning is recorded`
       );
     }
     // Record the commit history BEFORE any of the reasons this delivery might not become a

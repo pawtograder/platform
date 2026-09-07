@@ -41,9 +41,23 @@
  */
 export const AUTHOR_ID_IN_BATCH_SIZE = 50;
 
-/** Split `ids` into chunks of at most `size`, so each `.in()` filter stays inside a URL budget. */
+/**
+ * Split `ids` into chunks of at most `size`, so each `.in()` filter stays inside a URL budget.
+ *
+ * The guard demands a positive INTEGER, not merely a positive number, because the two ways to fail
+ * that check are both silent. `NaN` slips past `size <= 0` (every comparison with NaN is false) and
+ * then `i += NaN` ends the loop on its first pass, yielding `[[]]` — one empty chunk. The caller
+ * would issue a single `.in("id", [])`, get no rows, record no names AND no failures, and every
+ * author would fall through to the "Anonymous" fallback while the summary reported `0 errors`:
+ * exactly the defect this module was written to fix. `Infinity` passes the same check and produces
+ * one unbounded chunk, which reinstates the URI-too-long failure instead. Neither is reachable from
+ * the two call sites today (both pass module constants), but a silent wrong answer from a pure
+ * helper is worth one comparison to rule out.
+ */
 export function chunkIds<T>(ids: readonly T[], size: number): T[][] {
-  if (size <= 0) throw new Error(`chunkIds requires a positive chunk size, got ${size}`);
+  if (!Number.isInteger(size) || size <= 0) {
+    throw new Error(`chunkIds requires a positive integer chunk size, got ${size}`);
+  }
   const chunks: T[][] = [];
   for (let i = 0; i < ids.length; i += size) chunks.push(ids.slice(i, i + size));
   return chunks;
