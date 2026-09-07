@@ -1497,7 +1497,8 @@ function attachStepTimingsToScope(snapshot: StepTimingsSnapshot, scope?: Sentry.
 function attachHandledFailureTimings(
   timings: StepTimings | undefined,
   scope: Sentry.Scope | undefined,
-  handledStep: string
+  handledStep: string,
+  error?: unknown
 ): void {
   if (!timings || !scope) return;
   try {
@@ -1505,7 +1506,13 @@ function attachHandledFailureTimings(
     // The step whose failure was handled here. NOT `failed_step`, which is reserved for an error
     // that escaped the whole operation. Op-namespaced for the same reason as every other timing tag
     // (see attachSnapshotToScope): two instrumented operations share one envelope scope.
-    scope.setTag(`step_timings_${timings.op}_handled_failure_step`, handledStep);
+    //
+    // Prefer the step that actually raised THIS error over the caller's label. One catch can cover
+    // several timed steps — the rulesets try/catch below spans both the LIST and the DETAIL request
+    // — and a hardcoded label there tagged a failed DETAIL request as `ruleset_list`, contradicting
+    // the context blob beside it and sending endpoint-level filtering to the wrong place.
+    const step = timings.stepForError(error) ?? handledStep;
+    scope.setTag(`step_timings_${timings.op}_handled_failure_step`, step);
   } catch {
     /* diagnostics must never break the operation they describe */
   }
@@ -1548,7 +1555,7 @@ async function finalizeRepo(
   } catch (patchErr) {
     console.error("Error patching repo settings (squash merge / template flag)", patchErr);
     scope?.setTag("patch_repo_settings_failed", "true");
-    attachHandledFailureTimings(timings, scope, "patch_repo_settings");
+    attachHandledFailureTimings(timings, scope, "patch_repo_settings", patchErr);
     Sentry.captureException(patchErr, scope);
   }
   // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
@@ -1571,7 +1578,7 @@ async function finalizeRepo(
   } catch (actionsErr) {
     console.error("Error enabling GitHub Actions", actionsErr);
     scope?.setTag("enable_actions_failed", "true");
-    attachHandledFailureTimings(timings, scope, "enable_actions");
+    attachHandledFailureTimings(timings, scope, "enable_actions", actionsErr);
     Sentry.captureException(actionsErr, scope);
   }
   // Resolve the repo's actual default branch rather than assuming `main`: a FORK inherits the
@@ -1621,7 +1628,10 @@ async function finalizeRepo(
     // Log but don't fail repo creation if ruleset creation fails
     console.error("Error applying branch protection ruleset", rulesetError);
     scope?.setTag("ruleset_creation_failed", "true");
-    attachHandledFailureTimings(timings, scope, "branch_protection_ruleset");
+    // Coarse fallback only: this catch sits OUTSIDE applyBranchProtectionRuleset, so the throw may
+    // have come from any of its timed sub-steps (ruleset_get_octokit / _list / _detail / _write) or
+    // from untimed code between them. stepForError picks the exact one when it can.
+    attachHandledFailureTimings(timings, scope, "branch_protection_ruleset", rulesetError);
     Sentry.captureException(rulesetError, scope);
   }
 
@@ -1975,7 +1985,9 @@ export async function applyBranchProtectionRuleset(
     } else {
       // List failures shouldn't kill repo creation. Fall through assuming none.
       console.warn(`Could not list rulesets for ${org}/${repoName}:`, e);
-      attachHandledFailureTimings(timings, scope, "ruleset_list");
+      // `ruleset_list` is the fallback, not the assumption: this catch also covers the ruleset
+      // DETAIL request a few lines up, and that is exactly the misattribution stepForError fixes.
+      attachHandledFailureTimings(timings, scope, "ruleset_list", e);
       Sentry.captureException(e, scope);
       existingRulesetId = null;
       existingRules = null;
@@ -3198,7 +3210,7 @@ async function syncRepoPermissionsInstrumented(
     Sentry.withScope((s) => {
       s.setFingerprint(["staff-team-roster-unavailable"]);
       // Attach to the FORKED scope this capture actually uses, not to `scope`.
-      attachHandledFailureTimings(timings, s, "staff_team_members");
+      attachHandledFailureTimings(timings, s, "staff_team_members", err);
       Sentry.captureException(err, s);
     });
     console.error(`Could not read staff team for ${org}/${courseSlug}; not removing any collaborators`, err);

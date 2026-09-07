@@ -1431,8 +1431,15 @@ edgeFunctions:
   # signal stayed green. The runtime fix-up ENFORCES the two ceilings by
   # degrading concurrency, so on a bypass path a lone drainConcurrency=8 with the
   # timeouts left alone actually runs at 2 (floor(300/120)) and says so in the
-  # log and in Sentry. Set them here and the render-time rules make that
-  # impossible in the first place. Note these are rendered as explicit `env` entries, and
+  # log and in Sentry. Two details of that fix-up worth knowing: an absent or
+  # malformed EDGE_WORKER_TIMEOUT_MS is treated as 400s rather than "unknown",
+  # because that is what main.ts falls back to for the same input, so the
+  # lifetime ceiling caps concurrency at 3 unless worker.timeoutMs is really
+  # raised; and if the timeout cannot cover even ONE message the worker floors
+  # concurrency at 1 AND raises its own sleep_seconds to the 120s one-message
+  # budget, since it passes that value on every pgmq read and a floored-but-
+  # incoherent pair would just re-read a multi-minute create_repo. Set them here
+  # and the render-time rules make all of that impossible in the first place. Note these are rendered as explicit `env` entries, and
   # an `env` entry beats `envFrom`, so edgeFunctions.envFromSecrets CANNOT be
   # used to override them: set them here.
   githubAsyncWorker:

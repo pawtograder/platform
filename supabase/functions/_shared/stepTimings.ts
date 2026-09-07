@@ -279,6 +279,27 @@ export class StepTimings {
     }
   }
 
+  /**
+   * The step that threw `error`, if `error` is the most recent throw a timed step produced.
+   *
+   * Same identity match as `noteEscapingError`, exposed for HANDLED failures. A single `catch` in
+   * this codebase can cover more than one timed step — `applyBranchProtectionRuleset` wraps the
+   * rulesets LIST and the ruleset DETAIL request in one try/catch — so a hardcoded step label on
+   * the resulting Sentry tag can contradict the context blob sitting next to it and point
+   * operational filtering at the wrong GitHub endpoint. Asking which step actually raised THIS
+   * error object removes the guess.
+   *
+   * Returns null when the error did not come from a timed step, so callers can fall back to a
+   * coarser label of their own rather than get a wrong one.
+   */
+  stepForError(error: unknown): string | null {
+    try {
+      return this.lastThrow && this.lastThrow.error === error ? this.lastThrow.step : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Attach low-cardinality context (org, creation_method, whether the repair path ran, ...). */
   setMeta(key: string, value: string | number | boolean): void {
     try {

@@ -610,3 +610,43 @@ describe("attachSnapshotToScope", () => {
     ).not.toThrow();
   });
 });
+
+describe("stepForError (handled-failure attribution)", () => {
+  // WHY: applyBranchProtectionRuleset wraps BOTH the rulesets list and the ruleset detail request
+  // in one try/catch. Labelling that catch's Sentry tag `ruleset_list` meant a failed DETAIL
+  // request was indexed as a failed LIST request, contradicting the timing context attached beside
+  // it and pointing endpoint-level filtering at the wrong GitHub call.
+  it("names the step that raised THIS error, not the catch's coarse label", async () => {
+    const { timings } = harness();
+    const detailErr = Object.assign(new Error("Internal Server Error"), { status: 500 });
+
+    await timings.time("ruleset_list", () => Promise.resolve(["existing"]));
+    await expect(timings.time("ruleset_detail", () => Promise.reject(detailErr))).rejects.toBe(detailErr);
+
+    expect(timings.stepForError(detailErr)).toBe("ruleset_detail");
+  });
+
+  it("returns null for an error that did not come from a timed step, so callers can fall back", async () => {
+    const { timings } = harness();
+    await timings.time("ruleset_list", () => Promise.resolve(undefined));
+    expect(timings.stepForError(new Error("raised between steps"))).toBeNull();
+    expect(timings.stepForError(undefined)).toBeNull();
+  });
+
+  it("returns null when no step has thrown at all", () => {
+    const { timings } = harness();
+    expect(timings.stepForError(new Error("anything"))).toBeNull();
+  });
+
+  it("does not flag the operation as failed — attribution is read-only", async () => {
+    // A handled failure must not turn into `failed_step`/`error_escaped`; that pair is reserved for
+    // an error that escaped the whole operation.
+    const { timings } = harness();
+    const handled = new Error("handled and recovered");
+    await expect(timings.time("ruleset_detail", () => Promise.reject(handled))).rejects.toBe(handled);
+    expect(timings.stepForError(handled)).toBe("ruleset_detail");
+    const snapshot = timings.snapshot();
+    expect(snapshot.error_escaped).toBe(false);
+    expect(snapshot.failed_step).toBeNull();
+  });
+});

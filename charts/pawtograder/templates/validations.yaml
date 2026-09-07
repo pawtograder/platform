@@ -312,11 +312,36 @@ values.yaml says "raise it alongside any timeout increase"; render-guardrails.sh
 asserts it for the renders it happens to exercise. Neither can catch an
 operator's own values file, which is what this rule is for. Only checked when
 metrics are on, because the buckets are inert otherwise.
+
+CHECKING ONLY THE LAST ELEMENT WAS NOT ENOUGH, and the gap re-opened the exact
+hole this rule was added to close. The runtime does not merely read the last
+bound: histogramBuckets (images/edge-functions/main.ts) REJECTS a list with a
+non-finite or non-positive element, or one that is not strictly increasing, and
+SILENTLY falls back to DEFAULT_EDGE_BUCKETS -- which ends at 400. So
+[0.05, 1, 0.5, 960] satisfied "last >= lifetime" here, was thrown away at boot,
+and left a 960s lifetime being measured with 400s buckets. Validate the same
+three properties main.ts does, in the same order, before trusting the last
+element to mean anything.
 */ -}}
 {{- if .Values.edgeFunctions.metrics.enabled -}}
-{{- $top := last .Values.edgeFunctions.metrics.buckets | float64 -}}
+{{- $buckets := .Values.edgeFunctions.metrics.buckets -}}
+{{- if not $buckets -}}
+{{- fail "edgeFunctions.metrics.buckets is empty while edgeFunctions.metrics.enabled=true. main.ts would fall back to its own default list (ending at 400s), so the rendered configuration would not be the one in force. Set an explicit ascending list whose last element reaches worker.timeoutMs/1000." -}}
+{{- end -}}
+{{- $prev := 0.0 -}}
+{{- range $i, $b := $buckets -}}
+{{- $cur := $b | float64 -}}
+{{- if le $cur 0.0 -}}
+{{- fail (printf "edgeFunctions.metrics.buckets[%d]=%v is not positive. main.ts's histogramBuckets rejects a non-positive or non-finite bound and silently falls back to its default list (ending at 400s), so this list would never reach the runtime and the top-bucket check below would be meaningless." $i $b) -}}
+{{- end -}}
+{{- if and (gt $i 0) (le $cur $prev) -}}
+{{- fail (printf "edgeFunctions.metrics.buckets is not strictly increasing: element %d (%v) is not greater than the previous (%v). main.ts's histogramBuckets rejects that and silently falls back to its default list (ending at 400s) -- so a list that merely ENDS high, e.g. [0.05, 1, 0.5, 960], would be discarded at boot and every request past 400s would land in +Inf anyway." $i $b $prev) -}}
+{{- end -}}
+{{- $prev = $cur -}}
+{{- end -}}
+{{- $top := last $buckets | float64 -}}
 {{- if lt $top (float64 $lifeSec) -}}
-{{- fail (printf "edgeFunctions.metrics.buckets ends at %v seconds, below edgeFunctions.worker.timeoutMs (%ds). Every request that runs to the worker lifetime would land in +Inf, so p95/p99 stop meaning anything at exactly the moment this tier is in trouble. Extend the list so its last element is >= %d (keep it ascending; the default list ends ON the default 400s lifetime)." $top $lifeSec $lifeSec) -}}
+{{- fail (printf "edgeFunctions.metrics.buckets ends at %v seconds, below edgeFunctions.worker.timeoutMs (%ds). Every request that runs to the worker lifetime would land in +Inf, so p95/p99 stop meaning anything at exactly the moment this tier is in trouble. Extend the list so its last element is >= %d (keep it strictly increasing; the default list ends ON the default 400s lifetime)." $top $lifeSec $lifeSec) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

@@ -132,11 +132,21 @@ export const VISIBILITY_TIMEOUT_ENV = "GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SE
 /**
  * The isolate lifetime, read only to CHECK the second ceiling — this module
  * never sets it. Rendered by the same chart template that renders the two knobs
- * above (chart: edgeFunctions.worker.timeoutMs), so it is present in the same
- * container env; when it is absent (local `supabase functions serve`, tests) the
- * check is skipped rather than guessed at.
+ * above (chart: edgeFunctions.worker.timeoutMs), so it is normally present in
+ * the same container env; when it is absent or malformed the ceiling falls back
+ * to DEFAULT_ISOLATE_LIFETIME_SECONDS, matching the demuxer, rather than being
+ * skipped.
  */
 export const ISOLATE_LIFETIME_ENV = "EDGE_WORKER_TIMEOUT_MS";
+/**
+ * What to assume when `EDGE_WORKER_TIMEOUT_MS` is absent or malformed: 400s,
+ * because that is what the demuxer that creates the isolate assumes for exactly
+ * the same input — `charts/pawtograder/images/edge-functions/main.ts:61`,
+ * `Number(Deno.env.get("EDGE_WORKER_TIMEOUT_MS")) || 400 * 1000`. Treating it as
+ * "unknown" and skipping the ceiling would let this module bless a batch longer
+ * than the isolate it will actually run in. Keep this in step with main.ts.
+ */
+export const DEFAULT_ISOLATE_LIFETIME_SECONDS = 400;
 
 /** Today's hardcoded `n`. Keeping this as the default is what makes the change inert until configured. */
 export const DEFAULT_DRAIN_CONCURRENCY = 4;
@@ -371,14 +381,43 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
   if (vt.issue) issues.push(vt.issue);
 
   // Read the isolate lifetime (the second ceiling). Never written, only read:
-  // this module cannot change how long EdgeRuntime keeps the isolate. Absent or
-  // unparseable means "unknown", and an unknown ceiling is skipped rather than
-  // guessed at — see ISOLATE_LIFETIME_ENV.
+  // this module cannot change how long EdgeRuntime keeps the isolate.
+  //
+  // AN ABSENT OR MALFORMED VALUE IS NOT "UNKNOWN", IT IS 400s. The demuxer that
+  // actually creates the isolate is not undecided about it:
+  //
+  //   charts/pawtograder/images/edge-functions/main.ts:61
+  //   const WORKER_TIMEOUT_MS = Number(Deno.env.get("EDGE_WORKER_TIMEOUT_MS")) || 400 * 1000;
+  //
+  // An earlier version of this function treated absent/garbage as "ceiling
+  // unknown, skip the check", which green-lit a 960s batch inside an isolate
+  // that really lives 400s — the resolver declining to decide something the
+  // runtime had already decided. Mirroring the fallback keeps the two tied; if
+  // main.ts's default ever moves, DEFAULT_ISOLATE_LIFETIME_SECONDS moves with it.
   const lifetimeRaw = env.get(ISOLATE_LIFETIME_ENV);
-  const lifetimeSeconds =
-    lifetimeRaw !== undefined && /^\d+$/.test(lifetimeRaw.trim())
-      ? Math.floor(Number(lifetimeRaw.trim()) / 1000)
-      : undefined;
+  const lifetimeTrimmed = lifetimeRaw?.trim() ?? "";
+  let lifetimeSeconds = DEFAULT_ISOLATE_LIFETIME_SECONDS;
+  if (lifetimeTrimmed !== "") {
+    // `Number(...) || default` is what main.ts does, so 0, a negative and any
+    // non-numeric string all land on the same 400s there. Reported separately
+    // from the clamp so an operator can tell "you typed garbage" from "your
+    // pair was reduced".
+    const parsedMs = Number(lifetimeTrimmed);
+    if (!Number.isFinite(parsedMs) || parsedMs <= 0) {
+      issues.push({
+        env: ISOLATE_LIFETIME_ENV,
+        raw: lifetimeRaw,
+        effective: DEFAULT_ISOLATE_LIFETIME_SECONDS,
+        kind: "rejected",
+        message:
+          `${ISOLATE_LIFETIME_ENV}=${JSON.stringify(lifetimeRaw)} is not a positive number of ` +
+          `milliseconds; assuming ${DEFAULT_ISOLATE_LIFETIME_SECONDS}s, which is what main.ts falls ` +
+          `back to for the same input, so the ceiling used here matches the isolate you actually get.`
+      });
+    } else {
+      lifetimeSeconds = Math.floor(parsedMs / 1000);
+    }
+  }
 
   // THE EXACT LEGACY PAIR IS REPORTED, NOT ENFORCED. (4, 300) is what was
   // hardcoded in processBatch() before any of this was configurable, so it is
@@ -403,7 +442,7 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
           `on purpose; raise ${VISIBILITY_TIMEOUT_ENV} to >= ${requiredForConfigured} to fix it.`
       });
     }
-    if (lifetimeSeconds !== undefined && lifetimeSeconds < requiredForConfigured) {
+    if (lifetimeSeconds < requiredForConfigured) {
       issues.push({
         env: ISOLATE_LIFETIME_ENV,
         raw: lifetimeRaw,
@@ -455,14 +494,12 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
   // worse than draining slowly on this path specifically: there is no render
   // error for anyone to read, so a refusal would be a silent stop.
   const caps: { limit: number; because: string }[] = [
-    { limit: Math.floor(vt.value / PER_MESSAGE_VT_BUDGET_SECONDS), because: `${VISIBILITY_TIMEOUT_ENV}=${vt.value}s` }
-  ];
-  if (lifetimeSeconds !== undefined) {
-    caps.push({
+    { limit: Math.floor(vt.value / PER_MESSAGE_VT_BUDGET_SECONDS), because: `${VISIBILITY_TIMEOUT_ENV}=${vt.value}s` },
+    {
       limit: Math.floor(lifetimeSeconds / PER_MESSAGE_VT_BUDGET_SECONDS),
       because: `${ISOLATE_LIFETIME_ENV}=${lifetimeSeconds}s`
-    });
-  }
+    }
+  ];
   const binding = caps.reduce((lowest, c) => (c.limit < lowest.limit ? c : lowest));
   const coherentN = Math.max(MIN_DRAIN_CONCURRENCY, Math.min(n.value, binding.limit));
 
@@ -482,19 +519,52 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
     });
   }
 
-  // Only reachable when the VT itself is below one message's budget, so no
-  // positive `n` is coherent. Floored at 1 deliberately — see above.
-  if (binding.limit < MIN_DRAIN_CONCURRENCY) {
+  // THE FLOOR MUST STILL BE COHERENT. Flooring `n` at 1 is right — n=0 drains
+  // nothing while every liveness signal stays green — but on its own it left the
+  // other half of the pair broken: with VT=60 the floor returned n=1 against a
+  // 60s timeout while ONE message is budgeted at 120s, so processBatch ran a
+  // knowingly incoherent pair and a multi-minute create_repo was re-read
+  // repeatedly. The floor has to bring the timeout up with it.
+  //
+  // Raising the VT here is legitimate in a way that raising it to chase `n`
+  // never was: the worker passes `sleep_seconds` on every pgmq_public.read, so
+  // it OWNS that value and needs no chart change to honour it, and this is the
+  // one case where there is no concurrency left to give up. It is only reachable
+  // when the configured VT cannot cover a single message.
+  let effectiveVt = vt.value;
+  const requiredForEffective = requiredVisibilityTimeoutSeconds(coherentN);
+  if (effectiveVt < requiredForEffective) {
+    effectiveVt = requiredForEffective;
     issues.push({
       env: VISIBILITY_TIMEOUT_ENV,
-      effective: vt.value,
-      kind: "invariant",
+      raw: String(vt.value),
+      effective: effectiveVt,
+      kind: "clamped",
       message:
-        `no coherent concurrency exists at ${binding.because}: even one message is budgeted at ` +
-        `${PER_MESSAGE_VT_BUDGET_SECONDS}s. Draining at n=1 anyway, because n=0 would drain nothing ` +
-        `while every liveness signal stayed green. Raise it to >= ${PER_MESSAGE_VT_BUDGET_SECONDS}.`
+        `visibility timeout raised from ${vt.value}s to ${effectiveVt}s: ${binding.because} cannot cover ` +
+        `even one message (${PER_MESSAGE_VT_BUDGET_SECONDS}s), so concurrency was already floored at ` +
+        `${coherentN} (never 0 — that drains nothing while every liveness signal stays green) and the ` +
+        `timeout had to come up with it. The worker sets sleep_seconds on every pgmq read, so this needs ` +
+        `no chart change; set ${VISIBILITY_TIMEOUT_ENV} >= ${PER_MESSAGE_VT_BUDGET_SECONDS} to make it ` +
+        `explicit.`
     });
   }
 
-  return { drainConcurrency: coherentN, visibilityTimeoutSeconds: vt.value, issues };
+  // The one ceiling this function cannot fix by itself. `sleep_seconds` is ours;
+  // the isolate lifetime belongs to the demuxer, so if it is below even one
+  // message's budget all we can do is drain at n=1 and say so.
+  if (lifetimeSeconds < requiredForEffective) {
+    issues.push({
+      env: ISOLATE_LIFETIME_ENV,
+      effective: lifetimeSeconds,
+      kind: "invariant",
+      message:
+        `isolate lifetime ${lifetimeSeconds}s is below the ${requiredForEffective}s a batch of ` +
+        `${coherentN} needs, and this module cannot raise it — it belongs to the demuxer. Draining at ` +
+        `n=${coherentN} anyway. Raise edgeFunctions.worker.timeoutMs to >= ${requiredForEffective * 1000} ` +
+        `(keeping gracefulExitTimeoutSeconds / terminationGracePeriodSeconds above it).`
+    });
+  }
+
+  return { drainConcurrency: coherentN, visibilityTimeoutSeconds: effectiveVt, issues };
 }

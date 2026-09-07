@@ -25,7 +25,8 @@ import {
   MIN_VISIBILITY_TIMEOUT_SECONDS,
   MAX_VISIBILITY_TIMEOUT_SECONDS,
   PER_MESSAGE_VT_BUDGET_SECONDS,
-  ISOLATE_LIFETIME_ENV
+  ISOLATE_LIFETIME_ENV,
+  DEFAULT_ISOLATE_LIFETIME_SECONDS
 } from "@/supabase/functions/_shared/asyncWorkerTuning";
 
 function env(vars: Record<string, string | undefined>) {
@@ -55,22 +56,38 @@ describe("async worker drain tuning defaults", () => {
     // it must be a report and not a silent correction.
     const t = resolveAsyncWorkerTuning(env({}));
     const invariant = t.issues.filter((i) => i.kind === "invariant");
-    expect(invariant).toHaveLength(1);
+    expect(invariant).toHaveLength(2);
     expect(invariant[0].message).toContain("read_ct");
+    expect(invariant[1].env).toBe(ISOLATE_LIFETIME_ENV);
     expect(t.visibilityTimeoutSeconds).toBe(300);
+    expect(t.drainConcurrency).toBe(4);
   });
 });
 
 describe("async worker drain tuning: valid overrides", () => {
   it("accepts an in-range pair verbatim and reports nothing", () => {
-    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "960" }));
+    // The isolate lifetime has to be raised too, or the assumed 400s caps this
+    // at 3 — see the isolate-lifetime describe block below.
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "960",
+        [ISOLATE_LIFETIME_ENV]: "960000"
+      })
+    );
     expect(t.drainConcurrency).toBe(8);
     expect(t.visibilityTimeoutSeconds).toBe(960);
     expect(t.issues).toHaveLength(0);
   });
 
   it("tolerates surrounding whitespace from a chart/secret round-trip", () => {
-    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: " 6 ", [VISIBILITY_TIMEOUT_ENV]: "\t720\n" }));
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: " 6 ",
+        [VISIBILITY_TIMEOUT_ENV]: "\t720\n",
+        [ISOLATE_LIFETIME_ENV]: " 720000 "
+      })
+    );
     expect(t.drainConcurrency).toBe(6);
     expect(t.visibilityTimeoutSeconds).toBe(720);
     expect(t.issues).toHaveLength(0);
@@ -135,9 +152,19 @@ describe("async worker drain tuning: clamping", () => {
     expect(t.issues.some((i) => i.kind === "clamped" && i.env === DRAIN_CONCURRENCY_ENV)).toBe(true);
   });
 
-  it("clamps the visibility timeout to both bounds", () => {
+  it("clamps the visibility timeout to its bounds, then to coherence", () => {
+    // 1 is raised to the 60s bound, and 60 cannot cover even one message, so the
+    // coherence floor raises the EFFECTIVE value to 120. Both steps are reported.
     const low = resolveAsyncWorkerTuning(env({ [VISIBILITY_TIMEOUT_ENV]: "1" }));
-    expect(low.visibilityTimeoutSeconds).toBe(MIN_VISIBILITY_TIMEOUT_SECONDS);
+    expect(low.visibilityTimeoutSeconds).toBe(PER_MESSAGE_VT_BUDGET_SECONDS);
+    expect(low.drainConcurrency).toBe(1);
+    expect(
+      low.issues.some(
+        (i) => i.kind === "clamped" && i.message.includes(`below the minimum ${MIN_VISIBILITY_TIMEOUT_SECONDS}`)
+      )
+    ).toBe(true);
+    expect(low.issues.some((i) => i.kind === "clamped" && i.message.includes("raised from 60s to 120s"))).toBe(true);
+
     const high = resolveAsyncWorkerTuning(env({ [VISIBILITY_TIMEOUT_ENV]: "86400" }));
     expect(high.visibilityTimeoutSeconds).toBe(MAX_VISIBILITY_TIMEOUT_SECONDS);
     expect(high.issues.some((i) => i.kind === "clamped" && i.env === VISIBILITY_TIMEOUT_ENV)).toBe(true);
@@ -180,24 +207,44 @@ describe("the visibility-timeout-vs-concurrency invariant", () => {
   it("degrades concurrency rather than inflating the timeout", () => {
     // The timeout the operator set is what is honoured; the throughput knob is
     // what gives way. Inflating the VT could break the isolate-lifetime ceiling.
-    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "600" }));
+    // Lifetime raised out of the way here so the VT is the binding ceiling.
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "600",
+        [ISOLATE_LIFETIME_ENV]: "960000"
+      })
+    );
     expect(t.visibilityTimeoutSeconds).toBe(600);
     expect(t.drainConcurrency).toBe(5);
   });
 
   it("leaves a coherent pair completely alone", () => {
-    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "960" }));
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "960",
+        [ISOLATE_LIFETIME_ENV]: "960000"
+      })
+    );
     expect([t.drainConcurrency, t.visibilityTimeoutSeconds]).toEqual([8, 960]);
     expect(t.issues).toHaveLength(0);
   });
 
-  it("lands on n=1, NEVER 0, when no concurrency is coherent", () => {
+  it("lands on n=1, NEVER 0, and raises the timeout so the floored pair is coherent", () => {
     // floor(60/120) = 0. n=0 reads nothing at all while the lease is held and
-    // every heartbeat stays green, which is the worst outcome available.
+    // every heartbeat stays green, which is the worst outcome available — but
+    // flooring alone used to leave n=1 against a 60s timeout, i.e. a knowingly
+    // incoherent pair re-reading a multi-minute create_repo. The worker owns
+    // sleep_seconds on every pgmq read, so it raises the timeout to the
+    // one-message budget instead.
     const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "60" }));
     expect(t.drainConcurrency).toBe(1);
-    expect(t.issues.some((i) => i.message.includes("no coherent concurrency exists"))).toBe(true);
-    expect(t.issues.some((i) => i.message.includes("n=0 would drain nothing"))).toBe(true);
+    expect(t.visibilityTimeoutSeconds).toBe(PER_MESSAGE_VT_BUDGET_SECONDS);
+    const vtClamp = t.issues.filter((i) => i.kind === "clamped" && i.env === VISIBILITY_TIMEOUT_ENV);
+    expect(vtClamp).toHaveLength(1);
+    expect(vtClamp[0].message).toContain("raised from 60s to 120s");
+    expect(vtClamp[0].message).toContain("floored at 1");
   });
 
   it("keeps the exact legacy pair 4/300 untouched, reported but not enforced", () => {
@@ -207,12 +254,21 @@ describe("the visibility-timeout-vs-concurrency invariant", () => {
     expect([t.drainConcurrency, t.visibilityTimeoutSeconds]).toEqual([4, 300]);
     expect(t.issues.filter((i) => i.kind === "clamped")).toHaveLength(0);
     const invariant = t.issues.filter((i) => i.kind === "invariant");
-    expect(invariant).toHaveLength(1);
+    // Both ceilings are reported: 300 < 4x120, and the assumed 400s lifetime is
+    // also below 480. Reported, never enforced — that is the whole exemption.
+    expect(invariant).toHaveLength(2);
     expect(invariant[0].message).toContain("LEGACY PAIR");
+    expect(invariant[1].env).toBe(ISOLATE_LIFETIME_ENV);
   });
 
   it("stays silent once the timeout covers the batch", () => {
-    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "1200" }));
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "1200",
+        [ISOLATE_LIFETIME_ENV]: "1200000"
+      })
+    );
     expect(t.issues).toHaveLength(0);
     expect(t.drainConcurrency).toBe(8);
   });
@@ -227,9 +283,20 @@ describe("the visibility-timeout-vs-concurrency invariant", () => {
     // 64 is clamped to the ceiling of 8 first, then 8 is degraded to what a 600s
     // timeout can cover (5). Clamped inputs must not compose into an incoherent
     // pair, which is how 8/300 used to slip through.
-    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "64", [VISIBILITY_TIMEOUT_ENV]: "600" }));
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "64",
+        [VISIBILITY_TIMEOUT_ENV]: "600",
+        [ISOLATE_LIFETIME_ENV]: "960000"
+      })
+    );
     expect(t.drainConcurrency).toBe(5);
-    expect(t.visibilityTimeoutSeconds * 1).toBeGreaterThanOrEqual(t.drainConcurrency * PER_MESSAGE_VT_BUDGET_SECONDS);
+    expect(t.visibilityTimeoutSeconds).toBeGreaterThanOrEqual(t.drainConcurrency * PER_MESSAGE_VT_BUDGET_SECONDS);
+    // ...and with only the assumed 400s lifetime, the lifetime binds instead.
+    const noLifetime = resolveAsyncWorkerTuning(
+      env({ [DRAIN_CONCURRENCY_ENV]: "64", [VISIBILITY_TIMEOUT_ENV]: "600" })
+    );
+    expect(noLifetime.drainConcurrency).toBe(3);
   });
 });
 
@@ -278,30 +345,89 @@ describe("the second ceiling: isolate lifetime vs concurrency (config coherence)
     expect(t.issues.filter((i) => i.env === ISOLATE_LIFETIME_ENV)).toHaveLength(0);
   });
 
-  it("satisfies BOTH ceilings simultaneously for every combination it returns", () => {
-    for (const n of ["1", "4", "8", "64"]) {
-      for (const vt of ["60", "300", "480", "960", "1800"]) {
-        for (const life of [undefined, "400000", "960000"]) {
+  it("satisfies the visibility-timeout ceiling for EVERY combination it returns", () => {
+    // The `> 1` escape hatch this assertion used to carry was load-bearing only
+    // because the VT inputs never forced the floor. They do now (60, 61, 119),
+    // and the floored result raises the timeout, so the ceiling holds at n=1 too
+    // and the exemption is gone. The isolate-lifetime ceiling is asserted
+    // separately below, because it is the one this module cannot always fix.
+    for (const n of ["1", "3", "4", "8", "64", "0", "abc"]) {
+      for (const vt of ["60", "61", "119", "120", "240", "300", "480", "960", "1800", "abc"]) {
+        for (const life of [undefined, "60000", "400000", "480000", "960000", "abc"]) {
           const t = resolveAsyncWorkerTuning(
             env({ [DRAIN_CONCURRENCY_ENV]: n, [VISIBILITY_TIMEOUT_ENV]: vt, [ISOLATE_LIFETIME_ENV]: life })
           );
+          const tag = `${n}/${vt}/${life}`;
           expect(t.drainConcurrency).toBeGreaterThanOrEqual(1);
+          expect(t.drainConcurrency).toBeLessThanOrEqual(MAX_DRAIN_CONCURRENCY);
           const isLegacy = t.drainConcurrency === 4 && t.visibilityTimeoutSeconds === 300;
-          const needed = t.drainConcurrency * PER_MESSAGE_VT_BUDGET_SECONDS;
-          if (!isLegacy && t.drainConcurrency > 1) {
-            expect(t.visibilityTimeoutSeconds).toBeGreaterThanOrEqual(needed);
-            if (life) expect(Math.floor(Number(life) / 1000)).toBeGreaterThanOrEqual(needed);
+          if (!isLegacy) {
+            // `tag` is in the failure message so a sweep failure names the input.
+            expect([tag, t.visibilityTimeoutSeconds >= t.drainConcurrency * PER_MESSAGE_VT_BUDGET_SECONDS]).toEqual([
+              tag,
+              true
+            ]);
           }
         }
       }
     }
   });
 
-  it("skips the check rather than guessing when the lifetime is absent or unparseable", () => {
-    for (const vars of [{}, { [ISOLATE_LIFETIME_ENV]: "" }, { [ISOLATE_LIFETIME_ENV]: "400s" }]) {
-      const t = resolveAsyncWorkerTuning(env(vars));
-      expect(t.issues.filter((i) => i.env === ISOLATE_LIFETIME_ENV)).toHaveLength(0);
+  it("satisfies the isolate-lifetime ceiling whenever the lifetime allows one message at all", () => {
+    for (const n of ["1", "4", "8", "64"]) {
+      for (const vt of ["60", "300", "960", "1800"]) {
+        for (const life of [undefined, "400000", "480000", "960000"]) {
+          const t = resolveAsyncWorkerTuning(
+            env({ [DRAIN_CONCURRENCY_ENV]: n, [VISIBILITY_TIMEOUT_ENV]: vt, [ISOLATE_LIFETIME_ENV]: life })
+          );
+          const lifeSec = life ? Math.floor(Number(life) / 1000) : DEFAULT_ISOLATE_LIFETIME_SECONDS;
+          const isLegacy = t.drainConcurrency === 4 && t.visibilityTimeoutSeconds === 300;
+          if (!isLegacy && lifeSec >= PER_MESSAGE_VT_BUDGET_SECONDS) {
+            expect(lifeSec).toBeGreaterThanOrEqual(t.drainConcurrency * PER_MESSAGE_VT_BUDGET_SECONDS);
+          }
+        }
+      }
     }
+  });
+
+  it("assumes main.ts's 400s fallback rather than skipping the ceiling", () => {
+    // main.ts:61 is `Number(env) || 400 * 1000`, so the runtime is not undecided
+    // about an absent value and neither is this. Skipping the ceiling used to
+    // green-light a 960s batch inside an isolate that really lives 400s.
+    expect(DEFAULT_ISOLATE_LIFETIME_SECONDS).toBe(400);
+    for (const vars of [{}, { [ISOLATE_LIFETIME_ENV]: "" }]) {
+      const t = resolveAsyncWorkerTuning(
+        env({ ...vars, [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "960" })
+      );
+      expect(t.drainConcurrency).toBe(3);
+      expect(t.issues.find((i) => i.kind === "clamped")?.message).toContain(ISOLATE_LIFETIME_ENV);
+    }
+  });
+
+  it("reports a malformed lifetime separately from the clamp it causes", () => {
+    // "you typed garbage" and "your pair was reduced" are different facts and an
+    // operator needs both.
+    for (const raw of ["400s", "abc", "0", "-5"]) {
+      const t = resolveAsyncWorkerTuning(
+        env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "960", [ISOLATE_LIFETIME_ENV]: raw })
+      );
+      const rejected = t.issues.filter((i) => i.kind === "rejected" && i.env === ISOLATE_LIFETIME_ENV);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].effective).toBe(DEFAULT_ISOLATE_LIFETIME_SECONDS);
+      expect(t.issues.filter((i) => i.kind === "clamped")).toHaveLength(1);
+      expect(t.drainConcurrency).toBe(3);
+    }
+  });
+
+  it("says so, rather than pretending, when the lifetime is below even one message", () => {
+    // sleep_seconds is ours to raise; the isolate lifetime is the demuxer's.
+    const t = resolveAsyncWorkerTuning(
+      env({ [DRAIN_CONCURRENCY_ENV]: "4", [VISIBILITY_TIMEOUT_ENV]: "480", [ISOLATE_LIFETIME_ENV]: "60000" })
+    );
+    expect(t.drainConcurrency).toBe(1);
+    const unfixable = t.issues.filter((i) => i.kind === "invariant" && i.env === ISOLATE_LIFETIME_ENV);
+    expect(unfixable).toHaveLength(1);
+    expect(unfixable[0].message).toContain("cannot raise it");
   });
 
   it("never treats the lifetime as a knob it can change", () => {

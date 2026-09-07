@@ -856,10 +856,35 @@ assert_refused "raising the worker lifetime with default buckets is refused when
   --set edgeFunctions.worker.timeoutMs=960000 \
   --set edgeFunctions.gracefulExitTimeoutSeconds=970 \
   --set edgeFunctions.terminationGracePeriodSeconds=990
-assert_renders "the same render is accepted with the buckets extended to 960" \
+assert_renders "the same render is accepted with a strictly-increasing list reaching 960" \
   --set edgeFunctions.metrics.enabled=true \
   "${TUNE8[@]}" \
   --set 'edgeFunctions.metrics.buckets={0.05,0.1,0.25,0.5,1,2,5,10,30,60,120,300,400,960}'
+# Checking only the LAST element was not enough: main.ts's histogramBuckets
+# rejects a non-positive or non-strictly-increasing list and silently falls back
+# to its own default (ending at 400s), so a list that merely ENDS at 960 would be
+# discarded at boot and the 400-960s range would land in +Inf regardless. The
+# rule now validates the same three properties, in the same order, as main.ts.
+assert_refused "a list that ends high but is not strictly increasing is refused" \
+  "is not strictly increasing" \
+  --set edgeFunctions.metrics.enabled=true \
+  "${TUNE8[@]}" \
+  --set 'edgeFunctions.metrics.buckets={0.05,1,0.5,960}'
+assert_refused "a repeated bucket bound is refused (strictly, not merely non-decreasing)" \
+  "is not greater than the previous" \
+  --set edgeFunctions.metrics.enabled=true \
+  "${TUNE8[@]}" \
+  --set 'edgeFunctions.metrics.buckets={0.05,1,1,960}'
+assert_refused "a zero bucket bound is refused" \
+  "is not positive" \
+  --set edgeFunctions.metrics.enabled=true \
+  "${TUNE8[@]}" \
+  --set 'edgeFunctions.metrics.buckets={0,1,2,960}'
+assert_refused "a negative bucket bound is refused" \
+  "is not positive" \
+  --set edgeFunctions.metrics.enabled=true \
+  "${TUNE8[@]}" \
+  --set 'edgeFunctions.metrics.buckets={-1,1,2,960}'
 # ...and the buckets are inert with metrics off, so the rule must not fire there.
 assert_renders "buckets shorter than the lifetime are tolerated with metrics off" \
   "${TUNE8[@]}"
