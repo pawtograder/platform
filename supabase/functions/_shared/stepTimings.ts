@@ -417,3 +417,85 @@ export function timeStep<T>(timings: StepTimings | undefined, step: string, fn: 
 export function countStep(timings: StepTimings | undefined, name: string, delta = 1): void {
   timings?.count(name, delta);
 }
+
+/**
+ * The bits of `Sentry.Scope` this module writes to, described structurally so the module stays free
+ * of `npm:` imports (see the header: that is what keeps it Jest-testable, and also what puts it in
+ * the Next program, so it must type-check under BOTH toolchains). A real `Sentry.Scope` satisfies
+ * this; so does a plain object in a test, which is how the isolation tests below can prove that
+ * nothing leaks between two concurrently-running operations.
+ */
+export interface StepTimingsScope {
+  setTag?: (key: string, value: string | number | boolean) => unknown;
+  setContext?: (key: string, context: Record<string, unknown>) => unknown;
+  // `level` is the literal "info", not `string`: Sentry.Scope#addBreadcrumb takes a `Breadcrumb`
+  // whose level is a `SeverityLevel` union, and a widened `string` here makes Sentry.Scope fail to
+  // satisfy this interface (parameters are checked contravariantly), which `deno check` catches as
+  // TS2345 at the call site.
+  addBreadcrumb?: (breadcrumb: {
+    message: string;
+    category: string;
+    level: "info";
+    data: Record<string, unknown>;
+  }) => unknown;
+}
+
+/**
+ * Attach a snapshot to ONE scope: full breakdown as context, a few indexed tags, and a breadcrumb.
+ *
+ * SCOPE ISOLATION — why everything here goes through the passed-in `scope` and nothing through the
+ * module-level `Sentry.*` helpers. `processBatch` runs `drainConcurrency` (default 4) envelopes
+ * concurrently under `Promise.allSettled` and hands the SAME Sentry.Scope to every
+ * `processEnvelope`. `processEnvelope` then does `_scope.clone()` per envelope
+ * (github-async-worker/index.ts:613, and Scope.clone() copies _tags/_contexts/_breadcrumbs by
+ * value), so the scope OBJECT that reaches createRepo is already per-message and writing to it is
+ * safe. `Sentry.addBreadcrumb()` is NOT: it writes to the ISOLATION scope
+ * (@sentry/core breadcrumbs.js -> getIsolationScope().addBreadcrumb), which all four concurrent
+ * messages share, so an earlier version of this code interleaved four repos' timing breadcrumbs
+ * onto every event in the isolate. Hence `scope.addBreadcrumb(...)`, never `Sentry.addBreadcrumb`.
+ *
+ * TAG NAMESPACING — tag keys are prefixed with the operation name because a single create_repo
+ * message runs TWO instrumented operations against the same envelope scope (createRepo, then
+ * syncRepoPermissions). Unprefixed keys meant the second one silently overwrote the first one's
+ * slowest step, bucket and counters, so an event could report `wait_for_repo_ready_attempts` from
+ * createRepo next to sync_repo_permissions' totals. Two operations x a handful of keys keeps
+ * cardinality trivial, and each operation's tags can now be filtered on independently.
+ *
+ * Tags vs context is deliberate: tags are indexed and want low cardinality, so only the slowest
+ * step's NAME, a coarse duration BUCKET, the escaped/partial booleans, the failing step, and the
+ * small integer counters go in tags. The full millisecond breakdown is a JSON blob and belongs in
+ * `setContext`, where it is displayed but not indexed.
+ *
+ * Never throws: this is diagnostics attached to an operation that is often already failing.
+ */
+export function attachSnapshotToScope(snapshot: StepTimingsSnapshot, scope?: StepTimingsScope): void {
+  if (!scope) return;
+  try {
+    const prefix = `step_timings_${snapshot.op}`;
+    scope.setContext?.(prefix, snapshot as unknown as Record<string, unknown>);
+    scope.setTag?.(`${prefix}_slowest_step`, snapshot.slowest_step ?? "none");
+    scope.setTag?.(`${prefix}_total_bucket`, bucketDurationMs(snapshot.total_ms));
+    // A partial snapshot is a mid-operation view, so its total and step list are incomplete by
+    // construction. Tag it, or the two kinds of event are indistinguishable in Bugsink and someone
+    // will read a partial total as an operation duration.
+    scope.setTag?.(`${prefix}_partial`, String(snapshot.partial));
+    scope.setTag?.(`${prefix}_error_escaped`, String(snapshot.error_escaped));
+    if (snapshot.failed_step) {
+      scope.setTag?.(`${prefix}_failed_step`, snapshot.failed_step);
+    }
+    // Counters are small integers (poll attempts, collaborator writes), so they are tag-safe and
+    // are the fields we most want to filter on: `wait_for_repo_ready_attempts` alone distinguishes
+    // "returned immediately" from "burned the full 30 x 2000ms = 60s poll budget".
+    for (const [name, value] of Object.entries(snapshot.counts)) {
+      scope.setTag?.(`${prefix}_${name}`, String(value));
+    }
+    scope.addBreadcrumb?.({
+      message: `step timings ${snapshot.op}`,
+      category: "timing",
+      level: "info",
+      data: snapshot as unknown as Record<string, unknown>
+    });
+  } catch {
+    /* diagnostics must never break the operation they describe */
+  }
+}

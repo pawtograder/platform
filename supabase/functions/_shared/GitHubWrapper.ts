@@ -82,7 +82,7 @@ import {
 import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
-import { bucketDurationMs, countStep, StepTimings, type StepTimingsSnapshot, timeStep } from "./stepTimings.ts";
+import { attachSnapshotToScope, countStep, StepTimings, type StepTimingsSnapshot, timeStep } from "./stepTimings.ts";
 
 const adminsThatShouldNotBeListedAsAdmins = ["smaran-teja", "jonathantarun", "ricksva", "jondenman", "tsrats"];
 /**
@@ -1462,45 +1462,23 @@ export function isTeamAlreadyExistsError(e: unknown): boolean {
 }
 
 /**
- * Attach a finished step-timings snapshot to the Sentry scope, so the breakdown lands in Bugsink
- * next to whatever exception was reported for the same job — the failure case is exactly when the
- * per-step numbers are most useful.
+ * Attach a finished step-timings snapshot to the Sentry scope for the operation being measured.
  *
- * Tags vs context is deliberate. Sentry tags are INDEXED and want low cardinality, so only the
- * operation name, the slowest step's name, a coarse duration BUCKET, the failing step, and the
- * small integer counters go in tags (all of them searchable/groupable: "show me every create_repo
- * whose slowest step was get_head_sha"). The full millisecond breakdown is a JSON blob and belongs
- * in `setContext`, where it is displayed but not indexed.
+ * The writing itself lives in `attachSnapshotToScope` (_shared/stepTimings.ts), which documents why
+ * every write goes through this scope object and never through `Sentry.addBreadcrumb`, and why the
+ * tag keys are namespaced per operation.
  *
- * Passed to `StepTimings.finish()` as the sink, which already swallows sink failures — Sentry
- * bookkeeping must never turn a successful repo creation into a failed one.
+ * The scope handed to us is ALREADY per-message: `processBatch` shares one scope across the
+ * `drainConcurrency` envelopes it runs concurrently, but `processEnvelope` clones it per envelope
+ * (github-async-worker/index.ts:613) before any handler sees it, and `Sentry.Scope.clone()` copies
+ * tags and contexts by value. Attaching here — rather than to a scope this function clones for
+ * itself — is deliberate and is what makes an ESCAPING error carry its own breakdown: the worker
+ * captures that error with this same envelope scope, so the event arrives in Bugsink with this
+ * operation's steps on it. A private clone would isolate nothing extra and would drop the snapshot
+ * from precisely the event we most want it on.
  */
 function attachStepTimingsToScope(snapshot: StepTimingsSnapshot, scope?: Sentry.Scope): void {
-  if (!scope) return;
-  scope.setContext(`step_timings_${snapshot.op}`, snapshot as unknown as Record<string, unknown>);
-  scope.setTag("step_timings_op", snapshot.op);
-  scope.setTag("step_timings_slowest_step", snapshot.slowest_step ?? "none");
-  scope.setTag("step_timings_total_bucket", bucketDurationMs(snapshot.total_ms));
-  // A partial snapshot is a mid-operation view (see attachHandledFailureTimings), so its total and
-  // its step list are both incomplete by construction. Tag it, or the two kinds of event are
-  // indistinguishable in Bugsink and someone will read a partial total as an operation duration.
-  scope.setTag("step_timings_partial", String(snapshot.partial));
-  scope.setTag("step_timings_error_escaped", String(snapshot.error_escaped));
-  if (snapshot.failed_step) {
-    scope.setTag("step_timings_failed_step", snapshot.failed_step);
-  }
-  // Counters are small integers (poll attempts, retried sub-calls), so they are tag-safe and are
-  // the fields we most want to filter on: `wait_for_repo_ready_attempts` alone distinguishes
-  // "returned immediately" from "burned the full 30 x 2000ms = 60s poll budget".
-  for (const [name, value] of Object.entries(snapshot.counts)) {
-    scope.setTag(`step_timings_${name}`, String(value));
-  }
-  Sentry.addBreadcrumb({
-    message: `step timings ${snapshot.op}`,
-    category: "timing",
-    level: "info",
-    data: snapshot as unknown as Record<string, unknown>
-  });
+  attachSnapshotToScope(snapshot, scope);
 }
 
 /**
@@ -1525,8 +1503,9 @@ function attachHandledFailureTimings(
   try {
     attachStepTimingsToScope(timings.snapshot(), scope);
     // The step whose failure was handled here. NOT `failed_step`, which is reserved for an error
-    // that escaped the whole operation.
-    scope.setTag("step_timings_handled_failure_step", handledStep);
+    // that escaped the whole operation. Op-namespaced for the same reason as every other timing tag
+    // (see attachSnapshotToScope): two instrumented operations share one envelope scope.
+    scope.setTag(`step_timings_${timings.op}_handled_failure_step`, handledStep);
   } catch {
     /* diagnostics must never break the operation they describe */
   }

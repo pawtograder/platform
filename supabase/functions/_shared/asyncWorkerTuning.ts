@@ -93,17 +93,23 @@
  *
  * Raising `n` without raising the VT therefore RE-CREATES the incident, worse:
  * a longer batch against the same 300s VT means more messages redelivered
- * mid-flight, not fewer. That is why this module reports the violation instead
- * of leaving the two values as unrelated constants, and why the chart REFUSES
- * to render a raised concurrency with an unraised timeout
- * (templates/validations.yaml).
+ * mid-flight, not fewer. Two mechanisms stop that, at different layers:
+ * templates/validations.yaml REFUSES to render an incoherent combination, and
+ * `resolveAsyncWorkerTuning` ENFORCES coherence at runtime by degrading `n`
+ * until it fits under both ceilings (never by inflating a timeout, and never to
+ * 0). The runtime half exists because the chart cannot see the Helm-bypass
+ * paths — a hand-edited Deployment, `kubectl set env`, a local `supabase
+ * functions serve` — and an earlier version of this module only LOGGED the
+ * violation there before handing the broken numbers to processBatch anyway,
+ * which defended nothing.
  *
  * DEFAULTS ARE TODAY'S HARDCODED VALUES ON PURPOSE (n=4, VT=300). Deploying
  * this change alters nothing until someone sets the env vars, so the throughput
  * decision stays an explicit, reviewable operator action rather than a side
- * effect of a chart upgrade. The default pair (4, 300) DOES violate the
- * invariant above — that is the measured status quo, deliberately preserved,
- * and it is reported as a warning rather than clamped.
+ * effect of a chart upgrade. That exact pair DOES violate both ceilings under
+ * the model, and it is the ONE combination that is reported without being
+ * enforced — re-coherencing the status quo would change production behaviour on
+ * deploy, which is precisely what this change promises not to do.
  */
 
 /**
@@ -364,57 +370,131 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
   });
   if (vt.issue) issues.push(vt.issue);
 
-  // The invariant check. Reported, never enforced by mutating the values: the
-  // default pair (4, 300) violates it, and silently raising the VT on a
-  // default deploy would break the "defaults reproduce today's behaviour
-  // exactly" contract that makes this change safe to ship. The chart refuses
-  // the combination at render time for any RAISED concurrency, which is where
-  // a hard failure belongs.
-  const required = requiredVisibilityTimeoutSeconds(n.value);
-  if (vt.value < required) {
-    issues.push({
-      env: VISIBILITY_TIMEOUT_ENV,
-      effective: vt.value,
-      kind: "invariant",
-      message:
-        `visibility timeout ${vt.value}s is below the ${required}s a batch of ${n.value} can take ` +
-        `(${n.value} x ${PER_MESSAGE_VT_BUDGET_SECONDS}s/message, calibrated from the 2026-09-07 burst: ` +
-        `~7min for a batch of 4). Messages will be re-read while still in flight — that is the ` +
-        `read_ct>1 on 20 of 58 messages from that incident. Raise ${VISIBILITY_TIMEOUT_ENV} to >= ${required}.`
-    });
-  }
-
-  // Second ceiling: the isolate lifetime. A configuration whose modelled batch
-  // outlives the isolate is incoherent — if it ever did overrun, the archive
-  // calls would not run and successful work would redeliver — so it is reported
-  // on the same footing as the visibility timeout. This is a coherence check,
-  // NOT evidence that isolates are being truncated: see the header for the
-  // measurement that retracted that claim.
-  //
-  // Checked here as well as in the chart as DEFENCE IN DEPTH against the chart
-  // being bypassed: a hand-edited Deployment, `kubectl set env`, a local
-  // `supabase functions serve`, or any future non-Helm deploy path. It is NOT
-  // justified by edgeFunctions.envFromSecrets — see the note on the env vars
-  // above; that path cannot reach these variables at all.
+  // Read the isolate lifetime (the second ceiling). Never written, only read:
+  // this module cannot change how long EdgeRuntime keeps the isolate. Absent or
+  // unparseable means "unknown", and an unknown ceiling is skipped rather than
+  // guessed at — see ISOLATE_LIFETIME_ENV.
   const lifetimeRaw = env.get(ISOLATE_LIFETIME_ENV);
-  if (lifetimeRaw !== undefined && /^\d+$/.test(lifetimeRaw.trim())) {
-    const lifetimeSeconds = Math.floor(Number(lifetimeRaw.trim()) / 1000);
-    if (lifetimeSeconds < required) {
+  const lifetimeSeconds =
+    lifetimeRaw !== undefined && /^\d+$/.test(lifetimeRaw.trim())
+      ? Math.floor(Number(lifetimeRaw.trim()) / 1000)
+      : undefined;
+
+  // THE EXACT LEGACY PAIR IS REPORTED, NOT ENFORCED. (4, 300) is what was
+  // hardcoded in processBatch() before any of this was configurable, so it is
+  // what every deployment is already running; "re-coherencing" it here would
+  // change production behaviour on deploy, which is the one thing this change
+  // promises not to do. It genuinely violates both ceilings under the n x 120
+  // model, so it is reported loudly and left alone. Everything else is a
+  // deliberate act by whoever set the env var, and gets ENFORCED below.
+  const requiredForConfigured = requiredVisibilityTimeoutSeconds(n.value);
+  const isLegacyPair = n.value === DEFAULT_DRAIN_CONCURRENCY && vt.value === DEFAULT_VISIBILITY_TIMEOUT_SECONDS;
+  if (isLegacyPair) {
+    if (vt.value < requiredForConfigured) {
+      issues.push({
+        env: VISIBILITY_TIMEOUT_ENV,
+        effective: vt.value,
+        kind: "invariant",
+        message:
+          `visibility timeout ${vt.value}s is below the ${requiredForConfigured}s a batch of ${n.value} can ` +
+          `take (${n.value} x ${PER_MESSAGE_VT_BUDGET_SECONDS}s/message, calibrated from the 2026-09-07 ` +
+          `burst: ~7min for a batch of 4). Messages can be re-read while still in flight — that is the ` +
+          `read_ct>1 on 20 of 58 messages from that incident. This is the LEGACY PAIR (4/300), left as-is ` +
+          `on purpose; raise ${VISIBILITY_TIMEOUT_ENV} to >= ${requiredForConfigured} to fix it.`
+      });
+    }
+    if (lifetimeSeconds !== undefined && lifetimeSeconds < requiredForConfigured) {
       issues.push({
         env: ISOLATE_LIFETIME_ENV,
         raw: lifetimeRaw,
         effective: lifetimeSeconds,
         kind: "invariant",
         message:
-          `isolate lifetime ${lifetimeSeconds}s (${ISOLATE_LIFETIME_ENV}) is below the ${required}s a ` +
-          `batch of ${n.value} can take. The whole batch runs in ONE isolate, so it will be killed ` +
-          `before the archive calls run and every in-flight message will be re-provisioned on ` +
-          `redelivery. Raise edgeFunctions.worker.timeoutMs to >= ${required * 1000} (and keep ` +
-          `gracefulExitTimeoutSeconds / terminationGracePeriodSeconds above it). Note ` +
-          `beforeUnload.wallClockRatio asks the isolate to retire at half this.`
+          `isolate lifetime ${lifetimeSeconds}s (${ISOLATE_LIFETIME_ENV}) is below the ` +
+          `${requiredForConfigured}s a batch of ${n.value} can take. The whole batch runs in ONE isolate, ` +
+          `so an overrun would be killed before the archive calls and every in-flight message would be ` +
+          `re-provisioned on redelivery. Legacy pair (4/300), left as-is; raise ` +
+          `edgeFunctions.worker.timeoutMs to >= ${requiredForConfigured * 1000} (keeping ` +
+          `gracefulExitTimeoutSeconds / terminationGracePeriodSeconds above it) to fix it.`
       });
     }
+    return { drainConcurrency: n.value, visibilityTimeoutSeconds: vt.value, issues };
   }
 
-  return { drainConcurrency: n.value, visibilityTimeoutSeconds: vt.value, issues };
+  // ENFORCEMENT, and the direction of it is the whole point.
+  //
+  // This function used to only REPORT a broken pair and then hand the broken
+  // numbers to processBatch anyway, which made it useless exactly where it was
+  // the only check standing: on the Helm-bypass paths (hand-edited Deployment,
+  // `kubectl set env`) that the chart's render-time refusals cannot see. Setting
+  // GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY=8 and nothing else produced 8/300 — a
+  // batch modelled at 960s going visible at 300s, i.e. duplicated in-flight
+  // GitHub work and legitimate provisioning messages walking toward the
+  // poison-pill DLQ. A check that observes a fault it could have prevented is
+  // not defence in depth.
+  //
+  // We DEGRADE CONCURRENCY rather than inflate the timeout:
+  //
+  //   n = max(1, min(n_configured, floor(VT / 120), floor(lifetime / 120)))
+  //
+  //  * it satisfies BOTH ceilings simultaneously, by construction. Raising the
+  //    VT to fit `n` instead would satisfy the batch invariant while possibly
+  //    breaking the isolate-lifetime ceiling — trading one incoherence for
+  //    another, and the isolate ceiling is the one that loses the archive calls.
+  //  * it fails toward LESS THROUGHPUT, which is a slower queue. The other
+  //    direction fails toward duplicated GitHub work and re-provisioned repos.
+  //    A slow queue is visible and recoverable; re-provisioning is neither.
+  //  * it never returns 0. `n: 0` would drain nothing while the lease is held
+  //    and every heartbeat stays green — indistinguishable from a hung queue,
+  //    and the worst outcome available here. When the ceilings cannot be
+  //    satisfied at all (a VT below one message's 120s budget) we land on 1 and
+  //    say so, because draining slowly and incoherently still beats not
+  //    draining.
+  //
+  // We do NOT refuse to process the batch. Halting on a misconfiguration is
+  // worse than draining slowly on this path specifically: there is no render
+  // error for anyone to read, so a refusal would be a silent stop.
+  const caps: { limit: number; because: string }[] = [
+    { limit: Math.floor(vt.value / PER_MESSAGE_VT_BUDGET_SECONDS), because: `${VISIBILITY_TIMEOUT_ENV}=${vt.value}s` }
+  ];
+  if (lifetimeSeconds !== undefined) {
+    caps.push({
+      limit: Math.floor(lifetimeSeconds / PER_MESSAGE_VT_BUDGET_SECONDS),
+      because: `${ISOLATE_LIFETIME_ENV}=${lifetimeSeconds}s`
+    });
+  }
+  const binding = caps.reduce((lowest, c) => (c.limit < lowest.limit ? c : lowest));
+  const coherentN = Math.max(MIN_DRAIN_CONCURRENCY, Math.min(n.value, binding.limit));
+
+  if (coherentN !== n.value) {
+    issues.push({
+      env: DRAIN_CONCURRENCY_ENV,
+      effective: coherentN,
+      kind: "clamped",
+      message:
+        `drain concurrency reduced from ${n.value} to ${coherentN}: ${binding.because} only covers ` +
+        `${binding.limit} concurrent message(s) at ${PER_MESSAGE_VT_BUDGET_SECONDS}s each. Concurrency is ` +
+        `degraded rather than the timeout inflated, so both the visibility timeout and the isolate ` +
+        `lifetime stay above the modelled batch — the queue drains slower instead of re-serving work ` +
+        `that is still in flight. To actually get ${n.value}-way concurrency, raise ` +
+        `${VISIBILITY_TIMEOUT_ENV} and edgeFunctions.worker.timeoutMs to >= ${requiredForConfigured}s ` +
+        `(and the graceful-exit / termination-grace values with them).`
+    });
+  }
+
+  // Only reachable when the VT itself is below one message's budget, so no
+  // positive `n` is coherent. Floored at 1 deliberately — see above.
+  if (binding.limit < MIN_DRAIN_CONCURRENCY) {
+    issues.push({
+      env: VISIBILITY_TIMEOUT_ENV,
+      effective: vt.value,
+      kind: "invariant",
+      message:
+        `no coherent concurrency exists at ${binding.because}: even one message is budgeted at ` +
+        `${PER_MESSAGE_VT_BUDGET_SECONDS}s. Draining at n=1 anyway, because n=0 would drain nothing ` +
+        `while every liveness signal stayed green. Raise it to >= ${PER_MESSAGE_VT_BUDGET_SECONDS}.`
+    });
+  }
+
+  return { drainConcurrency: coherentN, visibilityTimeoutSeconds: vt.value, issues };
 }

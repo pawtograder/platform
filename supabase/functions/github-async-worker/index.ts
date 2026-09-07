@@ -2589,10 +2589,13 @@ function getTuning(scope: Sentry.Scope) {
     console.warn(`[pgmq] worker: ${issue.message}`);
   }
   // Only a rejected/clamped value is worth an event: it means the configured
-  // number is NOT the one in force, which is invisible from the outside. The
-  // `invariant` issue is true of the shipped defaults (4, 300) by design, so
-  // reporting it to Sentry would page on every deployment; it stays a log line
-  // and a tag.
+  // number is NOT the one in force, which is invisible from the outside. That
+  // now includes the COHERENCE clamp — someone who sets concurrency 8 through a
+  // Helm-bypass path and gets 2 because the visibility timeout only covers 2
+  // needs to hear about it, since their throughput change did not happen.
+  // `invariant` issues stay log-only: the one that survives enforcement is the
+  // shipped legacy pair (4, 300), which is deliberate, so reporting it would
+  // page on every deployment.
   const misconfigured = tuning.issues.filter((i) => i.kind !== "invariant");
   if (misconfigured.length > 0) {
     const s = scope.clone();
@@ -2632,11 +2635,14 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
   //
   // THE INVARIANT: the VT must exceed the worst case for a whole batch of `n`,
   // NOT for one message — raising `n` without raising the VT makes the
-  // redelivery storm worse, not better. It is encoded as
-  // requiredVisibilityTimeoutSeconds(n) in _shared/asyncWorkerTuning.ts, which
-  // holds the bounds, the calibration and the full incident narrative; the chart
-  // refuses to render a raised `n` with an unraised VT. Read that file before
-  // changing either number, and do NOT put constants back here.
+  // redelivery storm worse, not better. The same holds for the isolate lifetime.
+  // Both are encoded in _shared/asyncWorkerTuning.ts, which holds the bounds,
+  // the calibration and the full incident narrative, and which ENFORCES them:
+  // the pair below is coherent by construction, because an incoherent
+  // configuration has `n` degraded until it fits (never below 1) rather than
+  // being handed through with a warning. The chart refuses the same combinations
+  // at render time. Read that file before changing either number, and do NOT put
+  // constants back here.
   const tuning = getTuning(scope);
 
   let result = await adminSupabase.schema("pgmq_public").rpc("read", {

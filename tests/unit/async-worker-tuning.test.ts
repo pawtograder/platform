@@ -163,16 +163,58 @@ describe("the visibility-timeout-vs-concurrency invariant", () => {
     expect(requiredVisibilityTimeoutSeconds(4)).toBeGreaterThanOrEqual(420);
   });
 
-  it("flags a raised concurrency left against the old 300s timeout", () => {
+  it("ENFORCES a raised concurrency left against the old 300s timeout", () => {
+    // 8/300 used to be handed to processBatch unchanged with a log line: a batch
+    // modelled at 960s going visible at 300s. floor(300/120) = 2, so 2 is the
+    // most concurrency that timeout can cover.
     const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "300" }));
+    expect(t.drainConcurrency).toBe(2);
+    expect(t.visibilityTimeoutSeconds).toBe(300);
+    const clamped = t.issues.filter((i) => i.kind === "clamped");
+    expect(clamped).toHaveLength(1);
+    expect(clamped[0].env).toBe(DRAIN_CONCURRENCY_ENV);
+    expect(clamped[0].message).toContain("reduced from 8 to 2");
+    expect(clamped[0].message).toContain(VISIBILITY_TIMEOUT_ENV);
+  });
+
+  it("degrades concurrency rather than inflating the timeout", () => {
+    // The timeout the operator set is what is honoured; the throughput knob is
+    // what gives way. Inflating the VT could break the isolate-lifetime ceiling.
+    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "600" }));
+    expect(t.visibilityTimeoutSeconds).toBe(600);
+    expect(t.drainConcurrency).toBe(5);
+  });
+
+  it("leaves a coherent pair completely alone", () => {
+    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "960" }));
+    expect([t.drainConcurrency, t.visibilityTimeoutSeconds]).toEqual([8, 960]);
+    expect(t.issues).toHaveLength(0);
+  });
+
+  it("lands on n=1, NEVER 0, when no concurrency is coherent", () => {
+    // floor(60/120) = 0. n=0 reads nothing at all while the lease is held and
+    // every heartbeat stays green, which is the worst outcome available.
+    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "60" }));
+    expect(t.drainConcurrency).toBe(1);
+    expect(t.issues.some((i) => i.message.includes("no coherent concurrency exists"))).toBe(true);
+    expect(t.issues.some((i) => i.message.includes("n=0 would drain nothing"))).toBe(true);
+  });
+
+  it("keeps the exact legacy pair 4/300 untouched, reported but not enforced", () => {
+    // Enforcing here would change production behaviour on deploy, which is the
+    // one thing this change promises not to do.
+    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "4", [VISIBILITY_TIMEOUT_ENV]: "300" }));
+    expect([t.drainConcurrency, t.visibilityTimeoutSeconds]).toEqual([4, 300]);
+    expect(t.issues.filter((i) => i.kind === "clamped")).toHaveLength(0);
     const invariant = t.issues.filter((i) => i.kind === "invariant");
     expect(invariant).toHaveLength(1);
-    expect(invariant[0].message).toContain("960");
+    expect(invariant[0].message).toContain("LEGACY PAIR");
   });
 
   it("stays silent once the timeout covers the batch", () => {
     const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "8", [VISIBILITY_TIMEOUT_ENV]: "1200" }));
-    expect(t.issues.filter((i) => i.kind === "invariant")).toHaveLength(0);
+    expect(t.issues).toHaveLength(0);
+    expect(t.drainConcurrency).toBe(8);
   });
 
   it("leaves the whole legal concurrency range satisfiable within the timeout ceiling", () => {
@@ -181,18 +223,45 @@ describe("the visibility-timeout-vs-concurrency invariant", () => {
     expect(requiredVisibilityTimeoutSeconds(MAX_DRAIN_CONCURRENCY)).toBeLessThanOrEqual(MAX_VISIBILITY_TIMEOUT_SECONDS);
   });
 
-  it("reports the invariant against the CLAMPED concurrency, not the requested one", () => {
-    // Someone asks for 64 and gets 8; the timeout advice must be the one that
-    // matches what will actually run.
+  it("composes the bounds clamp with the coherence clamp", () => {
+    // 64 is clamped to the ceiling of 8 first, then 8 is degraded to what a 600s
+    // timeout can cover (5). Clamped inputs must not compose into an incoherent
+    // pair, which is how 8/300 used to slip through.
     const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "64", [VISIBILITY_TIMEOUT_ENV]: "600" }));
-    expect(t.drainConcurrency).toBe(8);
-    const invariant = t.issues.find((i) => i.kind === "invariant");
-    expect(invariant?.message).toContain("960");
+    expect(t.drainConcurrency).toBe(5);
+    expect(t.visibilityTimeoutSeconds * 1).toBeGreaterThanOrEqual(t.drainConcurrency * PER_MESSAGE_VT_BUDGET_SECONDS);
   });
 });
 
 describe("the second ceiling: isolate lifetime vs concurrency (config coherence)", () => {
-  it("flags the default concurrency against the shipped 400s isolate lifetime", () => {
+  it("caps concurrency on the isolate lifetime, not just the visibility timeout", () => {
+    // VT 960 would allow 8, but a 400s isolate only covers floor(400/120) = 3.
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "960",
+        [ISOLATE_LIFETIME_ENV]: "400000"
+      })
+    );
+    expect(t.drainConcurrency).toBe(3);
+    const clamped = t.issues.filter((i) => i.kind === "clamped");
+    expect(clamped).toHaveLength(1);
+    expect(clamped[0].message).toContain(ISOLATE_LIFETIME_ENV);
+  });
+
+  it("picks the LOWER of the two ceilings as the binding one", () => {
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "240",
+        [ISOLATE_LIFETIME_ENV]: "960000"
+      })
+    );
+    expect(t.drainConcurrency).toBe(2);
+    expect(t.issues.find((i) => i.kind === "clamped")?.message).toContain(VISIBILITY_TIMEOUT_ENV);
+  });
+
+  it("reports the legacy pair against the shipped 400s isolate lifetime without enforcing", () => {
     // A coherence check, not an observation: n x 120 budgets 480s for a batch of
     // 4 while EDGE_WORKER_TIMEOUT_MS=400000 allows 400s, so the pair cannot both
     // be right. Nothing here claims isolates are actually being truncated — that
@@ -209,18 +278,23 @@ describe("the second ceiling: isolate lifetime vs concurrency (config coherence)
     expect(t.issues.filter((i) => i.env === ISOLATE_LIFETIME_ENV)).toHaveLength(0);
   });
 
-  it("scales with concurrency, and reports both ceilings independently", () => {
-    const t = resolveAsyncWorkerTuning(
-      env({
-        [DRAIN_CONCURRENCY_ENV]: "8",
-        [VISIBILITY_TIMEOUT_ENV]: "300",
-        [ISOLATE_LIFETIME_ENV]: "400000"
-      })
-    );
-    expect(t.issues.filter((i) => i.kind === "invariant").map((i) => i.env)).toEqual([
-      VISIBILITY_TIMEOUT_ENV,
-      ISOLATE_LIFETIME_ENV
-    ]);
+  it("satisfies BOTH ceilings simultaneously for every combination it returns", () => {
+    for (const n of ["1", "4", "8", "64"]) {
+      for (const vt of ["60", "300", "480", "960", "1800"]) {
+        for (const life of [undefined, "400000", "960000"]) {
+          const t = resolveAsyncWorkerTuning(
+            env({ [DRAIN_CONCURRENCY_ENV]: n, [VISIBILITY_TIMEOUT_ENV]: vt, [ISOLATE_LIFETIME_ENV]: life })
+          );
+          expect(t.drainConcurrency).toBeGreaterThanOrEqual(1);
+          const isLegacy = t.drainConcurrency === 4 && t.visibilityTimeoutSeconds === 300;
+          const needed = t.drainConcurrency * PER_MESSAGE_VT_BUDGET_SECONDS;
+          if (!isLegacy && t.drainConcurrency > 1) {
+            expect(t.visibilityTimeoutSeconds).toBeGreaterThanOrEqual(needed);
+            if (life) expect(Math.floor(Number(life) / 1000)).toBeGreaterThanOrEqual(needed);
+          }
+        }
+      }
+    }
   });
 
   it("skips the check rather than guessing when the lifetime is absent or unparseable", () => {

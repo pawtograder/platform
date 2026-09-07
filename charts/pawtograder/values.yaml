@@ -1426,9 +1426,13 @@ edgeFunctions:
   # 1800s is 1.5x the queue-aging alert window, so a genuinely stuck message
   # still pages a human instead of sitting invisible for hours. Out-of-range
   # values are refused at render time and, if they reach the pod some other way
-  # (a hand-edited Deployment, `kubectl set env`), clamped at runtime rather than
-  # taking the worker down — a `0` would drain nothing while every liveness
-  # signal stayed green. Note these are rendered as explicit `env` entries, and
+  # (a hand-edited Deployment, `kubectl set env`), fixed up at runtime rather
+  # than taking the worker down — a `0` would drain nothing while every liveness
+  # signal stayed green. The runtime fix-up ENFORCES the two ceilings by
+  # degrading concurrency, so on a bypass path a lone drainConcurrency=8 with the
+  # timeouts left alone actually runs at 2 (floor(300/120)) and says so in the
+  # log and in Sentry. Set them here and the render-time rules make that
+  # impossible in the first place. Note these are rendered as explicit `env` entries, and
   # an `env` entry beats `envFrom`, so edgeFunctions.envFromSecrets CANNOT be
   # used to override them: set them here.
   githubAsyncWorker:

@@ -12,6 +12,7 @@
  */
 
 import {
+  attachSnapshotToScope,
   bucketDurationMs,
   countStep,
   STEP_TIMINGS_DEBUG_ENV_VAR,
@@ -448,5 +449,164 @@ describe("bucketDurationMs", () => {
     expect(bucketDurationMs(4_900)).toBe("1-5s"); // the template generate call
     expect(bucketDurationMs(Number.NaN)).toBe("unknown");
     expect(bucketDurationMs(-1)).toBe("unknown");
+  });
+});
+
+/**
+ * Stand-in for a Sentry.Scope. `attachSnapshotToScope` takes the scope structurally precisely so
+ * this is possible, which is what lets these tests assert the scope-isolation property directly
+ * rather than by inspection.
+ */
+function fakeScope() {
+  const tags: Record<string, string | number | boolean> = {};
+  const contexts: Record<string, unknown> = {};
+  const breadcrumbs: Record<string, unknown>[] = [];
+  return {
+    tags,
+    contexts,
+    breadcrumbs,
+    setTag: (key: string, value: string | number | boolean) => {
+      tags[key] = value;
+    },
+    setContext: (key: string, context: Record<string, unknown>) => {
+      contexts[key] = context;
+    },
+    addBreadcrumb: (breadcrumb: Record<string, unknown>) => {
+      breadcrumbs.push(breadcrumb);
+    }
+  };
+}
+
+describe("scope isolation between concurrent operations", () => {
+  // WHY: processBatch runs drainConcurrency (default 4) envelopes concurrently under
+  // Promise.allSettled and shares one Sentry.Scope across them; processEnvelope clones it per
+  // envelope before any handler sees it. Timings must therefore ride on the scope OBJECT they were
+  // given and never on a module-level/global sink, or one repo's breakdown lands on another repo's
+  // event and we chase the wrong step.
+  it("two operations running concurrently each report only their own steps and counters", async () => {
+    const lines: string[] = [];
+    let clockA = 1_000;
+    let clockB = 500_000;
+    const a = new StepTimings("create_repo", {
+      now: () => clockA,
+      log: (line) => lines.push(line),
+      debug: false,
+      meta: { repo_name: "hw2-alice" }
+    });
+    const b = new StepTimings("create_repo", {
+      now: () => clockB,
+      log: (line) => lines.push(line),
+      debug: false,
+      meta: { repo_name: "hw2-bob" }
+    });
+
+    // Interleaved, the way two awaited operations in one isolate actually run.
+    const opA = a.time("template_generate", async () => {
+      clockA += 4_896;
+      await Promise.resolve();
+      a.count("wait_for_repo_ready_attempts", 3);
+    });
+    const opB = b.time("template_generate", async () => {
+      clockB += 12_000;
+      await Promise.resolve();
+      b.count("wait_for_repo_ready_attempts", 29);
+    });
+    await Promise.all([opA, opB]);
+
+    const scopeA = fakeScope();
+    const scopeB = fakeScope();
+    a.finish((snapshot) => attachSnapshotToScope(snapshot, scopeA));
+    b.finish((snapshot) => attachSnapshotToScope(snapshot, scopeB));
+
+    const [snapA, snapB] = lines
+      .filter((l) => l.startsWith(STEP_TIMINGS_LOG_PREFIX))
+      .map((l) => JSON.parse(l.slice(STEP_TIMINGS_LOG_PREFIX.length).trim()) as StepTimingsSnapshot);
+    expect(snapA.steps.template_generate).toBe(4_896);
+    expect(snapB.steps.template_generate).toBe(12_000);
+    expect(snapA.counts.wait_for_repo_ready_attempts).toBe(3);
+    expect(snapB.counts.wait_for_repo_ready_attempts).toBe(29);
+    expect(snapA.meta.repo_name).toBe("hw2-alice");
+    expect(snapB.meta.repo_name).toBe("hw2-bob");
+
+    // And nothing bled across the two scopes.
+    expect(scopeA.tags["step_timings_create_repo_wait_for_repo_ready_attempts"]).toBe("3");
+    expect(scopeB.tags["step_timings_create_repo_wait_for_repo_ready_attempts"]).toBe("29");
+    expect((scopeA.contexts["step_timings_create_repo"] as StepTimingsSnapshot).meta.repo_name).toBe("hw2-alice");
+    expect((scopeB.contexts["step_timings_create_repo"] as StepTimingsSnapshot).meta.repo_name).toBe("hw2-bob");
+    expect(scopeA.breadcrumbs).toHaveLength(1);
+    expect(scopeB.breadcrumbs).toHaveLength(1);
+  });
+
+  it("a failure in one operation does not stamp failed_step onto the other", async () => {
+    const boom = new Error("message 3 of 4 blew up");
+    const failing = new StepTimings("create_repo", { now: () => 0, log: () => {}, debug: false });
+    const healthy = new StepTimings("create_repo", { now: () => 0, log: () => {}, debug: false });
+
+    await expect(failing.time("get_head_sha", () => Promise.reject(boom))).rejects.toBe(boom);
+    failing.noteEscapingError(boom);
+    await healthy.time("get_head_sha", () => Promise.resolve(undefined));
+
+    const failingScope = fakeScope();
+    const healthyScope = fakeScope();
+    attachSnapshotToScope(failing.snapshot(), failingScope);
+    attachSnapshotToScope(healthy.snapshot(), healthyScope);
+
+    expect(failing.snapshot().failed_step).toBe("get_head_sha");
+    expect(healthy.snapshot().failed_step).toBeNull();
+    expect(failingScope.tags["step_timings_create_repo_failed_step"]).toBe("get_head_sha");
+    expect(failingScope.tags["step_timings_create_repo_error_escaped"]).toBe("true");
+    // The healthy operation's scope must carry NO failure tag at all, not even a "false" one for
+    // failed_step — an error event for a sibling message must not look like this repo failed.
+    expect(healthyScope.tags["step_timings_create_repo_failed_step"]).toBeUndefined();
+    expect(healthyScope.tags["step_timings_create_repo_error_escaped"]).toBe("false");
+  });
+});
+
+describe("attachSnapshotToScope", () => {
+  it("namespaces tags per operation so two operations on ONE scope do not overwrite each other", () => {
+    // A single create_repo MESSAGE runs createRepo and then syncRepoPermissions against the same
+    // envelope scope. Unprefixed tag keys meant the second one silently clobbered the first.
+    const scope = fakeScope();
+    const create = new StepTimings("create_repo", { now: () => 0, log: () => {}, debug: false });
+    create.add("template_generate", 4_896);
+    create.count("wait_for_repo_ready_attempts", 7);
+    const sync = new StepTimings("sync_repo_permissions", { now: () => 0, log: () => {}, debug: false });
+    sync.add("list_collaborators", 1_200);
+    sync.count("collaborators_added", 1);
+
+    attachSnapshotToScope(create.snapshot(), scope);
+    attachSnapshotToScope(sync.snapshot(), scope);
+
+    expect(scope.tags["step_timings_create_repo_slowest_step"]).toBe("template_generate");
+    expect(scope.tags["step_timings_sync_repo_permissions_slowest_step"]).toBe("list_collaborators");
+    expect(scope.tags["step_timings_create_repo_wait_for_repo_ready_attempts"]).toBe("7");
+    expect(scope.tags["step_timings_sync_repo_permissions_collaborators_added"]).toBe("1");
+    expect(Object.keys(scope.contexts).sort()).toEqual([
+      "step_timings_create_repo",
+      "step_timings_sync_repo_permissions"
+    ]);
+  });
+
+  it("tags the coarse duration bucket and the partial flag", () => {
+    const scope = fakeScope();
+    const timings = new StepTimings("create_repo", { now: () => 0, log: () => {}, debug: false });
+    timings.add("patch_repo_settings", 279_500);
+    attachSnapshotToScope(timings.snapshot(), scope);
+    expect(scope.tags["step_timings_create_repo_partial"]).toBe("true");
+    timings.finish();
+    attachSnapshotToScope(timings.snapshot(), scope);
+    expect(scope.tags["step_timings_create_repo_partial"]).toBe("false");
+  });
+
+  it("is a no-op with no scope and swallows a throwing scope", () => {
+    const timings = new StepTimings("create_repo", { now: () => 0, log: () => {}, debug: false });
+    expect(() => attachSnapshotToScope(timings.snapshot(), undefined)).not.toThrow();
+    expect(() =>
+      attachSnapshotToScope(timings.snapshot(), {
+        setTag: () => {
+          throw new Error("sentry is down");
+        }
+      })
+    ).not.toThrow();
   });
 });
