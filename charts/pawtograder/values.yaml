@@ -1363,12 +1363,21 @@ edgeFunctions:
   #     visibilityTimeoutSeconds: 960   # 8 x 120
   #   worker:
   #     timeoutMs: 960000               # 8 x 120s: the isolate must outlive the batch
-  #   gracefulExitTimeoutSeconds: 970   # >= worker.timeoutMs
+  #   gracefulExitTimeoutSeconds: 970   # >= worker.timeoutMs, or a ROLLOUT truncates the batch
   #   terminationGracePeriodSeconds: 990 # >= preStop + gracefulExitTimeout
+  #   metrics:
+  #     buckets: [..., 300, 400, 960]   # top finite bucket >= the new lifetime
+  #
+  # All five are enforced by templates/validations.yaml, so a partial bundle is
+  # refused at render time rather than deployed: a graceful exit shorter than the
+  # isolate lifetime lets a rollout kill a batch before its archive calls, and a
+  # bucket list that stops at 400 puts everything in the newly-permitted range
+  # into +Inf.
   #
   # If that blast radius is unacceptable, the cheaper and better-scoped first
-  # move is to leave drainConcurrency at 4 and lift only the two timeouts to
-  # cover the batch that is ALREADY running (480s / 480000ms). That fixes the
+  # move is to leave drainConcurrency at 4 and lift the timeouts to cover the
+  # batch that is ALREADY running (480s VT / 480000ms lifetime / 490 graceful /
+  # 510 termination grace / buckets ending at 480). That fixes the
   # redeliveries without changing GitHub concurrency at all, and it is the
   # change with the shortest argument behind it.
   #
@@ -1417,8 +1426,11 @@ edgeFunctions:
   # 1800s is 1.5x the queue-aging alert window, so a genuinely stuck message
   # still pages a human instead of sitting invisible for hours. Out-of-range
   # values are refused at render time and, if they reach the pod some other way
-  # (envFromSecrets), clamped at runtime rather than taking the worker down —
-  # a `0` would drain nothing while every liveness signal stayed green.
+  # (a hand-edited Deployment, `kubectl set env`), clamped at runtime rather than
+  # taking the worker down — a `0` would drain nothing while every liveness
+  # signal stayed green. Note these are rendered as explicit `env` entries, and
+  # an `env` entry beats `envFrom`, so edgeFunctions.envFromSecrets CANNOT be
+  # used to override them: set them here.
   githubAsyncWorker:
     drainConcurrency: 4
     visibilityTimeoutSeconds: 300

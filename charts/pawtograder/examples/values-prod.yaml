@@ -230,10 +230,13 @@ edgeFunctions:
   #     visibilityTimeoutSeconds: 480   # 4 x 120
   #   worker:
   #     timeoutMs: 480000               # the isolate must outlive the batch
-  #   gracefulExitTimeoutSeconds: 490   # >= worker.timeoutMs
+  #   gracefulExitTimeoutSeconds: 490   # >= worker.timeoutMs, or a rollout kills the batch
   #   terminationGracePeriodSeconds: 510 # >= preStopSleepSeconds + gracefulExitTimeout
+  #   metrics:
+  #     # Top finite bucket must reach the new lifetime or the 400-480s range all lands in +Inf.
+  #     buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 400, 480]
   #
-  # Doubling throughput on top of that means moving all of it again, together — 8 x 120 = 960:
+  # Doubling throughput on top of that means moving all FIVE again, together — 8 x 120 = 960:
   #
   #   githubAsyncWorker:
   #     drainConcurrency: 8
@@ -242,6 +245,14 @@ edgeFunctions:
   #     timeoutMs: 960000
   #   gracefulExitTimeoutSeconds: 970
   #   terminationGracePeriodSeconds: 990
+  #   metrics:
+  #     buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 400, 960]
+  #
+  # Every one of those five is enforced at render time (templates/validations.yaml), so an
+  # incomplete bundle is refused rather than deployed: the visibility timeout and the isolate
+  # lifetime must cover the modelled batch, the graceful exit must cover the isolate lifetime, the
+  # SIGKILL backstop must cover preStop + graceful exit, and the top metrics bucket must reach the
+  # lifetime whenever metrics are enabled.
   #
   # Do NOT set drainConcurrency: 8 with worker.timeoutMs left at 400000. That combination is
   # incoherent — a batch modelled at 960s inside a 400s isolate — and the chart refuses it. Stated

@@ -229,8 +229,12 @@ through: a 60s timeout re-serves a create_repo (~280s, measured) four times over
 while it is still in flight, which is strictly worse than the status quo.
 
 Bounds are refused rather than clamped here so a typo is visible at deploy time.
-asyncWorkerTuning.ts clamps the same bounds at runtime, because these can also
-reach the pod through edgeFunctions.envFromSecrets, which the chart never sees.
+These chart values are the ONLY supported way to set the two variables:
+_edge-functions-workload.tpl renders them as explicit `env` entries, and an `env`
+entry beats anything from `envFrom`, so edgeFunctions.envFromSecrets cannot
+override them. asyncWorkerTuning.ts clamps the same bounds at runtime anyway, as
+defence in depth against the chart being bypassed (a hand-edited Deployment,
+`kubectl set env`, a local `supabase functions serve`).
 */ -}}
 {{- if .Values.edgeFunctions.enabled -}}
 {{- $gaw := .Values.edgeFunctions.githubAsyncWorker -}}
@@ -259,6 +263,60 @@ reach the pod through edgeFunctions.envFromSecrets, which the chart never sees.
 {{- $lifetimeMs := .Values.edgeFunctions.worker.timeoutMs | int -}}
 {{- if lt (div $lifetimeMs 1000) $need -}}
 {{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency=%d requires edgeFunctions.worker.timeoutMs >= %d (%ds = %d x 120s/message), but it is %d (%ds). worker.timeoutMs is the ISOLATE LIFETIME (main.ts passes it to EdgeRuntime as workerTimeoutMs), and the whole batch runs inside ONE leaseholder isolate: if the batch outlives it the isolate is killed before Promise.allSettled reaches the archive calls, so every message in flight is re-provisioned from scratch on redelivery. Note beforeUnload.wallClockRatio=%v asks the isolate to retire at half the lifetime, so treat the lifetime as the hard cap and not the budget. Raising it lengthens EVERY function's isolate lifetime in this pod, and gracefulExitTimeoutSeconds (%v) / terminationGracePeriodSeconds (%v) must stay above it or a rollout cuts the drain off anyway — so the concurrency bump is a coupled change, not a one-line one." $n (mul $need 1000) $need $n $lifetimeMs (div $lifetimeMs 1000) .Values.edgeFunctions.beforeUnload.wallClockRatio .Values.edgeFunctions.gracefulExitTimeoutSeconds .Values.edgeFunctions.terminationGracePeriodSeconds) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+The drain-coherence rules above are useless on their own if a ROLLOUT can cut
+the batch shorter than the isolate lifetime does, so the same arithmetic has to
+hold across the shutdown path. Two rules, both unconditional because they are
+properties of the edge tier and not of this worker:
+
+  gracefulExitTimeoutSeconds        >= worker.timeoutMs / 1000
+  terminationGracePeriodSeconds     >= preStopSleepSeconds + gracefulExitTimeoutSeconds
+
+edge-runtime intercepts SIGTERM and lets in-flight handlers finish for up to
+--graceful-exit-timeout; past that they are cut off. So a graceful-exit shorter
+than the isolate lifetime means a rollout terminates a batch that the isolate
+itself would have allowed to finish — the archive calls never run, and work
+GitHub has already done is redelivered. terminationGracePeriodSeconds is the
+kubelet's SIGKILL backstop and has to sit above preStop + graceful exit or the
+kubelet kills the pod mid-drain regardless of what the runtime intended.
+
+These were previously documented in values.yaml ("Sizing:
+gracefulExitTimeoutSeconds >= worker.timeoutMs") and asserted nowhere, which is
+why 8 / 960 / 960000 with the default 410s graceful exit rendered clean and the
+guard-rail suite blessed it. The chart defaults satisfy both (410 >= 400;
+430 >= 10 + 410), so this refuses nothing that exists today — it only refuses
+raising worker.timeoutMs without carrying the drain settings with it.
+*/ -}}
+{{- if .Values.edgeFunctions.enabled -}}
+{{- $lifeSec := div (.Values.edgeFunctions.worker.timeoutMs | int) 1000 -}}
+{{- $graceful := .Values.edgeFunctions.gracefulExitTimeoutSeconds | int -}}
+{{- $preStop := .Values.edgeFunctions.preStopSleepSeconds | int -}}
+{{- $termGrace := .Values.edgeFunctions.terminationGracePeriodSeconds | int -}}
+{{- if lt $graceful $lifeSec -}}
+{{- fail (printf "edgeFunctions.gracefulExitTimeoutSeconds=%d is below edgeFunctions.worker.timeoutMs (%dms = %ds). edge-runtime's --graceful-exit-timeout is how long in-flight handlers get to finish after SIGTERM, so a value below the isolate lifetime means a ROLLOUT cuts off work the isolate itself would have let finish. For the github-async-worker that means a batch killed before its pgmq archive calls, so repos that were created successfully are provisioned again on redelivery. Set gracefulExitTimeoutSeconds >= %d (the chart default leaves 10s of headroom: 410 for a 400s lifetime), and keep terminationGracePeriodSeconds above preStopSleepSeconds + this value." $graceful (.Values.edgeFunctions.worker.timeoutMs | int) $lifeSec $lifeSec) -}}
+{{- end -}}
+{{- if lt $termGrace (add $preStop $graceful) -}}
+{{- fail (printf "edgeFunctions.terminationGracePeriodSeconds=%d is below preStopSleepSeconds (%d) + gracefulExitTimeoutSeconds (%d) = %d. terminationGracePeriodSeconds is the kubelet's SIGKILL backstop: below that sum the pod is killed mid-drain no matter what --graceful-exit-timeout was set to, so the graceful exit is decorative and in-flight batches die without archiving. Set terminationGracePeriodSeconds >= %d." $termGrace $preStop $graceful (add $preStop $graceful) (add $preStop $graceful)) -}}
+{{- end -}}
+{{- /*
+And the metrics coupling, which is the other thing a raised worker.timeoutMs
+silently breaks: the top FINITE latency bucket must still reach the worker
+lifetime, or everything between the old bucket and the new lifetime lands in
++Inf and the upper quantiles become an extrapolation off the last finite bound
+-- precisely for the long batches the timeout was raised to accommodate.
+values.yaml says "raise it alongside any timeout increase"; render-guardrails.sh
+asserts it for the renders it happens to exercise. Neither can catch an
+operator's own values file, which is what this rule is for. Only checked when
+metrics are on, because the buckets are inert otherwise.
+*/ -}}
+{{- if .Values.edgeFunctions.metrics.enabled -}}
+{{- $top := last .Values.edgeFunctions.metrics.buckets | float64 -}}
+{{- if lt $top (float64 $lifeSec) -}}
+{{- fail (printf "edgeFunctions.metrics.buckets ends at %v seconds, below edgeFunctions.worker.timeoutMs (%ds). Every request that runs to the worker lifetime would land in +Inf, so p95/p99 stop meaning anything at exactly the moment this tier is in trouble. Extend the list so its last element is >= %d (keep it ascending; the default list ends ON the default 400s lifetime)." $top $lifeSec $lifeSec) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

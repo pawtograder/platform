@@ -2565,7 +2565,20 @@ export async function processEnvelope(
 let cachedTuning: ReturnType<typeof resolveAsyncWorkerTuning> | null = null;
 
 function getTuning(scope: Sentry.Scope) {
-  if (cachedTuning) return cachedTuning;
+  // TAGGING IS PER SCOPE, MEMOIZATION IS PER ISOLATE, and the two must not be
+  // conflated. runBatchHandler() builds a FRESH Sentry.Scope for every run, and
+  // in bounded mode (no Redis: each cron poke drains and returns) there are many
+  // runs per isolate. An early `return cachedTuning` before these setTag calls
+  // therefore left every run after the first with untagged batch and envelope
+  // events — the tags were on a scope that had already been discarded. So tag
+  // unconditionally, and memoize only the resolution and the one-time report
+  // below, which would otherwise be re-emitted on every poke for a static
+  // misconfiguration.
+  if (cachedTuning) {
+    scope.setTag("drain_concurrency", String(cachedTuning.drainConcurrency));
+    scope.setTag("visibility_timeout_seconds", String(cachedTuning.visibilityTimeoutSeconds));
+    return cachedTuning;
+  }
   const tuning = resolveAsyncWorkerTuning(Deno.env);
   cachedTuning = tuning;
 

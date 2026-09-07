@@ -106,6 +106,19 @@
  * and it is reported as a warning rather than clamped.
  */
 
+/**
+ * THE CHART VALUES ARE THE ONLY SUPPORTED INPUT for both knobs below.
+ * `_edge-functions-workload.tpl` renders them as explicit `env` entries with a
+ * literal `value:`, and in Kubernetes an `env` entry WINS over anything supplied
+ * by `envFrom` — so setting them through `edgeFunctions.envFromSecrets` is
+ * silently ignored and the pod keeps the chart-rendered numbers. An earlier
+ * version of this file claimed that secret path worked and used it to justify
+ * the runtime validation; the claim was wrong and is withdrawn. The validation
+ * stands on its own merits (defence in depth against a hand-edited Deployment,
+ * `kubectl set env`, or a local `supabase functions serve`), and it is also the
+ * only thing standing between a malformed value and pgmq.
+ */
+
 /** Env var read for the pgmq `read` fan-out (chart: edgeFunctions.githubAsyncWorker.drainConcurrency). */
 export const DRAIN_CONCURRENCY_ENV = "GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY";
 /** Env var read for the pgmq visibility timeout (chart: edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds). */
@@ -376,8 +389,13 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
   // calls would not run and successful work would redeliver — so it is reported
   // on the same footing as the visibility timeout. This is a coherence check,
   // NOT evidence that isolates are being truncated: see the header for the
-  // measurement that retracted that claim. Checked here as well as in the chart
-  // because the chart cannot see values that arrive via envFromSecrets.
+  // measurement that retracted that claim.
+  //
+  // Checked here as well as in the chart as DEFENCE IN DEPTH against the chart
+  // being bypassed: a hand-edited Deployment, `kubectl set env`, a local
+  // `supabase functions serve`, or any future non-Helm deploy path. It is NOT
+  // justified by edgeFunctions.envFromSecrets — see the note on the env vars
+  // above; that path cannot reach these variables at all.
   const lifetimeRaw = env.get(ISOLATE_LIFETIME_ENV);
   if (lifetimeRaw !== undefined && /^\d+$/.test(lifetimeRaw.trim())) {
     const lifetimeSeconds = Math.floor(Number(lifetimeRaw.trim()) / 1000);
