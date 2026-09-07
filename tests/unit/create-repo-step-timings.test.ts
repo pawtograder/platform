@@ -1,6 +1,14 @@
-/**
- * @jest-environment node
- */
+// NOTE: deliberately no jest environment pragma. These are pure-logic tests — injected clock,
+// logger and env reader, and a plain object standing in for a Sentry scope — so they need nothing
+// the default jsdom environment lacks, and there are no jest mocking APIs in the file at all.
+//
+// Naming an environment is what made suites here fragile: package.json allows `jest: ^30.1.2` so an
+// `npm install` drifts the runtime to 30.4.x, while package-lock.json still pins one hoisted
+// `jest-mock@30.0.5`. `jest-runtime@30.4.2` calls `moduleMocker.clearMocksOnScope()`, which 30.0.5
+// does not have, so a suite that pins an environment dies with
+// "TypeError: this._moduleMocker.clearMocksOnScope is not a function" before running a single test.
+// Staying on the default environment makes this suite immune to that drift, which matters now that
+// it is a gating CI job.
 
 /**
  * Tests for the step-timing collector added to chase the 2026-09-07 create_repo latency (58 prod

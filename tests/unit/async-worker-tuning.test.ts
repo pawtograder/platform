@@ -1,8 +1,4 @@
 /**
- * @jest-environment node
- */
-
-/**
  * The parsing/clamping rules behind the github-async-worker's pgmq drain tuning.
  *
  * These are the values that produced the 2026-09-07 incident (58 create_repo
@@ -146,8 +142,19 @@ describe("async worker drain tuning: clamping", () => {
     expect(clamped[0].message).toContain("below the minimum");
   });
 
+  // The isolate lifetime is set generously here ON PURPOSE. This test is about the
+  // MAX_DRAIN_CONCURRENCY bound, so that bound has to be the binding term; without a
+  // lifetime the resolver applies main.ts's 400s fallback and coherently returns 3
+  // (floor(400/120)), which is correct behaviour but tests the wrong ceiling. The
+  // lifetime ceiling has its own cases below.
   it("clamps an absurd concurrency down to the memory/quota ceiling instead of honouring it", () => {
-    const t = resolveAsyncWorkerTuning(env({ [DRAIN_CONCURRENCY_ENV]: "1000", [VISIBILITY_TIMEOUT_ENV]: "1800" }));
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "1000",
+        [VISIBILITY_TIMEOUT_ENV]: "1800",
+        [ISOLATE_LIFETIME_ENV]: "1800000"
+      })
+    );
     expect(t.drainConcurrency).toBe(MAX_DRAIN_CONCURRENCY);
     expect(t.issues.some((i) => i.kind === "clamped" && i.env === DRAIN_CONCURRENCY_ENV)).toBe(true);
   });
