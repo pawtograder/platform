@@ -146,14 +146,26 @@ auth:
     github:
       enabled: true
       redirectUri: https://api.staging.pawtograder.net/auth/v1/callback
-    # Microsoft (Entra ID), multi-tenant — GoTrue uses the common endpoint,
-    # so any Microsoft account can sign in. Creds come from the
-    # pawtograder-web Secret keys AZURE_OAUTH_CLIENT_ID /
-    # AZURE_OAUTH_CLIENT_SECRET (synced from kv/apps/pawtograder-staging/web).
-    # Redirect URI registered in Azure:
-    #   https://api.staging.pawtograder.net/auth/v1/callback
+    # Microsoft (Entra ID). Creds come from the pawtograder-web Secret keys
+    # AZURE_OAUTH_CLIENT_ID / AZURE_OAUTH_CLIENT_SECRET, synced from
+    # kv/apps/pawtograder-staging/web — populate them with
+    # k8s/apps/pawtograder-staging/setup-azure.sh, which also registers the
+    # redirect URI expectation below and restarts auth.
+    #
+    # redirectUri is spelled out rather than left to the chart default because
+    # it has to match the Entra app registration's "Web" redirect URI
+    # character-for-character; having it in one visible place makes the two
+    # easy to diff when sign-in starts failing with AADSTS50011.
+    #
+    # `url` is intentionally unset: staging runs against the common endpoint so
+    # any Microsoft account can sign in, which is what we want for testing with
+    # non-NU accounts. The trade-off is that a non-Northeastern account gets no
+    # employeeId from Microsoft Graph, so user-fetch-azure-profile leaves
+    # sis_user_id NULL. To restrict staging to the NU directory, set
+    #   url: https://login.microsoftonline.com/<northeastern-tenant-id>
     azure:
       enabled: true
+      redirectUri: https://api.staging.pawtograder.net/auth/v1/callback
     # GitHub + Discord OAuth (sign-in / identity-linking). Client id+secret are
     # read from the pawtograder-web Secret as {GITHUB,DISCORD}_OAUTH_CLIENT_ID /
     # _CLIENT_SECRET (synced from kv/apps/pawtograder-staging/web). GitHub reuses

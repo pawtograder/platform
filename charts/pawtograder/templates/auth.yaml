@@ -174,6 +174,12 @@ spec:
             {{- if .Values.auth.external.azure.enabled }}
             - name: GOTRUE_EXTERNAL_AZURE_ENABLED
               value: "true"
+            # REQUIRED, not optional: GoTrue's ValidateOAuth rejects a provider
+            # with an empty RedirectURI ("missing redirect URI") before it ever
+            # talks to Microsoft, so omitting this makes /authorize?provider=azure
+            # 400 even with a valid client id + secret.
+            - name: GOTRUE_EXTERNAL_AZURE_REDIRECT_URI
+              value: {{ default (printf "%s/auth/v1/callback" (include "pawtograder.api.url" .)) .Values.auth.external.azure.redirectUri | quote }}
             - name: GOTRUE_EXTERNAL_AZURE_CLIENT_ID
               valueFrom:
                 secretKeyRef:
@@ -186,6 +192,15 @@ spec:
                   name: {{ .Values.secrets.names.web }}
                   key: AZURE_OAUTH_CLIENT_SECRET
                   optional: true
+            {{- with .Values.auth.external.azure.url }}
+            # Tenant pinning. Unset, GoTrue uses login.microsoftonline.com/common
+            # and accepts an ID token from ANY issuer (any Microsoft account,
+            # personal ones included). Set to https://login.microsoftonline.com/<tenant-id>
+            # and GoTrue both routes the authorize/token calls at that tenant and
+            # requires the ID token's `iss` to match it.
+            - name: GOTRUE_EXTERNAL_AZURE_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.auth.external.discord.enabled }}
             - name: GOTRUE_EXTERNAL_DISCORD_ENABLED

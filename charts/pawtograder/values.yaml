@@ -655,8 +655,18 @@ auth:
     github:
       enabled: false
       redirectUri: "" # default: https://<hostname>/auth/v1/callback
+    # Microsoft / Entra ID. Reads AZURE_OAUTH_CLIENT_ID / _CLIENT_SECRET from
+    # the web Secret.
     azure:
       enabled: false
+      redirectUri: "" # default: https://api.<hostname>/auth/v1/callback
+      # Tenant pinning. Empty = login.microsoftonline.com/common: any Microsoft
+      # account signs in, including personal (outlook.com) ones. Set to
+      # https://login.microsoftonline.com/<tenant-id> to restrict sign-in to a
+      # single directory — GoTrue then also verifies the ID token's issuer
+      # against it. Required if your Entra app registration is single-tenant
+      # AND you want that enforced on our side rather than only Microsoft's.
+      url: ""
     discord:
       enabled: false
       redirectUri: "" # default: https://<hostname>/auth/v1/callback

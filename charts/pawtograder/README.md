@@ -482,7 +482,12 @@ id/secret (stored in the `pawtograder-web` Secret). `github`, `azure`, and
 auth:
   external:
     github: { enabled: true } # reads GITHUB_OAUTH_CLIENT_ID / _SECRET
-    azure: { enabled: true } # reads AZURE_OAUTH_CLIENT_ID / _SECRET
+    azure:
+      enabled: true # reads AZURE_OAUTH_CLIENT_ID / _SECRET
+      # Optional: pin sign-in to one Entra directory. Unset, GoTrue talks to
+      # login.microsoftonline.com/common and accepts an ID token from any
+      # issuer — including personal Microsoft accounts.
+      url: https://login.microsoftonline.com/<tenant-id>
   externalProviders:
     - name: google # -> GOTRUE_EXTERNAL_GOOGLE_*
       enabled: true # reads GOOGLE_OAUTH_CLIENT_ID / _SECRET from the web Secret
@@ -501,7 +506,10 @@ Each enabled provider's redirect URI defaults to the API gateway origin +
   `https://<hostname>/auth/v1/callback`
 
 Register that exact URL in the provider's OAuth app (override per provider with
-`redirectUri` if your topology differs). Put the client id/secret in the
+`redirectUri` if your topology differs). Microsoft/Entra matches it
+character-for-character and rejects a mismatch with `AADSTS50011` at the
+*consent* screen — after the client id has already been accepted — so a wrong
+value here looks like a working button that dead-ends on Microsoft's side. Put the client id/secret in the
 `pawtograder-web` Secret under the `<NAME>_OAUTH_CLIENT_ID` /
 `<NAME>_OAUTH_CLIENT_SECRET` keys (e.g. `GOOGLE_OAUTH_CLIENT_ID`). A complete
 worked example (Google + Microsoft + GitHub) is in
