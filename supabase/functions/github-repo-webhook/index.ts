@@ -50,6 +50,8 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { createRedis, type RedisClient } from "../_shared/Redis.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
+import { ExpectedRetryError, expectedRetryReport } from "../_shared/ExpectedRetryError.ts";
+import { classifyUnreadyRepoPush } from "../_shared/unreadyRepoPush.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 const eventHandler = createEventHandler({
@@ -145,6 +147,41 @@ if (Deno.env.get("SENTRY_DSN")) {
   });
 }
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
+
+/**
+ * Capture at the severity the error asked for.
+ *
+ * Most of what this webhook throws is a fault. Some of it is not: a few sites throw specifically to
+ * make EventBridge redeliver the event (GitHub's webhook reaches this function through an
+ * EventBridge rule, which is what retries a non-2xx), because a redelivery is what makes the
+ * outcome correct (see ExpectedRetryError). Those must not be reported at `error` level, and they
+ * must not share a
+ * Bugsink group with genuine failures from the same frame — otherwise routine provisioning buries
+ * the real thing. Concretely: one 58-student assignment release produced 412 error-level events
+ * from one such throw site over the 88 minutes the create_repo queue took to drain.
+ *
+ * Used at the generic catch sites rather than at the throw sites, because the throw sites do not
+ * capture — they throw, and these catches are what report. `expectedRetryReport` also looks inside an
+ * AggregateError, which is how `eventHandler.receive` may hand a listener's throw to the entry catch,
+ * so both catches agree on the level for the same underlying error.
+ *
+ * Anything without a report captures exactly as before, so no existing issue's grouping or severity
+ * moves.
+ */
+function captureWebhookException(err: unknown, scope: Sentry.Scope) {
+  const expected = expectedRetryReport(err);
+  if (!expected) {
+    Sentry.captureException(err, scope);
+    return;
+  }
+  // Cloned rather than mutated: the caller's scope carries the tags for this delivery and may be
+  // reused for further captures, which must not inherit the downgrade.
+  const expectedScope = typeof scope?.clone === "function" ? scope.clone() : new Sentry.Scope();
+  expectedScope.setLevel(expected.level);
+  expectedScope.setFingerprint(expected.fingerprint);
+  expectedScope.setTag("expected_retry", "true");
+  Sentry.captureException(err, expectedScope);
+}
 
 /**
  * Returns true if the given file path appears in the modified/added/removed lists
@@ -1877,7 +1914,15 @@ async function handlePushToStudentRepo(
     // set up — the repository works and the student can push to it, and the reconciler will repair
     // the flag shortly. Acknowledging those pushes discarded them permanently, so none of the
     // student's work between the failure and the repair became a submission. Those are thrown, so
-    // GitHub redelivers until the flag is repaired.
+    // the delivery is redelivered until the flag is repaired.
+    //
+    // Redelivered by EVENTBRIDGE, not by GitHub. GitHub's webhook goes to an EventBridge rule that
+    // invokes this function (hence the EVENTBRIDGE_SECRET check at the entry point, and the
+    // `attempt=N` counter in the [DISPATCH] log line), so the retry policy that decides whether a
+    // student push survives a provisioning window is an EventBridge rule/target configuration in
+    // AWS — defined outside this repository and NOT verifiable from this code. Anyone reasoning
+    // about worst-case loss here has to go read that configuration; no attempt count or maximum
+    // event age is asserted anywhere in this file, because none has been confirmed.
     if (!studentRepo.is_github_ready) {
       const isProvisioningPush = !!studentRepo.synced_repo_sha && studentRepo.synced_repo_sha === payload.after;
       if (isProvisioningPush) {
@@ -1888,10 +1933,98 @@ async function handlePushToStudentRepo(
         );
         return;
       }
+      // Which of the two cases above this is, reported accordingly. BOTH still throw: the
+      // redelivery is the mechanism that makes provisioning converge, and removing it is how the
+      // student-work case starts losing submissions again. How many redeliveries there are, and for
+      // how long, is an EventBridge setting defined outside this repository — so the size of that
+      // budget cannot be read off this code, and nothing here should be tuned as if it could.
+      // What differs between the two cases is only the severity of the Sentry event, and that
+      // difference is the whole point of this branch.
+      //
+      // The expected case is not rare or incidental — it happens once for EVERY repository, on the
+      // first delivery, because the `repositories` row is inserted before createRepo runs and the
+      // readiness write lands after it returns. Measured in Khoury production on 2026-09-07: CS 4530
+      // released one assignment to 58 students, and the async create_repo queue drained the batch on
+      // GitHub between 04:09 and 05:37 UTC. Over those 88 minutes this line threw 412 times across
+      // all 58 repositories (~7 deliveries each, EventBridge backing off until the readiness write
+      // landed), and every one of them arrived in Bugsink at `error` level in the same group. The
+      // outcome was completely correct — 58/58 ready, no duplicates, empty DLQ, no lost work — which
+      // is exactly the problem: a genuine readiness-write failure occurring in that window was
+      // indistinguishable from the batch. Fall 2026's CS 2000 has ~585 students, i.e. several
+      // thousand such events on day one.
+      //
+      // What the split rests on, and what it deliberately does NOT rest on.
+      //
+      // The tempting discriminator is the shape of the push: case 1 is by construction the creation
+      // of the default branch, so it arrives with `created: true` and an all-zero `before`. That is
+      // insufficient, and an earlier version of this branch was wrong for exactly that reason. When
+      // GitHub created the repository and our readiness write then FAILED, the delivery being
+      // rejected is still that same branch-creation push — and a redelivery carries a byte-identical
+      // payload, so `created: true` never stops being true. Classifying on shape alone would report
+      // case 2 as expected forever, permanently hiding the one failure this branch exists to surface.
+      //
+      // So the shape is only a necessary condition, and the decision rests on independent evidence
+      // that creation is still running: `payload.repository.created_at`, GitHub's own per-repository
+      // creation timestamp, which must fall inside a finalize window (see
+      // PROVISIONING_IN_FLIGHT_WINDOW_MS). That is NOT the grace window on `repositories.created_at`
+      // rejected earlier, and the difference matters: our row is stamped when the whole release is
+      // enqueued, so its age grows with the size of the batch (~96 minutes for the last of 58, many
+      // hours for 585). GitHub creates the repository INSIDE our createRepo call, so its timestamp
+      // measures that one repository's own remaining finalize time — ~275s to the readiness write,
+      // ~8.7 minutes worst case traced — and does not grow with the batch at all.
+      //
+      // Every uncertainty resolves to the visible side: no timestamp, an unusable one, or a push onto
+      // existing history is `readiness_write_failed`. A mislabelled error event costs ten seconds of
+      // triage; a hidden readiness failure costs student submissions.
+      //
+      // One inference remains, and it is only about the volume, not the logic: that those 412
+      // deliveries carried `created: true` / an all-zero `before` follows from how a
+      // template-generated repository's first push must look, but the payloads retrievable from that
+      // incident are truncated, so it was never confirmed against them. The tags below are how to
+      // confirm it — after the next release, an all-`provisioning_in_flight` batch is the expected
+      // shape, and any `readiness_write_failed` in it deserves a look at `repo_not_ready_reason`.
+      //
+      // Do not "fix" this by deleting the throw or by loosening the sha comparison above: neither is
+      // broken. The sha comparison is the fast path for a provisioning push whose readiness write
+      // HAS landed; this branch is the same push arriving before it landed.
+      const unready = classifyUnreadyRepoPush({
+        created: payload.created,
+        before: payload.before,
+        repositoryCreatedAt: payload.repository?.created_at,
+        repositoryPushedAt: payload.repository?.pushed_at
+      });
       scope.setTag("push_direct_retry_reason", "repo_not_github_ready");
+      scope.setTag("repo_not_ready_kind", unready.kind);
+      scope.setTag("repo_not_ready_reason", unready.reason);
+      if (unready.repoAgeMs !== undefined) {
+        scope.setTag("repo_age_seconds", String(Math.round(unready.repoAgeMs / 1000)));
+      }
+      if (unready.kind === "provisioning_in_flight") {
+        console.log(
+          `Rejecting delivery for ${repoName}@${payload.after}: repository creation is still in flight (this is the ` +
+            `branch-creation push, GitHub created the repository ${Math.round((unready.repoAgeMs ?? 0) / 1000)}s ago, ` +
+            `and the readiness write has not landed yet). EventBridge will redeliver, and the retry will recognize ` +
+            `it as the starter-template push once synced_repo_sha is recorded.`
+        );
+        throw new ExpectedRetryError(
+          `${repoName} is not marked ready yet, ${payload.after} created the default branch and GitHub created the ` +
+            `repository within the provisioning window, so creation is still in flight; rejecting this delivery so ` +
+            `EventBridge retries it once provisioning is recorded`,
+          {
+            name: "RepoProvisioningInFlightError",
+            level: "info",
+            fingerprint: ["github-repo-webhook", "push-direct", "repo-provisioning-in-flight"]
+          }
+        );
+      }
+      // Reached when the push is not the branch creation, when GitHub created this repository too long
+      // ago for creation to still be running, or when its creation timestamp is unusable. All three
+      // mean the same thing operationally: readiness was never recorded for a repository that exists,
+      // so the student's pushes are being rejected and only the reconciler (or a human) will fix it.
       throw new Error(
-        `${repoName} is not marked ready yet, but ${payload.after} is not the starter-template commit either, so ` +
-          `this is student work; rejecting this delivery so GitHub retries it once provisioning is recorded`
+        `${repoName} is not marked ready yet, but ${payload.after} is not a push from provisioning either ` +
+          `(${unready.reason}), so this is student work on a repository whose readiness was never recorded; ` +
+          `rejecting this delivery so EventBridge retries it once provisioning is recorded`
       );
     }
     // Record the commit history BEFORE any of the reasons this delivery might not become a
@@ -2782,7 +2915,7 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       }
     }
   } catch (err) {
-    Sentry.captureException(err, scope);
+    captureWebhookException(err, scope);
     throw err;
   }
 });
@@ -4090,7 +4223,7 @@ serveWithSentryFlush(async (req) => {
     } catch (err) {
       console.log(`Error processing webhook for ${eventName} id ${id}`);
       console.error(err);
-      Sentry.captureException(err, scope);
+      captureWebhookException(err, scope);
 
       // Log error in Redis
       if (redis) {
@@ -4127,7 +4260,7 @@ serveWithSentryFlush(async (req) => {
   } catch (err) {
     console.log(`Error processing webhook for ${eventName} id ${id}`);
     console.error(err);
-    Sentry.captureException(err, scope);
+    captureWebhookException(err, scope);
     return Response.json(
       {
         message: "Error processing webhook"
