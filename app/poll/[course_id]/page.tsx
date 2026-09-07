@@ -8,7 +8,7 @@ import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
-import { DefaultDark, DefaultLight } from "survey-core/themes";
+import { AccessibleDark, AccessibleLight } from "@/components/survey/surveyThemes";
 import "survey-core/survey-core.min.css";
 import { PollResponseData } from "@/types/poll";
 
@@ -180,9 +180,9 @@ export default function PollRespondPage() {
   useEffect(() => {
     if (surveyModel) {
       if (isDarkMode) {
-        surveyModel.applyTheme(DefaultDark);
+        surveyModel.applyTheme(AccessibleDark);
       } else {
-        surveyModel.applyTheme(DefaultLight);
+        surveyModel.applyTheme(AccessibleLight);
       }
     }
   }, [isDarkMode, surveyModel]);
@@ -194,7 +194,7 @@ export default function PollRespondPage() {
         <Box position="absolute" top={4} right={4} zIndex={1000}>
           <ColorModeButton colorPalette="gray" variant="outline" />
         </Box>
-        <Container maxW="800px" my={2}>
+        <Container as="main" id="main-content" tabIndex={-1} maxW="800px" my={2}>
           <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8} textAlign="center">
             <Heading size="lg" color="fg" mb={4}>
               Invalid Course ID
@@ -213,7 +213,10 @@ export default function PollRespondPage() {
         <ColorModeButton colorPalette="gray" variant="outline" />
       </Box>
 
-      <Container maxW="800px" my={2}>
+      {/* This page is its own shell — it renders outside the course layout, so
+          the <main> landmark (and the target the global skip link points at)
+          has to come from here. */}
+      <Container as="main" id="main-content" tabIndex={-1} maxW="800px" my={2}>
         {isLoading ? (
           <Box bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8} textAlign="center">
             <Text color="fg">Loading poll...</Text>

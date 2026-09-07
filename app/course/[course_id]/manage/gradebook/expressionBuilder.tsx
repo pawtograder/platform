@@ -20,6 +20,7 @@ import {
 } from "@/lib/gradebookExpressionMonaco";
 import { Badge, Box, Button, Flex, HStack, Icon, Input, Text, Textarea, VStack } from "@chakra-ui/react";
 import type { Monaco } from "@monaco-editor/react";
+import { accessibleMonacoTheme, registerAccessibleMonacoThemes } from "@/components/ui/monaco-a11y-theme";
 import dynamic from "next/dynamic";
 import type * as MathJSType from "mathjs";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -489,7 +490,7 @@ function InlineLineAnnotatedEditor({
   gradebookColumns: GradebookColumn[];
 }) {
   const { colorMode } = useColorMode();
-  const monacoTheme = colorMode === "dark" ? "vs-dark" : "vs";
+  const monacoTheme = accessibleMonacoTheme(colorMode);
   const evaluation = validation.evaluation;
   const lines = useMemo(() => expression.split("\n"), [expression]);
   const lineCount = Math.max(6, Math.min(24, lines.length + 2));
@@ -545,6 +546,7 @@ function InlineLineAnnotatedEditor({
   }, []);
 
   const handleBeforeMount = useCallback((monaco: Monaco) => {
+    registerAccessibleMonacoThemes(monaco);
     monacoRef.current = monaco;
     // Expose the Monaco namespace globally so E2E tests (and devtools) can
     // reach the editor models without us having to plumb a custom helper

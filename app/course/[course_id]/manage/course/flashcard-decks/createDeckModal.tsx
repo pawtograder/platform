@@ -17,6 +17,7 @@ import useAuthState from "@/hooks/useAuthState";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, HStack, Text, Textarea, VStack } from "@chakra-ui/react";
 import Editor, { Monaco } from "@monaco-editor/react";
+import { accessibleMonacoTheme, registerAccessibleMonacoThemes } from "@/components/ui/monaco-a11y-theme";
 import { useCreate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
@@ -131,6 +132,7 @@ export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDe
 
   // Handle Monaco Editor setup
   const handleEditorWillMount = useCallback((monaco: Monaco) => {
+    registerAccessibleMonacoThemes(monaco);
     window.MonacoEnvironment = {
       getWorker(_moduleId, label) {
         switch (label) {
@@ -378,7 +380,7 @@ cards:
                           width="100%"
                           defaultLanguage="yaml"
                           value={yamlValue}
-                          theme={colorMode === "dark" ? "vs-dark" : "vs"}
+                          theme={accessibleMonacoTheme(colorMode)}
                           beforeMount={handleEditorWillMount}
                           onChange={handleYamlChange}
                           options={{

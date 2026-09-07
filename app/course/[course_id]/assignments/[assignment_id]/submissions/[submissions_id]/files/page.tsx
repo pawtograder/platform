@@ -1879,6 +1879,13 @@ export default function FilesView() {
       alignItems="stretch"
       overflowX="auto"
       flexShrink={0}
+      // `aria-label` needs a role that supports naming — on a bare div it is
+      // prohibited, and axe cannot tell whether AT will expose it (#909, 4.1.2).
+      // `group` rather than `tablist`: these look like editor tabs but the
+      // children are click-only Flexes with no `tab` role, no tabpanel wiring
+      // and no arrow-key handling, so claiming tablist would promise a keyboard
+      // model that is not there.
+      role="group"
       aria-label="Open files"
     >
       {openFiles.map((f) => {
@@ -1926,13 +1933,24 @@ export default function FilesView() {
 
   const fileNavigator = (
     <Box
+      // Same 4.1.2 problem as the tab strip: a named div with no role. `region`
+      // fits here — it is a distinct, focusable pane of the page holding the
+      // file tree and artifact picker, and the name it already carries is what
+      // a region needs. Keeping the name matters beyond AT: file-tree-navigation
+      // and grading-quick-apply-palette both find this pane by `getByLabel`.
+      role="region"
       aria-label="File navigator"
       tabIndex={0}
       h="100%"
       display="flex"
       flexDirection="column"
       minH={0}
+      // `outline="none"` plus `tabIndex={0}` is a tab stop with no visible focus
+      // indicator (WCAG 2.4.7). Naming it as a region makes it a destination, so
+      // restore the ring for keyboard focus only — `:focus-visible` keeps the
+      // mouse-click case unchanged.
       outline="none"
+      _focusVisible={{ outline: "2px solid", outlineColor: "blue.500", outlineOffset: "-2px" }}
       data-file-navigator=""
     >
       <Box flex="1" minH={0} display="flex">

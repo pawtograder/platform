@@ -12,6 +12,7 @@ import { EdgeFunctionError, repositoryGetFile, repositoryWriteFile } from "@/lib
 import { createClient } from "@/utils/supabase/client";
 import { Box, HStack, Input, List, NativeSelect, Spinner, Text, VStack } from "@chakra-ui/react";
 import Editor, { Monaco, loader } from "@monaco-editor/react";
+import { accessibleMonacoTheme, registerAccessibleMonacoThemes } from "@/components/ui/monaco-a11y-theme";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as YAML from "yaml";
@@ -239,7 +240,8 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
     }
   }, []);
 
-  const handleBeforeMount = useCallback(() => {
+  const handleBeforeMount = useCallback((monaco: Monaco) => {
+    registerAccessibleMonacoThemes(monaco);
     window.MonacoEnvironment = {
       getWorker(_moduleId, label) {
         switch (label) {
@@ -453,7 +455,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
             defaultLanguage="yaml"
             language="yaml"
             value={content}
-            theme={colorMode === "dark" ? "vs-dark" : "vs"}
+            theme={accessibleMonacoTheme(colorMode)}
             beforeMount={handleBeforeMount}
             onMount={handleMount}
             onChange={(value) => {

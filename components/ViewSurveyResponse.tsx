@@ -4,7 +4,7 @@ import React from "react";
 import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
 import { useColorMode } from "@/components/ui/color-mode";
-import { DefaultDark, DefaultLight } from "survey-core/themes";
+import { AccessibleDark, AccessibleLight } from "@/components/survey/surveyThemes";
 import "survey-core/survey-core.min.css";
 import type { Survey as SurveyType, SurveyResponseWithProfile } from "@/types/survey";
 
@@ -31,9 +31,9 @@ export default function ViewSurveyResponse({
 
   // Apply SurveyJS theme based on color mode
   if (colorMode === "dark") {
-    survey.applyTheme(DefaultDark);
+    survey.applyTheme(AccessibleDark);
   } else {
-    survey.applyTheme(DefaultLight);
+    survey.applyTheme(AccessibleLight);
   }
 
   // Set initial data FIRST, before setting other properties

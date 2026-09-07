@@ -30,6 +30,7 @@ const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.de
 
 // Import Monaco type separately for type checking
 import type { Monaco } from "@monaco-editor/react";
+import { accessibleMonacoTheme, registerAccessibleMonacoThemes } from "@/components/ui/monaco-a11y-theme";
 import { Controller, useForm } from "react-hook-form";
 import { FaPlus } from "react-icons/fa";
 import * as YAML from "yaml";
@@ -275,6 +276,7 @@ export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: Ed
 
   // Handle Monaco Editor setup
   const handleEditorWillMount = useCallback((monaco: Monaco) => {
+    registerAccessibleMonacoThemes(monaco);
     window.MonacoEnvironment = {
       getWorker(_moduleId, label) {
         switch (label) {
@@ -574,7 +576,7 @@ export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: Ed
                           width="100%"
                           defaultLanguage="yaml"
                           value={yamlValue}
-                          theme={colorMode === "dark" ? "vs-dark" : "vs"}
+                          theme={accessibleMonacoTheme(colorMode)}
                           beforeMount={handleEditorWillMount}
                           onChange={handleYamlChange}
                           options={{

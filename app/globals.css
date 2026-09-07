@@ -94,11 +94,11 @@ html.dark {
   pointer-events: none !important;
 }
 
-/* Monaco Editor line highlight for deep linking */
-.monaco-line-highlight {
-  background-color: rgba(255, 235, 59, 0.3) !important;
-  transition: opacity 2s ease-out;
-}
+/* The Monaco deep-link line highlight now lives with the component that applies
+   the class (components/ui/code-file-monaco.tsx), because it has to follow the
+   color scheme. Do not restore a global fill here: a wash behind the code drops
+   every syntax token on that line below AA — see lineHighlightRail in
+   components/ui/monaco-a11y-theme.ts for the measurements. */
 
 .monaco-comment-glyph::before {
   content: "💬";

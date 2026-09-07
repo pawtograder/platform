@@ -357,7 +357,12 @@ export function OfficeHoursHeader({
       py={{ base: 3, md: 4 }}
     >
       <Flex align="center" justify="space-between" gap={4} wrap="wrap">
-        <HStack gap={4} flexShrink={0} align="center">
+        {/* The tabs + request breadcrumb are 511px of content at their widest.
+            flexShrink={0} pinned that width, so the whole page scrolled
+            horizontally at 320px (WCAG 1.4.10) — the crumb has to be allowed to
+            wrap onto its own line instead. Desktop is unaffected: the row only
+            shrinks when there is not enough space for it. */}
+        <HStack gap={4} minW={0} wrap="wrap" align="center">
           <HStack gap={4}>
             <NavLink
               href={`${officeHoursBaseHref}?view=my-requests`}
@@ -370,7 +375,7 @@ export function OfficeHoursHeader({
             </NavLink>
           </HStack>
           {currentRequest && (
-            <HStack gap={2} color="fg.muted">
+            <HStack gap={2} minW={0} wrap="wrap" color="fg.muted">
               <FiChevronRight />
               <NextLink
                 href={

@@ -529,9 +529,13 @@ export default async function StudentDashboard({
         {regradeRows.length > 0 && (
           <Link href={`/course/${course_id}/regrade-requests`}>
             <Box mt={4} textAlign="center">
-              <span style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline" }}>
+              {/* A raw --chakra-colors-blue-500 is both below AA on white
+                  (3.67:1, WCAG 1.4.3) and fixed across color schemes, because a
+                  hard-coded token bypasses the semantic layer. fg.info is
+                  blue.600 in light mode and blue.300 in dark. */}
+              <Text as="span" color="fg.info" textDecoration="underline">
                 View all regrade requests →
-              </span>
+              </Text>
             </Box>
           </Link>
         )}
