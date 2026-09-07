@@ -6,6 +6,12 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
+import {
+  AUTHOR_ID_IN_BATCH_SIZE,
+  chunkIds,
+  countUnresolvedAuthorMessages,
+  fetchAuthorNamesInChunks
+} from "./idBatching.ts";
 
 /**
  * Discord Discussion Stats Update
@@ -14,6 +20,24 @@ import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs
  * It updates Discord messages for discussion threads with refreshed stats
  * (reply count, likes count, answered status).
  */
+
+/**
+ * Max numeric (bigint) ids per `.in()` filter.
+ *
+ * To be clear about what was and was not broken: the query that failed in production
+ * on 2026-09-07 was the *author* lookup, whose ids are UUIDs (see idBatching.ts). The
+ * thread and topic lookups were within budget — a 9-digit id plus its separator costs
+ * ~10 bytes, so the 500 ids of a full batch is ~5 KB, and `cli/utils/pagingLimits.ts`
+ * documents numeric id lists at 1000 per filter as fine. There was no second live
+ * defect here.
+ *
+ * They are chunked anyway so that neither lookup's URI depends on `batchSize` staying
+ * at 500: raising the batch size is an obvious future tuning knob, and at 1000+ ids
+ * these filters would start approaching the same limit for the same reason. Bounding
+ * them now also means both lookups in this function read the same way, so nobody has
+ * to work out which one is safe.
+ */
+const NUMERIC_ID_IN_BATCH_SIZE = 200;
 
 interface DiscussionThread {
   id: number;
@@ -174,21 +198,27 @@ async function runStatsUpdate(
     // Get all thread IDs
     const threadIds = discordMessages.map((m) => m.resource_id);
 
-    // Fetch all threads in one query
-    const { data: threads, error: threadsError } = await supabase
-      .from("discussion_threads")
-      .select(
-        "id, class_id, topic_id, subject, body, is_question, answer, author, likes_count, children_count, created_at"
-      )
-      .in("id", threadIds);
+    // Fetch the threads in id chunks. A missing thread means we cannot build an embed
+    // at all, so a failure here still aborts the run as it always has.
+    const threads: DiscussionThread[] = [];
+    for (const threadIdChunk of chunkIds(threadIds, NUMERIC_ID_IN_BATCH_SIZE)) {
+      const { data: threadChunk, error: threadsError } = await supabase
+        .from("discussion_threads")
+        .select(
+          "id, class_id, topic_id, subject, body, is_question, answer, author, likes_count, children_count, created_at"
+        )
+        .in("id", threadIdChunk);
 
-    if (threadsError) {
-      console.error("[discord-discussion-stats-update] Error fetching threads:", threadsError);
-      scope.setContext("threads_error", { error: threadsError.message });
-      throw threadsError;
+      if (threadsError) {
+        console.error("[discord-discussion-stats-update] Error fetching threads:", threadsError);
+        scope.setContext("threads_error", { error: threadsError.message });
+        throw threadsError;
+      }
+
+      threads.push(...((threadChunk ?? []) as DiscussionThread[]));
     }
 
-    if (!threads || threads.length === 0) {
+    if (threads.length === 0) {
       console.log("[discord-discussion-stats-update] No matching threads found in this batch");
       offset += batchSize;
       hasMore = discordMessages.length === batchSize;
@@ -198,49 +228,70 @@ async function runStatsUpdate(
     // Create thread map for quick lookup
     const threadMap = new Map<number, DiscussionThread>();
     for (const thread of threads) {
-      threadMap.set(thread.id, thread as DiscussionThread);
+      threadMap.set(thread.id, thread);
     }
 
     // Get all unique topic IDs
     const topicIds = [...new Set(threads.map((t) => t.topic_id))];
 
-    // Fetch all topics
-    const { data: topics, error: topicsError } = await supabase
-      .from("discussion_topics")
-      .select("id, topic, discord_channel_id")
-      .in("id", topicIds);
-
-    if (topicsError) {
-      console.error("[discord-discussion-stats-update] Error fetching topics:", topicsError);
-      scope.setContext("topics_error", { error: topicsError.message });
-      throw topicsError;
-    }
-
-    // Create topic map for quick lookup
+    // Fetch the topics in id chunks. Without the topic we have no Discord channel to
+    // update, so a failure here aborts the run as it always has.
     const topicMap = new Map<number, DiscussionTopic>();
-    for (const topic of topics || []) {
-      topicMap.set(topic.id, topic);
+    for (const topicIdChunk of chunkIds(topicIds, NUMERIC_ID_IN_BATCH_SIZE)) {
+      const { data: topics, error: topicsError } = await supabase
+        .from("discussion_topics")
+        .select("id, topic, discord_channel_id")
+        .in("id", topicIdChunk);
+
+      if (topicsError) {
+        console.error("[discord-discussion-stats-update] Error fetching topics:", topicsError);
+        scope.setContext("topics_error", { error: topicsError.message });
+        throw topicsError;
+      }
+
+      for (const topic of topics ?? []) {
+        topicMap.set(topic.id, topic);
+      }
     }
 
     // Get all unique author IDs
     const authorIds = [...new Set(threads.map((t) => t.author))];
 
-    // Fetch all author profiles
-    const { data: authors, error: authorsError } = await supabase
-      .from("profiles")
-      .select("id, name")
-      .in("id", authorIds);
+    // Fetch author profiles in UUID-sized chunks. This is the query that logged
+    // "URI too long" in production on 2026-09-07: all ~280 author UUIDs went into one
+    // `.in()` filter, which is ~10 KB of query string. A failed chunk is counted, not
+    // thrown: the author name is decoration on the embed, and aborting an hourly cron
+    // run over it would discard the queued updates for every other batch.
+    const authorLookup = await fetchAuthorNamesInChunks(authorIds, AUTHOR_ID_IN_BATCH_SIZE, (chunk) =>
+      supabase.from("profiles").select("id, name").in("id", chunk)
+    );
 
-    if (authorsError) {
-      console.error("[discord-discussion-stats-update] Error fetching authors:", authorsError);
-      // Don't fail, just use "Anonymous" for all
+    if (authorLookup.failedChunks > 0) {
+      console.error(
+        `[discord-discussion-stats-update] Error fetching authors: ${authorLookup.failedChunks} of ${Math.ceil(authorIds.length / AUTHOR_ID_IN_BATCH_SIZE)} chunk(s) failed, ${authorLookup.failedAuthorIds.size} author(s) unresolved:`,
+        authorLookup.errors
+      );
+      scope.setContext("authors_error", {
+        failed_chunks: authorLookup.failedChunks,
+        unresolved_author_count: authorLookup.failedAuthorIds.size,
+        errors: authorLookup.errors
+      });
+      Sentry.captureException(
+        new Error(`Author lookup failed for ${authorLookup.failedAuthorIds.size} author(s)`),
+        scope
+      );
     }
 
-    // Create author map for quick lookup
-    const authorMap = new Map<string, string>();
-    for (const author of authors || []) {
-      authorMap.set(author.id, author.name || "Anonymous");
-    }
+    // Every message whose author we could not resolve is an error, and it is counted
+    // here rather than after the fact. Before this, the failure above only produced a
+    // console line: the completion summary reported "0 errors" on a run that had just
+    // failed to fetch any authors, so nothing watching that line could see it.
+    stats.errors += countUnresolvedAuthorMessages(
+      discordMessages.map((m) => threadMap.get(m.resource_id)?.author),
+      authorLookup.failedAuthorIds
+    );
+
+    const authorMap = authorLookup.names;
 
     // Process each Discord message in the batch
     for (const msg of discordMessages) {
@@ -256,6 +307,18 @@ async function runStatsUpdate(
       if (!topic || !topic.discord_channel_id) {
         console.warn(
           `[discord-discussion-stats-update] Topic ${thread.topic_id} not found or not linked to Discord, skipping`
+        );
+        continue;
+      }
+
+      // If the author's chunk failed we do not know their name. Falling back to
+      // "Anonymous" here would put a wrong author into the Discord embed *and* persist
+      // the stats snapshot below, so the wrong name would stick until the thread's
+      // stats changed again. Leaving it for the next hourly run is the safer failure.
+      // Already counted in stats.errors above.
+      if (authorLookup.failedAuthorIds.has(thread.author)) {
+        console.warn(
+          `[discord-discussion-stats-update] Author ${thread.author} unresolved (lookup chunk failed), leaving thread ${thread.id} for the next run`
         );
         continue;
       }
