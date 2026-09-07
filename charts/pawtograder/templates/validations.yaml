@@ -185,3 +185,50 @@ cannot detect.
 {{- fail "postgres.persistence.storageClass is empty — it would bind the database PVC to the cluster's DEFAULT StorageClass, which may be node-local (local-path): node loss = data loss. Production must name a replicated storage class explicitly (Ceph RBD, EBS, ...)." -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+github-async-worker drain tuning. Any environment.
+
+These two values are COUPLED, and the coupling is the whole reason there is a
+render-time rule: edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds is
+the pgmq visibility timeout, and it has to cover the worst case for a WHOLE
+BATCH of drainConcurrency messages, not for one message. On 2026-09-07 a
+58-message create_repo burst drained in 88 minutes at 2-4 messages per ~7 min
+iteration, and 20 of the 58 came back with read_ct > 1 because a ~420s batch
+outlived the hardcoded 300s timeout — pgmq re-served messages that were still
+in flight. Raising concurrency lengthens the batch (the handlers' GitHub calls
+serialize through the shared Bottleneck limiters), so raising it against an
+unraised timeout makes that worse, not better, and would push read_ct toward
+the worker's poison-pill threshold with LEGITIMATE provisioning work.
+
+The rule deliberately only bites when drainConcurrency is raised ABOVE the
+default: the default pair (4, 300) violates the invariant and is the measured
+status quo, preserved so a chart upgrade changes nothing on its own. Refusing
+it would refuse every existing install.
+
+Bounds are refused rather than clamped here so a typo is visible at deploy time.
+asyncWorkerTuning.ts clamps the same bounds at runtime, because these can also
+reach the pod through edgeFunctions.envFromSecrets, which the chart never sees.
+*/ -}}
+{{- if .Values.edgeFunctions.enabled -}}
+{{- $gaw := .Values.edgeFunctions.githubAsyncWorker -}}
+{{- $nRaw := $gaw.drainConcurrency | toString -}}
+{{- $vtRaw := $gaw.visibilityTimeoutSeconds | toString -}}
+{{- if not (regexMatch "^[0-9]+$" $nRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency must be an integer 1-8 (got %q). This is the pgmq read fan-out AND the worker's concurrency ceiling; a non-numeric value would be clamped back to the default 4 at runtime, so the deploy would not do what it says." $nRaw) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $vtRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds must be an integer 60-1800 (got %q). This is the pgmq visibility timeout; a non-numeric value would be clamped back to the default 300s at runtime." $vtRaw) -}}
+{{- end -}}
+{{- $n := int $nRaw -}}
+{{- $vt := int $vtRaw -}}
+{{- if or (lt $n 1) (gt $n 8) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency=%d is outside 1-8. 0 would drain NOTHING while every liveness signal stayed green (indistinguishable from a hung queue). Above 8: every in-flight create_repo holds one of the 40 slots in the FLEET-WIDE per-org Bottleneck content limiter for ~280s (measured p50 279.5s, 2026-09-07), and that same pool serves org invitations and handout syncs — so a high concurrency starves students' org invitations behind a convoy of repo creations. All those handlers also share ONE 256MiB leaseholder isolate (worker.memoryLimitMb) on a tier that OOM-killed PID 1 twice in 2026-08. Past 8 needs more than one concurrent leaseholder, not a bigger number." $n) -}}
+{{- end -}}
+{{- if or (lt $vt 60) (gt $vt 1800) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=%d is outside 60-1800. Below 60s a single create_repo (~105s of serialized GitHub work, measured 2026-09-07) is guaranteed to be re-served while still in flight; above 1800s the timeout becomes the RECOVERY LATENCY for a message whose isolate really died, and 1800s is already 1.5x the PawtograderQueueOldestMessageAging window so a genuinely stuck message still pages someone." $vt) -}}
+{{- end -}}
+{{- if and (gt $n 4) (lt $vt (mul $n 120)) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency=%d requires visibilityTimeoutSeconds >= %d (%d x 120s/message), but it is %d. The visibility timeout must cover a whole batch of %d, not one message: the batch runs concurrently but its GitHub calls serialize through the shared Bottleneck limiters, so batch wall clock grows with concurrency (measured 2026-09-07: ~420s for a batch of 4, which already re-read 20 of 58 messages against a 300s timeout). Raising concurrency against a short timeout multiplies mid-flight redeliveries and walks read_ct toward the poison-pill DLQ with legitimate provisioning work. Set visibilityTimeoutSeconds: %d." $n (mul $n 120) $n $vt $n (mul $n 120)) -}}
+{{- end -}}
+{{- end -}}

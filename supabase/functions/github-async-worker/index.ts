@@ -23,6 +23,7 @@ import {
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
+import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -989,6 +990,20 @@ export async function processEnvelope(
         }
         Sentry.addBreadcrumb({ message: `Creating repo ${repoName} for org ${org}`, level: "info" });
         const limiter = getCreateContentLimiter(org);
+        // This one `schedule` wraps the WHOLE repo creation, and the limiter is Redis-backed —
+        // fleet-wide per org, `{ reservoir: 40, maxConcurrent: 40, refresh 40/60s }`. A create_repo
+        // measured p50 279.5s (prod, 2026-09-07, 58 messages), so each in-flight creation holds one
+        // of those 40 slots for ~4.7 minutes, and the SAME pool serves org invitations
+        // (`POST /orgs/{org}/invitations`) and sync_repo_to_handout. That is why the worker's drain
+        // concurrency is capped at 8 rather than at anything near 40 — see
+        // _shared/asyncWorkerTuning.ts.
+        //
+        // DO NOT move any limiter-scheduled call INSIDE this wrapper. Nothing inside createRepo
+        // re-enters this limiter today, which is the only reason the pattern is safe: nest a
+        // permission/invitation call in here and, once >= maxConcurrent outer jobs are running,
+        // every slot is held by an outer job waiting on an inner job that can never start — a
+        // Bottleneck deadlock. If that ever changes, the concurrency ceiling has to come DOWN.
+        //
         // createRepo patches repo settings after generate/fork (squash merge on, template flag, branch ruleset, …).
         const effectiveSource = sourceRepo ?? templateRepo;
         const headSha = await limiter.schedule(() =>
@@ -2539,17 +2554,75 @@ export async function processEnvelope(
   }
 }
 
+/**
+ * Drain tuning, resolved ONCE per isolate.
+ *
+ * Memoized rather than re-read per iteration for two reasons: the values cannot
+ * change without a pod roll (they are container env), and the issue reporting
+ * below must not repeat on every ~7 min iteration for the life of the lease —
+ * that would be a Sentry event every few minutes for a static misconfiguration.
+ */
+let cachedTuning: ReturnType<typeof resolveAsyncWorkerTuning> | null = null;
+
+function getTuning(scope: Sentry.Scope) {
+  if (cachedTuning) return cachedTuning;
+  const tuning = resolveAsyncWorkerTuning(Deno.env);
+  cachedTuning = tuning;
+
+  scope.setTag("drain_concurrency", String(tuning.drainConcurrency));
+  scope.setTag("visibility_timeout_seconds", String(tuning.visibilityTimeoutSeconds));
+
+  for (const issue of tuning.issues) {
+    console.warn(`[pgmq] worker: ${issue.message}`);
+  }
+  // Only a rejected/clamped value is worth an event: it means the configured
+  // number is NOT the one in force, which is invisible from the outside. The
+  // `invariant` issue is true of the shipped defaults (4, 300) by design, so
+  // reporting it to Sentry would page on every deployment; it stays a log line
+  // and a tag.
+  const misconfigured = tuning.issues.filter((i) => i.kind !== "invariant");
+  if (misconfigured.length > 0) {
+    const s = scope.clone();
+    s.setTag("async_worker_tuning_rejected", "true");
+    s.setContext("async_worker_tuning", {
+      drain_concurrency: tuning.drainConcurrency,
+      visibility_timeout_seconds: tuning.visibilityTimeoutSeconds,
+      issues: misconfigured.map((i) => i.message)
+    });
+    Sentry.captureMessage(
+      `github-async-worker: rejected ${misconfigured.length} configured drain tuning value(s); running on bounded values`,
+      { level: "warning" }
+    );
+  }
+  return tuning;
+}
+
 export async function processBatch(adminSupabase: SupabaseClient<Database>, scope: Sentry.Scope) {
-  // VT (sleep_seconds) needs to comfortably exceed worst-case handler runtime.
-  // sync_repo_to_handout in particular can take minutes when many files change,
-  // and a too-short VT causes a re-read storm: the message stays in q_async_calls
-  // with read_ct climbing forever and `sync_data` never updating because the
-  // Edge Function isolate is killed mid-handler. 300s is well above the Edge
-  // Function wall clock and well above observed p99 handler durations.
+  // `n` is the CONCURRENCY CEILING (the batch below runs under
+  // Promise.allSettled inside a single leaseholder isolate), and `sleep_seconds`
+  // is the pgmq visibility timeout. Both were hardcoded at 4 / 300 until the
+  // 2026-09-07 CS 4530 burst measured what that costs: 58 create_repo messages
+  // took 88 MINUTES to drain, 2-4 completing every ~7 min, and 20 of the 58 came
+  // back with read_ct > 1 (max 3) because a ~420s batch outlives a 300s VT and
+  // pgmq re-served messages that were still in flight.
+  //
+  // The comment that used to live here claimed 300s was "well above observed
+  // p99 handler durations". That is FALSE for create_repo under burst and is why
+  // this is now configurable instead of asserted.
+  //
+  // THE INVARIANT: the VT must exceed the worst case for a whole batch of `n`,
+  // NOT for one message — raising `n` without raising the VT makes the
+  // redelivery storm worse, not better. It is encoded as
+  // requiredVisibilityTimeoutSeconds(n) in _shared/asyncWorkerTuning.ts, which
+  // holds the bounds, the calibration and the full incident narrative; the chart
+  // refuses to render a raised `n` with an unraised VT. Read that file before
+  // changing either number, and do NOT put constants back here.
+  const tuning = getTuning(scope);
+
   let result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "async_calls",
-    sleep_seconds: 300,
-    n: 4
+    sleep_seconds: tuning.visibilityTimeoutSeconds,
+    n: tuning.drainConcurrency
   });
 
   if (result.error) {
@@ -2561,10 +2634,13 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
   let queueName: "async_calls" | "async_calls_low_priority" = "async_calls";
 
   if (messages.length === 0) {
+    // Same tuning object as the main queue on purpose: these two call sites drifting
+    // apart is how the low-priority queue would quietly keep the 300s VT (and the
+    // re-read storm) after the main queue was fixed.
     result = await adminSupabase.schema("pgmq_public").rpc("read", {
       queue_name: "async_calls_low_priority",
-      sleep_seconds: 300,
-      n: 4
+      sleep_seconds: tuning.visibilityTimeoutSeconds,
+      n: tuning.drainConcurrency
     });
     if (result.error) {
       Sentry.captureException(result.error, scope);

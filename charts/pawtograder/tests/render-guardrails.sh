@@ -747,6 +747,71 @@ assert_refused "cold-load allowance below the largest bundle is refused" \
   "below the 64Mi needed to cover the largest bundle" \
   --set edgeFunctions.eszipColdLoadHeadroomMb=32
 
+# github-async-worker drain tuning. The DEFAULTS are the assertion that matters
+# most: 4 / 300 are the values that were hardcoded in processBatch() before they
+# became tunable, so a chart upgrade must change nothing on its own. If either
+# default drifts, an install silently gets a different pgmq fan-out or visibility
+# timeout than the one that was measured on 2026-09-07 (58 create_repo messages,
+# 88 minutes to drain, 20 of 58 re-read against the 300s timeout).
+echo "== github-async-worker drain tuning: defaults, overrides, and the VT invariant =="
+assert_env_value "drain concurrency defaults to today's hardcoded 4" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY 4
+assert_env_value "visibility timeout defaults to today's hardcoded 300s" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS 300
+# An explicit override has to actually reach the pod, and both have to move
+# together: 8 x 120 = 960 is the smallest timeout the invariant allows at 8.
+assert_env_value "drain concurrency is settable" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY 8 \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960
+assert_env_value "visibility timeout is settable" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS 960 \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960
+# The invariant: the visibility timeout must cover a whole batch of `n`, not one
+# message. Raising concurrency alone is the change that LOOKS like a throughput
+# fix and actually multiplies mid-flight redeliveries, so it is refused outright.
+assert_refused "raising concurrency without raising the visibility timeout is refused" \
+  "requires visibilityTimeoutSeconds >= 960" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8
+assert_refused "a partially-raised visibility timeout is still refused" \
+  "requires visibilityTimeoutSeconds >= 720" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=6 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=719
+assert_renders "concurrency 6 renders at exactly 6 x 120s" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=6 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=720
+# ...but the default pair (4, 300) also violates it and must keep rendering: it is
+# the measured status quo, deliberately grandfathered, or every existing install
+# would be refused. The rule only bites above the default concurrency.
+assert_renders "the default pair renders even though 300 < 4 x 120" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=4 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=300
+# Bounds. 0 is the dangerous one: it drains NOTHING while the lease is held and
+# every heartbeat stays green, which reads as a hung queue rather than as a
+# misconfiguration.
+assert_refused "drain concurrency 0 is refused" \
+  "would drain NOTHING" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=0
+assert_refused "drain concurrency above the 8 ceiling is refused" \
+  "is outside 1-8" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=16 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=1800
+assert_refused "a visibility timeout below the 60s floor is refused" \
+  "is outside 60-1800" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=30
+assert_refused "a visibility timeout above the 1800s ceiling is refused" \
+  "is outside 60-1800" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=3600
+# A non-numeric value must be refused here rather than left to the runtime clamp:
+# the pod would come up on the default and the deploy would not do what it says.
+assert_refused "a non-numeric drain concurrency is refused" \
+  "must be an integer 1-8" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=four
+assert_refused "a non-numeric visibility timeout is refused" \
+  "must be an integer 60-1800" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=5m
+
 # The HPA controller applies a default 10% tolerance, so a target of 100 is a dead
 # band of 90-110%. The edge tier's load-independent floor sat inside that band,
 # which wedged scaling in BOTH directions: it could not scale down (needs <90%) and

@@ -1,0 +1,342 @@
+/**
+ * Per-step wall-clock instrumentation for a multi-step GitHub operation, emitted as ONE structured
+ * log line per operation.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * Khoury production, 2026-09-07: 58 `create_repo` messages were processed by github-async-worker.
+ * Per-message duration derived from pgmq (`archived_at - (vt - 300s)`, since `pgmq.read` stamps
+ * `vt = read_time + sleep_seconds` and `archive` preserves it):
+ *
+ *     min 235.0s   p50 279.5s   p90 294.7s   max 304.0s   avg 277.6s
+ *     86% of all 58 landed in a 40-second band between 260s and 300s
+ *
+ * In the SAME batches on the SAME pods, `sync_student_team` had p50 1.0s and `sync_staff_team`
+ * p50 0.5s. So repo creation took ~4.7 minutes each and nothing in the code said where it went.
+ *
+ * What had already been ruled out before this module was written (do not re-litigate these from the
+ * timings alone — they were checked against the incident logs directly):
+ *
+ *   1. Retry backoff. `retryWithBackoff` logs "...retrying in Nms (attempt X/Y)" on every retry.
+ *      There are ZERO such lines in the incident window, so no ladder fired — including the worst
+ *      one (get_head_sha at maxRetries 5 / baseDelayMs 3000 = 93s of sleep).
+ *   2. The create-content rate limiter. Redis-backed, {reservoir 40, maxConcurrent 40, refresh
+ *      40/60_000}; only 4 messages ran concurrently, so nothing queued on it. Its `schedule()` wait
+ *      also happens OUTSIDE createRepo, so it is not visible here by construction.
+ *   3. `waitForRepoReady` timing out: it is hard-capped at 30 attempts x 2000ms = 60s and throws a
+ *      distinct UserVisibleError on timeout, which does not appear in the logs.
+ *   4. The template generate call: logged at 04:01:00.673, response at 04:01:05.569 — ~5 SECONDS.
+ *
+ * That left ~275s per message inside a stretch of code with no instrumentation at all. This module
+ * is that instrumentation. It is DIAGNOSTIC ONLY: it must not change any behavior, control flow,
+ * retry parameter, or timeout.
+ *
+ * DESIGN CONSTRAINTS
+ * ------------------
+ * - ONE log line per operation, not one per step. 58 repos x ~10 steps of individual lines is
+ *   unreadable and expensive to ship. Per-step lines exist but are off unless
+ *   PAWTOGRADER_STEP_TIMINGS_DEBUG=1.
+ * - The instrumentation can never throw and can never change what the instrumented code returns or
+ *   throws. Every public method swallows its own internal failures, and `time()` re-throws the
+ *   ORIGINAL error untouched after recording the elapsed time of the step that failed. A failure is
+ *   exactly when the breakdown is most valuable, so partial timings must still be reported.
+ * - No npm:/https: imports. This module is unit-tested from Jest (tests/unit) as well as running
+ *   under Deno in the edge functions, so it stays dependency-free and takes its clock, logger, and
+ *   env reader by injection (same pattern as _shared/SentryContext.ts and emailTransportConfig.ts).
+ *   Sentry wiring lives in the caller, which already imports Sentry, and is passed in as a sink.
+ */
+
+/** Reads one environment variable. Injectable for tests. */
+export type StepTimingsEnvReader = (key: string) => string | undefined;
+
+const denoEnv: StepTimingsEnvReader = (key) => {
+  try {
+    // `Deno` is absent under Jest and `Deno.env.get` throws without --allow-env. Either way the
+    // debug toggle is a nice-to-have; never let reading it break the operation being measured.
+    return Deno.env.get(key);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Grep for this to pull every timing line out of the pod logs, e.g.
+ *   kubectl logs ... | grep -F '[step-timings]' | sed 's/^.*\[step-timings\] //' | jq -s '...'
+ * The prefix is deliberately stable and machine-parseable: the rest of the line is exactly one JSON
+ * object, so the whole incident can be aggregated with jq without a log-parsing rule.
+ */
+export const STEP_TIMINGS_LOG_PREFIX = "[step-timings]";
+
+/** Per-step lines. Off by default — see the "ONE log line per operation" constraint above. */
+export const STEP_TIMINGS_DEBUG_LOG_PREFIX = "[step-timings-debug]";
+export const STEP_TIMINGS_DEBUG_ENV_VAR = "PAWTOGRADER_STEP_TIMINGS_DEBUG";
+
+export type StepTimingsMeta = Record<string, string | number | boolean>;
+
+export type StepTimingsSnapshot = {
+  /** Operation name, e.g. "create_repo". Low cardinality — safe as a Sentry tag. */
+  op: string;
+  /** Wall-clock ms from construction to `finish()`. */
+  total_ms: number;
+  /** Step name -> total ms spent in that step (summed if the step ran more than once). */
+  steps: Record<string, number>;
+  /** Step name -> call count, but ONLY for steps that ran more than once (e.g. the repair path). */
+  repeated: Record<string, number>;
+  /** Named counters, e.g. wait_for_repo_ready poll attempts. */
+  counts: Record<string, number>;
+  /** Sum of `steps`. */
+  accounted_ms: number;
+  /**
+   * total_ms - accounted_ms. THE most important field for the 2026-09-07 investigation: if the
+   * unexplained ~275s shows up here rather than in a named step, the time is being spent between
+   * the instrumented calls (or inside a limiter/queue wrapper we have not named yet), not in any
+   * single GitHub request.
+   */
+  unaccounted_ms: number;
+  /** Name of the step with the largest total, or null if no step was recorded. */
+  slowest_step: string | null;
+  slowest_ms: number;
+  /** Name of the step that threw, if any. */
+  failed_step: string | null;
+  /** Caller-supplied low-cardinality context (org, creation_method, ...). */
+  meta: StepTimingsMeta;
+};
+
+/** Receives the finished snapshot. Used by the caller to push timings into Sentry. */
+export type StepTimingsSink = (snapshot: StepTimingsSnapshot) => void;
+
+export type StepTimingsOptions = {
+  /** Clock. Injectable so tests are deterministic. Defaults to Date.now. */
+  now?: () => number;
+  /** Where the single summary line goes. Defaults to console.log. */
+  log?: (line: string) => void;
+  /** Env reader for the debug toggle. */
+  readEnv?: StepTimingsEnvReader;
+  /** Force per-step debug lines on/off, bypassing the env var. Tests use this. */
+  debug?: boolean;
+  /** Initial low-cardinality context. */
+  meta?: StepTimingsMeta;
+};
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/**
+ * Coarse duration bucket, for use as a Sentry TAG. Tags are indexed and want low cardinality, so
+ * the raw millisecond total belongs in a context (see StepTimingsSnapshot) and only the bucket
+ * belongs in a tag. Boundaries are chosen around the measured incident: the 240-300s bucket is the
+ * one 86% of the 2026-09-07 create_repo messages fell into.
+ */
+export function bucketDurationMs(ms: number): string {
+  if (!isFiniteNumber(ms) || ms < 0) return "unknown";
+  if (ms < 1_000) return "0-1s";
+  if (ms < 5_000) return "1-5s";
+  if (ms < 15_000) return "5-15s";
+  if (ms < 60_000) return "15-60s";
+  if (ms < 120_000) return "60-120s";
+  if (ms < 240_000) return "120-240s";
+  if (ms < 300_000) return "240-300s";
+  return "300s+";
+}
+
+/**
+ * Accumulates per-step elapsed times for one operation and emits a single structured line.
+ *
+ * Every method is failure-proof: internal bookkeeping runs inside try/catch, so a bug in this class
+ * cannot take down repo creation. `time()` is the one method that touches caller control flow, and
+ * it does so only by re-throwing the caller's own error.
+ */
+export class StepTimings {
+  readonly op: string;
+  private readonly now: () => number;
+  private readonly log: (line: string) => void;
+  private readonly debugEnabled: boolean;
+  private readonly startedAt: number;
+  private readonly stepOrder: string[] = [];
+  private readonly stepMs = new Map<string, number>();
+  private readonly stepCalls = new Map<string, number>();
+  private readonly counters = new Map<string, number>();
+  private readonly meta: StepTimingsMeta;
+  private failedStep: string | null = null;
+  private finished = false;
+
+  constructor(op: string, options: StepTimingsOptions = {}) {
+    this.op = op;
+    this.now = options.now ?? (() => Date.now());
+    this.log = options.log ?? ((line: string) => console.log(line));
+    this.meta = { ...(options.meta ?? {}) };
+    let debug = options.debug;
+    if (debug === undefined) {
+      const raw = (options.readEnv ?? denoEnv)(STEP_TIMINGS_DEBUG_ENV_VAR);
+      debug = raw?.trim() === "1" || raw?.trim().toLowerCase() === "true";
+    }
+    this.debugEnabled = debug === true;
+    this.startedAt = this.readClock();
+  }
+
+  /**
+   * Run `fn`, record how long it took under `step`, and return/throw EXACTLY what `fn` did.
+   *
+   * On throw the elapsed time is still recorded and the step is marked as the failing one, then the
+   * original error is re-thrown unmodified — the instrumentation must never mask, wrap, or delay an
+   * error, and a failed run is precisely when the breakdown of the steps that DID complete matters.
+   */
+  async time<T>(step: string, fn: () => Promise<T> | T): Promise<T> {
+    const started = this.readClock();
+    let result: T;
+    try {
+      result = await fn();
+    } catch (error) {
+      this.add(step, this.readClock() - started);
+      this.markFailed(step);
+      throw error;
+    }
+    this.add(step, this.readClock() - started);
+    return result;
+  }
+
+  /** Manually add elapsed ms to a step. Same accumulation semantics as `time()`. */
+  add(step: string, elapsedMs: number): void {
+    try {
+      const ms = isFiniteNumber(elapsedMs) && elapsedMs > 0 ? Math.round(elapsedMs) : 0;
+      if (!this.stepMs.has(step)) {
+        this.stepOrder.push(step);
+        this.stepMs.set(step, 0);
+        this.stepCalls.set(step, 0);
+      }
+      this.stepMs.set(step, (this.stepMs.get(step) ?? 0) + ms);
+      this.stepCalls.set(step, (this.stepCalls.get(step) ?? 0) + 1);
+      if (this.debugEnabled) {
+        this.log(`${STEP_TIMINGS_DEBUG_LOG_PREFIX} op=${this.op} step=${step} ms=${ms}`);
+      }
+    } catch {
+      /* instrumentation must never throw */
+    }
+  }
+
+  /**
+   * Bump a named counter. Used for `wait_for_repo_ready_attempts`: the poll loop is capped at 30
+   * attempts x 2000ms, so the attempt COUNT alone decides whether that loop contributed ~0s or the
+   * full ~60s, and the elapsed time for the step cannot distinguish "returned on attempt 1 after a
+   * slow request" from "polled 29 times".
+   */
+  count(name: string, delta = 1): void {
+    try {
+      if (!isFiniteNumber(delta)) return;
+      this.counters.set(name, (this.counters.get(name) ?? 0) + delta);
+    } catch {
+      /* instrumentation must never throw */
+    }
+  }
+
+  /** Attach low-cardinality context (org, creation_method, whether the repair path ran, ...). */
+  setMeta(key: string, value: string | number | boolean): void {
+    try {
+      this.meta[key] = value;
+    } catch {
+      /* instrumentation must never throw */
+    }
+  }
+
+  /** Mark `step` as the one that failed. Idempotent: the FIRST failure wins. */
+  markFailed(step: string): void {
+    try {
+      if (this.failedStep === null) this.failedStep = step;
+    } catch {
+      /* instrumentation must never throw */
+    }
+  }
+
+  /** Current view of the timings. Safe to call at any point, including mid-operation. */
+  snapshot(): StepTimingsSnapshot {
+    const steps: Record<string, number> = {};
+    const repeated: Record<string, number> = {};
+    let accounted = 0;
+    let slowestStep: string | null = null;
+    let slowestMs = 0;
+    for (const name of this.stepOrder) {
+      const ms = this.stepMs.get(name) ?? 0;
+      steps[name] = ms;
+      accounted += ms;
+      const calls = this.stepCalls.get(name) ?? 0;
+      if (calls > 1) repeated[name] = calls;
+      if (slowestStep === null || ms > slowestMs) {
+        slowestStep = name;
+        slowestMs = ms;
+      }
+    }
+    const counts: Record<string, number> = {};
+    for (const [name, value] of this.counters) counts[name] = value;
+    const total = Math.max(0, Math.round(this.readClock() - this.startedAt));
+    return {
+      op: this.op,
+      total_ms: total,
+      steps,
+      repeated,
+      counts,
+      accounted_ms: accounted,
+      unaccounted_ms: total - accounted,
+      slowest_step: slowestStep,
+      slowest_ms: slowestMs,
+      failed_step: this.failedStep,
+      meta: { ...this.meta }
+    };
+  }
+
+  /**
+   * Emit the single summary line and hand the snapshot to `sink` (used to attach it to the Sentry
+   * scope). Call from a `finally` so it runs on both the success and the throw path.
+   *
+   * Idempotent: a second call is a no-op, so a nested `finally` cannot double-log. A throwing sink
+   * is swallowed — pushing timings into Sentry is strictly best-effort and must not convert a
+   * successful repo creation into a failure, nor replace a real error with a reporting error.
+   */
+  finish(sink?: StepTimingsSink): StepTimingsSnapshot | undefined {
+    try {
+      if (this.finished) return undefined;
+      this.finished = true;
+      const snapshot = this.snapshot();
+      try {
+        this.log(`${STEP_TIMINGS_LOG_PREFIX} ${JSON.stringify(snapshot)}`);
+      } catch {
+        /* a logger or serializer failure must not break the operation */
+      }
+      if (sink) {
+        try {
+          sink(snapshot);
+        } catch {
+          /* best-effort Sentry attachment */
+        }
+      }
+      return snapshot;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private readClock(): number {
+    try {
+      const value = this.now();
+      return isFiniteNumber(value) ? value : 0;
+    } catch {
+      return 0;
+    }
+  }
+}
+
+/**
+ * Time `fn` under `step` when `timings` is present, otherwise just run it.
+ *
+ * Lets the instrumented helpers take `timings` as an OPTIONAL trailing parameter, so exported
+ * functions (applyBranchProtectionRuleset, called from several other edge functions) keep their
+ * existing signatures and callers that do not care pay nothing.
+ */
+export function timeStep<T>(timings: StepTimings | undefined, step: string, fn: () => Promise<T> | T): Promise<T> | T {
+  return timings ? timings.time(step, fn) : fn();
+}
+
+/** Bump a counter when timings are present. Mirrors `timeStep` for the optional-param pattern. */
+export function countStep(timings: StepTimings | undefined, name: string, delta = 1): void {
+  timings?.count(name, delta);
+}

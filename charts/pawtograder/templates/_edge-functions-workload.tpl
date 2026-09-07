@@ -278,6 +278,18 @@ spec:
             # so the cardinality delta has a single attributable cause.
             - name: EDGE_METRICS
               value: {{ ternary "1" "0" $ctx.Values.edgeFunctions.metrics.enabled | quote }}
+            # github-async-worker pgmq drain tuning, read by
+            # supabase/functions/_shared/asyncWorkerTuning.ts. Defaults (4 / 300)
+            # are the values that were hardcoded in the worker until 2026-09-07,
+            # when a 58-message create_repo burst took 88 minutes to drain and
+            # re-read 20 of those 58 against the 300s timeout. The two are
+            # COUPLED — visibilityTimeoutSeconds must cover a whole batch of
+            # drainConcurrency (x120s/message) — and validations.yaml enforces
+            # that whenever concurrency is raised. See values.yaml.
+            - name: GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.drainConcurrency | quote }}
+            - name: GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds | quote }}
             # Latency histogram bounds in seconds. The top finite bucket must be
             # >= worker.timeoutMs/1000 or every request that hits the worker
             # timeout lands in +Inf and the upper quantiles become an

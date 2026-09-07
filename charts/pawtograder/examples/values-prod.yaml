@@ -199,6 +199,36 @@ edgeFunctions:
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits:   { cpu: "2",    memory: "4Gi"   }
+  # github-async-worker pgmq drain tuning. LEFT AT THE CHART DEFAULTS (4 / 300) on purpose: those
+  # are the values that were hardcoded in the worker before they became tunable, so this example
+  # deploys today's behaviour and the throughput decision stays an explicit operator action.
+  #
+  # It IS a decision this tier has to make. Measured here on 2026-09-07: CS 4530 enqueued 58
+  # create_repo messages at once and they took 88 MINUTES to drain (2-4 completing every ~7 min,
+  # mean time-in-queue 3,230s), tripping PawtograderQueueOldestMessageAging for over an hour, and
+  # 20 of the 58 were re-read (read_ct > 1, max 3) because a ~420s batch outlives a 300s
+  # visibility timeout. Correct outcome, terrible latency. At ~0.6 msg/min a 585-student
+  # enrollment burst is ~15 hours.
+  #
+  # To double throughput and stop the mid-flight redeliveries, raise BOTH — the timeout has to
+  # cover a whole batch of drainConcurrency (x120s/message), and the render is refused if it does
+  # not:
+  #
+  #   githubAsyncWorker:
+  #     drainConcurrency: 8
+  #     visibilityTimeoutSeconds: 960   # 8 x 120
+  #
+  # Do it as its own deploy, ahead of a known release burst rather than during one, and watch
+  # pgmq queue depth, the edge pods' memory (all 8 handlers share ONE 256MiB leaseholder isolate),
+  # the GitHub secondary-rate-limit / circuit-breaker signals, and — the one that bites first —
+  # whether org INVITATIONS start lagging: a create_repo holds one of the 40 slots in the
+  # fleet-wide per-org content limiter for ~280s (measured p50 279.5s here on 2026-09-07), and
+  # invitations draw from that same pool. 8 is the chart's ceiling and it
+  # is still only ~1.2 msg/min; anything beyond that needs more than one concurrent leaseholder,
+  # which is a code change, not a values change. See values.yaml for the full reasoning.
+  githubAsyncWorker:
+    drainConcurrency: 4
+    visibilityTimeoutSeconds: 300
   # Mount the same SMTP Secret GoTrue uses, rather than populating a second OpenBao `smtp` bundle.
   # Without it SMTP_HOST is unset in the functions environment, and the notification processor read
   # that as "no work found" -- deferring the email queue indefinitely with no error anywhere, which
