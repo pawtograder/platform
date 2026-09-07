@@ -2680,24 +2680,54 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
 
   await Promise.allSettled(
     messages.map(async (msg) => {
+      // ONE SCOPE PER MESSAGE, because `n` of these run CONCURRENTLY and
+      // Sentry.Scope is a mutable bag. `archiveMessage` writes to whatever scope
+      // it is handed — setContext("archive_error", { msg_id, … }) and
+      // setTag("pgmq_archive_failed", "true") — so handing it processBatch's
+      // shared scope let four concurrent archives scribble over each other:
+      // a capture could report a FOREIGN msg_id, and pgmq_archive_failed=true
+      // stuck on the shared object for the rest of the batch, so a later event
+      // for a message that archived cleanly still claimed an archive failure.
+      //
+      // NOT the same thing as processEnvelope's scope handling, and do not
+      // "fix" that by analogy: processEnvelope already clones per envelope (see
+      // `_scope?.clone()` at its top), and Scope.clone() copies context and tags
+      // BY VALUE, so its two archiveMessage call sites are already isolated and
+      // the step-timings snapshot attached inside it is already private. Adding
+      // another clone there would be harmful — see the comment on
+      // attachStepTimingsToScope in _shared/GitHubWrapper.ts. Only THIS call
+      // site was reading through to the shared object.
+      //
+      // Cloning rather than constructing fresh keeps the batch- and run-level
+      // context the shared scope carries (function, worker_run_mode, the drain
+      // tuning tags), which a `new Sentry.Scope()` would silently drop.
+      const msgScope = scope.clone();
+      msgScope.setTag("msg_id", String(msg.msg_id));
+      msgScope.setTag("queue_name", queueName);
+
       const ok = await processEnvelope(
         adminSupabase,
         msg.message,
         { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, read_ct: msg.read_ct, queue_name: queueName },
-        scope
+        msgScope
       );
       if (ok) {
-        const archived = await archiveMessage(adminSupabase, msg.msg_id, scope, queueName);
+        const archived = await archiveMessage(adminSupabase, msg.msg_id, msgScope, queueName);
         if (!archived) {
           console.error(
             `[pgmq] worker: handler returned OK but archive failed msg_id=${msg.msg_id} queue=${queueName} — message will redeliver after VT`
           );
+          // This message's scope, positionally — not an options object. The
+          // options-object form is applied to the SDK's CURRENT scope, which is
+          // not this manually-built one, so the event would arrive without the
+          // worker's own tags; and the scope it does report must be the one only
+          // this message has written to.
+          const s = msgScope.clone();
+          s.setLevel("error");
+          s.setContext("archive_failed", { msg_id: msg.msg_id, queue_name: queueName });
           Sentry.captureMessage(
             "github-async-worker: processed message but failed to archive after retries; expect redelivery",
-            {
-              level: "error",
-              extra: { msg_id: msg.msg_id, queue_name: queueName }
-            }
+            s
           );
         }
       }
