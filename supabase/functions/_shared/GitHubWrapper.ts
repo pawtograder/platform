@@ -82,6 +82,7 @@ import {
 import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
+import { attachSnapshotToScope, countStep, StepTimings, type StepTimingsSnapshot, timeStep } from "./stepTimings.ts";
 
 const adminsThatShouldNotBeListedAsAdmins = ["smaran-teja", "jonathantarun", "ricksva", "jondenman", "tsrats"];
 /**
@@ -1461,6 +1462,63 @@ export function isTeamAlreadyExistsError(e: unknown): boolean {
 }
 
 /**
+ * Attach a finished step-timings snapshot to the Sentry scope for the operation being measured.
+ *
+ * The writing itself lives in `attachSnapshotToScope` (_shared/stepTimings.ts), which documents why
+ * every write goes through this scope object and never through `Sentry.addBreadcrumb`, and why the
+ * tag keys are namespaced per operation.
+ *
+ * The scope handed to us is ALREADY per-message: `processBatch` shares one scope across the
+ * `drainConcurrency` envelopes it runs concurrently, but `processEnvelope` clones it per envelope
+ * (github-async-worker/index.ts:613) before any handler sees it, and `Sentry.Scope.clone()` copies
+ * tags and contexts by value. Attaching here — rather than to a scope this function clones for
+ * itself — is deliberate and is what makes an ESCAPING error carry its own breakdown: the worker
+ * captures that error with this same envelope scope, so the event arrives in Bugsink with this
+ * operation's steps on it. A private clone would isolate nothing extra and would drop the snapshot
+ * from precisely the event we most want it on.
+ */
+function attachStepTimingsToScope(snapshot: StepTimingsSnapshot, scope?: Sentry.Scope): void {
+  attachSnapshotToScope(snapshot, scope);
+}
+
+/**
+ * Attach the timings so far to the scope for a HANDLED failure that is about to be reported and
+ * then recovered from.
+ *
+ * Sentry applies scope data at CAPTURE time. `createRepo` attaches its finished snapshot in a
+ * `finally` at the very end, so every `Sentry.captureException` that happens mid-operation — and in
+ * this file those are exactly the interesting ones: patch_repo_settings, enable_actions, the
+ * ruleset, the rulesets-list read, the staff-roster read, each of which is deliberately
+ * log-and-continue — would otherwise arrive in Bugsink with no timing context at all. Attaching a
+ * partial snapshot first is cheap (a read of the accumulators) and cannot affect the final one:
+ * `snapshot()` does not mutate, and `finish()` remains single-shot, so the summary log line is
+ * still emitted exactly once with the complete numbers.
+ */
+function attachHandledFailureTimings(
+  timings: StepTimings | undefined,
+  scope: Sentry.Scope | undefined,
+  handledStep: string,
+  error?: unknown
+): void {
+  if (!timings || !scope) return;
+  try {
+    attachStepTimingsToScope(timings.snapshot(), scope);
+    // The step whose failure was handled here. NOT `failed_step`, which is reserved for an error
+    // that escaped the whole operation. Op-namespaced for the same reason as every other timing tag
+    // (see attachSnapshotToScope): two instrumented operations share one envelope scope.
+    //
+    // Prefer the step that actually raised THIS error over the caller's label. One catch can cover
+    // several timed steps — the rulesets try/catch below spans both the LIST and the DETAIL request
+    // — and a hardcoded label there tagged a failed DETAIL request as `ruleset_list`, contradicting
+    // the context blob beside it and sending endpoint-level filtering to the wrong place.
+    const step = timings.stepForError(error) ?? handledStep;
+    scope.setTag(`step_timings_${timings.op}_handled_failure_step`, step);
+  } catch {
+    /* diagnostics must never break the operation they describe */
+  }
+}
+
+/**
  * Shared post-create finalization: enable squash merge + template flag, enable Actions, resolve the
  * default branch's head SHA, and apply the branch-protection ruleset. Run identically for freshly
  * created, repaired, and adopted pre-existing repos so the paths never drift. Returns the head SHA.
@@ -1470,7 +1528,8 @@ async function finalizeRepo(
   org: string,
   repoName: string,
   opts: { is_template_repo?: boolean; branch_protection?: BranchProtectionConfig },
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  timings?: StepTimings
 ): Promise<string> {
   const { is_template_repo, branch_protection = DEFAULT_BRANCH_PROTECTION } = opts;
   // Enable squash merging; set template flag when applicable. These are non-essential settings on an
@@ -1479,94 +1538,154 @@ async function finalizeRepo(
   // matching the enable-Actions and ruleset steps below.
   scope?.setTag("github_operation", "patch_repo_settings");
   try {
-    await retryWithBackoff(
-      () =>
-        octokit.request("PATCH /repos/{owner}/{repo}", {
-          owner: org,
-          repo: repoName,
-          allow_squash_merge: true,
-          is_template: is_template_repo ? true : false
-        }),
-      3, // maxRetries
-      1000, // baseDelayMs
-      scope
+    await timeStep(timings, "patch_repo_settings", () =>
+      retryWithBackoff(
+        () =>
+          octokit.request("PATCH /repos/{owner}/{repo}", {
+            owner: org,
+            repo: repoName,
+            allow_squash_merge: true,
+            is_template: is_template_repo ? true : false
+          }),
+        3, // maxRetries
+        1000, // baseDelayMs
+        scope
+      )
     );
   } catch (patchErr) {
     console.error("Error patching repo settings (squash merge / template flag)", patchErr);
     scope?.setTag("patch_repo_settings_failed", "true");
+    attachHandledFailureTimings(timings, scope, "patch_repo_settings", patchErr);
     Sentry.captureException(patchErr, scope);
   }
   // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
   scope?.setTag("github_operation", "enable_actions");
   try {
-    await retryWithBackoff(
-      () =>
-        octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
-          owner: org,
-          repo: repoName,
-          enabled: true,
-          allowed_actions: "all"
-        }),
-      3,
-      1000,
-      scope
+    await timeStep(timings, "enable_actions", () =>
+      retryWithBackoff(
+        () =>
+          octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+            owner: org,
+            repo: repoName,
+            enabled: true,
+            allowed_actions: "all"
+          }),
+        3,
+        1000,
+        scope
+      )
     );
   } catch (actionsErr) {
     console.error("Error enabling GitHub Actions", actionsErr);
     scope?.setTag("enable_actions_failed", "true");
+    attachHandledFailureTimings(timings, scope, "enable_actions", actionsErr);
     Sentry.captureException(actionsErr, scope);
   }
   // Resolve the repo's actual default branch rather than assuming `main`: a FORK inherits the
   // UPSTREAM's default branch (which may be `master`), and a template-generated repo inherits the
   // template's. Hardcoding `heads/main` would 404 the ref lookup for any such repo.
   scope?.setTag("github_operation", "get_default_branch");
-  const repoMeta = await retryWithBackoff(
-    () =>
-      octokit.request("GET /repos/{owner}/{repo}", {
-        owner: org,
-        repo: repoName
-      }),
-    3, // maxRetries
-    1000, // baseDelayMs
-    scope
+  const repoMeta = await timeStep(timings, "get_default_branch", () =>
+    retryWithBackoff(
+      () =>
+        octokit.request("GET /repos/{owner}/{repo}", {
+          owner: org,
+          repo: repoName
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    )
   );
   const defaultBranch = repoMeta.data.default_branch || "main";
   scope?.setTag("default_branch", defaultBranch);
   scope?.setTag("github_operation", "get_head_sha");
   scope?.setTag("ref", `heads/${defaultBranch}`);
-  const heads = await retryWithBackoff(
-    () =>
-      octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-        owner: org,
-        repo: repoName,
-        ref: `heads/${defaultBranch}`
-      }),
-    5, // maxRetries
-    3000, // baseDelayMs
-    scope
+  // NOTE (2026-09-07 latency hunt): this is the call with the deepest retry ladder in the path —
+  // maxRetries 5 / baseDelayMs 3000 = 3+6+12+24+48 = 93s of sleep if it 404s all the way. The
+  // incident logs contain no retry lines at all, so the ladder did NOT fire; this timing exists to
+  // keep proving that from the data rather than from absence-of-logs.
+  const heads = await timeStep(timings, "get_head_sha", () =>
+    retryWithBackoff(
+      () =>
+        octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+          owner: org,
+          repo: repoName,
+          ref: `heads/${defaultBranch}`
+        }),
+      5, // maxRetries
+      3000, // baseDelayMs
+      scope
+    )
   );
   scope?.setTag("head_sha", heads.data.object.sha);
 
   // Apply branch protection ruleset per the assignment's configuration.
   scope?.setTag("github_operation", "create_branch_protection_ruleset");
   try {
-    await applyBranchProtectionRuleset(org, repoName, branch_protection, scope);
+    await applyBranchProtectionRuleset(org, repoName, branch_protection, scope, timings);
   } catch (rulesetError) {
     // Log but don't fail repo creation if ruleset creation fails
     console.error("Error applying branch protection ruleset", rulesetError);
     scope?.setTag("ruleset_creation_failed", "true");
+    // Coarse fallback only: this catch sits OUTSIDE applyBranchProtectionRuleset, so the throw may
+    // have come from any of its timed sub-steps (ruleset_get_octokit / _list / _detail / _write) or
+    // from untimed code between them. stepForError picks the exact one when it can.
+    attachHandledFailureTimings(timings, scope, "branch_protection_ruleset", rulesetError);
     Sentry.captureException(rulesetError, scope);
   }
 
   return heads.data.object.sha as string;
 }
 
+/**
+ * Step-level timing wrapper around repo creation. See _shared/stepTimings.ts for the measurement
+ * that motivated it: 58 prod `create_repo` messages on 2026-09-07 took p50 279.5s each (vs
+ * sync_student_team p50 1.0s on the same pods), with only ~5s of that explained (the template
+ * generate call, timestamped in the logs) and ~275s spent inside code that logged nothing.
+ *
+ * The body is untouched and lives in `createRepoInstrumented`; this wrapper only creates the
+ * collector and reports it from a `finally`, so the breakdown is emitted on the throw path too.
+ * Note that `total_ms` here is createRepo's OWN wall time: the async worker wraps this whole call
+ * in `getCreateContentLimiter(org).schedule(...)`, so any wait for a limiter slot happens before we
+ * are entered and is deliberately not part of this number.
+ */
 export async function createRepo(
   org: string,
   repoName: string,
   template_repo: string,
   options: CreateRepoOptions = {},
   scope?: Sentry.Scope
+): Promise<string> {
+  const timings = new StepTimings("create_repo", {
+    meta: {
+      org,
+      repo_name: repoName,
+      template_repo,
+      creation_method: options.creation_method ?? "template"
+    }
+  });
+  try {
+    return await createRepoInstrumented(org, repoName, template_repo, options, scope, timings);
+  } catch (error) {
+    // The ONLY place that knows an error was not recovered from. Individual steps throw routinely
+    // (poll misses on a freshly generated repo, the 422 that opens the duplicate-repo path, the
+    // non-essential finalize settings), and every one of those is caught downstream — so `time()`
+    // deliberately does not flag them and this catch promotes the one that actually escaped.
+    timings.noteEscapingError(error);
+    throw error;
+  } finally {
+    timings.finish((snapshot) => attachStepTimingsToScope(snapshot, scope));
+  }
+}
+
+async function createRepoInstrumented(
+  org: string,
+  repoName: string,
+  template_repo: string,
+  options: CreateRepoOptions,
+  scope: Sentry.Scope | undefined,
+  timings: StepTimings
 ): Promise<string> {
   const { is_template_repo, creation_method = "template", branch_protection = DEFAULT_BRANCH_PROTECTION } = options;
   scope?.setTag("github_operation", "create_repo");
@@ -1596,7 +1715,10 @@ export async function createRepo(
     return stubFakeSha("e2e-stub-", repoName);
   }
 
-  const octokit = await getOctoKit(org, scope);
+  // Timed because it is not free on a cold isolate: the FIRST getOctoKit in a process does
+  // `GET /app/installations` and constructs one throttled Octokit per installation. On a warm
+  // isolate this is a map lookup and should read as ~0ms — which is itself the useful signal.
+  const octokit = await timeStep(timings, "get_octokit", () => getOctoKit(org, scope));
   if (!octokit) {
     throw new UserVisibleError("No GitHub installation found for organization " + org);
   }
@@ -1612,36 +1734,46 @@ export async function createRepo(
     if (creation_method === "fork") {
       // Fork the upstream into our org with the chosen name. Forks are
       // asynchronous on GitHub's side, so we poll for size > 0 below.
-      await retryWithBackoff(
-        () =>
-          octokit.request("POST /repos/{owner}/{repo}/forks", {
-            owner,
-            repo,
-            organization: org,
-            name: repoName,
-            default_branch_only: true
-          }),
-        2, // maxRetries
-        5000, // baseDelayMs
-        scope
+      await timeStep(timings, "create_fork", () =>
+        retryWithBackoff(
+          () =>
+            octokit.request("POST /repos/{owner}/{repo}/forks", {
+              owner,
+              repo,
+              organization: org,
+              name: repoName,
+              default_branch_only: true
+            }),
+          2, // maxRetries
+          5000, // baseDelayMs
+          scope
+        )
       );
     } else {
-      const resp = await retryWithBackoff(
-        () =>
-          octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
-            template_repo: repo,
-            template_owner: owner,
-            owner: org,
-            name: repoName,
-            private: true
-          }),
-        2, // maxRetries
-        5000, // baseDelayMs
-        scope
+      // The one step whose cost we already know from the incident logs: "Creating repo ... via
+      // template" at 04:01:00.673 and its response at 04:01:05.569, i.e. ~4.9s. Timed anyway so the
+      // single summary line is self-contained and we do not have to correlate two log lines again.
+      const resp = await timeStep(timings, "template_generate", () =>
+        retryWithBackoff(
+          () =>
+            octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
+              template_repo: repo,
+              template_owner: owner,
+              owner: org,
+              name: repoName,
+              private: true
+            }),
+          2, // maxRetries
+          5000, // baseDelayMs
+          scope
+        )
       );
       console.log(JSON.stringify(resp.headers, null, 2));
     }
-    await waitForRepoReady(octokit, org, repoName, scope);
+    // On the delete+regenerate repair path this whole closure runs TWICE; StepTimings accumulates
+    // per step and reports the call count in `repeated`, so a second pass is visible rather than
+    // silently doubling a step's number.
+    await waitForRepoReady(octokit, org, repoName, scope, timings);
   };
 
   scope?.setTag("github_operation", "create_repo_request");
@@ -1659,24 +1791,32 @@ export async function createRepo(
       // it is EMPTY, a previous attempt left it half-created — REPAIR it by deleting and
       // regenerating rather than adopting a blank repo forever (the old, broken behavior).
       scope?.setTag("repo_already_exists", "true");
-      const empty = await isRepoEmpty(octokit, org, repoName);
+      timings.setMeta("repo_already_exists", true);
+      const empty = await timeStep(timings, "is_repo_empty", () => isRepoEmpty(octokit, org, repoName));
       scope?.setTag("existing_repo_empty", empty.toString());
+      timings.setMeta("existing_repo_empty", empty);
       if (empty) {
         // Diagnose the source first: a genuinely-broken template must yield a precise,
         // non-retryable error instead of an endless delete/regenerate loop.
-        await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+        await timeStep(timings, "assert_source_not_empty", () =>
+          assertSourceNotEmpty(octokit, owner, repo, template_repo)
+        );
         // Safety invariant: only ever delete a VERIFIED-EMPTY repo, and never the template/source.
         if (org === owner && repoName === repo) {
           throw new NonRetryableRepoError(`Refusing to delete ${org}/${repoName}: it is the template/source repo`);
         }
         scope?.setTag("github_operation", "delete_empty_repo_for_repair");
         try {
-          await octokit.request("DELETE /repos/{owner}/{repo}", { owner: org, repo: repoName });
+          await timeStep(timings, "delete_empty_repo_for_repair", () =>
+            octokit.request("DELETE /repos/{owner}/{repo}", { owner: org, repo: repoName })
+          );
         } catch (delErr) {
           if (!(delErr instanceof RequestError) || delErr.status !== 404) throw delErr;
         }
         // GitHub frees the name shortly after deletion; give it a moment before regenerating.
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // Timed (not changed) so this fixed 2s is attributed rather than showing up as
+        // unaccounted_ms — the whole point of the instrumentation is that nothing is unexplained.
+        await timeStep(timings, "post_delete_sleep", () => new Promise((resolve) => setTimeout(resolve, 2000)));
         try {
           await createAndWaitReady();
         } catch (repairErr) {
@@ -1687,7 +1827,9 @@ export async function createRepo(
           // dead-lettering a slow-but-fine repo on the first attempt.
           if (repairErr instanceof UserVisibleError && repairErr.message.includes("did not become ready")) {
             console.error("Repaired repo did not become ready after delete+regenerate", repairErr);
-            await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+            await timeStep(timings, "assert_source_not_empty", () =>
+              assertSourceNotEmpty(octokit, owner, repo, template_repo)
+            );
           }
           throw repairErr;
         }
@@ -1700,7 +1842,9 @@ export async function createRepo(
       // transient condition, so re-throw the original readiness error as retryable rather than
       // dead-lettering a slow-but-fine repo on the first attempt.
       console.error("Repo did not become ready after create", createErr);
-      await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+      await timeStep(timings, "assert_source_not_empty", () =>
+        assertSourceNotEmpty(octokit, owner, repo, template_repo)
+      );
       throw createErr;
     } else {
       console.error("Error creating repo", createErr);
@@ -1711,7 +1855,7 @@ export async function createRepo(
   scope?.setTag("github_operation", "create_repo_request_done");
   // Shared finalize (settings, Actions, head SHA, branch protection) for fresh, repaired, and
   // adopted-pre-existing repos alike.
-  return await finalizeRepo(octokit, org, repoName, { is_template_repo, branch_protection }, scope);
+  return await finalizeRepo(octokit, org, repoName, { is_template_repo, branch_protection }, scope, timings);
 }
 
 /**
@@ -1764,7 +1908,8 @@ export async function applyBranchProtectionRuleset(
   org: string,
   repoName: string,
   cfg: BranchProtectionConfig,
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  timings?: StepTimings
 ): Promise<void> {
   scope?.setTag("github_operation", "apply_branch_protection_ruleset");
   scope?.setTag("org", org);
@@ -1792,7 +1937,7 @@ export async function applyBranchProtectionRuleset(
     return;
   }
 
-  const octokit = await getOctoKit(org, scope);
+  const octokit = await timeStep(timings, "ruleset_get_octokit", () => getOctoKit(org, scope));
   if (!octokit) {
     throw new UserVisibleError("No GitHub installation found for organization " + org);
   }
@@ -1802,19 +1947,25 @@ export async function applyBranchProtectionRuleset(
   let existingRulesetId: number | null = null;
   let existingRules: Parameters<typeof planBranchProtectionAction>[1] = null;
   try {
-    const existing = await octokit.paginate("GET /repos/{owner}/{repo}/rulesets", {
-      owner: org,
-      repo: repoName,
-      per_page: 100
-    });
+    // Broken out as its own step: this is a PAGINATED list, so it is one request per page and the
+    // count is not bounded by anything in our code.
+    const existing = await timeStep(timings, "ruleset_list", () =>
+      octokit.paginate("GET /repos/{owner}/{repo}/rulesets", {
+        owner: org,
+        repo: repoName,
+        per_page: 100
+      })
+    );
     const ours = existing.find((r) => r.name === BRANCH_PROTECTION_RULESET_NAME);
     if (ours) {
       existingRulesetId = ours.id;
-      const detail = await octokit.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
-        owner: org,
-        repo: repoName,
-        ruleset_id: ours.id
-      });
+      const detail = await timeStep(timings, "ruleset_detail", () =>
+        octokit.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
+          owner: org,
+          repo: repoName,
+          ruleset_id: ours.id
+        })
+      );
       // detail.data.rules has the same shape we build. Cast to the helper type.
       existingRules = (detail.data.rules ?? []) as NonNullable<typeof existingRules>;
     }
@@ -1834,6 +1985,9 @@ export async function applyBranchProtectionRuleset(
     } else {
       // List failures shouldn't kill repo creation. Fall through assuming none.
       console.warn(`Could not list rulesets for ${org}/${repoName}:`, e);
+      // `ruleset_list` is the fallback, not the assumption: this catch also covers the ruleset
+      // DETAIL request a few lines up, and that is exactly the misattribution stepForError fixes.
+      attachHandledFailureTimings(timings, scope, "ruleset_list", e);
       Sentry.captureException(e, scope);
       existingRulesetId = null;
       existingRules = null;
@@ -1864,40 +2018,46 @@ export async function applyBranchProtectionRuleset(
 
   try {
     if (action.kind === "create") {
-      await retryWithBackoff(
-        () => octokit.request("POST /repos/{owner}/{repo}/rulesets", body(action.rules)),
-        3,
-        1000,
-        scope
+      await timeStep(timings, "ruleset_write", () =>
+        retryWithBackoff(
+          () => octokit.request("POST /repos/{owner}/{repo}/rulesets", body(action.rules)),
+          3,
+          1000,
+          scope
+        )
       );
       scope?.setTag("ruleset_created", "true");
       return;
     }
     if (action.kind === "update" && existingRulesetId != null) {
-      await retryWithBackoff(
-        () =>
-          octokit.request("PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
-            ...body(action.rules),
-            ruleset_id: existingRulesetId
-          }),
-        3,
-        1000,
-        scope
+      await timeStep(timings, "ruleset_write", () =>
+        retryWithBackoff(
+          () =>
+            octokit.request("PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
+              ...body(action.rules),
+              ruleset_id: existingRulesetId
+            }),
+          3,
+          1000,
+          scope
+        )
       );
       scope?.setTag("ruleset_updated", "true");
       return;
     }
     if (action.kind === "delete" && existingRulesetId != null) {
-      await retryWithBackoff(
-        () =>
-          octokit.request("DELETE /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
-            owner: org,
-            repo: repoName,
-            ruleset_id: existingRulesetId
-          }),
-        3,
-        1000,
-        scope
+      await timeStep(timings, "ruleset_write", () =>
+        retryWithBackoff(
+          () =>
+            octokit.request("DELETE /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
+              owner: org,
+              repo: repoName,
+              ruleset_id: existingRulesetId
+            }),
+          3,
+          1000,
+          scope
+        )
       );
       scope?.setTag("ruleset_deleted", "true");
       return;
@@ -1941,15 +2101,30 @@ export async function createBranchProtectionRuleset(
  * background mirroring completes; the same pattern is already used for
  * template-generated repos in `assignment-create-all-repos`.
  */
-async function waitForRepoReady(octokit: Octokit, org: string, repoName: string, scope?: Sentry.Scope): Promise<void> {
+async function waitForRepoReady(
+  octokit: Octokit,
+  org: string,
+  repoName: string,
+  scope?: Sentry.Scope,
+  timings?: StepTimings
+): Promise<void> {
   scope?.setTag("github_operation", "wait_for_repo_ready");
   const maxAttempts = 30;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // Attempt COUNT is instrumented separately from elapsed time on purpose. The loop is capped at
+    // 30 attempts x 2000ms = 60s, so the count is what says whether this loop contributed ~0s or
+    // essentially its entire budget — elapsed time alone cannot tell "returned on attempt 1 after a
+    // slow GET" apart from "polled 29 times". Against the 2026-09-07 p50 of 279.5s, even the full
+    // 60s only covers about a fifth of the gap, so this number bounds how much of the 4.7 minutes
+    // this loop can possibly own.
+    countStep(timings, "wait_for_repo_ready_attempts");
     try {
-      const { data } = await octokit.request("GET /repos/{owner}/{repo}", {
-        owner: org,
-        repo: repoName
-      });
+      const { data } = await timeStep(timings, "wait_for_repo_ready_requests", () =>
+        octokit.request("GET /repos/{owner}/{repo}", {
+          owner: org,
+          repo: repoName
+        })
+      );
       // `size` is only refreshed by a lagging GitHub background job — on a freshly generated/forked
       // repo it can stay 0 for minutes even after the content has landed, so it is NOT a reliable
       // readiness signal on its own (a fully-populated repo would time out here). Keep it as a fast
@@ -1960,11 +2135,13 @@ async function waitForRepoReady(octokit: Octokit, org: string, repoName: string,
       }
       const defaultBranch = (data as { default_branch?: string }).default_branch || "main";
       try {
-        await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-          owner: org,
-          repo: repoName,
-          ref: `heads/${defaultBranch}`
-        });
+        await timeStep(timings, "wait_for_repo_ready_requests", () =>
+          octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+            owner: org,
+            repo: repoName,
+            ref: `heads/${defaultBranch}`
+          })
+        );
         return; // default branch ref exists → the initial commit has landed
       } catch (refErr) {
         // 404/409 → branch not created yet; anything else is a real error.
@@ -1977,7 +2154,11 @@ async function waitForRepoReady(octokit: Octokit, org: string, repoName: string,
         throw e;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    // The 2000ms sleep is timed but NOT changed: separating sleep from request time is what
+    // distinguishes "we deliberately waited" from "GitHub (or a limiter in front of it) made us
+    // wait". Together, wait_for_repo_ready_sleep + wait_for_repo_ready_requests is the full cost of
+    // this loop.
+    await timeStep(timings, "wait_for_repo_ready_sleep", () => new Promise((resolve) => setTimeout(resolve, 2000)));
   }
   throw new UserVisibleError(`Repo ${org}/${repoName} did not become ready in time`);
 }
@@ -2900,6 +3081,22 @@ export type SyncRepoPermissionsOptions = {
   studentTeamPermission?: "pull" | null;
 };
 
+/**
+ * Step-timing wrapper, same shape and same motivation as the one on `createRepo`.
+ *
+ * This function is instrumented because of what the 2026-09-07 numbers actually measure. The
+ * ~279.5s p50 was derived from pgmq (`archived_at - (vt - 300s)`), i.e. it is the duration of the
+ * whole `create_repo` MESSAGE — and the worker's create_repo case calls
+ * `github.syncRepoPermissions(...)` immediately after `createRepo` returns, inside the same
+ * message. So the unexplained ~275s is not necessarily inside repo creation at all: it can be here.
+ * This path makes far more GitHub calls than createRepo does (two team-slug resolutions, the staff
+ * roster, the full org member list, a paginated collaborator list, a paginated repo-teams list, a
+ * fresh membership check per not-yet-cached user, then one write per collaborator added or removed),
+ * and several of them are paginated, so their cost is bounded by org size rather than by anything
+ * in our code. Timing them is the only way to tell which half of the message owns the 4.7 minutes.
+ *
+ * The body is unchanged in `syncRepoPermissionsInstrumented`; this wrapper only reports.
+ */
 export async function syncRepoPermissions(
   org: string,
   repo: string,
@@ -2907,6 +3104,38 @@ export async function syncRepoPermissions(
   githubUsernamesMixedCase: string[],
   _scope?: Sentry.Scope,
   options: SyncRepoPermissionsOptions = {}
+): Promise<{ madeChanges: boolean; removalsSkipped: boolean }> {
+  const timings = new StepTimings("sync_repo_permissions", {
+    meta: { org, repo, course_slug: courseSlug, user_count: githubUsernamesMixedCase.length }
+  });
+  try {
+    return await syncRepoPermissionsInstrumented(
+      org,
+      repo,
+      courseSlug,
+      githubUsernamesMixedCase,
+      _scope,
+      options,
+      timings
+    );
+  } catch (error) {
+    // Same reasoning as createRepo: flag only what escapes. This path recovers from a missing staff
+    // team on purpose (TeamNotFoundError degrades to "do not remove anyone" and carries on).
+    timings.noteEscapingError(error);
+    throw error;
+  } finally {
+    timings.finish((snapshot) => attachStepTimingsToScope(snapshot, _scope));
+  }
+}
+
+async function syncRepoPermissionsInstrumented(
+  org: string,
+  repo: string,
+  courseSlug: string,
+  githubUsernamesMixedCase: string[],
+  _scope: Sentry.Scope | undefined,
+  options: SyncRepoPermissionsOptions,
+  timings: StepTimings
 ): Promise<{ madeChanges: boolean; removalsSkipped: boolean }> {
   if (isGithubStubEnabled()) {
     await recordE2eGithubCall(
@@ -2930,14 +3159,16 @@ export async function syncRepoPermissions(
     org = owner;
     repo = repoName;
   }
-  const octokit = await getOctoKit(org, scope);
+  const octokit = await timeStep(timings, "get_octokit", () => getOctoKit(org, scope));
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
   // Resolve to the team's real GitHub slug: if the team was created out-of-band and GitHub
   // normalized its slug differently from `${courseSlug}-staff`, the literal would 404 on the
   // members/repo-access endpoints below, silently leaving repos without staff access.
-  const team_slug = await resolveExistingTeamSlug(org, `${courseSlug}-staff`, octokit);
+  const team_slug = await timeStep(timings, "resolve_staff_team_slug", () =>
+    resolveExistingTeamSlug(org, `${courseSlug}-staff`, octokit)
+  );
   // JSON tuple, not `org + "-" + courseSlug`, for the same reason as teamSlugCache above: string
   // concat is ambiguous and could serve one course's staff roster to another.
   const staffCacheKey = JSON.stringify([org, courseSlug]);
@@ -2954,7 +3185,11 @@ export async function syncRepoPermissions(
   // a legitimate reason to remove collaborators.
   let staffTeamUsernames: string[] | null = null;
   try {
-    staffTeamUsernames = (await staffTeamCache.get(staffCacheKey)) ?? null;
+    // Timed at the AWAIT, not at the request: this is a promise cache, so a second concurrent job
+    // for the same course blocks here on the first job's in-flight roster read. That wait is real
+    // latency for this message and would otherwise be invisible.
+    staffTeamUsernames =
+      (await timeStep(timings, "staff_team_members", () => staffTeamCache.get(staffCacheKey))) ?? null;
   } catch (err) {
     // ONLY the "team does not exist at all" case degrades to an unknown roster and carries on.
     // A 403 (secondary rate limit), 502, network error, or a members read that failed while the
@@ -2974,6 +3209,8 @@ export async function syncRepoPermissions(
     scope?.setTag("staff_team_roster", "unavailable");
     Sentry.withScope((s) => {
       s.setFingerprint(["staff-team-roster-unavailable"]);
+      // Attach to the FORKED scope this capture actually uses, not to `scope`.
+      attachHandledFailureTimings(timings, s, "staff_team_members", err);
       Sentry.captureException(err, s);
     });
     console.error(`Could not read staff team for ${org}/${courseSlug}; not removing any collaborators`, err);
@@ -2987,18 +3224,24 @@ export async function syncRepoPermissions(
       })
     );
   }
-  const orgMembers = await orgMembershipCache.get(org);
+  // Same promise-cache note as the staff roster above. On a cold isolate this is a PAGINATED list
+  // of every member of the org, which for a large course org is many sequential requests.
+  const orgMembers = await timeStep(timings, "org_members", () => orgMembershipCache.get(org));
   const allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
-  const existingAccess = await retryWithBackoff(
-    () =>
-      octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
-        owner: org,
-        repo,
-        per_page: 100
-      }),
-    5,
-    3000,
-    scope
+  // maxRetries 5 / baseDelayMs 3000 — the same 93s worst-case ladder as get_head_sha. No retry
+  // lines appear in the 2026-09-07 logs, so it did not fire; timed so we can say that from data.
+  const existingAccess = await timeStep(timings, "list_collaborators", () =>
+    retryWithBackoff(
+      () =>
+        octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
+          owner: org,
+          repo,
+          per_page: 100
+        }),
+      5,
+      3000,
+      scope
+    )
   );
   const existingUsernames = existingAccess
     .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")
@@ -3010,36 +3253,50 @@ export async function syncRepoPermissions(
   });
   // console.log(`${org}/${repo} existing collaborators: ${existingUsernames.join(", ")}`);
   //Check if staff team has access to the repo, if not, add it
-  const teamsWithAccess = await octokit.paginate("GET /repos/{owner}/{repo}/teams", {
-    owner: org,
-    repo
-  });
+  const teamsWithAccess = await timeStep(timings, "list_repo_teams", () =>
+    octokit.paginate("GET /repos/{owner}/{repo}/teams", {
+      owner: org,
+      repo
+    })
+  );
   if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
     madeChanges = true;
-    await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
-      org,
-      team_slug,
-      owner: org,
-      repo,
-      permission: "maintain"
-    });
+    await timeStep(timings, "grant_staff_team", () =>
+      octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+        org,
+        team_slug,
+        owner: org,
+        repo,
+        permission: "maintain"
+      })
+    );
   }
   // Optionally grant the students team read access (mode 2 handout repos). Resolve the real slug for
   // the same reason as the staff team above, so grant/revoke hit the correct team endpoint.
-  const studentsTeamSlug = await resolveExistingTeamSlug(org, `${courseSlug}-students`, octokit);
+  const studentsTeamSlug = await timeStep(timings, "resolve_students_team_slug", () =>
+    resolveExistingTeamSlug(org, `${courseSlug}-students`, octokit)
+  );
   if (options.studentTeamPermission) {
+    // Bound to a local so the narrowing survives into the closure below: TypeScript discards the
+    // `if (options.studentTeamPermission)` narrowing inside a callback (options is a mutable
+    // parameter), so passing `options.studentTeamPermission` there would widen back to
+    // `"pull" | null | undefined`. Same value, same request — this is a typing artifact of wrapping
+    // the call in a timing closure, not a behavior change.
+    const studentTeamPermission = options.studentTeamPermission;
     const hasStudentsTeam = teamsWithAccess.some(
-      (t) => t.slug === studentsTeamSlug && t.permission === options.studentTeamPermission
+      (t) => t.slug === studentsTeamSlug && t.permission === studentTeamPermission
     );
     if (!hasStudentsTeam) {
       madeChanges = true;
-      await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
-        org,
-        team_slug: studentsTeamSlug,
-        owner: org,
-        repo,
-        permission: options.studentTeamPermission
-      });
+      await timeStep(timings, "grant_students_team", () =>
+        octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+          org,
+          team_slug: studentsTeamSlug,
+          owner: org,
+          repo,
+          permission: studentTeamPermission
+        })
+      );
       scope?.addBreadcrumb({
         category: "github",
         message: `${org}/${repo} granted ${studentsTeamSlug} team ${options.studentTeamPermission}`,
@@ -3051,12 +3308,14 @@ export async function syncRepoPermissions(
     const hasStudentsTeamAccess = teamsWithAccess.some((t) => t.slug === studentsTeamSlug);
     if (hasStudentsTeamAccess) {
       madeChanges = true;
-      await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
-        org,
-        team_slug: studentsTeamSlug,
-        owner: org,
-        repo
-      });
+      await timeStep(timings, "revoke_students_team", () =>
+        octokit.request("DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+          org,
+          team_slug: studentsTeamSlug,
+          owner: org,
+          repo
+        })
+      );
       scope?.addBreadcrumb({
         category: "github",
         message: `${org}/${repo} removed ${studentsTeamSlug} team access`,
@@ -3087,44 +3346,51 @@ export async function syncRepoPermissions(
 
     // For each user not in cached org, check if they're actually in the org now (fresh API call)
     // and also handle potential username changes
-    const verificationResults = await Promise.all(
-      desiredUsersNotInCachedOrg.map((username) =>
-        limiter.schedule(async () => {
-          // First, try to verify current membership with fresh API call
-          try {
-            await octokit.request("GET /orgs/{org}/members/{username}", {
-              org,
-              username
-            });
-            // User IS in org - they were just not in the stale cache
-            scope?.addBreadcrumb({
-              category: "github",
-              message: `${username} verified as org member (was not in cache)`,
-              level: "info"
-            });
-            return { username, isInOrg: true, newUsername: null };
-          } catch (membershipError: unknown) {
-            const err = membershipError as { status?: number };
-            if (err.status === 404 || err.status === 302) {
-              // User is NOT in org - might be a username change
-              const result = await updateGitHubUsernameForUser(username, octokit, adminSupabase, scope);
-              if (result.newUsername) {
-                // Username changed - verify new username is in org
-                try {
-                  await octokit.request("GET /orgs/{org}/members/{username}", {
-                    org,
-                    username: result.newUsername
-                  });
-                  return { username, isInOrg: true, newUsername: result.newUsername };
-                } catch {
-                  return { username, isInOrg: false, newUsername: result.newUsername };
+    // One fresh `GET /orgs/{org}/members/{username}` per user missing from the cached member list,
+    // fanned out 20 at a time, and each 404 additionally triggers a username re-resolution that
+    // reads Supabase and calls GitHub again. Timed as one step, with a counter for the fan-out
+    // size, because the cost here scales with the roster rather than with the repo.
+    countStep(timings, "org_membership_checks", desiredUsersNotInCachedOrg.length);
+    const verificationResults = await timeStep(timings, "verify_org_membership", () =>
+      Promise.all(
+        desiredUsersNotInCachedOrg.map((username) =>
+          limiter.schedule(async () => {
+            // First, try to verify current membership with fresh API call
+            try {
+              await octokit.request("GET /orgs/{org}/members/{username}", {
+                org,
+                username
+              });
+              // User IS in org - they were just not in the stale cache
+              scope?.addBreadcrumb({
+                category: "github",
+                message: `${username} verified as org member (was not in cache)`,
+                level: "info"
+              });
+              return { username, isInOrg: true, newUsername: null };
+            } catch (membershipError: unknown) {
+              const err = membershipError as { status?: number };
+              if (err.status === 404 || err.status === 302) {
+                // User is NOT in org - might be a username change
+                const result = await updateGitHubUsernameForUser(username, octokit, adminSupabase, scope);
+                if (result.newUsername) {
+                  // Username changed - verify new username is in org
+                  try {
+                    await octokit.request("GET /orgs/{org}/members/{username}", {
+                      org,
+                      username: result.newUsername
+                    });
+                    return { username, isInOrg: true, newUsername: result.newUsername };
+                  } catch {
+                    return { username, isInOrg: false, newUsername: result.newUsername };
+                  }
                 }
+                return { username, isInOrg: false, newUsername: null };
               }
-              return { username, isInOrg: false, newUsername: null };
+              throw membershipError;
             }
-            throw membershipError;
-          }
-        })
+          })
+        )
       )
     );
 
@@ -3155,12 +3421,18 @@ export async function syncRepoPermissions(
   });
   for (const username of newAccess) {
     madeChanges = true;
-    const resp = await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
-      owner: org,
-      repo,
-      username,
-      permission: "write"
-    });
+    // Accumulated across the loop, with a counter for how many writes were actually issued. One
+    // request per collaborator, issued SEQUENTIALLY — so this step is (users to add) x (per-write
+    // latency), and the counter is what lets us divide those two apart after the fact.
+    countStep(timings, "collaborators_added");
+    const resp = await timeStep(timings, "add_collaborator", () =>
+      octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
+        owner: org,
+        repo,
+        username,
+        permission: "write"
+      })
+    );
     scope?.addBreadcrumb({
       category: "github",
       message: `${org}/${repo} adding collaborator ${username}`,
@@ -3184,11 +3456,14 @@ export async function syncRepoPermissions(
     });
 
     console.log(`removing collaborator ${username} from ${org}/${repo}`);
-    await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
-      owner: org,
-      repo,
-      username
-    });
+    countStep(timings, "collaborators_removed");
+    await timeStep(timings, "remove_collaborator", () =>
+      octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
+        owner: org,
+        repo,
+        username
+      })
+    );
   }
   // `removalsSkipped` is REPORTED, not just logged. A run that could not read the staff roster
   // performed only the additive half of the sync, and a caller that then writes

@@ -82,7 +82,7 @@ async function ensureExistingRepoCreated({
   adminSupabase,
   courseId,
   assignmentId,
-  scope,
+  scope: requestScope,
   assignmentForStrategy,
   branchProtection,
   sourceAssignmentRepos
@@ -98,6 +98,19 @@ async function ensureExistingRepoCreated({
   sourceAssignmentRepos: SourceRepoRow[];
 }) {
   const [org, repoName] = repo.repository.split("/");
+  // PER-JOB SCOPE. The caller fans this function out over every existing repo with
+  // `Promise.allSettled` + a rate limiter, up to 30 in flight, and passes the SAME request scope to
+  // all of them. Everything below writes repo-specific data to it: the `repository` and
+  // `repo_creation_error` tags here, and — since the step-timing work — a
+  // `step_timings_create_repo` context and tag set written by github.createRepo /
+  // syncRepoPermissions on completion. On one shared object those writes overwrite each other, so
+  // whichever job finished last decides what an unrelated capture reports, and a Sentry event for
+  // repo N can carry repo M's timings. Cloning per job is the same invariant the async worker
+  // already holds at github-async-worker/index.ts:613 (`_scope.clone()` per envelope), and
+  // Scope.clone() copies tags/contexts/breadcrumbs by value, so the inherited request-level context
+  // (assignment_id, course_id, github_org, ...) is preserved.
+  const scope = requestScope?.clone() ?? requestScope;
+  scope?.setTag("repository", repo.repository);
 
   try {
     // Check if the repository exists in GitHub
@@ -395,6 +408,12 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
       return;
     }
 
+    // Per-job clone, for the same reason as ensureExistingRepoCreated above: this closure is fanned
+    // out over every repo to create (up to 30 concurrent) with one shared request scope, and both
+    // the capture below and the two github.* calls write repo-specific data to whatever scope they
+    // are given.
+    const jobScope = scope?.clone() ?? scope;
+    jobScope?.setTag("repository", `${assignment.classes!.github_org!}/${repoName}`);
     const { error, data: dbRepo } = await adminSupabase
       .from("repositories")
       .insert({
@@ -409,7 +428,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
       .single();
     if (error) {
       console.error(error);
-      Sentry.captureException(error, scope);
+      Sentry.captureException(error, jobScope);
       throw new UserVisibleError(`Error creating repo, repo not created: ${error}`);
     }
     if (!dbRepo) {
@@ -443,14 +462,14 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
           creation_method: strategy.creationMethod,
           branch_protection: branchProtection
         },
-        scope
+        jobScope
       );
       await github.syncRepoPermissions(
         assignment.classes!.github_org!,
         repoName,
         assignment.classes!.slug!,
         github_username,
-        scope
+        jobScope
       );
       await adminSupabase
         .from("repositories")
@@ -522,12 +541,17 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
               return;
             }
 
+            // Per-job clone, same invariant as the two fan-outs above: syncRepoPermissions writes a
+            // `step_timings_sync_repo_permissions` context and tag set to whatever scope it is
+            // handed, and this map runs concurrently over every existing repo.
+            const jobScope = scope?.clone() ?? scope;
+            jobScope?.setTag("repository", repo.repository);
             const { removalsSkipped } = await github.syncRepoPermissions(
               org,
               repoName,
               assignment.classes!.slug!,
               uniqueUsernames,
-              scope
+              jobScope
             );
             // A sync that could not read the staff roster skipped every removal, so it did only half
             // the job. Leaving is_github_ready = false (with creation_error still NULL) is what keeps

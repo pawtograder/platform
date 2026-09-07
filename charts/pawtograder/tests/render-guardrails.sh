@@ -747,6 +747,189 @@ assert_refused "cold-load allowance below the largest bundle is refused" \
   "below the 64Mi needed to cover the largest bundle" \
   --set edgeFunctions.eszipColdLoadHeadroomMb=32
 
+# github-async-worker drain tuning. The DEFAULTS are the assertion that matters
+# most: 4 / 300 are the values that were hardcoded in processBatch() before they
+# became tunable, so a chart upgrade must change nothing on its own. If either
+# default drifts, an install silently gets a different pgmq fan-out or visibility
+# timeout than the one that was measured on 2026-09-07 (58 create_repo messages,
+# 88 minutes to drain, 20 of 58 re-read against the 300s timeout).
+echo "== github-async-worker drain tuning: defaults, overrides, and BOTH batch ceilings =="
+assert_env_value "drain concurrency defaults to today's hardcoded 4" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY 4
+assert_env_value "visibility timeout defaults to today's hardcoded 300s" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS 300
+# An explicit override has to actually reach the pod, and ALL THREE numbers have
+# to move together: 8 x 120 = 960 is the smallest visibility timeout AND the
+# smallest isolate lifetime the invariants allow at 8.
+# NOTE the graceful-drain trio. An earlier version of this array stopped at
+# worker.timeoutMs, and this suite then asserted that 8/960/960000 RENDERS —
+# blessing a configuration that a rollout kills at the 410s default
+# --graceful-exit-timeout, i.e. 550s short of the modelled batch, which is the
+# same lost-archive redelivery from the shutdown path instead of the runtime.
+TUNE8=(
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960
+  --set edgeFunctions.worker.timeoutMs=960000
+  --set edgeFunctions.gracefulExitTimeoutSeconds=970
+  --set edgeFunctions.terminationGracePeriodSeconds=990
+)
+assert_env_value "drain concurrency is settable" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY 8 \
+  "${TUNE8[@]}"
+assert_env_value "visibility timeout is settable" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS 960 \
+  "${TUNE8[@]}"
+# Ceiling 1: the visibility timeout must cover a whole batch of `n`, not one
+# message. Raising concurrency alone is the change that LOOKS like a throughput
+# fix and actually multiplies mid-flight redeliveries, so it is refused outright.
+assert_refused "raising concurrency without raising the visibility timeout is refused" \
+  "requires visibilityTimeoutSeconds >= 960" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8
+assert_refused "a partially-raised visibility timeout is still refused" \
+  "requires visibilityTimeoutSeconds >= 720" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=6 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=719
+# Ceiling 2: the ISOLATE LIFETIME (worker.timeoutMs, 400s by default) must also
+# cover the modelled batch. This is a config-coherence rule — budgeting a batch
+# longer than the isolate that runs it cannot hold as advice, because an overrun
+# would skip the archive calls — and it is NOT a claim that isolates are being
+# truncated today (that was measured and retracted). A raised concurrency plus a
+# raised visibility timeout with the lifetime left at 400s is the incoherent
+# combination this chart's example used to recommend.
+assert_refused "8/960 with the default 400s isolate lifetime is refused" \
+  "requires edgeFunctions.worker.timeoutMs >= 960000" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960
+assert_refused "8/960/960000 with the default 410s graceful exit is refused" \
+  "gracefulExitTimeoutSeconds=410 is below edgeFunctions.worker.timeoutMs" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960 \
+  --set edgeFunctions.worker.timeoutMs=960000
+assert_renders "8/960 renders once the isolate lifetime AND the drain cover the batch" \
+  "${TUNE8[@]}"
+# The same trap one step down, and the fix that does not touch concurrency at
+# all: 4 x 120 = 480 needs BOTH timeouts, because the model's 480s budget for a
+# batch of 4 does not fit the 400s lifetime. (Only the exact 4/300 pair below is
+# exempt from that arithmetic.)
+assert_refused "raising only the visibility timeout at n=4 still leaves the isolate too short" \
+  "requires edgeFunctions.worker.timeoutMs >= 480000" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=480
+assert_refused "4/480/480000 without the matching graceful exit is refused" \
+  "gracefulExitTimeoutSeconds=410 is below edgeFunctions.worker.timeoutMs" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=480 \
+  --set edgeFunctions.worker.timeoutMs=480000
+assert_renders "4/480 renders with a 480s isolate lifetime and a 490/510 drain" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=480 \
+  --set edgeFunctions.worker.timeoutMs=480000 \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=490 \
+  --set edgeFunctions.terminationGracePeriodSeconds=510
+assert_renders "concurrency 6 renders at exactly 6 x 120s on both ceilings" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=6 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=720 \
+  --set edgeFunctions.worker.timeoutMs=720000 \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=730 \
+  --set edgeFunctions.terminationGracePeriodSeconds=750
+
+# The shutdown-path rules on their own, independent of this worker: they are
+# properties of the edge tier, and the defaults (410 >= 400, 430 >= 10 + 410)
+# satisfy both, so these refuse nothing that exists today.
+echo "== edge-function shutdown path must outlive the isolate =="
+assert_renders "the default graceful-drain trio renders" \
+  --set edgeFunctions.enabled=true
+assert_refused "a graceful exit below the isolate lifetime is refused" \
+  "gracefulExitTimeoutSeconds=300 is below edgeFunctions.worker.timeoutMs (400000ms = 400s)" \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=300
+assert_refused "a SIGKILL backstop below preStop + graceful exit is refused" \
+  "the graceful exit is decorative" \
+  --set edgeFunctions.terminationGracePeriodSeconds=419
+assert_refused "a raised isolate lifetime with the default graceful exit is refused" \
+  "gracefulExitTimeoutSeconds=410 is below edgeFunctions.worker.timeoutMs (900000ms = 900s)" \
+  --set edgeFunctions.worker.timeoutMs=900000
+
+# The metrics coupling, now enforced at render time rather than only asserted for
+# the renders this suite happens to exercise: a raised worker lifetime with the
+# default 400s top bucket puts everything in the newly-permitted range into +Inf.
+echo "== edge metrics buckets must reach the worker lifetime (render-time) =="
+assert_refused "raising the worker lifetime with default buckets is refused when metrics are on" \
+  "below edgeFunctions.worker.timeoutMs (960s)" \
+  --set edgeFunctions.metrics.enabled=true \
+  --set edgeFunctions.worker.timeoutMs=960000 \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=970 \
+  --set edgeFunctions.terminationGracePeriodSeconds=990
+assert_renders "the same render is accepted with a strictly-increasing list reaching 960" \
+  --set edgeFunctions.metrics.enabled=true \
+  "${TUNE8[@]}" \
+  --set 'edgeFunctions.metrics.buckets={0.05,0.1,0.25,0.5,1,2,5,10,30,60,120,300,400,960}'
+# Checking only the LAST element was not enough: main.ts's histogramBuckets
+# rejects a non-positive or non-strictly-increasing list and silently falls back
+# to its own default (ending at 400s), so a list that merely ENDS at 960 would be
+# discarded at boot and the 400-960s range would land in +Inf regardless. The
+# rule now validates the same three properties, in the same order, as main.ts.
+assert_refused "a list that ends high but is not strictly increasing is refused" \
+  "is not strictly increasing" \
+  --set edgeFunctions.metrics.enabled=true \
+  "${TUNE8[@]}" \
+  --set 'edgeFunctions.metrics.buckets={0.05,1,0.5,960}'
+assert_refused "a repeated bucket bound is refused (strictly, not merely non-decreasing)" \
+  "is not greater than the previous" \
+  --set edgeFunctions.metrics.enabled=true \
+  "${TUNE8[@]}" \
+  --set 'edgeFunctions.metrics.buckets={0.05,1,1,960}'
+assert_refused "a zero bucket bound is refused" \
+  "is not positive" \
+  --set edgeFunctions.metrics.enabled=true \
+  "${TUNE8[@]}" \
+  --set 'edgeFunctions.metrics.buckets={0,1,2,960}'
+assert_refused "a negative bucket bound is refused" \
+  "is not positive" \
+  --set edgeFunctions.metrics.enabled=true \
+  "${TUNE8[@]}" \
+  --set 'edgeFunctions.metrics.buckets={-1,1,2,960}'
+# ...and the buckets are inert with metrics off, so the rule must not fire there.
+assert_renders "buckets shorter than the lifetime are tolerated with metrics off" \
+  "${TUNE8[@]}"
+# ...but the EXACT legacy pair (4, 300) violates both ceilings and must keep
+# rendering: it is what was hardcoded in the worker, so every install is already
+# running it and refusing it would refuse every upgrade. The exemption is that
+# pair ONLY. It used to be gated on `n > 4`, which let 4/60 and 1/60 through — a
+# 60s timeout re-serves a ~280s create_repo four times over while it is still in
+# flight, which is strictly worse than the status quo it was grandfathering.
+assert_renders "the exact legacy pair 4/300 still renders" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=4 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=300
+assert_refused "4/60 is refused (not covered by the legacy exemption)" \
+  "requires visibilityTimeoutSeconds >= 480" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=4 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=60
+assert_refused "1/60 is refused (not covered by the legacy exemption)" \
+  "requires visibilityTimeoutSeconds >= 120" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=1 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=60
+# Bounds. 0 is the dangerous one: it drains NOTHING while the lease is held and
+# every heartbeat stays green, which reads as a hung queue rather than as a
+# misconfiguration.
+assert_refused "drain concurrency 0 is refused" \
+  "would drain NOTHING" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=0
+assert_refused "drain concurrency above the 8 ceiling is refused" \
+  "is outside 1-8" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=16 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=1800
+assert_refused "a visibility timeout below the 60s floor is refused" \
+  "is outside 60-1800" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=30
+assert_refused "a visibility timeout above the 1800s ceiling is refused" \
+  "is outside 60-1800" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=3600
+# A non-numeric value must be refused here rather than left to the runtime clamp:
+# the pod would come up on the default and the deploy would not do what it says.
+assert_refused "a non-numeric drain concurrency is refused" \
+  "must be an integer 1-8" \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=four
+assert_refused "a non-numeric visibility timeout is refused" \
+  "must be an integer 60-1800" \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=5m
+
 # The HPA controller applies a default 10% tolerance, so a target of 100 is a dead
 # band of 90-110%. The edge tier's load-independent floor sat inside that band,
 # which wedged scaling in BOTH directions: it could not scale down (needs <90%) and

@@ -32,6 +32,65 @@ jobs:
       - name: Run linting check
         run: npm run lint
 
+  # Jest unit tests (tests/unit).
+  #
+  # These were previously UNGATED. CI's only Jest invocation was in deploy.yml:
+  #   npx jest --runInBand --testPathPatterns "tests/unit/issue"
+  # which matches `tests/unit/issue*` only — so every other file under tests/unit
+  # ran nowhere. That was discovered on PR #956 when a stale expectation
+  # (`Expected: 8, Received: 3`, after the isolate-lifetime fallback landed) sat
+  # failing while CI stayed green, and ~117 tests across two PRs turned out to be
+  # green-by-omission. Widening the deploy.yml pattern was the other option, but
+  # that job needs a live Supabase and takes ~30 min; these are pure-logic tests
+  # that want fast feedback, so they get their own lane next to deno-unit-tests.
+  #
+  # No RUN_SUPABASE_INTEGRATION_TESTS here on purpose: the Supabase-backed files
+  # under tests/unit gate themselves on that flag and self-skip without it, so
+  # they stay in deploy.yml where a database actually exists.
+  jest-unit-tests:
+    runs-on: pawtograder-ci
+    strategy:
+      matrix:
+        node-version: [22.x]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node-22-
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      # `npm ci`, NOT `npm install`, and this is load-bearing. package.json has
+      # `jest: ^30.1.2`, so `npm install` drifts to 30.4.x while package-lock.json
+      # still pins a single hoisted `jest-mock@30.0.5`. jest-runtime@30.4.2 calls
+      # `moduleMocker.clearMocksOnScope()`, which 30.0.5 does not have, so every
+      # suite carrying `@jest-environment node` dies with
+      # "TypeError: this._moduleMocker.clearMocksOnScope is not a function"
+      # before running a single test — 43 suites locally. jest-runtime@30.1.2, the
+      # locked version, never calls it, so the locked pair is self-consistent.
+      # Verified by unpacking both versions. Refreshing the lockfile's jest deps
+      # would fix it at the source and is worth doing separately.
+      - name: Install dependencies
+        run: npm ci
+      # SCOPED to the suites this PR added, deliberately, rather than all of
+      # tests/unit. A repo-wide gate is the right end state but I could not
+      # verify it would be green: under the locked jest pair 11 of 101 suites
+      # still fail locally, and I could not attribute those without the repo's
+      # own jest.config.js dependencies, so turning it on repo-wide risks
+      # blocking unrelated PRs on pre-existing red. Widening it, and refreshing
+      # the lockfile's jest deps so `npm install` stops drifting, is the
+      # follow-up. Adding a file here is one line; that is the point.
+      - name: Run Jest unit tests
+        run: |
+          npx jest --runInBand \
+            tests/unit/async-worker-tuning.test.ts \
+            tests/unit/create-repo-step-timings.test.ts
+
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
   # dangerous production values combination (e2e bypasses, plaintext/
   # non-recoverable secrets, seeding, resetOnDrift, floating image tags,

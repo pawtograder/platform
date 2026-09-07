@@ -1281,6 +1281,170 @@ edgeFunctions:
     # render-guardrails.sh asserts monotonicity and that the top bucket is
     # >= worker.timeoutMs/1000; raise it alongside any timeout increase.
     buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 400]
+  # ---------------------------------------------------------------------------
+  # github-async-worker drain tuning (pgmq `async_calls` / `..._low_priority`)
+  # ---------------------------------------------------------------------------
+  # Rendered as GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY and
+  # GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS and consumed by
+  # supabase/functions/_shared/asyncWorkerTuning.ts, which holds the bounds and
+  # the full narrative. Both were HARDCODED (4 / 300) in the worker until
+  # 2026-09-07; the defaults here reproduce that exactly, so upgrading this
+  # chart changes nothing until you set a value.
+  #
+  # WHAT WAS MEASURED (Khoury prod, 2026-09-07). CS 4530 released an assignment
+  # and enqueued 58 `create_repo` messages at once at 04:01:00 UTC. The last one
+  # drained at 05:37:28 UTC — 88 MINUTES for 58 messages, mean time-in-queue
+  # 3,230s, worst 5,788s, with 2-4 messages completing every ~7 minutes.
+  # PawtograderQueueOldestMessageAging (1200s for 10m, critical) fired for over
+  # an hour and was a TRUE POSITIVE. 20 of the 58 messages came back with
+  # read_ct > 1 (max 3) because a ~420s batch outlives a 300s visibility
+  # timeout, so pgmq re-served messages that were still being processed.
+  # Everything still ended up correct (58/58 repos, no duplicates, empty DLQ) —
+  # this is a throughput and redelivery problem, not a correctness one.
+  #
+  # HOW THE KNOBS RELATE — TWO CEILINGS, not one, and a batch must fit under
+  # BOTH (do not break either):
+  #
+  #   visibilityTimeoutSeconds >= drainConcurrency x 120
+  #   worker.timeoutMs / 1000  >= drainConcurrency x 120
+  #
+  # Both are about a WHOLE BATCH of `drainConcurrency`, never about one message:
+  # all of them run concurrently in ONE isolate, but their GitHub calls
+  # serialize through the fleet-wide content limiter (below), so batch wall
+  # clock grows with concurrency. 120s/message is calibrated from the incident
+  # (420s for a batch of 4 ≈ 105s/message, rounded up; create_repo p50 279.5s).
+  #
+  # The second ceiling is the ISOLATE LIFETIME. worker.timeoutMs is handed to
+  # EdgeRuntime as workerTimeoutMs, and a batch that outlives it is killed
+  # BEFORE its archive calls run — so the repos exist, the messages were never
+  # archived, and pgmq redelivers work that already succeeded. That is strictly
+  # worse than a duplicate read. beforeUnload.wallClockRatio (50) asks the
+  # isolate to retire at HALF the lifetime, so treat worker.timeoutMs as the
+  # hard cap rather than the budget.
+  #
+  # The second ceiling is a CONFIG-COHERENCE rule, not a claim about what the
+  # runtime is doing right now. Under n x 120 against the 400s default lifetime
+  # the largest coherent concurrency is THREE (3 x 120 = 360; 4 x 120 = 480 >
+  # 400), so even the shipped default of 4 sits just outside the conservative
+  # model — which is why only the EXACT legacy pair (4, 300) is grandfathered.
+  # The practical consequence: you cannot raise the visibility timeout without
+  # raising worker.timeoutMs, and the worked example below therefore moves THREE
+  # values, not two.
+  #
+  # DO NOT read this as "isolates are being killed mid-batch". That was asserted
+  # here in an earlier draft and then MEASURED AND RETRACTED (2026-09-07): the
+  # runtime's `wall clock duraiton reached` log (its typo) was FLAT at ~200/hour
+  # across the functions pods before, during and after the 58-repo burst (197 at
+  # 03:00, 242 at 04:00, 225 at 05:00, 192 idle at 12:00). That is baseline
+  # churn — leased mode keeps a resident isolate polling, so it reaches the 400s
+  # wall clock and recycles about every 3.5 min per pod — and nothing in it ties
+  # a termination to an unarchived message. The 300s visibility timeout remains
+  # the established cause of the 20-of-58 re-reads. Note too that n x 120 is a
+  # conservative upper bound: the ~420s figure is a completion cadence including
+  # poll and re-poke latency, and a fully parallel batch of 4 at p50 279.5s
+  # would be ~280-300s.
+  #
+  # validations.yaml refuses any combination that breaks either ceiling. Only
+  # the EXACT legacy pair (4, 300) is exempt, because that is what was hardcoded
+  # in the worker and is therefore already running everywhere; anything else is
+  # a deliberate act and is checked. (4/60 and 1/60 are refused for the same
+  # reason 8/300 is — a 60s timeout re-serves a ~280s create_repo four times
+  # over while it is still in flight.)
+  #
+  # A worked example, for the CS 2000-shaped burst this exists for. Note it is a
+  # COUPLED change and its blast radius is wider than this worker: raising
+  # worker.timeoutMs lengthens EVERY function's isolate lifetime in the pod
+  # (longer-lived isolates accumulate more heap, which is what cpuSoftMs and
+  # beforeUnload exist to bound), and the graceful-drain trio has to move with
+  # it or a rollout truncates the batch anyway.
+  #
+  #   githubAsyncWorker:
+  #     drainConcurrency: 8
+  #     visibilityTimeoutSeconds: 960   # 8 x 120
+  #   worker:
+  #     timeoutMs: 960000               # 8 x 120s: the isolate must outlive the batch
+  #   gracefulExitTimeoutSeconds: 970   # >= worker.timeoutMs, or a ROLLOUT truncates the batch
+  #   terminationGracePeriodSeconds: 990 # >= preStop + gracefulExitTimeout
+  #   metrics:
+  #     buckets: [..., 300, 400, 960]   # top finite bucket >= the new lifetime
+  #
+  # All five are enforced by templates/validations.yaml, so a partial bundle is
+  # refused at render time rather than deployed: a graceful exit shorter than the
+  # isolate lifetime lets a rollout kill a batch before its archive calls, and a
+  # bucket list that stops at 400 puts everything in the newly-permitted range
+  # into +Inf.
+  #
+  # If that blast radius is unacceptable, the cheaper and better-scoped first
+  # move is to leave drainConcurrency at 4 and lift the timeouts to cover the
+  # batch that is ALREADY running (480s VT / 480000ms lifetime / 490 graceful /
+  # 510 termination grace / buckets ending at 480). That fixes the
+  # redeliveries without changing GitHub concurrency at all, and it is the
+  # change with the shortest argument behind it.
+  #
+  # Why the range is 1..8 rather than "as high as you like":
+  #   * THE BINDING CONSTRAINT IS A SHARED GITHUB LIMITER, not this pod.
+  #     `create_repo` wraps the whole github.createRepo() call in the
+  #     Redis-backed (therefore FLEET-WIDE, per-org) content limiter
+  #     `create_content:<org>:<GITHUB_APP_ID>`, which is
+  #     { reservoir: 40, maxConcurrent: 40, refresh 40/60s }. A create_repo
+  #     measured p50 279.5s on 2026-09-07, so every in-flight repo creation
+  #     holds one of those 40 slots and one reservoir token for ~4.7 MINUTES.
+  #     The same pool serves org INVITATIONS (POST /orgs/{org}/invitations) and
+  #     sync_repo_to_handout, so as concurrency rises toward 40 the minutes-long
+  #     repo creations form a convoy and invitations queue behind them —
+  #     students unable to join the org, which is a worse symptom than a slow
+  #     queue. Concurrency is per leaseholder while the limiter is per org and
+  #     fleet-wide, so several classes releasing into the same org compound it,
+  #     and the reservoir caps starts at 40/min per org regardless. 8 is 20% of
+  #     the pool: even with all 8 held for the full ~280s, 32 slots remain for
+  #     invitations and syncs.
+  #   * every message in a batch is processed inside the SINGLE leaseholder
+  #     isolate, which is capped at worker.memoryLimitMb (256MiB) and
+  #     early-drops at half that. Concurrency multiplies envelopes, Octokit
+  #     responses and file contents inside that one box, and an isolate killed
+  #     at the cap mid-handler is exactly the read_ct-climbing failure the
+  #     worker's poison-pill guard exists for. This tier OOM-killed PID 1 twice
+  #     in 2026-08 (see the eszipCacheMaxMb note above and the maxParallelism
+  #     note in examples/values-prod.yaml) and its container budget already sits
+  #     at ~2650Mi against a 4Gi limit, so there is no room to grow the isolate.
+  #   * concurrency multiplies concurrent GitHub API calls against ONE shared
+  #     App installation quota per org. The Bottleneck limiters in
+  #     supabase/functions/_shared/ and the github_circuit_breakers table are
+  #     the only backstops, so past the limiters' own concurrency the extra
+  #     parallelism becomes queueing inside Bottleneck, not throughput.
+  # 8 (a doubling of the measured configuration, and the same number as
+  # maxParallelism) is the largest step worth taking without re-measuring
+  # isolate memory, content-limiter occupancy and secondary-rate-limit
+  # behaviour under a real burst. Note
+  # that 8 is ~1.2 msg/min, i.e. ~8h for a 585-message burst: going materially
+  # faster needs MORE THAN ONE concurrent leaseholder (see workerRun.ts), which
+  # is a separate design change, not a bigger number here.
+  #
+  # visibilityTimeoutSeconds is bounded 60..1800. The timeout is also the
+  # RECOVERY LATENCY for a message whose isolate really died (memory cap,
+  # worker.timeoutMs, eviction): nothing retries it until the timeout expires.
+  # 1800s is 1.5x the queue-aging alert window, so a genuinely stuck message
+  # still pages a human instead of sitting invisible for hours. Out-of-range
+  # values are refused at render time and, if they reach the pod some other way
+  # (a hand-edited Deployment, `kubectl set env`), fixed up at runtime rather
+  # than taking the worker down — a `0` would drain nothing while every liveness
+  # signal stayed green. The runtime fix-up ENFORCES the two ceilings by
+  # degrading concurrency, so on a bypass path a lone drainConcurrency=8 with the
+  # timeouts left alone actually runs at 2 (floor(300/120)) and says so in the
+  # log and in Sentry. Two details of that fix-up worth knowing: an absent or
+  # malformed EDGE_WORKER_TIMEOUT_MS is treated as 400s rather than "unknown",
+  # because that is what main.ts falls back to for the same input, so the
+  # lifetime ceiling caps concurrency at 3 unless worker.timeoutMs is really
+  # raised; and if the timeout cannot cover even ONE message the worker floors
+  # concurrency at 1 AND raises its own sleep_seconds to the 120s one-message
+  # budget, since it passes that value on every pgmq read and a floored-but-
+  # incoherent pair would just re-read a multi-minute create_repo. Set them here
+  # and the render-time rules make all of that impossible in the first place. Note these are rendered as explicit `env` entries, and
+  # an `env` entry beats `envFrom`, so edgeFunctions.envFromSecrets CANNOT be
+  # used to override them: set them here.
+  githubAsyncWorker:
+    drainConcurrency: 4
+    visibilityTimeoutSeconds: 300
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)

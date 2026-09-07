@@ -445,6 +445,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           return;
         }
         const repoName = `${c.classes!.slug}-${assignment.slug}-group-${sanitizeRepoNameComponent(group.name)}`;
+        // PER-JOB SCOPE. This closure runs concurrently over every group repo (Promise.all above)
+        // and the whole function shares ONE request scope across four such fan-outs. Everything
+        // below writes repo-specific data to whatever scope it is handed — the captures in this
+        // closure, and since the step-timing work a `step_timings_*` context and tag set written by
+        // createRepo / syncRepoPermissions on completion — so on a shared object those writes
+        // overwrite each other and a capture here can report a SIBLING repository's timings. The
+        // per-repository failures here ARE captured, so the clone is threaded into those captures
+        // too; cloning without that would move the problem rather than fix it. Same invariant the
+        // async worker holds per envelope (github-async-worker/index.ts:613), and Scope.clone()
+        // copies tags/contexts by value so inherited request context survives.
+        const jobScope = scope?.clone() ?? scope;
+        jobScope?.setTag("repository", `${c.classes!.github_org}/${repoName}`);
 
         console.log(
           `repoName: ${repoName}, template_repo: '${assignment.template_repo}', groupMembership: ${JSON.stringify(groupMembership, null, 2)}, existingRepos: ${JSON.stringify(groupMembership.assignment_groups.repositories, null, 2)}`
@@ -518,10 +530,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 .eq("id", dbRepo!.id);
               return assignment;
             }
-            const headSha = await createRepo(c.classes!.github_org!, repoName, strategy.sourceRepo, {
-              creation_method: strategy.creationMethod,
-              branch_protection: branchProtectionFromAssignment(assignment)
-            });
+            // jobScope (not the shared request scope) so this repo's step timings and github_*
+            // tags land on an object only this job writes to.
+            const headSha = await createRepo(
+              c.classes!.github_org!,
+              repoName,
+              strategy.sourceRepo,
+              {
+                creation_method: strategy.creationMethod,
+                branch_protection: branchProtectionFromAssignment(assignment)
+              },
+              jobScope
+            );
             // Sync permissions and mark ready HERE. This branch returns below without
             // reaching the existing-repo sync further down, so deferring the flag to
             // that point left every newly created group repo at is_github_ready=false
@@ -537,7 +557,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 .filter((m) => m.user_roles)
                 .filter((m) => m.user_roles.users.github_username)
                 .map((m) => m.user_roles.users.github_username!),
-              scope
+              jobScope
             );
             // ONE checked write for both fields. They were two writes, and the first was
             // unchecked: if it failed transiently the row still became ready, so the reconciler —
@@ -555,7 +575,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               // discarded every group push until the reconciler repaired it, with no
               // replay of what was lost.
               console.error(readyError);
-              Sentry.captureException(readyError, scope);
+              Sentry.captureException(readyError, jobScope);
               throw new UserVisibleError(
                 `Group repository ${repoName} was created but could not be marked ready ` +
                   `(${readyError.message}). Please retry: pushes to it would not be recorded until this is fixed.`
@@ -589,7 +609,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .filter((m) => m.user_roles) // Needed to not barf when a student is removed from the class
               .filter((m) => m.user_roles.users.github_username)
               .map((m) => m.user_roles.users.github_username!),
-            scope
+            jobScope
           );
           // Only NOW is the repo genuinely usable: it exists and its members can
           // reach it. Consumers that gate on is_github_ready (including the
@@ -604,7 +624,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               `Could not resolve the repositories row for ${c.classes!.github_org!}/${repoName} (assignment ${assignment.id}); is_github_ready not set`
             );
             console.error(err);
-            Sentry.captureException(err, scope);
+            Sentry.captureException(err, jobScope);
           } else {
             // Only promote a row whose repo is known to be FULLY created. This branch runs for
             // an EXISTING is_github_ready=false row, and permission sync can succeed against a
@@ -634,7 +654,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 .eq("id", repoRowId)
                 .maybeSingle();
               if (pendingRow && pendingRow.synced_repo_sha === null) {
-                scope?.setTag("repo_not_promoted_incomplete_creation", String(repoRowId));
+                jobScope?.setTag("repo_not_promoted_incomplete_creation", String(repoRowId));
                 console.log(
                   `Not marking ${repoName} ready: creation has not completed (synced_repo_sha is null). ` +
                     `Leaving it for the creation worker.`
@@ -646,7 +666,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               const failure =
                 readyError ?? new Error(`No repositories row matched id=${repoRowId} when marking it ready`);
               console.error(failure);
-              Sentry.captureException(failure, scope);
+              Sentry.captureException(failure, jobScope);
               // Propagate, as the newly-created branch does. This branch is reached after
               // permissions have just been repaired on an EXISTING is_github_ready=false
               // row, so logging alone reported success while the row stayed unready — and
@@ -695,6 +715,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       //Is it a group assignment?
       const courseSlug = assignment.classes!.slug;
       const repoName = `${courseSlug}-${assignment.slug}-${githubUsername}`;
+      // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above.
+      const jobScope = scope?.clone() ?? scope;
+      jobScope?.setTag("repository", `${assignment.classes!.github_org}/${repoName}`);
       if (existingRepos.find((repo) => repo.repository === `${assignment.classes!.github_org}/${repoName}`)) {
         console.log(`Repo ${repoName} already exists...`);
         return;
@@ -755,12 +778,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             .eq("id", dbRepo!.id);
           return `e2e-skip-${repoName}`;
         }
-        const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, sourceTemplateRepo, {
-          creation_method: strategy.creationMethod,
-          branch_protection: branchProtectionFromAssignment(assignment)
-        });
+        const new_repo_sha = await createRepo(
+          assignment.classes!.github_org!,
+          repoName,
+          sourceTemplateRepo,
+          {
+            creation_method: strategy.creationMethod,
+            branch_protection: branchProtectionFromAssignment(assignment)
+          },
+          jobScope
+        );
         console.log(`courseSlug: ${courseSlug}`);
-        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
+        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], jobScope);
         const { error: readyError } = await adminSupabase
           .from("repositories")
           .update({
@@ -778,7 +807,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           // repos — so student pushes would be acknowledged and discarded until the
           // periodic reconciler repairs the row, with no replay of what was lost.
           console.error(readyError);
-          Sentry.captureException(readyError, scope);
+          Sentry.captureException(readyError, jobScope);
           throw new UserVisibleError(
             `Repository ${repoName} was created but could not be marked ready (${readyError.message}). ` +
               `Please retry: pushes to it would not be recorded until this is fixed.`
@@ -811,11 +840,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       .filter((repo) => repo.repository && repo.repository.includes("/"))
       .filter((repo) => assignmentId === undefined || repo.assignment_id === assignmentId)
       .map(async (repo) => {
+        // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above.
+        const jobScope = scope?.clone() ?? scope;
+        jobScope?.setTag("repository", repo.repository);
         try {
           const [orgName, repoName] = repo.repository.split("/");
           const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
           if (classSlug) {
-            await syncRepoPermissions(orgName, repoName, classSlug, [githubUsername], scope);
+            await syncRepoPermissions(orgName, repoName, classSlug, [githubUsername], jobScope);
             console.log(`Synced permissions for individual repo: ${repo.repository}`);
           }
         } catch (e) {
@@ -832,6 +864,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       .filter((repo) => repo.repository && repo.repository.includes("/"))
       .filter((repo) => assignmentId === undefined || repo.assignment_id === assignmentId)
       .map(async (repo) => {
+        // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above.
+        const jobScope = scope?.clone() ?? scope;
+        jobScope?.setTag("repository", repo.repository);
         try {
           const [orgName, repoName] = repo.repository.split("/");
           const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
@@ -846,7 +881,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .filter((m) => m.user_roles && m.user_roles.users.github_username)
               .map((m) => m.user_roles.users.github_username!);
 
-            await syncRepoPermissions(orgName, repoName, classSlug, groupMemberUsernames, scope);
+            await syncRepoPermissions(orgName, repoName, classSlug, groupMemberUsernames, jobScope);
             console.log(`Synced permissions for group repo: ${repo.repository}`);
           }
         } catch (e) {

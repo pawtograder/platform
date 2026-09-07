@@ -23,6 +23,7 @@ import {
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
+import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -989,6 +990,20 @@ export async function processEnvelope(
         }
         Sentry.addBreadcrumb({ message: `Creating repo ${repoName} for org ${org}`, level: "info" });
         const limiter = getCreateContentLimiter(org);
+        // This one `schedule` wraps the WHOLE repo creation, and the limiter is Redis-backed —
+        // fleet-wide per org, `{ reservoir: 40, maxConcurrent: 40, refresh 40/60s }`. A create_repo
+        // measured p50 279.5s (prod, 2026-09-07, 58 messages), so each in-flight creation holds one
+        // of those 40 slots for ~4.7 minutes, and the SAME pool serves org invitations
+        // (`POST /orgs/{org}/invitations`) and sync_repo_to_handout. That is why the worker's drain
+        // concurrency is capped at 8 rather than at anything near 40 — see
+        // _shared/asyncWorkerTuning.ts.
+        //
+        // DO NOT move any limiter-scheduled call INSIDE this wrapper. Nothing inside createRepo
+        // re-enters this limiter today, which is the only reason the pattern is safe: nest a
+        // permission/invitation call in here and, once >= maxConcurrent outer jobs are running,
+        // every slot is held by an outer job waiting on an inner job that can never start — a
+        // Bottleneck deadlock. If that ever changes, the concurrency ceiling has to come DOWN.
+        //
         // createRepo patches repo settings after generate/fork (squash merge on, template flag, branch ruleset, …).
         const effectiveSource = sourceRepo ?? templateRepo;
         const headSha = await limiter.schedule(() =>
@@ -2539,17 +2554,101 @@ export async function processEnvelope(
   }
 }
 
+/**
+ * Drain tuning, resolved ONCE per isolate.
+ *
+ * Memoized rather than re-read per iteration for two reasons: the values cannot
+ * change without a pod roll (they are container env), and the issue reporting
+ * below must not repeat on every ~7 min iteration for the life of the lease —
+ * that would be a Sentry event every few minutes for a static misconfiguration.
+ */
+let cachedTuning: ReturnType<typeof resolveAsyncWorkerTuning> | null = null;
+
+function getTuning(scope: Sentry.Scope) {
+  // TAGGING IS PER SCOPE, MEMOIZATION IS PER ISOLATE, and the two must not be
+  // conflated. runBatchHandler() builds a FRESH Sentry.Scope for every run, and
+  // in bounded mode (no Redis: each cron poke drains and returns) there are many
+  // runs per isolate. An early `return cachedTuning` before these setTag calls
+  // therefore left every run after the first with untagged batch and envelope
+  // events — the tags were on a scope that had already been discarded. So tag
+  // unconditionally, and memoize only the resolution and the one-time report
+  // below, which would otherwise be re-emitted on every poke for a static
+  // misconfiguration.
+  if (cachedTuning) {
+    scope.setTag("drain_concurrency", String(cachedTuning.drainConcurrency));
+    scope.setTag("visibility_timeout_seconds", String(cachedTuning.visibilityTimeoutSeconds));
+    return cachedTuning;
+  }
+  const tuning = resolveAsyncWorkerTuning(Deno.env);
+  cachedTuning = tuning;
+
+  scope.setTag("drain_concurrency", String(tuning.drainConcurrency));
+  scope.setTag("visibility_timeout_seconds", String(tuning.visibilityTimeoutSeconds));
+
+  for (const issue of tuning.issues) {
+    console.warn(`[pgmq] worker: ${issue.message}`);
+  }
+  // Only a rejected/clamped value is worth an event: it means the configured
+  // number is NOT the one in force, which is invisible from the outside. That
+  // now includes the COHERENCE clamp — someone who sets concurrency 8 through a
+  // Helm-bypass path and gets 2 because the visibility timeout only covers 2
+  // needs to hear about it, since their throughput change did not happen.
+  // `invariant` issues stay log-only: the one that survives enforcement is the
+  // shipped legacy pair (4, 300), which is deliberate, so reporting it would
+  // page on every deployment.
+  const misconfigured = tuning.issues.filter((i) => i.kind !== "invariant");
+  if (misconfigured.length > 0) {
+    const s = scope.clone();
+    s.setLevel("warning");
+    s.setTag("async_worker_tuning_rejected", "true");
+    s.setContext("async_worker_tuning", {
+      drain_concurrency: tuning.drainConcurrency,
+      visibility_timeout_seconds: tuning.visibilityTimeoutSeconds,
+      issues: misconfigured.map((i) => i.message)
+    });
+    // The scope goes POSITIONALLY, and the level goes ON the scope. This worker
+    // builds its own Sentry.Scope rather than using the SDK's current scope, so
+    // an options-object second argument (`{ level: "warning" }`) is applied to
+    // the CURRENT scope and silently drops every tag and context set above —
+    // the event would arrive with only the count in its message. Same shape as
+    // the captureException/captureMessage calls elsewhere in this file.
+    Sentry.captureMessage(
+      `github-async-worker: rejected ${misconfigured.length} configured drain tuning value(s); running on bounded values`,
+      s
+    );
+  }
+  return tuning;
+}
+
 export async function processBatch(adminSupabase: SupabaseClient<Database>, scope: Sentry.Scope) {
-  // VT (sleep_seconds) needs to comfortably exceed worst-case handler runtime.
-  // sync_repo_to_handout in particular can take minutes when many files change,
-  // and a too-short VT causes a re-read storm: the message stays in q_async_calls
-  // with read_ct climbing forever and `sync_data` never updating because the
-  // Edge Function isolate is killed mid-handler. 300s is well above the Edge
-  // Function wall clock and well above observed p99 handler durations.
+  // `n` is the CONCURRENCY CEILING (the batch below runs under
+  // Promise.allSettled inside a single leaseholder isolate), and `sleep_seconds`
+  // is the pgmq visibility timeout. Both were hardcoded at 4 / 300 until the
+  // 2026-09-07 CS 4530 burst measured what that costs: 58 create_repo messages
+  // took 88 MINUTES to drain, 2-4 completing every ~7 min, and 20 of the 58 came
+  // back with read_ct > 1 (max 3) because a ~420s batch outlives a 300s VT and
+  // pgmq re-served messages that were still in flight.
+  //
+  // The comment that used to live here claimed 300s was "well above observed
+  // p99 handler durations". That is FALSE for create_repo under burst and is why
+  // this is now configurable instead of asserted.
+  //
+  // THE INVARIANT: the VT must exceed the worst case for a whole batch of `n`,
+  // NOT for one message — raising `n` without raising the VT makes the
+  // redelivery storm worse, not better. The same holds for the isolate lifetime.
+  // Both are encoded in _shared/asyncWorkerTuning.ts, which holds the bounds,
+  // the calibration and the full incident narrative, and which ENFORCES them:
+  // the pair below is coherent by construction, because an incoherent
+  // configuration has `n` degraded until it fits (never below 1) rather than
+  // being handed through with a warning. The chart refuses the same combinations
+  // at render time. Read that file before changing either number, and do NOT put
+  // constants back here.
+  const tuning = getTuning(scope);
+
   let result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "async_calls",
-    sleep_seconds: 300,
-    n: 4
+    sleep_seconds: tuning.visibilityTimeoutSeconds,
+    n: tuning.drainConcurrency
   });
 
   if (result.error) {
@@ -2561,10 +2660,13 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
   let queueName: "async_calls" | "async_calls_low_priority" = "async_calls";
 
   if (messages.length === 0) {
+    // Same tuning object as the main queue on purpose: these two call sites drifting
+    // apart is how the low-priority queue would quietly keep the 300s VT (and the
+    // re-read storm) after the main queue was fixed.
     result = await adminSupabase.schema("pgmq_public").rpc("read", {
       queue_name: "async_calls_low_priority",
-      sleep_seconds: 300,
-      n: 4
+      sleep_seconds: tuning.visibilityTimeoutSeconds,
+      n: tuning.drainConcurrency
     });
     if (result.error) {
       Sentry.captureException(result.error, scope);
@@ -2578,24 +2680,54 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
 
   await Promise.allSettled(
     messages.map(async (msg) => {
+      // ONE SCOPE PER MESSAGE, because `n` of these run CONCURRENTLY and
+      // Sentry.Scope is a mutable bag. `archiveMessage` writes to whatever scope
+      // it is handed — setContext("archive_error", { msg_id, … }) and
+      // setTag("pgmq_archive_failed", "true") — so handing it processBatch's
+      // shared scope let four concurrent archives scribble over each other:
+      // a capture could report a FOREIGN msg_id, and pgmq_archive_failed=true
+      // stuck on the shared object for the rest of the batch, so a later event
+      // for a message that archived cleanly still claimed an archive failure.
+      //
+      // NOT the same thing as processEnvelope's scope handling, and do not
+      // "fix" that by analogy: processEnvelope already clones per envelope (see
+      // `_scope?.clone()` at its top), and Scope.clone() copies context and tags
+      // BY VALUE, so its two archiveMessage call sites are already isolated and
+      // the step-timings snapshot attached inside it is already private. Adding
+      // another clone there would be harmful — see the comment on
+      // attachStepTimingsToScope in _shared/GitHubWrapper.ts. Only THIS call
+      // site was reading through to the shared object.
+      //
+      // Cloning rather than constructing fresh keeps the batch- and run-level
+      // context the shared scope carries (function, worker_run_mode, the drain
+      // tuning tags), which a `new Sentry.Scope()` would silently drop.
+      const msgScope = scope.clone();
+      msgScope.setTag("msg_id", String(msg.msg_id));
+      msgScope.setTag("queue_name", queueName);
+
       const ok = await processEnvelope(
         adminSupabase,
         msg.message,
         { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, read_ct: msg.read_ct, queue_name: queueName },
-        scope
+        msgScope
       );
       if (ok) {
-        const archived = await archiveMessage(adminSupabase, msg.msg_id, scope, queueName);
+        const archived = await archiveMessage(adminSupabase, msg.msg_id, msgScope, queueName);
         if (!archived) {
           console.error(
             `[pgmq] worker: handler returned OK but archive failed msg_id=${msg.msg_id} queue=${queueName} — message will redeliver after VT`
           );
+          // This message's scope, positionally — not an options object. The
+          // options-object form is applied to the SDK's CURRENT scope, which is
+          // not this manually-built one, so the event would arrive without the
+          // worker's own tags; and the scope it does report must be the one only
+          // this message has written to.
+          const s = msgScope.clone();
+          s.setLevel("error");
+          s.setContext("archive_failed", { msg_id: msg.msg_id, queue_name: queueName });
           Sentry.captureMessage(
             "github-async-worker: processed message but failed to archive after retries; expect redelivery",
-            {
-              level: "error",
-              extra: { msg_id: msg.msg_id, queue_name: queueName }
-            }
+            s
           );
         }
       }

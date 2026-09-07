@@ -218,8 +218,21 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
           return;
         }
         const repoName = `${c.classes!.slug}-${assignment.slug}-group-${sanitizeRepoNameComponent(group.name)}`;
+        // PER-JOB SCOPE. This closure is one of four fan-outs in this function that share the single
+        // request scope, and it runs concurrently over every group repo. Everything below writes
+        // repo-specific data to whatever scope it is handed: the captures in this closure, the
+        // breadcrumbs, and — since the step-timing work — a `step_timings_*` context and tag set
+        // written by createRepo / syncRepoPermissions on completion. On one shared object those
+        // writes overwrite each other, so a capture here could report a SIBLING repository's timing
+        // breakdown. Unlike assignment-create-all-repos, the per-repository failures here ARE
+        // captured (below), so the clone has to be threaded into those captures too — otherwise the
+        // problem moves rather than goes away. Same invariant the async worker holds per envelope at
+        // github-async-worker/index.ts:613; Scope.clone() copies tags/contexts/breadcrumbs by value,
+        // so inherited request context (user_id, github_username, ...) survives.
+        const jobScope = scope?.clone() ?? scope;
+        jobScope?.setTag("repository", `${c.classes!.github_org}/${repoName}`);
 
-        Sentry.addBreadcrumb({
+        jobScope?.addBreadcrumb({
           category: "github",
           message: `repoName: ${repoName}, template_repo: '${assignment.template_repo}', groupMembership: ${JSON.stringify(groupMembership, null, 2)}, existingRepos: ${JSON.stringify(groupMembership.assignment_groups.repositories, null, 2)}`,
           level: "info"
@@ -227,7 +240,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
           madeChanges = true;
-          Sentry.addBreadcrumb({
+          jobScope?.addBreadcrumb({
             category: "github",
             message: `Creating repo ${repoName}`,
             level: "info"
@@ -245,7 +258,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             .select("id")
             .single();
           if (error) {
-            Sentry.captureException(error, scope);
+            Sentry.captureException(error, jobScope);
             throw new UserVisibleError(`Error creating repo: ${error}`);
           }
           try {
@@ -264,7 +277,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
                 .eq("id", dbRepo!.id);
               return assignment;
             }
-            const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
+            const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!, {}, jobScope);
             const { error: updateRepoError } = await adminSupabase
               .from("repositories")
               .update({
@@ -276,7 +289,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
               throw updateRepoError;
             }
           } catch (e) {
-            Sentry.captureException(e, scope);
+            Sentry.captureException(e, jobScope);
             // Keep the row (is_github_ready stays false) so the reconciler + self-healing createRepo
             // can auto-repair a transient failure; deleting would orphan a possibly-blank GitHub repo
             // and hide it from the reconciler. Only a terminal (non-retryable) failure records
@@ -293,7 +306,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         }
 
         try {
-          Sentry.addBreadcrumb({
+          jobScope?.addBreadcrumb({
             category: "github",
             message: `Syncing permissions for ${repoName}, groupMemberUsernames: ${group.assignment_groups_members
               .filter((m) => m.user_roles) // Needed to not barf when a student is removed from the class
@@ -310,11 +323,11 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
               .filter((m) => m.user_roles) // Needed to not barf when a student is removed from the class
               .filter((m) => m.user_roles.users.github_username)
               .map((m) => m.user_roles.users.github_username!),
-            scope
+            jobScope
           );
           madeChanges = madeChanges || madeChangesForRepo;
         } catch (e) {
-          Sentry.captureException(e, scope);
+          Sentry.captureException(e, jobScope);
           errorMessages.push(`Error syncing repo permissions for ${repoName}`);
         }
       });
@@ -344,8 +357,13 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
       //Is it a group assignment?
       const courseSlug = assignment.classes!.slug;
       const repoName = `${courseSlug}-${assignment.slug}-${githubUsername}`;
+      // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above: shared request
+      // scope + concurrent fan-out means this closure's own captures would report another
+      // repository's timings.
+      const jobScope = scope?.clone() ?? scope;
+      jobScope?.setTag("repository", `${assignment.classes!.github_org}/${repoName}`);
       if (existingRepos.find((repo) => repo.repository === `${assignment.classes!.github_org}/${repoName}`)) {
-        Sentry.addBreadcrumb({
+        jobScope?.addBreadcrumb({
           category: "github",
           message: `Repo ${repoName} already exists...`,
           level: "info"
@@ -365,12 +383,12 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         .select("id")
         .single();
       if (error) {
-        Sentry.captureException(error, scope);
+        Sentry.captureException(error, jobScope);
         throw new UserVisibleError(`Error inserting repo: ${error}`);
       }
 
       try {
-        Sentry.addBreadcrumb({
+        jobScope?.addBreadcrumb({
           category: "github",
           message: `Creating repo and syncing permissions for ${repoName}, githubUsername: ${githubUsername}`,
           level: "info"
@@ -387,8 +405,14 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             .eq("id", dbRepo!.id);
           return `e2e-skip-${repoName}`;
         }
-        const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
-        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
+        const new_repo_sha = await createRepo(
+          assignment.classes!.github_org!,
+          repoName,
+          assignment.template_repo,
+          {},
+          jobScope
+        );
+        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], jobScope);
         await adminSupabase
           .from("repositories")
           .update({
@@ -400,7 +424,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
 
         return new_repo_sha;
       } catch (e) {
-        Sentry.captureException(e, scope);
+        Sentry.captureException(e, jobScope);
         errorMessages.push(`Error creating repo: ${repoName}`);
         // Keep the row so the reconciler + self-healing createRepo can auto-repair a transient
         // failure (deleting would orphan a possibly-blank GitHub repo and hide it from the
@@ -417,11 +441,16 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   const individualRepoSyncPromises = existingIndividualRepos
     .filter((repo) => repo.repository && repo.repository.includes("/"))
     .map(async (repo) => {
+      // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above: shared request
+      // scope + concurrent fan-out means this closure's own captures would report another
+      // repository's timings.
+      const jobScope = scope?.clone() ?? scope;
+      jobScope?.setTag("repository", repo.repository);
       try {
         const [orgName, repoName] = repo.repository.split("/");
         const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
         if (classSlug) {
-          Sentry.addBreadcrumb({
+          jobScope?.addBreadcrumb({
             category: "github",
             message: `Syncing permissions for ${repo.repository}, githubUsername: ${githubUsername}`,
             level: "info"
@@ -431,12 +460,12 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             repoName,
             classSlug,
             [githubUsername],
-            scope
+            jobScope
           );
           madeChanges = madeChanges || madeChangesForRepo;
         }
       } catch (e) {
-        Sentry.captureException(e, scope);
+        Sentry.captureException(e, jobScope);
         errorMessages.push(`Error syncing permissions for repo: ${repo.repository}`);
       }
     });
@@ -445,6 +474,11 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   const groupRepoSyncPromises = existingGroupRepos
     .filter((repo) => repo.repository && repo.repository.includes("/"))
     .map(async (repo) => {
+      // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above: shared request
+      // scope + concurrent fan-out means this closure's own captures would report another
+      // repository's timings.
+      const jobScope = scope?.clone() ?? scope;
+      jobScope?.setTag("repository", repo.repository);
       try {
         const [orgName, repoName] = repo.repository.split("/");
         const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
@@ -459,7 +493,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             .filter((m) => m.user_roles && m.user_roles.users.github_username)
             .map((m) => m.user_roles.users.github_username!);
 
-          Sentry.addBreadcrumb({
+          jobScope?.addBreadcrumb({
             category: "github",
             message: `Syncing permissions for ${repo.repository}, groupMemberUsernames: ${groupMemberUsernames.join(", ")}`,
             level: "info"
@@ -469,12 +503,12 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             repoName,
             classSlug,
             groupMemberUsernames,
-            scope
+            jobScope
           );
           madeChanges = madeChanges || madeChangesForRepo;
         }
       } catch (e) {
-        Sentry.captureException(e, scope);
+        Sentry.captureException(e, jobScope);
         errorMessages.push(`Error syncing permissions for repo: ${repo.repository}`);
       }
     });
