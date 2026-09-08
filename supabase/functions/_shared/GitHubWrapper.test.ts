@@ -19,6 +19,7 @@ Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRIN
 const {
   assertSourceNotEmpty,
   computeCollaboratorRemovals,
+  filterToDirectCollaborators,
   getGitHubUserIfExists,
   getTeamAndCreateIfNeeded,
   getTeamMembers,
@@ -536,6 +537,32 @@ Deno.test("getTeamMembers: a 404 is not remembered as an empty roster", async ()
   });
   await assertRejects(() => getTeamMembers("org", "course-staff", octokit), TeamNotFoundError);
   assertEquals(await getTeamMembers("org", "course-staff", octokit), ["alice"]);
+});
+
+// --- Removals that can actually take effect (filterToDirectCollaborators) ---
+// DELETE /repos/.../collaborators/{username} only revokes a DIRECT grant. Access held through a
+// team or through org ownership survives it, and GitHub still answers 2xx — so every such
+// "removal" was a request that changed nothing, issued serially, once per sync.
+
+Deno.test("filterToDirectCollaborators: keeps direct collaborators", () => {
+  assertEquals(filterToDirectCollaborators(["alice", "bob"], ["alice", "bob", "carol"]), ["alice", "bob"]);
+});
+
+Deno.test("filterToDirectCollaborators: drops candidates whose access is not direct", () => {
+  // The measured prod case: a fresh handout repo listed 37 collaborators, none of them direct.
+  // Every removal the sync computed was unremovable, and attempting them cost 63.6 seconds.
+  assertEquals(filterToDirectCollaborators(["org-owner", "staff-via-team"], []), []);
+});
+
+Deno.test("filterToDirectCollaborators: compares case-insensitively", () => {
+  // GitHub reports logins in display casing; the sync works in lowercase. A case mismatch here
+  // would silently drop a real removal and let a dropped student keep write access.
+  assertEquals(filterToDirectCollaborators(["alice"], ["Alice"]), ["alice"]);
+  assertEquals(filterToDirectCollaborators(["Bob"], ["bob"]), ["Bob"]);
+});
+
+Deno.test("filterToDirectCollaborators: no candidates -> no removals", () => {
+  assertEquals(filterToDirectCollaborators([], ["alice"]), []);
 });
 
 Deno.test("computeCollaboratorRemovals: an unknown roster removes nobody", () => {

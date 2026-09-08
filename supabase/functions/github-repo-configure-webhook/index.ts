@@ -44,6 +44,8 @@ export const GITHUB_APP_WEBHOOK_EVENTS = [
   "deployment_status"
 ] as const;
 type RequestBody = {
+  // Typed non-null, but this is a request body: the type is a claim about the caller, not a
+  // guarantee. See the guard in handleRequest.
   new_repo: string;
   assignment_id: number;
   watch_type: "grader_solution" | "template_repo";
@@ -53,6 +55,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "github-repo-configure-webhook");
   scope?.setTag("assignment_id", assignment_id.toString());
   scope?.setTag("new_repo", new_repo);
+
+  // The autograder page sends `new_repo: values.grader_repo` straight from the form, and
+  // `autograder.grader_repo` is NULL whenever solution-repo creation never completed — which is
+  // exactly the state a failed or abandoned assignment-create-solution-repo leaves behind. The
+  // value then flowed unchecked into getFileFromRepo -> getOctoKit, where `repo.includes("/")`
+  // threw `TypeError: Cannot read properties of null (reading 'includes')` and the instructor got
+  // a 500 with "An unknown error occurred" — no indication that the fix is to create the repo.
+  //
+  // Checked here rather than at the getFileFromRepo call, so the template_repo branch is covered
+  // by the same guard and neither branch can grow a new unchecked use.
+  if (typeof new_repo !== "string" || !new_repo.includes("/")) {
+    throw new UserVisibleError(
+      `This assignment has no ${watch_type === "grader_solution" ? "grader" : "handout"} repository ` +
+        `configured yet, so there is nothing to read its configuration from. This usually means ` +
+        `repository creation did not finish — re-save the assignment to retry it.`,
+      400
+    );
+  }
   scope?.setTag("watch_type", watch_type);
   //Validate that the user is an instructor
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
