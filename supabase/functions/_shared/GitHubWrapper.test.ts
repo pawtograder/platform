@@ -27,6 +27,7 @@ const {
   NonRetryableRepoError,
   publicSupabaseUrl,
   resolveExistingTeamSlug,
+  resolveTeamSlugIfExists,
   TeamMembersUnreadableError,
   TeamNotFoundError,
   toPublicSupabaseUrl
@@ -261,6 +262,65 @@ Deno.test("resolveExistingTeamSlug: 404 then normalized slug in org list -> retu
     "GET /orgs/{org}/teams": () => [{ id: 2, slug: "cs-101-students", name: "cs101-students" }]
   });
   assertEquals(await resolveExistingTeamSlug("org-b", "cs101-students", octokit), "cs-101-students");
+});
+
+// --- Absence-reporting slug resolution (resolveTeamSlugIfExists) ---
+// `resolveExistingTeamSlug` echoes the requested slug back when the team does not exist, which made
+// "resolved" and "absent" indistinguishable — and every caller then fed that slug to a team endpoint
+// that 404s. These pin the distinction that `syncRepoPermissions` now branches on.
+
+Deno.test("resolveTeamSlugIfExists: team exists -> returns its actual slug", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => ({ data: { id: 1, slug: p.team_slug } })
+  });
+  assertEquals(await resolveTeamSlugIfExists("org-exists", "cs101-staff", octokit), "cs101-staff");
+});
+
+Deno.test("resolveTeamSlugIfExists: team absent -> null, NOT the requested slug", async () => {
+  // The whole point: an absent team must not come back as a usable-looking slug. This is the
+  // neu-cs4535/fa26-students case that 500'd handout creation for a course with nobody enrolled.
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /orgs/{org}/teams": () => []
+  });
+  assertEquals(await resolveTeamSlugIfExists("org-absent", "fa26-students", octokit), null);
+});
+
+Deno.test("resolveTeamSlugIfExists: 404 then normalized slug in org list -> returns normalized slug", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /orgs/{org}/teams": () => [{ id: 2, slug: "cs-101-students", name: "cs101-students" }]
+  });
+  assertEquals(await resolveTeamSlugIfExists("org-norm", "cs101-students", octokit), "cs-101-students");
+});
+
+Deno.test("resolveTeamSlugIfExists: a null result is not cached, so a later create is picked up", async () => {
+  let teamExists = false;
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => {
+      if (teamExists) return { data: { id: 3, slug: p.team_slug } };
+      throw requestError(404, "Not Found");
+    },
+    "GET /orgs/{org}/teams": () => (teamExists ? [{ id: 3, slug: "fa26-students", name: "fa26-students" }] : [])
+  });
+  assertEquals(await resolveTeamSlugIfExists("org-uncached", "fa26-students", octokit), null);
+  teamExists = true;
+  assertEquals(await resolveTeamSlugIfExists("org-uncached", "fa26-students", octokit), "fa26-students");
+});
+
+Deno.test("resolveTeamSlugIfExists: non-404 error -> rethrows rather than reporting absence", async () => {
+  // A 500 or a rate limit is "we do not know", and must not be read as "the team is gone" — that
+  // would silently skip a staff grant on a repo whose team is fine.
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(500, "Server Error");
+    }
+  });
+  await assertRejects(() => resolveTeamSlugIfExists("org-5xx", "cs101-staff", octokit), RequestError);
 });
 
 Deno.test("resolveExistingTeamSlug: 404 and no match -> falls back to requested slug, not cached", async () => {

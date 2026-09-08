@@ -2455,7 +2455,7 @@ export async function getTeamAndCreateIfNeeded(org: string, team_slug: string, o
   }
 }
 
-const teamSlugCache = new Map<string, Promise<string>>();
+const teamSlugCache = new Map<string, Promise<string | null>>();
 
 /**
  * Resolve a team's actual GitHub slug, tolerating the case where GitHub normalized the team's slug
@@ -2471,6 +2471,29 @@ const teamSlugCache = new Map<string, Promise<string>>();
  * the miss would keep every retry hitting the wrong slug until cold start.
  */
 export async function resolveExistingTeamSlug(org: string, team_slug: string, octokit: Octokit): Promise<string> {
+  return (await resolveTeamSlugIfExists(org, team_slug, octokit)) ?? team_slug;
+}
+
+/**
+ * Same resolution as {@link resolveExistingTeamSlug}, but reports ABSENCE as `null` instead of
+ * echoing back the requested slug.
+ *
+ * The fallback in `resolveExistingTeamSlug` makes "resolved to a real team" and "this team does not
+ * exist" indistinguishable to the caller, and every team endpoint below takes a slug — so a caller
+ * that only wanted a spelling correction would happily go on to PUT against a team that isn't
+ * there. That 404s, and because it happens inside `syncRepoPermissions`, it took down
+ * assignment-create-handout-repo for every brand-new course: the `<slug>-students` team is created
+ * lazily by the student-team sync, so a course with nothing enrolled yet has no students team at
+ * all, and mode-2 handout creation failed with a bare "Not Found" AFTER the repo was already made.
+ *
+ * Callers that must not create a team can now branch on the absence; the one caller that genuinely
+ * requires the team (a mode-2 handout grant) creates it explicitly.
+ */
+export async function resolveTeamSlugIfExists(
+  org: string,
+  team_slug: string,
+  octokit: Octokit
+): Promise<string | null> {
   // JSON tuple, not `org + "-" + team_slug`: string concat is ambiguous (org "a-b"/slug "c" would
   // collide with org "a"/slug "b-c") and could reuse one course's resolved slug for another.
   const cacheKey = JSON.stringify([org, team_slug]);
@@ -2479,12 +2502,10 @@ export async function resolveExistingTeamSlug(org: string, team_slug: string, oc
     return cached;
   }
   const pending = (async () => {
-    let slug = team_slug;
-    let resolved = false;
+    let slug: string | null = null;
     try {
       const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
       slug = team.data.slug ?? team_slug;
-      resolved = true;
     } catch (e) {
       if (!(e instanceof RequestError && e.status === 404)) {
         throw e;
@@ -2493,11 +2514,10 @@ export async function resolveExistingTeamSlug(org: string, team_slug: string, oc
       const match = teams.find((t) => t.slug === team_slug || t.name === team_slug);
       if (match?.slug) {
         slug = match.slug;
-        resolved = true;
       }
     }
-    // Don't retain a no-match fallback so a retry re-checks once the team exists.
-    if (!resolved) {
+    // Don't retain a no-match so a retry re-checks once the team exists.
+    if (slug === null) {
       teamSlugCache.delete(cacheKey);
     }
     return slug;
@@ -3166,9 +3186,12 @@ async function syncRepoPermissionsInstrumented(
   // Resolve to the team's real GitHub slug: if the team was created out-of-band and GitHub
   // normalized its slug differently from `${courseSlug}-staff`, the literal would 404 on the
   // members/repo-access endpoints below, silently leaving repos without staff access.
-  const team_slug = await timeStep(timings, "resolve_staff_team_slug", () =>
-    resolveExistingTeamSlug(org, `${courseSlug}-staff`, octokit)
+  const resolvedStaffTeamSlug = await timeStep(timings, "resolve_staff_team_slug", () =>
+    resolveTeamSlugIfExists(org, `${courseSlug}-staff`, octokit)
   );
+  // Keep the derived name as the slug we *use*, so the members read below still produces the
+  // TeamNotFoundError the degradation path downstream is written against.
+  const team_slug = resolvedStaffTeamSlug ?? `${courseSlug}-staff`;
   // JSON tuple, not `org + "-" + courseSlug`, for the same reason as teamSlugCache above: string
   // concat is ambiguous and could serve one course's staff roster to another.
   const staffCacheKey = JSON.stringify([org, courseSlug]);
@@ -3259,7 +3282,14 @@ async function syncRepoPermissionsInstrumented(
       repo
     })
   );
-  if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
+  // `resolvedStaffTeamSlug === null` means the course has no staff team on GitHub. Reading its
+  // roster already degrades to "remove nobody" a few lines up (see the TeamNotFoundError catch);
+  // this grant did not, and PUT-ing to a team that does not exist 404s and takes the whole sync —
+  // and its caller — down. Skip it for the same reason: a course that legitimately has no staff
+  // team must not be broken by it, and the staff-team sync is what owns creating one.
+  if (resolvedStaffTeamSlug === null) {
+    scope?.setTag("staff_team_grant", "skipped_absent");
+  } else if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
     madeChanges = true;
     await timeStep(timings, "grant_staff_team", () =>
       octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
@@ -3273,25 +3303,45 @@ async function syncRepoPermissionsInstrumented(
   }
   // Optionally grant the students team read access (mode 2 handout repos). Resolve the real slug for
   // the same reason as the staff team above, so grant/revoke hit the correct team endpoint.
-  const studentsTeamSlug = await timeStep(timings, "resolve_students_team_slug", () =>
-    resolveExistingTeamSlug(org, `${courseSlug}-students`, octokit)
+  let studentsTeamSlug = await timeStep(timings, "resolve_students_team_slug", () =>
+    resolveTeamSlugIfExists(org, `${courseSlug}-students`, octokit)
   );
-  if (options.studentTeamPermission) {
-    // Bound to a local so the narrowing survives into the closure below: TypeScript discards the
+  // The students team is created LAZILY, by the student-team sync, the first time somebody is
+  // enrolled. A mode-2 handout is normally created before that has ever run — a brand-new course
+  // has nobody enrolled — so the team the grant below needs does not exist yet, and the grant 404s
+  // AFTER the handout repo has already been created but before `template_repo` is persisted. That
+  // is a 500 on every first mode-2 handout of a new course, and a retry hits it again.
+  //
+  // Create it here rather than skipping, because `studentTeamPermission` is only ever set by the
+  // mode-2 handout path, which REQUIRES students to be able to read the handout. Skipping would
+  // let creation report success while leaving the repo unreadable, and nothing revisits the
+  // handout's team grants once the team later appears. Creating an empty `<slug>-students` team is
+  // exactly what the student-team sync would do on the next enrollment anyway.
+  if (options.studentTeamPermission && studentsTeamSlug === null) {
+    const created = await timeStep(timings, "create_students_team", () =>
+      getTeamAndCreateIfNeeded(org, `${courseSlug}-students`, octokit)
+    );
+    studentsTeamSlug = created.data.slug ?? `${courseSlug}-students`;
+    scope?.setTag("students_team_created", "true");
+  }
+  if (options.studentTeamPermission && studentsTeamSlug) {
+    // Bound to locals so the narrowing survives into the closure below: TypeScript discards the
     // `if (options.studentTeamPermission)` narrowing inside a callback (options is a mutable
     // parameter), so passing `options.studentTeamPermission` there would widen back to
     // `"pull" | null | undefined`. Same value, same request — this is a typing artifact of wrapping
-    // the call in a timing closure, not a behavior change.
+    // the call in a timing closure, not a behavior change. `studentsTeamSlug` needs the same
+    // treatment now that it is a mutable `string | null`.
     const studentTeamPermission = options.studentTeamPermission;
+    const studentsTeam = studentsTeamSlug;
     const hasStudentsTeam = teamsWithAccess.some(
-      (t) => t.slug === studentsTeamSlug && t.permission === studentTeamPermission
+      (t) => t.slug === studentsTeam && t.permission === studentTeamPermission
     );
     if (!hasStudentsTeam) {
       madeChanges = true;
       await timeStep(timings, "grant_students_team", () =>
         octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
           org,
-          team_slug: studentsTeamSlug,
+          team_slug: studentsTeam,
           owner: org,
           repo,
           permission: studentTeamPermission
@@ -3299,26 +3349,29 @@ async function syncRepoPermissionsInstrumented(
       );
       scope?.addBreadcrumb({
         category: "github",
-        message: `${org}/${repo} granted ${studentsTeamSlug} team ${options.studentTeamPermission}`,
+        message: `${org}/${repo} granted ${studentsTeam} team ${options.studentTeamPermission}`,
         level: "info"
       });
     }
-  } else {
-    // No student access desired — revoke any stale students-team grant.
-    const hasStudentsTeamAccess = teamsWithAccess.some((t) => t.slug === studentsTeamSlug);
+  } else if (studentsTeamSlug) {
+    // No student access desired — revoke any stale students-team grant. Guarded on the team
+    // existing: with no students team there is no grant to revoke, and `teamsWithAccess` could
+    // never match an absent team anyway.
+    const studentsTeam = studentsTeamSlug;
+    const hasStudentsTeamAccess = teamsWithAccess.some((t) => t.slug === studentsTeam);
     if (hasStudentsTeamAccess) {
       madeChanges = true;
       await timeStep(timings, "revoke_students_team", () =>
         octokit.request("DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
           org,
-          team_slug: studentsTeamSlug,
+          team_slug: studentsTeam,
           owner: org,
           repo
         })
       );
       scope?.addBreadcrumb({
         category: "github",
-        message: `${org}/${repo} removed ${studentsTeamSlug} team access`,
+        message: `${org}/${repo} removed ${studentsTeam} team access`,
         level: "info"
       });
     }
