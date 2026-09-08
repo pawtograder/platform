@@ -130,6 +130,9 @@ export interface SeedingConfiguration {
   discussionConfig?: DiscussionConfig;
   surveyConfig?: SurveyConfig;
   gradingScheme?: "current" | "specification";
+  /** Plant the extra gradebook columns the CS 4535 column-groups assignment is written against
+   * (see createColumnGroupFixtures). Off everywhere except the `cs4535` template. */
+  columnGroupFixtures?: boolean;
   className?: string;
   recycleUsers?: boolean; // Whether to recycle existing users with @pawtograder.net emails
   /** Fixed e-mail addresses pinned to the first user of each role created
@@ -1275,6 +1278,12 @@ export class DatabaseSeeder {
     return this;
   }
 
+  /** Enable the CS 4535 column-groups gradebook fixtures. See createColumnGroupFixtures. */
+  withColumnGroupFixtures(enabled: boolean): this {
+    this.config.columnGroupFixtures = enabled;
+    return this;
+  }
+
   withClassName(name: string): this {
     this.config.className = name;
     return this;
@@ -1424,6 +1433,7 @@ export class DatabaseSeeder {
       discussionConfig: this.config.discussionConfig,
       surveyConfig: this.config.surveyConfig,
       gradingScheme: this.config.gradingScheme || "current",
+      columnGroupFixtures: this.config.columnGroupFixtures === true,
       className: this.config.className || "Test Class",
       recycleUsers: this.config.recycleUsers !== false, // Default to true unless explicitly disabled
       fixedUsers: this.config.fixedUsers,
@@ -4886,6 +4896,10 @@ export class DatabaseSeeder {
     } else {
       await this.createCurrentGradingColumns(class_id, students, config.numManualGradedColumns || 0);
     }
+
+    if (config.columnGroupFixtures) {
+      await this.createColumnGroupFixtures(class_id, students);
+    }
   }
 
   // Helper method to create specification grading scheme columns
@@ -5093,6 +5107,234 @@ final;`,
     }
 
     console.log(`   ✓ Created specification grading scheme with ${skillColumns.length} skills and aggregate columns`);
+  }
+
+  /**
+   * Extra gradebook columns for the CS 4535 "gradebook column groups" onboarding assignment.
+   *
+   * Column grouping in the gradebook is not a stored concept. The `groupedColumns` memo in
+   * manage/gradebook/gradebookTable.tsx derives it at render time from the slug prefix plus a
+   * contiguity check on sort_order. Students are asked to replace that with a schema and to
+   * backfill it, so the seeded gradebook has to show them both halves of the problem: grouping
+   * that works, and the cases where the heuristic gets it wrong.
+   *
+   * Neither half survives the stock templates. createAssignments alternates labs and non-labs,
+   * so `assignment-lab-*` and `assignment-assignment-*` columns interleave and each one lands in
+   * a group of one; `skill-*` is the only multi-column group a seeded gradebook has ever had.
+   *
+   * What this adds:
+   *   - exam-1..3        a third real family, so there is something worth collapsing
+   *   - quiz-1,2,4,5     a family with a hole in sort_order where quiz-3 used to be. The
+   *                      heuristic renders it as two groups, both titled "Quiz"
+   *   - attendance       no "-" in the slug, so it is its own group of one
+   *   - ai-usage-log-*   a family the heuristic titles "Ai"
+   *   - assignment-final two slug parts, so it misses the assignment special case (which wants
+   *                      three) and files under "Assignment" rather than "Final"
+   *
+   * It then renumbers sort_order across the whole gradebook. The layout has to be identical on
+   * every run, because the assignment is graded on a backfill and a backfill can't be checked
+   * against a gradebook that reshuffles; the renumber is also what clusters the lab and
+   * assignment columns the assignment trigger created interleaved.
+   *
+   * quiz-3 is created and then deleted the same way the gradebook UI deletes a column (scores
+   * first, then the column) rather than being skipped, so the hole in sort_order is one the
+   * product can actually produce. Nothing here is a column an instructor couldn't have made.
+   */
+  private async createColumnGroupFixtures(class_id: number, students: TestingUser[]) {
+    console.log("   Creating column-group fixtures (CS 4535 onboarding assignment)...");
+
+    const scoreTargets: Array<{ id: number; averageScore: number; maxScore: number }> = [];
+
+    for (const i of [1, 2, 3]) {
+      const col = await this.createGradebookColumn({
+        class_id,
+        name: `Exam ${i}`,
+        description: `Exam ${i}, graded on paper and entered by hand`,
+        slug: `exam-${i}`,
+        max_score: 100
+      });
+      scoreTargets.push({ id: col.id, averageScore: 78, maxScore: 100 });
+    }
+
+    // quiz-3 exists for now; it is deleted below to leave the gap in sort_order.
+    for (const i of [1, 2, 3, 4, 5]) {
+      await this.createGradebookColumn({
+        class_id,
+        name: `Quiz ${i}`,
+        description: `Weekly quiz ${i}`,
+        slug: `quiz-${i}`,
+        max_score: 10
+      });
+    }
+
+    const attendance = await this.createGradebookColumn({
+      class_id,
+      name: "Attendance",
+      description: "Share of class sessions attended",
+      slug: "attendance",
+      max_score: 25
+    });
+    scoreTargets.push({ id: attendance.id, averageScore: 21, maxScore: 25 });
+
+    for (const i of [1, 2]) {
+      const col = await this.createGradebookColumn({
+        class_id,
+        name: `AI Usage Log ${i}`,
+        description: `Reflection on agent use for milestone ${i}`,
+        slug: `ai-usage-log-${i}`,
+        max_score: 5
+      });
+      scoreTargets.push({ id: col.id, averageScore: 4.2, maxScore: 5 });
+    }
+
+    const finalProject = await this.createGradebookColumn({
+      class_id,
+      name: "Final Project",
+      description: "Team project, graded from the studio rubric",
+      slug: "assignment-final",
+      max_score: 100
+    });
+    scoreTargets.push({ id: finalProject.id, averageScore: 83, maxScore: 100 });
+
+    await this.renumberGradebookColumnsForGrouping(class_id);
+    await this.deleteGradebookColumnBySlug(class_id, "quiz-3");
+
+    // Quiz scores are set after the delete so quiz-3 never gets any (the delete path has to
+    // clear gradebook_column_students first, and there is no reason to make it do more work).
+    const { data: quizColumns } = await supabase
+      .from("gradebook_columns")
+      .select("id")
+      .eq("class_id", class_id)
+      .like("slug", "quiz-%");
+    for (const col of quizColumns ?? []) {
+      scoreTargets.push({ id: col.id, averageScore: 8, maxScore: 10 });
+    }
+
+    for (const target of scoreTargets) {
+      await this.setGradebookColumnScores({
+        class_id,
+        gradebook_column_id: target.id,
+        students,
+        averageScore: target.averageScore,
+        standardDeviation: target.maxScore / 8,
+        maxScore: target.maxScore
+      });
+    }
+
+    const { data: layout } = await supabase
+      .from("gradebook_columns")
+      .select("slug, sort_order")
+      .eq("class_id", class_id)
+      .order("sort_order", { ascending: true });
+    console.log(`   ✓ Column-group fixtures in place. Layout (${layout?.length ?? 0} columns):`);
+    console.log(`     ${(layout ?? []).map((c) => `${c.sort_order}:${c.slug}`).join(" ")}`);
+  }
+
+  /**
+   * Give every column in a class a deterministic sort_order, grouping each slug family together.
+   *
+   * Assignment-backed columns arrive in whatever order createAssignments made them, which
+   * interleaves labs and homework, and the columns the grading-scheme helpers add carry
+   * hard-coded sort_orders that collide with those. The result is stable within one run and
+   * different across runs, which is no use to an assignment graded on a backfill.
+   *
+   * The rewrite goes one column at a time rather than in bulk because
+   * gradebook_columns_enforce_sort_order treats an UPDATE of sort_order as a move: it opens a
+   * slot at the target and closes the gap left behind. Placing columns in order means each one
+   * moves down into a position below every column already placed, which is the case that
+   * trigger handles correctly.
+   */
+  private async renumberGradebookColumnsForGrouping(class_id: number) {
+    const { data: columns, error } = await supabase
+      .from("gradebook_columns")
+      .select("id, slug, sort_order")
+      .eq("class_id", class_id);
+    if (error || !columns) {
+      throw new Error(`Failed to read gradebook columns for class ${class_id}: ${error?.message}`);
+    }
+
+    // Families in the left-to-right order an instructor would read them. Anything unmatched
+    // (code-walk columns, say) sorts to the end and keeps its relative order.
+    const families: Array<(slug: string) => boolean> = [
+      (slug) => /^assignment-lab-\d+$/.test(slug),
+      (slug) => /^assignment-assignment-\d+$/.test(slug),
+      (slug) => /^exam-\d+$/.test(slug),
+      (slug) => /^quiz-\d+$/.test(slug),
+      (slug) => /^skill-\d+$/.test(slug),
+      (slug) => ["meets-expectations", "approaching-expectations", "does-not-meet-expectations"].includes(slug),
+      (slug) => ["average.hw", "labs-drop-lowest", "total-labs"].includes(slug),
+      (slug) => ["curve-adjustment", "midterm-standing"].includes(slug),
+      (slug) => slug === "attendance",
+      (slug) => /^ai-usage-log-\d+$/.test(slug),
+      (slug) => slug === "assignment-final",
+      (slug) => slug === "final"
+    ];
+    const familyRank = (slug: string) => {
+      const index = families.findIndex((matches) => matches(slug));
+      return index === -1 ? families.length : index;
+    };
+    const trailingNumber = (slug: string) => {
+      const match = slug.match(/-(\d+)$/);
+      return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+    };
+
+    const ordered = [...columns].sort((a, b) => {
+      const slugA = a.slug ?? "";
+      const slugB = b.slug ?? "";
+      return (
+        familyRank(slugA) - familyRank(slugB) ||
+        trailingNumber(slugA) - trailingNumber(slugB) ||
+        (a.sort_order ?? 0) - (b.sort_order ?? 0) ||
+        a.id - b.id
+      );
+    });
+
+    for (const [position, column] of ordered.entries()) {
+      const { data: current } = await supabase
+        .from("gradebook_columns")
+        .select("sort_order")
+        .eq("id", column.id)
+        .single();
+      if (current?.sort_order === position) continue;
+      const { error: updateError } = await supabase
+        .from("gradebook_columns")
+        .update({ sort_order: position })
+        .eq("id", column.id);
+      if (updateError) {
+        throw new Error(`Failed to set sort_order ${position} on column ${column.slug}: ${updateError.message}`);
+      }
+    }
+  }
+
+  /**
+   * Delete one column the way the gradebook UI does it: clear the per-student score rows the
+   * insert trigger created, then the column itself. Nothing closes the hole this leaves in
+   * sort_order, which is the point — that hole is what fragments the group after it.
+   */
+  private async deleteGradebookColumnBySlug(class_id: number, slug: string) {
+    const { data: column, error } = await supabase
+      .from("gradebook_columns")
+      .select("id")
+      .eq("class_id", class_id)
+      .eq("slug", slug)
+      .single();
+    if (error || !column) {
+      throw new Error(`Cannot delete gradebook column ${slug} in class ${class_id}: ${error?.message}`);
+    }
+
+    const { error: scoresError } = await supabase
+      .from("gradebook_column_students")
+      .delete()
+      .eq("gradebook_column_id", column.id);
+    if (scoresError) {
+      throw new Error(`Failed to clear scores for gradebook column ${slug}: ${scoresError.message}`);
+    }
+
+    const { error: deleteError } = await supabase.from("gradebook_columns").delete().eq("id", column.id);
+    if (deleteError) {
+      throw new Error(`Failed to delete gradebook column ${slug}: ${deleteError.message}`);
+    }
+    console.log(`   ✓ Deleted ${slug}, leaving a gap in sort_order`);
   }
 
   // Helper method to create current grading scheme columns

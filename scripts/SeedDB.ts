@@ -37,6 +37,7 @@ interface SeederConfig {
   discussions?: DiscussionConfig;
   surveyConfig?: SurveyConfig;
   gradingScheme?: "current" | "specification";
+  columnGroupFixtures?: boolean;
   rateLimitOverrides?: Record<string, { maxInsertsPerSecond: number; description: string; batchSize?: number }>;
 }
 
@@ -330,6 +331,66 @@ const TEMPLATES: Record<string, SeederConfig> = {
     }
   },
 
+  // CS 4535 onboarding: the "gradebook column groups" assignment. A small course whose
+  // gradebook actually exercises the render-time grouping heuristic in
+  // manage/gradebook/gradebookTable.tsx — real multi-column families to group, and the cases
+  // the heuristic gets wrong for students to find. See createColumnGroupFixtures in
+  // DatabaseSeedingUtils for what the extra columns are and why each one is there.
+  //   npm run seed -- --template cs4535
+  cs4535: {
+    className: "CS 4535: Software Design & Delivery",
+    students: 24,
+    graders: 2,
+    instructors: 1,
+    assignments: 8,
+    // Everything already due, so the whole gradebook has scores in it.
+    dateRangeStart: -60,
+    dateRangeEnd: -2,
+    manualGradedColumns: 0, // the specification scheme + the fixtures below supply the columns
+    rubricConfig: {
+      minPartsPerAssignment: 2,
+      maxPartsPerAssignment: 3,
+      minCriteriaPerPart: 1,
+      maxCriteriaPerPart: 2,
+      minChecksPerCriteria: 2,
+      maxChecksPerCriteria: 3
+    },
+    sectionsAndTags: {
+      numClassSections: 1,
+      numLabSections: 2,
+      numStudentTags: 2,
+      numGraderTags: 1
+    },
+    labAssignments: {
+      numLabAssignments: 4,
+      minutesDueAfterLab: 1440
+    },
+    groupAssignments: {
+      numGroupAssignments: 2,
+      numLabGroupAssignments: 0
+    },
+    helpRequests: {
+      numHelpRequests: 8,
+      minRepliesPerRequest: 0,
+      maxRepliesPerRequest: 6,
+      maxMembersPerRequest: 3
+    },
+    discussions: {
+      postsPerTopic: 3,
+      maxRepliesPerPost: 4
+    },
+    gradingScheme: "specification",
+    columnGroupFixtures: true,
+    surveyConfig: {
+      numSurveys: 2,
+      numTemplates: 1,
+      responseRate: 0.75,
+      submissionRate: 0.85,
+      linkToGroupAssignments: true,
+      includeTeamCollaboration: true
+    }
+  },
+
   custom: {
     className: "Custom Configuration Class",
     students: 100,
@@ -425,7 +486,8 @@ async function runSeeding(config: SeederConfig) {
     .withHelpRequests(config.helpRequests!)
     .withDiscussions(config.discussions!)
     .withSurveys(config.surveyConfig!)
-    .withGradingScheme(config.gradingScheme!);
+    .withGradingScheme(config.gradingScheme!)
+    .withColumnGroupFixtures(config.columnGroupFixtures === true);
 
   if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student || fixedUsers.admin) {
     // Don't log the raw emails — they may be real reviewer addresses
@@ -580,7 +642,7 @@ Seed the database with test data
 
 Options:
   -t, --template <template>           Use a predefined template configuration
-                                      [choices: "micro", "small", "large", "tcrs", "marketing", "custom"] [default: "micro"]
+                                      [choices: "micro", "small", "large", "tcrs", "marketing", "cs4535", "custom"] [default: "micro"]
       --class-name <name>             Name for the test class
       
 Core Options:
@@ -607,6 +669,7 @@ Examples:
   npm run seed                                        Run with micro template (default)
   npm run seed -- --template large                   Run with large scale template
   npm run seed -- --template small --students 100    Use small template but override student count
+  npm run seed -- --template cs4535                  A gradebook that exercises the column-grouping heuristic
   npm run seed -- --students 50 --graders 5 --assignments 10  Full custom configuration
   npm run seed -- --help                             Show detailed help
   
