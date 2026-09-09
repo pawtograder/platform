@@ -7,6 +7,7 @@ import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { isE2eFixtureTarget } from "../_shared/e2eGithubGuard.ts";
 import { assignmentShouldHaveRepos } from "../_shared/handoutRepoStrategy.ts";
 import { edgeFunctionEndpoint } from "../_shared/edgeFunctionUrl.ts";
+import { canStartRepair, remainingBudgetMs } from "../_shared/repairBudget.ts";
 
 /**
  * GitHub Repo Reconciler
@@ -54,19 +55,7 @@ const REPAIR_GRACE_MINUTES = 30;
 // Alerting deliberately has NO such ceiling — see the alert query, which must keep surfacing the
 // whole overdue set or a defect older than this would silently stop being reported.
 const REPAIR_MAX_AGE_DAYS = 30;
-// Bounds on one tick. The worker lifetime is 400s (chart `edgeFunctions.worker.timeoutMs`), and a
-// single create_repo has been measured at p50 279.5s under contention (see the step-timings note in
-// GitHubWrapper.ts) even though it runs in ~10s when GitHub is calm. So the real bound has to be
-// ELAPSED TIME, not a count: two slow repairs would otherwise outlive the isolate and kill the run
-// before it flushed anything. The budget leaves headroom for jobs 1-2 and the Sentry flush.
-const REPAIR_TIME_BUDGET_MS = 240_000;
 const REPAIR_MAX_SUCCESSES_PER_RUN = 5;
-// Do not START a repair unless this much budget remains. Checking "am I still under budget?" before
-// each attempt is not enough: a call begun at 239s with a 279.5s p50 still runs past the 400s worker
-// lifetime and takes the response and the Sentry flush with it. The reservation is that measured
-// p50, and the fetch additionally carries an AbortSignal for whatever time is actually left, so a
-// slow call is recorded as a failed attempt rather than killing the isolate.
-const REPAIR_RESERVE_MS = 280_000;
 // Attempts are capped separately from successes so that a deterministic failure (an invalid source
 // assignment, a class whose GitHub App was uninstalled) costs an attempt but does NOT consume a
 // success slot. Counting attempts instead would let five permanently-broken assignments at the
@@ -281,7 +270,7 @@ async function repairMissingSolutionRepos(opts: {
   for (const a of repairable) {
     if (tally.created >= REPAIR_MAX_SUCCESSES_PER_RUN) break;
     if (attempts >= REPAIR_MAX_ATTEMPTS_PER_RUN) break;
-    if (REPAIR_TIME_BUDGET_MS - (Date.now() - startedAt) < REPAIR_RESERVE_MS) {
+    if (!canStartRepair(Date.now() - startedAt)) {
       console.warn("[github-repo-reconciler] Not enough budget left to start another repair; resumes next tick");
       break;
     }
@@ -301,12 +290,12 @@ async function repairMissingSolutionRepos(opts: {
         : ["assignment-create-solution-repo"];
       for (const fn of functions) {
         // Bounded by whatever budget is actually left.
-        const left = REPAIR_TIME_BUDGET_MS - (Date.now() - startedAt);
+        const left = remainingBudgetMs(Date.now() - startedAt);
         const response = await fetch(edgeFunctionEndpoint(edgeFunctionsUrl, fn), {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceRoleKey}` },
           body: JSON.stringify({ assignment_id: a.id, class_id: a.class_id }),
-          signal: AbortSignal.timeout(Math.max(left, 1))
+          signal: AbortSignal.timeout(left)
         });
         if (!response.ok) {
           throw new Error(`${fn} returned ${response.status}: ${await response.text()}`);

@@ -213,15 +213,23 @@ async function main() {
   // Measured on prod 2026-09-09: all 133 assignments missing a solution repo were in test/dev/demo
   // orgs and none in a real course org. `classes.is_demo` is false on every one of them, so it
   // cannot serve as the filter — the GitHub org is what actually separates them.
-  const { data: excludedOrgRows, error: excludedError } = await supabase
-    .from("github_orgs")
-    .select("org_name")
-    .eq("excluded_from_automation", true);
-  if (excludedError) {
-    console.error("Failed to read excluded orgs:", excludedError.message);
-    process.exit(1);
+  const excludedOrgs: string[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    // Paged for the same max_rows reason as the assignment scan. A truncated exclusion list means
+    // --apply creating repositories in an org explicitly configured to receive no automation.
+    const { data, error } = await supabase
+      .from("github_orgs")
+      .select("org_name")
+      .eq("excluded_from_automation", true)
+      .order("org_name")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) {
+      console.error("Failed to read excluded orgs:", error.message);
+      process.exit(1);
+    }
+    excludedOrgs.push(...(data ?? []).map((o) => o.org_name));
+    if ((data ?? []).length < PAGE_SIZE) break;
   }
-  const excludedOrgs = (excludedOrgRows ?? []).map((o) => o.org_name);
   const excludedList = excludedOrgs.length > 0 ? `(${excludedOrgs.map((o) => `"${o}"`).join(",")})` : null;
 
   const rows: Row[] = [];
