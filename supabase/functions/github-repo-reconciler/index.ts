@@ -505,17 +505,30 @@ async function repairMissingSolutionRepos(opts: {
         // pair meant a solution repository could still be created after it was enabled. The
         // creation endpoints deliberately do not enforce the flag themselves (instructor-initiated
         // calls must keep working), so this loop is the only thing that honours it.
-        const { data: orgNow, error: orgNowError } = await supabase
-          .from("github_orgs")
-          .select("excluded_from_automation")
-          .ilike("org_name", currentOrg)
+        // The class's org is RELOADED here too, not taken from the revalidation above. An admin
+        // can move a class from org A to org B while the handout request runs, and checking A's
+        // exclusion would clear the candidate while assignment-create-solution-repo — which reads
+        // the class as it is now — creates the repository in B. Asking about the wrong org is the
+        // same as not asking.
+        const { data: orgRow, error: orgRowError } = await supabase
+          .from("assignments")
+          .select("classes(github_org)")
+          .eq("id", a.id)
           .maybeSingle();
-        if (orgNowError || orgNow?.excluded_from_automation) {
+        const orgAtCall = (orgRow?.classes as { github_org: string | null } | null)?.github_org ?? null;
+        const { data: orgNow, error: orgNowError } = orgAtCall
+          ? await supabase
+              .from("github_orgs")
+              .select("excluded_from_automation")
+              .ilike("org_name", orgAtCall)
+              .maybeSingle()
+          : { data: null, error: null };
+        if (orgRowError || orgNowError || !orgAtCall || orgNow?.excluded_from_automation) {
           // Unreadable counts as excluded, for the same reason as the check above: "we could not
           // tell" must not mean "carry on".
           scope.setTag("repair_stopped_mid_candidate", "org_excluded_or_unknown");
           console.log(
-            `[github-repo-reconciler] Org ${currentOrg} became excluded or unreadable while repairing assignment ${a.id}; stopping before ${fn}`
+            `[github-repo-reconciler] Org ${orgAtCall ?? "unknown"} became excluded or unreadable while repairing assignment ${a.id}; stopping before ${fn}`
           );
           stoppedForExclusion = true;
           break;

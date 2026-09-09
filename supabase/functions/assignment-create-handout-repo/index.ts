@@ -381,6 +381,43 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // that switch precisely because the handout is not yet in place, which is the state this would
   // then quietly finish wrong.
   pointerWrite = pointerWrite.eq("submission_mode", assignment.submission_mode);
+  // And the slug, which is half of handoutFullName. None of the predicates above mentions the
+  // naming inputs, so an instructor renaming the assignment during createRepo or the permission
+  // sync had the repository named for the OLD slug attached afterwards — and every later
+  // reconciliation derives the expected handout from the NEW slug, reads the attached repository as
+  // a custom choice, and declines to repair a missing workflow hash for the rest of its life.
+  // `.is` when it is NULL, like the template_repo branch above: the column is nullable, and a null
+  // slug is an existing (broken-naming) state rather than something to start rejecting here.
+  pointerWrite = assignment.slug === null ? pointerWrite.is("slug", null) : pointerWrite.eq("slug", assignment.slug);
+  // The class-level naming inputs live on `classes`, so they cannot join this predicate. Re-read
+  // and compared immediately before the write instead.
+  //
+  // This NARROWS the window rather than closing it, and that is a deliberate stopping point: making
+  // it atomic means moving the pointer write into an RPC that locks the class row, and a class
+  // re-slug or org move invalidates the derived handout name of EVERY assignment in the course at
+  // once. That is a course-wide event this endpoint cannot resolve on its own — refusing one
+  // creation while the rest of the course is equally stale is not a fix, it is a smaller symptom.
+  // What this does buy is that the common case (an admin edits the class while one assignment is
+  // being provisioned) stops attaching a repository nothing will ever recognise.
+  const { data: classNow, error: classNowError } = await adminSupabase
+    .from("classes")
+    .select("slug, github_org")
+    .eq("id", assignment.class_id)
+    .maybeSingle();
+  if (classNowError) {
+    // Not permission to proceed: this decides whether the name about to be persisted is still the
+    // one this class derives.
+    Sentry.captureException(classNowError, scope);
+    throw classNowError;
+  }
+  if (classNow?.slug !== assignment.classes.slug || classNow?.github_org !== assignment.classes.github_org) {
+    scope.setTag("handout_pointer", "class_naming_changed");
+    throw new UserVisibleError(
+      `This class's GitHub organization or slug changed while ${handoutFullName} was being created, so it was not ` +
+        `attached. The repository exists — re-save to provision under the new naming.`,
+      409
+    );
+  }
   const { data: pointerRows, error: pointerError } = await pointerWrite.select("id");
   if (pointerError) {
     // Reporting success here would leave the handout repo created but unreferenced:
