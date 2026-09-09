@@ -89,4 +89,35 @@ export function resolveHandoutRepoAction(
   return { kind: "inherit_from_source", sourceAssignmentId: source.id };
 }
 
-export { TEMPLATE_HANDOUT_REPO_NAME };
+/**
+ * repo_modes that opt out of GitHub repos entirely. `assignment-create-handout-repo` actively
+ * CLEARS template_repo for these, so a NULL pointer on one of them is the correct state, not a
+ * failure to be repaired.
+ */
+const REPO_MODES_WITHOUT_REPOS: readonly AssignmentRepoMode[] = ["none", "no_submission"];
+
+/**
+ * Should this assignment have BOTH a handout and a solution ("grader") repo?
+ *
+ * repo_mode is the only input. The new-assignment page gates its two creation calls on exactly
+ * this condition and nothing else, so `has_autograder` and `submission_mode` deliberately do NOT
+ * narrow it:
+ *
+ *   - A repo-only assignment (has_autograder = false) still gets a handout — grade.yml is stripped
+ *     from it, not the repo skipped — and still needs pawtograder.yml read out of a solution repo,
+ *     because that is where `submissionFiles` comes from and the empty-submission check depends on
+ *     it whether or not an autograder ever runs.
+ *   - PR submission mode forces has_autograder off, and the same reasoning applies.
+ *   - `fork_from_prior_assignment` INHERITS its handout from the source assignment rather than
+ *     creating one, but template_repo is still expected to be non-NULL, so it still answers true
+ *     here. It gets its own solution repo normally.
+ *
+ * Exported so the repo reconciler decides "should this pointer be non-NULL?" from the same place
+ * `resolveHandoutRepoAction` decides what to create, rather than restating the matrix in a SQL
+ * filter that can drift away from it.
+ */
+export function assignmentShouldHaveRepos(mode: AssignmentRepoMode): boolean {
+  return !REPO_MODES_WITHOUT_REPOS.includes(mode);
+}
+
+export { REPO_MODES_WITHOUT_REPOS, TEMPLATE_HANDOUT_REPO_NAME };
