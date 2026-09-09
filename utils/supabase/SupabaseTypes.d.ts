@@ -11985,6 +11985,7 @@ export type Database = {
           created_at: string;
           default_handout_template_repo: string;
           default_solution_template_repo: string;
+          excluded_from_automation: boolean;
           is_configured: boolean;
           org_name: string;
           permission_sync_exempt_users: string[];
@@ -12110,6 +12111,7 @@ export type Database = {
       };
       admin_upsert_github_org: {
         Args: {
+          p_excluded_from_automation?: boolean;
           p_handout?: string;
           p_org_name: string;
           p_permission_sync_exempt_users?: string[];

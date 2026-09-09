@@ -4,6 +4,7 @@ import { EnterCourseAsInstructorButton } from "@/components/admin/EnterCourseAsI
 import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
@@ -48,6 +49,7 @@ export default function GitHubOrgDetailPage() {
   // Held as the raw text the admin typed, not as a parsed array, so a half-typed entry doesn't
   // vanish from the box while they're still writing it. Parsed on save.
   const [exemptUsers, setExemptUsers] = useState("");
+  const [excludedFromAutomation, setExcludedFromAutomation] = useState(false);
   const [courses, setCourses] = useState<OrgCourse[]>([]);
 
   const load = useCallback(async () => {
@@ -68,6 +70,7 @@ export default function GitHubOrgDetailPage() {
       setSavedHandout(loadedHandout);
       setSavedSolution(loadedSolution);
       setExemptUsers((thisOrg?.permission_sync_exempt_users ?? []).join(", "));
+      setExcludedFromAutomation(thisOrg?.excluded_from_automation ?? false);
       setCourses((orgCourses ?? []) as OrgCourse[]);
     } catch (err) {
       toaster.error({ title: "Failed to load org", description: (err as Error).message });
@@ -93,7 +96,10 @@ export default function GitHubOrgDetailPage() {
         p_permission_sync_exempt_users: exemptUsers
           .split(/[\s,]+/)
           .map((u) => u.trim())
-          .filter((u) => u !== "")
+          .filter((u) => u !== ""),
+        // Always sent: the RPC reads undefined as "not supplied by this caller" and keeps the
+        // stored value, so omitting it would make the box impossible to untick.
+        p_excluded_from_automation: excludedFromAutomation
       });
       if (error) throw error;
       toaster.success({ title: "Org defaults saved" });
@@ -106,7 +112,7 @@ export default function GitHubOrgDetailPage() {
     } finally {
       setSaving(false);
     }
-  }, [orgName, handout, solution, exemptUsers, load, revalidateServerCaches]);
+  }, [orgName, handout, solution, exemptUsers, excludedFromAutomation, load, revalidateServerCaches]);
 
   // A course in this org gives the edge function a valid auth/ownership context for editing the
   // org's template repos. (Writes are restricted to the course's own org.) Prefer a non-archived
@@ -161,6 +167,17 @@ export default function GitHubOrgDetailPage() {
                 fontFamily="mono"
                 placeholder="octocat, some-ops-account"
               />
+            </Field>
+            <Field
+              label="Exclude from background automation"
+              helperText="Stops scheduled jobs creating or modifying GitHub repositories for classes in this org. For test, dev, and demo orgs. Instructor-initiated actions are unaffected."
+            >
+              <Checkbox
+                checked={excludedFromAutomation}
+                onCheckedChange={(e) => setExcludedFromAutomation(!!e.checked)}
+              >
+                Excluded from automation
+              </Checkbox>
             </Field>
             <Button colorPalette="green" alignSelf="flex-start" onClick={handleSave} loading={saving}>
               Save defaults
