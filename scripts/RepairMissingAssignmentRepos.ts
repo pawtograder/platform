@@ -70,7 +70,10 @@ dotenv.config({ path: ".env.local", quiet: true });
 const REPO_MODES_WITHOUT_REPOS = new Set(["none", "no_submission"]);
 const E2E_FIXTURE_ORG = "pawtograder-playground";
 const isE2eFixture = (org: string | null, courseSlug: string | null, repoName?: string | null) =>
-  org === E2E_FIXTURE_ORG &&
+  // Lowercased for the same reason as the shared predicate: an exact comparison fails OPEN, and an
+  // explicit --assignment deliberately bypasses the excluded-org set, so this is the only thing
+  // left standing between a fixture and a real GitHub mutation.
+  org?.toLowerCase() === E2E_FIXTURE_ORG &&
   ((courseSlug?.startsWith("e2e-ignore-") ?? false) ||
     (repoName?.startsWith("e2e-ignore-") ?? false) ||
     (repoName?.startsWith("test-e2e") ?? false) ||
@@ -160,7 +163,14 @@ function intArg(name: string): number | undefined {
  * Unknown must not be read as either verdict: reporting a placeholder as broken invites someone to
  * create a repo nobody wanted, and reporting a broken one as fine hides it.
  */
-async function makeHandoutExistenceChecker(): Promise<(org: string, repo: string) => Promise<boolean | null>> {
+/**
+ * "exists" / "absent" are answers. "inaccessible" and "error" are not, and they differ: the first is
+ * a stable property of how the App is installed, the second is a transient failure that makes the
+ * whole sweep incomplete and must be reflected in the exit status.
+ */
+type HandoutProbe = "exists" | "absent" | "inaccessible" | "error";
+
+async function makeHandoutExistenceChecker(): Promise<(org: string, repo: string) => Promise<HandoutProbe>> {
   const appId = process.env.GITHUB_APP_ID;
   const raw = process.env.GITHUB_PRIVATE_KEY_STRING;
   if (!appId || !raw) {
@@ -194,9 +204,9 @@ async function makeHandoutExistenceChecker(): Promise<(org: string, repo: string
   // One installation-scoped client per org, reused across that org's assignments.
   const clients = new Map<string, Octokit>();
 
-  return async (org: string, repo: string) => {
+  return async (org: string, repo: string): Promise<HandoutProbe> => {
     const installation = byOrg.get(org.toLowerCase());
-    if (installation === undefined) return null;
+    if (installation === undefined) return "inaccessible";
     let client = clients.get(org.toLowerCase());
     if (!client) {
       client = new Octokit({
@@ -207,17 +217,19 @@ async function makeHandoutExistenceChecker(): Promise<(org: string, repo: string
     }
     try {
       await client.request("GET /repos/{owner}/{repo}", { owner: org, repo });
-      return true;
+      return "exists";
     } catch (e) {
       const status = (e as { status?: number }).status;
       if (status === 404) {
         // Only an installation that can see EVERY repo in the org can turn a 404 into "absent".
         // Under `selected`, the same 404 is returned for a repo that exists but was not granted, so
-        // the honest answer is that we do not know.
-        return installation.selection === "all" ? false : null;
+        // the honest answer is that we cannot see it — a stable fact about the installation, not a
+        // transient failure.
+        return installation.selection === "all" ? "absent" : "inaccessible";
       }
-      // Anything else (403, 5xx, network) is unknown, not absent.
-      return null;
+      // A rate limit, a 5xx, a network drop: the question was never answered. Distinct from
+      // "inaccessible", because it makes the run incomplete rather than describing the setup.
+      return "error";
     }
   };
 }
@@ -356,6 +368,9 @@ async function main() {
   // are placeholders from SeedCourseAssignments, which never sets repo_mode and so leaves every one
   // of them looking exactly like a failed handout.
   const confirmedBroken: Row[] = [];
+  // Transient GitHub failures during --check-github. Tracked separately from "not visible", because
+  // an unanswered question makes the run incomplete while a scoped installation is just a fact.
+  let checkFailures = 0;
   if (!checkGithub) {
     console.log("  Skipped: from the database this is indistinguishable from a placeholder assignment");
     console.log("  that was never meant to have repos. Re-run with --check-github to settle it.");
@@ -363,7 +378,7 @@ async function main() {
   } else {
     const handoutExists = await makeHandoutExistenceChecker();
     let placeholders = 0;
-    let unknown = 0;
+    let inaccessible = 0;
     // `fork_from_prior_assignment` never creates `<course>-handout-<assignment>` — it copies the
     // SOURCE assignment's template_repo. Probing the derived name would 404 for every such row and
     // silently file a genuine failure as a placeholder, so resolve the source's repo instead.
@@ -407,23 +422,29 @@ async function main() {
         [owner, handoutName] = sourceRepo.split("/");
       }
       const exists = await handoutExists(owner, handoutName);
-      if (exists === true) {
+      if (exists === "error") {
+        // A transient failure leaves this assignment undetermined, which makes the whole sweep
+        // incomplete. Recorded so --apply cannot exit 0 over it.
+        checkFailures++;
+        console.log(`  ERROR   ${describe(a)} — could not check ${owner}/${handoutName}; run incomplete`);
+      } else if (exists === "exists") {
         // The repo is on GitHub but nothing in the database points at it — handout creation got
         // past createRepo and died before the pointer write. Genuinely broken.
         confirmedBroken.push(a);
         console.log(`  BROKEN  ${describe(a)}`);
         console.log(`          handout ${owner}/${handoutName} exists but template_repo is NULL`);
-      } else if (exists === false) {
+      } else if (exists === "absent") {
         placeholders++;
       } else {
-        unknown++;
+        inaccessible++;
         console.log(
-          `  UNKNOWN ${describe(a)} — App not installed on ${owner}, scoped to selected repos, or GitHub errored`
+          `  NOT VISIBLE ${describe(a)} — the App is not installed on ${owner}, or is scoped to selected repos`
         );
       }
     }
     console.log(
-      `  ${confirmedBroken.length} genuinely broken, ${placeholders} never created (placeholders), ${unknown} unknown`
+      `  ${confirmedBroken.length} genuinely broken, ${placeholders} never created (placeholders), ` +
+        `${inaccessible} not visible to this installation, ${checkFailures} check failure(s)`
     );
   }
 
@@ -506,10 +527,13 @@ async function main() {
     if (allOk) ok++;
     else failed++;
   }
-  console.log(`\nRepaired ${ok}/${plans.length}${failed ? `, ${failed} failed` : ""}.`);
-  if (failed > 0) {
-    // Non-zero, so a wrapper script or operator automation cannot read an incomplete repair as a
-    // successful one.
+  console.log(
+    `\nRepaired ${ok}/${plans.length}${failed ? `, ${failed} failed` : ""}` +
+      `${checkFailures ? `, ${checkFailures} assignment(s) could not be checked` : ""}.`
+  );
+  if (failed > 0 || checkFailures > 0) {
+    // Non-zero, so a wrapper script or operator automation cannot read an incomplete repair — or a
+    // sweep that never determined whether some handouts exist — as a successful one.
     process.exitCode = 1;
   }
 }
