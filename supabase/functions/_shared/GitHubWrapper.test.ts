@@ -25,6 +25,7 @@ const {
   getTeamMembers,
   isRepoEmpty,
   isTeamAlreadyExistsError,
+  isValidRepoFullName,
   NonRetryableRepoError,
   publicSupabaseUrl,
   resolveExistingTeamSlug,
@@ -599,4 +600,46 @@ Deno.test("computeCollaboratorRemovals: keeps desired, staff and excluded admins
     }),
     ["stale"]
   );
+});
+
+// --- Repository names the GitHub helpers can act on (isValidRepoFullName) ---
+// getOctoKit / getFileFromRepo / getDefaultBranchHeadSha all take the first two slash-separated
+// components and hand them to the API, so "contains a slash" is not the same question as "names a
+// repository". github-repo-configure-webhook takes this value straight from an instructor's form.
+
+Deno.test("isValidRepoFullName: owner/name is valid", () => {
+  assertEquals(isValidRepoFullName("neu-cs4530/fa26-handout-ip2"), true);
+  assertEquals(isValidRepoFullName("a/b"), true);
+});
+
+Deno.test("isValidRepoFullName: a missing component is not a repository", () => {
+  // `autograder.grader_repo` is NULL exactly when solution-repo creation never finished; the empty
+  // string is what a cleared form field sends.
+  assertEquals(isValidRepoFullName(null), false);
+  assertEquals(isValidRepoFullName(undefined), false);
+  assertEquals(isValidRepoFullName(""), false);
+  assertEquals(isValidRepoFullName("no-slash"), false);
+  assertEquals(isValidRepoFullName("/"), false);
+  assertEquals(isValidRepoFullName("owner/"), false);
+  assertEquals(isValidRepoFullName("/repo"), false);
+});
+
+Deno.test("isValidRepoFullName: extra components are rejected rather than truncated", () => {
+  // The dangerous one: the helpers would drop "/extra" and act on owner/repo, a repository the
+  // instructor did not name.
+  assertEquals(isValidRepoFullName("owner/repo/extra"), false);
+  assertEquals(isValidRepoFullName("https://github.com/owner/repo"), false);
+});
+
+Deno.test("isValidRepoFullName: whitespace is rejected", () => {
+  // Matches the "owner/repo" validation admin_upsert_github_org applies to template repo defaults:
+  // a pasted value with a stray space is a typo, not a repository.
+  assertEquals(isValidRepoFullName("owner /repo"), false);
+  assertEquals(isValidRepoFullName(" owner/repo"), false);
+  assertEquals(isValidRepoFullName("owner/repo "), false);
+});
+
+Deno.test("isValidRepoFullName: non-strings are rejected", () => {
+  assertEquals(isValidRepoFullName(42), false);
+  assertEquals(isValidRepoFullName({ owner: "a", repo: "b" }), false);
 });

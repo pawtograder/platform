@@ -3,7 +3,12 @@
  */
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { getFileFromRepo, updateAutograderWorkflowHash, getDefaultBranchHeadSha } from "../_shared/GitHubWrapper.ts";
+import {
+  getFileFromRepo,
+  updateAutograderWorkflowHash,
+  getDefaultBranchHeadSha,
+  isValidRepoFullName
+} from "../_shared/GitHubWrapper.ts";
 import { UserVisibleError, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { parse } from "jsr:@std/yaml";
@@ -43,18 +48,28 @@ export const GITHUB_APP_WEBHOOK_EVENTS = [
   "organization",
   "deployment_status"
 ] as const;
+// `unknown`, not a shape: this is a request body, so a declared type would be a claim about the
+// caller rather than a guarantee. Narrowed by the guards at the top of handleRequest.
 type RequestBody = {
-  // Typed non-null, but this is a request body: the type is a claim about the caller, not a
-  // guarantee. See the guard in handleRequest.
-  new_repo: string;
-  assignment_id: number;
-  watch_type: "grader_solution" | "template_repo";
+  new_repo?: unknown;
+  assignment_id?: unknown;
+  watch_type?: unknown;
 };
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, new_repo, watch_type }: RequestBody = await req.json();
   scope?.setTag("function", "github-repo-configure-webhook");
+
+  // Validated BEFORE the Sentry tags: `assignment_id.toString()` on a missing or null id threw
+  // outside any UserVisibleError, so wrapRequestHandler classified it as unexpected and answered
+  // 500 — the same "An unknown error occurred" this function is being fixed to stop producing.
+  if (typeof assignment_id !== "number" || !Number.isFinite(assignment_id)) {
+    throw new UserVisibleError("assignment_id is required", 400);
+  }
+  if (watch_type !== "grader_solution" && watch_type !== "template_repo") {
+    throw new UserVisibleError("watch_type must be either grader_solution or template_repo", 400);
+  }
   scope?.setTag("assignment_id", assignment_id.toString());
-  scope?.setTag("new_repo", new_repo);
+  scope?.setTag("new_repo", typeof new_repo === "string" ? new_repo : String(new_repo));
 
   // The autograder page sends `new_repo: values.grader_repo` straight from the form, and
   // `autograder.grader_repo` is NULL whenever solution-repo creation never completed — which is
@@ -64,8 +79,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // a 500 with "An unknown error occurred" — no indication that the fix is to create the repo.
   //
   // Checked here rather than at the getFileFromRepo call, so the template_repo branch is covered
-  // by the same guard and neither branch can grow a new unchecked use.
-  if (typeof new_repo !== "string" || !new_repo.includes("/")) {
+  // by the same guard and neither branch can grow a new unchecked use. Full `owner/name` rather
+  // than "contains a slash": the helpers downstream take the first two components, so `owner/` and
+  // `/name` reach GitHub as a request with an empty field and `owner/name/extra` quietly acts on a
+  // repository the instructor did not name.
+  if (!isValidRepoFullName(new_repo)) {
     throw new UserVisibleError(
       `This assignment has no ${watch_type === "grader_solution" ? "grader" : "handout"} repository ` +
         `configured yet, so there is nothing to read its configuration from. This usually means ` +
@@ -308,11 +326,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         );
       }
     }
-  } else {
-    return {
-      message: "Webhook already configured"
-    };
   }
+  // No trailing `else`: watch_type is validated at the top of the function, so the three branches
+  // above are exhaustive. The branch that used to be here answered 200 "Webhook already configured"
+  // to anything else, telling the caller the work had been done when nothing had run at all.
 }
 Deno.serve(async (req) => {
   return await wrapRequestHandler(req, handleRequest);

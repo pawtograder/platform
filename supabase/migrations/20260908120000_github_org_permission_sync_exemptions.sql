@@ -55,8 +55,15 @@ BEGIN
     )
     SELECT
         o.org_name,
-        COALESCE(go.default_handout_template_repo, 'pawtograder/template-assignment-handout'),
-        COALESCE(go.default_solution_template_repo, 'pawtograder/template-assignment-grader'),
+        -- Through resolve_effective_template_repo, NOT a bare COALESCE to the constant: an org with
+        -- no row must still report the deployment's app.settings default (20260715120000), or a
+        -- self-hosted site sees pawtograder/* here and materializes it on the next save.
+        public.resolve_effective_template_repo(
+            NULL, go.default_handout_template_repo,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        public.resolve_effective_template_repo(
+            NULL, go.default_solution_template_repo,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader'),
         COALESCE(go.permission_sync_exempt_users, '{}'::text[]),
         (SELECT COUNT(*) FROM public.classes c WHERE c.github_org = o.org_name)::bigint,
         (go.org_name IS NOT NULL) AS is_configured,
@@ -122,7 +129,12 @@ BEGIN
             -- GitHub logins: alphanumeric with single internal hyphens, 39 chars max. Rejecting the
             -- obviously-wrong shapes here stops "owner/repo" or an email being pasted in and then
             -- never matching anything.
-            IF v_login !~ '^[a-z0-9](?:[a-z0-9]|-[a-z0-9]){0,38}$' THEN
+            --
+            -- The length is checked separately because the pattern cannot express it: the repeated
+            -- alternative consumes TWO characters on every '-[a-z0-9]' branch, so it accepts up to
+            -- 77 characters and an over-long login would be stored as a configured exemption that
+            -- can never match a real account.
+            IF length(v_login) > 39 OR v_login !~ '^[a-z0-9](?:[a-z0-9]|-[a-z0-9]){0,38}$' THEN
                 RAISE EXCEPTION 'Invalid GitHub login "%": expected a GitHub username', v_login;
             END IF;
         END LOOP;
@@ -137,15 +149,27 @@ BEGIN
         updated_by
     ) VALUES (
         trim(p_org_name),
-        COALESCE(NULLIF(trim(p_handout), ''), 'pawtograder/template-assignment-handout'),
-        COALESCE(NULLIF(trim(p_solution), ''), 'pawtograder/template-assignment-grader'),
+        -- A blank template field means "use the site default", which is the GUC tier, not the
+        -- constant. Writing the constant instead would override the operator's configured default
+        -- for every future assignment in this org — including when the admin only came here to
+        -- edit the exemption list and left the template boxes untouched.
+        public.resolve_effective_template_repo(
+            NULLIF(trim(p_handout), ''), NULL,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        public.resolve_effective_template_repo(
+            NULLIF(trim(p_solution), ''), NULL,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader'),
         COALESCE(v_exempt, '{}'::text[]),
         auth.uid(),
         auth.uid()
     )
     ON CONFLICT (org_name) DO UPDATE SET
-        default_handout_template_repo = COALESCE(NULLIF(trim(p_handout), ''), 'pawtograder/template-assignment-handout'),
-        default_solution_template_repo = COALESCE(NULLIF(trim(p_solution), ''), 'pawtograder/template-assignment-grader'),
+        default_handout_template_repo = public.resolve_effective_template_repo(
+            NULLIF(trim(p_handout), ''), NULL,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        default_solution_template_repo = public.resolve_effective_template_repo(
+            NULLIF(trim(p_solution), ''), NULL,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader'),
         -- NULL means "not supplied by this caller", so the existing list survives a save from a
         -- client that only knows about the template fields. Clearing is an explicit empty array.
         permission_sync_exempt_users = COALESCE(v_exempt, public.github_orgs.permission_sync_exempt_users),
