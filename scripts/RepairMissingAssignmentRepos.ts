@@ -354,8 +354,18 @@ async function main() {
   }
 
   const missing = eligible.filter((a) => (a.autograder?.grader_repo ?? null) === null);
-  const repairable = missing.filter((a) => a.template_repo !== null);
-  const needsReview = missing.filter((a) => a.template_repo === null);
+  // The same exception the reconciler makes, and for the same reason. A NULL template_repo is
+  // normally unactionable — indistinguishable from a placeholder that was never meant to have repos
+  // — but `fork_from_prior_assignment` with a named source is positive evidence of the same kind a
+  // non-NULL pointer gives: nothing DEFAULTS to that mode (the column default is
+  // template_only_staff), so somebody chose it and picked a source. Repairing it is also the safe
+  // direction, because the handout call INHERITS the source's existing repository rather than
+  // creating a new one — there is no uncertain repository to regret. Without this the script put
+  // every such row in needsReview, so a run without --check-github silently skipped assignments the
+  // reconciler would have repaired.
+  const isConfiguredFork = (a: Row) => a.repo_mode === "fork_from_prior_assignment" && a.source_assignment_id !== null;
+  const repairable = missing.filter((a) => a.template_repo !== null || isConfiguredFork(a));
+  const needsReview = missing.filter((a) => a.template_repo === null && !isConfiguredFork(a));
   const pointerSet = eligible.filter((a) => (a.autograder?.grader_repo ?? null) !== null);
 
   const describe = (a: Row) =>
@@ -518,7 +528,12 @@ async function main() {
   const planFor = (row: Row) => {
     const expected = expectedHandouts.get(row.id) ?? null;
     const handoutIsOurs = handoutPointerIsOurs(row.template_repo, expected);
-    const wantsHandout = row.has_autograder !== false && (row.autograder?.workflow_sha ?? null) === null;
+    // A missing pointer needs the handout call whatever the autograder setting: the solution call
+    // reads template_repo to seed handout file hashes, and for a configured fork the pointer is the
+    // only thing that links it to the source's repository. The workflow-hash clause is the OTHER
+    // reason to run it, for a row that already has its pointer.
+    const wantsHandout =
+      row.template_repo === null || (row.has_autograder !== false && (row.autograder?.workflow_sha ?? null) === null);
     if (wantsHandout && !handoutIsOurs) {
       console.log(
         `  note: assignment ${row.id} has a custom handout (${row.template_repo}, expected ${expected ?? "none"}); not rerunning handout creation`
@@ -580,7 +595,7 @@ async function main() {
       const { data: fresh, error: freshError } = await supabase
         .from("assignments")
         .select(
-          "archived_at, template_repo, repo_mode, source_assignment_id, classes(archived, github_org, slug), autograder(grader_repo, workflow_sha)"
+          "archived_at, template_repo, repo_mode, source_assignment_id, has_autograder, classes(archived, github_org, slug), autograder(grader_repo, workflow_sha)"
         )
         .eq("id", row.id)
         .maybeSingle();
@@ -661,19 +676,27 @@ async function main() {
             ? await sourceHandoutFor({ ...row, source_assignment_id: fresh.source_assignment_id ?? null })
             : null
       });
-      if (
-        functions.includes("assignment-create-handout-repo") &&
-        !handoutPointerIsOurs(freshTemplate, expectedHandoutNow)
-      ) {
+      // `functions` is RECOMPUTED from the reloaded row, not just narrowed. Only checking it when
+      // the plan already included the handout step made the guard one-directional: a plan built as
+      // solution-only stayed solution-only even after an instructor switched the assignment to
+      // fork_from_prior_assignment and picked a source. The solution endpoint accepts every
+      // repository-backed mode, so it would publish grader_repo while template_repo still named the
+      // old handout — and a published pointer takes the assignment out of every future scan.
+      const wantsHandoutNow = freshTemplate === null || (fresh.has_autograder !== false && freshWorkflowSha === null);
+      const handoutIsOursNow = handoutPointerIsOurs(freshTemplate, expectedHandoutNow);
+      if (wantsHandoutNow && !handoutIsOursNow) {
         console.log(
           `  skipping assignment ${row.id}: it gained a custom handout (${freshTemplate}, expected ${expectedHandoutNow ?? "none"}) since the plan was built`
         );
         continue;
       }
-      if (functions.includes("assignment-create-handout-repo") && freshTemplate !== null && freshWorkflowSha !== null) {
-        console.log(`  note: assignment ${row.id} no longer needs the handout step; running solution only`);
-        functions = SOLUTION_ONLY;
+      const functionsNow = wantsHandoutNow ? HANDOUT_THEN_SOLUTION : SOLUTION_ONLY;
+      if (functionsNow.join() !== functions.join()) {
+        console.log(
+          `  note: assignment ${row.id} changed since the plan was built; running ${functionsNow.join(" + ")}`
+        );
       }
+      functions = functionsNow;
     }
     let allOk = true;
     for (const fn of functions) {

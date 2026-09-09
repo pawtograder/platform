@@ -118,10 +118,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // SHA and points attached to the new one until somebody pushed.
   const pointerAlreadyPublished = (existingPointer?.grader_repo ?? null) === solutionRepoFullName;
   const expectedSha = existingPointer?.latest_autograder_sha ?? null;
-  // Deferring to the webhook needs BOTH: the pointer names this repo, and something has actually
-  // been recorded through it. A matching pointer alone proves only that deliveries can be routed
-  // here, not that any landed.
-  const webhookHasReconciled = pointerAlreadyPublished && expectedSha !== null;
   // What the metadata RPC should expect grader_repo to be when it runs. It starts as what we
   // observed and becomes NULL if we clear a stale pointer below — passing the pre-clear value there
   // would make the RPC's predicate unsatisfiable, so every stale-pointer repair would remove the old
@@ -168,6 +164,20 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     getDefaultBranch(solutionRepoFullName, scope)
   ]);
   scope.setTag("solution_head_sha", headCommit.sha);
+  // Deferring to the webhook needs THREE things: the pointer names this repo, something has been
+  // recorded through it, and what was recorded is the revision this repository is actually at. A
+  // matching pointer alone proves only that deliveries can be routed here, not that any landed —
+  // and a recorded SHA alone proves only that one landed for SOME repository at this name.
+  //
+  // The third condition is what covers a targeted repair of a repo that was DELETED on GitHub after
+  // its pointer was set — a shape the repair script explicitly supports. Recreating it at the same
+  // conventional name leaves the old pointer and the old SHA both looking healthy, so without the
+  // identity check this function fetched the replacement's head and config and then discarded both,
+  // reporting success while the database kept a config and a SHA that exist in no repository.
+  //
+  // Decided here rather than with the other snapshot values above, because it needs the head, and
+  // the head cannot be read before the stub guard has had its say.
+  const webhookHasReconciled = pointerAlreadyPublished && expectedSha !== null && expectedSha === headCommit.sha;
   const graderConfig = await getFileFromRepo(solutionRepoFullName, "pawtograder.yml", scope, headCommit.sha);
   const asObj = (await parse(graderConfig.content)) as Json;
   // The config is NOT written here. record_autograder_head_metadata below is the sole writer, so it

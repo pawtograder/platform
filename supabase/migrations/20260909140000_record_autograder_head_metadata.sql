@@ -19,7 +19,15 @@ CREATE OR REPLACE FUNCTION public.record_autograder_head_metadata(
     p_expected_sha text,
     p_new_sha text,
     p_config jsonb,
-    p_points integer,
+    -- numeric, not integer. `points` in pawtograder.yml is typed as a plain number and the
+    -- validator accepts fractions, so calculateTotalAutograderPoints can legitimately return 1.5.
+    -- Declared as integer, PostgREST could not resolve the call at all ("function ... (numeric)
+    -- does not exist") — and this path treats that as fatal before publishing grader_repo, so a
+    -- perfectly good solution repository would stay permanently unattached until somebody changed
+    -- the scoring. The pre-existing push-webhook path writes the same value straight into
+    -- assignments.autograder_points, which is bigint, so the fraction is rounded on assignment;
+    -- numeric here reproduces that behaviour exactly rather than inventing a second one.
+    p_points numeric,
     p_message text,
     p_author text,
     p_ref text,
@@ -110,8 +118,8 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text, text, boolean) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text, text, boolean) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, numeric, text, text, text, text, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, numeric, text, text, text, text, boolean) TO service_role;
 
 ----------------------------------------------------------------------------------------
 -- publish_grader_repo: attach the solution pointer, or refuse
