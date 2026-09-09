@@ -13777,6 +13777,19 @@ export type Database = {
         Args: { p_limit?: number; p_stale_minutes?: number };
         Returns: number;
       };
+      record_autograder_head_metadata: {
+        Args: {
+          p_assignment_id: number;
+          p_author: string | null;
+          p_config: Json;
+          p_expected_sha: string | null;
+          p_message: string;
+          p_new_sha: string;
+          p_points: number;
+          p_ref: string;
+        };
+        Returns: boolean;
+      };
       reconcile_stuck_repo_creations: {
         Args: { p_stale_minutes?: number };
         Returns: number;
@@ -14150,21 +14163,10 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       assignment_repo_mode:
-        | "none"
-        | "template_only_staff"
-        | "template_with_student_forks"
-        | "fork_from_prior_assignment"
-        | "no_submission";
+        "none" | "template_only_staff" | "template_with_student_forks" | "fork_from_prior_assignment" | "no_submission";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
       discord_channel_type:
-        | "general"
-        | "assignment"
-        | "lab"
-        | "office_hours"
-        | "regrades"
-        | "scheduling"
-        | "operations"
-        | "forum";
+        "general" | "assignment" | "lab" | "office_hours" | "regrades" | "scheduling" | "operations" | "forum";
       discord_membership_state: "in_guild" | "not_joined" | "cannot_invite";
       discord_resource_type: "help_request" | "regrade_request" | "discussion_thread";
       discussion_discord_notification_type: "all" | "followed_only" | "none";
@@ -14210,21 +14212,11 @@ export type Database = {
       repo_analytics_fetch_status: "idle" | "fetching" | "completed" | "error";
       repo_analytics_item_type: "issue" | "pr" | "commit" | "issue_comment" | "pr_review_comment";
       repo_analytics_kpi_category:
-        | "issues_opened"
-        | "issues_closed"
-        | "issue_comments"
-        | "prs_opened"
-        | "pr_review_comments"
-        | "commits";
+        "issues_opened" | "issues_closed" | "issue_comments" | "prs_opened" | "pr_review_comments" | "commits";
       review_round: "self-review" | "grading-review" | "meta-grading-review" | "code-walk";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
       student_help_activity_type:
-        | "request_created"
-        | "request_updated"
-        | "message_sent"
-        | "request_resolved"
-        | "video_joined"
-        | "video_left";
+        "request_created" | "request_updated" | "message_sent" | "request_resolved" | "video_joined" | "video_left";
       submission_mode: "push" | "pr";
       survey_status: "draft" | "published" | "closed";
       survey_type: "assign_all" | "specific" | "peer";
@@ -14242,14 +14234,13 @@ type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
 
 export type Tables<
   DefaultSchemaTableNameOrOptions extends
-    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
-    | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+    keyof (DefaultSchema["Tables"] & DefaultSchema["Views"]) | { schema: keyof DatabaseWithoutInternals },
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals;
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never
+    : never) = never
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals;
 }
@@ -14269,11 +14260,11 @@ export type Tables<
 
 export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"] | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals;
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never
+    : never) = never
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals;
 }
@@ -14292,11 +14283,11 @@ export type TablesInsert<
 
 export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"] | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals;
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never
+    : never) = never
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals;
 }
@@ -14315,11 +14306,11 @@ export type TablesUpdate<
 
 export type Enums<
   DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"] | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals;
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never
+    : never) = never
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals;
 }
@@ -14330,13 +14321,12 @@ export type Enums<
 
 export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
-    | keyof DefaultSchema["CompositeTypes"]
-    | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+    keyof DefaultSchema["CompositeTypes"] | { schema: keyof DatabaseWithoutInternals },
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals;
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never
+    : never) = never
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals;
 }

@@ -140,47 +140,33 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // freshly created assignment carries no points, no SHA and no commit row until somebody happens
   // to push again.
   //
-  // Everything is pinned to one revision: the head is resolved first and the config is read AT that
-  // sha, so config, points, latest_autograder_sha and the commit row cannot describe different
-  // trees. Reconciling is a closure because it runs TWICE — see the recheck after the pointer write.
+  // One RPC, because the four values move together or not at all: config and latest_autograder_sha
+  // on `autograder`, autograder_points on `assignments`, and a row in `autograder_commits`. They
+  // span two tables, so no arrangement of PostgREST statements can condition them as a unit — every
+  // ordering leaves an interleaving where a concurrent push webhook ends up with its newer SHA
+  // paired with this request's older config or points. `record_autograder_head_metadata` does the
+  // whole transition in one transaction, gated on the SHA we believe is current, and reports
+  // whether it applied.
   //
-  // Best-effort, like the handout hash seeding below: the repository exists and is usable, the
-  // values are re-derivable from the next push, and failing creation over them would be the worse
-  // trade. Reported to Sentry so a persistent failure is visible.
-  // `latest_autograder_sha` is what an instructor reads as "this config is live", so it is written
-  // LAST and only after everything it advertises has landed — the same discipline
-  // handlePushToGraderSolution applies when it HOLDS the pointer on a failed reconcile. Ordering is
-  // what makes a partial failure safe here: the SHA still names the older commit, which is
-  // consistent with the points and config that are still stored for it, rather than announcing a
-  // revision whose points never made it.
-  //
-  // `expectedPreviousSha` is a compare-and-set. Once grader_repo is published the push webhook can
-  // record a newer commit concurrently, and an unconditional write from this slower provisioning
-  // request would drag the assignment BACK to the commit it snapshotted — permanently, because that
-  // webhook delivery has already been consumed. Passing the sha we believe is current means the
-  // write simply matches no row if something newer won the race.
-  const reconcileHeadMetadata = async (
+  // The expectation is read BEFORE the head snapshot. A targeted repair runs against an assignment
+  // whose grader_repo is already published, so the webhook is live throughout — reading it later
+  // would let a delivery that landed in between become our own expectation, and we would then
+  // "successfully" roll the assignment back over it.
+  const { data: priorAutograder, error: priorError } = await adminSupabase
+    .from("autograder")
+    .select("latest_autograder_sha")
+    .eq("id", assignment_id)
+    .maybeSingle();
+  if (priorError) throw priorError;
+  const expectedSha = priorAutograder?.latest_autograder_sha ?? null;
+
+  const recordHeadMetadata = async (
     commitSha: string,
     message: string,
     author: string | null,
     config: Json,
-    expectedPreviousSha: string | null,
-    /**
-     * Whether the compare-and-set MUST match a row.
-     *
-     * PostgREST reports an update that matched nothing as success, so a CAS against the wrong
-     * expectation is silent. On the initial pass that silence is dangerous: the points, config and
-     * commit row have already been written, so a SHA that failed to advance leaves the assignment
-     * advertising an older revision than the config it now holds, and nothing can repair it —
-     * grader_repo is still NULL so the webhook cannot find the assignment, and the recheck below
-     * reads the mismatch as "superseded" and stands down. Failing instead keeps grader_repo NULL,
-     * which is what makes the whole thing retryable.
-     *
-     * On the recheck it is the opposite: matching nothing means the push webhook recorded something
-     * newer while this request was working, which is the correct outcome and must not throw.
-     */
-    requireMatch: boolean
-  ) => {
+    previousSha: string | null
+  ): Promise<boolean> => {
     const parsed = config as unknown as PawtograderConfig | null;
     // An assignment with has_autograder=false still comes through here — the create page calls this
     // for every repo-backed mode so `submissionFiles` gets loaded — but no autograder will ever run
@@ -190,72 +176,41 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // points nothing can award.
     const points = assignment.has_autograder === false || !parsed ? 0 : calculateTotalAutograderPoints(parsed);
     scope.setTag("total_autograder_points", points.toString());
-    scope.setTag("has_autograder", String(assignment.has_autograder !== false));
-    const { error: pointsError } = await adminSupabase
-      .from("assignments")
-      .update({ autograder_points: points })
-      .eq("id", assignment_id);
-    if (pointsError) throw pointsError;
-    // Same upsert shape and conflict target the push handler uses, so a later push over the same
-    // commit updates this row rather than colliding with it.
-    const { error: commitError } = await adminSupabase.from("autograder_commits").upsert(
-      [
-        {
-          autograder_id: assignment_id,
-          message,
-          sha: commitSha,
-          author,
-          class_id: class_id,
-          ref: `refs/heads/${defaultBranch}`
-        }
-      ],
-      { onConflict: "autograder_id,sha" }
-    );
-    if (commitError) throw commitError;
-    let shaWrite = adminSupabase
-      .from("autograder")
-      .update({ latest_autograder_sha: commitSha })
-      .eq("id", assignment_id);
-    if (expectedPreviousSha === null) {
-      shaWrite = shaWrite.is("latest_autograder_sha", null);
-    } else {
-      shaWrite = shaWrite.eq("latest_autograder_sha", expectedPreviousSha);
-    }
-    const { data: shaRows, error: shaError } = await shaWrite.select("id");
-    if (shaError) throw shaError;
-    if (requireMatch && (shaRows?.length ?? 0) === 0) {
-      throw new Error(
-        `Refusing to publish ${solutionRepoFullName}: latest_autograder_sha was not ${expectedPreviousSha ?? "NULL"} when we tried to advance it to ${commitSha}`
-      );
-    }
+    const { data: applied, error } = await adminSupabase.rpc("record_autograder_head_metadata", {
+      p_assignment_id: assignment_id,
+      p_expected_sha: previousSha,
+      p_new_sha: commitSha,
+      p_config: config,
+      p_points: points,
+      p_message: message,
+      p_author: author,
+      p_ref: `refs/heads/${defaultBranch}`
+    });
+    if (error) throw error;
+    return applied === true;
   };
 
   try {
-    // Read what is stored rather than assuming NULL. A previous attempt that got this far and then
-    // failed to publish grader_repo leaves a SHA behind, so a hardcoded NULL expectation would match
-    // no rows on the retry and — because PostgREST reports that as success — silently skip the only
-    // write that advances it.
-    const { data: priorAutograder, error: priorError } = await adminSupabase
-      .from("autograder")
-      .select("latest_autograder_sha")
-      .eq("id", assignment_id)
-      .maybeSingle();
-    if (priorError) throw priorError;
-    await reconcileHeadMetadata(
+    const applied = await recordHeadMetadata(
       headCommit.sha,
       headCommit.commit.message,
       headCommit.commit.author?.name ?? null,
       asObj,
-      priorAutograder?.latest_autograder_sha ?? null,
-      true
+      expectedSha
     );
+    if (!applied) {
+      // Nothing was written, so the state is whatever the winner left — coherent, just not ours.
+      // Refusing to publish the pointer keeps the assignment repairable rather than freezing it
+      // half-configured.
+      throw new Error(
+        `Refusing to publish ${solutionRepoFullName}: latest_autograder_sha changed from ${expectedSha ?? "NULL"} while provisioning`
+      );
+    }
   } catch (metadataError) {
-    // NOT best-effort, despite these being re-derivable in principle. Publishing grader_repo after
-    // this failed would take the assignment out of every repair scan while leaving
-    // latest_autograder_sha claiming a config is live over stale points and no commit row — and
-    // nothing would ever revisit it, because the pointer is exactly what the scans key on. Failing
-    // here keeps the pointer NULL, so the assignment stays repairable and a retry adopts the
-    // repository that already exists. Same reasoning as the config write above.
+    // NOT best-effort. Publishing grader_repo after this failed would take the assignment out of
+    // every repair scan while leaving it half-configured, and nothing would revisit it, because the
+    // pointer is exactly what the scans key on. Failing keeps the pointer NULL, so the assignment
+    // stays repairable and a retry adopts the repository that already exists.
     scope.setTag("initial_autograder_metadata", "failed");
     Sentry.captureException(metadataError, scope);
     console.error(`Could not record initial autograder metadata for ${solutionRepoFullName}`, metadataError);
@@ -291,30 +246,20 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // because the pointer now exists, so one recheck is enough to close the window rather than
   // needing a loop.
   //
-  // Costs one extra request on the common path, where the head has not moved and this is a no-op.
-  // Best-effort for the same reason as the first pass.
+  // The whole transition goes through the same conditional RPC, expecting the sha this request
+  // wrote. If the webhook recorded something newer in the meantime the RPC applies nothing and
+  // reports it, so the winner's config, points and SHA are left intact together — the outcome the
+  // hand-rolled per-statement guards could not guarantee, since they could overwrite config and
+  // points before discovering the SHA had moved.
+  //
+  // Best-effort here, unlike the initial pass: the pointer is already published and the stored
+  // values are internally consistent, so the worst case is an assignment one commit behind, which
+  // the next push reconciles.
   try {
     const currentHead = await getCommit(solutionRepoFullName, "HEAD", scope);
-    // Re-read what is STORED before writing anything. The compare-and-set inside
-    // reconcileHeadMetadata guards only the SHA, so on its own it would reject a stale SHA while
-    // the config and points writes preceding it had already landed — leaving the webhook's newer
-    // SHA paired with this request's older config. Checking first means a webhook that won the race
-    // is left entirely alone rather than half-overwritten.
-    const { data: storedAutograder, error: storedError } = await adminSupabase
-      .from("autograder")
-      .select("latest_autograder_sha")
-      .eq("id", assignment_id)
-      .maybeSingle();
-    if (storedError) throw storedError;
-    const storedSha = storedAutograder?.latest_autograder_sha ?? null;
-    if (storedSha !== headCommit.sha) {
-      // Something else — the push webhook, now that grader_repo is published — has already moved
-      // this on. It is by definition at least as new as anything this request saw.
-      scope.setTag("solution_head_recheck", "superseded");
-      console.log(
-        `Skipping head recheck for ${solutionRepoFullName}: latest_autograder_sha is ${storedSha}, not the ${headCommit.sha} this request wrote`
-      );
-    } else if (currentHead.sha !== headCommit.sha) {
+    if (currentHead.sha === headCommit.sha) {
+      // The common case: nothing moved during provisioning.
+    } else {
       scope.setTag("solution_head_moved_during_creation", "true");
       console.log(
         `Solution repo ${solutionRepoFullName} moved from ${headCommit.sha} to ${currentHead.sha} during creation; re-reading config`
@@ -322,43 +267,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // Re-read the config AT the new head, so the reconciled values still describe one revision.
       const newerConfig = await getFileFromRepo(solutionRepoFullName, "pawtograder.yml", scope, currentHead.sha);
       const newerObj = (await parse(newerConfig.content)) as Json;
-      // Conditional on the SHA still being the one this request wrote. The precheck above closes
-      // most of the window, but a webhook landing between it and this write would otherwise have
-      // its config and points overwritten by the older snapshot while its newer SHA survived the
-      // compare-and-set below — leaving the newest SHA paired with stale metadata, which is worse
-      // than either side winning outright. Matching nothing here means we lost the race, and we
-      // stop before touching points or the commit row.
-      const { data: reconfigRows, error: reconfigError } = await adminSupabase
-        .from("autograder")
-        .update({ config: newerObj })
-        .eq("id", assignment_id)
-        .eq("latest_autograder_sha", headCommit.sha)
-        .select("id");
-      if (reconfigError) throw reconfigError;
-      if ((reconfigRows?.length ?? 0) === 0) {
-        // NOT a `return` — this block sits directly in handleRequest, so returning here would skip
-        // the handout-hash seeding below and answer the caller with an empty body.
-        scope.setTag("solution_head_recheck", "superseded_mid_write");
-        console.log(`Head recheck for ${solutionRepoFullName} lost a race with the push webhook; leaving its values`);
-      } else {
-        // Only advance from the sha this function itself recorded. If the webhook has already stored
-        // something newer, this write matches nothing and the newer value stands.
-        await reconcileHeadMetadata(
-          currentHead.sha,
-          currentHead.commit.message,
-          currentHead.commit.author?.name ?? null,
-          newerObj,
-          headCommit.sha,
-          false
+      const applied = await recordHeadMetadata(
+        currentHead.sha,
+        currentHead.commit.message,
+        currentHead.commit.author?.name ?? null,
+        newerObj,
+        headCommit.sha
+      );
+      if (!applied) {
+        scope.setTag("solution_head_recheck", "superseded");
+        console.log(
+          `Head recheck for ${solutionRepoFullName} lost a race with the push webhook; leaving its values intact`
         );
       }
     }
   } catch (recheckError) {
-    // Reportable rather than fatal, and safe BECAUSE of the write ordering above: the SHA is the
-    // last thing to move, so a failure part-way leaves it naming the older commit, which is
-    // consistent with the points and config still stored for that commit. The assignment is behind,
-    // not misrepresenting itself, and the next push reconciles it — the pointer is published by
-    // now, so that push is discoverable.
     scope.setTag("solution_head_recheck", "failed");
     Sentry.captureException(recheckError, scope);
     console.error(`Could not recheck the head of ${solutionRepoFullName} after publishing grader_repo`, recheckError);
