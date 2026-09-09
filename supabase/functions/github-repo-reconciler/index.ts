@@ -214,7 +214,15 @@ async function repairMissingSolutionRepos(opts: {
     if (excludedList) {
       query = query.not("classes.github_org", "in", excludedList);
     }
-    const { data, error } = await query.order("created_at", { ascending: true }).range(from, from + PAGE - 1);
+    // `id` is the tie-breaker, and it is load-bearing rather than cosmetic: `created_at` is not
+    // unique (a multi-row insert gives every row the same timestamp), and Postgres is free to
+    // return tied rows in a different order for each OFFSET page. Without a stable total order the
+    // pages can duplicate some rows and skip others, and a skipped row gets neither the repair nor
+    // the alert — the one outcome this scan exists to prevent.
+    const { data, error } = await query
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
     if (error) throw error;
     const page = (data ?? []) as unknown as AssignmentRow[];
     rows.push(...page);
