@@ -179,13 +179,16 @@ Deno.test("classifyRepoPresence: 404 on a selected-repos installation -> inacces
   assertEquals(await classifyRepoPresence(octokit, "org", "repo", "selected"), "inaccessible");
 });
 
-Deno.test("classifyRepoPresence: 404 with unknown installation scope -> inaccessible", async () => {
+Deno.test("classifyRepoPresence: 404 with an undetermined installation scope -> unknown, so it retries", async () => {
+  // undefined scope means the lookup failed, not that the install is "selected". Terminating here
+  // would discard a permission sync (or leave a missing row unparked) because an auxiliary lookup
+  // hit a 5xx or a rate limit.
   const octokit = fakeOctokit({
     "GET /repos/{owner}/{repo}": () => {
       throw requestError(404, "Not Found");
     }
   });
-  assertEquals(await classifyRepoPresence(octokit, "org", "repo", undefined), "inaccessible");
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", undefined), "unknown");
 });
 
 Deno.test("classifyRepoPresence: probe itself fails (non-404) -> unknown, never absent", async () => {
@@ -285,23 +288,27 @@ Deno.test("listCollaboratorsOrThrowMissing: selection is resolved lazily, never 
   assertEquals(resolverCalls, 0);
 });
 
-Deno.test("listCollaboratorsOrThrowMissing: a resolver that cannot answer -> unreadable, never missing", async () => {
-  // fetchRepositorySelection returns undefined when it cannot read the installation. Unknown scope
-  // must never be treated as proof of deletion.
-  const octokit = fakeOctokit({
-    "GET /repos/{owner}/{repo}/collaborators": () => {
-      throw requestError(404, "Not Found");
-    },
-    "GET /repos/{owner}/{repo}": () => {
-      throw requestError(404, "Not Found");
-    }
-  });
-  const err = await assertRejects(
-    () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => undefined),
-    RepositoryUnreadableError
-  );
-  assertEquals(err instanceof RepositoryMissingError, false);
-});
+Deno.test(
+  "listCollaboratorsOrThrowMissing: a resolver that cannot answer -> rethrows, terminates nothing",
+  async () => {
+    // fetchRepositorySelection returns undefined when it cannot read the installation — a transient
+    // 5xx or rate limit. That must stay retryable: it is neither proof of deletion nor proof of a
+    // selected-repos install, so it may neither park the row nor discard the job.
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}/collaborators": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /repos/{owner}/{repo}": () => {
+        throw requestError(404, "Not Found");
+      }
+    });
+    const err = await assertRejects(
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => undefined),
+      RequestError
+    );
+    assertEquals(err.status, 404);
+  }
+);
 
 Deno.test("listCollaboratorsOrThrowMissing: non-404 propagates without an existence probe", async () => {
   // No "GET /repos/{owner}/{repo}" handler: fakeOctokit throws on an unexpected route, so this

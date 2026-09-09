@@ -2286,8 +2286,12 @@ function isGitHubNotFoundError(error: unknown): boolean {
  * prevent. Proof has to be fresh to be proof.
  *
  * Costs one app-authenticated request, and only on the 404 path (see
- * `listCollaboratorsOrThrowMissing`), never on the happy path. `undefined` on any failure: unknown
- * scope must degrade to "cannot prove deletion", not to "all".
+ * `listCollaboratorsOrThrowMissing`), never on the happy path.
+ *
+ * Returns `undefined` on ANY failure, meaning strictly "could not find out" — never "all" and never
+ * "selected". `classifyRepoPresence` maps that to its retryable `unknown` state, so a 5xx or rate
+ * limit from this auxiliary lookup cannot terminate a job. Reading it as "selected" would be just
+ * as wrong as reading it as "all": one discards a live sync, the other parks a live repo.
  */
 export async function fetchRepositorySelection(org: string): Promise<"all" | "selected" | undefined> {
   try {
@@ -2309,14 +2313,20 @@ export async function fetchRepositorySelection(org: string): Promise<"all" | "se
  * retrying, and may we write the row off — and collapsing them gets one of the two wrong:
  *
  *   present      — 200. The repo is there, so the collaborators 404 was replication lag. Retry.
- *   unknown      — the probe ITSELF failed (403, 5xx, network). We learned nothing, so this says
- *                  nothing about the repo and nothing about the row. Retry.
+ *   unknown      — we learned nothing, from either input: the probe ITSELF failed (403, 5xx,
+ *                  network), or the installation scope came back undefined because THAT lookup
+ *                  failed. Says nothing about the repo and nothing about the row. Retry.
  *   absent       — 404, AND this installation can see every repo in the org, so there was nothing
  *                  to hide: the repo really is gone. Terminal, and provably so — safe to park.
- *   inaccessible — 404, but the installation is scoped to SELECTED repos (or we don't know its
- *                  scope), so a live repo we were never granted 404s identically to a deleted one.
- *                  Terminal for this job — retrying cannot make an ungranted repo readable — but
- *                  NOT proof of anything about the row.
+ *   inaccessible — 404, AND the installation is confirmed scoped to SELECTED repos, so a live repo
+ *                  we were never granted 404s identically to a deleted one. Terminal for this job
+ *                  — retrying cannot make an ungranted repo readable — but NOT proof about the row.
+ *
+ * `undefined` scope means "we could not find out", and it has to land on `unknown` rather than on
+ * `inaccessible`: a transient 5xx or rate limit from the scope lookup would otherwise be
+ * indistinguishable from a confirmed selected-repos installation, and would terminate the job —
+ * permanently discarding a permission sync, or leaving a genuinely missing row unparked, because
+ * an auxiliary lookup blipped. Ignorance is never grounds to stop.
  *
  * `github-check-app-installation` already reads a repo 404 as "installed in the org but not granted
  * access to this repo". Collapsing that into "deleted" would park a LIVE repo; collapsing it into
@@ -2339,7 +2349,9 @@ export async function classifyRepoPresence(
     if (!isGitHubNotFoundError(error)) {
       return "unknown";
     }
-    return repositorySelection === "all" ? "absent" : "inaccessible";
+    if (repositorySelection === "all") return "absent";
+    if (repositorySelection === "selected") return "inaccessible";
+    return "unknown";
   }
 }
 
