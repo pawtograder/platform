@@ -5,7 +5,11 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { isE2eFixtureTarget } from "../_shared/e2eGithubGuard.ts";
-import { assignmentShouldHaveRepos, expectedHandoutRepo } from "../_shared/handoutRepoStrategy.ts";
+import {
+  assignmentShouldHaveRepos,
+  expectedHandoutRepo,
+  handoutPointerIsOurs
+} from "../_shared/handoutRepoStrategy.ts";
 import { edgeFunctionEndpoint } from "../_shared/edgeFunctionUrl.ts";
 import { canStartRepair, remainingBudgetMs } from "../_shared/repairBudget.ts";
 import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
@@ -465,8 +469,7 @@ async function repairMissingSolutionRepos(opts: {
       // Still an equality test, so the custom-handout protection is unchanged: a fork-mode
       // assignment pointed somewhere OTHER than its source is left alone exactly like a
       // template-mode one pointed away from its derived name.
-      const handoutIsOurs =
-        freshTemplateRepo === null || (expectedHandout !== null && freshTemplateRepo === expectedHandout);
+      const handoutIsOurs = handoutPointerIsOurs(freshTemplateRepo, expectedHandout);
       // has_autograder read fresh alongside everything else. The scan value can be minutes old, and
       // an instructor disabling the autograder in between makes a missing workflow_sha the correct
       // state rather than something to repair.

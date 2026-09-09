@@ -226,6 +226,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // custom repository's parsed config BEFORE writing its pointer, so checking only the SHA
       // could overwrite that config with this repository's. Declining is the right answer when the
       // expectation is already stale — the instructor's selection is explicit, ours is derived.
+      //
+      // NULL here means "expect no pointer", not "do not care": the RPC compares with IS NOT
+      // DISTINCT FROM either way. NULL is the normal value on this path, so a "do not care" reading
+      // would switch the check off exactly when it is needed.
       p_expected_grader_repo: pointerExpectationForRpc,
       // The flag `points` was derived from, checked inside the same transaction that writes them.
       // An instructor toggling the autograder while the GitHub calls ran would otherwise have this

@@ -56,7 +56,7 @@
  *        # one assignment, INCLUDING the needs-review shape and including a non-NULL grader_repo
  *        # (for a run that failed after the pointer was written). Naming it is the confirmation.
  */
-import { expectedHandoutRepo } from "@/supabase/functions/_shared/handoutRepoStrategy";
+import { expectedHandoutRepo, handoutPointerIsOurs } from "@/supabase/functions/_shared/handoutRepoStrategy";
 import type { AssignmentRepoMode } from "@/supabase/functions/_shared/repoCreationStrategy";
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { createAdminClient } from "@/utils/supabase/client";
@@ -517,10 +517,7 @@ async function main() {
 
   const planFor = (row: Row) => {
     const expected = expectedHandouts.get(row.id) ?? null;
-    // A null expectation is NOT a match: it means the naming inputs or the fork source could not be
-    // resolved, and rerunning creation on that basis is exactly what would rebuild a pointer we
-    // cannot account for.
-    const handoutIsOurs = row.template_repo === null || (expected !== null && row.template_repo === expected);
+    const handoutIsOurs = handoutPointerIsOurs(row.template_repo, expected);
     const wantsHandout = row.has_autograder !== false && (row.autograder?.workflow_sha ?? null) === null;
     if (wantsHandout && !handoutIsOurs) {
       console.log(
@@ -583,7 +580,7 @@ async function main() {
       const { data: fresh, error: freshError } = await supabase
         .from("assignments")
         .select(
-          "archived_at, template_repo, classes(archived, github_org, slug), autograder(grader_repo, workflow_sha)"
+          "archived_at, template_repo, repo_mode, source_assignment_id, classes(archived, github_org, slug), autograder(grader_repo, workflow_sha)"
         )
         .eq("id", row.id)
         .maybeSingle();
@@ -648,14 +645,28 @@ async function main() {
         console.log(`  skipping assignment ${row.id}: its class no longer has a slug`);
         continue;
       }
-      const derivedHandoutNow = `${currentOrg}/${currentSlug}-handout-${row.slug}`;
+      // The same rule the plan used, re-evaluated against the reloaded row rather than a derived
+      // name spelled out again here. Spelling it out was wrong for exactly one mode:
+      // fork_from_prior_assignment mirrors the SOURCE's pointer, which can never equal
+      // `<class>-handout-<assignment>`, so every inherited handout was skipped here as "custom"
+      // even after planFor had correctly scheduled the handout step for it — the assignment came
+      // out of a broad --apply with neither its workflow hash nor its solution repo.
+      const expectedHandoutNow = expectedHandoutRepo({
+        mode: (fresh.repo_mode ?? row.repo_mode) as AssignmentRepoMode,
+        githubOrg: currentOrg,
+        classSlug: currentSlug,
+        assignmentSlug: row.slug,
+        sourceTemplateRepo:
+          (fresh.repo_mode ?? row.repo_mode) === "fork_from_prior_assignment"
+            ? await sourceHandoutFor({ ...row, source_assignment_id: fresh.source_assignment_id ?? null })
+            : null
+      });
       if (
         functions.includes("assignment-create-handout-repo") &&
-        freshTemplate !== null &&
-        freshTemplate !== derivedHandoutNow
+        !handoutPointerIsOurs(freshTemplate, expectedHandoutNow)
       ) {
         console.log(
-          `  skipping assignment ${row.id}: it gained a custom handout (${freshTemplate}) since the plan was built`
+          `  skipping assignment ${row.id}: it gained a custom handout (${freshTemplate}, expected ${expectedHandoutNow ?? "none"}) since the plan was built`
         );
         continue;
       }

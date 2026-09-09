@@ -7,7 +7,12 @@
  * GitHub repos every 15 minutes for assignments that are supposed to have none.
  */
 import { assertEquals } from "jsr:@std/assert@^1";
-import { assignmentShouldHaveRepos, expectedHandoutRepo, resolveHandoutRepoAction } from "./handoutRepoStrategy.ts";
+import {
+  assignmentShouldHaveRepos,
+  expectedHandoutRepo,
+  handoutPointerIsOurs,
+  resolveHandoutRepoAction
+} from "./handoutRepoStrategy.ts";
 
 Deno.test("assignmentShouldHaveRepos: modes that opt out of GitHub entirely", () => {
   // assignment-create-handout-repo CLEARS template_repo for these, so NULL is correct and must
@@ -138,4 +143,19 @@ Deno.test("expectedHandoutRepo: no-repo modes have no expected handout", () => {
     );
     assertEquals(assignmentShouldHaveRepos(mode), false);
   }
+});
+
+Deno.test("handoutPointerIsOurs: exact, case-insensitive, and the two null cases", () => {
+  assertEquals(handoutPointerIsOurs("org/c-handout-hw2", "org/c-handout-hw2"), true);
+  // A class whose stored github_org differs only in case from the owner already in template_repo.
+  // GitHub logins are case-insensitive but classes.github_org keeps the typed capitalization, so
+  // these name the same repository; calling it custom would leave the assignment unrepaired.
+  assertEquals(handoutPointerIsOurs("Khoury-CS3650/C-Handout-HW2", "khoury-cs3650/c-handout-hw2"), true);
+  // A genuinely different repository is still protected.
+  assertEquals(handoutPointerIsOurs("org/instructors-own-handout", "org/c-handout-hw2"), false);
+  // Nothing stored: nothing to protect, safe to create.
+  assertEquals(handoutPointerIsOurs(null, "org/c-handout-hw2"), true);
+  // Unresolvable expectation with a pointer present: must NOT be read as a match.
+  assertEquals(handoutPointerIsOurs("org/c-handout-hw1", null), false);
+  assertEquals(handoutPointerIsOurs(null, null), true);
 });

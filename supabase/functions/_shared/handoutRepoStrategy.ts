@@ -153,4 +153,27 @@ export function expectedHandoutRepo(args: {
   return `${args.githubOrg}/${args.classSlug}-handout-${args.assignmentSlug}`;
 }
 
+/**
+ * Is the handout pointer already on the assignment one that `assignment-create-handout-repo` would
+ * write, and therefore safe to rebuild by rerunning it?
+ *
+ * `null` stored means nothing to protect. `null` expected means the naming inputs or the fork
+ * source could not be resolved, which is NOT a match — rerunning creation on that basis is exactly
+ * what would overwrite a pointer we cannot account for.
+ *
+ * Compared case-insensitively. GitHub owner and repository names are case-insensitive, but
+ * `classes.github_org` and `classes.slug` store whatever capitalization was typed (admin_create_class
+ * and admin_update_class both keep it verbatim, and production has at least one mixed-case class).
+ * A stored pointer written under one spelling and an expectation derived under another name the
+ * same repository, so an exact comparison would call it custom — and for an assignment with no
+ * workflow_sha that means solution creation alone, which publishes grader_repo, drops the row out of
+ * every future scan and leaves submissions blocked on the missing workflow hash. The callers still
+ * pass the exact stored value to GitHub; only this ownership test is normalized.
+ */
+export function handoutPointerIsOurs(stored: string | null, expected: string | null): boolean {
+  if (stored === null) return true;
+  if (expected === null) return false;
+  return stored.toLowerCase() === expected.toLowerCase();
+}
+
 export { REPO_MODES_WITHOUT_REPOS, TEMPLATE_HANDOUT_REPO_NAME };

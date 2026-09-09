@@ -68,13 +68,23 @@ BEGIN
     -- writes a custom repository's parsed config BEFORE it writes the pointer, so a provisioning
     -- request that checked only the SHA could overwrite that config with the conventionally derived
     -- repository's metadata. Including the pointer means a request whose expectation is already
-    -- stale declines instead. NULL means "do not care", which is what the pre-pointer paths pass.
+    -- stale declines instead.
+    --
+    -- Compared with IS NOT DISTINCT FROM in every case, including NULL. An earlier revision read a
+    -- NULL expectation as "do not care", which disabled the check on the ONLY path that normally
+    -- reaches it: provisioning observes grader_repo as NULL, or clears a stale one to NULL, so NULL
+    -- is what it passes. An instructor saving a custom repository during the GitHub work — config
+    -- first, pointer second — could then have that config, SHA and points overwritten here, and the
+    -- publish CAS afterwards would correctly refuse the derived pointer, leaving their pointer
+    -- attached to this repository's metadata. "Expect no pointer" is a real expectation and is now
+    -- treated as one. There is no "do not care" caller; the one call site always has a definite
+    -- expectation.
     UPDATE public.autograder
        SET config = p_config,
            latest_autograder_sha = p_new_sha
      WHERE id = p_assignment_id
        AND latest_autograder_sha IS NOT DISTINCT FROM p_expected_sha
-       AND (p_expected_grader_repo IS NULL OR grader_repo IS NOT DISTINCT FROM p_expected_grader_repo)
+       AND grader_repo IS NOT DISTINCT FROM p_expected_grader_repo
     RETURNING class_id INTO v_class_id;
 
     IF NOT FOUND THEN
