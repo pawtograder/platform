@@ -102,15 +102,20 @@ BEGIN
     -- invariant every future writer of this column has to remember, and jsonb equality already
     -- answers the only question being asked — "is the config still the one the caller looked at".
     -- Configs are small, and the caller reads this column in the same query it reads the pointer
-    -- from, so the check costs nothing extra. NULL means "do not care", for callers that have not
-    -- observed it.
+    -- from, so the check costs nothing extra.
+    --
+    -- Compared with IS NOT DISTINCT FROM in every case, including NULL — the same correction the
+    -- pointer predicate needed. A freshly created autograder row legitimately has config = NULL, so
+    -- that IS the value provisioning normally observes; reading NULL as "do not care" switched the
+    -- check off in precisely the case it was added for, a brand-new assignment being provisioned
+    -- while an instructor selects a custom repository. There is no "do not care" caller.
     UPDATE public.autograder
        SET config = p_config,
            latest_autograder_sha = p_new_sha
      WHERE id = p_assignment_id
        AND latest_autograder_sha IS NOT DISTINCT FROM p_expected_sha
        AND grader_repo IS NOT DISTINCT FROM p_expected_grader_repo
-       AND (p_expected_config IS NULL OR config IS NOT DISTINCT FROM p_expected_config)
+       AND config IS NOT DISTINCT FROM p_expected_config
     RETURNING class_id INTO v_class_id;
 
     IF NOT FOUND THEN

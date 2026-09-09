@@ -726,7 +726,39 @@ async function main() {
       functions = functionsNow;
     }
     let allOk = true;
+    let stoppedForExclusion = false;
     for (const fn of functions) {
+      // Re-read before EVERY request, matching the reconciler. The exclusion was checked once
+      // before this loop, but the handout call takes minutes and this is the switch an operator
+      // flips to stop automation — so a solution repository could still be created after it was
+      // enabled, and the assignment reported as successfully repaired. The creation endpoints
+      // deliberately do not enforce the flag (instructor-initiated calls must keep working), so
+      // this loop is the only thing that honours it. Skipped for a named --assignment, exactly like
+      // the checks above it: that is a human deliberately repairing one row.
+      if (!targeted) {
+        const { data: orgRow, error: orgRowError } = await supabase
+          .from("assignments")
+          .select("classes(github_org)")
+          .eq("id", row.id)
+          .maybeSingle();
+        const orgNow = (orgRow?.classes as { github_org: string | null } | null)?.github_org ?? null;
+        const { data: exclusionNow, error: exclusionError } = orgNow
+          ? await supabase
+              .from("github_orgs")
+              .select("excluded_from_automation")
+              .ilike("org_name", orgNow)
+              .maybeSingle()
+          : { data: null, error: null };
+        if (orgRowError || exclusionError || !orgNow || exclusionNow?.excluded_from_automation) {
+          // Unreadable counts as excluded, matching the check before the loop: "we could not tell"
+          // must not mean "carry on" for the switch whose purpose is stopping automation.
+          console.log(
+            `  skipping assignment ${row.id}: org ${orgNow ?? "unknown"} is excluded from automation or could not be read`
+          );
+          stoppedForExclusion = true;
+          break;
+        }
+      }
       process.stdout.write(`  ${fn} for assignment ${row.id}... `);
       const { error: invokeError } = await supabase.functions.invoke(fn, {
         body: {
@@ -750,6 +782,9 @@ async function main() {
       }
       console.log("ok");
     }
+    // A clean skip, not a success and not a failure: the operator asked automation to stop, and a
+    // partial handout-then-solution leaves grader_repo NULL, so the row stays repairable.
+    if (stoppedForExclusion) continue;
     if (allOk) ok++;
     else failed++;
   }

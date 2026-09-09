@@ -269,6 +269,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // writes the matching grader_repo, and touches neither the sha nor the pointer doing it — so
       // without this the other two predicates still matched and this call would overwrite an
       // instructor's chosen config with the derived repository's, permanently.
+      //
+      // NULL here means "expect no config", not "do not care" — and NULL is the normal observation
+      // on this path, since a freshly created autograder row has none.
       p_expected_config: (existingPointer?.config ?? null) as Json,
       // The flag `points` was derived from, checked inside the same transaction that writes them.
       // An instructor toggling the autograder while the GitHub calls ran would otherwise have this

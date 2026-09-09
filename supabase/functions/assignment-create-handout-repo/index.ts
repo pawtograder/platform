@@ -177,7 +177,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // handout — it belongs to the source assignment, which may well have an
     // autograder of its own.
     if (sourceAssignment!.template_repo && assignment.has_autograder !== false) {
-      await updateAutograderWorkflowHash(sourceAssignment!.template_repo);
+      // Hashed AT the revision just copied, not at the repository's current head. This branch pins
+      // latest_template_sha to the source's recorded value, and updateAutograderWorkflowHash's own
+      // contract says to pass a sha whenever the caller does that — hashing the unqualified head
+      // while advertising a different revision records the NEW workflow's hash against the OLD tree
+      // students receive, so their Actions submissions fail the hash check. Reachable here whenever
+      // the source's own handout webhook is delayed or failed: the pointer says S1 while GitHub is
+      // already at S2. Undefined when the source has no recorded sha, which is the previous
+      // behaviour and the only thing available then.
+      await updateAutograderWorkflowHash(
+        sourceAssignment!.template_repo,
+        sourceAssignment!.latest_template_sha ?? undefined
+      );
     }
     return {
       repo_name: sourceAssignment!.template_repo?.split("/")[1] ?? null,
