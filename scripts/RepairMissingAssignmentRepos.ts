@@ -80,6 +80,13 @@ const isE2eFixture = (org: string | null, courseSlug: string | null, repoName?: 
 // unpaged read would report a complete result while silently omitting everything past the cap.
 const PAGE_SIZE = 500;
 
+// Matches the reconciler's grace. `template_repo` is written before the rest of handout setup and
+// before the solution call, so an assignment still being created legitimately looks "repairable"
+// for the length of that flow. A broad sweep that acted on it would race the run already in
+// progress into duplicate GitHub creation and permission work. A named --assignment overrides it,
+// since that is a human who knows the state.
+const SWEEP_GRACE_MINUTES = 30;
+
 // Every option this script accepts. Anything else is a typo, and a typo must not silently widen the
 // run: `--clas 123 --apply` would otherwise leave classId undefined and sweep every repairable
 // assignment instead of one class.
@@ -90,7 +97,13 @@ function validateArgv(): void {
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
-    if (!token.startsWith("--")) continue;
+    if (!token.startsWith("--")) {
+      // A bare word or a short option is not silently ignored: `-c 123 --apply` and
+      // `class 123 --apply` both leave classId undefined, which turns a scoped repair into an
+      // all-assignment one. That is the same widening the option checks below exist to stop.
+      console.error(`Unexpected argument "${token}". Options must be written in full, as --name value.`);
+      process.exit(2);
+    }
     const name = token.slice(2);
     if (BOOLEAN_OPTIONS.has(name)) continue;
     if (VALUE_OPTIONS.has(name)) {
@@ -198,6 +211,7 @@ type Row = {
   repo_mode: string;
   template_repo: string | null;
   archived_at: string | null;
+  created_at: string;
   has_autograder: boolean | null;
   source_assignment_id: number | null;
   classes: { slug: string | null; github_org: string | null; archived: boolean | null } | null;
@@ -241,7 +255,7 @@ async function main() {
     let query = supabase
       .from("assignments")
       .select(
-        "id, class_id, slug, repo_mode, template_repo, archived_at, has_autograder, source_assignment_id, classes(slug, github_org, archived), autograder(grader_repo, workflow_sha)"
+        "id, class_id, slug, repo_mode, template_repo, archived_at, created_at, has_autograder, source_assignment_id, classes(slug, github_org, archived), autograder(grader_repo, workflow_sha)"
       )
       .order("class_id")
       .order("id")
@@ -277,6 +291,8 @@ async function main() {
     // assignments were reported as repairable in the first production dry run.
     if (isE2eFixture(a.classes.github_org, a.classes.slug, `${a.classes.slug}-solution-${a.slug}`)) return false;
     if (!targeted && (a.classes.archived || a.archived_at)) return false;
+    // Skip assignments whose creation may still be running (see SWEEP_GRACE_MINUTES).
+    if (!targeted && Date.now() - new Date(a.created_at).getTime() < SWEEP_GRACE_MINUTES * 60 * 1000) return false;
     return true;
   });
 

@@ -273,8 +273,18 @@ async function repairMissingSolutionRepos(opts: {
   }
 
   const oldestRepairable = new Date(startedAt - REPAIR_MAX_AGE_DAYS * 24 * 60 * 60 * 1000).getTime();
+  // Rotate the window between ticks. Capping attempts stops a handful of deterministic failures
+  // starving the rest WITHIN a tick, but with a fixed oldest-first order the same first
+  // REPAIR_MAX_ATTEMPTS_PER_RUN candidates are retried on every tick forever — so if that many fail
+  // deterministically, healthy candidates behind them are never attempted at all and can cross the
+  // 30-day repair ceiling while still fixable. The offset advances once per cadence period, which
+  // needs no persisted state and guarantees every candidate eventually gets a turn. The alert pass
+  // above is unaffected: it already covers the whole set on every run.
+  const rotation =
+    repairable.length === 0 ? 0 : Math.floor(startedAt / (STALE_MINUTES * 60 * 1000)) % repairable.length;
+  const rotated = [...repairable.slice(rotation), ...repairable.slice(0, rotation)];
   let attempts = 0;
-  for (const a of repairable) {
+  for (const a of rotated) {
     if (tally.created >= REPAIR_MAX_SUCCESSES_PER_RUN) break;
     if (attempts >= REPAIR_MAX_ATTEMPTS_PER_RUN) break;
     if (!canStartRepair(Date.now() - startedAt)) {
