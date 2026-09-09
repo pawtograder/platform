@@ -357,6 +357,25 @@ Deno.test("listCollaboratorsOrThrowMissing: a rate-limited probe propagates, so 
   assertEquals(err.status, 429);
 });
 
+Deno.test("listCollaboratorsOrThrowMissing: a 404 whose repo is PRESENT is passed through untouched", async () => {
+  // The invariant that lets the whole-sync backstop be applied broadly: a 404 that was never about
+  // the repo (e.g. a deleted GitHub account on a collaborator PUT) must not be reinterpreted as a
+  // missing repo, or a live repo gets parked because a student deleted their account.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /repos/{owner}/{repo}": META_OK
+  });
+  const err = await assertRejects(
+    () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all"),
+    RequestError
+  );
+  assertEquals(err.status, 404);
+  assertEquals(err instanceof RepositoryMissingError, false);
+  assertEquals(err instanceof RepositoryUnreadableError, false);
+});
+
 Deno.test("listCollaboratorsOrThrowMissing: selection is resolved lazily, never on the happy path", async () => {
   // The resolver hits GitHub, so it must not be called when the collaborator read succeeds.
   let resolverCalls = 0;

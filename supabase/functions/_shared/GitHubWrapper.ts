@@ -2466,34 +2466,53 @@ export async function listCollaboratorsOrThrowMissing(
       per_page: 100
     });
   } catch (error) {
-    if (isGitHubNotFoundError(error)) {
-      const presence = await classifyRepoPresence(octokit, owner, repo, await resolveRepositorySelection());
-      if (presence === "absent") {
-        // `absent` rests on the scope having been "all", read BEFORE the probe. If an admin narrows
-        // the installation in between, a live repo dropped from the selection 404s and this stale
-        // "all" would write it off — the very failure the fresh lookup exists to prevent, moved
-        // inside a single call. So confirm the scope again, now that the 404 is in hand.
-        //
-        // Re-ordering alone would not help: reading only AFTER the probe just inverts the race (a
-        // widening between probe and read would mislead us identically). Requiring "all" on BOTH
-        // sides is what raises the bar from one administrative change mid-request to two in
-        // opposite directions, which is not a thing that happens. Costs one request, and only on
-        // the path where we are about to write to the database.
-        const confirmed = await resolveRepositorySelection();
-        if (confirmed === "all") {
-          throw new RepositoryMissingError(`${owner}/${repo}`);
-        }
-        // Scope changed under us. "selected" means the 404 is now unattributable; anything else
-        // means we no longer know, so fall through and let the original 404 be retried.
-        if (confirmed === "selected") {
-          throw new RepositoryUnreadableError(`${owner}/${repo}`);
-        }
-      } else if (presence === "inaccessible") {
-        throw new RepositoryUnreadableError(`${owner}/${repo}`);
-      }
-    }
+    const reinterpreted = await reinterpretRepoNotFound(octokit, owner, repo, error, resolveRepositorySelection);
+    if (reinterpreted) throw reinterpreted;
     throw error;
   }
+}
+
+/**
+ * Given an error from a repo-scoped call, decide whether it should be re-reported as a per-repo
+ * terminal condition, and which one. Returns undefined to mean "leave this error exactly as it is".
+ *
+ * Shared by the collaborator read and by the whole-sync backstop, so the "when may we conclude the
+ * repo is gone" rule lives in one place. Verifying rather than assuming is what makes the backstop
+ * safe to apply broadly: a 404 from
+ * `PUT /repos/{owner}/{repo}/collaborators/{username}` can mean the USERNAME does not exist, and
+ * treating that as a missing repo would park a live repo because a student deleted their GitHub
+ * account. Since this probes the repo before concluding anything, that case comes back `present`
+ * and the original error is passed through untouched.
+ */
+async function reinterpretRepoNotFound(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  error: unknown,
+  resolveRepositorySelection: () => Promise<"all" | "selected" | undefined>
+): Promise<RepositoryMissingError | RepositoryUnreadableError | undefined> {
+  if (!isGitHubNotFoundError(error)) return undefined;
+  const presence = await classifyRepoPresence(octokit, owner, repo, await resolveRepositorySelection());
+  if (presence === "inaccessible") {
+    return new RepositoryUnreadableError(`${owner}/${repo}`);
+  }
+  if (presence !== "absent") {
+    // present -> the 404 was about something else (a user, a team); unknown -> we have no grounds.
+    return undefined;
+  }
+  // `absent` rests on the scope having been "all", read BEFORE the probe. If an admin narrows the
+  // installation in between, a live repo dropped from the selection 404s and that stale "all"
+  // would write it off — the failure the fresh lookup exists to prevent, moved inside one call.
+  // So confirm the scope again, now that the 404 is in hand.
+  //
+  // Re-ordering alone would not help: reading only AFTER the probe inverts the race, since a
+  // widening between probe and read misleads us identically. Requiring "all" on BOTH sides raises
+  // the bar from one administrative change mid-request to two in opposite directions. Costs one
+  // request, and only on the path about to write to the database.
+  const confirmed = await resolveRepositorySelection();
+  if (confirmed === "all") return new RepositoryMissingError(`${owner}/${repo}`);
+  if (confirmed === "selected") return new RepositoryUnreadableError(`${owner}/${repo}`);
+  return undefined;
 }
 
 export async function archiveRepoAndLock(org: string, repo: string, scope?: Sentry.Scope) {
@@ -3514,6 +3533,39 @@ export async function syncRepoPermissions(
     // Same reasoning as createRepo: flag only what escapes. This path recovers from a missing staff
     // team on purpose (TeamNotFoundError degrades to "do not remove anyone" and carries on).
     timings.noteEscapingError(error);
+    // Backstop for every OTHER repo-scoped call in the sync. The collaborator read classifies its
+    // own 404 because it sits inside the retry ladder and has to short-circuit those 93 seconds,
+    // but the sync goes on to read the repo's teams and to add/remove collaborators — and this
+    // function has been measured at 94 seconds, so a repo deleted part-way through is not
+    // hypothetical. During the 2026-09-09 sp26 cleanup an instructor deleted 146 repos by hand;
+    // any one of those could have landed mid-sync. Without this, such a 404 escapes bare and the
+    // worker reads it as systemic, opening the org-wide circuit — the original incident, entered
+    // through a different call.
+    //
+    // Safe to apply this broadly precisely because it verifies instead of assuming: a 404 that was
+    // never about the repo (a deleted GitHub account on a collaborator PUT) probes back `present`
+    // and is rethrown untouched.
+    try {
+      const [owner, repoName] = repo.includes("/") ? repo.split("/") : [org, repo];
+      const octokit = await getOctoKit(owner, _scope);
+      if (octokit) {
+        const reinterpreted = await reinterpretRepoNotFound(octokit, owner, repoName, error, () =>
+          fetchRepositorySelection(owner)
+        );
+        if (reinterpreted) throw reinterpreted;
+      }
+    } catch (reinterpretError) {
+      // Only the reinterpretation may replace the original; a failure while trying to reinterpret
+      // must not mask what actually went wrong.
+      if (reinterpretError instanceof RepositoryMissingError || reinterpretError instanceof RepositoryUnreadableError) {
+        throw reinterpretError;
+      }
+      Sentry.addBreadcrumb({
+        category: "github",
+        message: `Could not classify the 404 escaping sync for ${org}/${repo}; reporting the original error`,
+        level: "warning"
+      });
+    }
     throw error;
   } finally {
     timings.finish((snapshot) => attachStepTimingsToScope(snapshot, _scope));
