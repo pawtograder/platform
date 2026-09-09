@@ -73,6 +73,27 @@ export class RepositoryMissingError extends NonRetryableGitHubError {
 }
 
 /**
+ * The repo 404s and we cannot attribute it: the installation is scoped to selected repositories, so
+ * this is either a deleted repo or a live one we were never granted. Sibling of
+ * RepositoryMissingError, and the distinction is exactly what we are allowed to DO about it.
+ *
+ * Both are per-repo failures, so neither should trip the org-wide circuit breaker or spend the
+ * retry ladder — nothing about one repo says the org is unhealthy. Only RepositoryMissingError
+ * carries proof of deletion, so only it may park the row; this one leaves `repositories` untouched,
+ * because the row may be perfectly correct and the problem ours.
+ */
+export class RepositoryUnreadableError extends NonRetryableGitHubError {
+  readonly fullName: string;
+  constructor(fullName: string) {
+    super(
+      `Repository ${fullName} returned 404 and this installation is scoped to selected repositories, so it is either deleted or not granted to us. Cannot sync it, and cannot safely conclude it is gone.`
+    );
+    this.name = "RepositoryUnreadableError";
+    this.fullName = fullName;
+  }
+}
+
+/**
  * The GitHub login we have on file for a user doesn't exist, and we couldn't recover a current one
  * from the numeric account id we stored when they linked their account (see
  * `reresolveMissingGitHubLogin`). Either the account was deleted or the username was never really
@@ -2284,24 +2305,26 @@ export async function fetchRepositorySelection(org: string): Promise<"all" | "se
 }
 
 /**
- * Three states, because a 404 on `GET /repos/{owner}/{repo}` has two very different causes and
- * only one of them is actionable:
+ * Four states, because the caller has to make two independent decisions from one 404 — may we keep
+ * retrying, and may we write the row off — and collapsing them gets one of the two wrong:
  *
- *   present      — 200. The repo is there.
+ *   present      — 200. The repo is there, so the collaborators 404 was replication lag. Retry.
+ *   unknown      — the probe ITSELF failed (403, 5xx, network). We learned nothing, so this says
+ *                  nothing about the repo and nothing about the row. Retry.
  *   absent       — 404, AND this installation can see every repo in the org, so there was nothing
- *                  to hide: the repo really is gone.
+ *                  to hide: the repo really is gone. Terminal, and provably so — safe to park.
  *   inaccessible — 404, but the installation is scoped to SELECTED repos (or we don't know its
- *                  scope), so a repo we were never granted 404s identically to a deleted one. Also
- *                  any non-404 failure: 403, 5xx, network.
+ *                  scope), so a live repo we were never granted 404s identically to a deleted one.
+ *                  Terminal for this job — retrying cannot make an ungranted repo readable — but
+ *                  NOT proof of anything about the row.
  *
- * That middle distinction is the whole point. `github-check-app-installation` already reads a repo
- * 404 as "installed in the org but not granted access to this repo", and if we collapsed that into
- * "deleted" we would park a LIVE repo — clearing `is_github_ready`, writing a creation_error, and
- * having every later permission sync skip it even after access was restored. "We could not find
- * out" must never be recorded as "the repo is gone", so anything short of proof lands on
- * `inaccessible` and the caller leaves the row alone.
+ * `github-check-app-installation` already reads a repo 404 as "installed in the org but not granted
+ * access to this repo". Collapsing that into "deleted" would park a LIVE repo; collapsing it into
+ * "retry" would spend the 93s ladder and then let a bare 404 escape and trip the org-wide circuit,
+ * throttling every other class over one repo. Hence two terminal states rather than one: both stop
+ * the work, only `absent` is allowed to change the database.
  */
-export type RepoPresence = "present" | "absent" | "inaccessible";
+export type RepoPresence = "present" | "unknown" | "absent" | "inaccessible";
 
 export async function classifyRepoPresence(
   octokit: Octokit,
@@ -2314,7 +2337,7 @@ export async function classifyRepoPresence(
     return "present";
   } catch (error) {
     if (!isGitHubNotFoundError(error)) {
-      return "inaccessible";
+      return "unknown";
     }
     return repositorySelection === "all" ? "absent" : "inaccessible";
   }
@@ -2331,10 +2354,17 @@ export async function classifyRepoPresence(
  * by opening the `<org>:sync_repo_permissions` circuit, throttling that method for every other
  * class in the org over one dead row.
  *
- * So ask instead of guessing. One extra request, only on the error path, and we act only on proof:
- * `absent` -> RepositoryMissingError (terminal, not retried, handled per-row). `present` or
- * `inaccessible` -> rethrow the original 404 so the ladder still covers the lag it was written for,
- * and so a repo merely hidden from a selected-repos installation is never parked.
+ * So ask instead of guessing, and answer the two questions separately:
+ *
+ *   absent       -> RepositoryMissingError. Terminal AND provable: park the row.
+ *   inaccessible -> RepositoryUnreadableError. Terminal but unprovable: stop, touch nothing.
+ *   present      -> rethrow the original 404; the ladder covers the lag it was written for.
+ *   unknown      -> rethrow too. The probe failed, so we have no grounds to terminate.
+ *
+ * Both terminal cases are NonRetryableGitHubError, which is what keeps a single dead or ungranted
+ * repo out of the org-wide circuit breaker and out of the error-threshold counter. Returning a
+ * bare 404 for the inaccessible case instead would spend the full ladder and then be read as a
+ * systemic failure — the original incident, just narrowed to selected-repos installations.
  *
  * `resolveRepositorySelection` is a thunk, not a value, for two reasons: it is only needed on the
  * 404 path so the happy path pays nothing for it, and passing it in keeps this function testable —
@@ -2360,6 +2390,9 @@ export async function listCollaboratorsOrThrowMissing(
       const presence = await classifyRepoPresence(octokit, owner, repo, await resolveRepositorySelection());
       if (presence === "absent") {
         throw new RepositoryMissingError(`${owner}/${repo}`);
+      }
+      if (presence === "inaccessible") {
+        throw new RepositoryUnreadableError(`${owner}/${repo}`);
       }
     }
     throw error;

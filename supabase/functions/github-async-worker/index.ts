@@ -21,6 +21,7 @@ import {
   NonRetryableRepoError,
   NonRetryableUserError,
   RepositoryMissingError,
+  RepositoryUnreadableError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
@@ -2318,6 +2319,12 @@ export async function processEnvelope(
       // sp26 assignment on 2026-09-09). Group them; the repo is on the tag and in the message.
       scope.setFingerprint(["github-repository-missing", envelope.method]);
       scope.setTag("missing_repository", error.fullName);
+    } else if (error instanceof RepositoryUnreadableError) {
+      // Narrowing an installation's repo selection would produce one of these per affected repo at
+      // once, so group them the same way. Kept separate from the missing case because the operator
+      // action differs: re-grant access, versus accept that the repo is gone.
+      scope.setFingerprint(["github-repository-unreadable", envelope.method]);
+      scope.setTag("unreadable_repository", error.fullName);
     }
 
     const errorId = Sentry.captureException(error, scope);
@@ -2385,7 +2392,13 @@ export async function processEnvelope(
         // redelivery is the only thing that gets us another attempt.
         let parked = true;
         try {
-          if (envelope.repo_id) {
+          if (error instanceof RepositoryUnreadableError) {
+            // Terminal for this job, but it says nothing about the row: the repo may be alive and
+            // simply not granted to this installation. Recording a creation_error here would put a
+            // failure in front of an instructor for a repo that is fine, and the cause is on our
+            // side of the fence. Stop the work, leave the data alone.
+            scope.setTag("repository_unreadable", error.fullName);
+          } else if (envelope.repo_id) {
             const { data: rows, error: e } = await adminSupabase
               .from("repositories")
               .update(repoUpdate)

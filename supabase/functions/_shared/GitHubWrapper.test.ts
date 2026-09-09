@@ -32,6 +32,7 @@ const {
   NonRetryableRepoError,
   publicSupabaseUrl,
   RepositoryMissingError,
+  RepositoryUnreadableError,
   resolveExistingTeamSlug,
   resolveTeamSlugIfExists,
   TeamMembersUnreadableError,
@@ -187,7 +188,7 @@ Deno.test("classifyRepoPresence: 404 with unknown installation scope -> inaccess
   assertEquals(await classifyRepoPresence(octokit, "org", "repo", undefined), "inaccessible");
 });
 
-Deno.test("classifyRepoPresence: non-404 -> inaccessible, never absent", async () => {
+Deno.test("classifyRepoPresence: probe itself fails (non-404) -> unknown, never absent", async () => {
   // "We could not find out" must never be recorded as "the repo is gone" — that would park live
   // repos during a GitHub outage.
   const octokit = fakeOctokit({
@@ -195,7 +196,7 @@ Deno.test("classifyRepoPresence: non-404 -> inaccessible, never absent", async (
       throw requestError(500, "Server Error");
     }
   });
-  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "inaccessible");
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "unknown");
 });
 
 Deno.test("listCollaboratorsOrThrowMissing: happy path returns the collaborator list", async () => {
@@ -245,10 +246,12 @@ Deno.test(
 );
 
 Deno.test(
-  "listCollaboratorsOrThrowMissing: 404 everywhere but a selected-repos install -> rethrows, does NOT park",
+  "listCollaboratorsOrThrowMissing: 404 on a selected-repos install -> RepositoryUnreadableError, terminal but not proof",
   async () => {
-    // The case that would park a live repo if presence were read as a boolean: both endpoints 404
-    // because the installation was never granted this repo, not because it was deleted.
+    // Both endpoints 404 because the installation was never granted this repo, not because it was
+    // deleted. This must be terminal — retrying cannot make an ungranted repo readable, and letting
+    // a bare 404 escape would spend the ladder and then trip the ORG-WIDE circuit over one repo —
+    // while still not being proof of anything about the row.
     const octokit = fakeOctokit({
       "GET /repos/{owner}/{repo}/collaborators": () => {
         throw requestError(404, "Not Found");
@@ -259,9 +262,13 @@ Deno.test(
     });
     const err = await assertRejects(
       () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "selected"),
-      RequestError
+      RepositoryUnreadableError
     );
-    assertEquals(err.status, 404);
+    assertEquals(err.fullName, "org/repo");
+    // Non-retryable, so the worker keeps it off the shared circuit and out of the error threshold.
+    assertEquals(err instanceof NonRetryableGitHubError, true);
+    // But NOT the parking error: only proven-absent repos may touch the database.
+    assertEquals(err instanceof RepositoryMissingError, false);
   }
 );
 
@@ -278,7 +285,7 @@ Deno.test("listCollaboratorsOrThrowMissing: selection is resolved lazily, never 
   assertEquals(resolverCalls, 0);
 });
 
-Deno.test("listCollaboratorsOrThrowMissing: a resolver that cannot answer -> inaccessible, does NOT park", async () => {
+Deno.test("listCollaboratorsOrThrowMissing: a resolver that cannot answer -> unreadable, never missing", async () => {
   // fetchRepositorySelection returns undefined when it cannot read the installation. Unknown scope
   // must never be treated as proof of deletion.
   const octokit = fakeOctokit({
@@ -291,9 +298,9 @@ Deno.test("listCollaboratorsOrThrowMissing: a resolver that cannot answer -> ina
   });
   const err = await assertRejects(
     () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => undefined),
-    RequestError
+    RepositoryUnreadableError
   );
-  assertEquals(err.status, 404);
+  assertEquals(err instanceof RepositoryMissingError, false);
 });
 
 Deno.test("listCollaboratorsOrThrowMissing: non-404 propagates without an existence probe", async () => {
