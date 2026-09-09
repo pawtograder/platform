@@ -372,7 +372,19 @@ async function main() {
       let owner = a.classes!.github_org!;
       let handoutName = `${a.classes!.slug}-handout-${a.slug}`;
       if (a.repo_mode === "fork_from_prior_assignment") {
-        const source = a.source_assignment_id === null ? undefined : byId.get(a.source_assignment_id);
+        // `byId` only holds what the scan returned, and the scan is narrowed by --class and
+        // --assignment. A fork whose source sits in another class, or any fork in an --assignment
+        // run, would miss here and be reported as having no source — dropping a genuinely broken
+        // assignment from the plan. Fetch the source directly when it is not already in hand.
+        let source = a.source_assignment_id === null ? undefined : byId.get(a.source_assignment_id);
+        if (!source && a.source_assignment_id !== null) {
+          const { data: fetched } = await supabase
+            .from("assignments")
+            .select("template_repo")
+            .eq("id", a.source_assignment_id)
+            .maybeSingle();
+          if (fetched) source = { template_repo: fetched.template_repo } as Row;
+        }
         const sourceRepo = source?.template_repo ?? null;
         if (!sourceRepo) {
           // No source, or a source that is itself unprovisioned: there is nothing to inherit, so

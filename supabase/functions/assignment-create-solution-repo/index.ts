@@ -81,7 +81,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       repoName: solutionRepoName
     })
   ) {
-    await adminSupabase.from("autograder").update({ grader_repo: solutionRepoFullName }).eq("id", assignment_id);
+    const { error: e2ePointerError } = await adminSupabase
+      .from("autograder")
+      .update({ grader_repo: solutionRepoFullName })
+      .eq("id", assignment_id);
+    if (e2ePointerError) {
+      // Returning `skipped: true` over a failed write would report success while grader_repo stayed
+      // NULL — the same "reported done, pointer absent" state the real path refuses below.
+      Sentry.captureException(e2ePointerError, scope);
+      throw e2ePointerError;
+    }
     return { repo_name: solutionRepoName, org_name: solutionRepoOrg, skipped: true };
   }
 
