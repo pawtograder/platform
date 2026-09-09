@@ -324,29 +324,33 @@ async function repairMissingSolutionRepos(opts: {
     // between the scan and this candidate's turn — and creating repositories for something somebody
     // has just deliberately retired is exactly what those guards exist to prevent. The solution
     // handler rechecks repo_mode itself, but it reads neither archive flag nor the org exclusion.
-    // The org exclusion is re-read too, not taken from the set captured at the start of the pass.
-    // It is a safety switch: an operator flipping it expects automation to stop, and a detached pass
-    // can still be working through candidates minutes later. Reading the flag for this one org is a
-    // single indexed lookup.
-    const [{ data: fresh, error: freshError }, { data: freshOrg, error: freshOrgError }] = await Promise.all([
-      supabase
-        .from("assignments")
-        .select("repo_mode, archived_at, classes!inner(slug, github_org, archived)")
-        .eq("id", a.id)
-        .maybeSingle(),
-      supabase
-        .from("github_orgs")
-        .select("excluded_from_automation")
-        .ilike("org_name", a.classes?.github_org ?? "")
-        .maybeSingle()
-    ]);
+    // The assignment is loaded FIRST and the exclusion looked up against the org it names NOW, not
+    // the one captured when the pass began. A class can be moved between orgs while this detached
+    // pass works through its candidates, and the creation functions read the class as it is now — so
+    // checking the scan-time org would clear a candidate against A and then create repositories in
+    // an excluded B. `excludedOrgSet` carries the same staleness, which is why this fresh lookup is
+    // the authority rather than a second opinion.
+    //
+    // The exclusion is a safety switch: an operator flipping it expects automation to stop, and a
+    // detached pass can still be working through candidates minutes later. One indexed lookup.
+    const { data: fresh, error: freshError } = await supabase
+      .from("assignments")
+      .select("repo_mode, archived_at, classes!inner(slug, github_org, archived)")
+      .eq("id", a.id)
+      .maybeSingle();
+    const currentOrg = fresh?.classes?.github_org ?? null;
+    const { data: freshOrg, error: freshOrgError } = currentOrg
+      ? await supabase
+          .from("github_orgs")
+          .select("excluded_from_automation")
+          .ilike("org_name", currentOrg)
+          .maybeSingle()
+      : { data: null, error: null };
     if (freshOrgError || freshOrg?.excluded_from_automation) {
       // Unreadable is treated the same as excluded: this is the switch that stops automation, so
       // "we could not tell" must not mean "carry on".
       scope.setTag("repair_skipped_revalidation", "org_excluded_or_unknown");
-      console.log(
-        `[github-repo-reconciler] Org ${a.classes?.github_org} is excluded or unreadable; skipping assignment ${a.id}`
-      );
+      console.log(`[github-repo-reconciler] Org ${currentOrg} is excluded or unreadable; skipping assignment ${a.id}`);
       continue;
     }
     if (freshError) {
@@ -356,6 +360,7 @@ async function repairMissingSolutionRepos(opts: {
     }
     const stillEligible =
       fresh !== null &&
+      currentOrg !== null &&
       fresh.archived_at === null &&
       assignmentShouldHaveRepos(fresh.repo_mode) &&
       isEligibleForRepoWork(

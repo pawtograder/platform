@@ -223,14 +223,23 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
   }
 
-  if (pointerAlreadyPublished) {
-    // A targeted repair of an assignment that already has a pointer. The push webhook owns this
-    // metadata now and is at least as current as anything we snapshotted, so the repair's job here
-    // is done — the repository exists and the pointer is set. Rewriting would be a race we cannot
-    // win correctly, and the next push reconciles anything genuinely stale.
-    scope.setTag("initial_autograder_metadata", "skipped_pointer_published");
+  // Deferring to the webhook needs BOTH: the pointer names this repo, and something has actually
+  // been recorded through it. A matching pointer alone proves only that deliveries can now be
+  // routed to this assignment, not that any of them ever landed — which is exactly the state the
+  // repair script's --assignment recovery path exists for: a creation that wrote grader_repo and
+  // then failed before storing config or a SHA. Treating that as webhook-owned made the rerun a
+  // no-op that reported success while leaving the metadata missing, defeating the recovery it was
+  // invoked to perform. The same shape occurs when a deleted repository is recreated under its old
+  // name.
+  const webhookHasReconciled = pointerAlreadyPublished && expectedSha !== null;
+  if (webhookHasReconciled) {
+    // The push webhook owns this metadata and is at least as current as anything we snapshotted, so
+    // the repair's job here is done — the repository exists, the pointer is set, and a SHA recorded
+    // through that pointer means a delivery actually reconciled it. Rewriting would be a race we
+    // cannot win correctly, and the next push reconciles anything genuinely stale.
+    scope.setTag("initial_autograder_metadata", "skipped_webhook_owned");
     console.log(
-      `Not rewriting autograder metadata for ${solutionRepoFullName}: grader_repo already names this repo, so the push webhook owns it`
+      `Not rewriting autograder metadata for ${solutionRepoFullName}: grader_repo names this repo and a SHA is recorded, so the push webhook owns it`
     );
   } else {
     try {
