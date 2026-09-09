@@ -164,7 +164,22 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     message: string,
     author: string | null,
     config: Json,
-    expectedPreviousSha: string | null
+    expectedPreviousSha: string | null,
+    /**
+     * Whether the compare-and-set MUST match a row.
+     *
+     * PostgREST reports an update that matched nothing as success, so a CAS against the wrong
+     * expectation is silent. On the initial pass that silence is dangerous: the points, config and
+     * commit row have already been written, so a SHA that failed to advance leaves the assignment
+     * advertising an older revision than the config it now holds, and nothing can repair it —
+     * grader_repo is still NULL so the webhook cannot find the assignment, and the recheck below
+     * reads the mismatch as "superseded" and stands down. Failing instead keeps grader_repo NULL,
+     * which is what makes the whole thing retryable.
+     *
+     * On the recheck it is the opposite: matching nothing means the push webhook recorded something
+     * newer while this request was working, which is the correct outcome and must not throw.
+     */
+    requireMatch: boolean
   ) => {
     const parsed = config as unknown as PawtograderConfig | null;
     const points = parsed ? calculateTotalAutograderPoints(parsed) : 0;
@@ -199,18 +214,33 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     } else {
       shaWrite = shaWrite.eq("latest_autograder_sha", expectedPreviousSha);
     }
-    const { error: shaError } = await shaWrite;
+    const { data: shaRows, error: shaError } = await shaWrite.select("id");
     if (shaError) throw shaError;
+    if (requireMatch && (shaRows?.length ?? 0) === 0) {
+      throw new Error(
+        `Refusing to publish ${solutionRepoFullName}: latest_autograder_sha was not ${expectedPreviousSha ?? "NULL"} when we tried to advance it to ${commitSha}`
+      );
+    }
   };
 
   try {
-    // Nothing has written a SHA for this assignment yet, so the compare-and-set expects NULL.
+    // Read what is stored rather than assuming NULL. A previous attempt that got this far and then
+    // failed to publish grader_repo leaves a SHA behind, so a hardcoded NULL expectation would match
+    // no rows on the retry and — because PostgREST reports that as success — silently skip the only
+    // write that advances it.
+    const { data: priorAutograder, error: priorError } = await adminSupabase
+      .from("autograder")
+      .select("latest_autograder_sha")
+      .eq("id", assignment_id)
+      .maybeSingle();
+    if (priorError) throw priorError;
     await reconcileHeadMetadata(
       headCommit.sha,
       headCommit.commit.message,
       headCommit.commit.author?.name ?? null,
       asObj,
-      null
+      priorAutograder?.latest_autograder_sha ?? null,
+      true
     );
   } catch (metadataError) {
     // NOT best-effort, despite these being re-derivable in principle. Publishing grader_repo after
@@ -297,7 +327,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         currentHead.commit.message,
         currentHead.commit.author?.name ?? null,
         newerObj,
-        headCommit.sha
+        headCommit.sha,
+        false
       );
     }
   } catch (recheckError) {
