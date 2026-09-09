@@ -198,6 +198,31 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return applied === true;
   };
 
+  // Replacing a pointer that names a DIFFERENT repository: retire the old one first.
+  //
+  // Until grader_repo is swapped, the OLD repo is still what handlePushToGraderSolution resolves
+  // this assignment by, so a push to it during provisioning can overwrite the new repo's metadata —
+  // or interleave with the write — and we would then publish the new pointer over the old repo's
+  // config, SHA and points. Clearing it first makes the assignment invisible to that webhook for
+  // the rest of this function, and NULL is the same state every failure path here already leaves
+  // behind: unfinished and therefore repairable.
+  if (!pointerAlreadyPublished && (existingPointer?.grader_repo ?? null) !== null) {
+    scope.setTag("retired_stale_grader_repo", existingPointer!.grader_repo!);
+    console.log(
+      `Clearing stale grader_repo ${existingPointer!.grader_repo} on assignment ${assignment_id} before attaching ${solutionRepoFullName}`
+    );
+    const { error: clearError } = await adminSupabase
+      .from("autograder")
+      .update({ grader_repo: null })
+      .eq("id", assignment_id);
+    if (clearError) {
+      // Proceeding would leave the old repo webhook-discoverable for the rest of this function,
+      // which is the whole thing this clear exists to prevent.
+      Sentry.captureException(clearError, scope);
+      throw clearError;
+    }
+  }
+
   if (pointerAlreadyPublished) {
     // A targeted repair of an assignment that already has a pointer. The push webhook owns this
     // metadata now and is at least as current as anything we snapshotted, so the repair's job here

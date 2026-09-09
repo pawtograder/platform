@@ -524,25 +524,34 @@ async function main() {
       // The org exclusion is re-read too, not taken from the set loaded at startup. It is the
       // switch that stops automation, the creation functions deliberately do not enforce it, and a
       // sequential sweep can still be running minutes after an operator flips it.
-      const [{ data: fresh, error: freshError }, { data: freshOrg, error: freshOrgError }] = await Promise.all([
-        supabase.from("assignments").select("archived_at, classes(archived)").eq("id", row.id).maybeSingle(),
-        supabase
-          .from("github_orgs")
-          .select("excluded_from_automation")
-          .ilike("org_name", row.classes?.github_org ?? "")
-          .maybeSingle()
-      ]);
+      // The org is reloaded WITH the assignment, not taken from the plan. An admin can move a class
+      // between orgs while earlier sequential repairs run, and the creation functions read the
+      // class as it is now — so checking the org captured at plan time would clear an assignment
+      // against org A and then create repositories in an excluded org B.
+      const { data: fresh, error: freshError } = await supabase
+        .from("assignments")
+        .select("archived_at, classes(archived, github_org)")
+        .eq("id", row.id)
+        .maybeSingle();
+      const currentOrg = (fresh?.classes as { github_org: string | null } | null)?.github_org ?? null;
+      const { data: freshOrg, error: freshOrgError } = currentOrg
+        ? await supabase
+            .from("github_orgs")
+            .select("excluded_from_automation")
+            .ilike("org_name", currentOrg)
+            .maybeSingle()
+        : { data: null, error: null };
       if (freshOrgError) {
         // Unreadable counts as excluded — this is the stop switch, so "could not tell" must not mean
         // "carry on" — but it is NOT a clean skip: the assignment was never attempted, so counting
         // it as a failure is what stops automation reading the run as complete.
         failed++;
-        console.log(`  skipping assignment ${row.id}: could not read the exclusion for ${row.classes?.github_org}`);
+        console.log(`  skipping assignment ${row.id}: could not read the exclusion for ${currentOrg}`);
         continue;
       }
       if (freshOrg?.excluded_from_automation) {
         // A genuine exclusion IS a clean skip: the operator asked for exactly this.
-        console.log(`  skipping assignment ${row.id}: org ${row.classes?.github_org} is excluded from automation`);
+        console.log(`  skipping assignment ${row.id}: org ${currentOrg} is excluded from automation`);
         continue;
       }
       if (freshError) {
@@ -554,6 +563,12 @@ async function main() {
       const clazz = fresh?.classes as { archived: boolean | null } | null;
       if (!fresh || fresh.archived_at || clazz?.archived) {
         console.log(`  skipping assignment ${row.id}: archived since the plan was built`);
+        continue;
+      }
+      if (!currentOrg) {
+        // The class no longer has a GitHub org, so it can no longer have repos — the same condition
+        // the eligibility filter applies when the plan is built.
+        console.log(`  skipping assignment ${row.id}: its class no longer has a github_org`);
         continue;
       }
     }
