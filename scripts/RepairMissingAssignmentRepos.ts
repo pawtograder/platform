@@ -524,7 +524,9 @@ async function main() {
   // partial one.
   let ok = 0;
   let failed = 0;
-  for (const { row, functions } of plans) {
+  for (const plan of plans) {
+    const { row } = plan;
+    let functions = plan.functions;
     // Revalidate the archive state immediately before acting, exactly as the scheduled reconciler
     // does. Repairs are sequential and each one can take minutes, so on a broad sweep an operator
     // can retire an assignment or a whole class while earlier entries are still running — and
@@ -541,7 +543,7 @@ async function main() {
       // against org A and then create repositories in an excluded org B.
       const { data: fresh, error: freshError } = await supabase
         .from("assignments")
-        .select("archived_at, classes(archived, github_org)")
+        .select("archived_at, template_repo, classes(archived, github_org), autograder(grader_repo, workflow_sha)")
         .eq("id", row.id)
         .maybeSingle();
       const currentOrg = (fresh?.classes as { github_org: string | null } | null)?.github_org ?? null;
@@ -581,6 +583,35 @@ async function main() {
         // the eligibility filter applies when the plan is built.
         console.log(`  skipping assignment ${row.id}: its class no longer has a github_org`);
         continue;
+      }
+      // Both pointers are re-read, because both creation functions will overwrite what they find:
+      // the handout endpoint rebuilds the derived name and writes it over template_repo, and the
+      // solution endpoint treats a grader_repo naming a different repository as stale and replaces
+      // it. Earlier repairs in this sweep take minutes, so an instructor can select a custom repo in
+      // between — and acting on the plan-time values would erase that choice.
+      const freshGrader = (fresh.autograder as { grader_repo: string | null } | null)?.grader_repo ?? null;
+      const freshWorkflowSha = (fresh.autograder as { workflow_sha: string | null } | null)?.workflow_sha ?? null;
+      const freshTemplate = fresh.template_repo ?? null;
+      if (freshGrader !== null) {
+        console.log(
+          `  skipping assignment ${row.id}: it gained a grader_repo (${freshGrader}) since the plan was built`
+        );
+        continue;
+      }
+      const derivedHandoutNow = `${currentOrg}/${row.classes?.slug}-handout-${row.slug}`;
+      if (
+        functions.includes("assignment-create-handout-repo") &&
+        freshTemplate !== null &&
+        freshTemplate !== derivedHandoutNow
+      ) {
+        console.log(
+          `  skipping assignment ${row.id}: it gained a custom handout (${freshTemplate}) since the plan was built`
+        );
+        continue;
+      }
+      if (functions.includes("assignment-create-handout-repo") && freshTemplate !== null && freshWorkflowSha !== null) {
+        console.log(`  note: assignment ${row.id} no longer needs the handout step; running solution only`);
+        functions = SOLUTION_ONLY;
       }
     }
     let allOk = true;

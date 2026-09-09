@@ -156,6 +156,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
 
   // action.kind === "create"
+  // Snapshot the handout pointer before any GitHub work. createRepo and syncRepoPermissions take
+  // seconds to minutes, and an instructor can select a custom handout from the edit page while they
+  // run — the final write below rebuilds the DERIVED name and would erase that choice. `assignment`
+  // was read at the top of this function, before any of it.
+  const observedTemplateRepo = assignment.template_repo ?? null;
   const handoutRepoName = `${assignment.classes.slug}-handout-${assignment.slug}`;
   scope.setTag("handout_repo_name", handoutRepoName);
   scope.setTag("handout_repo_org", handoutRepoOrg!);
@@ -286,7 +291,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // autograder-create-submission then rejects as a "workflow sha mismatch" on the
   // first real student run, and which the has_autograder backfill reads as "the
   // autograder was never wired up".
-  const { error: pointerError } = await adminSupabase
+  // Compare-and-set against the pointer observed before the GitHub work. Without it, an instructor
+  // selecting a custom handout while createRepo ran would have it silently replaced by the derived
+  // name here — and the automated repair paths call this function precisely to fill in a missing
+  // workflow_sha, so the overwrite would happen unattended.
+  let pointerWrite = adminSupabase
     .from("assignments")
     .update({
       template_repo: handoutFullName,
@@ -294,12 +303,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       ...(assignment.submission_mode === "pr" ? { upstream_repo: handoutFullName } : {})
     })
     .eq("id", assignment_id);
+  pointerWrite =
+    observedTemplateRepo === null
+      ? pointerWrite.is("template_repo", null)
+      : pointerWrite.eq("template_repo", observedTemplateRepo);
+  const { data: pointerRows, error: pointerError } = await pointerWrite.select("id");
   if (pointerError) {
     // Reporting success here would leave the handout repo created but unreferenced:
     // nothing points at it, and a retry cannot recover latest_template_sha because
     // grade.yml is already gone (deleteFileFromRepo then reports nothing deleted).
     Sentry.captureException(pointerError, scope);
     throw pointerError;
+  }
+  if ((pointerRows?.length ?? 0) === 0) {
+    // Somebody set template_repo while we worked. Their choice is explicit and ours is derived from
+    // a naming convention, so theirs wins; the repository we created is left in place rather than
+    // being attached over the top.
+    scope.setTag("template_repo_pointer", "superseded");
+    throw new UserVisibleError(
+      `The handout repository for this assignment was changed while ${handoutFullName} was being created, so it was not attached. ` +
+        `The repository exists — re-save if you intended to use it.`,
+      409
+    );
   }
 
   // updateAutograderWorkflowHash is skipped for a repo-only assignment: it reads

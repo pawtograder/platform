@@ -52,22 +52,32 @@ SET excluded_from_automation = true,
     updated_at = now()
 WHERE lower(org_name) IN ('pawtograder-playground', 'autograder-dev', 'pawtograder-instructor-demo');
 
--- New rows take the DEPLOYMENT's effective template defaults, not the table's hardcoded ones:
--- materializing a github_orgs row suppresses the GUC tier in resolve_class_template_repos, so an
--- insert that quietly took the column defaults would move template resolution for the org. This
--- migration is about automation only and must not do that. An existing row keeps its own values,
--- which is why the UPDATE above touches nothing but the flag.
+-- New rows carry NULL templates, meaning "inherit".
 --
+-- The columns are NOT NULL with a hardcoded default, so ANY insert materializes a concrete value —
+-- and resolve_class_template_repos prefers a stored per-org value over the app.settings.default_*
+-- GUCs. Seeding the current effective defaults would therefore pin these orgs to today's values and
+-- silently stop a later site-wide default change from reaching them, which is a permanent side
+-- effect for a migration that is only supposed to set an automation flag. Making the columns
+-- nullable lets a row say "excluded, templates inherited" — the state that was previously
+-- inexpressible.
+--
+-- The DEFAULT is left in place, so nothing that omits these columns changes behaviour; only this
+-- insert, which names them explicitly, opts out.
+ALTER TABLE public.github_orgs
+    ALTER COLUMN default_handout_template_repo DROP NOT NULL,
+    ALTER COLUMN default_solution_template_repo DROP NOT NULL;
+
+COMMENT ON COLUMN public.github_orgs.default_handout_template_repo IS
+    'Per-org handout template default. NULL means inherit: resolve_class_template_repos falls '
+    'through to app.settings.default_handout_template_repo and then the built-in constant.';
+COMMENT ON COLUMN public.github_orgs.default_solution_template_repo IS
+    'Per-org solution template default. NULL means inherit, as above.';
+
 -- Reversible by any platform admin from the per-org admin page (the "Admins manage github_orgs" RLS
 -- policy grants full CRUD, and 20260909130000 surfaces the flag there).
 INSERT INTO public.github_orgs (org_name, excluded_from_automation, default_handout_template_repo, default_solution_template_repo)
-SELECT
-    seed.org_name,
-    true,
-    public.resolve_effective_template_repo(
-        NULL, NULL, 'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
-    public.resolve_effective_template_repo(
-        NULL, NULL, 'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader')
+SELECT seed.org_name, true, NULL, NULL
 FROM (VALUES ('pawtograder-playground'), ('autograder-dev'), ('pawtograder-instructor-demo')) AS seed(org_name)
 WHERE NOT EXISTS (
     SELECT 1 FROM public.github_orgs g WHERE lower(g.org_name) = seed.org_name

@@ -59,6 +59,12 @@ export default function GitHubOrgDetailPage() {
   // would then write an empty exemption array, a false exclusion, and deployment-default templates
   // over whatever was actually stored. Saving is enabled only once the org has genuinely loaded.
   const [orgFound, setOrgFound] = useState(false);
+  // What the exclusion was when this page loaded. The RPC reads `undefined` as "not supplied by
+  // this caller" and keeps the stored value, so sending the checkbox only when it actually changed
+  // lets two admins edit different fields without one silently reverting the other's. This flag is
+  // the switch that stops background GitHub mutations, so losing an enable is the expensive
+  // direction.
+  const [loadedExcluded, setLoadedExcluded] = useState(false);
   const [courses, setCourses] = useState<OrgCourse[]>([]);
 
   const load = useCallback(async () => {
@@ -81,6 +87,7 @@ export default function GitHubOrgDetailPage() {
       setSavedSolution(loadedSolution);
       setExemptUsers((thisOrg?.permission_sync_exempt_users ?? []).join(", "));
       setExcludedFromAutomation(thisOrg?.excluded_from_automation ?? false);
+      setLoadedExcluded(thisOrg?.excluded_from_automation ?? false);
       setOrgFound(thisOrg !== undefined);
       setCourses((orgCourses ?? []) as OrgCourse[]);
     } catch (err) {
@@ -116,9 +123,10 @@ export default function GitHubOrgDetailPage() {
           .split(/[\s,]+/)
           .map((u) => u.trim())
           .filter((u) => u !== ""),
-        // Always sent: the RPC reads undefined as "not supplied by this caller" and keeps the
-        // stored value, so omitting it would make the box impossible to untick.
-        p_excluded_from_automation: excludedFromAutomation
+        // Sent only when this page changed it. Always sending would have one admin's unrelated
+        // template or exemption save silently revert an exclusion another admin enabled after this
+        // page loaded. Ticking and unticking both still send, so the box remains usable.
+        p_excluded_from_automation: excludedFromAutomation === loadedExcluded ? undefined : excludedFromAutomation
       });
       if (error) throw error;
       toaster.success({ title: "Org defaults saved" });
@@ -131,7 +139,17 @@ export default function GitHubOrgDetailPage() {
     } finally {
       setSaving(false);
     }
-  }, [orgName, handout, solution, exemptUsers, excludedFromAutomation, orgFound, load, revalidateServerCaches]);
+  }, [
+    orgName,
+    handout,
+    solution,
+    exemptUsers,
+    excludedFromAutomation,
+    loadedExcluded,
+    orgFound,
+    load,
+    revalidateServerCaches
+  ]);
 
   // A course in this org gives the edge function a valid auth/ownership context for editing the
   // org's template repos. (Writes are restricted to the course's own org.) Prefer a non-archived
