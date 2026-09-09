@@ -76,6 +76,37 @@ const isE2eFixture = (org: string | null, courseSlug: string | null, repoName?: 
 // unpaged read would report a complete result while silently omitting everything past the cap.
 const PAGE_SIZE = 500;
 
+// Every option this script accepts. Anything else is a typo, and a typo must not silently widen the
+// run: `--clas 123 --apply` would otherwise leave classId undefined and sweep every repairable
+// assignment instead of one class.
+const VALUE_OPTIONS = new Set(["class", "assignment"]);
+const BOOLEAN_OPTIONS = new Set(["apply", "check-github"]);
+
+function validateArgv(): void {
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2);
+    if (BOOLEAN_OPTIONS.has(name)) continue;
+    if (VALUE_OPTIONS.has(name)) {
+      // Present-but-valueless must not read as absent, for the same widening reason.
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        console.error(`--${name} requires a value`);
+        process.exit(2);
+      }
+      i++;
+      continue;
+    }
+    console.error(`Unknown option "${token}".`);
+    console.error(
+      `Known options: ${[...VALUE_OPTIONS].map((o) => `--${o} <n>`).join(", ")}, ${[...BOOLEAN_OPTIONS].map((o) => `--${o}`).join(", ")}`
+    );
+    process.exit(2);
+  }
+}
+
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i === -1 ? undefined : process.argv[i + 1];
@@ -122,10 +153,16 @@ async function makeHandoutExistenceChecker(): Promise<(org: string, repo: string
   const privateKey = raw.includes("\\n") ? raw.replace(/\\n/g, "\n") : raw;
 
   const appOctokit = new Octokit({ authStrategy: createAppAuth, auth: { appId, privateKey } });
-  const installations = await appOctokit.request("GET /app/installations", { per_page: 100 });
+  // Paged explicitly: @octokit/core has no `.paginate` (that lives in plugin-paginate-rest, which
+  // this project does not depend on), so a single request would cap at 100 installations and every
+  // org past the first page would report UNKNOWN and never be repairable.
   const byOrg = new Map<string, number>();
-  for (const inst of installations.data) {
-    if (inst.account && "login" in inst.account) byOrg.set(inst.account.login.toLowerCase(), inst.id);
+  for (let page = 1; ; page++) {
+    const installations = await appOctokit.request("GET /app/installations", { per_page: 100, page });
+    for (const inst of installations.data) {
+      if (inst.account && "login" in inst.account) byOrg.set(inst.account.login.toLowerCase(), inst.id);
+    }
+    if (installations.data.length < 100) break;
   }
   // One installation-scoped client per org, reused across that org's assignments.
   const clients = new Map<string, Octokit>();
@@ -157,11 +194,14 @@ type Row = {
   repo_mode: string;
   template_repo: string | null;
   archived_at: string | null;
+  has_autograder: boolean | null;
+  source_assignment_id: number | null;
   classes: { slug: string | null; github_org: string | null; archived: boolean | null } | null;
-  autograder: { grader_repo: string | null } | null;
+  autograder: { grader_repo: string | null; workflow_sha: string | null } | null;
 };
 
 async function main() {
+  validateArgv();
   const apply = hasFlag("apply");
   const checkGithub = hasFlag("check-github");
   const classId = intArg("class");
@@ -189,7 +229,7 @@ async function main() {
     let query = supabase
       .from("assignments")
       .select(
-        "id, class_id, slug, repo_mode, template_repo, archived_at, classes(slug, github_org, archived), autograder(grader_repo)"
+        "id, class_id, slug, repo_mode, template_repo, archived_at, has_autograder, source_assignment_id, classes(slug, github_org, archived), autograder(grader_repo, workflow_sha)"
       )
       .order("class_id")
       .order("id")
@@ -253,20 +293,38 @@ async function main() {
     const handoutExists = await makeHandoutExistenceChecker();
     let placeholders = 0;
     let unknown = 0;
+    // `fork_from_prior_assignment` never creates `<course>-handout-<assignment>` — it copies the
+    // SOURCE assignment's template_repo. Probing the derived name would 404 for every such row and
+    // silently file a genuine failure as a placeholder, so resolve the source's repo instead.
+    const byId = new Map(rows.map((r) => [r.id, r]));
     for (const a of needsReview) {
-      const handoutName = `${a.classes!.slug}-handout-${a.slug}`;
-      const exists = await handoutExists(a.classes!.github_org!, handoutName);
+      let owner = a.classes!.github_org!;
+      let handoutName = `${a.classes!.slug}-handout-${a.slug}`;
+      if (a.repo_mode === "fork_from_prior_assignment") {
+        const source = a.source_assignment_id === null ? undefined : byId.get(a.source_assignment_id);
+        const sourceRepo = source?.template_repo ?? null;
+        if (!sourceRepo) {
+          // No source, or a source that is itself unprovisioned: there is nothing to inherit, so
+          // this is a configuration problem rather than a repo that failed to be created.
+          console.log(
+            `  NO SOURCE ${describe(a)} — forks from #${a.source_assignment_id ?? "?"}, which has no handout`
+          );
+          continue;
+        }
+        [owner, handoutName] = sourceRepo.split("/");
+      }
+      const exists = await handoutExists(owner, handoutName);
       if (exists === true) {
         // The repo is on GitHub but nothing in the database points at it — handout creation got
         // past createRepo and died before the pointer write. Genuinely broken.
         confirmedBroken.push(a);
         console.log(`  BROKEN  ${describe(a)}`);
-        console.log(`          handout ${a.classes!.github_org}/${handoutName} exists but template_repo is NULL`);
+        console.log(`          handout ${owner}/${handoutName} exists but template_repo is NULL`);
       } else if (exists === false) {
         placeholders++;
       } else {
         unknown++;
-        console.log(`  UNKNOWN ${describe(a)} — App not installed on ${a.classes!.github_org}, or GitHub errored`);
+        console.log(`  UNKNOWN ${describe(a)} — App not installed on ${owner}, or GitHub errored`);
       }
     }
     console.log(
@@ -295,17 +353,27 @@ async function main() {
   const HANDOUT_THEN_SOLUTION = ["assignment-create-handout-repo", "assignment-create-solution-repo"];
   type RepairPlan = { row: Row; functions: string[] };
 
+  // A non-NULL template_repo proves the handout call reached its pointer write, but that write
+  // happens BEFORE updateAutograderWorkflowHash — so a failure in between leaves the pointer set and
+  // autograder.workflow_sha NULL, which the solution call never restores. Once it writes grader_repo
+  // the row leaves this scan for good while student submissions are rejected for a workflow-SHA
+  // mismatch. Finish the handout first in that case.
+  const planFor = (row: Row) =>
+    row.has_autograder !== false && (row.autograder?.workflow_sha ?? null) === null
+      ? HANDOUT_THEN_SOLUTION
+      : SOLUTION_ONLY;
+
   const plans: RepairPlan[] = targeted
     ? [
-        ...repairable.map((row) => ({ row, functions: SOLUTION_ONLY })),
+        ...repairable.map((row) => ({ row, functions: planFor(row) })),
         // A named assignment with neither pointer gets the handout call too. Unlike the sweep, this
         // may CREATE a handout that never existed — naming the assignment is the confirmation that
         // you want that.
         ...needsReview.map((row) => ({ row, functions: HANDOUT_THEN_SOLUTION })),
-        ...targetedPointerSet.map((row) => ({ row, functions: SOLUTION_ONLY }))
+        ...targetedPointerSet.map((row) => ({ row, functions: planFor(row) }))
       ]
     : [
-        ...repairable.map((row) => ({ row, functions: SOLUTION_ONLY })),
+        ...repairable.map((row) => ({ row, functions: planFor(row) })),
         ...confirmedBroken.map((row) => ({ row, functions: HANDOUT_THEN_SOLUTION }))
       ];
 

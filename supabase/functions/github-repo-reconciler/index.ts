@@ -61,6 +61,12 @@ const REPAIR_MAX_AGE_DAYS = 30;
 // before it flushed anything. The budget leaves headroom for jobs 1-2 and the Sentry flush.
 const REPAIR_TIME_BUDGET_MS = 240_000;
 const REPAIR_MAX_SUCCESSES_PER_RUN = 5;
+// Do not START a repair unless this much budget remains. Checking "am I still under budget?" before
+// each attempt is not enough: a call begun at 239s with a 279.5s p50 still runs past the 400s worker
+// lifetime and takes the response and the Sentry flush with it. The reservation is that measured
+// p50, and the fetch additionally carries an AbortSignal for whatever time is actually left, so a
+// slow call is recorded as a failed attempt rather than killing the isolate.
+const REPAIR_RESERVE_MS = 280_000;
 // Attempts are capped separately from successes so that a deterministic failure (an invalid source
 // assignment, a class whose GitHub App was uninstalled) costs an attempt but does NOT consume a
 // success slot. Counting attempts instead would let five permanently-broken assignments at the
@@ -78,8 +84,9 @@ type AssignmentRow = {
   created_at: string;
   repo_mode: Parameters<typeof assignmentShouldHaveRepos>[0];
   template_repo: string | null;
+  has_autograder: boolean | null;
   classes: { slug: string | null; github_org: string | null; archived: boolean | null } | null;
-  autograder: { grader_repo: string | null } | null;
+  autograder: { grader_repo: string | null; workflow_sha: string | null } | null;
 };
 
 /**
@@ -169,12 +176,21 @@ async function repairMissingSolutionRepos(opts: {
   // repo was in a test/dev/demo org, and none were in a real course org — so without this the
   // reconciler would spend all of its effort creating repositories nobody wants. `classes.is_demo`
   // cannot serve here: it is false on every one of those classes.
-  const { data: excludedOrgRows, error: excludedError } = await supabase
-    .from("github_orgs")
-    .select("org_name")
-    .eq("excluded_from_automation", true);
-  if (excludedError) throw excludedError;
-  const excludedOrgs = (excludedOrgRows ?? []).map((o) => o.org_name);
+  const excludedOrgs: string[] = [];
+  for (let from = 0; ; from += 500) {
+    // Paged for the same max_rows reason as the assignment scan below. An exclusion silently
+    // dropped past the cap would let the reconciler create repos in an org configured to receive no
+    // automation at all, which is the one outcome this list exists to prevent.
+    const { data, error } = await supabase
+      .from("github_orgs")
+      .select("org_name")
+      .eq("excluded_from_automation", true)
+      .order("org_name")
+      .range(from, from + 499);
+    if (error) throw error;
+    excludedOrgs.push(...(data ?? []).map((o) => o.org_name));
+    if ((data ?? []).length < 500) break;
+  }
 
   const rows: AssignmentRow[] = [];
   const PAGE = 500;
@@ -189,7 +205,7 @@ async function repairMissingSolutionRepos(opts: {
     let query = supabase
       .from("assignments")
       .select(
-        "id, class_id, slug, created_at, repo_mode, template_repo, classes!inner(slug, github_org, archived), autograder!inner(grader_repo)"
+        "id, class_id, slug, created_at, repo_mode, template_repo, has_autograder, classes!inner(slug, github_org, archived), autograder!inner(grader_repo, workflow_sha)"
       )
       .is("autograder.grader_repo", null)
       .is("archived_at", null)
@@ -255,27 +271,40 @@ async function repairMissingSolutionRepos(opts: {
   for (const a of repairable) {
     if (tally.created >= REPAIR_MAX_SUCCESSES_PER_RUN) break;
     if (attempts >= REPAIR_MAX_ATTEMPTS_PER_RUN) break;
-    if (Date.now() - startedAt > REPAIR_TIME_BUDGET_MS) {
-      console.warn("[github-repo-reconciler] Repair time budget exhausted; remaining work resumes next tick");
+    if (REPAIR_TIME_BUDGET_MS - (Date.now() - startedAt) < REPAIR_RESERVE_MS) {
+      console.warn("[github-repo-reconciler] Not enough budget left to start another repair; resumes next tick");
       break;
     }
     if (new Date(a.created_at).getTime() < oldestRepairable) continue;
     attempts++;
     try {
-      // Re-invoking the same edge function the new-assignment page would have called, with the
-      // service role (accepted via assertUserIsInstructorOrServiceRole) and no argument the UI
-      // could not have supplied.
-      const response = await fetch(edgeFunctionEndpoint(edgeFunctionsUrl, "assignment-create-solution-repo"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceRoleKey}` },
-        body: JSON.stringify({ assignment_id: a.id, class_id: a.class_id })
-      });
-      if (!response.ok) {
-        throw new Error(`assignment-create-solution-repo returned ${response.status}: ${await response.text()}`);
+      // A non-NULL template_repo proves the handout call reached its pointer write — but that write
+      // happens BEFORE updateAutograderWorkflowHash, so a failure in between leaves the pointer set
+      // and autograder.workflow_sha NULL. Nothing else restores it: the solution call does not, and
+      // once that call writes grader_repo the assignment drops out of this scan for good while every
+      // student submission is rejected for a workflow-SHA mismatch. Re-run the handout call first in
+      // that case — it is idempotent (createRepo adopts the existing repo) and it is what calls
+      // updateAutograderWorkflowHash.
+      const needsHandoutFinish = a.has_autograder !== false && (a.autograder?.workflow_sha ?? null) === null;
+      const functions = needsHandoutFinish
+        ? ["assignment-create-handout-repo", "assignment-create-solution-repo"]
+        : ["assignment-create-solution-repo"];
+      for (const fn of functions) {
+        // Bounded by whatever budget is actually left.
+        const left = REPAIR_TIME_BUDGET_MS - (Date.now() - startedAt);
+        const response = await fetch(edgeFunctionEndpoint(edgeFunctionsUrl, fn), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceRoleKey}` },
+          body: JSON.stringify({ assignment_id: a.id, class_id: a.class_id }),
+          signal: AbortSignal.timeout(Math.max(left, 1))
+        });
+        if (!response.ok) {
+          throw new Error(`${fn} returned ${response.status}: ${await response.text()}`);
+        }
       }
       tally.created++;
       console.log(
-        `[github-repo-reconciler] Created missing solution repo for assignment ${a.id} (class ${a.class_id})`
+        `[github-repo-reconciler] Repaired assignment ${a.id} (class ${a.class_id}) via ${functions.join(" + ")}`
       );
     } catch (repairError) {
       // Costs an attempt, not a success slot, so the loop moves past a permanently broken
