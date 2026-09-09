@@ -27,6 +27,7 @@ import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { shouldSendOrgInvitation } from "../_shared/orgInviteWindow.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -781,11 +782,19 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Syncing student team for user ${args.userId}`, level: "info" });
+        // At most ONE invitation per envelope. The pre- and post-reconcile checks below can match
+        // the same row — nothing in-process records that we invited, and the webhook that stamps
+        // invitation_date may not have arrived yet — which mails the student twice for one
+        // enrollment. Latent until now because both checks required invitation_date IS NULL and
+        // were reached almost only on a fresh enrollment; re-invites make the overlap routine.
+        let invitedThisRun = false;
         if (args.userId) {
           //Make sure that the student has been invited to the org
           const { data, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .eq("role", "student")
@@ -793,10 +802,14 @@ export async function processEnvelope(
           if (error) throw error;
           if (
             data &&
-            data.invitation_date === null &&
             data.users?.github_username &&
             data.classes?.github_org &&
-            data.classes?.slug
+            data.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: data.invitation_date,
+              cls: data.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               data.classes.github_org,
@@ -805,6 +818,7 @@ export async function processEnvelope(
               scope,
               { userId: args.userId }
             );
+            invitedThisRun = true;
           }
         }
 
@@ -827,10 +841,12 @@ export async function processEnvelope(
           scope
         );
         // If an affected user is provided and they haven't been invited yet, ensure org invitation to students team
-        if (args.userId && envelope.class_id) {
+        if (args.userId && envelope.class_id && !invitedThisRun) {
           const { data: ur, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .eq("role", "student")
@@ -838,10 +854,14 @@ export async function processEnvelope(
           if (
             !error &&
             ur &&
-            ur.invitation_date === null &&
             ur.users?.github_username &&
             ur.classes?.github_org &&
-            ur.classes?.slug
+            ur.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: ur.invitation_date,
+              cls: ur.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               ur.classes.github_org,
@@ -873,6 +893,8 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Syncing staff team for org ${args.org}`, level: "info" });
+        // One invitation per envelope, for the reason spelled out on the student path above.
+        let invitedThisRun = false;
         if (args.userId) {
           scope.setTag("user_id", args.userId);
           //Make sure that the student has been invited to the org
@@ -882,7 +904,9 @@ export async function processEnvelope(
           // row simply means "no per-user reinvite to do".
           const { data, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
@@ -893,10 +917,14 @@ export async function processEnvelope(
           if (error) throw error;
           if (
             data &&
-            data.invitation_date === null &&
             data.users?.github_username &&
             data.classes?.github_org &&
-            data.classes?.slug
+            data.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: data.invitation_date,
+              cls: data.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               data.classes.github_org,
@@ -905,6 +933,7 @@ export async function processEnvelope(
               scope,
               { userId: args.userId }
             );
+            invitedThisRun = true;
           }
         }
         await github.syncStaffTeam(
@@ -924,10 +953,12 @@ export async function processEnvelope(
           },
           scope
         );
-        if (args.userId && envelope.class_id) {
+        if (args.userId && envelope.class_id && !invitedThisRun) {
           const { data: ur, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
@@ -938,10 +969,14 @@ export async function processEnvelope(
           if (
             !error &&
             ur &&
-            ur.invitation_date === null &&
             ur.users?.github_username &&
             ur.classes?.github_org &&
-            ur.classes?.slug
+            ur.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: ur.invitation_date,
+              cls: ur.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               ur.classes.github_org,
