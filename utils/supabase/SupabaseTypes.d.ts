@@ -3542,6 +3542,7 @@ export type Database = {
           created_by: string | null;
           default_handout_template_repo: string;
           default_solution_template_repo: string;
+          excluded_from_automation: boolean;
           org_name: string;
           permission_sync_exempt_users: string[];
           updated_at: string;
@@ -3552,6 +3553,7 @@ export type Database = {
           created_by?: string | null;
           default_handout_template_repo?: string;
           default_solution_template_repo?: string;
+          excluded_from_automation?: boolean;
           org_name: string;
           permission_sync_exempt_users?: string[];
           updated_at?: string;
@@ -3562,6 +3564,7 @@ export type Database = {
           created_by?: string | null;
           default_handout_template_repo?: string;
           default_solution_template_repo?: string;
+          excluded_from_automation?: boolean;
           org_name?: string;
           permission_sync_exempt_users?: string[];
           updated_at?: string;

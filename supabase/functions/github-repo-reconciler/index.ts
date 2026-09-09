@@ -106,7 +106,18 @@ function isEligibleForRepoWork(a: AssignmentRow): boolean {
   if (!a.classes?.github_org || !a.classes?.slug) return false;
   if (!a.slug) return false;
   if (a.classes.archived) return false;
-  if (isE2eFixtureTarget({ org: a.classes.github_org, courseSlug: a.classes.slug })) return false;
+  // The repo NAME matters as well as the course slug: isE2eFixtureTarget also matches repos named
+  // `e2e-test*` / `test-e2e*`, and omitting it here is why 57 `e2e-test-class-*` assignments were
+  // classified as repairable in the first production dry run.
+  if (
+    isE2eFixtureTarget({
+      org: a.classes.github_org,
+      courseSlug: a.classes.slug,
+      repoName: `${a.classes.slug}-solution-${a.slug}`
+    })
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -153,10 +164,29 @@ async function repairMissingSolutionRepos(opts: {
   // NO lower age bound on the query. The 30-day ceiling applies to automatic repair only; a defect
   // older than that must still be alerted, both on first deployment against existing damage and on
   // the day an unresolved one crosses the boundary.
+  // Orgs that background automation must never act on, read from configuration rather than
+  // hardcoded. Measured on prod 2026-09-09: every one of the 133 assignments missing a solution
+  // repo was in a test/dev/demo org, and none were in a real course org — so without this the
+  // reconciler would spend all of its effort creating repositories nobody wants. `classes.is_demo`
+  // cannot serve here: it is false on every one of those classes.
+  const { data: excludedOrgRows, error: excludedError } = await supabase
+    .from("github_orgs")
+    .select("org_name")
+    .eq("excluded_from_automation", true);
+  if (excludedError) throw excludedError;
+  const excludedOrgs = (excludedOrgRows ?? []).map((o) => o.org_name);
+
   const rows: AssignmentRow[] = [];
   const PAGE = 500;
+  // `not.in` needs a non-empty list, and the org names are quoted so a name containing a comma or
+  // a parenthesis cannot break out of it.
+  const excludedList = excludedOrgs.length > 0 ? `(${excludedOrgs.map((o) => `"${o}"`).join(",")})` : null;
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
+    // Everything that CAN be expressed in SQL is, rather than read-then-discard: on prod this is
+    // the difference between reading ~1000 assignments every 15 minutes and reading the handful
+    // that are actually candidates. `classes.archived` uses `not.is.true` rather than `eq.false`
+    // because the column is nullable and NULL means "not archived".
+    let query = supabase
       .from("assignments")
       .select(
         "id, class_id, slug, created_at, repo_mode, template_repo, classes!inner(slug, github_org, archived), autograder!inner(grader_repo)"
@@ -164,10 +194,15 @@ async function repairMissingSolutionRepos(opts: {
       .is("autograder.grader_repo", null)
       .is("archived_at", null)
       .not("repo_mode", "in", "(none,no_submission)")
+      .not("slug", "is", null)
       .not("classes.github_org", "is", null)
-      .lt("created_at", graceCutoff)
-      .order("created_at", { ascending: true })
-      .range(from, from + PAGE - 1);
+      .not("classes.slug", "is", null)
+      .not("classes.archived", "is", true)
+      .lt("created_at", graceCutoff);
+    if (excludedList) {
+      query = query.not("classes.github_org", "in", excludedList);
+    }
+    const { data, error } = await query.order("created_at", { ascending: true }).range(from, from + PAGE - 1);
     if (error) throw error;
     const page = (data ?? []) as unknown as AssignmentRow[];
     rows.push(...page);

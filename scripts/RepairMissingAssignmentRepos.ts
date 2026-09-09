@@ -65,8 +65,12 @@ dotenv.config({ path: ".env.local", quiet: true });
 // runs under tsx; keep them in step if a repo_mode is ever added.
 const REPO_MODES_WITHOUT_REPOS = new Set(["none", "no_submission"]);
 const E2E_FIXTURE_ORG = "pawtograder-playground";
-const isE2eFixture = (org: string | null, courseSlug: string | null) =>
-  org === E2E_FIXTURE_ORG && (courseSlug?.startsWith("e2e-ignore-") ?? false);
+const isE2eFixture = (org: string | null, courseSlug: string | null, repoName?: string | null) =>
+  org === E2E_FIXTURE_ORG &&
+  ((courseSlug?.startsWith("e2e-ignore-") ?? false) ||
+    (repoName?.startsWith("e2e-ignore-") ?? false) ||
+    (repoName?.startsWith("test-e2e") ?? false) ||
+    (repoName?.startsWith("e2e-test") ?? false));
 
 // PostgREST caps a response at max_rows (1000, in both supabase/config.toml and the chart), so an
 // unpaged read would report a complete result while silently omitting everything past the cap.
@@ -165,6 +169,21 @@ async function main() {
 
   const supabase = createAdminClient<Database>();
 
+  // Orgs background automation must never touch, from configuration rather than a hardcoded list.
+  // Measured on prod 2026-09-09: all 133 assignments missing a solution repo were in test/dev/demo
+  // orgs and none in a real course org. `classes.is_demo` is false on every one of them, so it
+  // cannot serve as the filter — the GitHub org is what actually separates them.
+  const { data: excludedOrgRows, error: excludedError } = await supabase
+    .from("github_orgs")
+    .select("org_name")
+    .eq("excluded_from_automation", true);
+  if (excludedError) {
+    console.error("Failed to read excluded orgs:", excludedError.message);
+    process.exit(1);
+  }
+  const excludedOrgs = (excludedOrgRows ?? []).map((o) => o.org_name);
+  const excludedList = excludedOrgs.length > 0 ? `(${excludedOrgs.map((o) => `"${o}"`).join(",")})` : null;
+
   const rows: Row[] = [];
   for (let from = 0; ; from += PAGE_SIZE) {
     let query = supabase
@@ -177,6 +196,11 @@ async function main() {
       .range(from, from + PAGE_SIZE - 1);
     if (classId !== undefined) query = query.eq("class_id", classId);
     if (assignmentId !== undefined) query = query.eq("id", assignmentId);
+    // Excluded orgs are filtered in SQL, not read and discarded. A named --assignment bypasses it,
+    // since that is a human deliberately repairing one row.
+    if (excludedList && assignmentId === undefined) {
+      query = query.not("classes.github_org", "in", excludedList);
+    }
 
     const { data, error } = await query;
     if (error) {
@@ -196,7 +220,10 @@ async function main() {
     if (!a.classes?.github_org || !a.classes?.slug) return false;
     if (!a.slug) return false;
     if (REPO_MODES_WITHOUT_REPOS.has(a.repo_mode)) return false;
-    if (isE2eFixture(a.classes.github_org, a.classes.slug)) return false;
+    // The repo NAME matters as well as the course slug — the shared predicate also treats repos
+    // named `e2e-test*` / `test-e2e*` as fixtures, and omitting that is why 57 `e2e-test-class-*`
+    // assignments were reported as repairable in the first production dry run.
+    if (isE2eFixture(a.classes.github_org, a.classes.slug, `${a.classes.slug}-solution-${a.slug}`)) return false;
     if (!targeted && (a.classes.archived || a.archived_at)) return false;
     return true;
   });
