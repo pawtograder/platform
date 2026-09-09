@@ -55,6 +55,23 @@ function getAdminSupabase() {
   return createClient<Database>(Deno.env.get("SUPABASE_URL") || "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "");
 }
 
+/**
+ * The distinct kinds of repair a sync can perform.
+ *
+ * Reported as Sentry tags on "Fix GitHub button made changes" so the event is countable. It used to
+ * carry a single boolean across five different repairs, which made the issue unreadable in
+ * aggregate: an org invitation that GitHub had expired, a repo that was never created, and ordinary
+ * collaborator drift all produced the identical event, and telling them apart meant opening
+ * breadcrumbs one event at a time.
+ */
+type RepairKind =
+  | "staff_org_invite"
+  | "student_org_invite"
+  | "group_repo_create"
+  | "individual_repo_create"
+  | "repo_permission_sync"
+  | "github_username_changed";
+
 async function ensureStaffOrgMembership(userID: string, githubUsername: string, scope: Sentry.Scope) {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
@@ -68,13 +85,18 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
     .eq("user_id", userID);
   if (staffError) {
     Sentry.captureException(staffError, scope);
-    return { madeChanges: false, errorMessages: ["Error fetching staff roles"] };
+    return {
+      madeChanges: false,
+      errorMessages: ["Error fetching staff roles"],
+      repairKinds: new Set<RepairKind>()
+    };
   }
   if (!staffRoles || staffRoles.length === 0) {
-    return { madeChanges: false, errorMessages: [] };
+    return { madeChanges: false, errorMessages: [], repairKinds: new Set<RepairKind>() };
   }
   let madeChanges = false;
   const errorMessages: string[] = [];
+  const repairKinds = new Set<RepairKind>();
   for (const c of staffRoles) {
     if (!c.classes?.github_org || !c.classes?.slug) {
       continue;
@@ -89,7 +111,10 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
       const resp = await reinviteToOrgTeam(c.classes.github_org, team_slug, githubUsername, scope, {
         userId: userID
       });
-      madeChanges = madeChanges || resp;
+      if (resp) {
+        madeChanges = true;
+        repairKinds.add("staff_org_invite");
+      }
       if (!resp) {
         // Either already in the team, or just added directly via PUT. Mark confirmed for this class.
         await adminSupabase
@@ -103,7 +128,7 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
       errorMessages.push(`Error inviting ${githubUsername} to ${c.classes.github_org}/${team_slug}`);
     }
   }
-  return { madeChanges, errorMessages };
+  return { madeChanges, errorMessages, repairKinds };
 }
 
 async function ensureAllReposExist(userID: string, githubUsername: string, scope: Sentry.Scope) {
@@ -123,11 +148,12 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     throw new UserVisibleError("Error fetching classes");
   }
   if (!classes || classes.length === 0) {
-    return { madeChanges: false, errorMessages: [] };
+    return { madeChanges: false, errorMessages: [], repairKinds: new Set<RepairKind>() };
   }
 
   let madeChanges = false;
   const errorMessages: string[] = [];
+  const repairKinds = new Set<RepairKind>();
 
   for (const c of classes) {
     // Require both org and slug: the student team name is derived as `${slug}-students`, so a class
@@ -150,7 +176,10 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
           undefined,
           { userId: userID }
         );
-        madeChanges = madeChanges || resp;
+        if (resp) {
+          madeChanges = true;
+          repairKinds.add("student_org_invite");
+        }
         if (!resp) {
           await adminSupabase
             .from("user_roles")
@@ -240,6 +269,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
           madeChanges = true;
+          repairKinds.add("group_repo_create");
           jobScope?.addBreadcrumb({
             category: "github",
             message: `Creating repo ${repoName}`,
@@ -325,7 +355,10 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
               .map((m) => m.user_roles.users.github_username!),
             jobScope
           );
-          madeChanges = madeChanges || madeChangesForRepo;
+          if (madeChangesForRepo) {
+            madeChanges = true;
+            repairKinds.add("repo_permission_sync");
+          }
         } catch (e) {
           Sentry.captureException(e, jobScope);
           errorMessages.push(`Error syncing repo permissions for ${repoName}`);
@@ -371,6 +404,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         return;
       }
       madeChanges = true;
+      repairKinds.add("individual_repo_create");
       //Use service role key to insert the repo into the database
       const { error, data: dbRepo } = await adminSupabase
         .from("repositories")
@@ -462,7 +496,10 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             [githubUsername],
             jobScope
           );
-          madeChanges = madeChanges || madeChangesForRepo;
+          if (madeChangesForRepo) {
+            madeChanges = true;
+            repairKinds.add("repo_permission_sync");
+          }
         }
       } catch (e) {
         Sentry.captureException(e, jobScope);
@@ -505,7 +542,10 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             groupMemberUsernames,
             jobScope
           );
-          madeChanges = madeChanges || madeChangesForRepo;
+          if (madeChangesForRepo) {
+            madeChanges = true;
+            repairKinds.add("repo_permission_sync");
+          }
         }
       } catch (e) {
         Sentry.captureException(e, jobScope);
@@ -514,10 +554,9 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     });
 
   await Promise.all([...individualRepoSyncPromises, ...groupRepoSyncPromises]);
-  if (madeChanges) {
-    Sentry.captureMessage("Fix GitHub button made changes", scope);
-  }
-  return { madeChanges, errorMessages };
+  // The capture itself lives in syncGitHubUser: staff-only repairs and a GitHub username change
+  // happen outside this function and were invisible in Sentry while the event was emitted here.
+  return { madeChanges, errorMessages, repairKinds };
 }
 async function fetchGitHubUserLogin(
   githubUserId: string | null | undefined,
@@ -731,14 +770,22 @@ async function syncGitHubUser(
   const staffResult = await ensureStaffOrgMembership(userId, gitHubUser.login, scope);
 
   //For good measure, make sure that all repos for the student exist and have the correct permissions
-  const { madeChanges: studentMadeChanges, errorMessages: studentErrorMessages } = await ensureAllReposExist(
-    userId,
-    gitHubUser.login,
-    scope
-  );
+  const {
+    madeChanges: studentMadeChanges,
+    errorMessages: studentErrorMessages,
+    repairKinds: studentRepairKinds
+  } = await ensureAllReposExist(userId, gitHubUser.login, scope);
   const madeChanges = staffResult.madeChanges || studentMadeChanges;
   const errorMessages = [...staffResult.errorMessages, ...studentErrorMessages];
   const changedUsername = userData.github_username !== gitHubUser.login;
+  const repairKinds = new Set<RepairKind>([...staffResult.repairKinds, ...studentRepairKinds]);
+  if (changedUsername) {
+    // A rename is a repair too: the stored login was wrong, and every GitHub call made on the
+    // user's behalf between the rename and this sync was made against a login that no longer
+    // existed. Tagged, but deliberately not folded into madeChanges, whose meaning ("repositories
+    // were updated, refresh the page") the UI depends on.
+    repairKinds.add("github_username_changed");
+  }
   const messages = [];
   if (changedUsername) {
     Sentry.addBreadcrumb({
@@ -752,6 +799,18 @@ async function syncGitHubUser(
   }
   if (madeChanges) {
     messages.push(`Repositories were updated. Please refresh the page.`);
+  }
+  if (repairKinds.size > 0) {
+    // One tag per kind so a Sentry search can count a single repair, plus the sorted join so the
+    // combinations are countable too. The message text is unchanged on purpose: it keeps the
+    // existing issue's history rather than splitting it in two on the day this ships.
+    const kinds = [...repairKinds].sort();
+    scope.setTag("repair_kinds", kinds.join(","));
+    for (const kind of kinds) {
+      scope.setTag(`repair_${kind}`, "true");
+    }
+    scope.setContext("repairs", { kinds, made_changes: madeChanges, errors: errorMessages.length });
+    Sentry.captureMessage("Fix GitHub button made changes", scope);
   }
   messages.push(...errorMessages);
   return {
@@ -841,6 +900,7 @@ async function handleInstructorGitHubRequest(req: Request, body: InstructorGitHu
   }
 
   if (body.action === "sync") {
+    scope.setTag("sync_trigger", "instructor");
     if (!target.classes?.github_org) {
       throw new UserVisibleError("Course has no GitHub organization configured");
     }
@@ -900,7 +960,12 @@ async function parseRequestBody(req: Request): Promise<Record<string, unknown>> 
   }
 }
 
-async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
+async function handleStudentGitHubSync(req: Request, source: string, scope: Sentry.Scope) {
+  // "login" or "button" — the two callers are indistinguishable in production otherwise, and the
+  // repairs recorded here were mostly the login-time reconcile rather than a student pressing
+  // anything. Normalized to those two values rather than passed through: the label is
+  // client-supplied, and an unbounded tag would be a cardinality hole in Sentry.
+  scope.setTag("sync_trigger", source === "login" ? "login" : "button");
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) {
     throw new SecurityError("Missing Authorization header");
@@ -980,7 +1045,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (body.action === "diagnose" || body.action === "sync" || body.action === "unlink") {
     return await handleInstructorGitHubRequest(req, body as InstructorGitHubRequest, scope);
   }
-  return await handleStudentGitHubSync(req, scope);
+  return await handleStudentGitHubSync(req, typeof body.source === "string" ? body.source : "button", scope);
 }
 Deno.serve(async (req) => {
   return await wrapRequestHandler(req, handleRequest);
