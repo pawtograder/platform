@@ -142,6 +142,13 @@ function isEligibleForRepoWork(a: AssignmentRow): boolean {
  *                                          (does the expected handout repo exist?), which the
  *                                          script does on demand with --check-github.
  *
+ * This predicate is only sound because assignment-create-solution-repo writes grader_repo LAST,
+ * after the repo exists and its config is stored. It used to write it FIRST, which meant any later
+ * failure — including this job's own request timeout — left a non-NULL pointer to a repo that might
+ * not exist, and the row then matched no scan and was never retried or alerted. That write was moved
+ * in this branch; without it, every failed repair here would quietly orphan the assignment it was
+ * trying to fix.
+ *
  * A handout that failed always leaves both NULL (solution never runs after it), so handout repair
  * has no unambiguous signal at all and is intentionally never automatic.
  */

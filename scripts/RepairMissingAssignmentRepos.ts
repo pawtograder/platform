@@ -29,6 +29,10 @@
  *                                          request per candidate every 15 minutes, against a set
  *                                          that is mostly placeholders, is not worth it.
  *
+ * The NULL check is only sound because assignment-create-solution-repo writes grader_repo LAST,
+ * after the repo exists and its config is stored — it used to write it first, so any later failure
+ * left a pointer to a repo that might not exist and the row matched no scan ever again.
+ *
  * Also excluded: classes with no github_org, archived classes and assignments, rows with a NULL
  * class or assignment slug (the repo name is derived from both, so a NULL would create or adopt
  * `<class>-solution-null` and point several assignments at one repository), and e2e fixtures
@@ -340,9 +344,10 @@ async function main() {
     );
   }
 
-  // A targeted run may also want an assignment whose grader_repo was written but whose creation
-  // then failed downstream (template resolution, GitHub, permission sync, config load) — the
-  // pointer is non-NULL, so a sweep would never see it again.
+  // A targeted run may also want an assignment whose pointer is set but whose repo is wrong or
+  // absent. Since grader_repo is now written last, that is no longer the normal shape of a partial
+  // failure — but it remains reachable (the pointer write itself failing after the config write, or
+  // a repo deleted on GitHub afterwards), and a sweep would never look at it again.
   const targetedPointerSet = targeted ? pointerSet : [];
   if (targetedPointerSet.length > 0) {
     console.log(`\n=== Named assignment already has a grader_repo pointer ===`);

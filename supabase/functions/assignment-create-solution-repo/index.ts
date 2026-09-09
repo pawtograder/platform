@@ -43,19 +43,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!solutionRepoOrg) {
     throw new UserVisibleError("Class does not have a GitHub organization");
   }
-  await adminSupabase
-    .from("autograder")
-    .update({
-      grader_repo: `${solutionRepoOrg}/${solutionRepoName}`
-    })
-    .eq("id", assignment_id);
+  const solutionRepoFullName = `${solutionRepoOrg}/${solutionRepoName}`;
   const { solution: solutionTemplateRepo } = await resolveTemplateRepos(adminSupabase, class_id);
   scope.setTag("solution_template_repo", solutionTemplateRepo);
 
   // E2E fixtures must never hit real GitHub. Return before createRepo + syncRepoPermissions +
   // getFileFromRepo (the last has no stub seam and would 404 on the fixture repo). The grader_repo
-  // pointer update above is a harmless DB write and stays; the config update below is correctly
-  // skipped since it depends on getFileFromRepo. Stub-record tests still fall through.
+  // pointer is written HERE for this branch specifically, preserving the behaviour it had when the
+  // write lived at the top of the function; the config update below is correctly skipped since it
+  // depends on getFileFromRepo. Stub-record tests still fall through.
   if (
     shouldSkipRealGithubForE2eFixture({
       org: solutionRepoOrg,
@@ -63,12 +59,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       repoName: solutionRepoName
     })
   ) {
+    await adminSupabase.from("autograder").update({ grader_repo: solutionRepoFullName }).eq("id", assignment_id);
     return { repo_name: solutionRepoName, org_name: solutionRepoOrg, skipped: true };
   }
 
   await createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope);
   await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, [], scope);
-  const graderConfig = await getFileFromRepo(`${solutionRepoOrg}/${solutionRepoName}`, "pawtograder.yml");
+  const graderConfig = await getFileFromRepo(solutionRepoFullName, "pawtograder.yml");
   const asObj = (await parse(graderConfig.content)) as Json;
   const { error: configError } = await adminSupabase
     .from("autograder")
@@ -83,6 +80,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // solution repo and no config at all.
     Sentry.captureException(configError, scope);
     throw configError;
+  }
+
+  // Persist grader_repo only NOW — the same discipline assignment-create-handout-repo applies to
+  // template_repo, and for the same reason. This write used to be the FIRST thing the function did,
+  // which meant any later failure (a GitHub error, a permission sync, a config read, or the
+  // reconciler's request timeout) left a non-NULL pointer to a repo that might not exist or might
+  // have no config. Every scan that looks for unfinished work keys on this pointer being NULL, so
+  // such a row became permanently invisible: never retried, never alerted, and not reachable by the
+  // repair script's sweep either. Writing it last makes a NULL pointer mean exactly "this did not
+  // finish", which is what the reconciler and the repair script both assume, and makes every
+  // partial failure retryable — createRepo adopts the repo it already made.
+  const { error: pointerError } = await adminSupabase
+    .from("autograder")
+    .update({ grader_repo: solutionRepoFullName })
+    .eq("id", assignment_id);
+  if (pointerError) {
+    // Same reasoning as the config write: reporting success here would leave a solution repo that
+    // nothing points at, and the assignment would keep being reported as missing one.
+    Sentry.captureException(pointerError, scope);
+    throw pointerError;
   }
 
   // Seed the handout's file hashes now that submissionFiles is known.
