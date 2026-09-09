@@ -87,7 +87,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   await createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope);
   await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, [], scope);
-  const graderConfig = await getFileFromRepo(solutionRepoFullName, "pawtograder.yml");
+
+  // Resolve the head BEFORE reading the config, and read the config AT that commit, so every value
+  // recorded below describes one revision. An unqualified read races any push landing between the
+  // two calls: config and points would come from the old tree while latest_autograder_sha and the
+  // commit row named the new one — and because grader_repo is not written until the end of this
+  // function, the webhook for that intervening push cannot find the assignment and is dropped, so
+  // the mismatch is not self-correcting. getFileFromRepo's own parameter documentation asks for
+  // exactly this, and it is the same pinning assignment-create-handout-repo does when it passes
+  // strippedHandoutSha to updateAutograderWorkflowHash.
+  //
+  // `autograder_commits.ref` is NOT NULL and a template-generated repo inherits the template's
+  // default branch, which may not be `main` — the push handlers all carry a comment about that
+  // exact bug, so this asks rather than guesses.
+  const [headCommit, defaultBranch] = await Promise.all([
+    getCommit(solutionRepoFullName, "HEAD", scope),
+    getDefaultBranch(solutionRepoFullName, scope)
+  ]);
+  scope.setTag("solution_head_sha", headCommit.sha);
+  const graderConfig = await getFileFromRepo(solutionRepoFullName, "pawtograder.yml", scope, headCommit.sha);
   const asObj = (await parse(graderConfig.content)) as Json;
   const { error: configError } = await adminSupabase
     .from("autograder")
@@ -122,13 +140,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // trade. Reported to Sentry so a persistent failure is visible.
   try {
     const parsedConfig = asObj as unknown as PawtograderConfig | null;
-    // `autograder_commits.ref` is NOT NULL and a template-generated repo inherits the template's
-    // default branch, which may not be `main` — the push handlers all carry a comment about exactly
-    // that. Ask rather than guess.
-    const [headCommit, defaultBranch] = await Promise.all([
-      getCommit(solutionRepoFullName, "HEAD", scope),
-      getDefaultBranch(solutionRepoFullName, scope)
-    ]);
     const points = parsedConfig ? calculateTotalAutograderPoints(parsedConfig) : 0;
     scope.setTag("total_autograder_points", points.toString());
     const [{ error: pointsError }, { error: shaError }] = await Promise.all([

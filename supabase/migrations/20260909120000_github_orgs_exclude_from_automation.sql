@@ -39,17 +39,36 @@ COMMENT ON COLUMN public.github_orgs.excluded_from_automation IS
 -- Reversible by any platform admin: the "Admins manage github_orgs" RLS policy grants full CRUD, so
 -- this is settable over PostgREST today. It is not yet surfaced in the admin per-org UI; that
 -- plumbing (admin_get_github_orgs / admin_upsert_github_org) is a follow-up.
+-- Case-insensitively, because org_name is a case-sensitive text primary key while GitHub org
+-- logins are not, and nothing normalizes what admin_create_class / admin_update_class store. A
+-- straight lowercase insert against a deployment that already holds `Pawtograder-Playground` would
+-- create a SECOND row: the admin page would then show both spellings, and unticking the flag on the
+-- one the classes actually reference would leave the lowercase seed still excluding the org,
+-- because the reconciler lowercases every excluded row when it compares.
+--
+-- So: flip the flag on any existing case-insensitive match, and insert only where none exists.
+UPDATE public.github_orgs
+SET excluded_from_automation = true,
+    updated_at = now()
+WHERE lower(org_name) IN ('pawtograder-playground', 'autograder-dev', 'pawtograder-instructor-demo');
+
+-- New rows take the DEPLOYMENT's effective template defaults, not the table's hardcoded ones:
+-- materializing a github_orgs row suppresses the GUC tier in resolve_class_template_repos, so an
+-- insert that quietly took the column defaults would move template resolution for the org. This
+-- migration is about automation only and must not do that. An existing row keeps its own values,
+-- which is why the UPDATE above touches nothing but the flag.
+--
+-- Reversible by any platform admin from the per-org admin page (the "Admins manage github_orgs" RLS
+-- policy grants full CRUD, and 20260909130000 surfaces the flag there).
 INSERT INTO public.github_orgs (org_name, excluded_from_automation, default_handout_template_repo, default_solution_template_repo)
 SELECT
-    org_name,
+    seed.org_name,
     true,
     public.resolve_effective_template_repo(
         NULL, NULL, 'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
     public.resolve_effective_template_repo(
         NULL, NULL, 'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader')
 FROM (VALUES ('pawtograder-playground'), ('autograder-dev'), ('pawtograder-instructor-demo')) AS seed(org_name)
-ON CONFLICT (org_name) DO UPDATE SET
-    -- Only the automation flag on an existing row: its template defaults were configured
-    -- deliberately and are none of this migration's business.
-    excluded_from_automation = true,
-    updated_at = now();
+WHERE NOT EXISTS (
+    SELECT 1 FROM public.github_orgs g WHERE lower(g.org_name) = seed.org_name
+);
