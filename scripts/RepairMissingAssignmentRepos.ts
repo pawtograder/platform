@@ -521,11 +521,23 @@ async function main() {
     // happily publish repositories for work somebody has since withdrawn. A named --assignment is
     // exempt: that is a human who knows what they are repairing.
     if (!targeted) {
-      const { data: fresh, error: freshError } = await supabase
-        .from("assignments")
-        .select("archived_at, classes(archived)")
-        .eq("id", row.id)
-        .maybeSingle();
+      // The org exclusion is re-read too, not taken from the set loaded at startup. It is the
+      // switch that stops automation, the creation functions deliberately do not enforce it, and a
+      // sequential sweep can still be running minutes after an operator flips it.
+      const [{ data: fresh, error: freshError }, { data: freshOrg, error: freshOrgError }] = await Promise.all([
+        supabase.from("assignments").select("archived_at, classes(archived)").eq("id", row.id).maybeSingle(),
+        supabase
+          .from("github_orgs")
+          .select("excluded_from_automation")
+          .ilike("org_name", row.classes?.github_org ?? "")
+          .maybeSingle()
+      ]);
+      if (freshOrgError || freshOrg?.excluded_from_automation) {
+        // Unreadable counts as excluded: this is the stop switch, so "could not tell" must not mean
+        // "carry on".
+        console.log(`  skipping assignment ${row.id}: org ${row.classes?.github_org} is excluded or unreadable`);
+        continue;
+      }
       if (freshError) {
         // A failed read is not permission to proceed.
         console.log(`  skipping assignment ${row.id}: could not revalidate (${freshError.message})`);

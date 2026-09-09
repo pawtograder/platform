@@ -109,6 +109,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // `autograder_commits.ref` is NOT NULL and a template-generated repo inherits the template's
   // default branch, which may not be `main` — the push handlers all carry a comment about that
   // exact bug, so this asks rather than guesses.
+  // Read the CURRENT pointer and SHA before snapshotting the head, so what follows is decided by
+  // state observed no later than the snapshot it guards.
+  //
+  // `grader_repo` being already published is the discriminator that matters. While it is NULL no
+  // webhook can find this assignment — handlePushToGraderSolution looks it up by that column — so
+  // any SHA present is one of OUR earlier attempts, and overwriting it is correct. Once it is
+  // published the webhook is live and authoritative for this metadata, and a targeted repair that
+  // rewrote it would fight a writer it cannot serialize with: the webhook writes config and points
+  // across several requests and only advances the SHA afterwards, so our atomic transition can
+  // match the SHA it has not moved yet, replace its config and points with an older snapshot, and
+  // then watch it advance the SHA over the top.
+  const { data: existingPointer, error: existingPointerError } = await adminSupabase
+    .from("autograder")
+    .select("grader_repo, latest_autograder_sha")
+    .eq("id", assignment_id)
+    .maybeSingle();
+  if (existingPointerError) throw existingPointerError;
+  const pointerAlreadyPublished = (existingPointer?.grader_repo ?? null) !== null;
+  const expectedSha = existingPointer?.latest_autograder_sha ?? null;
+
   const [headCommit, defaultBranch] = await Promise.all([
     getCommit(solutionRepoFullName, "HEAD", scope),
     getDefaultBranch(solutionRepoFullName, scope)
@@ -143,18 +163,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // whole transition in one transaction, gated on the SHA we believe is current, and reports
   // whether it applied.
   //
-  // The expectation is read BEFORE the head snapshot. A targeted repair runs against an assignment
-  // whose grader_repo is already published, so the webhook is live throughout — reading it later
-  // would let a delivery that landed in between become our own expectation, and we would then
-  // "successfully" roll the assignment back over it.
-  const { data: priorAutograder, error: priorError } = await adminSupabase
-    .from("autograder")
-    .select("latest_autograder_sha")
-    .eq("id", assignment_id)
-    .maybeSingle();
-  if (priorError) throw priorError;
-  const expectedSha = priorAutograder?.latest_autograder_sha ?? null;
-
   const recordHeadMetadata = async (
     commitSha: string,
     message: string,
@@ -185,31 +193,42 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return applied === true;
   };
 
-  try {
-    const applied = await recordHeadMetadata(
-      headCommit.sha,
-      headCommit.commit.message,
-      headCommit.commit.author?.name ?? null,
-      asObj,
-      expectedSha
+  if (pointerAlreadyPublished) {
+    // A targeted repair of an assignment that already has a pointer. The push webhook owns this
+    // metadata now and is at least as current as anything we snapshotted, so the repair's job here
+    // is done — the repository exists and the pointer is set. Rewriting would be a race we cannot
+    // win correctly, and the next push reconciles anything genuinely stale.
+    scope.setTag("initial_autograder_metadata", "skipped_pointer_published");
+    console.log(
+      `Not rewriting autograder metadata for ${solutionRepoFullName}: grader_repo is already published, so the push webhook owns it`
     );
-    if (!applied) {
-      // Nothing was written, so the state is whatever the winner left — coherent, just not ours.
-      // Refusing to publish the pointer keeps the assignment repairable rather than freezing it
-      // half-configured.
-      throw new Error(
-        `Refusing to publish ${solutionRepoFullName}: latest_autograder_sha changed from ${expectedSha ?? "NULL"} while provisioning`
+  } else {
+    try {
+      const applied = await recordHeadMetadata(
+        headCommit.sha,
+        headCommit.commit.message,
+        headCommit.commit.author?.name ?? null,
+        asObj,
+        expectedSha
       );
+      if (!applied) {
+        // Nothing was written, so the state is whatever the winner left — coherent, just not ours.
+        // Refusing to publish the pointer keeps the assignment repairable rather than freezing it
+        // half-configured.
+        throw new Error(
+          `Refusing to publish ${solutionRepoFullName}: latest_autograder_sha changed from ${expectedSha ?? "NULL"} while provisioning`
+        );
+      }
+    } catch (metadataError) {
+      // NOT best-effort. Publishing grader_repo after this failed would take the assignment out of
+      // every repair scan while leaving it half-configured, and nothing would revisit it, because the
+      // pointer is exactly what the scans key on. Failing keeps the pointer NULL, so the assignment
+      // stays repairable and a retry adopts the repository that already exists.
+      scope.setTag("initial_autograder_metadata", "failed");
+      Sentry.captureException(metadataError, scope);
+      console.error(`Could not record initial autograder metadata for ${solutionRepoFullName}`, metadataError);
+      throw metadataError;
     }
-  } catch (metadataError) {
-    // NOT best-effort. Publishing grader_repo after this failed would take the assignment out of
-    // every repair scan while leaving it half-configured, and nothing would revisit it, because the
-    // pointer is exactly what the scans key on. Failing keeps the pointer NULL, so the assignment
-    // stays repairable and a retry adopts the repository that already exists.
-    scope.setTag("initial_autograder_metadata", "failed");
-    Sentry.captureException(metadataError, scope);
-    console.error(`Could not record initial autograder metadata for ${solutionRepoFullName}`, metadataError);
-    throw metadataError;
   }
 
   // Persist grader_repo only NOW — the same discipline assignment-create-handout-repo applies to
