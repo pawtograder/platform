@@ -74,7 +74,6 @@ const REPAIR_RESERVE_MS = 280_000;
 const REPAIR_MAX_ATTEMPTS_PER_RUN = 25;
 
 type RepairTally = { repairable: number; ambiguous: number; created: number; failed: number; alerted: number };
-const EMPTY_REPAIR: RepairTally = { repairable: 0, ambiguous: 0, created: 0, failed: 0, alerted: 0 };
 
 /** The row shape both the repair and the alert pass reduce to. */
 type AssignmentRow = {
@@ -160,7 +159,8 @@ function isEligibleForRepoWork(a: AssignmentRow): boolean {
 async function repairMissingSolutionRepos(opts: {
   supabase: ReturnType<typeof createClient<Database>>;
   serviceRoleKey: string;
-  edgeFunctionsUrl: string;
+  /** `null` when EDGE_FUNCTIONS_URL is unset: detection and alerting still run, repairs do not. */
+  edgeFunctionsUrl: string | null;
   scope: Sentry.Scope;
 }): Promise<RepairTally> {
   const { supabase, serviceRoleKey, edgeFunctionsUrl, scope } = opts;
@@ -264,6 +264,16 @@ async function repairMissingSolutionRepos(opts: {
   tally.ambiguous = ambiguous.length;
   for (const a of repairable) {
     alertOn(a, "solution-missing", "Assignment has a handout repo but no solution (grader) repo");
+  }
+
+  if (!edgeFunctionsUrl) {
+    // Detection and alerting are database-only and are the whole escalation path for a deployment
+    // that cannot make the outbound call. Skipping them along with the repairs left such a
+    // deployment with nothing but a recurring console warning.
+    console.warn(
+      `[github-repo-reconciler] EDGE_FUNCTIONS_URL not set; alerted ${tally.alerted}, repaired none of ${repairable.length}`
+    );
+    return tally;
   }
 
   const oldestRepairable = new Date(startedAt - REPAIR_MAX_AGE_DAYS * 24 * 60 * 60 * 1000).getTime();
@@ -410,20 +420,15 @@ Deno.serve(async (req) => {
     }
 
     // 3) Create solution repos the create path never created, and alert on the rest.
-    let repairs = EMPTY_REPAIR;
-    const edgeFunctionsUrl = Deno.env.get("EDGE_FUNCTIONS_URL");
-    if (!edgeFunctionsUrl) {
-      // Skipped rather than fatal: jobs 1 and 2 are the reason this function is scheduled, and a
-      // deployment that has not set this should still get them.
-      console.warn("[github-repo-reconciler] EDGE_FUNCTIONS_URL not set; skipping solution-repo repair");
-    } else {
-      repairs = await repairMissingSolutionRepos({
-        supabase,
-        serviceRoleKey: supabaseKey,
-        edgeFunctionsUrl,
-        scope
-      });
-    }
+    // Runs unconditionally: the scan and its Sentry alerts are database-only, and are the entire
+    // escalation path when the repair call cannot be made. Only the outbound repairs are gated on
+    // the URL, inside the helper.
+    const repairs = await repairMissingSolutionRepos({
+      supabase,
+      serviceRoleKey: supabaseKey,
+      edgeFunctionsUrl: Deno.env.get("EDGE_FUNCTIONS_URL") ?? null,
+      scope
+    });
 
     // Edge runtime may tear down as soon as the response is returned; flush queued Sentry events first.
     await Sentry.flush(2000);

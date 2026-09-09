@@ -28,3 +28,25 @@ Deno.test("edgeFunctionEndpoint: trailing slashes are normalized in both shapes"
     "https://api.example.edu/functions/v1/f"
   );
 });
+
+Deno.test("edgeFunctionEndpoint: a direct edge-runtime service URL is left unprefixed", () => {
+  // export-preview-agent-env.sh in-cluster form. This bypasses Kong entirely and serves /<function>
+  // at the service port, so adding the prefix would 404 every repair in that environment.
+  assertEquals(
+    edgeFunctionEndpoint("http://pawtograder-functions.pawtograder-preview-pr-1.svc.cluster.local:9000", "f"),
+    "http://pawtograder-functions.pawtograder-preview-pr-1.svc.cluster.local:9000/f"
+  );
+});
+
+Deno.test("edgeFunctionEndpoint: an in-cluster Kong origin still gets the prefix", () => {
+  // Same scheme and shape as the direct form above, different service port — which is the only
+  // thing that structurally separates them.
+  assertEquals(
+    edgeFunctionEndpoint("http://pawtograder-kong.ns.svc.cluster.local:8000", "f"),
+    "http://pawtograder-kong.ns.svc.cluster.local:8000/functions/v1/f"
+  );
+});
+
+Deno.test("edgeFunctionEndpoint: an explicit non-root path is taken at its word", () => {
+  assertEquals(edgeFunctionEndpoint("https://api.example.edu/edge", "f"), "https://api.example.edu/edge/f");
+});
