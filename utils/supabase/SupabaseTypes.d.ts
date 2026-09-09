@@ -13516,6 +13516,18 @@ export type Database = {
         };
         Returns: number;
       };
+      inherit_handout_from_source: {
+        Args: {
+          p_assignment_id: number;
+          p_expected_has_autograder: boolean;
+          p_expected_repo_mode: Database["public"]["Enums"]["assignment_repo_mode"];
+          p_expected_template_repo?: string | null;
+          p_source_assignment_id: number;
+          p_source_latest_template_sha: string | null;
+          p_source_template_repo: string | null;
+        };
+        Returns: boolean;
+      };
       insert_discord_message: {
         Args: {
           p_class_id: number;

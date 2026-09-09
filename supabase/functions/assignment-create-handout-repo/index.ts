@@ -113,31 +113,31 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // copy the source assignment's template_repo + latest_template_sha onto
     // this assignment so the handout-history UI and template-SHA-driven sync
     // continue to work.
-    // Compare-and-set on everything this branch's answer was derived from, exactly like the create
-    // branch's pointer write below. Every field is on `assignments`, so one predicate covers them.
+    // One conditional transition, because this write has to agree with TWO rows: the target still
+    // being configured the way this request resolved it, and the SOURCE still holding the values
+    // this request read. They cannot be conditioned together over PostgREST.
     //
-    // The write used to be unconditional, on the reasoning that the reads above are only moments
-    // old. But this function is also invoked unattended — by the reconciler and the repair script —
-    // and the reads are separated from this write by the source lookup and the strategy resolution.
-    // An instructor changing the mode, the source assignment, the handout pointer or the autograder
-    // flag in that window would have this restore the OLD source's handout over their newer
-    // configuration, and the caller then publishes a solution repository against that inconsistent
-    // state.
-    let inheritWrite = adminSupabase
-      .from("assignments")
-      .update({
-        template_repo: sourceAssignment!.template_repo,
-        latest_template_sha: sourceAssignment!.latest_template_sha ?? null
-      })
-      .eq("id", assignment_id)
-      .eq("repo_mode", assignment.repo_mode)
-      .eq("source_assignment_id", assignment.source_assignment_id!)
-      .eq("has_autograder", assignment.has_autograder);
-    inheritWrite =
-      (assignment.template_repo ?? null) === null
-        ? inheritWrite.is("template_repo", null)
-        : inheritWrite.eq("template_repo", assignment.template_repo!);
-    const { data: inheritRows, error: inheritError } = await inheritWrite.select("id");
+    // The target half alone is not enough, and the write used to have neither. This function is
+    // invoked unattended by the reconciler and the repair script, and the reads it decides from are
+    // separated from this write by the source lookup and the strategy resolution. An instructor
+    // changing the target's mode, source, pointer or autograder flag in that window had the old
+    // configuration's handout restored over their newer one; an instructor repointing the SOURCE's
+    // handout left this copying a repository the source no longer uses — and hashing its workflow
+    // just below. Either way the caller went on to publish a solution pointer, which takes the
+    // assignment out of every repair scan, so nothing revisited it.
+    //
+    // Declining rather than copying the source's current values: everything after this line was
+    // resolved from the snapshot, starting with the repository whose workflow gets hashed. Writing
+    // values this request did not plan around would move the inconsistency rather than remove it.
+    const { data: inherited, error: inheritError } = await adminSupabase.rpc("inherit_handout_from_source", {
+      p_assignment_id: assignment_id,
+      p_source_assignment_id: sourceAssignment!.id,
+      p_source_template_repo: sourceAssignment!.template_repo,
+      p_source_latest_template_sha: sourceAssignment!.latest_template_sha ?? null,
+      p_expected_repo_mode: assignment.repo_mode,
+      p_expected_has_autograder: assignment.has_autograder,
+      p_expected_template_repo: assignment.template_repo ?? null
+    });
     if (inheritError) {
       // Returning 200 over a failed write here is not harmless. The caller treats success as "the
       // handout is in place" and proceeds to create the solution repo, which publishes grader_repo
@@ -148,14 +148,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       Sentry.captureException(inheritError, scope);
       throw inheritError;
     }
-    if ((inheritRows?.length ?? 0) === 0) {
-      // Same resolution as the create branch: their edit is explicit and this is derived from a
-      // configuration that no longer holds, so theirs wins. Nothing was written, so the assignment
-      // is left exactly as they configured it and a retry runs against the new state.
+    if (inherited !== true) {
+      // Their edit is explicit and this is derived from a configuration that no longer holds, so
+      // theirs wins. Nothing was written, so the assignment is left exactly as they configured it
+      // and a retry runs against the new state.
       scope.setTag("handout_pointer", "config_changed");
       throw new UserVisibleError(
-        `This assignment's repository configuration changed while its handout was being inherited from ` +
-          `"${sourceAssignment!.template_repo}", so nothing was attached. Re-save to apply the new configuration.`,
+        `This assignment's repository configuration, or that of the assignment it forks from, changed while ` +
+          `its handout was being inherited from "${sourceAssignment!.template_repo}", so nothing was attached. ` +
+          `Re-save to apply the new configuration.`,
         409
       );
     }

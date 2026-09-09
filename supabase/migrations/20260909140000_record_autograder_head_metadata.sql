@@ -171,3 +171,92 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.publish_grader_repo(bigint, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.publish_grader_repo(bigint, text, text) TO service_role;
+
+----------------------------------------------------------------------------------------
+-- inherit_handout_from_source: copy a fork source's handout onto the forking assignment, or refuse
+----------------------------------------------------------------------------------------
+
+-- `fork_from_prior_assignment` does not create a handout; assignment-create-handout-repo copies the
+-- SOURCE assignment's template_repo and latest_template_sha onto the forking one. That write has to
+-- agree with two rows at once — the target still being configured the way this request resolved it,
+-- and the source still holding the values this request read — and they cannot be conditioned
+-- together over PostgREST.
+--
+-- The target half was already a compare-and-set. The source half was not: the source is read near
+-- the top of the request, and an instructor repointing THAT assignment's handout in the meantime
+-- left this copying a repository the source no longer uses, hashing its workflow, and letting the
+-- caller publish a solution pointer over the result — which takes the assignment out of every
+-- repair scan, so nothing revisits it.
+--
+-- Declining rather than copying the source's CURRENT values, which would be the tempting fix: the
+-- caller resolved its whole plan from the snapshot, including the repository it hashes the workflow
+-- from immediately afterwards. Writing values the caller did not plan around would just move the
+-- inconsistency. Returning false leaves the assignment untouched and repairable, and the retry
+-- reads the source as it now stands.
+-- Prerequisite: the BEFORE UPDATE trigger on `assignments` mirrors template_repo changes into
+-- autograder_regression_test using UNQUALIFIED table names and carries no search_path of its own,
+-- so it resolves against whatever the calling function set. Every function in this migration uses
+-- `SET search_path = ''` (the project convention, and what protects a SECURITY DEFINER body from
+-- schema shadowing), which made the trigger fail with `relation "autograder_regression_test" does
+-- not exist` the moment one of them changed template_repo.
+--
+-- Fixed on the trigger rather than by relaxing the callers' search_path, because the trap belongs to
+-- the trigger: ANY function with a restricted search_path that touches assignments.template_repo
+-- hits it, and there is no reason for each of them to widen its own path to compensate. ALTER
+-- FUNCTION rather than CREATE OR REPLACE — the body is untouched, only its name resolution is
+-- pinned, and `pg_temp` goes last so a temporary table cannot shadow a real one. This matches the
+-- sibling trigger assignments_check_source_assignment, which already carries exactly this setting.
+ALTER FUNCTION public.assignment_before_update() SET search_path = public, pg_temp;
+
+CREATE OR REPLACE FUNCTION public.inherit_handout_from_source(
+    p_assignment_id bigint,
+    p_source_assignment_id bigint,
+    p_source_template_repo text,
+    p_source_latest_template_sha text,
+    p_expected_repo_mode public.assignment_repo_mode,
+    p_expected_has_autograder boolean,
+    p_expected_template_repo text DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_repo text;
+    v_sha text;
+BEGIN
+    IF auth.role() <> 'service_role' THEN
+        RAISE EXCEPTION 'Access denied: service role required';
+    END IF;
+
+    -- FOR SHARE, not a bare read: this only needs the source to hold still, not to change it, and
+    -- an unlocked read would leave the same gap at READ COMMITTED that the whole function exists to
+    -- close. A concurrent edit of the source waits for this one UPDATE.
+    SELECT a.template_repo, a.latest_template_sha
+      INTO v_repo, v_sha
+      FROM public.assignments a
+     WHERE a.id = p_source_assignment_id
+       FOR SHARE;
+
+    IF NOT FOUND
+       OR v_repo IS DISTINCT FROM p_source_template_repo
+       OR v_sha IS DISTINCT FROM p_source_latest_template_sha THEN
+        RETURN false;
+    END IF;
+
+    UPDATE public.assignments
+       SET template_repo = p_source_template_repo,
+           latest_template_sha = p_source_latest_template_sha
+     WHERE id = p_assignment_id
+       AND repo_mode = p_expected_repo_mode
+       AND source_assignment_id IS NOT DISTINCT FROM p_source_assignment_id
+       AND has_autograder IS NOT DISTINCT FROM p_expected_has_autograder
+       AND template_repo IS NOT DISTINCT FROM p_expected_template_repo;
+
+    RETURN FOUND;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.inherit_handout_from_source(bigint, bigint, text, text, public.assignment_repo_mode, boolean, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.inherit_handout_from_source(bigint, bigint, text, text, public.assignment_repo_mode, boolean, text) TO service_role;
