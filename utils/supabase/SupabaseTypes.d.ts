@@ -13806,6 +13806,7 @@ export type Database = {
           p_assignment_id: number;
           p_author: string | null;
           p_config: Json;
+          p_expected_config?: Json | null;
           p_expected_grader_repo?: string | null;
           p_expected_has_autograder?: boolean | null;
           p_expected_sha: string | null;
@@ -13938,6 +13939,10 @@ export type Database = {
       };
       send_signup_welcome_message: {
         Args: { p_user_id: string };
+        Returns: boolean;
+      };
+      set_autograder_points_for_repo: {
+        Args: { p_assignment_id: number; p_expected_grader_repo: string | null; p_points: number };
         Returns: boolean;
       };
       set_class_template_overrides: {

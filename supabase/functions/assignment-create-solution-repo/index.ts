@@ -107,7 +107,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // published the webhook is live and authoritative for this metadata.
   const { data: existingPointer, error: existingPointerError } = await adminSupabase
     .from("autograder")
-    .select("grader_repo, latest_autograder_sha")
+    .select("grader_repo, latest_autograder_sha, config")
     .eq("id", assignment_id)
     .maybeSingle();
   if (existingPointerError) throw existingPointerError;
@@ -116,6 +116,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // never discoverable through that other pointer, so treating them as webhook-owned would skip the
   // metadata write and then swap the pointer underneath, leaving the previous repository's config,
   // SHA and points attached to the new one until somebody pushed.
+  if (expect_no_grader_repo === true && (existingPointer?.grader_repo ?? null) !== null) {
+    // An unattended caller asked to act only on an assignment with no pointer at all, and there is
+    // one. Refuse WITHOUT clearing it, and refuse HERE — before createRepo, the permission sync and
+    // the head/config reads. Deciding this after the GitHub work still protected the instructor's
+    // pointer, but left a conventionally named solution repository behind in the course org that
+    // nobody asked for and that a later legitimate creation would then collide with.
+    //
+    // The reconciler and the repair script's sweep check grader_repo before they call, but the
+    // handout request they make first takes minutes, so an instructor can choose a custom grader
+    // repository in between. This endpoint's own compare-and-set does not protect that choice — by
+    // the time it reads the pointer, the custom value IS its snapshot, and the clear below is
+    // written to retire exactly such a "differently named" pointer. That behaviour is right for a
+    // human running a targeted repair and wrong for a sweep, and only the caller knows which it is.
+    scope.setTag("grader_repo_pointer", "present_for_unattended_repair");
+    console.log(
+      `Not attaching ${solutionRepoFullName} to assignment ${assignment_id}: an unattended repair requires a NULL grader_repo and it holds ${existingPointer!.grader_repo}`
+    );
+    throw new UserVisibleError(
+      `This assignment already has a grader repository (${existingPointer!.grader_repo}), so automated repair left it alone.`,
+      409
+    );
+  }
+
   const pointerAlreadyPublished = (existingPointer?.grader_repo ?? null) === solutionRepoFullName;
   const expectedSha = existingPointer?.latest_autograder_sha ?? null;
   // What the metadata RPC should expect grader_repo to be when it runs. It starts as what we
@@ -241,6 +264,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // DISTINCT FROM either way. NULL is the normal value on this path, so a "do not care" reading
       // would switch the check off exactly when it is needed.
       p_expected_grader_repo: pointerExpectationForRpc,
+      // The config as it stood when this function read the pointer. github-repo-configure-webhook
+      // persists a newly selected repository's parsed pawtograder.yml BEFORE the settings page
+      // writes the matching grader_repo, and touches neither the sha nor the pointer doing it — so
+      // without this the other two predicates still matched and this call would overwrite an
+      // instructor's chosen config with the derived repository's, permanently.
+      p_expected_config: (existingPointer?.config ?? null) as Json,
       // The flag `points` was derived from, checked inside the same transaction that writes them.
       // An instructor toggling the autograder while the GitHub calls ran would otherwise have this
       // commit zero points for an assignment they just enabled, or the template's graded points for
@@ -261,26 +290,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // config, SHA and points. Clearing it first makes the assignment invisible to that webhook for
   // the rest of this function, and NULL is the same state every failure path here already leaves
   // behind: unfinished and therefore repairable.
-  if (expect_no_grader_repo === true && (existingPointer?.grader_repo ?? null) !== null) {
-    // An unattended caller asked to act only on an assignment with no pointer at all, and there is
-    // one. Refuse WITHOUT clearing it.
-    //
-    // The reconciler and the repair script's sweep check grader_repo before they call, but the
-    // handout request they make first takes minutes, so an instructor can choose a custom grader
-    // repository in between. This endpoint's own compare-and-set does not protect that choice — by
-    // the time it reads the pointer, the custom value IS its snapshot, and the clear below is
-    // written to retire exactly such a "differently named" pointer. That behaviour is right for a
-    // human running a targeted repair and wrong for a sweep, and only the caller knows which it is.
-    scope.setTag("grader_repo_pointer", "present_for_unattended_repair");
-    console.log(
-      `Not attaching ${solutionRepoFullName} to assignment ${assignment_id}: an unattended repair requires a NULL grader_repo and it holds ${existingPointer!.grader_repo}`
-    );
-    throw new UserVisibleError(
-      `This assignment already has a grader repository (${existingPointer!.grader_repo}), so automated repair left it alone.`,
-      409
-    );
-  }
-
   if (!webhookHasReconciled && (existingPointer?.grader_repo ?? null) !== null) {
     scope.setTag("retired_stale_grader_repo", existingPointer!.grader_repo!);
     console.log(

@@ -32,7 +32,8 @@ CREATE OR REPLACE FUNCTION public.record_autograder_head_metadata(
     p_author text,
     p_ref text,
     p_expected_grader_repo text DEFAULT NULL,
-    p_expected_has_autograder boolean DEFAULT NULL
+    p_expected_has_autograder boolean DEFAULT NULL,
+    p_expected_config jsonb DEFAULT NULL
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -87,12 +88,29 @@ BEGIN
     -- attached to this repository's metadata. "Expect no pointer" is a real expectation and is now
     -- treated as one. There is no "do not care" caller; the one call site always has a definite
     -- expectation.
+    -- The CONFIG is part of the condition too, not only the sha and the pointer.
+    --
+    -- github-repo-configure-webhook writes a newly selected repository's parsed pawtograder.yml
+    -- into this column BEFORE the settings page persists the matching grader_repo, and it touches
+    -- neither the sha nor the pointer while doing so. Both of the other predicates therefore still
+    -- matched the provisioning snapshot during that interval, and this statement would overwrite
+    -- the instructor's chosen config with the derived repository's; the settings page then installed
+    -- the custom pointer, the provisioning publish was correctly rejected, and grading ran on
+    -- metadata from the wrong repository indefinitely, because nothing recomputes it.
+    --
+    -- Comparing the value rather than adding a generation column: a counter would be a new
+    -- invariant every future writer of this column has to remember, and jsonb equality already
+    -- answers the only question being asked — "is the config still the one the caller looked at".
+    -- Configs are small, and the caller reads this column in the same query it reads the pointer
+    -- from, so the check costs nothing extra. NULL means "do not care", for callers that have not
+    -- observed it.
     UPDATE public.autograder
        SET config = p_config,
            latest_autograder_sha = p_new_sha
      WHERE id = p_assignment_id
        AND latest_autograder_sha IS NOT DISTINCT FROM p_expected_sha
        AND grader_repo IS NOT DISTINCT FROM p_expected_grader_repo
+       AND (p_expected_config IS NULL OR config IS NOT DISTINCT FROM p_expected_config)
     RETURNING class_id INTO v_class_id;
 
     IF NOT FOUND THEN
@@ -118,8 +136,8 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, numeric, text, text, text, text, boolean) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, numeric, text, text, text, text, boolean) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, numeric, text, text, text, text, boolean, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, numeric, text, text, text, text, boolean, jsonb) TO service_role;
 
 ----------------------------------------------------------------------------------------
 -- publish_grader_repo: attach the solution pointer, or refuse
@@ -307,3 +325,54 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.inherit_handout_from_source(bigint, bigint, text, text, public.assignment_repo_mode, boolean, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.inherit_handout_from_source(bigint, bigint, text, text, public.assignment_repo_mode, boolean, text, text) TO service_role;
+
+----------------------------------------------------------------------------------------
+-- set_autograder_points_for_repo: points, conditioned on the pointer, in one transaction
+----------------------------------------------------------------------------------------
+
+-- github-repo-webhook resolves a push to its assignments BY grader_repo and then writes by
+-- assignment id. Its config and latest_autograder_sha writes can carry `AND grader_repo = <repo>`
+-- themselves, because those columns share a table with the pointer. autograder_points does not: it
+-- lives on `assignments`, so the handler had to re-resolve the pointer with a separate SELECT and
+-- then write — which is check-then-act. Provisioning that swaps the repository between the two
+-- leaves the replacement paired with the OLD repository's scoring allocation, and nothing rolls it
+-- back: the config and sha writes correctly fail their own predicates, so the mismatch is silent.
+--
+-- FOR SHARE on the autograder row, matching inherit_handout_from_source: this only needs the
+-- pointer to hold still, and an unlocked read would leave the same gap at READ COMMITTED.
+CREATE OR REPLACE FUNCTION public.set_autograder_points_for_repo(
+    p_assignment_id bigint,
+    p_expected_grader_repo text,
+    p_points numeric
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_repo text;
+BEGIN
+    IF auth.role() <> 'service_role' THEN
+        RAISE EXCEPTION 'Access denied: service role required';
+    END IF;
+
+    SELECT g.grader_repo INTO v_repo
+      FROM public.autograder g
+     WHERE g.id = p_assignment_id
+       FOR SHARE;
+
+    IF NOT FOUND OR v_repo IS DISTINCT FROM p_expected_grader_repo THEN
+        RETURN false;
+    END IF;
+
+    UPDATE public.assignments
+       SET autograder_points = p_points
+     WHERE id = p_assignment_id;
+
+    RETURN FOUND;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.set_autograder_points_for_repo(bigint, text, numeric) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.set_autograder_points_for_repo(bigint, text, numeric) TO service_role;

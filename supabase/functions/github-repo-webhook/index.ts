@@ -2381,40 +2381,17 @@ async function handlePushToGraderSolution(
       const totalAutograderPoints = calculateTotalAutograderPoints(parsedYml);
       scope?.setTag("total_autograder_points", totalAutograderPoints.toString());
       // autograder_points lives on `assignments`, which has no grader_repo to condition on the way
-      // the two `autograder` writes below can. Re-resolving the pointer here is the equivalent
-      // fence: an assignment whose grader_repo no longer names this repository is skipped, so a
-      // delivery overtaken by a repair that swapped the repository cannot leave the old
-      // repository's point total on the new one. One indexed read per push.
-      const { data: stillOurs, error: stillOursError } = await adminSupabase
-        .from("autograder")
-        .select("id")
-        .eq("grader_repo", repoName)
-        .in(
-          "id",
-          autograders.map((a) => a.id)
-        );
-      if (stillOursError) {
-        // Treated exactly like the write failures below: an unanswered question about which
-        // assignments this repository still backs must not let latest_autograder_sha advance.
-        configReconcileOk = false;
-        Sentry.captureException(stillOursError, scope);
-        console.error(stillOursError);
-      }
-      const stillOursIds = new Set((stillOurs ?? []).map((r) => r.id));
+      // the two `autograder` writes below can. An earlier revision re-resolved the pointer with a
+      // separate SELECT and then wrote, which is check-then-act: provisioning that swapped the
+      // repository between the two left the replacement paired with the OLD repository's scoring
+      // allocation, silently — the config and sha writes correctly fail their own predicates, so
+      // nothing else reports or repairs it. The RPC does the check and the write in one transaction.
       for (const autograder of autograders) {
-        if (stillOursError || !stillOursIds.has(autograder.id)) {
-          scope?.setTag("grader_repo_pointer_moved", "true");
-          console.log(
-            `Skipping autograder_points for assignment ${autograder.id}: grader_repo no longer names ${repoName}`
-          );
-          continue;
-        }
-        const { error: updateError } = await adminSupabase
-          .from("assignments")
-          .update({
-            autograder_points: totalAutograderPoints
-          })
-          .eq("id", autograder.id);
+        const { data: pointsApplied, error: updateError } = await adminSupabase.rpc("set_autograder_points_for_repo", {
+          p_assignment_id: autograder.id,
+          p_expected_grader_repo: repoName,
+          p_points: totalAutograderPoints
+        });
         if (updateError) {
           // Clears the flag too. The pointer guard below is only as good as the set of failures
           // that reach it, and a write that returns a PostgREST error (statement timeout, pool
@@ -2424,6 +2401,13 @@ async function handlePushToGraderSolution(
           configReconcileOk = false;
           Sentry.captureException(updateError, scope);
           console.error(updateError);
+        } else if (pointsApplied !== true) {
+          // Not a failure: the assignment's grader_repo no longer names this repository, so this
+          // delivery has been overtaken and has nothing to say about its scoring.
+          scope?.setTag("grader_repo_pointer_moved", "true");
+          console.log(
+            `Skipping autograder_points for assignment ${autograder.id}: grader_repo no longer names ${repoName}`
+          );
         }
       }
       await Promise.all(
