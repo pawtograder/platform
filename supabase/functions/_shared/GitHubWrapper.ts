@@ -3545,27 +3545,38 @@ export async function syncRepoPermissions(
     // Safe to apply this broadly precisely because it verifies instead of assuming: a 404 that was
     // never about the repo (a deleted GitHub account on a collaborator PUT) probes back `present`
     // and is rethrown untouched.
+    let reinterpreted: RepositoryMissingError | RepositoryUnreadableError | undefined;
     try {
       const [owner, repoName] = repo.includes("/") ? repo.split("/") : [org, repo];
       const octokit = await getOctoKit(owner, _scope);
       if (octokit) {
-        const reinterpreted = await reinterpretRepoNotFound(octokit, owner, repoName, error, () =>
+        reinterpreted = await reinterpretRepoNotFound(octokit, owner, repoName, error, () =>
           fetchRepositorySelection(owner)
         );
-        if (reinterpreted) throw reinterpreted;
       }
     } catch (reinterpretError) {
-      // Only the reinterpretation may replace the original; a failure while trying to reinterpret
-      // must not mask what actually went wrong.
-      if (reinterpretError instanceof RepositoryMissingError || reinterpretError instanceof RepositoryUnreadableError) {
+      // A rate limit hit WHILE classifying outranks the 404 that prompted the classification: it is
+      // the actionable one, it carries Retry-After, and the worker has real backoff for it. Losing
+      // it here would report the 404 instead and open the org circuit — the same mistake this
+      // function exists to prevent, one level up. (classifyRepoPresence and
+      // fetchRepositorySelection both rethrow rate limits, so they can reach this catch.)
+      if (carriesRateLimitSignal(reinterpretError)) {
         throw reinterpretError;
       }
+      // Anything else is just a failed attempt to explain the original error, and must not mask it.
       Sentry.addBreadcrumb({
         category: "github",
         message: `Could not classify the 404 escaping sync for ${org}/${repo}; reporting the original error`,
-        level: "warning"
+        level: "warning",
+        data: {
+          classify_error: reinterpretError instanceof Error ? reinterpretError.message : String(reinterpretError)
+        }
       });
     }
+    // Thrown OUTSIDE the try on purpose: the previous shape threw here from inside it, so my own
+    // intended throw landed in my own catch and had to be fished back out by instanceof — which is
+    // exactly how the rate-limit case came to be swallowed.
+    if (reinterpreted) throw reinterpreted;
     throw error;
   } finally {
     timings.finish((snapshot) => attachStepTimingsToScope(snapshot, _scope));
