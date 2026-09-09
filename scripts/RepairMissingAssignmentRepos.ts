@@ -56,7 +56,11 @@
  *        # one assignment, INCLUDING the needs-review shape and including a non-NULL grader_repo
  *        # (for a run that failed after the pointer was written). Naming it is the confirmation.
  */
-import { expectedHandoutRepo, handoutPointerIsOurs } from "@/supabase/functions/_shared/handoutRepoStrategy";
+import {
+  assignmentShouldHaveRepos,
+  expectedHandoutRepo,
+  handoutPointerIsOurs
+} from "@/supabase/functions/_shared/handoutRepoStrategy";
 import type { AssignmentRepoMode } from "@/supabase/functions/_shared/repoCreationStrategy";
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { createAdminClient } from "@/utils/supabase/client";
@@ -66,10 +70,11 @@ import dotenv from "dotenv";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
-// Mirrors _shared/handoutRepoStrategy.ts::assignmentShouldHaveRepos and _shared/e2eGithubGuard.ts.
-// Restated rather than imported because those are Deno modules (relative ".ts" specifiers) and this
-// runs under tsx; keep them in step if a repo_mode is ever added.
-const REPO_MODES_WITHOUT_REPOS = new Set(["none", "no_submission"]);
+// Mirrors _shared/e2eGithubGuard.ts. Restated rather than imported: that module reaches for Deno
+// APIs, and this runs under tsx. `assignmentShouldHaveRepos` used to be restated here for the same
+// stated reason, but handoutRepoStrategy.ts is Deno-free — its only cross-module import is a `import
+// type`, which is erased — so it is imported above instead. One fewer copy of a rule that has
+// already drifted once in this file's history.
 const E2E_FIXTURE_ORG = "pawtograder-playground";
 const isE2eFixture = (org: string | null, courseSlug: string | null, repoName?: string | null) =>
   // Lowercased for the same reason as the shared predicate: an exact comparison fails OPEN, and an
@@ -326,7 +331,7 @@ async function main() {
     // automation — so applying it here unconditionally made it impossible to repair anything in a
     // test/dev/demo org by hand, contradicting both the query and the column's own documentation.
     if (!targeted && excludedOrgSet.has(a.classes.github_org.toLowerCase())) return false;
-    if (REPO_MODES_WITHOUT_REPOS.has(a.repo_mode)) return false;
+    if (!assignmentShouldHaveRepos(a.repo_mode as AssignmentRepoMode)) return false;
     // The repo NAME matters as well as the course slug — the shared predicate also treats repos
     // named `e2e-test*` / `test-e2e*` as fixtures, and omitting that is why 57 `e2e-test-class-*`
     // assignments were reported as repairable in the first production dry run.
@@ -635,6 +640,16 @@ async function main() {
         // The class no longer has a GitHub org, so it can no longer have repos — the same condition
         // the eligibility filter applies when the plan is built.
         console.log(`  skipping assignment ${row.id}: its class no longer has a github_org`);
+        continue;
+      }
+      if (!assignmentShouldHaveRepos(fresh.repo_mode as AssignmentRepoMode)) {
+        // An instructor opted the assignment out of repositories while earlier repairs in this
+        // sweep ran. A CLEAN skip, not a failure: the assignment is in exactly the state they asked
+        // for. Without this the recompute below read the now-NULL template_repo as "needs the
+        // handout step", the handout endpoint returned its successful no-op, the solution endpoint
+        // correctly rejected the no-repo mode, and the script reported a failed repair and exited
+        // non-zero — which is what operator automation reads to decide whether the sweep worked.
+        console.log(`  skipping assignment ${row.id}: repo_mode is now ${fresh.repo_mode}, which uses no repositories`);
         continue;
       }
       // Both pointers are re-read, because both creation functions will overwrite what they find:
