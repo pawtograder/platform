@@ -6,18 +6,21 @@ import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { isE2eFixtureTarget } from "../_shared/e2eGithubGuard.ts";
 import { assignmentShouldHaveRepos } from "../_shared/handoutRepoStrategy.ts";
+import { edgeFunctionEndpoint } from "../_shared/edgeFunctionUrl.ts";
 
 /**
  * GitHub Repo Reconciler
  *
- * Invoked every 15 minutes via pg_cron. Two jobs:
+ * Invoked every 15 minutes via pg_cron. Three jobs:
  *  1. Re-enqueue TRANSIENT stuck repos — is_github_ready=false with no recorded creation_error and
  *     stale for a few minutes. These are repos whose create_repo job was lost/dropped; the RPC
  *     reconcile_stuck_repo_creations() re-enqueues them idempotently. Repos WITH a creation_error
  *     are terminal (a deterministic config failure) and are left for an instructor to retry.
  *  2. Alert on repos stuck > 12h — any repo still not ready 12h after it was created is surfaced to
  *     Sentry so a human notices (grouped into one issue per class+assignment to avoid storms).
- *  3. Create solution ("grader") repos that were never created at all.
+ *  3. Create solution ("grader") repos the create path never created, and ALERT on assignments
+ *     that are missing both repos — a shape that cannot be distinguished from an assignment that
+ *     was never meant to have any, so it is never acted on automatically.
  *
  * Job 3 exists because `assignment-create-solution-repo` has exactly ONE caller in the product —
  * the new-assignment page, which awaits handout creation and then solution creation in sequence.
@@ -42,201 +45,217 @@ if (Deno.env.get("SENTRY_DSN")) {
 
 const STALE_MINUTES = 15;
 const ALERT_AFTER_HOURS = 12;
-// Grace period before job 3 treats a NULL grader_repo as abandoned rather than in flight. Creation
-// normally completes in ~15s; 30 minutes is far outside that and well inside the 15-minute cadence.
+
+// Grace before a missing solution repo is treated as abandoned rather than in flight. Creation
+// normally completes in seconds; 30 minutes is far outside that and inside the 15-minute cadence.
 const REPAIR_GRACE_MINUTES = 30;
-// Upper bound on how far back to look. An assignment this old whose repair has never succeeded is a
-// standing problem for a human (job 3 alerts on it well before this), not something to keep
-// retrying against GitHub every 15 minutes forever.
+// Ceiling on AUTOMATIC repair only. An assignment older than this whose repair has never succeeded
+// is a standing problem for a human, not something to keep retrying against GitHub forever.
+// Alerting deliberately has NO such ceiling — see the alert query, which must keep surfacing the
+// whole overdue set or a defect older than this would silently stop being reported.
 const REPAIR_MAX_AGE_DAYS = 30;
-// Each repair instantiates a template and syncs permissions — GitHub work measured in seconds, not
-// milliseconds. Capped so one run cannot outlive its own 15-minute cadence; the remainder is picked
-// up next tick, and the set only shrinks.
-const REPAIR_MAX_PER_RUN = 5;
+// Bounds on one tick. The worker lifetime is 400s (chart `edgeFunctions.worker.timeoutMs`), and a
+// single create_repo has been measured at p50 279.5s under contention (see the step-timings note in
+// GitHubWrapper.ts) even though it runs in ~10s when GitHub is calm. So the real bound has to be
+// ELAPSED TIME, not a count: two slow repairs would otherwise outlive the isolate and kill the run
+// before it flushed anything. The budget leaves headroom for jobs 1-2 and the Sentry flush.
+const REPAIR_TIME_BUDGET_MS = 240_000;
+const REPAIR_MAX_SUCCESSES_PER_RUN = 5;
+// Attempts are capped separately from successes so that a deterministic failure (an invalid source
+// assignment, a class whose GitHub App was uninstalled) costs an attempt but does NOT consume a
+// success slot. Counting attempts instead would let five permanently-broken assignments at the
+// front of the oldest-first ordering starve every healthy one behind them, on every tick, forever.
+const REPAIR_MAX_ATTEMPTS_PER_RUN = 25;
 
-type RepairTally = { missing: number; created: number; failed: number; alerted: number };
-const EMPTY_REPAIR: RepairTally = { missing: 0, created: 0, failed: 0, alerted: 0 };
+type RepairTally = { repairable: number; created: number; failed: number; alerted: number };
+const EMPTY_REPAIR: RepairTally = { repairable: 0, created: 0, failed: 0, alerted: 0 };
 
-/** The one row shape both jobs reduce to, so the alert/repair half is written once. */
-type RepairCandidate = {
+/** The row shape both the repair and the alert pass reduce to. */
+type AssignmentRow = {
   id: number;
   class_id: number;
   slug: string | null;
   created_at: string;
-  repo_mode: RepairCandidateMode;
-  org: string;
-  courseSlug: string | null;
+  repo_mode: Parameters<typeof assignmentShouldHaveRepos>[0];
+  template_repo: string | null;
+  classes: { slug: string | null; github_org: string | null; archived: boolean | null } | null;
+  autograder: { grader_repo: string | null } | null;
 };
 
-/** `assignments.repo_mode` as the generated types express it. */
-type RepairCandidateMode = Parameters<typeof assignmentShouldHaveRepos>[0];
+/**
+ * Is this assignment one the product would have created repos for, and one we may safely touch?
+ *
+ * Deliberately conservative. Every exclusion here is a case where acting would CREATE GitHub
+ * repositories that nobody asked for:
+ *
+ *   - repo_mode none/no_submission: `assignment-create-handout-repo` actively CLEARS template_repo
+ *     for these, so a NULL pointer is the correct state. Decided by `assignmentShouldHaveRepos`.
+ *   - No github_org: the class cannot have repos at all.
+ *   - NULL assignment or class slug: the repo name is derived from both, so a NULL would create or
+ *     ADOPT `<class>-solution-null` — and a second such assignment in the same class would then be
+ *     pointed at the very same repository.
+ *   - Archived class or assignment: deliberately retired. `admin_delete_class` soft-deletes by
+ *     setting `classes.archived`, and archived assignments are already excluded from user-facing
+ *     queries. Creating repos for them resurrects work someone chose to stop.
+ *   - E2E fixtures: `assignment-create-handout-repo` returns BEFORE persisting template_repo for
+ *     `pawtograder-playground` + `e2e-ignore-*` classes, by design, so those rows are permanently
+ *     NULL and are not defects.
+ */
+function isEligibleForRepoWork(a: AssignmentRow): boolean {
+  if (!assignmentShouldHaveRepos(a.repo_mode)) return false;
+  if (!a.classes?.github_org || !a.classes?.slug) return false;
+  if (!a.slug) return false;
+  if (a.classes.archived) return false;
+  if (isE2eFixtureTarget({ org: a.classes.github_org, courseSlug: a.classes.slug })) return false;
+  return true;
+}
 
 /**
- * Repair assignments whose handout or solution repo was never created.
+ * Repair assignments whose solution ("grader") repo was never created, and alert on the ones we
+ * must not touch automatically.
  *
- * WHICH ASSIGNMENTS SHOULD HAVE WHICH REPO — this is the whole correctness question, and it is
- * decided by `repo_mode` (see `_shared/handoutRepoStrategy.ts`, which is authoritative):
+ * WHY ONLY THE SOLUTION REPO IS REPAIRED AUTOMATICALLY. A NULL pointer on its own does NOT mean
+ * creation was attempted and failed — `assignments.repo_mode` defaults to `template_only_staff`,
+ * and `scripts/SeedCourseAssignments.ts` inserts placeholder assignments without ever setting it.
+ * Every placeholder in every seeded course therefore looks exactly like a failed handout: repo_mode
+ * template_only_staff, template_repo NULL, no repos on GitHub. Repairing on that evidence would
+ * mass-create handout and solution repositories nobody asked for, across every course.
  *
- *   none / no_submission        no repo of either kind. assignment-create-handout-repo actively
- *                               CLEARS template_repo for these, so a NULL is correct and must
- *                               never be "repaired". Excluded by the repo_mode filter.
- *   template_only_staff         handout created; solution created.
- *   template_with_student_forks handout created (students team gets read); solution created.
- *   fork_from_prior_assignment  handout INHERITED from the source assignment rather than created,
- *                               but template_repo is still expected to be non-NULL. Re-invoking
- *                               the function is still the right repair — it takes the
- *                               inherit_from_source branch. Its own solution repo is created
- *                               normally.
+ * What distinguishes a real create-path miss is POSITIVE evidence that creation ran and got
+ * partway. The new-assignment page calls handout first and solution second, so:
  *
- * So "pointer is NULL and repo_mode is not none/no_submission" is the correct condition for BOTH,
- * and neither `has_autograder` nor `submission_mode` narrows it: the new-assignment page gates
- * both calls on repo_mode alone, and a repo-only or PR-mode assignment still needs its handout and
- * still needs pawtograder.yml read out of a solution repo (that is where submissionFiles comes
- * from, which the empty-submission check depends on whether or not an autograder runs).
+ *   template_repo SET + grader_repo NULL   handout succeeded, solution never ran. Unambiguous —
+ *                                          this is exactly the neu-cs4530/fa26 ip2 shape, and the
+ *                                          only case repaired automatically.
+ *   both NULL                              creation either never started or died on its first step.
+ *                                          Indistinguishable from a seeded placeholder, so it is
+ *                                          ALERTED and left alone. A human decides, and repairs it
+ *                                          with the script's --assignment flag.
  *
- * WHY THE POINTER IS THE SIGNAL: each function writes its pointer before, or immediately after,
- * the GitHub work it cannot repeat — `autograder.grader_repo` at the very top of
- * assignment-create-solution-repo, `assignments.template_repo` after createRepo succeeds. NULL
- * therefore means the function did not get that far, which is the create-path miss this repairs.
- *
- * E2E FIXTURES ARE EXCLUDED. assignment-create-handout-repo returns BEFORE persisting
- * template_repo for `pawtograder-playground` fixture classes, deliberately, so those rows are
- * permanently NULL by design — without this filter the reconciler would retry them against
- * GitHub every 15 minutes forever. (The solution function writes grader_repo before its own e2e
- * guard, so those self-exclude, but it is filtered here too so the two jobs cannot drift.)
+ * A handout that failed always leaves both NULL (solution never runs after it), so handout repair
+ * has no unambiguous signal at all and is intentionally never automatic.
  */
-async function repairMissingAssignmentRepos(opts: {
-  kind: "handout" | "solution";
+async function repairMissingSolutionRepos(opts: {
   supabase: ReturnType<typeof createClient<Database>>;
   serviceRoleKey: string;
   edgeFunctionsUrl: string;
   scope: Sentry.Scope;
 }): Promise<RepairTally> {
-  const { kind, supabase, serviceRoleKey, edgeFunctionsUrl, scope } = opts;
-  const isHandout = kind === "handout";
-  const functionName = isHandout ? "assignment-create-handout-repo" : "assignment-create-solution-repo";
-  const tally: RepairTally = { missing: 0, created: 0, failed: 0, alerted: 0 };
+  const { supabase, serviceRoleKey, edgeFunctionsUrl, scope } = opts;
+  const tally: RepairTally = { repairable: 0, created: 0, failed: 0, alerted: 0 };
+  const startedAt = Date.now();
+  const graceCutoff = new Date(startedAt - REPAIR_GRACE_MINUTES * 60 * 1000).toISOString();
 
-  const now = Date.now();
-  const graceCutoff = new Date(now - REPAIR_GRACE_MINUTES * 60 * 1000).toISOString();
-  const oldestConsidered = new Date(now - REPAIR_MAX_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
-
-  // The two queries are written out rather than built from a ternary: postgrest-js derives the row
-  // type from the select STRING, and a union of two literals collapses it to an unusable type.
-  let candidates: RepairCandidate[];
-  if (isHandout) {
-    const { data, error } = await supabase
-      .from("assignments")
-      .select("id, class_id, slug, created_at, repo_mode, classes!inner(github_org, slug)")
-      .is("template_repo", null)
-      .not("repo_mode", "in", "(none,no_submission)")
-      .not("classes.github_org", "is", null)
-      .lt("created_at", graceCutoff)
-      .gt("created_at", oldestConsidered)
-      .order("created_at", { ascending: true });
-    if (error) throw error;
-    candidates = (data ?? []).map((a) => ({
-      id: a.id,
-      class_id: a.class_id,
-      slug: a.slug,
-      created_at: a.created_at,
-      repo_mode: a.repo_mode,
-      org: a.classes.github_org!,
-      courseSlug: a.classes.slug
-    }));
-  } else {
+  // NO lower age bound on the query. The 30-day ceiling applies to automatic repair only; a defect
+  // older than that must still be alerted, both on first deployment against existing damage and on
+  // the day an unresolved one crosses the boundary.
+  const rows: AssignmentRow[] = [];
+  const PAGE = 500;
+  for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from("assignments")
       .select(
-        "id, class_id, slug, created_at, repo_mode, classes!inner(github_org, slug), autograder!inner(grader_repo)"
+        "id, class_id, slug, created_at, repo_mode, template_repo, classes!inner(slug, github_org, archived), autograder!inner(grader_repo)"
       )
       .is("autograder.grader_repo", null)
+      .is("archived_at", null)
       .not("repo_mode", "in", "(none,no_submission)")
       .not("classes.github_org", "is", null)
       .lt("created_at", graceCutoff)
-      .gt("created_at", oldestConsidered)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: true })
+      .range(from, from + PAGE - 1);
     if (error) throw error;
-    candidates = (data ?? []).map((a) => ({
-      id: a.id,
-      class_id: a.class_id,
-      slug: a.slug,
-      created_at: a.created_at,
-      repo_mode: a.repo_mode,
-      org: a.classes.github_org!,
-      courseSlug: a.classes.slug
-    }));
+    const page = (data ?? []) as unknown as AssignmentRow[];
+    rows.push(...page);
+    // PostgREST caps a response at max_rows (1000 in both supabase/config.toml and the chart), so
+    // an unpaged read would silently report a complete result while omitting everything past the
+    // first page once a deployment has more assignments than that.
+    if (page.length < PAGE) break;
   }
 
-  const missing = candidates.filter(
-    // `assignmentShouldHaveRepos` is the authority, applied to the rows rather than trusted to the
-    // SQL: the repo_mode filter above is a prefilter for efficiency, and re-checking here is what
-    // stops the two descriptions of the matrix drifting apart when a repo_mode is added.
-    (a) => assignmentShouldHaveRepos(a.repo_mode) && !isE2eFixtureTarget({ org: a.org, courseSlug: a.courseSlug })
-  );
-  tally.missing = missing.length;
-  if (missing.length === 0) return tally;
+  const eligible = rows.filter(isEligibleForRepoWork);
+  const repairable = eligible.filter((a) => a.template_repo !== null);
+  const ambiguous = eligible.filter((a) => a.template_repo === null);
+  tally.repairable = repairable.length;
 
-  // Alert on the WHOLE overdue set, not just the slice this tick repairs: an assignment past the
-  // threshold is a human's problem whether or not this run reaches it, and reporting is what turns
-  // a silent hole into a visible one.
-  const alertCutoff = now - ALERT_AFTER_HOURS * 60 * 60 * 1000;
-  for (const assignment of missing) {
-    if (new Date(assignment.created_at).getTime() > alertCutoff) continue;
-    const missScope = scope.clone();
-    missScope.setTag("class_id", String(assignment.class_id));
-    missScope.setTag("assignment_id", String(assignment.id));
-    missScope.setTag("repo_kind", kind);
-    missScope.setFingerprint([`${kind}-repo-missing`, String(assignment.class_id), String(assignment.id)]);
-    missScope.setContext("missing_assignment_repo", {
-      assignment_id: assignment.id,
-      assignment_slug: assignment.slug,
-      created_at: assignment.created_at,
+  const alertCutoff = startedAt - ALERT_AFTER_HOURS * 60 * 60 * 1000;
+  const alertOn = (a: AssignmentRow, kind: "solution-missing" | "creation-never-completed", message: string) => {
+    if (new Date(a.created_at).getTime() > alertCutoff) return;
+    const s = scope.clone();
+    s.setTag("class_id", String(a.class_id));
+    s.setTag("assignment_id", String(a.id));
+    s.setFingerprint([kind, String(a.class_id), String(a.id)]);
+    s.setContext("assignment_repo_gap", {
+      assignment_id: a.id,
+      assignment_slug: a.slug,
+      repo_mode: a.repo_mode,
+      template_repo: a.template_repo,
+      created_at: a.created_at,
       hours_missing: ALERT_AFTER_HOURS
     });
-    missScope.setLevel("error");
-    Sentry.captureMessage(`Assignment has no ${kind} repo long after creation`, missScope);
+    s.setLevel("error");
+    Sentry.captureMessage(message, s);
     tally.alerted++;
+  };
+
+  for (const a of ambiguous) {
+    // Reported, never auto-created: this shape is indistinguishable from a placeholder assignment
+    // that is supposed to have no repos, and guessing wrong creates repositories in a real org.
+    alertOn(
+      a,
+      "creation-never-completed",
+      "Assignment has neither a handout nor a solution repo long after creation (needs a human: may be intentional)"
+    );
+  }
+  for (const a of repairable) {
+    alertOn(a, "solution-missing", "Assignment has a handout repo but no solution (grader) repo");
   }
 
-  for (const assignment of missing.slice(0, REPAIR_MAX_PER_RUN)) {
+  const oldestRepairable = new Date(startedAt - REPAIR_MAX_AGE_DAYS * 24 * 60 * 60 * 1000).getTime();
+  let attempts = 0;
+  for (const a of repairable) {
+    if (tally.created >= REPAIR_MAX_SUCCESSES_PER_RUN) break;
+    if (attempts >= REPAIR_MAX_ATTEMPTS_PER_RUN) break;
+    if (Date.now() - startedAt > REPAIR_TIME_BUDGET_MS) {
+      console.warn("[github-repo-reconciler] Repair time budget exhausted; remaining work resumes next tick");
+      break;
+    }
+    if (new Date(a.created_at).getTime() < oldestRepairable) continue;
+    attempts++;
     try {
       // Re-invoking the same edge function the new-assignment page would have called, with the
       // service role (accepted via assertUserIsInstructorOrServiceRole) and no argument the UI
-      // could not have supplied. createRepo has a pre-existing-repo branch, so an assignment whose
-      // repo does exist on GitHub is ADOPTED rather than damaged — which is exactly the state a
-      // handout failure after createRepo but before the pointer write leaves behind.
-      const response = await fetch(`${edgeFunctionsUrl.replace(/\/$/, "")}/${functionName}`, {
+      // could not have supplied.
+      const response = await fetch(edgeFunctionEndpoint(edgeFunctionsUrl, "assignment-create-solution-repo"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceRoleKey}` },
-        body: JSON.stringify({ assignment_id: assignment.id, class_id: assignment.class_id })
+        body: JSON.stringify({ assignment_id: a.id, class_id: a.class_id })
       });
       if (!response.ok) {
-        throw new Error(`${functionName} returned ${response.status}: ${await response.text()}`);
+        throw new Error(`assignment-create-solution-repo returned ${response.status}: ${await response.text()}`);
       }
       tally.created++;
       console.log(
-        `[github-repo-reconciler] Created missing ${kind} repo for assignment ${assignment.id} (class ${assignment.class_id})`
+        `[github-repo-reconciler] Created missing solution repo for assignment ${a.id} (class ${a.class_id})`
       );
     } catch (repairError) {
-      // One assignment failing must not abandon the rest, and the run is idempotent: a repaired
-      // assignment has a non-NULL pointer and drops out of the query next tick.
+      // Costs an attempt, not a success slot, so the loop moves past a permanently broken
+      // assignment to the healthy ones behind it rather than retrying the same five forever.
       tally.failed++;
       const failScope = scope.clone();
-      failScope.setTag("class_id", String(assignment.class_id));
-      failScope.setTag("assignment_id", String(assignment.id));
-      failScope.setTag("repo_kind", kind);
-      failScope.setFingerprint([`${kind}-repo-repair-failed`, String(assignment.class_id)]);
+      failScope.setTag("class_id", String(a.class_id));
+      failScope.setTag("assignment_id", String(a.id));
+      failScope.setFingerprint(["solution-repo-repair-failed", String(a.class_id)]);
       Sentry.captureException(repairError, failScope);
-      console.error(
-        `[github-repo-reconciler] Failed to create ${kind} repo for assignment ${assignment.id}:`,
-        repairError
-      );
+      console.error(`[github-repo-reconciler] Failed to create solution repo for assignment ${a.id}:`, repairError);
     }
   }
-  console.log(
-    `[github-repo-reconciler] ${kind} repos missing: ${missing.length}; repaired ${tally.created}, failed ${tally.failed}`
-  );
+  if (eligible.length > 0) {
+    console.log(
+      `[github-repo-reconciler] Solution repos repairable: ${repairable.length} (repaired ${tally.created}, failed ${tally.failed}); ` +
+        `ambiguous (no handout either, not touched): ${ambiguous.length}`
+    );
+  }
   return tally;
 }
 
@@ -322,29 +341,15 @@ Deno.serve(async (req) => {
       console.warn(`[github-repo-reconciler] ${stuck.length} repos stuck > ${ALERT_AFTER_HOURS}h (alerted to Sentry)`);
     }
 
-    // 3) Create assignment-level repos that the create path never created.
-    //
-    // Handout first: `fork_from_prior_assignment` inherits its template_repo from a source
-    // assignment, so a source that is itself unrepaired has to be fixed before its dependents.
-    // Ordering both jobs by created_at ascending is what makes that fall out for free. Solution
-    // creation also seeds handout file hashes from template_repo as its last step, so it reads
-    // better after the handout pointer exists.
-    const repairs = { handout: EMPTY_REPAIR, solution: EMPTY_REPAIR };
+    // 3) Create solution repos the create path never created, and alert on the rest.
+    let repairs = EMPTY_REPAIR;
     const edgeFunctionsUrl = Deno.env.get("EDGE_FUNCTIONS_URL");
     if (!edgeFunctionsUrl) {
       // Skipped rather than fatal: jobs 1 and 2 are the reason this function is scheduled, and a
       // deployment that has not set this should still get them.
-      console.warn("[github-repo-reconciler] EDGE_FUNCTIONS_URL not set; skipping assignment-repo repair");
+      console.warn("[github-repo-reconciler] EDGE_FUNCTIONS_URL not set; skipping solution-repo repair");
     } else {
-      repairs.handout = await repairMissingAssignmentRepos({
-        kind: "handout",
-        supabase,
-        serviceRoleKey: supabaseKey,
-        edgeFunctionsUrl,
-        scope
-      });
-      repairs.solution = await repairMissingAssignmentRepos({
-        kind: "solution",
+      repairs = await repairMissingSolutionRepos({
         supabase,
         serviceRoleKey: supabaseKey,
         edgeFunctionsUrl,
@@ -359,12 +364,9 @@ Deno.serve(async (req) => {
         success: true,
         requeued: requeuedCount ?? 0,
         long_stuck_alerted: stuck.length,
-        handout_repos_repaired: repairs.handout.created,
-        handout_repos_failed: repairs.handout.failed,
-        handout_repos_alerted: repairs.handout.alerted,
-        solution_repos_repaired: repairs.solution.created,
-        solution_repos_failed: repairs.solution.failed,
-        solution_repos_alerted: repairs.solution.alerted,
+        solution_repos_repaired: repairs.created,
+        solution_repos_failed: repairs.failed,
+        assignment_repo_gaps_alerted: repairs.alerted,
         timestamp: new Date().toISOString()
       }),
       { headers: { "Content-Type": "application/json" } }
