@@ -1174,6 +1174,23 @@ export async function processEnvelope(
           if (repository?.creation_error) {
             console.log(`repo is parked, dropping permission sync: ${org}/${repoName} — ${repository.creation_error}`);
             scope.setTag("permission_sync_skipped", "repo_parked");
+            // Close out the api_gateway_calls row this envelope opened. enqueue_* inserts it with
+            // status_code = 0, and returning true archives the message — so without this the row
+            // stays pending forever and every dropped duplicate inflates the call totals with no
+            // completion status or latency. 422: the job was well-formed but can never succeed,
+            // matching the non-retryable path below.
+            recordMetric(
+              adminSupabase,
+              {
+                method: envelope.method,
+                status_code: 422,
+                class_id: envelope.class_id,
+                debug_id: envelope.debug_id,
+                enqueued_at: meta.enqueued_at,
+                log_id: envelope.log_id
+              },
+              scope
+            );
             return true;
           }
           console.log("repo is not ready", `${org}/${repoName}`);
@@ -2326,26 +2343,52 @@ export async function processEnvelope(
           error instanceof RepositoryMissingError
             ? { creation_error: reason, is_github_ready: false }
             : { creation_error: reason };
+        // postgrest-js RESOLVES with `{ error }` instead of throwing, so a failed write here is
+        // invisible to the catch below. That matters more than it used to: parking is what stops
+        // the next job repeating this failure, and DLQing while the row still says
+        // is_github_ready = true would throw the durable state away and leave the loop intact. So
+        // inspect the result, and treat a failed park as a reason NOT to archive — leaving the
+        // message for redelivery is the only thing that gets us another attempt at parking.
+        let parked = true;
         try {
           if (envelope.repo_id) {
-            await adminSupabase.from("repositories").update(repoUpdate).eq("id", envelope.repo_id);
+            const { error: e } = await adminSupabase.from("repositories").update(repoUpdate).eq("id", envelope.repo_id);
+            if (e) throw e;
           } else if (envelope.method === "create_repo" && envelope.class_id) {
             const { org: eo, repoName: ern } = envelope.args as CreateRepoArgs;
-            await adminSupabase
+            const { error: e } = await adminSupabase
               .from("repositories")
               .update(repoUpdate)
               .eq("class_id", envelope.class_id)
               .eq("repository", `${eo}/${ern}`);
+            if (e) throw e;
           } else if (error instanceof RepositoryMissingError) {
             // sync_repo_permissions envelopes carry no repo_id (enqueue_github_sync_repo_permissions
             // takes org + repo, not a row id), so match on the full name the error actually
-            // confirmed missing. Not scoped by class_id: `repository` is the unique handle here and
-            // the envelope's class_id is absent on some paths.
-            await adminSupabase.from("repositories").update(repoUpdate).eq("repository", error.fullName);
+            // confirmed missing. Not scoped by class_id: `repository` carries a UNIQUE index
+            // (unique_repo_name), so this touches at most one row, and the envelope's class_id is
+            // absent on some paths.
+            const { error: e } = await adminSupabase
+              .from("repositories")
+              .update(repoUpdate)
+              .eq("repository", error.fullName);
+            if (e) throw e;
           }
         } catch (markErr) {
+          parked = false;
           console.error("Failed to record creation_error on repository row:", markErr);
           Sentry.captureException(markErr, scope);
+        }
+        // Only for a missing repo, where the park IS the fix. Every other non-retryable error is
+        // already terminal on its own and has always gone to the DLQ regardless of this write —
+        // holding those back on a transient DB blip would be a new way to wedge the queue.
+        if (!parked && error instanceof RepositoryMissingError) {
+          scope.setTag("park_failed", "true");
+          Sentry.captureMessage(
+            `Could not park ${error.fullName}; leaving msg ${meta.msg_id} unarchived to retry the park`,
+            scope
+          );
+          return false;
         }
         recordMetric(
           adminSupabase,

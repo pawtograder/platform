@@ -26,11 +26,11 @@ const {
   isRepoEmpty,
   isTeamAlreadyExistsError,
   isValidRepoFullName,
+  classifyRepoPresence,
   listCollaboratorsOrThrowMissing,
   NonRetryableGitHubError,
   NonRetryableRepoError,
   publicSupabaseUrl,
-  repoExists,
   RepositoryMissingError,
   resolveExistingTeamSlug,
   resolveTeamSlugIfExists,
@@ -151,36 +151,58 @@ Deno.test("assertSourceNotEmpty: missing source (404 on repo) -> NonRetryableRep
 // (worth the 93s retry ladder) or a repo that is gone (where the ladder buys nothing and the
 // escaping RequestError trips the org's method circuit). These pin the classification.
 
-Deno.test("repoExists: repo present -> true", async () => {
+Deno.test("classifyRepoPresence: repo readable -> present", async () => {
   const octokit = fakeOctokit({ "GET /repos/{owner}/{repo}": META_OK });
-  assertEquals(await repoExists(octokit, "org", "repo"), true);
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "present");
 });
 
-Deno.test("repoExists: 404 -> false", async () => {
+Deno.test("classifyRepoPresence: 404 on an all-repos installation -> absent", async () => {
+  // Only here is a 404 proof: the installation can see every repo in the org, so there was
+  // nothing to hide.
   const octokit = fakeOctokit({
     "GET /repos/{owner}/{repo}": () => {
       throw requestError(404, "Not Found");
     }
   });
-  assertEquals(await repoExists(octokit, "org", "repo"), false);
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "absent");
 });
 
-Deno.test("repoExists: non-404 rethrows rather than reporting absence", async () => {
-  // "We could not find out" must never be recorded as "the repo is gone" — that would clear
-  // is_github_ready on live repos during a GitHub outage.
+Deno.test("classifyRepoPresence: 404 on a selected-repos installation -> inaccessible, NOT absent", async () => {
+  // A repo we were never granted 404s exactly like a deleted one. Calling this "absent" would
+  // park a LIVE repo and skip it forever after access was restored.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "selected"), "inaccessible");
+});
+
+Deno.test("classifyRepoPresence: 404 with unknown installation scope -> inaccessible", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", undefined), "inaccessible");
+});
+
+Deno.test("classifyRepoPresence: non-404 -> inaccessible, never absent", async () => {
+  // "We could not find out" must never be recorded as "the repo is gone" — that would park live
+  // repos during a GitHub outage.
   const octokit = fakeOctokit({
     "GET /repos/{owner}/{repo}": () => {
       throw requestError(500, "Server Error");
     }
   });
-  await assertRejects(() => repoExists(octokit, "org", "repo"), RequestError);
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "inaccessible");
 });
 
 Deno.test("listCollaboratorsOrThrowMissing: happy path returns the collaborator list", async () => {
   const octokit = fakeOctokit({
     "GET /repos/{owner}/{repo}/collaborators": () => [{ login: "student", role_name: "write" }]
   });
-  const got = await listCollaboratorsOrThrowMissing(octokit, "org", "repo");
+  const got = await listCollaboratorsOrThrowMissing(octokit, "org", "repo", "all");
   assertEquals(got.length, 1);
 });
 
@@ -193,7 +215,7 @@ Deno.test(
       },
       "GET /repos/{owner}/{repo}": META_OK
     });
-    const err = await assertRejects(() => listCollaboratorsOrThrowMissing(octokit, "org", "repo"), RequestError);
+    const err = await assertRejects(() => listCollaboratorsOrThrowMissing(octokit, "org", "repo", "all"), RequestError);
     assertEquals(err.status, 404);
   }
 );
@@ -210,12 +232,33 @@ Deno.test(
       }
     });
     const err = await assertRejects(
-      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo"),
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", "all"),
       RepositoryMissingError
     );
     assertEquals(err.fullName, "org/repo");
     // The worker branches on this to keep the failure per-row instead of tripping the org circuit.
     assertEquals(err instanceof NonRetryableGitHubError, true);
+  }
+);
+
+Deno.test(
+  "listCollaboratorsOrThrowMissing: 404 everywhere but a selected-repos install -> rethrows, does NOT park",
+  async () => {
+    // The case that would park a live repo if presence were read as a boolean: both endpoints 404
+    // because the installation was never granted this repo, not because it was deleted.
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}/collaborators": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /repos/{owner}/{repo}": () => {
+        throw requestError(404, "Not Found");
+      }
+    });
+    const err = await assertRejects(
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", "selected"),
+      RequestError
+    );
+    assertEquals(err.status, 404);
   }
 );
 
@@ -227,7 +270,7 @@ Deno.test("listCollaboratorsOrThrowMissing: non-404 propagates without an existe
       throw requestError(403, "Forbidden");
     }
   });
-  const err = await assertRejects(() => listCollaboratorsOrThrowMissing(octokit, "org", "repo"), RequestError);
+  const err = await assertRejects(() => listCollaboratorsOrThrowMissing(octokit, "org", "repo", "all"), RequestError);
   assertEquals(err.status, 403);
 });
 

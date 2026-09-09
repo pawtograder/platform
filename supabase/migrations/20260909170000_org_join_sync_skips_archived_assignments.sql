@@ -151,3 +151,142 @@ $$;
 revoke all on function public.sync_repo_permissions_for_student(uuid, integer) from public;
 grant execute on function public.sync_repo_permissions_for_student(uuid, integer) to postgres;
 grant execute on function public.sync_repo_permissions_for_student(uuid, integer) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- The creation path needs the same exclusion, or archival is only half honoured.
+-- ---------------------------------------------------------------------------
+-- `sync_github_teams_on_role_change` fires BOTH functions on the same
+-- github_org_confirmed false->true transition: create_repos_for_student first, then the permission
+-- sync above (20260728010000_include_admin_in_staff_github_team_sync.sql:82-93). Filtering only
+-- the rows that already exist therefore leaves a gap — for a released-but-archived assignment
+-- whose repository row was deleted or never created, an org confirmation still enqueues a
+-- create_repo job and manufactures fresh work for an assignment the instructor has retired. It
+-- would then be a brand-new repo that nothing wants, and the permission-sync filter above would
+-- (correctly) never touch it again.
+--
+-- Body is otherwise verbatim from the live definition, itself last set by
+-- 20260530120200_assignment-repo-config.sql; the only change is the added `a.archived_at is null`
+-- predicate in the assignment loop.
+-- (generated from pg_get_functiondef; see the note above)
+CREATE OR REPLACE FUNCTION public.create_repos_for_student(user_id uuid, class_id integer DEFAULT NULL::integer, p_force boolean DEFAULT false)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_username text;
+  v_user_id uuid := user_id;
+  v_class_id integer := class_id;
+  r_assignment_id bigint;
+  r_assignment_slug text;
+  r_template_repo text;
+  r_course_id bigint;
+  r_course_slug text;
+  r_github_org text;
+  r_latest_template_sha text;
+  r_profile_id uuid;
+  r_repo_mode public.assignment_repo_mode;
+  r_source_assignment_id bigint;
+  r_branch_protection jsonb;
+  r_creation_method text;
+  r_source_repo text;
+begin
+  if user_id is null then
+    raise warning 'create_repos_for_student called with NULL user_id, skipping';
+    return;
+  end if;
+
+  select u.github_username into v_username from public.users u where u.user_id = v_user_id;
+  if v_username is null or v_username = '' then
+    raise exception 'User % has no GitHub username linked', user_id;
+  end if;
+
+  if p_force then
+    if auth.uid() is not null then
+      if class_id is null then
+        raise exception 'Force create for all classes requires service role';
+      end if;
+      if not exists (
+        select 1 from public.user_privileges up
+        where up.user_id = auth.uid()
+          and (up.role = 'admin' or (up.class_id = v_class_id::bigint and up.role = 'instructor'))
+      ) then
+        raise exception 'Access denied: Only instructors can force-create repos for class %', class_id;
+      end if;
+    end if;
+  end if;
+
+  for r_assignment_id, r_assignment_slug, r_template_repo, r_course_id, r_course_slug, r_github_org,
+      r_latest_template_sha, r_profile_id, r_repo_mode, r_source_assignment_id, r_branch_protection in
+    select a.id, a.slug, a.template_repo, c.id, c.slug, c.github_org, a.latest_template_sha,
+           ur.private_profile_id, a.repo_mode, a.source_assignment_id,
+           jsonb_build_object(
+             'blockForcePush', coalesce(a.protect_block_force_push, true),
+             'requirePullRequest', coalesce(a.protect_require_pull_request, false),
+             'requiredReviewers', coalesce(a.protect_required_reviewers, 0)
+           )
+    from public.assignments a
+    join public.classes c on c.id = a.class_id
+    join public.user_roles ur on ur.class_id = c.id
+    where ur.user_id = v_user_id
+      and ur.private_profile_id is not null                  -- safety check for NULL profiles
+      and ur.disabled = false                                -- skip disabled/dropped students
+      and (v_class_id is null or c.id = v_class_id)
+      and c.github_org is not null and c.github_org <> ''    -- skip classes with no GitHub org configured
+      and a.release_date is not null and a.release_date <= now()  -- only create repos for released assignments
+      and a.archived_at is null                              -- an archived assignment is over; do not create repos for it
+      and a.repo_mode not in ('none', 'no_submission')
+      and a.group_config <> 'groups'
+      and (
+        a.repo_mode = 'fork_from_prior_assignment'
+        or (a.template_repo is not null and a.template_repo <> '')
+      )
+      and (
+        p_force
+        or not exists (
+          select 1 from public.repositories r
+          where r.assignment_id = a.id and r.profile_id = ur.private_profile_id
+        )
+      )
+  loop
+    if r_repo_mode = 'fork_from_prior_assignment' then
+      select r.repository into r_source_repo
+        from public.repositories r
+       where r.assignment_id = r_source_assignment_id
+         and r.profile_id = r_profile_id
+       limit 1;
+      if r_source_repo is null then
+        raise warning 'No source repository for profile % on assignment %; skipping', r_profile_id, r_source_assignment_id;
+        continue;
+      end if;
+      r_creation_method := 'fork';
+    elsif r_repo_mode = 'template_with_student_forks' then
+      r_source_repo := r_template_repo;
+      r_creation_method := 'fork';
+    else
+      r_source_repo := r_template_repo;
+      r_creation_method := 'template';
+    end if;
+
+    perform public.enqueue_github_create_repo(
+      r_course_id,
+      r_github_org,
+      r_course_slug || '-' || r_assignment_slug || '-' || v_username,
+      coalesce(r_template_repo, r_source_repo),
+      r_course_slug,
+      array[v_username],
+      false,
+      null,
+      r_assignment_id,
+      r_profile_id,
+      null,
+      r_latest_template_sha,
+      r_creation_method,
+      r_source_repo,
+      r_branch_protection,
+      null
+    );
+  end loop;
+end;
+$function$;

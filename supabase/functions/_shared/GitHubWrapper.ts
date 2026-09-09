@@ -350,6 +350,10 @@ const installations: {
   orgName: string;
   id: number;
   octokit: Octokit;
+  // "all" | "selected" — whether this installation can see every repo in the org. Kept because it
+  // is the only thing that makes a 404 legible: on a "selected" installation a repo we were never
+  // granted 404s exactly like one that was deleted. See classifyRepoPresence.
+  repositorySelection: "all" | "selected" | undefined;
 }[] = [];
 const MyOctokit = Octokit.plugin(throttling);
 
@@ -437,6 +441,7 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
       installations.push({
         orgName: orgLogin,
         id: i.id,
+        repositorySelection: i.repository_selection,
         octokit: new MyOctokit({
           authStrategy: createAppAuth,
           auth: {
@@ -2255,23 +2260,47 @@ function isGitHubNotFoundError(error: unknown): boolean {
 }
 
 /**
- * Does this repo exist right now? Used to tell a 404 that means "not yet" from one that means
- * "never again" — see `listCollaboratorsOrThrowMissing` for why that distinction is worth a
- * request.
- *
- * A 404 here is the answer, not a failure. Anything else (403, 5xx, network) is NOT: propagate it,
- * because "we could not find out" must not be recorded as "the repo is gone" — that would clear
- * `is_github_ready` on a live repo during an outage.
+ * Whether the installation's repo selection lets us read a 404 as proof of deletion.
+ * Reads the cache `getOctoKit` populates, so callers must have obtained an octokit first.
  */
-export async function repoExists(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
+export function installationRepositorySelection(org: string): "all" | "selected" | undefined {
+  return installations.find((i) => i.orgName === org)?.repositorySelection;
+}
+
+/**
+ * Three states, because a 404 on `GET /repos/{owner}/{repo}` has two very different causes and
+ * only one of them is actionable:
+ *
+ *   present      — 200. The repo is there.
+ *   absent       — 404, AND this installation can see every repo in the org, so there was nothing
+ *                  to hide: the repo really is gone.
+ *   inaccessible — 404, but the installation is scoped to SELECTED repos (or we don't know its
+ *                  scope), so a repo we were never granted 404s identically to a deleted one. Also
+ *                  any non-404 failure: 403, 5xx, network.
+ *
+ * That middle distinction is the whole point. `github-check-app-installation` already reads a repo
+ * 404 as "installed in the org but not granted access to this repo", and if we collapsed that into
+ * "deleted" we would park a LIVE repo — clearing `is_github_ready`, writing a creation_error, and
+ * having every later permission sync skip it even after access was restored. "We could not find
+ * out" must never be recorded as "the repo is gone", so anything short of proof lands on
+ * `inaccessible` and the caller leaves the row alone.
+ */
+export type RepoPresence = "present" | "absent" | "inaccessible";
+
+export async function classifyRepoPresence(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  repositorySelection: "all" | "selected" | undefined
+): Promise<RepoPresence> {
   try {
     await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
-    return true;
+    return "present";
   } catch (error) {
-    if (isGitHubNotFoundError(error)) {
-      return false;
+    if (!isGitHubNotFoundError(error)) {
+      return "inaccessible";
     }
-    throw error;
+    return repositorySelection === "all" ? "absent" : "inaccessible";
   }
 }
 
@@ -2286,11 +2315,23 @@ export async function repoExists(octokit: Octokit, owner: string, repo: string):
  * by opening the `<org>:sync_repo_permissions` circuit, throttling that method for every other
  * class in the org over one dead row.
  *
- * So ask instead of guessing. One extra request, only on the error path, converts the ambiguous
- * 404 into an answer: missing -> RepositoryMissingError (terminal, not retried, handled per-row),
- * present -> rethrow the original so the ladder still covers the lag it was written for.
+ * So ask instead of guessing. One extra request, only on the error path, and we act only on proof:
+ * `absent` -> RepositoryMissingError (terminal, not retried, handled per-row). `present` or
+ * `inaccessible` -> rethrow the original 404 so the ladder still covers the lag it was written for,
+ * and so a repo merely hidden from a selected-repos installation is never parked.
+ *
+ * `repositorySelection` is a parameter rather than a lookup inside this function on purpose: it
+ * comes from the module-level installation cache, and reading it here would make the "repo is
+ * gone" branch untestable — a cold cache reports `undefined`, which correctly degrades to
+ * `inaccessible`, so the one case that must be proven right would silently never be exercised.
+ * Callers pass `installationRepositorySelection(org)`; by then `getOctoKit` has warmed the cache.
  */
-export async function listCollaboratorsOrThrowMissing(octokit: Octokit, owner: string, repo: string) {
+export async function listCollaboratorsOrThrowMissing(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  repositorySelection: "all" | "selected" | undefined
+) {
   try {
     return await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
       owner,
@@ -2298,8 +2339,11 @@ export async function listCollaboratorsOrThrowMissing(octokit: Octokit, owner: s
       per_page: 100
     });
   } catch (error) {
-    if (isGitHubNotFoundError(error) && !(await repoExists(octokit, owner, repo))) {
-      throw new RepositoryMissingError(`${owner}/${repo}`);
+    if (isGitHubNotFoundError(error)) {
+      const presence = await classifyRepoPresence(octokit, owner, repo, repositorySelection);
+      if (presence === "absent") {
+        throw new RepositoryMissingError(`${owner}/${repo}`);
+      }
     }
     throw error;
   }
@@ -3447,7 +3491,12 @@ async function syncRepoPermissionsInstrumented(
   // identically, so `listCollaboratorsOrThrowMissing` classifies the 404 before we spend the
   // ladder on it; see that function for what the ambiguity used to cost.
   const existingAccess = await timeStep(timings, "list_collaborators", () =>
-    retryWithBackoff(() => listCollaboratorsOrThrowMissing(octokit, org, repo), 5, 3000, scope)
+    retryWithBackoff(
+      () => listCollaboratorsOrThrowMissing(octokit, org, repo, installationRepositorySelection(org)),
+      5,
+      3000,
+      scope
+    )
   );
   const existingUsernames = existingAccess
     .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")

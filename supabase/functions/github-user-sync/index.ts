@@ -113,7 +113,11 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     .select(
       // "*"
       // "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*,assignments(*), assignment_groups(*,repositories(*)), user_roles(users(github_username)))))",
-      "class_id, github_org_confirmed, classes(slug, github_org, time_zone), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
+      // `repositories(*, assignments(archived_at))`: the repo rows carry no assignment data of their
+      // own, and both permission-sync fan-outs below have to skip repos whose assignment has been
+      // archived. Unambiguous embed — repositories has exactly one FK to assignments
+      // (repositories_assignment_id_fkey).
+      "class_id, github_org_confirmed, classes(slug, github_org, time_zone), profiles!private_profile_id(id, name, sortable_name, repositories(*, assignments(archived_at)), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*, assignments(archived_at)), assignment_groups_members(*, user_roles(users(github_username))))))"
     )
     .eq("disabled", false)
     .eq("role", "student")
@@ -170,6 +174,23 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     c!.profiles!.assignment_groups_members!.flatMap((g) => g.assignment_groups.repositories)
   );
 
+  // An archived assignment is over: its repos need no collaborator reconciliation, and if the
+  // instructor deleted them on GitHub when they abandoned the assignment then syncing is not just
+  // pointless but noisy — every one 404s, and this is the user-facing "Fix GitHub" path, so the
+  // student is shown `Error syncing permissions for <repo>` about something that is not their
+  // problem and cannot fix. Two abandoned sp26 assignments left 192 such rows in neu-cs2100.
+  // Mirrors the trigger-path filter in
+  // 20260909170000_org_join_sync_skips_archived_assignments.sql.
+  //
+  // Deliberately NOT applied to `existingRepos` below. That list answers "does a repo already
+  // exist for this assignment?", which decides whether to CREATE one — a different question, and
+  // one where dropping archived rows would conclude "missing" and manufacture a fresh repo for a
+  // retired assignment. Existence is unconditional; only syncing is filtered.
+  const isForLiveAssignment = (repo: { assignments?: { archived_at: string | null } | null }) =>
+    !repo.assignments?.archived_at;
+  const individualReposToSync = existingIndividualRepos.filter(isForLiveAssignment);
+  const groupReposToSync = existingGroupRepos.filter(isForLiveAssignment);
+
   const existingRepos = [...existingIndividualRepos, ...existingGroupRepos];
   //Find all assignments that the student is enrolled in that have been released
   const { data: allAssignments, error: assignmentsError } = await adminSupabase
@@ -182,6 +203,11 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
       classes!.map((c) => c!.class_id)
     )
     .eq("classes.user_roles.user_id", userID)
+    // Never create a repo for a retired assignment. Same reasoning as the sync filter above, and
+    // the same predicate the migration adds to create_repos_for_student — this function is the
+    // TypeScript twin of that path, so a student pressing "Fix GitHub" must not manufacture repos
+    // the instructor has archived.
+    .is("archived_at", null)
     .not("template_repo", "is", "null")
     .not("template_repo", "eq", "")
     .lte("release_date", TZDate.tz(classes[0].classes.time_zone!).toISOString())
@@ -438,7 +464,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   await Promise.all(requests);
 
   // Sync permissions for existing individual repos
-  const individualRepoSyncPromises = existingIndividualRepos
+  const individualRepoSyncPromises = individualReposToSync
     .filter((repo) => repo.repository && repo.repository.includes("/"))
     .map(async (repo) => {
       // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above: shared request
@@ -471,7 +497,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     });
 
   // Sync permissions for existing group repos
-  const groupRepoSyncPromises = existingGroupRepos
+  const groupRepoSyncPromises = groupReposToSync
     .filter((repo) => repo.repository && repo.repository.includes("/"))
     .map(async (repo) => {
       // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above: shared request
