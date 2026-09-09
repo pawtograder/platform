@@ -13521,6 +13521,7 @@ export type Database = {
           p_assignment_id: number;
           p_expected_has_autograder: boolean;
           p_expected_repo_mode: Database["public"]["Enums"]["assignment_repo_mode"];
+          p_expected_submission_mode: string;
           p_expected_template_repo?: string | null;
           p_source_assignment_id: number;
           p_source_latest_template_sha: string | null;

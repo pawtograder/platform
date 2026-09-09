@@ -499,7 +499,12 @@ async function repairMissingSolutionRepos(opts: {
         const response = await fetch(edgeFunctionEndpoint(edgeFunctionsUrl, fn), {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceRoleKey}` },
-          body: JSON.stringify({ assignment_id: a.id, class_id: a.class_id }),
+          // expect_no_grader_repo pins the guarantee this loop already checked. The pointer was
+          // read before the handout request, which takes minutes; an instructor choosing a custom
+          // grader repository in that window would otherwise be handed to an endpoint that reads
+          // their choice as its own baseline and retires it as stale. Only the caller knows this is
+          // an unattended sweep rather than a human repairing one assignment on purpose.
+          body: JSON.stringify({ assignment_id: a.id, class_id: a.class_id, expect_no_grader_repo: true }),
           signal: AbortSignal.timeout(left)
         });
         if (!response.ok) {

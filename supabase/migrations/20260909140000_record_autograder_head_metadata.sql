@@ -223,6 +223,7 @@ CREATE OR REPLACE FUNCTION public.inherit_handout_from_source(
     p_source_latest_template_sha text,
     p_expected_repo_mode public.assignment_repo_mode,
     p_expected_has_autograder boolean,
+    p_expected_submission_mode text,
     p_expected_template_repo text DEFAULT NULL
 )
 RETURNS boolean
@@ -233,6 +234,7 @@ AS $$
 DECLARE
     v_repo text;
     v_sha text;
+    v_source_has_autograder boolean;
 BEGIN
     IF auth.role() <> 'service_role' THEN
         RAISE EXCEPTION 'Access denied: service role required';
@@ -241,30 +243,54 @@ BEGIN
     -- FOR SHARE, not a bare read: this only needs the source to hold still, not to change it, and
     -- an unlocked read would leave the same gap at READ COMMITTED that the whole function exists to
     -- close. A concurrent edit of the source waits for this one UPDATE.
-    SELECT a.template_repo, a.latest_template_sha
-      INTO v_repo, v_sha
+    SELECT a.template_repo, a.latest_template_sha, a.has_autograder
+      INTO v_repo, v_sha, v_source_has_autograder
       FROM public.assignments a
      WHERE a.id = p_source_assignment_id
        FOR SHARE;
 
+    -- has_autograder is compared under the same lock as the pointer, not just validated in the
+    -- caller. The two assignments SHARE one handout repository, so the flag is a property of that
+    -- repository and the caller refuses the inheritance outright when they disagree. Checking it
+    -- only in the caller left the window this function exists to close: the source being disabled
+    -- after that check still let the handout be copied onto an enabled target, and the source's own
+    -- workflow synchronization may already have snapshotted who shares that repository while the
+    -- target had no pointer — so nothing would realign the target, and solution creation would go
+    -- on to publish a grader pointer for an assignment whose inherited handout has had grade.yml
+    -- removed. Compared against the TARGET's expected flag, which the caller has already checked
+    -- equals the source's.
     IF NOT FOUND
        OR v_repo IS DISTINCT FROM p_source_template_repo
-       OR v_sha IS DISTINCT FROM p_source_latest_template_sha THEN
+       OR v_sha IS DISTINCT FROM p_source_latest_template_sha
+       OR (v_source_has_autograder IS FALSE) IS DISTINCT FROM (p_expected_has_autograder IS FALSE) THEN
         RETURN false;
     END IF;
 
+    -- upstream_repo moves with the pointer for a PR-mode assignment, exactly as the create branch
+    -- does it. Without this an inherited handout left it NULL, and github-repo-webhook resolves an
+    -- incoming pull request by matching upstream_repo — so every student PR on such an assignment
+    -- went unrecognized, while solution creation published grader_repo and took the row out of
+    -- every repair scan. The value is the same one the edit page writes for PR mode: this
+    -- assignment's own template_repo, which for a fork is the inherited one. (That is a different
+    -- thing from the per-student fork parent used by repo syncing, which resolves to each student's
+    -- prior-assignment repository and is not stored here.)
+    --
+    -- submission_mode joins the predicate for the same reason it is in the create branch's: this
+    -- write's behaviour depends on it, so it has to still hold.
     UPDATE public.assignments
        SET template_repo = p_source_template_repo,
-           latest_template_sha = p_source_latest_template_sha
+           latest_template_sha = p_source_latest_template_sha,
+           upstream_repo = CASE WHEN p_expected_submission_mode = 'pr' THEN p_source_template_repo ELSE upstream_repo END
      WHERE id = p_assignment_id
        AND repo_mode = p_expected_repo_mode
        AND source_assignment_id IS NOT DISTINCT FROM p_source_assignment_id
        AND has_autograder IS NOT DISTINCT FROM p_expected_has_autograder
+       AND submission_mode::text IS NOT DISTINCT FROM p_expected_submission_mode
        AND template_repo IS NOT DISTINCT FROM p_expected_template_repo;
 
     RETURN FOUND;
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.inherit_handout_from_source(bigint, bigint, text, text, public.assignment_repo_mode, boolean, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.inherit_handout_from_source(bigint, bigint, text, text, public.assignment_repo_mode, boolean, text) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.inherit_handout_from_source(bigint, bigint, text, text, public.assignment_repo_mode, boolean, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.inherit_handout_from_source(bigint, bigint, text, text, public.assignment_repo_mode, boolean, text, text) TO service_role;

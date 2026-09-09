@@ -22,7 +22,7 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { describeHandoutSeedResult, seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
-  const { assignment_id, class_id } = (await req.json()) as AssignmentCreateSolutionRepoRequest;
+  const { assignment_id, class_id, expect_no_grader_repo } = (await req.json()) as AssignmentCreateSolutionRepoRequest;
   scope?.setTag("function", "assignment-create-solution-repo");
   scope?.setTag("assignment_id", assignment_id.toString());
   scope?.setTag("class_id", class_id.toString());
@@ -261,6 +261,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // config, SHA and points. Clearing it first makes the assignment invisible to that webhook for
   // the rest of this function, and NULL is the same state every failure path here already leaves
   // behind: unfinished and therefore repairable.
+  if (expect_no_grader_repo === true && (existingPointer?.grader_repo ?? null) !== null) {
+    // An unattended caller asked to act only on an assignment with no pointer at all, and there is
+    // one. Refuse WITHOUT clearing it.
+    //
+    // The reconciler and the repair script's sweep check grader_repo before they call, but the
+    // handout request they make first takes minutes, so an instructor can choose a custom grader
+    // repository in between. This endpoint's own compare-and-set does not protect that choice — by
+    // the time it reads the pointer, the custom value IS its snapshot, and the clear below is
+    // written to retire exactly such a "differently named" pointer. That behaviour is right for a
+    // human running a targeted repair and wrong for a sweep, and only the caller knows which it is.
+    scope.setTag("grader_repo_pointer", "present_for_unattended_repair");
+    console.log(
+      `Not attaching ${solutionRepoFullName} to assignment ${assignment_id}: an unattended repair requires a NULL grader_repo and it holds ${existingPointer!.grader_repo}`
+    );
+    throw new UserVisibleError(
+      `This assignment already has a grader repository (${existingPointer!.grader_repo}), so automated repair left it alone.`,
+      409
+    );
+  }
+
   if (!webhookHasReconciled && (existingPointer?.grader_repo ?? null) !== null) {
     scope.setTag("retired_stale_grader_repo", existingPointer!.grader_repo!);
     console.log(

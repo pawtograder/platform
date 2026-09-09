@@ -136,6 +136,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       p_source_latest_template_sha: sourceAssignment!.latest_template_sha ?? null,
       p_expected_repo_mode: assignment.repo_mode,
       p_expected_has_autograder: assignment.has_autograder,
+      // Decides whether the RPC also sets upstream_repo, and is therefore part of its predicate —
+      // the same reasoning as the create branch's pointer write.
+      p_expected_submission_mode: assignment.submission_mode,
       p_expected_template_repo: assignment.template_repo ?? null
     });
     if (inheritError) {

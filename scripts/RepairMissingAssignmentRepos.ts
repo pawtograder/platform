@@ -395,13 +395,19 @@ async function main() {
   // Used twice — to probe the right repository under --check-github, and to decide below whether a
   // pointer already on the row is the inherited one (safe to rerun) or a custom choice (must not be
   // rebuilt over).
-  const sourceHandoutFor = async (a: Row): Promise<string | null> => {
+  const sourceHandoutFor = async (a: Row, opts?: { reload?: boolean }): Promise<string | null> => {
     // `byId` only holds what the scan returned, and the scan is narrowed by --class and
     // --assignment. A fork whose source sits in another class, or any fork in an --assignment run,
     // would miss here and be reported as having no source — dropping a genuinely broken assignment
     // from the plan. Fetch the source directly when it is not already in hand.
     if (a.source_assignment_id === null) return null;
-    const known = byId.get(a.source_assignment_id);
+    // `reload` bypasses the plan-time cache. The apply loop needs it: on a broad sweep, an
+    // instructor can repoint the SOURCE while earlier repairs run, and answering from the cached
+    // snapshot would compare the target's pointer against the source's OLD handout — classifying a
+    // pointer that is now custom as automation-owned, and rerunning creation to replace it with the
+    // source's new one. The plan-building path deliberately keeps the cache: it reads every row in
+    // one pass and has no window to go stale within.
+    const known = opts?.reload === true ? undefined : byId.get(a.source_assignment_id);
     if (known) return known.template_repo ?? null;
     const { data: fetched, error: sourceError } = await supabase
       .from("assignments")
@@ -688,7 +694,10 @@ async function main() {
         assignmentSlug: row.slug,
         sourceTemplateRepo:
           (fresh.repo_mode ?? row.repo_mode) === "fork_from_prior_assignment"
-            ? await sourceHandoutFor({ ...row, source_assignment_id: fresh.source_assignment_id ?? null })
+            ? await sourceHandoutFor(
+                { ...row, source_assignment_id: fresh.source_assignment_id ?? null },
+                { reload: true }
+              )
             : null
       });
       // `functions` is RECOMPUTED from the reloaded row, not just narrowed. Only checking it when
@@ -717,7 +726,16 @@ async function main() {
     for (const fn of functions) {
       process.stdout.write(`  ${fn} for assignment ${row.id}... `);
       const { error: invokeError } = await supabase.functions.invoke(fn, {
-        body: { assignment_id: row.id, class_id: row.class_id }
+        body: {
+          assignment_id: row.id,
+          class_id: row.class_id,
+          // Only on a SWEEP. The pointer was read before the handout call, which takes minutes, and
+          // this flag makes the solution endpoint refuse rather than retire a custom grader
+          // repository an instructor chose in that window. A named --assignment deliberately does
+          // NOT send it: replacing a differently named pointer is the whole point of a targeted
+          // repair, and `targetedPointerSet` exists to do exactly that.
+          ...(targeted ? {} : { expect_no_grader_repo: true })
+        }
       });
       if (invokeError) {
         // Stop this assignment but keep going with the rest: the solution call depends on the
