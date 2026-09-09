@@ -12810,6 +12810,17 @@ export type Database = {
         };
         Returns: number;
       };
+      enqueue_github_org_reinvite: {
+        Args: {
+          p_class_id: number;
+          p_course_slug: string;
+          p_debug_id?: string;
+          p_is_staff: boolean;
+          p_org: string;
+          p_user_id: string;
+        };
+        Returns: number;
+      };
       enqueue_github_sync_repo_permissions: {
         Args: {
           p_class_id: number;
@@ -13196,6 +13207,20 @@ export type Database = {
           oldest_first_observed_at: string;
         }[];
       };
+      get_stuck_org_membership_alerts: {
+        Args: { p_days?: number };
+        Returns: {
+          class_id: number;
+          class_slug: string;
+          github_org: string;
+          missing_term_dates: boolean;
+          oldest_invitation: string;
+          stuck_count: number;
+          term_end: string;
+          term_start: string;
+          window_open: boolean;
+        }[];
+      };
       get_student_summary: {
         Args: { p_class_id: number; p_student_profile_id: string };
         Returns: Json;
@@ -13394,6 +13419,10 @@ export type Database = {
         };
         Returns: number;
       };
+      github_org_invite_window_open: {
+        Args: { p_archived: boolean; p_end_date: string; p_start_date: string };
+        Returns: boolean;
+      };
       github_team_slugify: { Args: { p_value: string }; Returns: string };
       gradebook_auto_layout: {
         Args: { p_gradebook_id: number };
@@ -13528,6 +13557,10 @@ export type Database = {
         Returns: undefined;
       };
       invoke_github_async_worker_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
+      invoke_github_membership_reconciler_background_task: {
         Args: never;
         Returns: undefined;
       };
@@ -13758,6 +13791,14 @@ export type Database = {
       recalculate_gradebook_columns_in_range: {
         Args: { end_id: number; start_id: number };
         Returns: undefined;
+      };
+      reconcile_stale_org_invitations: {
+        Args: {
+          p_max?: number;
+          p_new_role_grace_minutes?: number;
+          p_stale_days?: number;
+        };
+        Returns: number;
       };
       reconcile_stuck_discord_memberships: {
         Args: { p_limit?: number; p_stale_minutes?: number };

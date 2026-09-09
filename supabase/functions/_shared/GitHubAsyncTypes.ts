@@ -12,6 +12,15 @@ export type SyncTeamArgs = {
   org: string;
   courseSlug: string;
   userId?: string; // affected user to ensure org invitation
+  /**
+   * Invite `userId` without consulting `invitation_date`.
+   *
+   * Set only by the membership reconciler (`reconcile_stale_org_invitations`), which stamps
+   * invitation_date as it enqueues — so by the time the worker opens this envelope the invitation
+   * looks fresh and the ordinary staleness check would make the repair a no-op. The reconciler has
+   * already applied the class's term window in SQL; see _shared/orgInviteWindow.ts.
+   */
+  forceReinvite?: boolean;
 };
 
 export type BranchProtectionConfig = {
