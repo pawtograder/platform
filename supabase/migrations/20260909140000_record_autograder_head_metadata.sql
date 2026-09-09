@@ -22,7 +22,8 @@ CREATE OR REPLACE FUNCTION public.record_autograder_head_metadata(
     p_points integer,
     p_message text,
     p_author text,
-    p_ref text
+    p_ref text,
+    p_expected_grader_repo text DEFAULT NULL
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -38,11 +39,17 @@ BEGIN
         RAISE EXCEPTION 'Access denied: service role required';
     END IF;
 
+    -- `grader_repo` is part of the condition, not just the SHA. The autograder settings page
+    -- writes a custom repository's parsed config BEFORE it writes the pointer, so a provisioning
+    -- request that checked only the SHA could overwrite that config with the conventionally derived
+    -- repository's metadata. Including the pointer means a request whose expectation is already
+    -- stale declines instead. NULL means "do not care", which is what the pre-pointer paths pass.
     UPDATE public.autograder
        SET config = p_config,
            latest_autograder_sha = p_new_sha
      WHERE id = p_assignment_id
        AND latest_autograder_sha IS NOT DISTINCT FROM p_expected_sha
+       AND (p_expected_grader_repo IS NULL OR grader_repo IS NOT DISTINCT FROM p_expected_grader_repo)
     RETURNING class_id INTO v_class_id;
 
     IF NOT FOUND THEN
@@ -68,5 +75,5 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text, text) TO service_role;

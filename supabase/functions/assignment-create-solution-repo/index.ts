@@ -196,7 +196,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       p_points: points,
       p_message: message,
       p_author: author,
-      p_ref: `refs/heads/${defaultBranch}`
+      p_ref: `refs/heads/${defaultBranch}`,
+      // The pointer we observed at the top of this function. The autograder settings page writes a
+      // custom repository's parsed config BEFORE writing its pointer, so checking only the SHA
+      // could overwrite that config with this repository's. Declining is the right answer when the
+      // expectation is already stale — the instructor's selection is explicit, ours is derived.
+      p_expected_grader_repo: existingPointer?.grader_repo ?? null
     });
     if (error) throw error;
     return applied === true;

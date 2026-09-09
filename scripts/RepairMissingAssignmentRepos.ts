@@ -475,10 +475,21 @@ async function main() {
   // autograder.workflow_sha NULL, which the solution call never restores. Once it writes grader_repo
   // the row leaves this scan for good while student submissions are rejected for a workflow-SHA
   // mismatch. Finish the handout first in that case.
-  const planFor = (row: Row) =>
-    row.has_autograder !== false && (row.autograder?.workflow_sha ?? null) === null
-      ? HANDOUT_THEN_SOLUTION
-      : SOLUTION_ONLY;
+  // Same gate as the reconciler: assignment-create-handout-repo ignores whatever template_repo
+  // holds, rebuilds `<class>-handout-<assignment>` and overwrites the column with it, so rerunning
+  // it against an assignment carrying a CUSTOM handout silently replaces the instructor's choice.
+  // Completing a missing workflow_sha is not worth that; those rows get the solution repair only.
+  const planFor = (row: Row) => {
+    const derivedHandout = `${row.classes?.github_org}/${row.classes?.slug}-handout-${row.slug}`;
+    const handoutIsDerived = row.template_repo === null || row.template_repo === derivedHandout;
+    const wantsHandout = row.has_autograder !== false && (row.autograder?.workflow_sha ?? null) === null;
+    if (wantsHandout && !handoutIsDerived) {
+      console.log(
+        `  note: assignment ${row.id} has a custom handout (${row.template_repo}); not rerunning handout creation`
+      );
+    }
+    return wantsHandout && handoutIsDerived ? HANDOUT_THEN_SOLUTION : SOLUTION_ONLY;
+  };
 
   const plans: RepairPlan[] = targeted
     ? [

@@ -402,8 +402,25 @@ async function repairMissingSolutionRepos(opts: {
       // updateAutograderWorkflowHash.
       // Either the handout never ran at all (a configured fork with no inherited pointer yet), or it
       // ran but died before updateAutograderWorkflowHash.
+      //
+      // Gated on the pointer naming the repository this function would DERIVE. assignment-create-handout-repo
+      // ignores whatever template_repo holds and rebuilds `<class>-handout-<assignment>`, then
+      // overwrites the column with it — so running it against an assignment carrying a CUSTOM
+      // handout silently replaces the instructor's choice and changes how that assignment syncs
+      // from then on. Completing a missing workflow_sha is not worth destroying a deliberate
+      // configuration; such an assignment gets its solution repair only, and its workflow hash is
+      // refreshed by the next push to its own handout.
+      const derivedHandout = `${a.classes?.github_org}/${a.classes?.slug}-handout-${a.slug}`;
+      const handoutIsDerived = a.template_repo === null || a.template_repo === derivedHandout;
       const needsHandoutFinish =
-        a.template_repo === null || (a.has_autograder !== false && (a.autograder?.workflow_sha ?? null) === null);
+        handoutIsDerived &&
+        (a.template_repo === null || (a.has_autograder !== false && (a.autograder?.workflow_sha ?? null) === null));
+      if (!handoutIsDerived && (a.autograder?.workflow_sha ?? null) === null) {
+        scope.setTag("custom_handout_workflow_sha_missing", "true");
+        console.log(
+          `[github-repo-reconciler] Assignment ${a.id} has a custom handout (${a.template_repo}) and no workflow_sha; not rerunning handout creation`
+        );
+      }
       const functions = needsHandoutFinish
         ? ["assignment-create-handout-repo", "assignment-create-solution-repo"]
         : ["assignment-create-solution-repo"];
