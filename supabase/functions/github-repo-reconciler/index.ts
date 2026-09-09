@@ -96,9 +96,16 @@ type AssignmentRow = {
  *     `pawtograder-playground` + `e2e-ignore-*` classes, by design, so those rows are permanently
  *     NULL and are not defects.
  */
-function isEligibleForRepoWork(a: AssignmentRow): boolean {
+function isEligibleForRepoWork(a: AssignmentRow, excludedOrgs: Set<string>): boolean {
   if (!assignmentShouldHaveRepos(a.repo_mode)) return false;
   if (!a.classes?.github_org || !a.classes?.slug) return false;
+  // Case-insensitively, because the SQL `not.in` above is exact and GitHub org logins are not.
+  // `admin_create_class` and `admin_update_class` store whatever was typed, and the uniqueness
+  // constraint compares `lower(github_org)` — so a class recorded as `Pawtograder-Playground`
+  // slips past an exclusion seeded as `pawtograder-playground` and the reconciler would create
+  // repos in the very org marked off-limits. The query stays the cheap prefilter; this is the
+  // authority, the same split as assignmentShouldHaveRepos below.
+  if (excludedOrgs.has(a.classes.github_org.toLowerCase())) return false;
   if (!a.slug) return false;
   if (a.classes.archived) return false;
   // The repo NAME matters as well as the course slug: isE2eFixtureTarget also matches repos named
@@ -232,7 +239,8 @@ async function repairMissingSolutionRepos(opts: {
     if (page.length < PAGE) break;
   }
 
-  const eligible = rows.filter(isEligibleForRepoWork);
+  const excludedOrgSet = new Set(excludedOrgs.map((o) => o.toLowerCase()));
+  const eligible = rows.filter((a) => isEligibleForRepoWork(a, excludedOrgSet));
   const repairable = eligible.filter((a) => a.template_repo !== null);
   const ambiguous = eligible.filter((a) => a.template_repo === null);
   tally.repairable = repairable.length;

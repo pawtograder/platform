@@ -249,6 +249,7 @@ async function main() {
     if ((data ?? []).length < PAGE_SIZE) break;
   }
   const excludedList = excludedOrgs.length > 0 ? `(${excludedOrgs.map((o) => `"${o}"`).join(",")})` : null;
+  const excludedOrgSet = new Set(excludedOrgs.map((o) => o.toLowerCase()));
 
   const rows: Row[] = [];
   for (let from = 0; ; from += PAGE_SIZE) {
@@ -285,6 +286,9 @@ async function main() {
   const eligible = rows.filter((a) => {
     if (!a.classes?.github_org || !a.classes?.slug) return false;
     if (!a.slug) return false;
+    // Case-insensitive, for the same reason as the reconciler: the SQL filter is exact but GitHub
+    // org logins are not, and classes store whatever capitalization was typed.
+    if (excludedOrgSet.has(a.classes.github_org.toLowerCase())) return false;
     if (REPO_MODES_WITHOUT_REPOS.has(a.repo_mode)) return false;
     // The repo NAME matters as well as the course slug — the shared predicate also treats repos
     // named `e2e-test*` / `test-e2e*` as fixtures, and omitting that is why 57 `e2e-test-class-*`
