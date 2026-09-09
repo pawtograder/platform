@@ -288,7 +288,12 @@ async function main() {
     if (!a.slug) return false;
     // Case-insensitive, for the same reason as the reconciler: the SQL filter is exact but GitHub
     // org logins are not, and classes store whatever capitalization was typed.
-    if (excludedOrgSet.has(a.classes.github_org.toLowerCase())) return false;
+    //
+    // Gated on `targeted`, like the archived and grace checks below it. The SQL query already
+    // exempts a named --assignment from the exclusion, and the flag is scoped to background
+    // automation — so applying it here unconditionally made it impossible to repair anything in a
+    // test/dev/demo org by hand, contradicting both the query and the column's own documentation.
+    if (!targeted && excludedOrgSet.has(a.classes.github_org.toLowerCase())) return false;
     if (REPO_MODES_WITHOUT_REPOS.has(a.repo_mode)) return false;
     // The repo NAME matters as well as the course slug — the shared predicate also treats repos
     // named `e2e-test*` / `test-e2e*` as fixtures, and omitting that is why 57 `e2e-test-class-*`
@@ -299,6 +304,22 @@ async function main() {
     if (!targeted && Date.now() - new Date(a.created_at).getTime() < SWEEP_GRACE_MINUTES * 60 * 1000) return false;
     return true;
   });
+
+  if (targeted && rows.length === 0) {
+    // A stale id, or an id paired with the wrong --class. Without this the empty result flows into
+    // an empty plan and --apply exits 0 after printing "Repaired 0/0", so operator automation reads
+    // a repair that never even found its assignment as a success.
+    console.error(`No assignment ${assignmentId}${classId !== undefined ? ` in class ${classId}` : ""} found.`);
+    process.exit(1);
+  }
+  if (targeted && eligible.length === 0) {
+    // It exists but something disqualified it — a no-repo repo_mode, a class with no github_org, a
+    // NULL slug. Say so rather than reporting nothing to do.
+    console.error(
+      `Assignment ${assignmentId} is not eligible for repo work (check repo_mode, the class's github_org, and slugs).`
+    );
+    process.exit(1);
+  }
 
   const missing = eligible.filter((a) => (a.autograder?.grader_repo ?? null) === null);
   const repairable = missing.filter((a) => a.template_repo !== null);

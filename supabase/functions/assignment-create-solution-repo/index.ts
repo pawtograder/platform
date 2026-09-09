@@ -5,6 +5,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { AssignmentCreateSolutionRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, getFileFromRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
+import { assignmentShouldHaveRepos } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { parse } from "jsr:@std/yaml";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
@@ -27,7 +28,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("slug,classes(slug,github_org)")
+    .select("slug,repo_mode,classes(slug,github_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
@@ -43,6 +44,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!solutionRepoOrg) {
     throw new UserVisibleError("Class does not have a GitHub organization");
   }
+  // Enforced HERE rather than trusted to callers. `repo_mode` can change between the moment a
+  // caller decides to create a solution repo and the moment this runs — the reconciler builds a
+  // repair plan from a scan that may be minutes old, and in its handout-then-solution case the
+  // handout function already honours a mode change by clearing template_repo and returning a no-op.
+  // Without this check the solution call that follows would still create and attach a repository to
+  // an assignment that has since explicitly opted out of having any.
+  if (!assignmentShouldHaveRepos(assignment.repo_mode)) {
+    throw new UserVisibleError(
+      `This assignment's repository configuration is "${assignment.repo_mode}", which does not use GitHub repositories.`,
+      400
+    );
+  }
+
   const solutionRepoFullName = `${solutionRepoOrg}/${solutionRepoName}`;
   const { solution: solutionTemplateRepo } = await resolveTemplateRepos(adminSupabase, class_id);
   scope.setTag("solution_template_repo", solutionTemplateRepo);
