@@ -173,11 +173,21 @@ async function makeHandoutExistenceChecker(): Promise<(org: string, repo: string
   // Paged explicitly: @octokit/core has no `.paginate` (that lives in plugin-paginate-rest, which
   // this project does not depend on), so a single request would cap at 100 installations and every
   // org past the first page would report UNKNOWN and never be repairable.
-  const byOrg = new Map<string, number>();
+  // `repository_selection` is kept alongside the id because it changes what a 404 MEANS. An
+  // installation scoped to selected repositories returns 404 for a repo that exists but is not in
+  // the selection, which is indistinguishable from a repo that is not there — and reading it as
+  // "never created" files a genuinely broken assignment as a placeholder and drops it from --apply.
+  // github-check-app-installation draws the same distinction for the same reason.
+  const byOrg = new Map<string, { id: number; selection: string }>();
   for (let page = 1; ; page++) {
     const installations = await appOctokit.request("GET /app/installations", { per_page: 100, page });
     for (const inst of installations.data) {
-      if (inst.account && "login" in inst.account) byOrg.set(inst.account.login.toLowerCase(), inst.id);
+      if (inst.account && "login" in inst.account) {
+        byOrg.set(inst.account.login.toLowerCase(), {
+          id: inst.id,
+          selection: inst.repository_selection ?? "all"
+        });
+      }
     }
     if (installations.data.length < 100) break;
   }
@@ -185,11 +195,14 @@ async function makeHandoutExistenceChecker(): Promise<(org: string, repo: string
   const clients = new Map<string, Octokit>();
 
   return async (org: string, repo: string) => {
-    const installationId = byOrg.get(org.toLowerCase());
-    if (installationId === undefined) return null;
+    const installation = byOrg.get(org.toLowerCase());
+    if (installation === undefined) return null;
     let client = clients.get(org.toLowerCase());
     if (!client) {
-      client = new Octokit({ authStrategy: createAppAuth, auth: { appId, privateKey, installationId } });
+      client = new Octokit({
+        authStrategy: createAppAuth,
+        auth: { appId, privateKey, installationId: installation.id }
+      });
       clients.set(org.toLowerCase(), client);
     }
     try {
@@ -197,7 +210,12 @@ async function makeHandoutExistenceChecker(): Promise<(org: string, repo: string
       return true;
     } catch (e) {
       const status = (e as { status?: number }).status;
-      if (status === 404) return false;
+      if (status === 404) {
+        // Only an installation that can see EVERY repo in the org can turn a 404 into "absent".
+        // Under `selected`, the same 404 is returned for a repo that exists but was not granted, so
+        // the honest answer is that we do not know.
+        return installation.selection === "all" ? false : null;
+      }
       // Anything else (403, 5xx, network) is unknown, not absent.
       return null;
     }
@@ -377,7 +395,9 @@ async function main() {
         placeholders++;
       } else {
         unknown++;
-        console.log(`  UNKNOWN ${describe(a)} — App not installed on ${owner}, or GitHub errored`);
+        console.log(
+          `  UNKNOWN ${describe(a)} — App not installed on ${owner}, scoped to selected repos, or GitHub errored`
+        );
       }
     }
     console.log(

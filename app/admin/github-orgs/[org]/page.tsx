@@ -50,6 +50,11 @@ export default function GitHubOrgDetailPage() {
   // vanish from the box while they're still writing it. Parsed on save.
   const [exemptUsers, setExemptUsers] = useState("");
   const [excludedFromAutomation, setExcludedFromAutomation] = useState(false);
+  // Whether admin_get_github_orgs actually returned this org. PostgREST caps that RPC at max_rows
+  // (1000), so on a deployment with more orgs than that the target may simply be absent from the
+  // response — and every field would then initialize to its empty value and be written back on the
+  // next save, silently clearing a real exemption list or automation exclusion.
+  const [orgFound, setOrgFound] = useState(true);
   const [courses, setCourses] = useState<OrgCourse[]>([]);
 
   const load = useCallback(async () => {
@@ -71,6 +76,7 @@ export default function GitHubOrgDetailPage() {
       setSavedSolution(loadedSolution);
       setExemptUsers((thisOrg?.permission_sync_exempt_users ?? []).join(", "));
       setExcludedFromAutomation(thisOrg?.excluded_from_automation ?? false);
+      setOrgFound(thisOrg !== undefined);
       setCourses((orgCourses ?? []) as OrgCourse[]);
     } catch (err) {
       toaster.error({ title: "Failed to load org", description: (err as Error).message });
@@ -84,6 +90,14 @@ export default function GitHubOrgDetailPage() {
   }, [load]);
 
   const handleSave = useCallback(async () => {
+    if (!orgFound) {
+      // Refuse rather than write defaults over whatever is actually stored.
+      toaster.error({
+        title: "Cannot save",
+        description: "This org was not returned by the admin org list, so its current settings are unknown."
+      });
+      return;
+    }
     setSaving(true);
     const supabase = createClient();
     try {
@@ -112,7 +126,7 @@ export default function GitHubOrgDetailPage() {
     } finally {
       setSaving(false);
     }
-  }, [orgName, handout, solution, exemptUsers, excludedFromAutomation, load, revalidateServerCaches]);
+  }, [orgName, handout, solution, exemptUsers, excludedFromAutomation, orgFound, load, revalidateServerCaches]);
 
   // A course in this org gives the edge function a valid auth/ownership context for editing the
   // org's template repos. (Writes are restricted to the course's own org.) Prefer a non-archived
@@ -170,7 +184,7 @@ export default function GitHubOrgDetailPage() {
             </Field>
             <Field
               label="Exclude from background automation"
-              helperText="Stops scheduled jobs creating or modifying GitHub repositories for classes in this org. For test, dev, and demo orgs. Instructor-initiated actions are unaffected."
+              helperText="Stops the reconciler creating missing handout and solution repos for assignments in this org. For test, dev, and demo orgs. It does NOT stop student-repo reconciliation (reconcile_stuck_repo_creations), and instructor-initiated actions are unaffected."
             >
               <Checkbox
                 checked={excludedFromAutomation}
@@ -179,7 +193,19 @@ export default function GitHubOrgDetailPage() {
                 Excluded from automation
               </Checkbox>
             </Field>
-            <Button colorPalette="green" alignSelf="flex-start" onClick={handleSave} loading={saving}>
+            {!orgFound && (
+              <Alert status="warning">
+                This org was not returned by the admin org list, so its stored settings could not be read. Saving is
+                disabled to avoid overwriting them.
+              </Alert>
+            )}
+            <Button
+              colorPalette="green"
+              alignSelf="flex-start"
+              onClick={handleSave}
+              loading={saving}
+              disabled={!orgFound}
+            >
               Save defaults
             </Button>
           </VStack>

@@ -44,8 +44,17 @@ BEGIN
     )
     SELECT
         o.org_name,
-        COALESCE(go.default_handout_template_repo, 'pawtograder/template-assignment-handout'),
-        COALESCE(go.default_solution_template_repo, 'pawtograder/template-assignment-grader'),
+        -- Through resolve_effective_template_repo, NOT a bare COALESCE to the constant: an org with
+        -- no row must still report the deployment's app.settings default (20260715120000), or a
+        -- self-hosted site sees pawtograder/* here and materializes it on the next save. Carried
+        -- over verbatim from #960 — an earlier draft of this migration dropped it while copying the
+        -- function to extend it, which is exactly the regression that comment warns about.
+        public.resolve_effective_template_repo(
+            NULL, go.default_handout_template_repo,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        public.resolve_effective_template_repo(
+            NULL, go.default_solution_template_repo,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader'),
         COALESCE(go.permission_sync_exempt_users, '{}'::text[]),
         -- An org with no row has never been configured, and the column default is false.
         COALESCE(go.excluded_from_automation, false),
@@ -107,7 +116,12 @@ BEGIN
         WHERE NULLIF(trim(u), '') IS NOT NULL;
 
         FOREACH v_login IN ARRAY v_exempt LOOP
-            IF v_login !~ '^[a-z0-9](?:[a-z0-9]|-[a-z0-9]){0,38}$' THEN
+            -- The length check is NOT redundant with the pattern: each `-[a-z0-9]` repetition
+            -- consumes two characters, so the regex alone admits hyphenated strings far longer than
+            -- GitHub's 39-character limit. An impossible login saved as an active exemption can
+            -- never match a collaborator, so permission sync would still remove the very account
+            -- the operator believed was protected. Carried over verbatim from #960.
+            IF length(v_login) > 39 OR v_login !~ '^[a-z0-9](?:[a-z0-9]|-[a-z0-9]){0,38}$' THEN
                 RAISE EXCEPTION 'Invalid GitHub login "%": expected a GitHub username', v_login;
             END IF;
         END LOOP;
