@@ -2298,6 +2298,14 @@ export async function fetchRepositorySelection(org: string): Promise<"all" | "se
     const resp = await app.octokit.request("GET /orgs/{org}/installation", { org });
     return resp.data.repository_selection;
   } catch (error) {
+    // One failure must NOT be flattened into undefined: a rate limit. Swallowing it here loses the
+    // response and its Retry-After before the worker's detectRateLimitType ever sees them, so the
+    // job comes back as a generic failure — opening the org-method circuit and counting toward the
+    // eight-hour threshold — when the correct answer was "back off for N seconds and try again".
+    // Propagate it and let the worker's rate-limit handling do its job.
+    if (carriesRateLimitSignal(error)) {
+      throw error;
+    }
     Sentry.addBreadcrumb({
       category: "github",
       message: `Could not read installation repo selection for ${org}; treating repo presence as unprovable`,
@@ -2306,6 +2314,31 @@ export async function fetchRepositorySelection(org: string): Promise<"all" | "se
     });
     return undefined;
   }
+}
+
+/**
+ * Does this error carry the rate-limit signal the async worker keys off?
+ *
+ * Mirrors the INPUTS of github-async-worker's `detectRateLimitType` (the two rate-limit error
+ * classes, a 429, or a 403 carrying Retry-After / an exhausted x-ratelimit-remaining) rather than
+ * its decision tree, because all we need here is "is this worth preserving for that function to
+ * classify". Erring either way is survivable and neither is silent: a false positive propagates an
+ * error the worker then declines to treat as a rate limit, and a false negative just falls back to
+ * the `unknown` path, which retries.
+ *
+ * A plain 403 with no rate-limit headers is deliberately NOT a match — that is a permission
+ * problem, and propagating it would trip the org circuit over a lookup we can simply do without.
+ */
+function carriesRateLimitSignal(error: unknown): boolean {
+  if (error instanceof SecondaryRateLimitError || error instanceof PrimaryRateLimitError) return true;
+  const status = error instanceof RequestError ? error.status : undefined;
+  if (status === 429) return true;
+  if (status !== 403) return false;
+  const raw = (error as { response?: { headers?: Record<string, unknown> } })?.response?.headers;
+  if (!raw) return false;
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) headers[k.toLowerCase()] = String(v);
+  return headers["retry-after"] !== undefined || headers["x-ratelimit-remaining"] === "0";
 }
 
 /**
@@ -2346,7 +2379,13 @@ export async function classifyRepoPresence(
     await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
     return "present";
   } catch (error) {
-    if (!isGitHubNotFoundError(error)) {
+    // Status, NOT `isGitHubNotFoundError`. That helper falls back to `message.includes("Not Found")`
+    // so that callers doing benign things still recognise a 404 behind a wrapper — but here the
+    // answer can DELETE a row's readiness, and a statusless transport/proxy error or a wrapped 5xx
+    // whose body happens to carry "Not Found" would then be read as proof of deletion. This is the
+    // one place in the file where the loose check is unsafe, so require the real thing.
+    const isRealNotFound = error instanceof RequestError && error.status === 404;
+    if (!isRealNotFound) {
       return "unknown";
     }
     if (repositorySelection === "all") return "absent";

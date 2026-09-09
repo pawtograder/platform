@@ -179,6 +179,30 @@ Deno.test("classifyRepoPresence: 404 on a selected-repos installation -> inacces
   assertEquals(await classifyRepoPresence(octokit, "org", "repo", "selected"), "inaccessible");
 });
 
+Deno.test(
+  'classifyRepoPresence: a statusless error whose message says "Not Found" -> unknown, never absent',
+  async () => {
+    // isGitHubNotFoundError has a `message.includes("Not Found")` fallback, so a transport/proxy
+    // error or a wrapped 5xx carrying that text would otherwise be read as proof of deletion and
+    // park a repo whose existence was never confirmed. This classification uses status only.
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}": () => {
+        throw new Error("socket hang up: Not Found");
+      }
+    });
+    assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "unknown");
+  }
+);
+
+Deno.test("classifyRepoPresence: a wrapped 5xx mentioning Not Found -> unknown, never absent", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(502, "Bad Gateway: Not Found");
+    }
+  });
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "unknown");
+});
+
 Deno.test("classifyRepoPresence: 404 with an undetermined installation scope -> unknown, so it retries", async () => {
   // undefined scope means the lookup failed, not that the install is "selected". Terminating here
   // would discard a permission sync (or leave a missing row unparked) because an auxiliary lookup
