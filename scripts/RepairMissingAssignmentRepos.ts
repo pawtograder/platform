@@ -499,6 +499,12 @@ async function main() {
     if (!checkGithub && needsReview.length > 0) {
       console.log(`Add --check-github to also settle the ${needsReview.length} with no handout.`);
     }
+    if (checkFailures > 0) {
+      // A dry run that could not check some handouts has not produced the list it claims to. Its
+      // output is what an operator decides from, so it must not exit 0 either.
+      console.error(`${checkFailures} assignment(s) could not be checked against GitHub; this listing is incomplete.`);
+      process.exitCode = 1;
+    }
     return;
   }
 
@@ -508,6 +514,30 @@ async function main() {
   let ok = 0;
   let failed = 0;
   for (const { row, functions } of plans) {
+    // Revalidate the archive state immediately before acting, exactly as the scheduled reconciler
+    // does. Repairs are sequential and each one can take minutes, so on a broad sweep an operator
+    // can retire an assignment or a whole class while earlier entries are still running — and
+    // neither creation function rejects an archived row, so the plan built at the start would
+    // happily publish repositories for work somebody has since withdrawn. A named --assignment is
+    // exempt: that is a human who knows what they are repairing.
+    if (!targeted) {
+      const { data: fresh, error: freshError } = await supabase
+        .from("assignments")
+        .select("archived_at, classes(archived)")
+        .eq("id", row.id)
+        .maybeSingle();
+      if (freshError) {
+        // A failed read is not permission to proceed.
+        console.log(`  skipping assignment ${row.id}: could not revalidate (${freshError.message})`);
+        failed++;
+        continue;
+      }
+      const clazz = fresh?.classes as { archived: boolean | null } | null;
+      if (!fresh || fresh.archived_at || clazz?.archived) {
+        console.log(`  skipping assignment ${row.id}: archived since the plan was built`);
+        continue;
+      }
+    }
     let allOk = true;
     for (const fn of functions) {
       process.stdout.write(`  ${fn} for assignment ${row.id}... `);

@@ -116,20 +116,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope.setTag("solution_head_sha", headCommit.sha);
   const graderConfig = await getFileFromRepo(solutionRepoFullName, "pawtograder.yml", scope, headCommit.sha);
   const asObj = (await parse(graderConfig.content)) as Json;
-  const { error: configError } = await adminSupabase
-    .from("autograder")
-    .update({
-      config: asObj
-    })
-    .eq("id", assignment_id);
-  if (configError) {
-    // Storing the config IS the point of reading pawtograder.yml, and everything downstream
-    // depends on it: the submission-file globs, the handout hashes seeded below, and the
-    // empty-submission check. Ignoring this error reported success over an assignment with a
-    // solution repo and no config at all.
-    Sentry.captureException(configError, scope);
-    throw configError;
-  }
+  // The config is NOT written here. record_autograder_head_metadata below is the sole writer, so it
+  // moves inside the same conditional transaction as the SHA, points and commit row.
+  //
+  // A standalone write used to sit here, and it survived a lost compare-and-set: on a targeted
+  // repair of an already-published assignment, this update committed and then the RPC declined,
+  // leaving this request's older config paired with the concurrent winner's SHA and points. Storing
+  // the config is still exactly as load-bearing as it was — the submission-file globs, the handout
+  // hashes seeded below and the empty-submission check all depend on it — which is why the RPC
+  // failing or declining now aborts the whole function rather than being tolerated.
 
   // Record the metadata the initial push would have carried.
   //
