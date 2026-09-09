@@ -335,7 +335,7 @@ async function repairMissingSolutionRepos(opts: {
     // detached pass can still be working through candidates minutes later. One indexed lookup.
     const { data: fresh, error: freshError } = await supabase
       .from("assignments")
-      .select("repo_mode, archived_at, classes!inner(slug, github_org, archived)")
+      .select("repo_mode, archived_at, classes!inner(slug, github_org, archived), autograder(grader_repo)")
       .eq("id", a.id)
       .maybeSingle();
     const currentOrg = fresh?.classes?.github_org ?? null;
@@ -371,6 +371,20 @@ async function repairMissingSolutionRepos(opts: {
         },
         excludedOrgSet
       );
+    // An instructor may have supplied a custom grader_repo since the scan. assignment-create-solution-repo
+    // now treats a pointer naming a different repository as stale and replaces it, which is the
+    // right behaviour for a human running a targeted repair and the wrong one for an unattended
+    // sweep — it would silently swap an explicit choice for the conventionally derived name.
+    // Automated repair only ever acts on an assignment that still has NO pointer.
+    const currentGraderRepo = (fresh?.autograder as { grader_repo: string | null } | null)?.grader_repo ?? null;
+    if (currentGraderRepo !== null) {
+      scope.setTag("repair_skipped_revalidation", "grader_repo_set_since_scan");
+      console.log(
+        `[github-repo-reconciler] Assignment ${a.id} gained a grader_repo (${currentGraderRepo}) since the scan; leaving it alone`
+      );
+      continue;
+    }
+
     if (!stillEligible) {
       scope.setTag("repair_skipped_revalidation", "true");
       console.log(`[github-repo-reconciler] Assignment ${a.id} no longer eligible for repair; skipping`);

@@ -217,15 +217,30 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     console.log(
       `Clearing stale grader_repo ${existingPointer!.grader_repo} on assignment ${assignment_id} before attaching ${solutionRepoFullName}`
     );
-    const { error: clearError } = await adminSupabase
+    // Conditional on the value we actually observed. An unconditional clear defeats the
+    // compare-and-set on the final write further down: an instructor changing grader_repo while the
+    // GitHub work runs would have their new value wiped to NULL here, and the final `.is(null)`
+    // would then match and attach the conventionally derived repo over it — the exact data loss
+    // that CAS exists to prevent, reintroduced two statements earlier.
+    const { data: clearedRows, error: clearError } = await adminSupabase
       .from("autograder")
       .update({ grader_repo: null })
-      .eq("id", assignment_id);
+      .eq("id", assignment_id)
+      .eq("grader_repo", existingPointer!.grader_repo!)
+      .select("id");
     if (clearError) {
       // Proceeding would leave the old repo webhook-discoverable for the rest of this function,
       // which is the whole thing this clear exists to prevent.
       Sentry.captureException(clearError, scope);
       throw clearError;
+    }
+    if ((clearedRows?.length ?? 0) === 0) {
+      scope.setTag("grader_repo_pointer", "changed_before_clear");
+      throw new UserVisibleError(
+        `The grader repository for this assignment changed while ${solutionRepoFullName} was being created, so it was not attached. ` +
+          `The repository exists — re-save if you intended to use it.`,
+        409
+      );
     }
   }
 
