@@ -29,6 +29,7 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
+import { calculateTotalAutograderPoints } from "../_shared/pawtograderYmlHelpers.ts";
 import {
   computeHandoutFileHashesForCommit,
   describeHandoutSeedResult,
@@ -37,7 +38,7 @@ import {
   type HandoutHashCaches
 } from "../_shared/handoutFileHashes.ts";
 import { buildTooLargeErrorName } from "../_shared/tooLargeErrorName.ts";
-import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
+import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
 import { prStateFromPullRequest } from "../_shared/PrState.ts";
 import {
@@ -2374,21 +2375,10 @@ async function handlePushToGraderSolution(
       if (!parsedYml.gradedParts) {
         parsedYml.gradedParts = [];
       }
-      const totalAutograderPoints = parsedYml.gradedParts.reduce(
-        (acc, part) =>
-          acc +
-          part.gradedUnits.reduce(
-            (unitAcc, unit) =>
-              unitAcc +
-              (isMutationTestUnit(unit)
-                ? (unit.linearScoring?.points ?? unit.breakPoints?.[0]?.pointsToAward ?? 0)
-                : isRegularTestUnit(unit)
-                  ? unit.points
-                  : 0),
-            0
-          ),
-        0
-      );
+      // _shared/pawtograderYmlHelpers.ts has always exported this; the copy that used to live here
+      // was the only implementation in use. assignment-create-solution-repo now needs the same
+      // number, so the two callers share one definition rather than drifting.
+      const totalAutograderPoints = calculateTotalAutograderPoints(parsedYml);
       scope?.setTag("total_autograder_points", totalAutograderPoints.toString());
       for (const autograder of autograders) {
         const { error: updateError } = await adminSupabase
@@ -4084,16 +4074,6 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
     throw prIngestError;
   }
 });
-
-// Type guard to check if a unit is a mutation test unit
-export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
-  return "locations" in unit;
-}
-
-// Type guard to check if a unit is a regular test unit
-export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
-  return "tests" in unit && "testCount" in unit;
-}
 
 serveWithSentryFlush(async (req) => {
   console.log("[ENTRY] Received webhook request");

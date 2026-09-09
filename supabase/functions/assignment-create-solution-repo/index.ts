@@ -3,7 +3,15 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { AssignmentCreateSolutionRepoRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, getFileFromRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import {
+  createRepo,
+  getCommit,
+  getDefaultBranch,
+  getFileFromRepo,
+  syncRepoPermissions
+} from "../_shared/GitHubWrapper.ts";
+import { calculateTotalAutograderPoints } from "../_shared/pawtograderYmlHelpers.ts";
+import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assignmentShouldHaveRepos } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -94,6 +102,61 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // solution repo and no config at all.
     Sentry.captureException(configError, scope);
     throw configError;
+  }
+
+  // Reconcile the head metadata the initial push would have carried.
+  //
+  // `handlePushToGraderSolution` in github-repo-webhook is what normally records these, but it
+  // finds the assignment by `grader_repo` — and that pointer is deliberately written at the END of
+  // this function (see below), so the template-generation push arrives while it is still NULL and
+  // the event is dropped. Nothing else ever writes `latest_autograder_sha`, so without this a
+  // freshly created assignment carries no points, no SHA, and no commit row until somebody happens
+  // to push to the solution repo again.
+  //
+  // Doing it here rather than restoring the early pointer write also removes the dependency on a
+  // webhook race this function cannot observe: it already has the repo and the parsed config, so it
+  // can simply record what it just created.
+  //
+  // Best-effort, like the handout hash seeding below: the repository exists and is usable, the
+  // values are re-derivable from the next push, and failing creation over them would be the worse
+  // trade. Reported to Sentry so a persistent failure is visible.
+  try {
+    const parsedConfig = asObj as unknown as PawtograderConfig | null;
+    // `autograder_commits.ref` is NOT NULL and a template-generated repo inherits the template's
+    // default branch, which may not be `main` — the push handlers all carry a comment about exactly
+    // that. Ask rather than guess.
+    const [headCommit, defaultBranch] = await Promise.all([
+      getCommit(solutionRepoFullName, "HEAD", scope),
+      getDefaultBranch(solutionRepoFullName, scope)
+    ]);
+    const points = parsedConfig ? calculateTotalAutograderPoints(parsedConfig) : 0;
+    scope.setTag("total_autograder_points", points.toString());
+    const [{ error: pointsError }, { error: shaError }] = await Promise.all([
+      adminSupabase.from("assignments").update({ autograder_points: points }).eq("id", assignment_id),
+      adminSupabase.from("autograder").update({ latest_autograder_sha: headCommit.sha }).eq("id", assignment_id)
+    ]);
+    if (pointsError) throw pointsError;
+    if (shaError) throw shaError;
+    // Same upsert shape and conflict target the push handler uses, so a later push over the same
+    // commit updates this row rather than colliding with it.
+    const { error: commitError } = await adminSupabase.from("autograder_commits").upsert(
+      [
+        {
+          autograder_id: assignment_id,
+          message: headCommit.commit.message,
+          sha: headCommit.sha,
+          author: headCommit.commit.author?.name ?? null,
+          class_id: class_id,
+          ref: `refs/heads/${defaultBranch}`
+        }
+      ],
+      { onConflict: "autograder_id,sha" }
+    );
+    if (commitError) throw commitError;
+  } catch (metadataError) {
+    scope.setTag("initial_autograder_metadata", "failed");
+    Sentry.captureException(metadataError, scope);
+    console.error(`Could not record initial autograder metadata for ${solutionRepoFullName}`, metadataError);
   }
 
   // Persist grader_repo only NOW — the same discipline assignment-create-handout-repo applies to

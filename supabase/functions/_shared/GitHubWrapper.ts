@@ -906,6 +906,26 @@ export async function writeFileToRepo(
  * returns no commit sha, yet the assignment still needs a `latest_template_sha` to give
  * student syncs a target.
  */
+/**
+ * The repo's default branch name.
+ *
+ * Resolved rather than assumed for the reason createRepo already documents: a fork inherits the
+ * UPSTREAM's default branch and a template-generated repo inherits the template's, so either can be
+ * `master`. The webhook handlers all learned this the hard way — a grader/solution repo on `master`
+ * had every push ignored until they started reading `payload.repository.default_branch`. A caller
+ * with no push payload to read it from needs to ask GitHub.
+ */
+export async function getDefaultBranch(repoName: string, scope?: Sentry.Scope): Promise<string> {
+  scope?.setTag("github_operation", "get_default_branch");
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error("No octokit found for repository " + repoName);
+  }
+  const [owner, repo] = repoName.split("/");
+  const repoData = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+  return repoData.data.default_branch || "main";
+}
+
 export async function getDefaultBranchHeadSha(repoName: string, scope?: Sentry.Scope): Promise<string | undefined> {
   scope?.setTag("github_operation", "get_default_branch_head");
   scope?.setTag("repository", repoName);
