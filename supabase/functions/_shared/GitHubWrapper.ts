@@ -2457,13 +2457,15 @@ export async function listCollaboratorsOrThrowMissing(
   octokit: Octokit,
   owner: string,
   repo: string,
-  resolveRepositorySelection: () => Promise<"all" | "selected" | undefined>
+  resolveRepositorySelection: () => Promise<"all" | "selected" | undefined>,
+  options: { affiliation?: "direct" | "outside" | "all" } = {}
 ) {
   try {
     return await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
       owner,
       repo,
-      per_page: 100
+      per_page: 100,
+      ...(options.affiliation ? { affiliation: options.affiliation } : {})
     });
   } catch (error) {
     const reinterpreted = await reinterpretRepoNotFound(octokit, owner, repo, error, resolveRepositorySelection);
@@ -3928,14 +3930,16 @@ async function syncRepoPermissionsInstrumented(
   // common no-op sync keeps costing exactly the requests it costs today.
   let removeAccess: string[] = [];
   if (removalCandidates.length > 0) {
+    // Same classification as the first collaborator read, and for the same reason: this is the
+    // sync's OTHER retry ladder, and the whole-sync backstop sits outside it. Left bare, a repo
+    // deleted between the two reads would spend a second 93-second ladder here before the backstop
+    // ever saw the error. The two ladders are the only places that need in-band classification;
+    // every other repo-scoped call in this function fails fast and the backstop catches it.
     const directAccess = await timeStep(timings, "list_direct_collaborators", () =>
       retryWithBackoff(
         () =>
-          octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
-            owner: org,
-            repo,
-            affiliation: "direct",
-            per_page: 100
+          listCollaboratorsOrThrowMissing(octokit, org, repo, () => fetchRepositorySelection(org), {
+            affiliation: "direct"
           }),
         5,
         3000,

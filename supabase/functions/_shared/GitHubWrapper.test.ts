@@ -376,6 +376,41 @@ Deno.test("listCollaboratorsOrThrowMissing: a 404 whose repo is PRESENT is passe
   assertEquals(err instanceof RepositoryUnreadableError, false);
 });
 
+Deno.test("listCollaboratorsOrThrowMissing: passes affiliation through, and still classifies its 404", async () => {
+  // The direct-collaborator read is the sync's second retry ladder; it needs the same in-band
+  // classification, so the helper has to carry `affiliation` without losing that behaviour.
+  let seenAffiliation: unknown = "unset";
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": (params) => {
+      seenAffiliation = params.affiliation;
+      throw requestError(404, "Not Found");
+    },
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  await assertRejects(
+    () =>
+      listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all", {
+        affiliation: "direct"
+      }),
+    RepositoryMissingError
+  );
+  assertEquals(seenAffiliation, "direct");
+});
+
+Deno.test("listCollaboratorsOrThrowMissing: omits affiliation when not asked for", async () => {
+  let seenAffiliation: unknown = "unset";
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": (params) => {
+      seenAffiliation = params.affiliation;
+      return [];
+    }
+  });
+  await listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all");
+  assertEquals(seenAffiliation, undefined);
+});
+
 Deno.test("listCollaboratorsOrThrowMissing: selection is resolved lazily, never on the happy path", async () => {
   // The resolver hits GitHub, so it must not be called when the collaborator read succeeds.
   let resolverCalls = 0;
