@@ -9,7 +9,7 @@ import {
   getDefaultBranchHeadSha,
   isValidRepoFullName
 } from "../_shared/GitHubWrapper.ts";
-import { UserVisibleError, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { UserVisibleError, SecurityError, wrapRequestHandler, readJsonObjectBody } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { parse } from "jsr:@std/yaml";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
@@ -48,15 +48,12 @@ export const GITHUB_APP_WEBHOOK_EVENTS = [
   "organization",
   "deployment_status"
 ] as const;
-// `unknown`, not a shape: this is a request body, so a declared type would be a claim about the
-// caller rather than a guarantee. Narrowed by the guards at the top of handleRequest.
-type RequestBody = {
-  new_repo?: unknown;
-  assignment_id?: unknown;
-  watch_type?: unknown;
-};
 async function handleRequest(req: Request, scope: Sentry.Scope) {
-  const { assignment_id, new_repo, watch_type }: RequestBody = await req.json();
+  // Not `await req.json()` destructured directly: malformed JSON throws a SyntaxError and a body of
+  // JSON `null` throws a TypeError on the destructuring itself, and neither is a typed error, so
+  // both came back as a 500 and paged us. No declared body shape either — this is a request body,
+  // so a type would be a claim about the caller rather than a guarantee. Every field is checked.
+  const { assignment_id, new_repo, watch_type } = await readJsonObjectBody(req);
   scope?.setTag("function", "github-repo-configure-webhook");
 
   // Validated BEFORE the Sentry tags: `assignment_id.toString()` on a missing or null id threw
