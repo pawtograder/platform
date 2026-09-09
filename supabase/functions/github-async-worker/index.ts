@@ -2368,36 +2368,62 @@ export async function processEnvelope(
           error instanceof RepositoryMissingError
             ? { creation_error: reason, is_github_ready: false }
             : { creation_error: reason };
-        // postgrest-js RESOLVES with `{ error }` instead of throwing, so a failed write here is
-        // invisible to the catch below. That matters more than it used to: parking is what stops
-        // the next job repeating this failure, and DLQing while the row still says
-        // is_github_ready = true would throw the durable state away and leave the loop intact. So
-        // inspect the result, and treat a failed park as a reason NOT to archive — leaving the
-        // message for redelivery is the only thing that gets us another attempt at parking.
+        // Two ways this write can fail without throwing, both of which would leave us believing a
+        // row was parked when it was not:
+        //
+        //   1. postgrest-js RESOLVES with `{ error }` rather than throwing, so a PostgREST or
+        //      database failure is invisible to the catch below.
+        //   2. An UPDATE that matches ZERO rows is a success in both Postgres and PostgREST. The
+        //      by-name fallback is the exposed one: `.eq("repository", ...)` is case-sensitive
+        //      while GitHub treats owner/repo case-insensitively, so an envelope whose casing
+        //      differs from the stored value silently parks nothing — as would a row already
+        //      deleted.
+        //
+        // Parking is what stops the next job repeating this failure, so "we think we parked it"
+        // has to mean a row actually changed. `.select("id")` makes the affected rows observable;
+        // zero of them is a failed park, and a failed park means do not archive, because
+        // redelivery is the only thing that gets us another attempt.
         let parked = true;
         try {
           if (envelope.repo_id) {
-            const { error: e } = await adminSupabase.from("repositories").update(repoUpdate).eq("id", envelope.repo_id);
+            const { data: rows, error: e } = await adminSupabase
+              .from("repositories")
+              .update(repoUpdate)
+              .eq("id", envelope.repo_id)
+              .select("id");
             if (e) throw e;
+            if (!rows?.length) throw new Error(`no repositories row matched id ${envelope.repo_id}`);
           } else if (envelope.method === "create_repo" && envelope.class_id) {
             const { org: eo, repoName: ern } = envelope.args as CreateRepoArgs;
-            const { error: e } = await adminSupabase
+            const { data: rows, error: e } = await adminSupabase
               .from("repositories")
               .update(repoUpdate)
               .eq("class_id", envelope.class_id)
-              .eq("repository", `${eo}/${ern}`);
+              .eq("repository", `${eo}/${ern}`)
+              .select("id");
             if (e) throw e;
+            if (!rows?.length)
+              throw new Error(`no repositories row matched ${eo}/${ern} in class ${envelope.class_id}`);
           } else if (error instanceof RepositoryMissingError) {
             // sync_repo_permissions envelopes carry no repo_id (enqueue_github_sync_repo_permissions
             // takes org + repo, not a row id), so match on the full name the error actually
             // confirmed missing. Not scoped by class_id: `repository` carries a UNIQUE index
             // (unique_repo_name), so this touches at most one row, and the envelope's class_id is
             // absent on some paths.
-            const { error: e } = await adminSupabase
+            const { data: rows, error: e } = await adminSupabase
               .from("repositories")
               .update(repoUpdate)
-              .eq("repository", error.fullName);
+              .eq("repository", error.fullName)
+              .select("id");
             if (e) throw e;
+            if (!rows?.length) {
+              // Most likely an owner/repo casing difference between the envelope and the stored
+              // value, since GitHub is case-insensitive here and this filter is not. Naming it
+              // explicitly beats a silent no-op that reports success.
+              throw new Error(
+                `no repositories row matched ${error.fullName} (casing mismatch, or row already deleted)`
+              );
+            }
           }
         } catch (markErr) {
           parked = false;
