@@ -2395,6 +2395,26 @@ export async function classifyRepoPresence(
     // one place in the file where the loose check is unsafe, so require the real thing.
     const isRealNotFound = error instanceof RequestError && error.status === 404;
     if (!isRealNotFound) {
+      // A 5xx, transport error, or non-rate-limited 403 leaves the caller holding the original 404,
+      // which the ladder then retries — deliberately. Propagating the probe error instead would be
+      // worse, not better: retryWithBackoff only retries 404 / "git repository is empty", so a
+      // 5xx would get ZERO retries and land on the worker's generic path, opening the org-method
+      // circuit on the first transient blip. Retrying the 404 re-runs this probe too, which is the
+      // thing most likely to clear it.
+      //
+      // Rate limits are the deliberate exception above, because there the worker genuinely knows
+      // better than the ladder does: it has Retry-After and a real backoff. For a 5xx it has
+      // neither, so the ladder is the better handler. What IS lost is attribution — the escaping
+      // error says 404 when the proximate cause was a 500 — so leave the real reason behind.
+      Sentry.addBreadcrumb({
+        category: "github",
+        message: `Presence probe for ${owner}/${repo} failed; repo presence unknown, retrying the original 404`,
+        level: "warning",
+        data: {
+          probe_status: error instanceof RequestError ? error.status : "none",
+          probe_error: error instanceof Error ? error.message : String(error)
+        }
+      });
       return "unknown";
     }
     if (repositorySelection === "all") return "absent";
