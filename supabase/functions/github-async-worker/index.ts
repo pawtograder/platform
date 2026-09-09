@@ -20,6 +20,7 @@ import {
   NonRetryableGitHubError,
   NonRetryableRepoError,
   NonRetryableUserError,
+  RepositoryMissingError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
@@ -1159,10 +1160,22 @@ export async function processEnvelope(
         //Otherwise we might race against a createRepo, and end up overwriting to the wrong githubUsernames.
         const { data: repository } = await adminSupabase
           .from("repositories")
-          .select("is_github_ready")
+          .select("is_github_ready, creation_error")
           .eq("repository", `${org}/${repoName}`)
           .maybeSingle();
         if (!repository?.is_github_ready) {
+          // "Not ready" covers two states that deserve opposite answers. With no creation_error the
+          // repo is still on its way — requeue and let it land, which is what this gate was written
+          // for. With one recorded, the row is parked: creation failed for good, or the repo turned
+          // out to be missing (RepositoryMissingError, handled below). Requeueing that is pure
+          // waste — nothing will change it, and the message just redelivers every visibility
+          // timeout until read_ct trips the poison-pill limit ~50 minutes later. Archive it and
+          // say why.
+          if (repository?.creation_error) {
+            console.log(`repo is parked, dropping permission sync: ${org}/${repoName} — ${repository.creation_error}`);
+            scope.setTag("permission_sync_skipped", "repo_parked");
+            return true;
+          }
           console.log("repo is not ready", `${org}/${repoName}`);
           return false;
         }
@@ -2258,6 +2271,11 @@ export async function processEnvelope(
       // one issue per method is enough. The offending login is on the tag and in the message.
       scope.setFingerprint(["github-non-retryable-user", envelope.method]);
       scope.setTag("github_username", error.githubUsername);
+    } else if (error instanceof RepositoryMissingError) {
+      // Deleting an assignment's repos by hand turns up dozens of these at once (146 rows for one
+      // sp26 assignment on 2026-09-09). Group them; the repo is on the tag and in the message.
+      scope.setFingerprint(["github-repository-missing", envelope.method]);
+      scope.setTag("missing_repository", error.fullName);
     }
 
     const errorId = Sentry.captureException(error, scope);
@@ -2294,16 +2312,36 @@ export async function processEnvelope(
           scope.setTag("non_retryable_repo_error", "true");
         }
         const reason = error.message;
+        // A repo that is gone is not just "this job failed" — the ROW is wrong, and every future
+        // job derived from it will fail the same way. Clearing is_github_ready parks the row, so
+        // the sync_repo_permissions pre-flight gate drops the duplicates already queued for it
+        // (see that gate) instead of each one paying for its own discovery, and the row stops
+        // silently claiming a working repo.
+        //
+        // Safe to pair with creation_error and only with it: reconcile_stuck_repo_creations
+        // re-enqueues create_repo for rows with `is_github_ready = false AND creation_error IS
+        // NULL`, so clearing the flag on its own would hand a deleted repo to the reconciler and
+        // have it recreated. Setting both in one update keeps the row parked.
+        const repoUpdate =
+          error instanceof RepositoryMissingError
+            ? { creation_error: reason, is_github_ready: false }
+            : { creation_error: reason };
         try {
           if (envelope.repo_id) {
-            await adminSupabase.from("repositories").update({ creation_error: reason }).eq("id", envelope.repo_id);
+            await adminSupabase.from("repositories").update(repoUpdate).eq("id", envelope.repo_id);
           } else if (envelope.method === "create_repo" && envelope.class_id) {
             const { org: eo, repoName: ern } = envelope.args as CreateRepoArgs;
             await adminSupabase
               .from("repositories")
-              .update({ creation_error: reason })
+              .update(repoUpdate)
               .eq("class_id", envelope.class_id)
               .eq("repository", `${eo}/${ern}`);
+          } else if (error instanceof RepositoryMissingError) {
+            // sync_repo_permissions envelopes carry no repo_id (enqueue_github_sync_repo_permissions
+            // takes org + repo, not a row id), so match on the full name the error actually
+            // confirmed missing. Not scoped by class_id: `repository` is the unique handle here and
+            // the envelope's class_id is absent on some paths.
+            await adminSupabase.from("repositories").update(repoUpdate).eq("repository", error.fullName);
           }
         } catch (markErr) {
           console.error("Failed to record creation_error on repository row:", markErr);

@@ -54,6 +54,25 @@ export class NonRetryableRepoError extends NonRetryableGitHubError {
 }
 
 /**
+ * The repository we were asked to operate on is not on GitHub at all. Distinct from a bare 404,
+ * which on a freshly-created repo usually means read-after-create replication lag and IS worth
+ * retrying: this error is only raised once a direct `GET /repos/{owner}/{repo}` has confirmed the
+ * repo is really gone. Someone deleted it out of band, or the row was left behind when the repo was
+ * renamed. Either way the row no longer describes anything, so the worker records the reason and
+ * clears `is_github_ready` rather than retrying.
+ */
+export class RepositoryMissingError extends NonRetryableGitHubError {
+  readonly fullName: string;
+  constructor(fullName: string) {
+    super(
+      `Repository ${fullName} does not exist on GitHub. It was deleted or renamed outside Pawtograder, so there is nothing to sync.`
+    );
+    this.name = "RepositoryMissingError";
+    this.fullName = fullName;
+  }
+}
+
+/**
  * The GitHub login we have on file for a user doesn't exist, and we couldn't recover a current one
  * from the numeric account id we stored when they linked their account (see
  * `reresolveMissingGitHubLogin`). Either the account was deleted or the username was never really
@@ -2235,6 +2254,57 @@ function isGitHubNotFoundError(error: unknown): boolean {
   );
 }
 
+/**
+ * Does this repo exist right now? Used to tell a 404 that means "not yet" from one that means
+ * "never again" — see `listCollaboratorsOrThrowMissing` for why that distinction is worth a
+ * request.
+ *
+ * A 404 here is the answer, not a failure. Anything else (403, 5xx, network) is NOT: propagate it,
+ * because "we could not find out" must not be recorded as "the repo is gone" — that would clear
+ * `is_github_ready` on a live repo during an outage.
+ */
+export async function repoExists(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    return true;
+  } catch (error) {
+    if (isGitHubNotFoundError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+/**
+ * List a repo's collaborators, distinguishing the two things a 404 can mean.
+ *
+ * The caller wraps this in `retryWithBackoff`, whose 404 ladder exists for read-after-create lag:
+ * syncRepoPermissions runs immediately after createRepo in the same worker message, and the
+ * collaborators endpoint can 404 briefly on a repo that does exist. A repo that is GONE returns
+ * exactly the same 404, and paying the ladder for it costs 93 seconds of a worker slot and then
+ * escapes as a bare RequestError — which the async worker reads as a systemic failure and answers
+ * by opening the `<org>:sync_repo_permissions` circuit, throttling that method for every other
+ * class in the org over one dead row.
+ *
+ * So ask instead of guessing. One extra request, only on the error path, converts the ambiguous
+ * 404 into an answer: missing -> RepositoryMissingError (terminal, not retried, handled per-row),
+ * present -> rethrow the original so the ladder still covers the lag it was written for.
+ */
+export async function listCollaboratorsOrThrowMissing(octokit: Octokit, owner: string, repo: string) {
+  try {
+    return await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
+      owner,
+      repo,
+      per_page: 100
+    });
+  } catch (error) {
+    if (isGitHubNotFoundError(error) && !(await repoExists(octokit, owner, repo))) {
+      throw new RepositoryMissingError(`${owner}/${repo}`);
+    }
+    throw error;
+  }
+}
+
 export async function archiveRepoAndLock(org: string, repo: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "archive_repo");
   scope?.setTag("org", org);
@@ -3372,20 +3442,12 @@ async function syncRepoPermissionsInstrumented(
     const orgMembers = await timeStep(timings, "org_members", () => orgMembershipCache.get(org));
     allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
   }
-  // maxRetries 5 / baseDelayMs 3000 — the same 93s worst-case ladder as get_head_sha. No retry
-  // lines appear in the 2026-09-07 logs, so it did not fire; timed so we can say that from data.
+  // maxRetries 5 / baseDelayMs 3000 — the same 93s worst-case ladder as get_head_sha, and still
+  // the right ladder for the read-after-create lag it was written for. A repo that is GONE 404s
+  // identically, so `listCollaboratorsOrThrowMissing` classifies the 404 before we spend the
+  // ladder on it; see that function for what the ambiguity used to cost.
   const existingAccess = await timeStep(timings, "list_collaborators", () =>
-    retryWithBackoff(
-      () =>
-        octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
-          owner: org,
-          repo,
-          per_page: 100
-        }),
-      5,
-      3000,
-      scope
-    )
+    retryWithBackoff(() => listCollaboratorsOrThrowMissing(octokit, org, repo), 5, 3000, scope)
   );
   const existingUsernames = existingAccess
     .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")

@@ -26,8 +26,12 @@ const {
   isRepoEmpty,
   isTeamAlreadyExistsError,
   isValidRepoFullName,
+  listCollaboratorsOrThrowMissing,
+  NonRetryableGitHubError,
   NonRetryableRepoError,
   publicSupabaseUrl,
+  repoExists,
+  RepositoryMissingError,
   resolveExistingTeamSlug,
   resolveTeamSlugIfExists,
   TeamMembersUnreadableError,
@@ -139,6 +143,92 @@ Deno.test("assertSourceNotEmpty: missing source (404 on repo) -> NonRetryableRep
     NonRetryableRepoError
   );
   assertEquals(err.message.includes("not found"), true);
+});
+
+// --- Telling "not yet" from "never again" on the collaborator read ---
+//
+// A 404 from the collaborators endpoint is ambiguous: read-after-create lag on a repo that exists
+// (worth the 93s retry ladder) or a repo that is gone (where the ladder buys nothing and the
+// escaping RequestError trips the org's method circuit). These pin the classification.
+
+Deno.test("repoExists: repo present -> true", async () => {
+  const octokit = fakeOctokit({ "GET /repos/{owner}/{repo}": META_OK });
+  assertEquals(await repoExists(octokit, "org", "repo"), true);
+});
+
+Deno.test("repoExists: 404 -> false", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  assertEquals(await repoExists(octokit, "org", "repo"), false);
+});
+
+Deno.test("repoExists: non-404 rethrows rather than reporting absence", async () => {
+  // "We could not find out" must never be recorded as "the repo is gone" — that would clear
+  // is_github_ready on live repos during a GitHub outage.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(500, "Server Error");
+    }
+  });
+  await assertRejects(() => repoExists(octokit, "org", "repo"), RequestError);
+});
+
+Deno.test("listCollaboratorsOrThrowMissing: happy path returns the collaborator list", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => [{ login: "student", role_name: "write" }]
+  });
+  const got = await listCollaboratorsOrThrowMissing(octokit, "org", "repo");
+  assertEquals(got.length, 1);
+});
+
+Deno.test(
+  "listCollaboratorsOrThrowMissing: 404 on a repo that EXISTS -> rethrows, so the ladder still retries",
+  async () => {
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}/collaborators": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /repos/{owner}/{repo}": META_OK
+    });
+    const err = await assertRejects(() => listCollaboratorsOrThrowMissing(octokit, "org", "repo"), RequestError);
+    assertEquals(err.status, 404);
+  }
+);
+
+Deno.test(
+  "listCollaboratorsOrThrowMissing: 404 on a repo that is GONE -> terminal RepositoryMissingError",
+  async () => {
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}/collaborators": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /repos/{owner}/{repo}": () => {
+        throw requestError(404, "Not Found");
+      }
+    });
+    const err = await assertRejects(
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo"),
+      RepositoryMissingError
+    );
+    assertEquals(err.fullName, "org/repo");
+    // The worker branches on this to keep the failure per-row instead of tripping the org circuit.
+    assertEquals(err instanceof NonRetryableGitHubError, true);
+  }
+);
+
+Deno.test("listCollaboratorsOrThrowMissing: non-404 propagates without an existence probe", async () => {
+  // No "GET /repos/{owner}/{repo}" handler: fakeOctokit throws on an unexpected route, so this
+  // fails loudly if a 403 ever starts costing an extra request.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => {
+      throw requestError(403, "Forbidden");
+    }
+  });
+  const err = await assertRejects(() => listCollaboratorsOrThrowMissing(octokit, "org", "repo"), RequestError);
+  assertEquals(err.status, 403);
 });
 
 // --- Idempotent team creation (getTeamAndCreateIfNeeded) ---
