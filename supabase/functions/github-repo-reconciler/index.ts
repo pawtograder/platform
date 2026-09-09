@@ -343,7 +343,7 @@ async function repairMissingSolutionRepos(opts: {
       // itself, and splitting it collapses `fresh` to GenericStringError and every field access
       // below with it.
       .select(
-        "repo_mode, archived_at, template_repo, has_autograder, source_assignment_id, classes!inner(slug, github_org, archived), autograder(grader_repo, workflow_sha)"
+        "repo_mode, archived_at, template_repo, has_autograder, slug, source_assignment_id, classes!inner(slug, github_org, archived), autograder(grader_repo, workflow_sha)"
       )
       .eq("id", a.id)
       .maybeSingle();
@@ -463,7 +463,12 @@ async function repairMissingSolutionRepos(opts: {
         mode: fresh.repo_mode,
         githubOrg: fresh.classes?.github_org,
         classSlug: fresh.classes?.slug,
-        assignmentSlug: a.slug,
+        // The assignment's OWN slug, reloaded. The class slug was already read fresh here, but this
+        // one was still coming from the scan — and it is half of the derived handout name. An
+        // instructor renaming a queued assignment left the old pointer matching the old derived
+        // name, so it read as automation-owned; the handout endpoint then builds the name from the
+        // NEW slug, creates that repository, and replaces the pointer the instructor kept.
+        assignmentSlug: fresh.slug,
         sourceTemplateRepo: sourceHandout
       });
       // Still an equality test, so the custom-handout protection is unchanged: a fork-mode
@@ -489,9 +494,30 @@ async function repairMissingSolutionRepos(opts: {
       // would then start with a near-zero timeout, abort immediately, and be recorded as a genuine
       // failure with a Sentry event — reporting a budget shortfall as a broken assignment.
       let ranOutOfBudget = false;
+      let stoppedForExclusion = false;
       for (const fn of functions) {
         if (!canStartRepair(Date.now() - startedAt)) {
           ranOutOfBudget = true;
+          break;
+        }
+        // Re-read before EVERY request, not once per candidate. The handout call takes minutes, and
+        // this is the switch an operator flips to stop automation — so checking it only before the
+        // pair meant a solution repository could still be created after it was enabled. The
+        // creation endpoints deliberately do not enforce the flag themselves (instructor-initiated
+        // calls must keep working), so this loop is the only thing that honours it.
+        const { data: orgNow, error: orgNowError } = await supabase
+          .from("github_orgs")
+          .select("excluded_from_automation")
+          .ilike("org_name", currentOrg)
+          .maybeSingle();
+        if (orgNowError || orgNow?.excluded_from_automation) {
+          // Unreadable counts as excluded, for the same reason as the check above: "we could not
+          // tell" must not mean "carry on".
+          scope.setTag("repair_stopped_mid_candidate", "org_excluded_or_unknown");
+          console.log(
+            `[github-repo-reconciler] Org ${currentOrg} became excluded or unreadable while repairing assignment ${a.id}; stopping before ${fn}`
+          );
+          stoppedForExclusion = true;
           break;
         }
         // Bounded by whatever budget is actually left.
@@ -510,6 +536,12 @@ async function repairMissingSolutionRepos(opts: {
         if (!response.ok) {
           throw new Error(`${fn} returned ${response.status}: ${await response.text()}`);
         }
+      }
+      if (stoppedForExclusion) {
+        // Neither created nor failed. The operator asked automation to stop, and a partial
+        // handout-then-solution leaves grader_repo NULL, so the row stays repairable for whenever
+        // the exclusion is lifted.
+        continue;
       }
       if (ranOutOfBudget) {
         // Neither created nor failed: nothing is wrong with this assignment, we simply stopped. A

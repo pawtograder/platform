@@ -291,12 +291,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // GitHub work runs would have their new value wiped to NULL here, and the final `.is(null)`
     // would then match and attach the conventionally derived repo over it — the exact data loss
     // that CAS exists to prevent, reintroduced two statements earlier.
-    const { data: clearedRows, error: clearError } = await adminSupabase
+    // The SHA is part of the condition, not just the repository name. A push webhook can advance
+    // latest_autograder_sha between the snapshot at the top of this function and this clear — and on
+    // a targeted repair of an already-published assignment that is a webhook doing its job. Without
+    // the SHA here, the clear succeeded against the unchanged name, and the metadata RPC below then
+    // declined against the stale expected SHA — leaving the function to throw with grader_repo NULL,
+    // so the assignment was DETACHED and further pushes to it undiscoverable until another repair.
+    // Including it makes a completed webhook miss this write, which aborts the repair without
+    // touching anything.
+    let clearWrite = adminSupabase
       .from("autograder")
       .update({ grader_repo: null })
       .eq("id", assignment_id)
-      .eq("grader_repo", existingPointer!.grader_repo!)
-      .select("id");
+      .eq("grader_repo", existingPointer!.grader_repo!);
+    clearWrite =
+      expectedSha === null
+        ? clearWrite.is("latest_autograder_sha", null)
+        : clearWrite.eq("latest_autograder_sha", expectedSha);
+    const { data: clearedRows, error: clearError } = await clearWrite.select("id");
     if (clearError) {
       // Proceeding would leave the old repo webhook-discoverable for the rest of this function,
       // which is the whole thing this clear exists to prevent.
@@ -380,7 +392,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { data: published, error: pointerError } = await adminSupabase.rpc("publish_grader_repo", {
     p_assignment_id: assignment_id,
     p_expected_grader_repo: webhookHasReconciled ? solutionRepoFullName : null,
-    p_new_grader_repo: solutionRepoFullName
+    p_new_grader_repo: solutionRepoFullName,
+    // Rechecked here as well as in the metadata RPC, because those are two transactions. A disable
+    // landing between them leaves points computed from the enabled state already committed, and
+    // nothing recomputes autograder_points afterwards — so publishing would attach a repository to
+    // an assignment carrying an automated allocation it can never award. Declining leaves the
+    // pointer NULL, which is the repairable state.
+    p_expected_has_autograder: assignment.has_autograder
   });
   if (pointerError) {
     // Same reasoning as the config write: reporting success here would leave a solution repo that

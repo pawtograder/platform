@@ -2380,7 +2380,35 @@ async function handlePushToGraderSolution(
       // number, so the two callers share one definition rather than drifting.
       const totalAutograderPoints = calculateTotalAutograderPoints(parsedYml);
       scope?.setTag("total_autograder_points", totalAutograderPoints.toString());
+      // autograder_points lives on `assignments`, which has no grader_repo to condition on the way
+      // the two `autograder` writes below can. Re-resolving the pointer here is the equivalent
+      // fence: an assignment whose grader_repo no longer names this repository is skipped, so a
+      // delivery overtaken by a repair that swapped the repository cannot leave the old
+      // repository's point total on the new one. One indexed read per push.
+      const { data: stillOurs, error: stillOursError } = await adminSupabase
+        .from("autograder")
+        .select("id")
+        .eq("grader_repo", repoName)
+        .in(
+          "id",
+          autograders.map((a) => a.id)
+        );
+      if (stillOursError) {
+        // Treated exactly like the write failures below: an unanswered question about which
+        // assignments this repository still backs must not let latest_autograder_sha advance.
+        configReconcileOk = false;
+        Sentry.captureException(stillOursError, scope);
+        console.error(stillOursError);
+      }
+      const stillOursIds = new Set((stillOurs ?? []).map((r) => r.id));
       for (const autograder of autograders) {
+        if (stillOursError || !stillOursIds.has(autograder.id)) {
+          scope?.setTag("grader_repo_pointer_moved", "true");
+          console.log(
+            `Skipping autograder_points for assignment ${autograder.id}: grader_repo no longer names ${repoName}`
+          );
+          continue;
+        }
         const { error: updateError } = await adminSupabase
           .from("assignments")
           .update({
@@ -2406,6 +2434,14 @@ async function handlePushToGraderSolution(
               config: parsedYml as unknown as Json
             })
             .eq("id", autograder.id)
+            // Still pointing at the repository THIS delivery came from. `autograders` was resolved
+            // by grader_repo at the top of the request, and everything after that writes by id — so
+            // a delivery already in flight when assignment-create-solution-repo retires an old
+            // grader repo and attaches a replacement would land the OLD repository's config, points
+            // and SHA on the NEW pointer, and drive grading from them until the replacement is
+            // pushed to again. Same exact predicate the selection used, so a row that matched then
+            // matches now unless the pointer actually moved.
+            .eq("grader_repo", repoName)
             .single();
           if (error) {
             configReconcileOk = false;
@@ -2514,6 +2550,9 @@ async function handlePushToGraderSolution(
             latest_autograder_sha: newAutograderSha
           })
           .eq("id", autograder.id)
+          // Same fence as the config write above, and the one that matters most: this is the value
+          // that announces "this revision is live".
+          .eq("grader_repo", repoName)
           .single();
         if (error) {
           Sentry.captureException(error, scope);

@@ -138,7 +138,8 @@ GRANT EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, t
 CREATE OR REPLACE FUNCTION public.publish_grader_repo(
     p_assignment_id bigint,
     p_expected_grader_repo text,
-    p_new_grader_repo text
+    p_new_grader_repo text,
+    p_expected_has_autograder boolean DEFAULT NULL
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -147,6 +148,7 @@ SET search_path = ''
 AS $$
 DECLARE
     v_mode public.assignment_repo_mode;
+    v_has_autograder boolean;
 BEGIN
     IF auth.role() <> 'service_role' THEN
         RAISE EXCEPTION 'Access denied: service role required';
@@ -163,8 +165,19 @@ BEGIN
     -- instructor's edit does, this re-reads the committed mode and declines; if this does, the edit
     -- waits and its own clearing of grader_repo lands afterwards, which is the outcome they asked
     -- for. The lock is held for one UPDATE on a single row.
-    SELECT a.repo_mode INTO v_mode FROM public.assignments a WHERE a.id = p_assignment_id FOR UPDATE;
+    SELECT a.repo_mode, a.has_autograder INTO v_mode, v_has_autograder
+      FROM public.assignments a WHERE a.id = p_assignment_id FOR UPDATE;
     IF v_mode IS NULL OR v_mode IN ('none', 'no_submission') THEN
+        RETURN false;
+    END IF;
+
+    -- The autograder flag is checked here as well as in record_autograder_head_metadata, because
+    -- the two are separate transactions. A disable landing between them leaves points computed from
+    -- the enabled state already committed and nothing recomputes autograder_points afterwards, so
+    -- publishing would attach the repository to an assignment carrying an automated allocation it
+    -- can never award. NULL means "do not care", for callers that write no points.
+    IF p_expected_has_autograder IS NOT NULL
+       AND (v_has_autograder IS FALSE) IS DISTINCT FROM (p_expected_has_autograder IS FALSE) THEN
         RETURN false;
     END IF;
 
@@ -177,8 +190,8 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.publish_grader_repo(bigint, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.publish_grader_repo(bigint, text, text) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.publish_grader_repo(bigint, text, text, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.publish_grader_repo(bigint, text, text, boolean) TO service_role;
 
 ----------------------------------------------------------------------------------------
 -- inherit_handout_from_source: copy a fork source's handout onto the forking assignment, or refuse

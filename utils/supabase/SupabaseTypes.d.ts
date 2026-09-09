@@ -13793,7 +13793,12 @@ export type Database = {
         Returns: number;
       };
       publish_grader_repo: {
-        Args: { p_assignment_id: number; p_expected_grader_repo: string | null; p_new_grader_repo: string };
+        Args: {
+          p_assignment_id: number;
+          p_expected_grader_repo: string | null;
+          p_expected_has_autograder?: boolean | null;
+          p_new_grader_repo: string;
+        };
         Returns: boolean;
       };
       record_autograder_head_metadata: {

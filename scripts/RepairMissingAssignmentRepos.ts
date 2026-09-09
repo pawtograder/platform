@@ -606,7 +606,7 @@ async function main() {
       const { data: fresh, error: freshError } = await supabase
         .from("assignments")
         .select(
-          "archived_at, template_repo, repo_mode, source_assignment_id, has_autograder, classes(archived, github_org, slug), autograder(grader_repo, workflow_sha)"
+          "archived_at, template_repo, repo_mode, source_assignment_id, has_autograder, slug, classes(archived, github_org, slug), autograder(grader_repo, workflow_sha)"
         )
         .eq("id", row.id)
         .maybeSingle();
@@ -691,7 +691,10 @@ async function main() {
         mode: (fresh.repo_mode ?? row.repo_mode) as AssignmentRepoMode,
         githubOrg: currentOrg,
         classSlug: currentSlug,
-        assignmentSlug: row.slug,
+        // Reloaded for the same reason as the class slug beside it: both halves of the derived
+        // handout name can be renamed while earlier repairs in this sweep run, and judging the
+        // pointer against the OLD name lets creation replace one the instructor kept.
+        assignmentSlug: fresh.slug ?? row.slug,
         sourceTemplateRepo:
           (fresh.repo_mode ?? row.repo_mode) === "fork_from_prior_assignment"
             ? await sourceHandoutFor(
