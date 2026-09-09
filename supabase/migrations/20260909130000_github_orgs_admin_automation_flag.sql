@@ -273,6 +273,50 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.admin_get_org_courses(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.admin_get_org_courses(text) TO authenticated, service_role;
 
+----------------------------------------------------------------------------------------
+-- resolve_class_template_repos: match the org case-insensitively
+----------------------------------------------------------------------------------------
+
+-- The runtime consumer, and the last exact-case one left. `classes.github_org` keeps whatever
+-- capitalization was typed (admin_create_class and admin_update_class both store it verbatim), so a
+-- class recorded as `Khoury-CS3650` never matches a `khoury-cs3650` configuration row and silently
+-- provisions every assignment from the deployment defaults instead of the org's configured
+-- templates. The admin RPCs above now coalesce case-insensitively, so the admin page would show the
+-- configured templates while assignment creation quietly used different ones.
+--
+-- An earlier draft of this branch repointed mixed-case classes onto the configured spelling as part
+-- of a duplicate collapse, which would have masked this; that collapse was removed for being
+-- riskier than the state it addressed, so the runtime join has to carry it. The unique index on
+-- lower(org_name) keeps this matching at most one row.
+CREATE OR REPLACE FUNCTION public.resolve_class_template_repos(p_class_id bigint)
+RETURNS TABLE (handout_template_repo text, solution_template_repo text)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    IF NOT (auth.role() = 'service_role' OR public.authorizeforclassinstructor(p_class_id)) THEN
+        RAISE EXCEPTION 'Access denied: instructor role required for class %', p_class_id;
+    END IF;
+
+    RETURN QUERY
+    SELECT
+        public.resolve_effective_template_repo(
+            c.handout_template_repo, go.default_handout_template_repo,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        public.resolve_effective_template_repo(
+            c.solution_template_repo, go.default_solution_template_repo,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader')
+    FROM public.classes c
+    LEFT JOIN public.github_orgs go ON lower(go.org_name) = lower(c.github_org)
+    WHERE c.id = p_class_id;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.resolve_class_template_repos(bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.resolve_class_template_repos(bigint) TO authenticated, service_role;
+
 REVOKE EXECUTE ON FUNCTION public.admin_get_github_orgs() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.admin_upsert_github_org(text, text, text, text[], boolean) FROM PUBLIC;
 

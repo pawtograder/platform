@@ -237,55 +237,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw pointerError;
   }
 
-  // Now that grader_repo is published, recheck the head once.
+  // There is deliberately NO post-pointer recheck here.
   //
-  // A push landing between the snapshot above and the pointer write is dropped by
-  // handlePushToGraderSolution — it finds the assignment by grader_repo, which was still NULL — so
-  // nothing else will ever notice it, and the assignment would keep serving the config and SHA of
-  // the commit before it until somebody pushed again. Any push from HERE on is discoverable,
-  // because the pointer now exists, so one recheck is enough to close the window rather than
-  // needing a loop.
+  // One existed, to catch a push landing between the head snapshot above and the pointer write —
+  // that push is dropped, because handlePushToGraderSolution finds the assignment by grader_repo
+  // and it was still NULL. But the recheck was the only part of provisioning that ran concurrently
+  // with a LIVE webhook: everything above happens while grader_repo is NULL, so the webhook cannot
+  // find this assignment at all and no interleaving is possible.
   //
-  // The whole transition goes through the same conditional RPC, expecting the sha this request
-  // wrote. If the webhook recorded something newer in the meantime the RPC applies nothing and
-  // reports it, so the winner's config, points and SHA are left intact together — the outcome the
-  // hand-rolled per-statement guards could not guarantee, since they could overwrite config and
-  // points before discovering the SHA had moved.
+  // Closing that window properly needs both writers to share one conditional transaction, and the
+  // webhook's transition is not a single statement — it writes config and points across several
+  // requests and only advances latest_autograder_sha afterwards, deliberately holding the pointer
+  // when a reconcile fails. Making it use record_autograder_head_metadata would mean rewriting the
+  // hottest push path in the system, and its multi-autograder and pointer-hold semantics with it,
+  // to fix a race that can only occur in the seconds while one brand-new repo is being provisioned.
   //
-  // Best-effort here, unlike the initial pass: the pointer is already published and the stored
-  // values are internally consistent, so the worst case is an assignment one commit behind, which
-  // the next push reconciles.
-  try {
-    const currentHead = await getCommit(solutionRepoFullName, "HEAD", scope);
-    if (currentHead.sha === headCommit.sha) {
-      // The common case: nothing moved during provisioning.
-    } else {
-      scope.setTag("solution_head_moved_during_creation", "true");
-      console.log(
-        `Solution repo ${solutionRepoFullName} moved from ${headCommit.sha} to ${currentHead.sha} during creation; re-reading config`
-      );
-      // Re-read the config AT the new head, so the reconciled values still describe one revision.
-      const newerConfig = await getFileFromRepo(solutionRepoFullName, "pawtograder.yml", scope, currentHead.sha);
-      const newerObj = (await parse(newerConfig.content)) as Json;
-      const applied = await recordHeadMetadata(
-        currentHead.sha,
-        currentHead.commit.message,
-        currentHead.commit.author?.name ?? null,
-        newerObj,
-        headCommit.sha
-      );
-      if (!applied) {
-        scope.setTag("solution_head_recheck", "superseded");
-        console.log(
-          `Head recheck for ${solutionRepoFullName} lost a race with the push webhook; leaving its values intact`
-        );
-      }
-    }
-  } catch (recheckError) {
-    scope.setTag("solution_head_recheck", "failed");
-    Sentry.captureException(recheckError, scope);
-    console.error(`Could not recheck the head of ${solutionRepoFullName} after publishing grader_repo`, recheckError);
-  }
+  // The cost of not having it is that such a push leaves the assignment one commit behind until the
+  // next push reconciles it — which is the behaviour that already existed before this function
+  // recorded any metadata at all, and 209 of 912 production assignments currently carry no
+  // latest_autograder_sha whatsoever. Every attempt to close it instead produced a new interleaving.
 
   // Seed the handout's file hashes now that submissionFiles is known.
   //
