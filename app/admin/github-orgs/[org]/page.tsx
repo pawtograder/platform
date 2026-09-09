@@ -83,7 +83,12 @@ export default function GitHubOrgDetailPage() {
       ]);
       if (orgsError) throw orgsError;
       if (coursesError) throw coursesError;
-      const thisOrg = (orgs ?? []).find((o) => o.org_name === orgName);
+      // Matched case-insensitively. The RPC reports one spelling per org and the URL carries
+      // whatever the list page rendered, but GitHub logins are case-insensitive and nothing
+      // guarantees a caller arrived here from that list — a hand-typed or bookmarked URL with a
+      // different capitalization would otherwise fail to match, leave `orgFound` false, and disable
+      // saving on an org that is perfectly readable.
+      const thisOrg = (orgs ?? []).find((o) => o.org_name.toLowerCase() === orgName.toLowerCase());
       setHandout(thisOrg?.override_handout_template_repo ?? "");
       setSolution(thisOrg?.override_solution_template_repo ?? "");
       setSavedHandout(thisOrg?.default_handout_template_repo ?? "");
@@ -167,8 +172,14 @@ export default function GitHubOrgDetailPage() {
   // for whatever is currently typed.
   const handoutRepo = useMemo(() => parseRepo(savedHandout), [savedHandout]);
   const solutionRepo = useMemo(() => parseRepo(savedSolution), [savedSolution]);
-  const canEditHandout = authCourseId !== undefined && handoutRepo !== null && handoutRepo.org === orgName;
-  const canEditSolution = authCourseId !== undefined && solutionRepo !== null && solutionRepo.org === orgName;
+  // Case-insensitive for the same reason the org lookup above is: the template repo's owner and the
+  // org in the URL can be spelled differently and still be the same GitHub org, and an exact
+  // comparison would disable the editor for a repo that is genuinely in this org.
+  // The `!== null` stays inline rather than moving into the helper: TypeScript narrows
+  // handoutRepo/solutionRepo from these consts, and the editors below dereference them.
+  const sameOrg = (owner: string) => owner.toLowerCase() === orgName.toLowerCase();
+  const canEditHandout = authCourseId !== undefined && handoutRepo !== null && sameOrg(handoutRepo.org);
+  const canEditSolution = authCourseId !== undefined && solutionRepo !== null && sameOrg(solutionRepo.org);
 
   if (loading) {
     return <Spinner />;

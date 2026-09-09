@@ -113,13 +113,31 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // copy the source assignment's template_repo + latest_template_sha onto
     // this assignment so the handout-history UI and template-SHA-driven sync
     // continue to work.
-    const { error: inheritError } = await adminSupabase
+    // Compare-and-set on everything this branch's answer was derived from, exactly like the create
+    // branch's pointer write below. Every field is on `assignments`, so one predicate covers them.
+    //
+    // The write used to be unconditional, on the reasoning that the reads above are only moments
+    // old. But this function is also invoked unattended — by the reconciler and the repair script —
+    // and the reads are separated from this write by the source lookup and the strategy resolution.
+    // An instructor changing the mode, the source assignment, the handout pointer or the autograder
+    // flag in that window would have this restore the OLD source's handout over their newer
+    // configuration, and the caller then publishes a solution repository against that inconsistent
+    // state.
+    let inheritWrite = adminSupabase
       .from("assignments")
       .update({
         template_repo: sourceAssignment!.template_repo,
         latest_template_sha: sourceAssignment!.latest_template_sha ?? null
       })
-      .eq("id", assignment_id);
+      .eq("id", assignment_id)
+      .eq("repo_mode", assignment.repo_mode)
+      .eq("source_assignment_id", assignment.source_assignment_id!)
+      .eq("has_autograder", assignment.has_autograder);
+    inheritWrite =
+      (assignment.template_repo ?? null) === null
+        ? inheritWrite.is("template_repo", null)
+        : inheritWrite.eq("template_repo", assignment.template_repo!);
+    const { data: inheritRows, error: inheritError } = await inheritWrite.select("id");
     if (inheritError) {
       // Returning 200 over a failed write here is not harmless. The caller treats success as "the
       // handout is in place" and proceeds to create the solution repo, which publishes grader_repo
@@ -129,6 +147,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // the create branch below, which has always been checked.
       Sentry.captureException(inheritError, scope);
       throw inheritError;
+    }
+    if ((inheritRows?.length ?? 0) === 0) {
+      // Same resolution as the create branch: their edit is explicit and this is derived from a
+      // configuration that no longer holds, so theirs wins. Nothing was written, so the assignment
+      // is left exactly as they configured it and a retry runs against the new state.
+      scope.setTag("handout_pointer", "config_changed");
+      throw new UserVisibleError(
+        `This assignment's repository configuration changed while its handout was being inherited from ` +
+          `"${sourceAssignment!.template_repo}", so nothing was attached. Re-save to apply the new configuration.`,
+        409
+      );
     }
     // Populate this assignment's autograder.workflow_sha from the inherited
     // handout's grade.yml. Without this the auto-created autograder row keeps
@@ -329,6 +358,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // `assignment.has_autograder`, read before the GitHub work, so the value it was decided from is
   // what the write requires to still be true.
   pointerWrite = pointerWrite.eq("has_autograder", assignment.has_autograder);
+  // And submission_mode, which decides whether this write also sets `upstream_repo`. Switching
+  // push -> PR while the GitHub work ran changes nothing else in this predicate, so a stale
+  // push-mode request would attach the handout with `upstream_repo` left NULL — and the PR
+  // ingestion in github-repo-webhook matches an incoming PR against `upstream_repo`, so every
+  // student PR on that assignment would go unrecognized. The edit flow clears `upstream_repo` on
+  // that switch precisely because the handout is not yet in place, which is the state this would
+  // then quietly finish wrong.
+  pointerWrite = pointerWrite.eq("submission_mode", assignment.submission_mode);
   const { data: pointerRows, error: pointerError } = await pointerWrite.select("id");
   if (pointerError) {
     // Reporting success here would leave the handout repo created but unreferenced:

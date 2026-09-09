@@ -81,7 +81,14 @@ BEGIN
             k.key,
             COALESCE(
                 (SELECT g.org_name FROM public.github_orgs g WHERE lower(g.org_name) = k.key LIMIT 1),
-                (SELECT c.github_org FROM public.classes c WHERE lower(c.github_org) = k.key LIMIT 1)
+                -- MIN, not an unordered LIMIT 1. For an UNCONFIGURED org referenced by classes that
+                -- spell it differently, an unordered pick can return a different capitalization on
+                -- successive calls — and the list page builds the detail URL from one call while the
+                -- detail page calls this RPC again and looks the org up by exact name, so a changed
+                -- spelling made it report the org as missing and disable saving. The configured
+                -- spelling above is already unique (github_orgs_org_name_lower_key), so only this
+                -- fallback needed pinning down.
+                (SELECT MIN(c.github_org) FROM public.classes c WHERE lower(c.github_org) = k.key)
             ) AS org_name
         FROM keys k
     )
