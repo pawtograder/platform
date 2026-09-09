@@ -126,7 +126,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .eq("id", assignment_id)
     .maybeSingle();
   if (existingPointerError) throw existingPointerError;
-  const pointerAlreadyPublished = (existingPointer?.grader_repo ?? null) !== null;
+  // Specifically THIS repository, not merely any pointer. A targeted repair is often run precisely
+  // because grader_repo names the WRONG repo — and webhooks for the repo we are about to attach were
+  // never discoverable through that other pointer, so treating them as webhook-owned would skip the
+  // metadata write and then swap the pointer underneath, leaving the previous repository's config,
+  // SHA and points attached to the new one until somebody pushed.
+  const pointerAlreadyPublished = (existingPointer?.grader_repo ?? null) === solutionRepoFullName;
   const expectedSha = existingPointer?.latest_autograder_sha ?? null;
 
   const [headCommit, defaultBranch] = await Promise.all([
@@ -200,7 +205,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // win correctly, and the next push reconciles anything genuinely stale.
     scope.setTag("initial_autograder_metadata", "skipped_pointer_published");
     console.log(
-      `Not rewriting autograder metadata for ${solutionRepoFullName}: grader_repo is already published, so the push webhook owns it`
+      `Not rewriting autograder metadata for ${solutionRepoFullName}: grader_repo already names this repo, so the push webhook owns it`
     );
   } else {
     try {

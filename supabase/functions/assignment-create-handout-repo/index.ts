@@ -113,13 +113,23 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // copy the source assignment's template_repo + latest_template_sha onto
     // this assignment so the handout-history UI and template-SHA-driven sync
     // continue to work.
-    await adminSupabase
+    const { error: inheritError } = await adminSupabase
       .from("assignments")
       .update({
         template_repo: sourceAssignment!.template_repo,
         latest_template_sha: sourceAssignment!.latest_template_sha ?? null
       })
       .eq("id", assignment_id);
+    if (inheritError) {
+      // Returning 200 over a failed write here is not harmless. The caller treats success as "the
+      // handout is in place" and proceeds to create the solution repo, which publishes grader_repo
+      // — and the repo reconciler's scan requires that pointer to be NULL, so the assignment leaves
+      // it permanently, holding a solution pointer and no inherited handout, with neither a repair
+      // nor an alert ever reaching it again. Same reasoning as the template_repo pointer write in
+      // the create branch below, which has always been checked.
+      Sentry.captureException(inheritError, scope);
+      throw inheritError;
+    }
     // Populate this assignment's autograder.workflow_sha from the inherited
     // handout's grade.yml. Without this the auto-created autograder row keeps
     // workflow_sha = NULL and every student submission is rejected with a

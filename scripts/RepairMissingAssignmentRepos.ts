@@ -532,10 +532,17 @@ async function main() {
           .ilike("org_name", row.classes?.github_org ?? "")
           .maybeSingle()
       ]);
-      if (freshOrgError || freshOrg?.excluded_from_automation) {
-        // Unreadable counts as excluded: this is the stop switch, so "could not tell" must not mean
-        // "carry on".
-        console.log(`  skipping assignment ${row.id}: org ${row.classes?.github_org} is excluded or unreadable`);
+      if (freshOrgError) {
+        // Unreadable counts as excluded — this is the stop switch, so "could not tell" must not mean
+        // "carry on" — but it is NOT a clean skip: the assignment was never attempted, so counting
+        // it as a failure is what stops automation reading the run as complete.
+        failed++;
+        console.log(`  skipping assignment ${row.id}: could not read the exclusion for ${row.classes?.github_org}`);
+        continue;
+      }
+      if (freshOrg?.excluded_from_automation) {
+        // A genuine exclusion IS a clean skip: the operator asked for exactly this.
+        console.log(`  skipping assignment ${row.id}: org ${row.classes?.github_org} is excluded from automation`);
         continue;
       }
       if (freshError) {
