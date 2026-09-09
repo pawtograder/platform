@@ -3540,8 +3540,8 @@ export type Database = {
         Row: {
           created_at: string;
           created_by: string | null;
-          default_handout_template_repo: string;
-          default_solution_template_repo: string;
+          default_handout_template_repo: string | null;
+          default_solution_template_repo: string | null;
           excluded_from_automation: boolean;
           org_name: string;
           permission_sync_exempt_users: string[];
@@ -3551,8 +3551,8 @@ export type Database = {
         Insert: {
           created_at?: string;
           created_by?: string | null;
-          default_handout_template_repo?: string;
-          default_solution_template_repo?: string;
+          default_handout_template_repo?: string | null;
+          default_solution_template_repo?: string | null;
           excluded_from_automation?: boolean;
           org_name: string;
           permission_sync_exempt_users?: string[];
@@ -3562,8 +3562,8 @@ export type Database = {
         Update: {
           created_at?: string;
           created_by?: string | null;
-          default_handout_template_repo?: string;
-          default_solution_template_repo?: string;
+          default_handout_template_repo?: string | null;
+          default_solution_template_repo?: string | null;
           excluded_from_automation?: boolean;
           org_name?: string;
           permission_sync_exempt_users?: string[];

@@ -56,6 +56,8 @@
  *        # one assignment, INCLUDING the needs-review shape and including a non-NULL grader_repo
  *        # (for a run that failed after the pointer was written). Naming it is the confirmation.
  */
+import { expectedHandoutRepo } from "@/supabase/functions/_shared/handoutRepoStrategy";
+import type { AssignmentRepoMode } from "@/supabase/functions/_shared/repoCreationStrategy";
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { createAdminClient } from "@/utils/supabase/client";
 import { createAppAuth } from "@octokit/auth-app";
@@ -371,6 +373,38 @@ async function main() {
   // Transient GitHub failures during --check-github. Tracked separately from "not visible", because
   // an unanswered question makes the run incomplete while a scoped installation is just a fact.
   let checkFailures = 0;
+
+  const byId = new Map(rows.map((r) => [r.id, r]));
+
+  // The handout a `fork_from_prior_assignment` INHERITS: the source assignment's template_repo.
+  // Used twice — to probe the right repository under --check-github, and to decide below whether a
+  // pointer already on the row is the inherited one (safe to rerun) or a custom choice (must not be
+  // rebuilt over).
+  const sourceHandoutFor = async (a: Row): Promise<string | null> => {
+    // `byId` only holds what the scan returned, and the scan is narrowed by --class and
+    // --assignment. A fork whose source sits in another class, or any fork in an --assignment run,
+    // would miss here and be reported as having no source — dropping a genuinely broken assignment
+    // from the plan. Fetch the source directly when it is not already in hand.
+    if (a.source_assignment_id === null) return null;
+    const known = byId.get(a.source_assignment_id);
+    if (known) return known.template_repo ?? null;
+    const { data: fetched, error: sourceError } = await supabase
+      .from("assignments")
+      .select("template_repo")
+      .eq("id", a.source_assignment_id)
+      .maybeSingle();
+    if (sourceError) {
+      // Discarding this would report NO SOURCE for an assignment whose source may well have a
+      // handout, drop it from the plan, repair everything else, and exit 0 — so operator automation
+      // reads an incomplete sweep as a complete one. A failed lookup is not an answer about the
+      // source.
+      console.error(
+        `Failed to load source assignment ${a.source_assignment_id} for assignment ${a.id}: ${sourceError.message}`
+      );
+      process.exit(1);
+    }
+    return fetched?.template_repo ?? null;
+  };
   if (!checkGithub) {
     console.log("  Skipped: from the database this is indistinguishable from a placeholder assignment");
     console.log("  that was never meant to have repos. Re-run with --check-github to settle it.");
@@ -382,35 +416,11 @@ async function main() {
     // `fork_from_prior_assignment` never creates `<course>-handout-<assignment>` — it copies the
     // SOURCE assignment's template_repo. Probing the derived name would 404 for every such row and
     // silently file a genuine failure as a placeholder, so resolve the source's repo instead.
-    const byId = new Map(rows.map((r) => [r.id, r]));
     for (const a of needsReview) {
       let owner = a.classes!.github_org!;
       let handoutName = `${a.classes!.slug}-handout-${a.slug}`;
       if (a.repo_mode === "fork_from_prior_assignment") {
-        // `byId` only holds what the scan returned, and the scan is narrowed by --class and
-        // --assignment. A fork whose source sits in another class, or any fork in an --assignment
-        // run, would miss here and be reported as having no source — dropping a genuinely broken
-        // assignment from the plan. Fetch the source directly when it is not already in hand.
-        let source = a.source_assignment_id === null ? undefined : byId.get(a.source_assignment_id);
-        if (!source && a.source_assignment_id !== null) {
-          const { data: fetched, error: sourceError } = await supabase
-            .from("assignments")
-            .select("template_repo")
-            .eq("id", a.source_assignment_id)
-            .maybeSingle();
-          if (sourceError) {
-            // Discarding this would report NO SOURCE for an assignment whose source may well have a
-            // handout, drop it from the plan, repair everything else, and exit 0 — so operator
-            // automation reads an incomplete sweep as a complete one. A failed lookup is not an
-            // answer about the source.
-            console.error(
-              `Failed to load source assignment ${a.source_assignment_id} for assignment ${a.id}: ${sourceError.message}`
-            );
-            process.exit(1);
-          }
-          if (fetched) source = { template_repo: fetched.template_repo } as Row;
-        }
-        const sourceRepo = source?.template_repo ?? null;
+        const sourceRepo = await sourceHandoutFor(a);
         if (!sourceRepo) {
           // No source, or a source that is itself unprovisioned: there is nothing to inherit, so
           // this is a configuration problem rather than a repo that failed to be created.
@@ -476,19 +486,48 @@ async function main() {
   // the row leaves this scan for good while student submissions are rejected for a workflow-SHA
   // mismatch. Finish the handout first in that case.
   // Same gate as the reconciler: assignment-create-handout-repo ignores whatever template_repo
-  // holds, rebuilds `<class>-handout-<assignment>` and overwrites the column with it, so rerunning
-  // it against an assignment carrying a CUSTOM handout silently replaces the instructor's choice.
-  // Completing a missing workflow_sha is not worth that; those rows get the solution repair only.
+  // holds, rebuilds the pointer and overwrites the column with it, so rerunning it against an
+  // assignment carrying a CUSTOM handout silently replaces the instructor's choice. Completing a
+  // missing workflow_sha is not worth that; those rows get the solution repair only.
+  //
+  // `expectedHandoutRepo` rather than the derived name inline, and shared with the reconciler so
+  // the two cannot disagree about which rows are safe to rerun. It matters most for
+  // fork_from_prior_assignment, which creates no handout at all — it mirrors the SOURCE's pointer,
+  // which can never equal `<class>-handout-<assignment>`. Comparing against the derived name
+  // reported every inherited handout as custom, so an inherit that wrote its pointer and then died
+  // before recording its workflow hash got solution creation only: that publishes grader_repo,
+  // which drops the row out of the automatic scan for good, leaving workflow_sha NULL and every
+  // student submission rejected for a workflow-SHA mismatch.
+  //
+  // Resolved up front rather than inside planFor, because the fork source may need a query and
+  // planFor is called from .map().
+  const expectedHandouts = new Map<number, string | null>();
+  for (const row of [...repairable, ...targetedPointerSet]) {
+    expectedHandouts.set(
+      row.id,
+      expectedHandoutRepo({
+        mode: row.repo_mode as AssignmentRepoMode,
+        githubOrg: row.classes?.github_org,
+        classSlug: row.classes?.slug,
+        assignmentSlug: row.slug,
+        sourceTemplateRepo: row.repo_mode === "fork_from_prior_assignment" ? await sourceHandoutFor(row) : null
+      })
+    );
+  }
+
   const planFor = (row: Row) => {
-    const derivedHandout = `${row.classes?.github_org}/${row.classes?.slug}-handout-${row.slug}`;
-    const handoutIsDerived = row.template_repo === null || row.template_repo === derivedHandout;
+    const expected = expectedHandouts.get(row.id) ?? null;
+    // A null expectation is NOT a match: it means the naming inputs or the fork source could not be
+    // resolved, and rerunning creation on that basis is exactly what would rebuild a pointer we
+    // cannot account for.
+    const handoutIsOurs = row.template_repo === null || (expected !== null && row.template_repo === expected);
     const wantsHandout = row.has_autograder !== false && (row.autograder?.workflow_sha ?? null) === null;
-    if (wantsHandout && !handoutIsDerived) {
+    if (wantsHandout && !handoutIsOurs) {
       console.log(
-        `  note: assignment ${row.id} has a custom handout (${row.template_repo}); not rerunning handout creation`
+        `  note: assignment ${row.id} has a custom handout (${row.template_repo}, expected ${expected ?? "none"}); not rerunning handout creation`
       );
     }
-    return wantsHandout && handoutIsDerived ? HANDOUT_THEN_SOLUTION : SOLUTION_ONLY;
+    return wantsHandout && handoutIsOurs ? HANDOUT_THEN_SOLUTION : SOLUTION_ONLY;
   };
 
   const plans: RepairPlan[] = targeted
