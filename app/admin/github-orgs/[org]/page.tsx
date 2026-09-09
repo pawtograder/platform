@@ -39,11 +39,16 @@ export default function GitHubOrgDetailPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const revalidateServerCaches = useRevalidateServerCaches();
+  // The org's OWN stored defaults, blank when it stores none and inherits the deployment's. Filled
+  // from the raw override columns rather than the resolved ones on purpose: rendering the resolved
+  // value here would make every save post it back as an explicit override, which is how an org that
+  // was inheriting stopped inheriting the moment an admin opened this page to tick a checkbox.
   const [handout, setHandout] = useState("");
   const [solution, setSolution] = useState("");
-  // The persisted org defaults (distinct from the live inputs above). The file editor is gated
-  // on these so that typing into the inputs doesn't mount RepoFileEditor and fire GitHub fetches
-  // for half-typed or not-yet-saved repos.
+  // What is actually in force, override or inherited. Shown as the inputs' placeholder, and the
+  // file editor is gated on these: a repo in this org is editable whether it is pinned here or
+  // inherited from the deployment default. Distinct from the live inputs so that typing doesn't
+  // mount RepoFileEditor and fire GitHub fetches for a half-typed or not-yet-saved repo.
   const [savedHandout, setSavedHandout] = useState("");
   const [savedSolution, setSavedSolution] = useState("");
   // Held as the raw text the admin typed, not as a parsed array, so a half-typed entry doesn't
@@ -79,12 +84,10 @@ export default function GitHubOrgDetailPage() {
       if (orgsError) throw orgsError;
       if (coursesError) throw coursesError;
       const thisOrg = (orgs ?? []).find((o) => o.org_name === orgName);
-      const loadedHandout = thisOrg?.default_handout_template_repo ?? "";
-      const loadedSolution = thisOrg?.default_solution_template_repo ?? "";
-      setHandout(loadedHandout);
-      setSolution(loadedSolution);
-      setSavedHandout(loadedHandout);
-      setSavedSolution(loadedSolution);
+      setHandout(thisOrg?.override_handout_template_repo ?? "");
+      setSolution(thisOrg?.override_solution_template_repo ?? "");
+      setSavedHandout(thisOrg?.default_handout_template_repo ?? "");
+      setSavedSolution(thisOrg?.default_solution_template_repo ?? "");
       setExemptUsers((thisOrg?.permission_sync_exempt_users ?? []).join(", "));
       setExcludedFromAutomation(thisOrg?.excluded_from_automation ?? false);
       setLoadedExcluded(thisOrg?.excluded_from_automation ?? false);
@@ -115,6 +118,9 @@ export default function GitHubOrgDetailPage() {
     try {
       const { error } = await supabase.rpc("admin_upsert_github_org", {
         p_org_name: orgName,
+        // Blank is sent as `undefined`, which the RPC stores as NULL: "this org pins nothing, use
+        // the deployment default". For these two fields that is the admin's actual intent, because
+        // the inputs render the stored override and nothing else.
         p_handout: handout.trim() === "" ? undefined : handout.trim(),
         p_solution: solution.trim() === "" ? undefined : solution.trim(),
         // Always sent, including as an empty array: `undefined` means "leave as-is" to the RPC, so
@@ -188,11 +194,27 @@ export default function GitHubOrgDetailPage() {
         </Card.Header>
         <Card.Body>
           <VStack align="stretch" gap={4} maxW="2xl">
-            <Field label="Default handout template repository">
-              <Input value={handout} onChange={(e) => setHandout(e.target.value)} fontFamily="mono" />
+            <Field
+              label="Default handout template repository"
+              helperText={`Leave blank to follow this deployment's default (${savedHandout}).`}
+            >
+              <Input
+                value={handout}
+                onChange={(e) => setHandout(e.target.value)}
+                fontFamily="mono"
+                placeholder={savedHandout}
+              />
             </Field>
-            <Field label="Default solution (grader) template repository">
-              <Input value={solution} onChange={(e) => setSolution(e.target.value)} fontFamily="mono" />
+            <Field
+              label="Default solution (grader) template repository"
+              helperText={`Leave blank to follow this deployment's default (${savedSolution}).`}
+            >
+              <Input
+                value={solution}
+                onChange={(e) => setSolution(e.target.value)}
+                fontFamily="mono"
+                placeholder={savedSolution}
+              />
             </Field>
             <Field
               label="Permission sync exemptions"

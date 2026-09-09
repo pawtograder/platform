@@ -328,54 +328,35 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // is not small — the value was read before several GitHub round trips. An unconditional write
   // would silently discard their explicit choice in favour of the conventionally derived name.
   //
+  // Both of the conditions that have to hold at this moment — nobody else changed grader_repo while
+  // we worked, and the assignment still uses a repo-backed mode — are checked inside ONE statement,
+  // by publish_grader_repo. They live on different tables (`autograder` and `assignments`), so the
+  // earlier version re-read the mode and then wrote the pointer, and the gap between the two FAILED
+  // OPEN: an instructor opting out has the edit flow clear grader_repo to NULL, which is exactly
+  // what the write's own condition expected, so the pointer was republished after the opt-out — and
+  // the reconciler, which excludes no-repo modes, would never revisit it.
+  //
   // Expected value: this repo's own name when the webhook already owns it and we touched nothing,
   // NULL otherwise (we either cleared a stale pointer above or never had one).
-  // repo_mode is re-read immediately before publishing. An instructor switching the assignment to
-  // none/no_submission while the GitHub work ran has the edit flow clear its repository
-  // configuration — but grader_repo would then be NULL, which is exactly what the compare-and-set
-  // below expects, so the pointer would be republished after the opt-out and the reconciler, which
-  // excludes no-repo modes, would never revisit it.
-  //
-  // Unlike the handout function, this cannot be folded into the write's predicate: repo_mode lives
-  // on `assignments` and the pointer on `autograder`. The gap between this read and the write
-  // remains, and is the price of not adding another RPC for a second conditional transition.
-  const { data: modeNow, error: modeError } = await adminSupabase
-    .from("assignments")
-    .select("repo_mode")
-    .eq("id", assignment_id)
-    .maybeSingle();
-  if (modeError) throw modeError;
-  if (!modeNow || !assignmentShouldHaveRepos(modeNow.repo_mode)) {
-    scope.setTag("grader_repo_pointer", "mode_changed");
-    throw new UserVisibleError(
-      `This assignment's repository configuration changed to "${modeNow?.repo_mode ?? "unknown"}" while ` +
-        `${solutionRepoFullName} was being created, so it was not attached.`,
-      409
-    );
-  }
-
-  let pointerWrite = adminSupabase
-    .from("autograder")
-    .update({ grader_repo: solutionRepoFullName })
-    .eq("id", assignment_id);
-  pointerWrite = webhookHasReconciled
-    ? pointerWrite.eq("grader_repo", solutionRepoFullName)
-    : pointerWrite.is("grader_repo", null);
-  const { data: pointerRows, error: pointerError } = await pointerWrite.select("id");
+  const { data: published, error: pointerError } = await adminSupabase.rpc("publish_grader_repo", {
+    p_assignment_id: assignment_id,
+    p_expected_grader_repo: webhookHasReconciled ? solutionRepoFullName : null,
+    p_new_grader_repo: solutionRepoFullName
+  });
   if (pointerError) {
     // Same reasoning as the config write: reporting success here would leave a solution repo that
     // nothing points at, and the assignment would keep being reported as missing one.
     Sentry.captureException(pointerError, scope);
     throw pointerError;
   }
-  if ((pointerRows?.length ?? 0) === 0) {
-    // Somebody set grader_repo to something else while we worked. Their choice is explicit and
-    // ours is derived from a naming convention, so theirs wins; the repository we created is left
-    // in place rather than being silently attached over the top.
+  if (published !== true) {
+    // Either somebody set grader_repo to something else while we worked, or the assignment stopped
+    // using repositories. Their action is explicit and ours is derived from a naming convention, so
+    // theirs wins; the repository we created is left in place rather than attached over the top.
     scope.setTag("grader_repo_pointer", "superseded");
     throw new UserVisibleError(
-      `The grader repository for this assignment was changed while ${solutionRepoFullName} was being created, so it was not attached. ` +
-        `The repository exists — re-save if you intended to use it.`,
+      `This assignment's grader repository or repository configuration changed while ${solutionRepoFullName} was ` +
+        `being created, so it was not attached. The repository exists — re-save if you intended to use it.`,
       409
     );
   }

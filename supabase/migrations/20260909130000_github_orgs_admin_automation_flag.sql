@@ -42,6 +42,8 @@ RETURNS TABLE (
     org_name text,
     default_handout_template_repo text,
     default_solution_template_repo text,
+    override_handout_template_repo text,
+    override_solution_template_repo text,
     permission_sync_exempt_users text[],
     excluded_from_automation boolean,
     course_count bigint,
@@ -96,6 +98,15 @@ BEGIN
         public.resolve_effective_template_repo(
             NULL, go.default_solution_template_repo,
             'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader'),
+        -- ...and the RAW stored values alongside them, which is what the per-org admin page fills
+        -- its inputs from. Reporting only the resolved value made the page unable to tell "this org
+        -- stores nothing and follows the deployment default" from "this org pins that exact repo":
+        -- it showed the resolved string in the input, and the next save -- even one that only
+        -- ticked the automation checkbox -- posted it back as an explicit override. 20260909120000
+        -- made these columns nullable precisely so seeded orgs could inherit, and a single visit to
+        -- the page undid that for every org it touched. NULL here means "inherits".
+        go.default_handout_template_repo,
+        go.default_solution_template_repo,
         COALESCE(go.permission_sync_exempt_users, '{}'::text[]),
         -- An org with no row has never been configured, and the column default is false.
         COALESCE(go.excluded_from_automation, false),
@@ -178,10 +189,18 @@ BEGIN
         END LOOP;
     END IF;
 
-    -- The template columns are handled EXACTLY as #960 left them, including
-    -- resolve_effective_template_repo on both branches: a blank field means "use the site default",
-    -- which is the GUC tier rather than the constant, and preserving that is what lets an admin
-    -- clear an override back to the default. Only excluded_from_automation is new here.
+    -- The template columns store what was supplied, NOT resolve_effective_template_repo's answer.
+    -- #960 resolved them here, which meant a blank field wrote the deployment's current GUC value
+    -- into the row as a literal override. That reads identically the day it is written and then
+    -- stops tracking the deployment default forever after -- and since the column was NOT NULL at
+    -- the time, there was no other way to say "inherit". 20260909120000 dropped the NOT NULL, so
+    -- blank can now be recorded as blank: NULL, resolved on every read by the same helper.
+    --
+    -- Consequence for callers: NULL/omitted CLEARS an override here, whereas it means "leave as-is"
+    -- for the exemption list and the automation flag below. That asymmetry is deliberate. The admin
+    -- page always renders both template inputs from the stored override, so it always posts the
+    -- admin's actual intent for them; the other two fields exist on clients that may not know about
+    -- them at all.
     INSERT INTO public.github_orgs (
         org_name,
         default_handout_template_repo,
@@ -192,24 +211,16 @@ BEGIN
         updated_by
     ) VALUES (
         v_org,
-        public.resolve_effective_template_repo(
-            NULLIF(trim(p_handout), ''), NULL,
-            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
-        public.resolve_effective_template_repo(
-            NULLIF(trim(p_solution), ''), NULL,
-            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader'),
+        NULLIF(trim(p_handout), ''),
+        NULLIF(trim(p_solution), ''),
         COALESCE(v_exempt, '{}'::text[]),
         COALESCE(p_excluded_from_automation, false),
         auth.uid(),
         auth.uid()
     )
     ON CONFLICT (org_name) DO UPDATE SET
-        default_handout_template_repo = public.resolve_effective_template_repo(
-            NULLIF(trim(p_handout), ''), NULL,
-            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
-        default_solution_template_repo = public.resolve_effective_template_repo(
-            NULLIF(trim(p_solution), ''), NULL,
-            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader'),
+        default_handout_template_repo = NULLIF(trim(p_handout), ''),
+        default_solution_template_repo = NULLIF(trim(p_solution), ''),
         -- NULL means "not supplied by this caller", so each field survives a save from a client that
         -- does not know about it. Clearing the exemption list is an explicit empty array.
         permission_sync_exempt_users = COALESCE(v_exempt, public.github_orgs.permission_sync_exempt_users),

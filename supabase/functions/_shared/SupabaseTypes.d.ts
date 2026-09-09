@@ -11988,6 +11988,8 @@ export type Database = {
           excluded_from_automation: boolean;
           is_configured: boolean;
           org_name: string;
+          override_handout_template_repo: string | null;
+          override_solution_template_repo: string | null;
           permission_sync_exempt_users: string[];
           updated_at: string;
         }[];
@@ -13776,6 +13778,10 @@ export type Database = {
       reconcile_stuck_discord_memberships: {
         Args: { p_limit?: number; p_stale_minutes?: number };
         Returns: number;
+      };
+      publish_grader_repo: {
+        Args: { p_assignment_id: number; p_expected_grader_repo: string | null; p_new_grader_repo: string };
+        Returns: boolean;
       };
       record_autograder_head_metadata: {
         Args: {

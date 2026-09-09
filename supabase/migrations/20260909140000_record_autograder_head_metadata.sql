@@ -77,3 +77,62 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text, text) TO service_role;
+
+----------------------------------------------------------------------------------------
+-- publish_grader_repo: attach the solution pointer, or refuse
+----------------------------------------------------------------------------------------
+
+-- assignment-create-solution-repo has to check two things that live on different tables before it
+-- attaches grader_repo: that nobody else changed the pointer while it worked (autograder), and that
+-- the assignment still uses a repo-backed mode (assignments). A read followed by an update leaves a
+-- gap in which an instructor can opt the assignment out of repositories entirely — and because that
+-- edit clears grader_repo to NULL, the update's own `grader_repo IS NULL` condition then SUCCEEDS,
+-- attaching a repository to an assignment that just declined one. Nothing cleans that up: the
+-- solution endpoint rejects the new mode and the reconciler excludes no-repo modes.
+--
+-- The handout endpoint does not need this — its pointer and repo_mode are both on `assignments`, so
+-- one predicate covers it. This exists because the solution pointer is not.
+CREATE OR REPLACE FUNCTION public.publish_grader_repo(
+    p_assignment_id bigint,
+    p_expected_grader_repo text,
+    p_new_grader_repo text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_mode public.assignment_repo_mode;
+BEGIN
+    IF auth.role() <> 'service_role' THEN
+        RAISE EXCEPTION 'Access denied: service role required';
+    END IF;
+
+    IF p_new_grader_repo IS NULL OR trim(p_new_grader_repo) = '' THEN
+        RAISE EXCEPTION 'A grader repository is required';
+    END IF;
+
+    -- FOR UPDATE, not a bare read. Putting both checks in one transaction is not by itself enough
+    -- at READ COMMITTED: an opt-out committing between this SELECT and the UPDATE below would still
+    -- be invisible to this snapshot, which is the whole failure being fixed. Locking the assignment
+    -- row serializes the two. Whichever transaction takes the lock first wins outright — if the
+    -- instructor's edit does, this re-reads the committed mode and declines; if this does, the edit
+    -- waits and its own clearing of grader_repo lands afterwards, which is the outcome they asked
+    -- for. The lock is held for one UPDATE on a single row.
+    SELECT a.repo_mode INTO v_mode FROM public.assignments a WHERE a.id = p_assignment_id FOR UPDATE;
+    IF v_mode IS NULL OR v_mode IN ('none', 'no_submission') THEN
+        RETURN false;
+    END IF;
+
+    UPDATE public.autograder
+       SET grader_repo = p_new_grader_repo
+     WHERE id = p_assignment_id
+       AND grader_repo IS NOT DISTINCT FROM p_expected_grader_repo;
+
+    RETURN FOUND;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.publish_grader_repo(bigint, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.publish_grader_repo(bigint, text, text) TO service_role;

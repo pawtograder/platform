@@ -313,7 +313,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // NULL — which still MATCHES the observed value on a first creation, so without this the derived
   // handout would be attached after the opt-out. The solution call then rejects the new mode and
   // the reconciler excludes no-repo modes, so nothing would ever clean it up.
-  pointerWrite = pointerWrite.not("repo_mode", "in", "(none,no_submission)");
+  // The ORIGINALLY OBSERVED mode, not merely "still some repo-backed mode". Every repo-backed mode
+  // implies different work: switching to fork_from_prior_assignment means the handout should be
+  // INHERITED from a source rather than derived, and template_with_student_forks wants a different
+  // template and student-team permission than template_only_staff. A repository built under the old
+  // strategy is the wrong artifact for the new mode, so attaching it is not a smaller error than
+  // attaching one after an opt-out.
+  pointerWrite = pointerWrite.eq("repo_mode", assignment.repo_mode);
   const { data: pointerRows, error: pointerError } = await pointerWrite.select("id");
   if (pointerError) {
     // Reporting success here would leave the handout repo created but unreferenced:
@@ -328,7 +334,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // being attached over the top.
     scope.setTag("template_repo_pointer", "superseded");
     throw new UserVisibleError(
-      `This assignment's handout repository or submission mode changed while ${handoutFullName} was being created, so it was not attached. ` +
+      `This assignment's handout repository or repository configuration changed while ${handoutFullName} was being created, so it was not attached. ` +
         `The repository exists — re-save if you intended to use it.`,
       409
     );
