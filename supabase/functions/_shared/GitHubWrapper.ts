@@ -2868,7 +2868,12 @@ function readOrgPermissionSyncExemptions(org: string): Promise<string[]> {
     const { data, error } = await adminSupabase
       .from("github_orgs")
       .select("permission_sync_exempt_users")
-      .eq("org_name", org)
+      // Case-insensitive: GitHub org logins are, `github_orgs.org_name` is a case-sensitive text
+      // key, and admin_create_class stores whatever capitalization was typed. An exact miss here
+      // reads as "no exemptions", which is the one wrong answer that costs something — permission
+      // sync would remove the protected accounts. A unique index on lower(org_name) guarantees this
+      // still matches at most one row.
+      .ilike("org_name", org)
       .maybeSingle();
     // maybeSingle: an org with no configuration row is `null` with no error, and that is a real
     // answer (no exemptions). Only a genuine error is unknown.

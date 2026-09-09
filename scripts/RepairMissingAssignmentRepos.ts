@@ -378,11 +378,21 @@ async function main() {
         // assignment from the plan. Fetch the source directly when it is not already in hand.
         let source = a.source_assignment_id === null ? undefined : byId.get(a.source_assignment_id);
         if (!source && a.source_assignment_id !== null) {
-          const { data: fetched } = await supabase
+          const { data: fetched, error: sourceError } = await supabase
             .from("assignments")
             .select("template_repo")
             .eq("id", a.source_assignment_id)
             .maybeSingle();
+          if (sourceError) {
+            // Discarding this would report NO SOURCE for an assignment whose source may well have a
+            // handout, drop it from the plan, repair everything else, and exit 0 — so operator
+            // automation reads an incomplete sweep as a complete one. A failed lookup is not an
+            // answer about the source.
+            console.error(
+              `Failed to load source assignment ${a.source_assignment_id} for assignment ${a.id}: ${sourceError.message}`
+            );
+            process.exit(1);
+          }
           if (fetched) source = { template_repo: fetched.template_repo } as Row;
         }
         const sourceRepo = source?.template_repo ?? null;

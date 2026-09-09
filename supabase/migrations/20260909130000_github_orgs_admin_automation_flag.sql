@@ -48,6 +48,26 @@ SET excluded_from_automation = m.any_excluded,
 FROM merged m
 WHERE g.org_name = m.keep_name;
 
+-- Repoint dependent class rows at the surviving spelling BEFORE anything is deleted. Several
+-- consumers still compare github_org EXACTLY — `resolve_class_template_repos` joins on equality,
+-- and `readOrgPermissionSyncExemptions` filters on it — so a class left holding a spelling this
+-- migration is about to delete would fall back to site-level templates and, worse, read an EMPTY
+-- exemption list and let permission sync remove the very collaborators the merge above just
+-- preserved. Canonicalizing the classes keeps those exact comparisons finding the surviving row.
+UPDATE public.classes c
+SET github_org = (
+    SELECT g.org_name FROM public.github_orgs g
+     WHERE lower(g.org_name) = lower(c.github_org)
+     ORDER BY g.created_at, g.org_name
+     LIMIT 1
+)
+WHERE c.github_org IS NOT NULL
+  AND EXISTS (
+      SELECT 1 FROM public.github_orgs g
+       WHERE lower(g.org_name) = lower(c.github_org)
+         AND g.org_name <> c.github_org
+  );
+
 -- Then drop every variant that is not the keeper for its key.
 DELETE FROM public.github_orgs g
 WHERE EXISTS (

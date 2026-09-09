@@ -147,16 +147,33 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // Best-effort, like the handout hash seeding below: the repository exists and is usable, the
   // values are re-derivable from the next push, and failing creation over them would be the worse
   // trade. Reported to Sentry so a persistent failure is visible.
-  const reconcileHeadMetadata = async (commitSha: string, message: string, author: string | null, config: Json) => {
+  // `latest_autograder_sha` is what an instructor reads as "this config is live", so it is written
+  // LAST and only after everything it advertises has landed — the same discipline
+  // handlePushToGraderSolution applies when it HOLDS the pointer on a failed reconcile. Ordering is
+  // what makes a partial failure safe here: the SHA still names the older commit, which is
+  // consistent with the points and config that are still stored for it, rather than announcing a
+  // revision whose points never made it.
+  //
+  // `expectedPreviousSha` is a compare-and-set. Once grader_repo is published the push webhook can
+  // record a newer commit concurrently, and an unconditional write from this slower provisioning
+  // request would drag the assignment BACK to the commit it snapshotted — permanently, because that
+  // webhook delivery has already been consumed. Passing the sha we believe is current means the
+  // write simply matches no row if something newer won the race.
+  const reconcileHeadMetadata = async (
+    commitSha: string,
+    message: string,
+    author: string | null,
+    config: Json,
+    expectedPreviousSha: string | null
+  ) => {
     const parsed = config as unknown as PawtograderConfig | null;
     const points = parsed ? calculateTotalAutograderPoints(parsed) : 0;
     scope.setTag("total_autograder_points", points.toString());
-    const [{ error: pointsError }, { error: shaError }] = await Promise.all([
-      adminSupabase.from("assignments").update({ autograder_points: points }).eq("id", assignment_id),
-      adminSupabase.from("autograder").update({ latest_autograder_sha: commitSha }).eq("id", assignment_id)
-    ]);
+    const { error: pointsError } = await adminSupabase
+      .from("assignments")
+      .update({ autograder_points: points })
+      .eq("id", assignment_id);
     if (pointsError) throw pointsError;
-    if (shaError) throw shaError;
     // Same upsert shape and conflict target the push handler uses, so a later push over the same
     // commit updates this row rather than colliding with it.
     const { error: commitError } = await adminSupabase.from("autograder_commits").upsert(
@@ -173,14 +190,27 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       { onConflict: "autograder_id,sha" }
     );
     if (commitError) throw commitError;
+    let shaWrite = adminSupabase
+      .from("autograder")
+      .update({ latest_autograder_sha: commitSha })
+      .eq("id", assignment_id);
+    if (expectedPreviousSha === null) {
+      shaWrite = shaWrite.is("latest_autograder_sha", null);
+    } else {
+      shaWrite = shaWrite.eq("latest_autograder_sha", expectedPreviousSha);
+    }
+    const { error: shaError } = await shaWrite;
+    if (shaError) throw shaError;
   };
 
   try {
+    // Nothing has written a SHA for this assignment yet, so the compare-and-set expects NULL.
     await reconcileHeadMetadata(
       headCommit.sha,
       headCommit.commit.message,
       headCommit.commit.author?.name ?? null,
-      asObj
+      asObj,
+      null
     );
   } catch (metadataError) {
     // NOT best-effort, despite these being re-derivable in principle. Publishing grader_repo after
@@ -241,16 +271,22 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         .update({ config: newerObj })
         .eq("id", assignment_id);
       if (reconfigError) throw reconfigError;
+      // Only advance from the sha this function itself recorded. If the webhook has already stored
+      // something newer, this write matches nothing and the newer value stands.
       await reconcileHeadMetadata(
         currentHead.sha,
         currentHead.commit.message,
         currentHead.commit.author?.name ?? null,
-        newerObj
+        newerObj,
+        headCommit.sha
       );
     }
   } catch (recheckError) {
-    // The stored config and SHA are consistent with each other either way — they just describe an
-    // older commit — so this is reportable, not fatal.
+    // Reportable rather than fatal, and safe BECAUSE of the write ordering above: the SHA is the
+    // last thing to move, so a failure part-way leaves it naming the older commit, which is
+    // consistent with the points and config still stored for that commit. The assignment is behind,
+    // not misrepresenting itself, and the next push reconciles it — the pointer is published by
+    // now, so that push is discoverable.
     scope.setTag("solution_head_recheck", "failed");
     Sentry.captureException(recheckError, scope);
     console.error(`Could not recheck the head of ${solutionRepoFullName} after publishing grader_repo`, recheckError);
