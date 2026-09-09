@@ -376,6 +376,21 @@ export async function getOrgId(org: string, scope?: Sentry.Scope): Promise<numbe
   }
 }
 
+/**
+ * Is this a repository name the GitHub helpers here can actually use — exactly `owner/name`?
+ *
+ * `getOctoKit`, `getFileFromRepo` and `getDefaultBranchHeadSha` all take the first two
+ * slash-separated components and pass them straight to the API, so `owner/name/extra` silently
+ * targets `owner/name`, and `/name`, `owner/` or `/` build a request with an empty owner or repo.
+ * A merely-present slash (the check this replaces at the callers) accepts all four.
+ *
+ * Same shape as the "owner/repo" validation `admin_upsert_github_org` applies to the template repo
+ * defaults, deliberately: these values come from the same kind of admin-typed form field.
+ */
+export function isValidRepoFullName(repo: unknown): repo is string {
+  return typeof repo === "string" && /^[^/\s]+\/[^/\s]+$/.test(repo);
+}
+
 export async function getOctoKitAndInstallationID(repoOrOrgName: string, scope?: Sentry.Scope) {
   const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
   const octokit = await getOctoKit(repoOrOrgName, scope);
@@ -2782,6 +2797,74 @@ export async function reinviteToOrgTeam(
 }
 const staffTeamCache = new Map<string, Promise<string[]>>();
 const orgMembershipCache = new Map<string, Promise<Endpoints["GET /orgs/{org}/members"]["response"]["data"][]>>();
+// A READ FAILURE is not cached at all, so a retry re-asks rather than inheriting a wrong answer.
+//
+// Bounded, unlike the staff-team and org-membership caches above, because this list is edited in the
+// admin UI and nothing invalidates a warm isolate: an unbounded entry means an exemption added right
+// after a sync does not apply until that isolate is recycled, which can be hours. The TTL is short
+// enough that an admin edit takes effect on the next sync but still collapses the burst that matters
+// — assignment-create-all-repos syncs every repo in a course back to back against the same org.
+const ORG_EXEMPTION_CACHE_TTL_MS = 60_000;
+const orgExemptionCache = new Map<string, { readAt: number; users: Promise<string[]> }>();
+
+/**
+ * Per-org allowlist of GitHub logins that permission sync must never remove.
+ *
+ * Some accounts hold access the course roster cannot explain and should keep it — institutional IT,
+ * an integration account, faculty carried on a repo directly rather than through the staff team.
+ * That used to be `adminsThatShouldNotBeListedAsAdmins`: five names hardcoded here, applied to every
+ * org, invisible to the admins who know who those people actually are, and changeable only by a
+ * deploy. `github_orgs.permission_sync_exempt_users` is the same decision moved to the per-org
+ * config admins already manage; the constant stays as a global backstop so nothing regresses.
+ *
+ * THROWS when the list could not be read, which is distinct from an empty list — and aborts the
+ * sync, exactly as an unreadable staff roster does. Degrading instead would finish the run having
+ * performed only the additive half, and the callers that ignore `removalsSkipped` (both repo
+ * creation paths, github-user-sync, the async worker) would record the repo as ready: a student
+ * dropped from the course keeps write access and nothing retries. An exemption list that silently
+ * reads as absent is the other half of the same failure — it strips a protected account off a repo.
+ */
+async function getOrgPermissionSyncExemptions(org: string, scope?: Sentry.Scope): Promise<string[]> {
+  try {
+    return await readOrgPermissionSyncExemptions(org);
+  } catch (err) {
+    // Tagged before rethrowing so the abort is attributable to the config read rather than looking
+    // like a GitHub failure. The failure is not cached, so the retry re-asks.
+    scope?.setTag("org_permission_exemptions", "unavailable");
+    throw err;
+  }
+}
+
+function readOrgPermissionSyncExemptions(org: string): Promise<string[]> {
+  const cached = orgExemptionCache.get(org);
+  if (cached && Date.now() - cached.readAt < ORG_EXEMPTION_CACHE_TTL_MS) {
+    return cached.users;
+  }
+  const pending = (async () => {
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+    const { data, error } = await adminSupabase
+      .from("github_orgs")
+      .select("permission_sync_exempt_users")
+      .eq("org_name", org)
+      .maybeSingle();
+    // maybeSingle: an org with no configuration row is `null` with no error, and that is a real
+    // answer (no exemptions). Only a genuine error is unknown.
+    if (error) {
+      throw error;
+    }
+    // Lowercased on write by admin_upsert_github_org, and again here: a row edited directly with
+    // SQL would otherwise never match the lowercased logins the sync compares against.
+    return (data?.permission_sync_exempt_users ?? []).map((u) => u.toLowerCase());
+  })().catch((err) => {
+    orgExemptionCache.delete(org);
+    throw err;
+  });
+  orgExemptionCache.set(org, { readAt: Date.now(), users: pending });
+  return pending;
+}
 /**
  * The team does not exist on GitHub at all.
  *
@@ -2895,6 +2978,34 @@ export function computeCollaboratorRemovals({
   return existingUsernames.filter(
     (u) => !desiredUsernames.includes(u) && !staffRoster.includes(u) && !adminExclusions.includes(u)
   );
+}
+
+/**
+ * Narrow removal candidates to the ones a removal can actually act on.
+ *
+ * `DELETE /repos/{owner}/{repo}/collaborators/{username}` removes a DIRECT collaborator grant. It
+ * cannot revoke access someone holds through a team or through org ownership — GitHub accepts the
+ * call, reports success, and the person keeps their access. `GET .../collaborators` defaults to
+ * `affiliation=all`, so the candidate list it feeds contains all three kinds mixed together, and
+ * every team-derived or owner-derived entry became one serial DELETE that changed nothing.
+ *
+ * Measured on a real course org: a freshly created handout repo listed 37 collaborators, of which
+ * ZERO were direct (org `default_repository_permission` is `none`; all 37 came from the staff team
+ * plus org owners). The sync issued 22 removals, took 63.6s doing it, revoked nothing, and would
+ * have repeated the same 63.6s on every subsequent sync of that repo. That is what pushed handout
+ * creation past 95s and made the browser give up before the chained solution-repo call.
+ *
+ * Filtering here rather than fetching only `affiliation=direct` in the first place: the unfiltered
+ * list is still the right input for the "already has access, do not re-add" check, since access via
+ * a team is real access and a redundant direct grant would be wrong.
+ *
+ * The hardcoded `adminsThatShouldNotBeListedAsAdmins` allowlist is the same problem patched by hand
+ * for five specific people; this covers every org owner without naming them, and that list stays as
+ * a backstop.
+ */
+export function filterToDirectCollaborators(candidates: string[], directUsernames: string[]): string[] {
+  const direct = new Set(directUsernames.map((u) => u.toLowerCase()));
+  return candidates.filter((u) => direct.has(u.toLowerCase()));
 }
 async function getOrgMembers(
   org: string,
@@ -3238,19 +3349,29 @@ async function syncRepoPermissionsInstrumented(
     });
     console.error(`Could not read staff team for ${org}/${courseSlug}; not removing any collaborators`, err);
   }
-  if (!orgMembershipCache.has(org)) {
-    orgMembershipCache.set(
-      org,
-      getOrgMembers(org, octokit).catch((err) => {
-        orgMembershipCache.delete(org);
-        throw err;
-      })
-    );
+  // The org roster answers exactly one question — "is this person I am about to ADD already in the
+  // org?" — so with nobody to add it is pure cost. Handout and solution repo creation both pass an
+  // empty username list, and on a large org this paginated read took 18.8s of the 95.6s that made
+  // handout creation outlive the browser's patience. Both consumers below are optional-chained, so
+  // leaving it undefined is the same code path as a failed lookup.
+  let allOrgMembers: string[] | undefined;
+  if (githubUsernames.length === 0) {
+    scope?.setTag("org_members_skipped", "no_desired_users");
+  } else {
+    if (!orgMembershipCache.has(org)) {
+      orgMembershipCache.set(
+        org,
+        getOrgMembers(org, octokit).catch((err) => {
+          orgMembershipCache.delete(org);
+          throw err;
+        })
+      );
+    }
+    // Same promise-cache note as the staff roster above. On a cold isolate this is a PAGINATED list
+    // of every member of the org, which for a large course org is many sequential requests.
+    const orgMembers = await timeStep(timings, "org_members", () => orgMembershipCache.get(org));
+    allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
   }
-  // Same promise-cache note as the staff roster above. On a cold isolate this is a PAGINATED list
-  // of every member of the org, which for a large course org is many sequential requests.
-  const orgMembers = await timeStep(timings, "org_members", () => orgMembershipCache.get(org));
-  const allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
   // maxRetries 5 / baseDelayMs 3000 — the same 93s worst-case ladder as get_head_sha. No retry
   // lines appear in the 2026-09-07 logs, so it did not fire; timed so we can say that from data.
   const existingAccess = await timeStep(timings, "list_collaborators", () =>
@@ -3466,12 +3587,48 @@ async function syncRepoPermissionsInstrumented(
   const newAccess = githubUsernames.filter(
     (u) => !existingUsernames.includes(u) && verifiedOrgMembers.has(u.toLowerCase())
   );
-  const removeAccess = computeCollaboratorRemovals({
+  // Read BEFORE computing removals, and it THROWS rather than degrading when the read fails, for
+  // the same reason the staff roster aborts on a 403: a removal made against an incomplete
+  // exemption list is not recoverable by the next sync — the access is already gone — and a run
+  // that quietly skipped the removal half would be recorded as complete by the callers that do not
+  // inspect `removalsSkipped`.
+  const orgExemptions = await timeStep(timings, "org_permission_exemptions", () =>
+    getOrgPermissionSyncExemptions(org, scope)
+  );
+  const removalCandidates = computeCollaboratorRemovals({
     existingUsernames,
     desiredUsernames: githubUsernames,
     staffRoster: staffTeamUsernames,
-    adminExclusions: adminsThatShouldNotBeListedAsAdmins
+    // Per-org config first, then the legacy global constant as a backstop. Once every org that
+    // needs one has a row, the constant can be deleted.
+    adminExclusions: [...adminsThatShouldNotBeListedAsAdmins, ...orgExemptions]
   });
+  // Only ask for the direct-collaborator list when something might actually be removed, so the
+  // common no-op sync keeps costing exactly the requests it costs today.
+  let removeAccess: string[] = [];
+  if (removalCandidates.length > 0) {
+    const directAccess = await timeStep(timings, "list_direct_collaborators", () =>
+      retryWithBackoff(
+        () =>
+          octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
+            owner: org,
+            repo,
+            affiliation: "direct",
+            per_page: 100
+          }),
+        5,
+        3000,
+        scope
+      )
+    );
+    removeAccess = filterToDirectCollaborators(
+      removalCandidates,
+      directAccess.map((c) => c.login)
+    );
+    // The gap between these two is the futile work this guard removes. Counted so a regression
+    // shows up as a number rather than as latency somebody has to go and explain.
+    countStep(timings, "removals_skipped_not_direct", removalCandidates.length - removeAccess.length);
+  }
   for (const username of newAccess) {
     madeChanges = true;
     // Accumulated across the loop, with a counter for how many writes were actually issued. One
@@ -3524,6 +3681,9 @@ async function syncRepoPermissionsInstrumented(
   // dropped from the course keeps push access and reconcile_stuck_repo_creations, which scans only
   // is_github_ready = false, never revisits it. That is the outcome the TeamNotFoundError comment
   // above rejects for a 403; the flag is what stops it happening for a 404.
+  //
+  // The staff roster is the only input that can be unknown here: an unreadable exemption list
+  // throws out of this function rather than reaching this line.
   return { madeChanges, removalsSkipped: staffTeamUsernames === null };
 }
 /**

@@ -3543,6 +3543,7 @@ export type Database = {
           default_handout_template_repo: string;
           default_solution_template_repo: string;
           org_name: string;
+          permission_sync_exempt_users: string[];
           updated_at: string;
           updated_by: string | null;
         };
@@ -3552,6 +3553,7 @@ export type Database = {
           default_handout_template_repo?: string;
           default_solution_template_repo?: string;
           org_name: string;
+          permission_sync_exempt_users?: string[];
           updated_at?: string;
           updated_by?: string | null;
         };
@@ -3561,6 +3563,7 @@ export type Database = {
           default_handout_template_repo?: string;
           default_solution_template_repo?: string;
           org_name?: string;
+          permission_sync_exempt_users?: string[];
           updated_at?: string;
           updated_by?: string | null;
         };
@@ -11981,6 +11984,7 @@ export type Database = {
           default_solution_template_repo: string;
           is_configured: boolean;
           org_name: string;
+          permission_sync_exempt_users: string[];
           updated_at: string;
         }[];
       };
@@ -12102,7 +12106,12 @@ export type Database = {
         Returns: boolean;
       };
       admin_upsert_github_org: {
-        Args: { p_handout?: string; p_org_name: string; p_solution?: string };
+        Args: {
+          p_handout?: string;
+          p_org_name: string;
+          p_permission_sync_exempt_users?: string[];
+          p_solution?: string;
+        };
         Returns: undefined;
       };
       admin_upsert_lti_platform: {

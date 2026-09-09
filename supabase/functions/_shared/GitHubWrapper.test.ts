@@ -19,11 +19,13 @@ Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRIN
 const {
   assertSourceNotEmpty,
   computeCollaboratorRemovals,
+  filterToDirectCollaborators,
   getGitHubUserIfExists,
   getTeamAndCreateIfNeeded,
   getTeamMembers,
   isRepoEmpty,
   isTeamAlreadyExistsError,
+  isValidRepoFullName,
   NonRetryableRepoError,
   publicSupabaseUrl,
   resolveExistingTeamSlug,
@@ -538,6 +540,32 @@ Deno.test("getTeamMembers: a 404 is not remembered as an empty roster", async ()
   assertEquals(await getTeamMembers("org", "course-staff", octokit), ["alice"]);
 });
 
+// --- Removals that can actually take effect (filterToDirectCollaborators) ---
+// DELETE /repos/.../collaborators/{username} only revokes a DIRECT grant. Access held through a
+// team or through org ownership survives it, and GitHub still answers 2xx — so every such
+// "removal" was a request that changed nothing, issued serially, once per sync.
+
+Deno.test("filterToDirectCollaborators: keeps direct collaborators", () => {
+  assertEquals(filterToDirectCollaborators(["alice", "bob"], ["alice", "bob", "carol"]), ["alice", "bob"]);
+});
+
+Deno.test("filterToDirectCollaborators: drops candidates whose access is not direct", () => {
+  // The measured prod case: a fresh handout repo listed 37 collaborators, none of them direct.
+  // Every removal the sync computed was unremovable, and attempting them cost 63.6 seconds.
+  assertEquals(filterToDirectCollaborators(["org-owner", "staff-via-team"], []), []);
+});
+
+Deno.test("filterToDirectCollaborators: compares case-insensitively", () => {
+  // GitHub reports logins in display casing; the sync works in lowercase. A case mismatch here
+  // would silently drop a real removal and let a dropped student keep write access.
+  assertEquals(filterToDirectCollaborators(["alice"], ["Alice"]), ["alice"]);
+  assertEquals(filterToDirectCollaborators(["Bob"], ["bob"]), ["Bob"]);
+});
+
+Deno.test("filterToDirectCollaborators: no candidates -> no removals", () => {
+  assertEquals(filterToDirectCollaborators([], ["alice"]), []);
+});
+
 Deno.test("computeCollaboratorRemovals: an unknown roster removes nobody", () => {
   assertEquals(
     computeCollaboratorRemovals({
@@ -572,4 +600,46 @@ Deno.test("computeCollaboratorRemovals: keeps desired, staff and excluded admins
     }),
     ["stale"]
   );
+});
+
+// --- Repository names the GitHub helpers can act on (isValidRepoFullName) ---
+// getOctoKit / getFileFromRepo / getDefaultBranchHeadSha all take the first two slash-separated
+// components and hand them to the API, so "contains a slash" is not the same question as "names a
+// repository". github-repo-configure-webhook takes this value straight from an instructor's form.
+
+Deno.test("isValidRepoFullName: owner/name is valid", () => {
+  assertEquals(isValidRepoFullName("neu-cs4530/fa26-handout-ip2"), true);
+  assertEquals(isValidRepoFullName("a/b"), true);
+});
+
+Deno.test("isValidRepoFullName: a missing component is not a repository", () => {
+  // `autograder.grader_repo` is NULL exactly when solution-repo creation never finished; the empty
+  // string is what a cleared form field sends.
+  assertEquals(isValidRepoFullName(null), false);
+  assertEquals(isValidRepoFullName(undefined), false);
+  assertEquals(isValidRepoFullName(""), false);
+  assertEquals(isValidRepoFullName("no-slash"), false);
+  assertEquals(isValidRepoFullName("/"), false);
+  assertEquals(isValidRepoFullName("owner/"), false);
+  assertEquals(isValidRepoFullName("/repo"), false);
+});
+
+Deno.test("isValidRepoFullName: extra components are rejected rather than truncated", () => {
+  // The dangerous one: the helpers would drop "/extra" and act on owner/repo, a repository the
+  // instructor did not name.
+  assertEquals(isValidRepoFullName("owner/repo/extra"), false);
+  assertEquals(isValidRepoFullName("https://github.com/owner/repo"), false);
+});
+
+Deno.test("isValidRepoFullName: whitespace is rejected", () => {
+  // Matches the "owner/repo" validation admin_upsert_github_org applies to template repo defaults:
+  // a pasted value with a stray space is a typo, not a repository.
+  assertEquals(isValidRepoFullName("owner /repo"), false);
+  assertEquals(isValidRepoFullName(" owner/repo"), false);
+  assertEquals(isValidRepoFullName("owner/repo "), false);
+});
+
+Deno.test("isValidRepoFullName: non-strings are rejected", () => {
+  assertEquals(isValidRepoFullName(42), false);
+  assertEquals(isValidRepoFullName({ owner: "a", repo: "b" }), false);
 });
