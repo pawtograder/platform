@@ -133,6 +133,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // SHA and points attached to the new one until somebody pushed.
   const pointerAlreadyPublished = (existingPointer?.grader_repo ?? null) === solutionRepoFullName;
   const expectedSha = existingPointer?.latest_autograder_sha ?? null;
+  // Deferring to the webhook needs BOTH: the pointer names this repo, and something has actually
+  // been recorded through it. A matching pointer alone proves only that deliveries can be routed
+  // here, not that any landed.
+  const webhookHasReconciled = pointerAlreadyPublished && expectedSha !== null;
 
   const [headCommit, defaultBranch] = await Promise.all([
     getCommit(solutionRepoFullName, "HEAD", scope),
@@ -198,15 +202,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return applied === true;
   };
 
-  // Replacing a pointer that names a DIFFERENT repository: retire the old one first.
+  // Retire whatever pointer is there before we write metadata ourselves.
   //
+  // This covers both shapes that reach the write below: a pointer naming a DIFFERENT repository,
+  // and a same-name pointer with no SHA recorded (the recovery case). In either,
   // Until grader_repo is swapped, the OLD repo is still what handlePushToGraderSolution resolves
   // this assignment by, so a push to it during provisioning can overwrite the new repo's metadata —
   // or interleave with the write — and we would then publish the new pointer over the old repo's
   // config, SHA and points. Clearing it first makes the assignment invisible to that webhook for
   // the rest of this function, and NULL is the same state every failure path here already leaves
   // behind: unfinished and therefore repairable.
-  if (!pointerAlreadyPublished && (existingPointer?.grader_repo ?? null) !== null) {
+  if (!webhookHasReconciled && (existingPointer?.grader_repo ?? null) !== null) {
     scope.setTag("retired_stale_grader_repo", existingPointer!.grader_repo!);
     console.log(
       `Clearing stale grader_repo ${existingPointer!.grader_repo} on assignment ${assignment_id} before attaching ${solutionRepoFullName}`
@@ -223,15 +229,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
   }
 
-  // Deferring to the webhook needs BOTH: the pointer names this repo, and something has actually
-  // been recorded through it. A matching pointer alone proves only that deliveries can now be
-  // routed to this assignment, not that any of them ever landed — which is exactly the state the
-  // repair script's --assignment recovery path exists for: a creation that wrote grader_repo and
-  // then failed before storing config or a SHA. Treating that as webhook-owned made the rerun a
-  // no-op that reported success while leaving the metadata missing, defeating the recovery it was
-  // invoked to perform. The same shape occurs when a deleted repository is recreated under its old
-  // name.
-  const webhookHasReconciled = pointerAlreadyPublished && expectedSha !== null;
   if (webhookHasReconciled) {
     // The push webhook owns this metadata and is at least as current as anything we snapshotted, so
     // the repair's job here is done — the repository exists, the pointer is set, and a SHA recorded
@@ -279,15 +276,37 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // repair script's sweep either. Writing it last makes a NULL pointer mean exactly "this did not
   // finish", which is what the reconciler and the repair script both assume, and makes every
   // partial failure retryable — createRepo adopts the repo it already made.
-  const { error: pointerError } = await adminSupabase
+  // Compare-and-set against the pointer this function is entitled to replace. An instructor can
+  // save a different grader_repo from the autograder settings page while this runs, and the window
+  // is not small — the value was read before several GitHub round trips. An unconditional write
+  // would silently discard their explicit choice in favour of the conventionally derived name.
+  //
+  // Expected value: this repo's own name when the webhook already owns it and we touched nothing,
+  // NULL otherwise (we either cleared a stale pointer above or never had one).
+  let pointerWrite = adminSupabase
     .from("autograder")
     .update({ grader_repo: solutionRepoFullName })
     .eq("id", assignment_id);
+  pointerWrite = webhookHasReconciled
+    ? pointerWrite.eq("grader_repo", solutionRepoFullName)
+    : pointerWrite.is("grader_repo", null);
+  const { data: pointerRows, error: pointerError } = await pointerWrite.select("id");
   if (pointerError) {
     // Same reasoning as the config write: reporting success here would leave a solution repo that
     // nothing points at, and the assignment would keep being reported as missing one.
     Sentry.captureException(pointerError, scope);
     throw pointerError;
+  }
+  if ((pointerRows?.length ?? 0) === 0) {
+    // Somebody set grader_repo to something else while we worked. Their choice is explicit and
+    // ours is derived from a naming convention, so theirs wins; the repository we created is left
+    // in place rather than being silently attached over the top.
+    scope.setTag("grader_repo_pointer", "superseded");
+    throw new UserVisibleError(
+      `The grader repository for this assignment was changed while ${solutionRepoFullName} was being created, so it was not attached. ` +
+        `The repository exists — re-save if you intended to use it.`,
+      409
+    );
   }
 
   // There is deliberately NO post-pointer recheck here.
