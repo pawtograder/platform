@@ -1366,7 +1366,7 @@ export type CreateRepoOptions = {
 //                                            mergeForkUpstream return shape so
 //                                            tests can exercise the fallback.
 // -----------------------------------------------------------------------------
-function isGithubStubEnabled(): boolean {
+export function isGithubStubEnabled(): boolean {
   return Deno.env.get("PAWTOGRADER_GITHUB_STUB") === "1";
 }
 

@@ -8,6 +8,7 @@ import {
   getCommit,
   getDefaultBranch,
   getFileFromRepo,
+  isGithubStubEnabled,
   syncRepoPermissions
 } from "../_shared/GitHubWrapper.ts";
 import { calculateTotalAutograderPoints } from "../_shared/pawtograderYmlHelpers.ts";
@@ -94,32 +95,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return { repo_name: solutionRepoName, org_name: solutionRepoOrg, skipped: true };
   }
 
-  await createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope);
-  await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, [], scope);
-
-  // Resolve the head BEFORE reading the config, and read the config AT that commit, so every value
-  // recorded below describes one revision. An unqualified read races any push landing between the
-  // two calls: config and points would come from the old tree while latest_autograder_sha and the
-  // commit row named the new one — and because grader_repo is not written until the end of this
-  // function, the webhook for that intervening push cannot find the assignment and is dropped, so
-  // the mismatch is not self-correcting. getFileFromRepo's own parameter documentation asks for
-  // exactly this, and it is the same pinning assignment-create-handout-repo does when it passes
-  // strippedHandoutSha to updateAutograderWorkflowHash.
+  // Snapshot the pointer BEFORE any GitHub mutation. createRepo and syncRepoPermissions take
+  // seconds to minutes, and an instructor can select a custom grader repository from the settings
+  // page while they run — reading afterwards would take that new value as this request's own
+  // baseline, and the stale-pointer clear below would then match it and delete an explicit choice.
+  // Every later transition is conditioned on THIS observation.
   //
-  // `autograder_commits.ref` is NOT NULL and a template-generated repo inherits the template's
-  // default branch, which may not be `main` — the push handlers all carry a comment about that
-  // exact bug, so this asks rather than guesses.
-  // Read the CURRENT pointer and SHA before snapshotting the head, so what follows is decided by
-  // state observed no later than the snapshot it guards.
-  //
-  // `grader_repo` being already published is the discriminator that matters. While it is NULL no
+  // `grader_repo` already naming this repo is the discriminator that matters. While it is NULL no
   // webhook can find this assignment — handlePushToGraderSolution looks it up by that column — so
-  // any SHA present is one of OUR earlier attempts, and overwriting it is correct. Once it is
-  // published the webhook is live and authoritative for this metadata, and a targeted repair that
-  // rewrote it would fight a writer it cannot serialize with: the webhook writes config and points
-  // across several requests and only advances the SHA afterwards, so our atomic transition can
-  // match the SHA it has not moved yet, replace its config and points with an older snapshot, and
-  // then watch it advance the SHA over the top.
+  // any SHA present is one of OUR earlier attempts and overwriting it is correct. Once it is
+  // published the webhook is live and authoritative for this metadata.
   const { data: existingPointer, error: existingPointerError } = await adminSupabase
     .from("autograder")
     .select("grader_repo, latest_autograder_sha")
@@ -137,6 +122,46 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // been recorded through it. A matching pointer alone proves only that deliveries can be routed
   // here, not that any landed.
   const webhookHasReconciled = pointerAlreadyPublished && expectedSha !== null;
+  // What the metadata RPC should expect grader_repo to be when it runs. It starts as what we
+  // observed and becomes NULL if we clear a stale pointer below — passing the pre-clear value there
+  // would make the RPC's predicate unsatisfiable, so every stale-pointer repair would remove the old
+  // pointer and then throw, leaving the assignment worse than it found it.
+  let pointerExpectationForRpc: string | null = existingPointer?.grader_repo ?? null;
+
+  await createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope);
+  await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, [], scope);
+
+  // Resolve the head BEFORE reading the config, and read the config AT that commit, so every value
+  // recorded below describes one revision. An unqualified read races any push landing between the
+  // two calls: config and points would come from the old tree while latest_autograder_sha and the
+  // commit row named the new one — and because grader_repo is not written until the end of this
+  // function, the webhook for that intervening push cannot find the assignment and is dropped, so
+  // the mismatch is not self-correcting. getFileFromRepo's own parameter documentation asks for
+  // exactly this, and it is the same pinning assignment-create-handout-repo does when it passes
+  // strippedHandoutSha to updateAutograderWorkflowHash.
+  //
+  // `autograder_commits.ref` is NOT NULL and a template-generated repo inherits the template's
+  // default branch, which may not be `main` — the push handlers all carry a comment about that
+  // exact bug, so this asks rather than guesses.
+
+  // Under PAWTOGRADER_GITHUB_STUB the fixture guard above deliberately falls THROUGH, so createRepo
+  // and syncRepoPermissions reach their stub seams and record intent. These three reads have no
+  // such seam — they would query api.github.com for a repository the stub never created, and the
+  // whole call would fail before persisting anything. There is no head to describe in stub mode, so
+  // the metadata is skipped and the pointer below is still written, which is what the stubbed e2e
+  // flows assert on.
+  if (isGithubStubEnabled()) {
+    scope.setTag("initial_autograder_metadata", "skipped_github_stub");
+    const { error: stubPointerError } = await adminSupabase
+      .from("autograder")
+      .update({ grader_repo: solutionRepoFullName })
+      .eq("id", assignment_id);
+    if (stubPointerError) {
+      Sentry.captureException(stubPointerError, scope);
+      throw stubPointerError;
+    }
+    return { repo_name: solutionRepoName, org_name: solutionRepoOrg, stubbed: true };
+  }
 
   const [headCommit, defaultBranch] = await Promise.all([
     getCommit(solutionRepoFullName, "HEAD", scope),
@@ -201,7 +226,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // custom repository's parsed config BEFORE writing its pointer, so checking only the SHA
       // could overwrite that config with this repository's. Declining is the right answer when the
       // expectation is already stale — the instructor's selection is explicit, ours is derived.
-      p_expected_grader_repo: existingPointer?.grader_repo ?? null
+      p_expected_grader_repo: pointerExpectationForRpc
     });
     if (error) throw error;
     return applied === true;
@@ -247,6 +272,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         409
       );
     }
+    // The clear landed, so every later condition must expect NULL rather than the old value.
+    pointerExpectationForRpc = null;
   }
 
   if (webhookHasReconciled) {

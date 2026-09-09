@@ -335,7 +335,9 @@ async function repairMissingSolutionRepos(opts: {
     // detached pass can still be working through candidates minutes later. One indexed lookup.
     const { data: fresh, error: freshError } = await supabase
       .from("assignments")
-      .select("repo_mode, archived_at, classes!inner(slug, github_org, archived), autograder(grader_repo)")
+      .select(
+        "repo_mode, archived_at, template_repo, classes!inner(slug, github_org, archived), autograder(grader_repo, workflow_sha)"
+      )
       .eq("id", a.id)
       .maybeSingle();
     const currentOrg = fresh?.classes?.github_org ?? null;
@@ -410,15 +412,19 @@ async function repairMissingSolutionRepos(opts: {
       // from then on. Completing a missing workflow_sha is not worth destroying a deliberate
       // configuration; such an assignment gets its solution repair only, and its workflow hash is
       // refreshed by the next push to its own handout.
-      const derivedHandout = `${a.classes?.github_org}/${a.classes?.slug}-handout-${a.slug}`;
-      const handoutIsDerived = a.template_repo === null || a.template_repo === derivedHandout;
+      // Decided from the REVALIDATED row, not the scan. An instructor can point an assignment at a
+      // custom handout between the scan and this candidate's turn, and acting on the stale value
+      // would rerun creation and overwrite the pointer they just chose.
+      const freshTemplateRepo = fresh.template_repo ?? null;
+      const freshWorkflowSha = (fresh.autograder as { workflow_sha: string | null } | null)?.workflow_sha ?? null;
+      const derivedHandout = `${fresh.classes?.github_org}/${fresh.classes?.slug}-handout-${a.slug}`;
+      const handoutIsDerived = freshTemplateRepo === null || freshTemplateRepo === derivedHandout;
       const needsHandoutFinish =
-        handoutIsDerived &&
-        (a.template_repo === null || (a.has_autograder !== false && (a.autograder?.workflow_sha ?? null) === null));
-      if (!handoutIsDerived && (a.autograder?.workflow_sha ?? null) === null) {
+        handoutIsDerived && (freshTemplateRepo === null || (a.has_autograder !== false && freshWorkflowSha === null));
+      if (!handoutIsDerived && freshWorkflowSha === null) {
         scope.setTag("custom_handout_workflow_sha_missing", "true");
         console.log(
-          `[github-repo-reconciler] Assignment ${a.id} has a custom handout (${a.template_repo}) and no workflow_sha; not rerunning handout creation`
+          `[github-repo-reconciler] Assignment ${a.id} has a custom handout (${freshTemplateRepo}) and no workflow_sha; not rerunning handout creation`
         );
       }
       const functions = needsHandoutFinish
