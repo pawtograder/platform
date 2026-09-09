@@ -122,29 +122,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw configError;
   }
 
-  // Reconcile the head metadata the initial push would have carried.
+  // Record the metadata the initial push would have carried.
   //
   // `handlePushToGraderSolution` in github-repo-webhook is what normally records these, but it
   // finds the assignment by `grader_repo` — and that pointer is deliberately written at the END of
-  // this function (see below), so the template-generation push arrives while it is still NULL and
-  // the event is dropped. Nothing else ever writes `latest_autograder_sha`, so without this a
-  // freshly created assignment carries no points, no SHA, and no commit row until somebody happens
-  // to push to the solution repo again.
+  // this function (see below), so any push arriving before then, including the template-generation
+  // push itself, is dropped. Nothing else ever writes `latest_autograder_sha`, so without this a
+  // freshly created assignment carries no points, no SHA and no commit row until somebody happens
+  // to push again.
   //
-  // Doing it here rather than restoring the early pointer write also removes the dependency on a
-  // webhook race this function cannot observe: it already has the repo and the parsed config, so it
-  // can simply record what it just created.
+  // Everything is pinned to one revision: the head is resolved first and the config is read AT that
+  // sha, so config, points, latest_autograder_sha and the commit row cannot describe different
+  // trees. Reconciling is a closure because it runs TWICE — see the recheck after the pointer write.
   //
   // Best-effort, like the handout hash seeding below: the repository exists and is usable, the
   // values are re-derivable from the next push, and failing creation over them would be the worse
   // trade. Reported to Sentry so a persistent failure is visible.
-  try {
-    const parsedConfig = asObj as unknown as PawtograderConfig | null;
-    const points = parsedConfig ? calculateTotalAutograderPoints(parsedConfig) : 0;
+  const reconcileHeadMetadata = async (commitSha: string, message: string, author: string | null, config: Json) => {
+    const parsed = config as unknown as PawtograderConfig | null;
+    const points = parsed ? calculateTotalAutograderPoints(parsed) : 0;
     scope.setTag("total_autograder_points", points.toString());
     const [{ error: pointsError }, { error: shaError }] = await Promise.all([
       adminSupabase.from("assignments").update({ autograder_points: points }).eq("id", assignment_id),
-      adminSupabase.from("autograder").update({ latest_autograder_sha: headCommit.sha }).eq("id", assignment_id)
+      adminSupabase.from("autograder").update({ latest_autograder_sha: commitSha }).eq("id", assignment_id)
     ]);
     if (pointsError) throw pointsError;
     if (shaError) throw shaError;
@@ -154,9 +154,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       [
         {
           autograder_id: assignment_id,
-          message: headCommit.commit.message,
-          sha: headCommit.sha,
-          author: headCommit.commit.author?.name ?? null,
+          message,
+          sha: commitSha,
+          author,
           class_id: class_id,
           ref: `refs/heads/${defaultBranch}`
         }
@@ -164,6 +164,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       { onConflict: "autograder_id,sha" }
     );
     if (commitError) throw commitError;
+  };
+
+  try {
+    await reconcileHeadMetadata(
+      headCommit.sha,
+      headCommit.commit.message,
+      headCommit.commit.author?.name ?? null,
+      asObj
+    );
   } catch (metadataError) {
     scope.setTag("initial_autograder_metadata", "failed");
     Sentry.captureException(metadataError, scope);
@@ -188,6 +197,47 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // nothing points at, and the assignment would keep being reported as missing one.
     Sentry.captureException(pointerError, scope);
     throw pointerError;
+  }
+
+  // Now that grader_repo is published, recheck the head once.
+  //
+  // A push landing between the snapshot above and the pointer write is dropped by
+  // handlePushToGraderSolution — it finds the assignment by grader_repo, which was still NULL — so
+  // nothing else will ever notice it, and the assignment would keep serving the config and SHA of
+  // the commit before it until somebody pushed again. Any push from HERE on is discoverable,
+  // because the pointer now exists, so one recheck is enough to close the window rather than
+  // needing a loop.
+  //
+  // Costs one extra request on the common path, where the head has not moved and this is a no-op.
+  // Best-effort for the same reason as the first pass.
+  try {
+    const currentHead = await getCommit(solutionRepoFullName, "HEAD", scope);
+    if (currentHead.sha !== headCommit.sha) {
+      scope.setTag("solution_head_moved_during_creation", "true");
+      console.log(
+        `Solution repo ${solutionRepoFullName} moved from ${headCommit.sha} to ${currentHead.sha} during creation; re-reading config`
+      );
+      // Re-read the config AT the new head, so the reconciled values still describe one revision.
+      const newerConfig = await getFileFromRepo(solutionRepoFullName, "pawtograder.yml", scope, currentHead.sha);
+      const newerObj = (await parse(newerConfig.content)) as Json;
+      const { error: reconfigError } = await adminSupabase
+        .from("autograder")
+        .update({ config: newerObj })
+        .eq("id", assignment_id);
+      if (reconfigError) throw reconfigError;
+      await reconcileHeadMetadata(
+        currentHead.sha,
+        currentHead.commit.message,
+        currentHead.commit.author?.name ?? null,
+        newerObj
+      );
+    }
+  } catch (recheckError) {
+    // The stored config and SHA are consistent with each other either way — they just describe an
+    // older commit — so this is reportable, not fatal.
+    scope.setTag("solution_head_recheck", "failed");
+    Sentry.captureException(recheckError, scope);
+    console.error(`Could not recheck the head of ${solutionRepoFullName} after publishing grader_repo`, recheckError);
   }
 
   // Seed the handout's file hashes now that submissionFiles is known.

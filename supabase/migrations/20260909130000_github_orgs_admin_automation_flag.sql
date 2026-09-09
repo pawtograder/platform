@@ -36,11 +36,30 @@ BEGIN
         RAISE EXCEPTION 'Access denied: Admin role required';
     END IF;
 
+    -- Coalesced case-insensitively. `github_orgs.org_name` is a case-sensitive text primary key
+    -- while GitHub org logins are not, and admin_create_class / admin_update_class store whatever
+    -- capitalization was typed. Joining exactly made a configured `Pawtograder-Playground` and a
+    -- class-supplied `pawtograder-playground` two separate entries: the configured spelling showed
+    -- the real exclusion and zero courses, the class spelling showed the courses and
+    -- excluded_from_automation = false. Saving the one that looked right then created a SECOND row
+    -- while the original kept excluding the org — with the checkbox reading unticked.
+    --
+    -- The CONFIGURED spelling wins as the display name when a row exists, so what the page saves
+    -- updates that row rather than forking a new one.
     RETURN QUERY
-    WITH orgs AS (
-        SELECT go.org_name FROM public.github_orgs go
+    WITH keys AS (
+        SELECT lower(go.org_name) AS key FROM public.github_orgs go
         UNION
-        SELECT DISTINCT c.github_org AS org_name FROM public.classes c WHERE c.github_org IS NOT NULL
+        SELECT DISTINCT lower(c.github_org) FROM public.classes c WHERE c.github_org IS NOT NULL
+    ),
+    orgs AS (
+        SELECT
+            k.key,
+            COALESCE(
+                (SELECT g.org_name FROM public.github_orgs g WHERE lower(g.org_name) = k.key LIMIT 1),
+                (SELECT c.github_org FROM public.classes c WHERE lower(c.github_org) = k.key LIMIT 1)
+            ) AS org_name
+        FROM keys k
     )
     SELECT
         o.org_name,
@@ -58,12 +77,12 @@ BEGIN
         COALESCE(go.permission_sync_exempt_users, '{}'::text[]),
         -- An org with no row has never been configured, and the column default is false.
         COALESCE(go.excluded_from_automation, false),
-        (SELECT COUNT(*) FROM public.classes c WHERE c.github_org = o.org_name)::bigint,
+        (SELECT COUNT(*) FROM public.classes c WHERE lower(c.github_org) = o.key)::bigint,
         (go.org_name IS NOT NULL) AS is_configured,
         go.created_at,
         go.updated_at
     FROM orgs o
-    LEFT JOIN public.github_orgs go ON go.org_name = o.org_name
+    LEFT JOIN public.github_orgs go ON lower(go.org_name) = o.key
     ORDER BY o.org_name;
 END;
 $$;
@@ -91,6 +110,7 @@ AS $$
 DECLARE
     v_exempt text[];
     v_login text;
+    v_org text;
 BEGIN
     IF NOT public.authorize_for_admin() THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
@@ -99,6 +119,15 @@ BEGIN
     IF p_org_name IS NULL OR trim(p_org_name) = '' THEN
         RAISE EXCEPTION 'Org name is required';
     END IF;
+
+    -- Target an existing row case-insensitively, for the same reason admin_get_github_orgs
+    -- coalesces: saving the class-supplied spelling of an org that is already configured under a
+    -- different capitalization must UPDATE that row, not insert a second one that then competes
+    -- with it. Falls back to what was supplied when there is no existing row.
+    v_org := COALESCE(
+        (SELECT g.org_name FROM public.github_orgs g WHERE lower(g.org_name) = lower(trim(p_org_name)) LIMIT 1),
+        trim(p_org_name)
+    );
 
     IF NULLIF(trim(p_handout), '') IS NOT NULL AND trim(p_handout) !~ '^[^/[:space:]]+/[^/[:space:]]+$' THEN
         RAISE EXCEPTION 'Invalid handout template repo "%": expected "owner/repo"', p_handout;
@@ -140,7 +169,7 @@ BEGIN
         created_by,
         updated_by
     ) VALUES (
-        trim(p_org_name),
+        v_org,
         public.resolve_effective_template_repo(
             NULLIF(trim(p_handout), ''), NULL,
             'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
