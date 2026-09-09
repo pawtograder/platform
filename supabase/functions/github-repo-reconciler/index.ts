@@ -5,7 +5,7 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { isE2eFixtureTarget } from "../_shared/e2eGithubGuard.ts";
-import { assignmentShouldHaveRepos } from "../_shared/handoutRepoStrategy.ts";
+import { assignmentShouldHaveRepos, expectedHandoutRepo } from "../_shared/handoutRepoStrategy.ts";
 import { edgeFunctionEndpoint } from "../_shared/edgeFunctionUrl.ts";
 import { canStartRepair, remainingBudgetMs } from "../_shared/repairBudget.ts";
 import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
@@ -335,8 +335,11 @@ async function repairMissingSolutionRepos(opts: {
     // detached pass can still be working through candidates minutes later. One indexed lookup.
     const { data: fresh, error: freshError } = await supabase
       .from("assignments")
+      // One string literal, not a concatenation: supabase-js infers the row type from the literal
+      // itself, and splitting it collapses `fresh` to GenericStringError and every field access
+      // below with it.
       .select(
-        "repo_mode, archived_at, template_repo, classes!inner(slug, github_org, archived), autograder(grader_repo, workflow_sha)"
+        "repo_mode, archived_at, template_repo, has_autograder, source_assignment_id, classes!inner(slug, github_org, archived), autograder(grader_repo, workflow_sha)"
       )
       .eq("id", a.id)
       .maybeSingle();
@@ -393,6 +396,32 @@ async function repairMissingSolutionRepos(opts: {
       continue;
     }
 
+    // The fork source's handout, for the classification below. A separate query rather than an
+    // embed on the revalidation select: PostgREST resolves `assignments!source_assignment_id` to
+    // the REVERSE direction (rows that fork FROM this one) and returns an empty array, and the
+    // constraint-name hint is not in its schema cache at all — both of which type-check happily and
+    // then report every inherited handout as custom, which is the bug being fixed here.
+    //
+    // Read in the revalidation block, not inside the repair below, so a transient failure is
+    // recorded as "skipped this tick" rather than counted against the assignment as a repair
+    // failure — the same treatment the reads above get.
+    let sourceHandout: string | null = null;
+    if (fresh.repo_mode === "fork_from_prior_assignment" && fresh.source_assignment_id !== null) {
+      const { data: sourceRow, error: sourceError } = await supabase
+        .from("assignments")
+        .select("template_repo")
+        .eq("id", fresh.source_assignment_id)
+        .maybeSingle();
+      if (sourceError) {
+        scope.setTag("repair_skipped_revalidation", "source_assignment_unreadable");
+        console.warn(
+          `[github-repo-reconciler] Could not read fork source ${fresh.source_assignment_id} for assignment ${a.id}; skipping this tick`
+        );
+        continue;
+      }
+      sourceHandout = sourceRow?.template_repo ?? null;
+    }
+
     attempts++;
     try {
       // A non-NULL template_repo proves the handout call reached its pointer write — but that write
@@ -417,14 +446,36 @@ async function repairMissingSolutionRepos(opts: {
       // would rerun creation and overwrite the pointer they just chose.
       const freshTemplateRepo = fresh.template_repo ?? null;
       const freshWorkflowSha = (fresh.autograder as { workflow_sha: string | null } | null)?.workflow_sha ?? null;
-      const derivedHandout = `${fresh.classes?.github_org}/${fresh.classes?.slug}-handout-${a.slug}`;
-      const handoutIsDerived = freshTemplateRepo === null || freshTemplateRepo === derivedHandout;
+      // What assignment-create-handout-repo would put in template_repo for THIS assignment, which
+      // is a derived name for the template_* modes and the SOURCE'S pointer for
+      // fork_from_prior_assignment — that mode creates no handout of its own, it mirrors the one it
+      // forks from. Comparing every mode against the derived name declared an inherited pointer
+      // "custom" (it can never equal `<class>-handout-<assignment>`), so an inherit that wrote its
+      // pointer and then failed in updateAutograderWorkflowHash got solution creation ONLY. That
+      // publishes grader_repo, which drops the row out of this scan for good, leaving workflow_sha
+      // NULL and every student submission rejected for a workflow-SHA mismatch — the exact state
+      // this branch exists to prevent, reached through the mode most likely to hit it.
+      const expectedHandout = expectedHandoutRepo({
+        mode: fresh.repo_mode,
+        githubOrg: fresh.classes?.github_org,
+        classSlug: fresh.classes?.slug,
+        assignmentSlug: a.slug,
+        sourceTemplateRepo: sourceHandout
+      });
+      // Still an equality test, so the custom-handout protection is unchanged: a fork-mode
+      // assignment pointed somewhere OTHER than its source is left alone exactly like a
+      // template-mode one pointed away from its derived name.
+      const handoutIsOurs =
+        freshTemplateRepo === null || (expectedHandout !== null && freshTemplateRepo === expectedHandout);
+      // has_autograder read fresh alongside everything else. The scan value can be minutes old, and
+      // an instructor disabling the autograder in between makes a missing workflow_sha the correct
+      // state rather than something to repair.
       const needsHandoutFinish =
-        handoutIsDerived && (freshTemplateRepo === null || (a.has_autograder !== false && freshWorkflowSha === null));
-      if (!handoutIsDerived && freshWorkflowSha === null) {
+        handoutIsOurs && (freshTemplateRepo === null || (fresh.has_autograder !== false && freshWorkflowSha === null));
+      if (!handoutIsOurs && freshWorkflowSha === null) {
         scope.setTag("custom_handout_workflow_sha_missing", "true");
         console.log(
-          `[github-repo-reconciler] Assignment ${a.id} has a custom handout (${freshTemplateRepo}) and no workflow_sha; not rerunning handout creation`
+          `[github-repo-reconciler] Assignment ${a.id} has a custom handout (${freshTemplateRepo}, expected ${expectedHandout ?? "none"}) and no workflow_sha; not rerunning handout creation`
         );
       }
       const functions = needsHandoutFinish

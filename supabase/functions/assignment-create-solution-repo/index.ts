@@ -226,7 +226,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // custom repository's parsed config BEFORE writing its pointer, so checking only the SHA
       // could overwrite that config with this repository's. Declining is the right answer when the
       // expectation is already stale — the instructor's selection is explicit, ours is derived.
-      p_expected_grader_repo: pointerExpectationForRpc
+      p_expected_grader_repo: pointerExpectationForRpc,
+      // The flag `points` was derived from, checked inside the same transaction that writes them.
+      // An instructor toggling the autograder while the GitHub calls ran would otherwise have this
+      // commit zero points for an assignment they just enabled, or the template's graded points for
+      // one they just disabled — and nothing recomputes it until the next push to this repository.
+      p_expected_has_autograder: assignment.has_autograder
     });
     if (error) throw error;
     return applied === true;

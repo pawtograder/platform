@@ -120,4 +120,37 @@ export function assignmentShouldHaveRepos(mode: AssignmentRepoMode): boolean {
   return !REPO_MODES_WITHOUT_REPOS.includes(mode);
 }
 
+/**
+ * What `assignment-create-handout-repo` would leave in `assignments.template_repo` for this
+ * assignment, or null when that cannot be determined.
+ *
+ * The reconciler uses this to tell "the handout run never finished" from "an instructor chose a
+ * custom handout" — the first is safe to rerun, the second must be left alone because the create
+ * function rebuilds the pointer and would erase their choice.
+ *
+ * It exists because that test is NOT simply the derived `<class>-handout-<assignment>` name.
+ * `fork_from_prior_assignment` creates no handout at all; it mirrors the source assignment's
+ * pointer, which can never equal the derived name. Comparing every mode against the derived name
+ * therefore reported every inherited handout as custom, so an inherit that wrote its pointer and
+ * then died before recording its workflow hash got solution creation only — publishing grader_repo,
+ * dropping the assignment out of the repair scan for good, and leaving every student submission
+ * rejected for a workflow-SHA mismatch.
+ *
+ * Lives next to `resolveHandoutRepoAction` so the two cannot drift: this must answer for the
+ * pointer whatever that decides to create.
+ */
+export function expectedHandoutRepo(args: {
+  mode: AssignmentRepoMode;
+  githubOrg: string | null | undefined;
+  classSlug: string | null | undefined;
+  assignmentSlug: string | null | undefined;
+  /** The fork source's `template_repo`. Only consulted for `fork_from_prior_assignment`. */
+  sourceTemplateRepo: string | null;
+}): string | null {
+  if (REPO_MODES_WITHOUT_REPOS.includes(args.mode)) return null;
+  if (args.mode === "fork_from_prior_assignment") return args.sourceTemplateRepo;
+  if (!args.githubOrg || !args.classSlug || !args.assignmentSlug) return null;
+  return `${args.githubOrg}/${args.classSlug}-handout-${args.assignmentSlug}`;
+}
+
 export { REPO_MODES_WITHOUT_REPOS, TEMPLATE_HANDOUT_REPO_NAME };

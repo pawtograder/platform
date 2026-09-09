@@ -320,6 +320,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // strategy is the wrong artifact for the new mode, so attaching it is not a smaller error than
   // attaching one after an opt-out.
   pointerWrite = pointerWrite.eq("repo_mode", assignment.repo_mode);
+  // And the autograder flag, on the same table again. Disabling the autograder is not just a flag
+  // write: the edit flow deletes grade.yml from the handout and records the resulting NEWER
+  // latest_template_sha. This write would then stamp the PRE-DISABLE revision back over it, and the
+  // handout-hash seeding below would hash grade.yml at that older revision — leaving a disabled
+  // assignment advertising the enabled handout state, from which a student-repo sync can reinstall
+  // the workflow the instructor just removed. Enabling has the mirror problem. Both are decided by
+  // `assignment.has_autograder`, read before the GitHub work, so the value it was decided from is
+  // what the write requires to still be true.
+  pointerWrite = pointerWrite.eq("has_autograder", assignment.has_autograder);
   const { data: pointerRows, error: pointerError } = await pointerWrite.select("id");
   if (pointerError) {
     // Reporting success here would leave the handout repo created but unreferenced:

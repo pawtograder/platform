@@ -13789,6 +13789,7 @@ export type Database = {
           p_author: string | null;
           p_config: Json;
           p_expected_grader_repo?: string | null;
+          p_expected_has_autograder?: boolean | null;
           p_expected_sha: string | null;
           p_message: string;
           p_new_sha: string;

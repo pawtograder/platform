@@ -23,7 +23,8 @@ CREATE OR REPLACE FUNCTION public.record_autograder_head_metadata(
     p_message text,
     p_author text,
     p_ref text,
-    p_expected_grader_repo text DEFAULT NULL
+    p_expected_grader_repo text DEFAULT NULL,
+    p_expected_has_autograder boolean DEFAULT NULL
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -32,11 +33,35 @@ SET search_path = ''
 AS $$
 DECLARE
     v_class_id bigint;
+    v_has_autograder boolean;
 BEGIN
     -- Service role only: this is called by an edge function during repo provisioning, never by a
     -- user session, and it writes grading-relevant totals.
     IF auth.role() <> 'service_role' THEN
         RAISE EXCEPTION 'Access denied: service role required';
+    END IF;
+
+    -- p_points is derived from the caller's snapshot of has_autograder: a disabled assignment gets
+    -- 0, because copying the solution template's graded points into autograder_points would have
+    -- the rubric editor treat them as an automated allocation and subtract them from hand grading.
+    -- The flag is toggleable while the caller's GitHub calls run, so the snapshot can be wrong by
+    -- the time the points land — committing zero points for an assignment that was just enabled, or
+    -- template points for one that was just disabled, and neither the SHA nor the pointer predicate
+    -- below notices. Nothing recomputes it either, until the next push to the solution repository.
+    --
+    -- Checked FIRST and under FOR UPDATE, for the reason publish_grader_repo takes the same lock: a
+    -- toggle committing between an unlocked read and the write would be invisible at READ
+    -- COMMITTED. Declining is the coherent answer rather than recomputing here — the caller's whole
+    -- snapshot is stale, it does not publish the pointer when this returns false, and the retry runs
+    -- against the flag as it now stands. NULL means "do not care", for callers that write no points.
+    IF p_expected_has_autograder IS NOT NULL THEN
+        SELECT a.has_autograder INTO v_has_autograder
+          FROM public.assignments a
+         WHERE a.id = p_assignment_id
+           FOR UPDATE;
+        IF v_has_autograder IS DISTINCT FROM p_expected_has_autograder THEN
+            RETURN false;
+        END IF;
     END IF;
 
     -- `grader_repo` is part of the condition, not just the SHA. The autograder settings page
@@ -75,8 +100,8 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text, text) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text, text, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.record_autograder_head_metadata(bigint, text, text, jsonb, integer, text, text, text, text, boolean) TO service_role;
 
 ----------------------------------------------------------------------------------------
 -- publish_grader_repo: attach the solution pointer, or refuse
