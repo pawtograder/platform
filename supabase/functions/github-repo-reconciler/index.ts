@@ -313,7 +313,16 @@ async function repairMissingSolutionRepos(opts: {
       const functions = needsHandoutFinish
         ? ["assignment-create-handout-repo", "assignment-create-solution-repo"]
         : ["assignment-create-solution-repo"];
+      // The reserve is re-checked before EACH request, not just once per candidate. A
+      // handout-then-solution pair can spend the whole reserve on the first call, and the second
+      // would then start with a near-zero timeout, abort immediately, and be recorded as a genuine
+      // failure with a Sentry event — reporting a budget shortfall as a broken assignment.
+      let ranOutOfBudget = false;
       for (const fn of functions) {
+        if (!canStartRepair(Date.now() - startedAt)) {
+          ranOutOfBudget = true;
+          break;
+        }
         // Bounded by whatever budget is actually left.
         const left = remainingBudgetMs(Date.now() - startedAt);
         const response = await fetch(edgeFunctionEndpoint(edgeFunctionsUrl, fn), {
@@ -325,6 +334,13 @@ async function repairMissingSolutionRepos(opts: {
         if (!response.ok) {
           throw new Error(`${fn} returned ${response.status}: ${await response.text()}`);
         }
+      }
+      if (ranOutOfBudget) {
+        // Neither created nor failed: nothing is wrong with this assignment, we simply stopped. A
+        // partial handout-then-solution leaves grader_repo NULL, so the row is still repairable and
+        // the next tick picks it up — the handout call it did make is idempotent.
+        console.warn(`[github-repo-reconciler] Budget exhausted mid-repair of assignment ${a.id}; resumes next tick`);
+        break;
       }
       tally.created++;
       console.log(
