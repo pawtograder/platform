@@ -54,11 +54,16 @@ export default function GitHubOrgDetailPage() {
   // (1000), so on a deployment with more orgs than that the target may simply be absent from the
   // response — and every field would then initialize to its empty value and be written back on the
   // next save, silently clearing a real exemption list or automation exclusion.
-  const [orgFound, setOrgFound] = useState(true);
+  // Starts FALSE. If either RPC throws, `load` reaches its catch before populating anything, and a
+  // guard that defaulted to true left the page showing empty inputs and an enabled Save — which
+  // would then write an empty exemption array, a false exclusion, and deployment-default templates
+  // over whatever was actually stored. Saving is enabled only once the org has genuinely loaded.
+  const [orgFound, setOrgFound] = useState(false);
   const [courses, setCourses] = useState<OrgCourse[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setOrgFound(false);
     const supabase = createClient();
     try {
       const [{ data: orgs, error: orgsError }, { data: orgCourses, error: coursesError }] = await Promise.all([

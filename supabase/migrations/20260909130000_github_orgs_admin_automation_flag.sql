@@ -9,6 +9,64 @@
 -- admin page cannot see that an org is excluded, let alone reverse the seeded exclusions.
 
 ----------------------------------------------------------------------------------------
+-- Collapse case-duplicate rows, then forbid new ones
+----------------------------------------------------------------------------------------
+
+-- `org_name` is a case-sensitive text primary key while GitHub org logins are not, so
+-- `github_orgs` can already hold `Pawtograder-Playground` AND `pawtograder-playground` — a state
+-- the admin RPC itself could produce before this migration. Coalescing on lower(org_name) in the
+-- read is not enough: the LEFT JOIN is then one-to-many and expands the key straight back into two
+-- result rows, both showing an arbitrarily chosen display name, while the upsert updates whichever
+-- one LIMIT 1 happened to pick. Unticking the flag on one leaves the other excluding the org.
+--
+-- Merge rather than pick a winner, so nothing configured is silently dropped: the surviving row is
+-- the oldest, its exemption list becomes the UNION of all variants, and its automation flag is true
+-- if ANY variant had it set. Losing an exemption would strip a protected account off repos; losing
+-- an exclusion would let automation into an org marked off-limits. Both are worse than keeping a
+-- setting somebody can remove from the admin page.
+WITH dupes AS (
+    SELECT lower(org_name) AS key
+    FROM public.github_orgs
+    GROUP BY lower(org_name)
+    HAVING COUNT(*) > 1
+),
+merged AS (
+    SELECT
+        d.key,
+        (SELECT g.org_name FROM public.github_orgs g WHERE lower(g.org_name) = d.key
+          ORDER BY g.created_at, g.org_name LIMIT 1) AS keep_name,
+        (SELECT bool_or(g.excluded_from_automation) FROM public.github_orgs g WHERE lower(g.org_name) = d.key) AS any_excluded,
+        (SELECT COALESCE(array_agg(DISTINCT u ORDER BY u), '{}'::text[])
+           FROM public.github_orgs g, unnest(g.permission_sync_exempt_users) AS u
+          WHERE lower(g.org_name) = d.key) AS all_exempt
+    FROM dupes d
+)
+UPDATE public.github_orgs g
+SET excluded_from_automation = m.any_excluded,
+    permission_sync_exempt_users = m.all_exempt,
+    updated_at = now()
+FROM merged m
+WHERE g.org_name = m.keep_name;
+
+-- Then drop every variant that is not the keeper for its key.
+DELETE FROM public.github_orgs g
+WHERE EXISTS (
+    SELECT 1 FROM public.github_orgs o
+     WHERE lower(o.org_name) = lower(g.org_name)
+       AND o.org_name <> g.org_name
+)
+AND g.org_name <> (
+    SELECT g2.org_name FROM public.github_orgs g2
+     WHERE lower(g2.org_name) = lower(g.org_name)
+     ORDER BY g2.created_at, g2.org_name
+     LIMIT 1
+);
+
+-- With the duplicates gone, forbid the state entirely. This is what makes the case-insensitive
+-- joins below single-valued rather than merely usually-single-valued.
+CREATE UNIQUE INDEX IF NOT EXISTS github_orgs_org_name_lower_key ON public.github_orgs (lower(org_name));
+
+----------------------------------------------------------------------------------------
 -- admin_get_github_orgs: report the flag
 ----------------------------------------------------------------------------------------
 
@@ -196,6 +254,60 @@ BEGIN
         updated_at = now();
 END;
 $$;
+
+----------------------------------------------------------------------------------------
+-- admin_get_org_courses: match the org case-insensitively
+----------------------------------------------------------------------------------------
+
+-- admin_get_github_orgs now reports the CONFIGURED spelling as an org's display name, and the list
+-- page puts that spelling straight into the detail-page URL. This companion RPC still compared
+-- exactly, so an org configured as `Pawtograder-Playground` whose classes store
+-- `pawtograder-playground` showed a non-zero course count on the list and ZERO courses on the
+-- detail page — which also disables the course-backed repo editors there, since they need a course
+-- for their auth context.
+CREATE OR REPLACE FUNCTION public.admin_get_org_courses(p_org_name text)
+RETURNS TABLE (
+    id bigint,
+    name text,
+    term integer,
+    archived boolean,
+    handout_template_repo text,
+    solution_template_repo text,
+    effective_handout_template_repo text,
+    effective_solution_template_repo text
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    IF NOT public.authorize_for_admin() THEN
+        RAISE EXCEPTION 'Access denied: Admin role required';
+    END IF;
+
+    RETURN QUERY
+    SELECT
+        c.id,
+        c.name,
+        c.term,
+        COALESCE(c.archived, false),
+        c.handout_template_repo,
+        c.solution_template_repo,
+        public.resolve_effective_template_repo(
+            c.handout_template_repo, go.default_handout_template_repo,
+            'app.settings.default_handout_template_repo', 'pawtograder/template-assignment-handout'),
+        public.resolve_effective_template_repo(
+            c.solution_template_repo, go.default_solution_template_repo,
+            'app.settings.default_solution_template_repo', 'pawtograder/template-assignment-grader')
+    FROM public.classes c
+    LEFT JOIN public.github_orgs go ON lower(go.org_name) = lower(c.github_org)
+    WHERE lower(c.github_org) = lower(p_org_name)
+    ORDER BY c.name;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.admin_get_org_courses(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.admin_get_org_courses(text) TO authenticated, service_role;
 
 REVOKE EXECUTE ON FUNCTION public.admin_get_github_orgs() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.admin_upsert_github_org(text, text, text, text[], boolean) FROM PUBLIC;

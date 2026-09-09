@@ -74,6 +74,7 @@ type AssignmentRow = {
   repo_mode: Parameters<typeof assignmentShouldHaveRepos>[0];
   template_repo: string | null;
   has_autograder: boolean | null;
+  source_assignment_id: number | null;
   classes: { slug: string | null; github_org: string | null; archived: boolean | null } | null;
   autograder: { grader_repo: string | null; workflow_sha: string | null } | null;
 };
@@ -209,7 +210,7 @@ async function repairMissingSolutionRepos(opts: {
     let query = supabase
       .from("assignments")
       .select(
-        "id, class_id, slug, created_at, repo_mode, template_repo, has_autograder, classes!inner(slug, github_org, archived), autograder!inner(grader_repo, workflow_sha)"
+        "id, class_id, slug, created_at, repo_mode, template_repo, has_autograder, source_assignment_id, classes!inner(slug, github_org, archived), autograder!inner(grader_repo, workflow_sha)"
       )
       .is("autograder.grader_repo", null)
       .is("archived_at", null)
@@ -242,8 +243,16 @@ async function repairMissingSolutionRepos(opts: {
 
   const excludedOrgSet = new Set(excludedOrgs.map((o) => o.toLowerCase()));
   const eligible = rows.filter((a) => isEligibleForRepoWork(a, excludedOrgSet));
-  const repairable = eligible.filter((a) => a.template_repo !== null);
-  const ambiguous = eligible.filter((a) => a.template_repo === null);
+  // A NULL template_repo is normally unactionable — indistinguishable from a placeholder that was
+  // never meant to have repos. `fork_from_prior_assignment` is the exception, and it is positive
+  // evidence of the same kind the non-NULL pointer provides: nothing DEFAULTS to that mode (the
+  // column default is template_only_staff), so somebody chose it and named a source assignment.
+  // Repairing it is also the safe direction — the handout call inherits the source's existing repo
+  // rather than creating a new one, so there is no uncertain repository to regret.
+  const isConfiguredFork = (a: AssignmentRow) =>
+    a.repo_mode === "fork_from_prior_assignment" && a.source_assignment_id !== null;
+  const repairable = eligible.filter((a) => a.template_repo !== null || isConfiguredFork(a));
+  const ambiguous = eligible.filter((a) => a.template_repo === null && !isConfiguredFork(a));
   tally.repairable = repairable.length;
 
   const alertCutoff = startedAt - ALERT_AFTER_HOURS * 60 * 60 * 1000;
@@ -318,7 +327,10 @@ async function repairMissingSolutionRepos(opts: {
       // student submission is rejected for a workflow-SHA mismatch. Re-run the handout call first in
       // that case — it is idempotent (createRepo adopts the existing repo) and it is what calls
       // updateAutograderWorkflowHash.
-      const needsHandoutFinish = a.has_autograder !== false && (a.autograder?.workflow_sha ?? null) === null;
+      // Either the handout never ran at all (a configured fork with no inherited pointer yet), or it
+      // ran but died before updateAutograderWorkflowHash.
+      const needsHandoutFinish =
+        a.template_repo === null || (a.has_autograder !== false && (a.autograder?.workflow_sha ?? null) === null);
       const functions = needsHandoutFinish
         ? ["assignment-create-handout-repo", "assignment-create-solution-repo"]
         : ["assignment-create-solution-repo"];

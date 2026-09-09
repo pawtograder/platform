@@ -183,9 +183,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       asObj
     );
   } catch (metadataError) {
+    // NOT best-effort, despite these being re-derivable in principle. Publishing grader_repo after
+    // this failed would take the assignment out of every repair scan while leaving
+    // latest_autograder_sha claiming a config is live over stale points and no commit row — and
+    // nothing would ever revisit it, because the pointer is exactly what the scans key on. Failing
+    // here keeps the pointer NULL, so the assignment stays repairable and a retry adopts the
+    // repository that already exists. Same reasoning as the config write above.
     scope.setTag("initial_autograder_metadata", "failed");
     Sentry.captureException(metadataError, scope);
     console.error(`Could not record initial autograder metadata for ${solutionRepoFullName}`, metadataError);
+    throw metadataError;
   }
 
   // Persist grader_repo only NOW — the same discipline assignment-create-handout-repo applies to
