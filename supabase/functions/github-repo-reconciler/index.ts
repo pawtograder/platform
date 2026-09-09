@@ -18,9 +18,9 @@ import { edgeFunctionEndpoint } from "../_shared/edgeFunctionUrl.ts";
  *     are terminal (a deterministic config failure) and are left for an instructor to retry.
  *  2. Alert on repos stuck > 12h — any repo still not ready 12h after it was created is surfaced to
  *     Sentry so a human notices (grouped into one issue per class+assignment to avoid storms).
- *  3. Create solution ("grader") repos the create path never created, and ALERT on assignments
- *     that are missing both repos — a shape that cannot be distinguished from an assignment that
- *     was never meant to have any, so it is never acted on automatically.
+ *  3. Create solution ("grader") repos the create path never created — and ONLY where the database
+ *     proves it. Assignments missing both repos are neither repaired nor alerted on; see the note
+ *     on repairMissingSolutionRepos for why that shape is unactionable without asking GitHub.
  *
  * Job 3 exists because `assignment-create-solution-repo` has exactly ONE caller in the product —
  * the new-assignment page, which awaits handout creation and then solution creation in sequence.
@@ -67,8 +67,8 @@ const REPAIR_MAX_SUCCESSES_PER_RUN = 5;
 // front of the oldest-first ordering starve every healthy one behind them, on every tick, forever.
 const REPAIR_MAX_ATTEMPTS_PER_RUN = 25;
 
-type RepairTally = { repairable: number; created: number; failed: number; alerted: number };
-const EMPTY_REPAIR: RepairTally = { repairable: 0, created: 0, failed: 0, alerted: 0 };
+type RepairTally = { repairable: number; ambiguous: number; created: number; failed: number; alerted: number };
+const EMPTY_REPAIR: RepairTally = { repairable: 0, ambiguous: 0, created: 0, failed: 0, alerted: 0 };
 
 /** The row shape both the repair and the alert pass reduce to. */
 type AssignmentRow = {
@@ -128,9 +128,13 @@ function isEligibleForRepoWork(a: AssignmentRow): boolean {
  *                                          this is exactly the neu-cs4530/fa26 ip2 shape, and the
  *                                          only case repaired automatically.
  *   both NULL                              creation either never started or died on its first step.
- *                                          Indistinguishable from a seeded placeholder, so it is
- *                                          ALERTED and left alone. A human decides, and repairs it
- *                                          with the script's --assignment flag.
+ *                                          Indistinguishable from a seeded placeholder FROM THE
+ *                                          DATABASE, so it is counted and otherwise ignored —
+ *                                          not repaired, and not alerted on either, because the
+ *                                          placeholders vastly outnumber the real failures and the
+ *                                          alert would be pure noise. Only GitHub can settle it
+ *                                          (does the expected handout repo exist?), which the
+ *                                          script does on demand with --check-github.
  *
  * A handout that failed always leaves both NULL (solution never runs after it), so handout repair
  * has no unambiguous signal at all and is intentionally never automatic.
@@ -142,7 +146,7 @@ async function repairMissingSolutionRepos(opts: {
   scope: Sentry.Scope;
 }): Promise<RepairTally> {
   const { supabase, serviceRoleKey, edgeFunctionsUrl, scope } = opts;
-  const tally: RepairTally = { repairable: 0, created: 0, failed: 0, alerted: 0 };
+  const tally: RepairTally = { repairable: 0, ambiguous: 0, created: 0, failed: 0, alerted: 0 };
   const startedAt = Date.now();
   const graceCutoff = new Date(startedAt - REPAIR_GRACE_MINUTES * 60 * 1000).toISOString();
 
@@ -179,7 +183,7 @@ async function repairMissingSolutionRepos(opts: {
   tally.repairable = repairable.length;
 
   const alertCutoff = startedAt - ALERT_AFTER_HOURS * 60 * 60 * 1000;
-  const alertOn = (a: AssignmentRow, kind: "solution-missing" | "creation-never-completed", message: string) => {
+  const alertOn = (a: AssignmentRow, kind: "solution-missing", message: string) => {
     if (new Date(a.created_at).getTime() > alertCutoff) return;
     const s = scope.clone();
     s.setTag("class_id", String(a.class_id));
@@ -198,15 +202,15 @@ async function repairMissingSolutionRepos(opts: {
     tally.alerted++;
   };
 
-  for (const a of ambiguous) {
-    // Reported, never auto-created: this shape is indistinguishable from a placeholder assignment
-    // that is supposed to have no repos, and guessing wrong creates repositories in a real org.
-    alertOn(
-      a,
-      "creation-never-completed",
-      "Assignment has neither a handout nor a solution repo long after creation (needs a human: may be intentional)"
-    );
-  }
+  // `ambiguous` (both pointers NULL) is deliberately NOT alerted on. Every placeholder assignment
+  // created by scripts/SeedCourseAssignments.ts has this exact shape — and there are many, in every
+  // seeded course — so an alert here fires constantly, says nothing actionable, and gets muted,
+  // which is strictly worse than no alert. Resolving it needs GitHub, not the database: see
+  // scripts/RepairMissingAssignmentRepos.ts --check-github, which asks whether the expected handout
+  // repo actually exists. That is a human-triggered sweep precisely because it costs a GitHub
+  // request per candidate and cannot be justified every 15 minutes against a set that is mostly
+  // placeholders. Counted so the number is visible in the run summary without paging anyone.
+  tally.ambiguous = ambiguous.length;
   for (const a of repairable) {
     alertOn(a, "solution-missing", "Assignment has a handout repo but no solution (grader) repo");
   }
@@ -367,6 +371,7 @@ Deno.serve(async (req) => {
         solution_repos_repaired: repairs.created,
         solution_repos_failed: repairs.failed,
         assignment_repo_gaps_alerted: repairs.alerted,
+        assignments_missing_both_repos: repairs.ambiguous,
         timestamp: new Date().toISOString()
       }),
       { headers: { "Content-Type": "application/json" } }

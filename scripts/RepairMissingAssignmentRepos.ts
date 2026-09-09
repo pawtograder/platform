@@ -19,8 +19,15 @@
  *                                          the only thing repaired by default.
  *   both NULL                              creation never started, or died on its first step, or
  *                                          the assignment was never meant to have repos at all.
- *                                          Listed as NEEDS REVIEW and skipped unless you name it
- *                                          explicitly with --assignment.
+ *                                          The database cannot tell these apart, so they are
+ *                                          skipped by default. --check-github settles it by asking
+ *                                          whether the expected handout repo actually exists: if it
+ *                                          does, the pointer is missing and the assignment IS
+ *                                          broken; if it 404s, nothing was ever created and the
+ *                                          assignment is almost certainly a placeholder. The
+ *                                          reconciler deliberately does NOT do this — one GitHub
+ *                                          request per candidate every 15 minutes, against a set
+ *                                          that is mostly placeholders, is not worth it.
  *
  * Also excluded: classes with no github_org, archived classes and assignments, rows with a NULL
  * class or assignment slug (the repo name is derived from both, so a NULL would create or adopt
@@ -39,12 +46,16 @@
  *   npx tsx scripts/RepairMissingAssignmentRepos.ts                      # dry run, everything
  *   npx tsx scripts/RepairMissingAssignmentRepos.ts --class 123          # dry run, one class
  *   npx tsx scripts/RepairMissingAssignmentRepos.ts --class 123 --apply  # repair one class
+ *   npx tsx scripts/RepairMissingAssignmentRepos.ts --check-github        # settle the ambiguous set
+ *   npx tsx scripts/RepairMissingAssignmentRepos.ts --check-github --apply # and repair what it finds
  *   npx tsx scripts/RepairMissingAssignmentRepos.ts --assignment 456 --apply
  *        # one assignment, INCLUDING the needs-review shape and including a non-NULL grader_repo
  *        # (for a run that failed after the pointer was written). Naming it is the confirmation.
  */
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { createAdminClient } from "@/utils/supabase/client";
+import { createAppAuth } from "@octokit/auth-app";
+import { Octokit } from "@octokit/core";
 import dotenv from "dotenv";
 
 dotenv.config({ path: ".env.local", quiet: true });
@@ -82,6 +93,59 @@ function intArg(name: string): number | undefined {
   return Number.parseInt(raw, 10);
 }
 
+/**
+ * Does the handout repo an assignment WOULD have been given actually exist on GitHub?
+ *
+ * This is the only thing that can separate "handout creation failed before it wrote the pointer"
+ * from "this assignment was never meant to have repos". The repo name is fully determined by the
+ * class slug and assignment slug (`assignment-create-handout-repo` derives it the same way), so a
+ * plain existence check answers it:
+ *
+ *   200  the repo is there and the database pointer is missing  -> genuinely broken, repair it
+ *   404  nothing was ever created                               -> placeholder, leave it alone
+ *
+ * Returns null when the answer is UNKNOWN — the App is not installed on the org, or GitHub failed.
+ * Unknown must not be read as either verdict: reporting a placeholder as broken invites someone to
+ * create a repo nobody wanted, and reporting a broken one as fine hides it.
+ */
+async function makeHandoutExistenceChecker(): Promise<(org: string, repo: string) => Promise<boolean | null>> {
+  const appId = process.env.GITHUB_APP_ID;
+  const raw = process.env.GITHUB_PRIVATE_KEY_STRING;
+  if (!appId || !raw) {
+    throw new Error("--check-github needs GITHUB_APP_ID and GITHUB_PRIVATE_KEY_STRING in .env.local");
+  }
+  // .env files commonly store the PEM with literal \n; normalize to real newlines.
+  const privateKey = raw.includes("\\n") ? raw.replace(/\\n/g, "\n") : raw;
+
+  const appOctokit = new Octokit({ authStrategy: createAppAuth, auth: { appId, privateKey } });
+  const installations = await appOctokit.request("GET /app/installations", { per_page: 100 });
+  const byOrg = new Map<string, number>();
+  for (const inst of installations.data) {
+    if (inst.account && "login" in inst.account) byOrg.set(inst.account.login.toLowerCase(), inst.id);
+  }
+  // One installation-scoped client per org, reused across that org's assignments.
+  const clients = new Map<string, Octokit>();
+
+  return async (org: string, repo: string) => {
+    const installationId = byOrg.get(org.toLowerCase());
+    if (installationId === undefined) return null;
+    let client = clients.get(org.toLowerCase());
+    if (!client) {
+      client = new Octokit({ authStrategy: createAppAuth, auth: { appId, privateKey, installationId } });
+      clients.set(org.toLowerCase(), client);
+    }
+    try {
+      await client.request("GET /repos/{owner}/{repo}", { owner: org, repo });
+      return true;
+    } catch (e) {
+      const status = (e as { status?: number }).status;
+      if (status === 404) return false;
+      // Anything else (403, 5xx, network) is unknown, not absent.
+      return null;
+    }
+  };
+}
+
 type Row = {
   id: number;
   class_id: number;
@@ -95,6 +159,7 @@ type Row = {
 
 async function main() {
   const apply = hasFlag("apply");
+  const checkGithub = hasFlag("check-github");
   const classId = intArg("class");
   const assignmentId = intArg("assignment");
 
@@ -148,10 +213,39 @@ async function main() {
   console.log(`\n=== Repairable: handout exists, solution repo missing (${repairable.length}) ===`);
   repairable.forEach((a) => console.log(`  ${describe(a)}`));
 
-  console.log(`\n=== Needs review: no handout either (${needsReview.length}) ===`);
-  console.log("  Not repaired by default — this is also what a placeholder assignment that was");
-  console.log("  never meant to have repos looks like. Confirm, then use --assignment <id> --apply.");
-  needsReview.forEach((a) => console.log(`  ${describe(a)}`));
+  console.log(`\n=== No handout either (${needsReview.length}) ===`);
+  // Resolved against GitHub only on request: it costs a request per assignment, and most of these
+  // are placeholders from SeedCourseAssignments, which never sets repo_mode and so leaves every one
+  // of them looking exactly like a failed handout.
+  const confirmedBroken: Row[] = [];
+  if (!checkGithub) {
+    console.log("  Skipped: from the database this is indistinguishable from a placeholder assignment");
+    console.log("  that was never meant to have repos. Re-run with --check-github to settle it.");
+    needsReview.forEach((a) => console.log(`  ${describe(a)}`));
+  } else {
+    const handoutExists = await makeHandoutExistenceChecker();
+    let placeholders = 0;
+    let unknown = 0;
+    for (const a of needsReview) {
+      const handoutName = `${a.classes!.slug}-handout-${a.slug}`;
+      const exists = await handoutExists(a.classes!.github_org!, handoutName);
+      if (exists === true) {
+        // The repo is on GitHub but nothing in the database points at it — handout creation got
+        // past createRepo and died before the pointer write. Genuinely broken.
+        confirmedBroken.push(a);
+        console.log(`  BROKEN  ${describe(a)}`);
+        console.log(`          handout ${a.classes!.github_org}/${handoutName} exists but template_repo is NULL`);
+      } else if (exists === false) {
+        placeholders++;
+      } else {
+        unknown++;
+        console.log(`  UNKNOWN ${describe(a)} — App not installed on ${a.classes!.github_org}, or GitHub errored`);
+      }
+    }
+    console.log(
+      `  ${confirmedBroken.length} genuinely broken, ${placeholders} never created (placeholders), ${unknown} unknown`
+    );
+  }
 
   // A targeted run may also want an assignment whose grader_repo was written but whose creation
   // then failed downstream (template resolution, GitHub, permission sync, config load) — the
@@ -164,10 +258,35 @@ async function main() {
     targetedPointerSet.forEach((a) => console.log(`  ${describe(a)} (currently ${a.autograder!.grader_repo})`));
   }
 
-  const toRepair = targeted ? [...repairable, ...needsReview, ...targetedPointerSet] : repairable;
+  // Each entry carries WHICH functions to re-run, because the two broken shapes need different
+  // work. A repairable row already has its handout pointer, so only the solution call is missing.
+  // A GitHub-confirmed broken row has an orphaned handout repo AND no pointer, so the handout call
+  // has to run first — it adopts the existing repo (createRepo has a pre-existing-repo branch) and
+  // writes template_repo — before the solution call, which reads that pointer when it seeds handout
+  // file hashes.
+  const SOLUTION_ONLY = ["assignment-create-solution-repo"];
+  const HANDOUT_THEN_SOLUTION = ["assignment-create-handout-repo", "assignment-create-solution-repo"];
+  type RepairPlan = { row: Row; functions: string[] };
+
+  const plans: RepairPlan[] = targeted
+    ? [
+        ...repairable.map((row) => ({ row, functions: SOLUTION_ONLY })),
+        // A named assignment with neither pointer gets the handout call too. Unlike the sweep, this
+        // may CREATE a handout that never existed — naming the assignment is the confirmation that
+        // you want that.
+        ...needsReview.map((row) => ({ row, functions: HANDOUT_THEN_SOLUTION })),
+        ...targetedPointerSet.map((row) => ({ row, functions: SOLUTION_ONLY }))
+      ]
+    : [
+        ...repairable.map((row) => ({ row, functions: SOLUTION_ONLY })),
+        ...confirmedBroken.map((row) => ({ row, functions: HANDOUT_THEN_SOLUTION }))
+      ];
 
   if (!apply) {
-    console.log(`\nDry run. Re-run with --apply to repair ${toRepair.length} assignment(s).`);
+    console.log(`\nDry run. Re-run with --apply to repair ${plans.length} assignment(s).`);
+    if (!checkGithub && needsReview.length > 0) {
+      console.log(`Add --check-github to also settle the ${needsReview.length} with no handout.`);
+    }
     return;
   }
 
@@ -176,21 +295,27 @@ async function main() {
   // partial one.
   let ok = 0;
   let failed = 0;
-  for (const a of toRepair) {
-    process.stdout.write(`  repairing assignment ${a.id}... `);
-    const { error: invokeError } = await supabase.functions.invoke("assignment-create-solution-repo", {
-      body: { assignment_id: a.id, class_id: a.class_id }
-    });
-    if (invokeError) {
-      // Keep going: one assignment failing must not stop the rest, and the run is re-runnable.
-      failed++;
-      console.log(`FAILED: ${invokeError.message}`);
-      continue;
+  for (const { row, functions } of plans) {
+    let allOk = true;
+    for (const fn of functions) {
+      process.stdout.write(`  ${fn} for assignment ${row.id}... `);
+      const { error: invokeError } = await supabase.functions.invoke(fn, {
+        body: { assignment_id: row.id, class_id: row.class_id }
+      });
+      if (invokeError) {
+        // Stop this assignment but keep going with the rest: the solution call depends on the
+        // handout pointer the previous call was supposed to write, so running it anyway would
+        // repeat the original half-finished state. The run is re-runnable.
+        console.log(`FAILED: ${invokeError.message}`);
+        allOk = false;
+        break;
+      }
+      console.log("ok");
     }
-    ok++;
-    console.log("ok");
+    if (allOk) ok++;
+    else failed++;
   }
-  console.log(`\nRepaired ${ok}/${toRepair.length}${failed ? `, ${failed} failed` : ""}.`);
+  console.log(`\nRepaired ${ok}/${plans.length}${failed ? `, ${failed} failed` : ""}.`);
   if (failed > 0) {
     // Non-zero, so a wrapper script or operator automation cannot read an incomplete repair as a
     // successful one.
