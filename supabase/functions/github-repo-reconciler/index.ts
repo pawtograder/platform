@@ -8,6 +8,7 @@ import { isE2eFixtureTarget } from "../_shared/e2eGithubGuard.ts";
 import { assignmentShouldHaveRepos } from "../_shared/handoutRepoStrategy.ts";
 import { edgeFunctionEndpoint } from "../_shared/edgeFunctionUrl.ts";
 import { canStartRepair, remainingBudgetMs } from "../_shared/repairBudget.ts";
+import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 /**
  * GitHub Repo Reconciler
@@ -20,7 +21,7 @@ import { canStartRepair, remainingBudgetMs } from "../_shared/repairBudget.ts";
  *  2. Alert on repos stuck > 12h — any repo still not ready 12h after it was created is surfaced to
  *     Sentry so a human notices (grouped into one issue per class+assignment to avoid storms).
  *  3. Create solution ("grader") repos the create path never created — and ONLY where the database
- *     proves it. Assignments missing both repos are neither repaired nor alerted on; see the note
+ *     proves it. DETACHED via waitUntil: see the note at its call site. Assignments missing both repos are neither repaired nor alerted on; see the note
  *     on repairMissingSolutionRepos for why that shape is unactionable without asking GitHub.
  *
  * Job 3 exists because `assignment-create-solution-repo` has exactly ONE caller in the product —
@@ -458,15 +459,37 @@ Deno.serve(async (req) => {
     }
 
     // 3) Create solution repos the create path never created, and alert on the rest.
-    // Runs unconditionally: the scan and its Sentry alerts are database-only, and are the entire
-    // escalation path when the repair call cannot be made. Only the outbound repairs are gated on
-    // the URL, inside the helper.
-    const repairs = await repairMissingSolutionRepos({
-      supabase,
-      serviceRoleKey: supabaseKey,
-      edgeFunctionsUrl: Deno.env.get("EDGE_FUNCTIONS_URL") ?? null,
-      scope
-    });
+    // 3) DETACHED, not awaited. pg_cron reaches this function through
+    // call_edge_function_internal with a 5000ms pg_net timeout
+    // (20260709130000_repo-creation-reconciler.sql), while a repair pass is bounded at 240s and a
+    // single creation has been measured at p50 279.5s under contention. Awaiting it inside the
+    // handler meant the scheduled caller gave up, and disconnected, on every single tick — jobs 1
+    // and 2 are fast and would have returned fine, but job 3 could never complete within the
+    // invocation that triggers it.
+    //
+    // Same shape as assignment-create-all-repos, which detaches its own long repo-creation run:
+    // hand the work to waitUntil and answer immediately. waitUntilWithSentryFlush flushes when the
+    // BACKGROUND work settles rather than when the response returns, which matters here because
+    // every alert and every failure this job reports is captured after that point.
+    const repairTask = async () => {
+      try {
+        const repairs = await repairMissingSolutionRepos({
+          supabase,
+          serviceRoleKey: supabaseKey,
+          edgeFunctionsUrl: Deno.env.get("EDGE_FUNCTIONS_URL") ?? null,
+          scope
+        });
+        console.log(
+          `[github-repo-reconciler] Repair pass: repaired ${repairs.created}, failed ${repairs.failed}, ` +
+            `alerted ${repairs.alerted}, missing both repos ${repairs.ambiguous}`
+        );
+      } catch (error) {
+        // Nothing is awaiting this, so an escaping error would otherwise be invisible.
+        console.error("[github-repo-reconciler] Repair pass failed:", error);
+        Sentry.captureException(error, scope);
+      }
+    };
+    waitUntilWithSentryFlush(repairTask());
 
     // Edge runtime may tear down as soon as the response is returned; flush queued Sentry events first.
     await Sentry.flush(2000);
@@ -475,10 +498,9 @@ Deno.serve(async (req) => {
         success: true,
         requeued: requeuedCount ?? 0,
         long_stuck_alerted: stuck.length,
-        solution_repos_repaired: repairs.created,
-        solution_repos_failed: repairs.failed,
-        assignment_repo_gaps_alerted: repairs.alerted,
-        assignments_missing_both_repos: repairs.ambiguous,
+        // The repair pass is detached, so its counts are not known when this response is written.
+        // They are logged and reported to Sentry from the background task instead.
+        solution_repair: "started",
         timestamp: new Date().toISOString()
       }),
       { headers: { "Content-Type": "application/json" } }
