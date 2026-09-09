@@ -243,6 +243,13 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         if (!assignment.template_repo?.includes("/")) {
           return;
         }
+        // This fan-out CREATES a repo whenever the group has none, and it reads its assignment from
+        // its own embed rather than from `allAssignments` — so the `archived_at` filter on that
+        // query does not reach here. Without this guard, "Fix GitHub" would still manufacture a
+        // fresh group repo for an assignment the instructor has retired.
+        if (assignment.archived_at) {
+          return;
+        }
         const repoName = `${c.classes!.slug}-${assignment.slug}-group-${sanitizeRepoNameComponent(group.name)}`;
         // PER-JOB SCOPE. This closure is one of four fan-outs in this function that share the single
         // request scope, and it runs concurrently over every group repo. Everything below writes

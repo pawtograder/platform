@@ -350,10 +350,6 @@ const installations: {
   orgName: string;
   id: number;
   octokit: Octokit;
-  // "all" | "selected" — whether this installation can see every repo in the org. Kept because it
-  // is the only thing that makes a 404 legible: on a "selected" installation a repo we were never
-  // granted 404s exactly like one that was deleted. See classifyRepoPresence.
-  repositorySelection: "all" | "selected" | undefined;
 }[] = [];
 const MyOctokit = Octokit.plugin(throttling);
 
@@ -441,7 +437,6 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
       installations.push({
         orgName: orgLogin,
         id: i.id,
-        repositorySelection: i.repository_selection,
         octokit: new MyOctokit({
           authStrategy: createAppAuth,
           auth: {
@@ -2260,11 +2255,32 @@ function isGitHubNotFoundError(error: unknown): boolean {
 }
 
 /**
- * Whether the installation's repo selection lets us read a 404 as proof of deletion.
- * Reads the cache `getOctoKit` populates, so callers must have obtained an octokit first.
+ * Read the org installation's repo selection ("all" | "selected") STRAIGHT FROM GitHub.
+ *
+ * Deliberately not cached, and deliberately not taken from the `installations` array: that array
+ * is filled once per isolate and only refilled while empty, so a value read from it is arbitrarily
+ * stale. An installation narrowed from "All repositories" to "Only select repositories" would keep
+ * reporting "all" for the life of the isolate, and the first live repo dropped from the selection
+ * would be read as deleted and durably parked — the exact failure the selection check exists to
+ * prevent. Proof has to be fresh to be proof.
+ *
+ * Costs one app-authenticated request, and only on the 404 path (see
+ * `listCollaboratorsOrThrowMissing`), never on the happy path. `undefined` on any failure: unknown
+ * scope must degrade to "cannot prove deletion", not to "all".
  */
-export function installationRepositorySelection(org: string): "all" | "selected" | undefined {
-  return installations.find((i) => i.orgName === org)?.repositorySelection;
+export async function fetchRepositorySelection(org: string): Promise<"all" | "selected" | undefined> {
+  try {
+    const resp = await app.octokit.request("GET /orgs/{org}/installation", { org });
+    return resp.data.repository_selection;
+  } catch (error) {
+    Sentry.addBreadcrumb({
+      category: "github",
+      message: `Could not read installation repo selection for ${org}; treating repo presence as unprovable`,
+      level: "warning",
+      data: { error: error instanceof Error ? error.message : String(error) }
+    });
+    return undefined;
+  }
 }
 
 /**
@@ -2320,17 +2336,18 @@ export async function classifyRepoPresence(
  * `inaccessible` -> rethrow the original 404 so the ladder still covers the lag it was written for,
  * and so a repo merely hidden from a selected-repos installation is never parked.
  *
- * `repositorySelection` is a parameter rather than a lookup inside this function on purpose: it
- * comes from the module-level installation cache, and reading it here would make the "repo is
- * gone" branch untestable — a cold cache reports `undefined`, which correctly degrades to
- * `inaccessible`, so the one case that must be proven right would silently never be exercised.
- * Callers pass `installationRepositorySelection(org)`; by then `getOctoKit` has warmed the cache.
+ * `resolveRepositorySelection` is a thunk, not a value, for two reasons: it is only needed on the
+ * 404 path so the happy path pays nothing for it, and passing it in keeps this function testable —
+ * an earlier version read the module-level installation cache directly, and a unit test caught that
+ * a cold cache reports `undefined`, degrades to `inaccessible`, and would have left the one branch
+ * that must be provably correct never exercised. Production passes
+ * `() => fetchRepositorySelection(owner)`, which asks GitHub rather than trusting a cache.
  */
 export async function listCollaboratorsOrThrowMissing(
   octokit: Octokit,
   owner: string,
   repo: string,
-  repositorySelection: "all" | "selected" | undefined
+  resolveRepositorySelection: () => Promise<"all" | "selected" | undefined>
 ) {
   try {
     return await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
@@ -2340,7 +2357,7 @@ export async function listCollaboratorsOrThrowMissing(
     });
   } catch (error) {
     if (isGitHubNotFoundError(error)) {
-      const presence = await classifyRepoPresence(octokit, owner, repo, repositorySelection);
+      const presence = await classifyRepoPresence(octokit, owner, repo, await resolveRepositorySelection());
       if (presence === "absent") {
         throw new RepositoryMissingError(`${owner}/${repo}`);
       }
@@ -3492,7 +3509,7 @@ async function syncRepoPermissionsInstrumented(
   // ladder on it; see that function for what the ambiguity used to cost.
   const existingAccess = await timeStep(timings, "list_collaborators", () =>
     retryWithBackoff(
-      () => listCollaboratorsOrThrowMissing(octokit, org, repo, installationRepositorySelection(org)),
+      () => listCollaboratorsOrThrowMissing(octokit, org, repo, () => fetchRepositorySelection(org)),
       5,
       3000,
       scope

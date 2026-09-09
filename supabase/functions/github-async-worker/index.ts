@@ -1175,7 +1175,7 @@ export async function processEnvelope(
             console.log(`repo is parked, dropping permission sync: ${org}/${repoName} — ${repository.creation_error}`);
             scope.setTag("permission_sync_skipped", "repo_parked");
             // Close out the api_gateway_calls row this envelope opened. enqueue_* inserts it with
-            // status_code = 0, and returning true archives the message — so without this the row
+            // status_code = 0, and archiving the message ends its life — so without this the row
             // stays pending forever and every dropped duplicate inflates the call totals with no
             // completion status or latency. 422: the job was well-formed but can never succeed,
             // matching the non-retryable path below.
@@ -1191,6 +1191,31 @@ export async function processEnvelope(
               },
               scope
             );
+            // DLQ before archiving, rather than just dropping the message.
+            //
+            // The subtle case this protects: when the error path below parks the row but its own
+            // sendToDeadLetterQueue call fails, it deliberately leaves the message UNARCHIVED so
+            // that write can be retried. That redelivered message arrives back here, and it is
+            // indistinguishable from a duplicate — so simply archiving would consume the very
+            // retry the error path was preserving, and the terminal failure would vanish from DLQ
+            // tracking during exactly the transient outage the retry exists for.
+            //
+            // Routing every parked message through the DLQ makes both cases correct without having
+            // to tell them apart, and matches the handler's convention that terminal work leaves a
+            // DLQ record. It does mean a genuine duplicate also lands there, which is the intended
+            // trade: a redundant DLQ row is recoverable, a lost one is not.
+            const dlqSuccess = await sendToDeadLetterQueue(
+              adminSupabase,
+              envelope,
+              meta,
+              new Error(`Repository is parked and cannot be synced: ${repository.creation_error}`),
+              scope
+            );
+            if (!dlqSuccess) {
+              // Leave it unarchived so the DLQ write is retried; read_ct's poison limit bounds this.
+              console.error(`Failed to DLQ parked permission sync for ${org}/${repoName}, leaving unarchived`);
+              return false;
+            }
             return true;
           }
           console.log("repo is not ready", `${org}/${repoName}`);

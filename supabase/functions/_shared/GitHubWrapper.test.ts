@@ -202,7 +202,7 @@ Deno.test("listCollaboratorsOrThrowMissing: happy path returns the collaborator 
   const octokit = fakeOctokit({
     "GET /repos/{owner}/{repo}/collaborators": () => [{ login: "student", role_name: "write" }]
   });
-  const got = await listCollaboratorsOrThrowMissing(octokit, "org", "repo", "all");
+  const got = await listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all");
   assertEquals(got.length, 1);
 });
 
@@ -215,7 +215,10 @@ Deno.test(
       },
       "GET /repos/{owner}/{repo}": META_OK
     });
-    const err = await assertRejects(() => listCollaboratorsOrThrowMissing(octokit, "org", "repo", "all"), RequestError);
+    const err = await assertRejects(
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all"),
+      RequestError
+    );
     assertEquals(err.status, 404);
   }
 );
@@ -232,7 +235,7 @@ Deno.test(
       }
     });
     const err = await assertRejects(
-      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", "all"),
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all"),
       RepositoryMissingError
     );
     assertEquals(err.fullName, "org/repo");
@@ -255,12 +258,43 @@ Deno.test(
       }
     });
     const err = await assertRejects(
-      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", "selected"),
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "selected"),
       RequestError
     );
     assertEquals(err.status, 404);
   }
 );
+
+Deno.test("listCollaboratorsOrThrowMissing: selection is resolved lazily, never on the happy path", async () => {
+  // The resolver hits GitHub, so it must not be called when the collaborator read succeeds.
+  let resolverCalls = 0;
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => [{ login: "student", role_name: "write" }]
+  });
+  await listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => {
+    resolverCalls++;
+    return "all";
+  });
+  assertEquals(resolverCalls, 0);
+});
+
+Deno.test("listCollaboratorsOrThrowMissing: a resolver that cannot answer -> inaccessible, does NOT park", async () => {
+  // fetchRepositorySelection returns undefined when it cannot read the installation. Unknown scope
+  // must never be treated as proof of deletion.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  const err = await assertRejects(
+    () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => undefined),
+    RequestError
+  );
+  assertEquals(err.status, 404);
+});
 
 Deno.test("listCollaboratorsOrThrowMissing: non-404 propagates without an existence probe", async () => {
   // No "GET /repos/{owner}/{repo}" handler: fakeOctokit throws on an unexpected route, so this
@@ -270,7 +304,10 @@ Deno.test("listCollaboratorsOrThrowMissing: non-404 propagates without an existe
       throw requestError(403, "Forbidden");
     }
   });
-  const err = await assertRejects(() => listCollaboratorsOrThrowMissing(octokit, "org", "repo", "all"), RequestError);
+  const err = await assertRejects(
+    () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all"),
+    RequestError
+  );
   assertEquals(err.status, 403);
 });
 
