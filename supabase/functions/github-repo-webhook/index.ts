@@ -3177,6 +3177,73 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
 });
 
 // Handle organization invitation events
+/**
+ * A user left (or was removed from) a course's GitHub org.
+ *
+ * Until this handler existed, `github_org_confirmed` was a one-way latch: set true when the user
+ * joined the team, and never cleared. An enrollment whose org membership disappeared therefore
+ * looked confirmed forever, so nothing re-invited them, the team sync kept counting them as an
+ * intended member, and the student's only symptom was repo permissions that silently stopped
+ * working. Clearing both columns puts the row back into the state the ordinary invite machinery
+ * already knows how to repair: the enrollment triggers on the next role change, and the hourly
+ * membership reconciler otherwise.
+ *
+ * Only rows for classes IN THIS ORG are touched, and only live enrollments — a dropped student who
+ * is removed from the org must stay removed. This is also the shape the instructor unlink flow
+ * produces (github-user-sync removes the member, then clears the link); clearing there is harmless
+ * because every re-invite path requires a non-null github_username.
+ */
+async function handleOrgMemberRemoved(
+  adminSupabase: SupabaseClient<Database>,
+  organizationName: string,
+  removedUserLogin: string,
+  scope: Sentry.Scope
+) {
+  const { data: userData, error: userError } = await adminSupabase
+    .from("users")
+    .select("user_id")
+    .ilike("github_username", removedUserLogin)
+    .maybeSingle();
+  if (userError) {
+    Sentry.captureException(userError, scope);
+    return;
+  }
+  if (!userData) {
+    // Not one of ours (an org owner, a bot, someone added out of band). Not an error.
+    return;
+  }
+
+  const { data: classesData, error: classesError } = await adminSupabase
+    .from("classes")
+    .select("id")
+    .eq("github_org", organizationName);
+  if (classesError) {
+    Sentry.captureException(classesError, scope);
+    return;
+  }
+  if (!classesData || classesData.length === 0) {
+    return;
+  }
+
+  const { error: updateError } = await adminSupabase
+    .from("user_roles")
+    .update({ github_org_confirmed: false, invitation_date: null })
+    .eq("user_id", userData.user_id)
+    .eq("disabled", false)
+    .in(
+      "class_id",
+      classesData.map((c) => c.id)
+    );
+  if (updateError) {
+    Sentry.captureException(updateError, scope);
+    return;
+  }
+  scope?.setTag("org_membership_cleared", "true");
+  console.log(
+    `[github-repo-webhook] ${removedUserLogin} left ${organizationName}; cleared github_org_confirmed for their live enrollments`
+  );
+}
+
 eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent }) => {
   // Extract organization name early for e2e-ignore guard
   const organizationName = payload.organization?.login;
@@ -3198,6 +3265,16 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
 
   try {
     const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+    // A departure is the mirror of an invitation: it must un-confirm the enrollment, or the row
+    // claims a membership that no longer exists and no repair path will ever look at it again.
+    if (payload.action === "member_removed") {
+      const removedUserLogin = "membership" in payload ? payload.membership?.user?.login : undefined;
+      if (removedUserLogin && organizationName) {
+        await handleOrgMemberRemoved(adminSupabase, organizationName, removedUserLogin, scope);
+      }
+      return;
+    }
 
     // Only process member invitation events
     if (payload.action !== "member_invited") {
