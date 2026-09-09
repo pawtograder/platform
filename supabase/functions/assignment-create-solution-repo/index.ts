@@ -36,7 +36,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("slug,repo_mode,classes(slug,github_org)")
+    .select("slug,repo_mode,has_autograder,classes(slug,github_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
@@ -182,8 +182,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     requireMatch: boolean
   ) => {
     const parsed = config as unknown as PawtograderConfig | null;
-    const points = parsed ? calculateTotalAutograderPoints(parsed) : 0;
+    // An assignment with has_autograder=false still comes through here — the create page calls this
+    // for every repo-backed mode so `submissionFiles` gets loaded — but no autograder will ever run
+    // for it. Copying the solution template's graded points into assignments.autograder_points
+    // would have the rubric editor and the grading summary treat that as an automated-score
+    // allocation and subtract it from hand-grading, so a repo-only or PR-mode assignment would show
+    // points nothing can award.
+    const points = assignment.has_autograder === false || !parsed ? 0 : calculateTotalAutograderPoints(parsed);
     scope.setTag("total_autograder_points", points.toString());
+    scope.setTag("has_autograder", String(assignment.has_autograder !== false));
     const { error: pointsError } = await adminSupabase
       .from("assignments")
       .update({ autograder_points: points })
@@ -315,21 +322,36 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // Re-read the config AT the new head, so the reconciled values still describe one revision.
       const newerConfig = await getFileFromRepo(solutionRepoFullName, "pawtograder.yml", scope, currentHead.sha);
       const newerObj = (await parse(newerConfig.content)) as Json;
-      const { error: reconfigError } = await adminSupabase
+      // Conditional on the SHA still being the one this request wrote. The precheck above closes
+      // most of the window, but a webhook landing between it and this write would otherwise have
+      // its config and points overwritten by the older snapshot while its newer SHA survived the
+      // compare-and-set below — leaving the newest SHA paired with stale metadata, which is worse
+      // than either side winning outright. Matching nothing here means we lost the race, and we
+      // stop before touching points or the commit row.
+      const { data: reconfigRows, error: reconfigError } = await adminSupabase
         .from("autograder")
         .update({ config: newerObj })
-        .eq("id", assignment_id);
+        .eq("id", assignment_id)
+        .eq("latest_autograder_sha", headCommit.sha)
+        .select("id");
       if (reconfigError) throw reconfigError;
-      // Only advance from the sha this function itself recorded. If the webhook has already stored
-      // something newer, this write matches nothing and the newer value stands.
-      await reconcileHeadMetadata(
-        currentHead.sha,
-        currentHead.commit.message,
-        currentHead.commit.author?.name ?? null,
-        newerObj,
-        headCommit.sha,
-        false
-      );
+      if ((reconfigRows?.length ?? 0) === 0) {
+        // NOT a `return` — this block sits directly in handleRequest, so returning here would skip
+        // the handout-hash seeding below and answer the caller with an empty body.
+        scope.setTag("solution_head_recheck", "superseded_mid_write");
+        console.log(`Head recheck for ${solutionRepoFullName} lost a race with the push webhook; leaving its values`);
+      } else {
+        // Only advance from the sha this function itself recorded. If the webhook has already stored
+        // something newer, this write matches nothing and the newer value stands.
+        await reconcileHeadMetadata(
+          currentHead.sha,
+          currentHead.commit.message,
+          currentHead.commit.author?.name ?? null,
+          newerObj,
+          headCommit.sha,
+          false
+        );
+      }
     }
   } catch (recheckError) {
     // Reportable rather than fatal, and safe BECAUSE of the write ordering above: the SHA is the

@@ -324,11 +324,31 @@ async function repairMissingSolutionRepos(opts: {
     // between the scan and this candidate's turn — and creating repositories for something somebody
     // has just deliberately retired is exactly what those guards exist to prevent. The solution
     // handler rechecks repo_mode itself, but it reads neither archive flag nor the org exclusion.
-    const { data: fresh, error: freshError } = await supabase
-      .from("assignments")
-      .select("repo_mode, archived_at, classes!inner(slug, github_org, archived)")
-      .eq("id", a.id)
-      .maybeSingle();
+    // The org exclusion is re-read too, not taken from the set captured at the start of the pass.
+    // It is a safety switch: an operator flipping it expects automation to stop, and a detached pass
+    // can still be working through candidates minutes later. Reading the flag for this one org is a
+    // single indexed lookup.
+    const [{ data: fresh, error: freshError }, { data: freshOrg, error: freshOrgError }] = await Promise.all([
+      supabase
+        .from("assignments")
+        .select("repo_mode, archived_at, classes!inner(slug, github_org, archived)")
+        .eq("id", a.id)
+        .maybeSingle(),
+      supabase
+        .from("github_orgs")
+        .select("excluded_from_automation")
+        .ilike("org_name", a.classes?.github_org ?? "")
+        .maybeSingle()
+    ]);
+    if (freshOrgError || freshOrg?.excluded_from_automation) {
+      // Unreadable is treated the same as excluded: this is the switch that stops automation, so
+      // "we could not tell" must not mean "carry on".
+      scope.setTag("repair_skipped_revalidation", "org_excluded_or_unknown");
+      console.log(
+        `[github-repo-reconciler] Org ${a.classes?.github_org} is excluded or unreadable; skipping assignment ${a.id}`
+      );
+      continue;
+    }
     if (freshError) {
       // A failed read is not permission to proceed.
       console.warn(`[github-repo-reconciler] Could not revalidate assignment ${a.id}; skipping this tick`);
