@@ -15,6 +15,15 @@ import { sentryIdentity } from "../_shared/SentryContext.ts";
  *     are terminal (a deterministic config failure) and are left for an instructor to retry.
  *  2. Alert on repos stuck > 12h — any repo still not ready 12h after it was created is surfaced to
  *     Sentry so a human notices (grouped into one issue per class+assignment to avoid storms).
+ *  3. Create solution ("grader") repos that were never created at all.
+ *
+ * Job 3 exists because `assignment-create-solution-repo` has exactly ONE caller in the product —
+ * the new-assignment page, which awaits handout creation and then solution creation in sequence.
+ * When the handout call rejects, the solution call never runs, and until this job there was nothing
+ * anywhere that noticed: re-saving the assignment does not call it, jobs 1 and 2 above only ever
+ * look at the `repositories` table (student repos), and the assignment simply keeps a handout repo
+ * and no grader repo forever. That is how neu-cs4530/fa26 `ip2` ended up with `fa26-handout-ip2`
+ * and no `fa26-solution-ip2` after handout creation ran 95.6s and the browser gave up at ~30s.
  */
 
 if (Deno.env.get("SENTRY_DSN")) {
@@ -31,6 +40,17 @@ if (Deno.env.get("SENTRY_DSN")) {
 
 const STALE_MINUTES = 15;
 const ALERT_AFTER_HOURS = 12;
+// Grace period before job 3 treats a NULL grader_repo as abandoned rather than in flight. Creation
+// normally completes in ~15s; 30 minutes is far outside that and well inside the 15-minute cadence.
+const SOLUTION_REPO_GRACE_MINUTES = 30;
+// Upper bound on how far back to look. An assignment this old whose repair has never succeeded is a
+// standing problem for a human (job 3 alerts on it well before this), not something to keep
+// retrying against GitHub every 15 minutes forever.
+const SOLUTION_REPO_MAX_AGE_DAYS = 30;
+// Each repair instantiates a template and syncs permissions — GitHub work measured in seconds, not
+// milliseconds. Capped so one run cannot outlive its own 15-minute cadence; the remainder is picked
+// up next tick, and the set only shrinks.
+const SOLUTION_REPO_MAX_PER_RUN = 5;
 
 Deno.serve(async (req) => {
   console.log(`[github-repo-reconciler] Received request: ${req.method}`);
@@ -114,6 +134,103 @@ Deno.serve(async (req) => {
       console.warn(`[github-repo-reconciler] ${stuck.length} repos stuck > ${ALERT_AFTER_HOURS}h (alerted to Sentry)`);
     }
 
+    // 3) Create solution ("grader") repos that were never created.
+    //
+    // `autograder.grader_repo` is written at the TOP of assignment-create-solution-repo, before it
+    // touches GitHub, so NULL means the function never ran — which is exactly the create-path miss
+    // described above. A non-NULL value means it ran and got past that write; whether the repo
+    // exists is a different question, needs GitHub to answer, and is deliberately not this job's.
+    const solutionRepairs = { attempted: 0, created: 0, failed: 0, alerted: 0 };
+    const edgeFunctionsUrl = Deno.env.get("EDGE_FUNCTIONS_URL");
+    if (!edgeFunctionsUrl) {
+      // Skipped rather than fatal: jobs 1 and 2 are the reason this function is scheduled, and a
+      // deployment that has not set this should still get them.
+      console.warn("[github-repo-reconciler] EDGE_FUNCTIONS_URL not set; skipping solution-repo repair");
+    } else {
+      const now = Date.now();
+      const graceCutoff = new Date(now - SOLUTION_REPO_GRACE_MINUTES * 60 * 1000).toISOString();
+      const oldestConsidered = new Date(now - SOLUTION_REPO_MAX_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      const { data: missingSolution, error: missingError } = await supabase
+        .from("assignments")
+        .select("id, class_id, slug, created_at, classes!inner(github_org), autograder!inner(grader_repo)")
+        .is("autograder.grader_repo", null)
+        .not("repo_mode", "in", "(none,no_submission)")
+        .not("classes.github_org", "is", null)
+        .lt("created_at", graceCutoff)
+        .gt("created_at", oldestConsidered)
+        .order("created_at", { ascending: true });
+      if (missingError) {
+        console.error("[github-repo-reconciler] Failed to query assignments missing a solution repo:", missingError);
+        scope.setContext("missing_solution_query_error", { error: missingError.message });
+        throw missingError;
+      }
+
+      const missing = missingSolution ?? [];
+      // Alert on the whole set, but repair only a bounded slice: an assignment that has been
+      // missing its grader repo past the threshold is a human's problem whether or not this tick
+      // gets to it, and reporting it is what turns a silent hole into a visible one.
+      const alertCutoff = now - ALERT_AFTER_HOURS * 60 * 60 * 1000;
+      for (const assignment of missing) {
+        if (new Date(assignment.created_at).getTime() > alertCutoff) continue;
+        const missScope = scope.clone();
+        missScope.setTag("class_id", String(assignment.class_id));
+        missScope.setTag("assignment_id", String(assignment.id));
+        missScope.setFingerprint(["solution-repo-missing", String(assignment.class_id), String(assignment.id)]);
+        missScope.setContext("missing_solution_repo", {
+          assignment_id: assignment.id,
+          assignment_slug: assignment.slug,
+          created_at: assignment.created_at,
+          hours_missing: ALERT_AFTER_HOURS
+        });
+        missScope.setLevel("error");
+        Sentry.captureMessage("Assignment has no solution (grader) repo long after creation", missScope);
+        solutionRepairs.alerted++;
+      }
+
+      for (const assignment of missing.slice(0, SOLUTION_REPO_MAX_PER_RUN)) {
+        solutionRepairs.attempted++;
+        try {
+          // Re-invoking the same edge function the new-assignment page would have called, with the
+          // service role (accepted via assertUserIsInstructorOrServiceRole) and no argument the UI
+          // could not have supplied. createRepo has a pre-existing-repo branch, so an assignment
+          // whose repo does somehow exist is adopted rather than damaged.
+          const response = await fetch(`${edgeFunctionsUrl.replace(/\/$/, "")}/assignment-create-solution-repo`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${supabaseKey}`
+            },
+            body: JSON.stringify({ assignment_id: assignment.id, class_id: assignment.class_id })
+          });
+          if (!response.ok) {
+            throw new Error(`assignment-create-solution-repo returned ${response.status}: ${await response.text()}`);
+          }
+          solutionRepairs.created++;
+          console.log(
+            `[github-repo-reconciler] Created missing solution repo for assignment ${assignment.id} (class ${assignment.class_id})`
+          );
+        } catch (repairError) {
+          // One assignment failing must not abandon the rest, and the run is idempotent: a repaired
+          // assignment has a non-NULL grader_repo and drops out of the query next tick.
+          solutionRepairs.failed++;
+          const failScope = scope.clone();
+          failScope.setTag("class_id", String(assignment.class_id));
+          failScope.setTag("assignment_id", String(assignment.id));
+          failScope.setFingerprint(["solution-repo-repair-failed", String(assignment.class_id)]);
+          Sentry.captureException(repairError, failScope);
+          console.error(
+            `[github-repo-reconciler] Failed to create solution repo for assignment ${assignment.id}:`,
+            repairError
+          );
+        }
+      }
+      if (missing.length > 0) {
+        console.log(
+          `[github-repo-reconciler] Solution repos missing: ${missing.length}; repaired ${solutionRepairs.created}, failed ${solutionRepairs.failed}`
+        );
+      }
+    }
+
     // Edge runtime may tear down as soon as the response is returned; flush queued Sentry events first.
     await Sentry.flush(2000);
     return new Response(
@@ -121,6 +238,9 @@ Deno.serve(async (req) => {
         success: true,
         requeued: requeuedCount ?? 0,
         long_stuck_alerted: stuck.length,
+        solution_repos_repaired: solutionRepairs.created,
+        solution_repos_failed: solutionRepairs.failed,
+        solution_repos_alerted: solutionRepairs.alerted,
         timestamp: new Date().toISOString()
       }),
       { headers: { "Content-Type": "application/json" } }
