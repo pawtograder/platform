@@ -299,6 +299,64 @@ Deno.test(
   }
 );
 
+Deno.test(
+  "listCollaboratorsOrThrowMissing: parking requires the scope to still be all-repos after the probe",
+  async () => {
+    // The TOCTOU: scope read as "all" before the probe, narrowed by an admin, so a live but
+    // newly-deselected repo 404s. Confirming after the 404 catches it and refuses to park.
+    const selections: Array<"all" | "selected"> = ["all", "selected"];
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}/collaborators": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /repos/{owner}/{repo}": () => {
+        throw requestError(404, "Not Found");
+      }
+    });
+    const err = await assertRejects(
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => selections.shift()),
+      RepositoryUnreadableError
+    );
+    assertEquals(err instanceof RepositoryMissingError, false);
+  }
+);
+
+Deno.test("listCollaboratorsOrThrowMissing: scope unreadable on confirmation -> rethrows, parks nothing", async () => {
+  // Second read failed. We had one "all" and one shrug, which is not proof.
+  const selections: Array<"all" | undefined> = ["all", undefined];
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  const err = await assertRejects(
+    () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => selections.shift()),
+    RequestError
+  );
+  assertEquals(err.status, 404);
+});
+
+Deno.test("listCollaboratorsOrThrowMissing: a rate-limited probe propagates, so the worker can back off", async () => {
+  // Not "unknown": flattening it would strip Retry-After before detectRateLimitType sees it, and
+  // the job would surface as a generic failure that opens the org circuit.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(429, "Too Many Requests");
+    }
+  });
+  const err = await assertRejects(
+    () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all"),
+    RequestError
+  );
+  assertEquals(err.status, 429);
+});
+
 Deno.test("listCollaboratorsOrThrowMissing: selection is resolved lazily, never on the happy path", async () => {
   // The resolver hits GitHub, so it must not be called when the collaborator read succeeds.
   let resolverCalls = 0;

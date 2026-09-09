@@ -2379,6 +2379,15 @@ export async function classifyRepoPresence(
     await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
     return "present";
   } catch (error) {
+    // A rate-limited probe is not "unknown", it is "ask again later", and only the caller's caller
+    // knows how to wait. Flattening it here would strip the response and its Retry-After before
+    // the worker's detectRateLimitType could see them, so the job would surface as a generic
+    // failure — ladder, org-method circuit, error threshold — instead of a backoff. Same reasoning
+    // as fetchRepositorySelection; propagating still cannot classify the repo as absent, because
+    // this throws instead of returning.
+    if (carriesRateLimitSignal(error)) {
+      throw error;
+    }
     // Status, NOT `isGitHubNotFoundError`. That helper falls back to `message.includes("Not Found")`
     // so that callers doing benign things still recognise a 404 behind a wrapper — but here the
     // answer can DELETE a row's readiness, and a statusless transport/proxy error or a wrapped 5xx
@@ -2440,9 +2449,26 @@ export async function listCollaboratorsOrThrowMissing(
     if (isGitHubNotFoundError(error)) {
       const presence = await classifyRepoPresence(octokit, owner, repo, await resolveRepositorySelection());
       if (presence === "absent") {
-        throw new RepositoryMissingError(`${owner}/${repo}`);
-      }
-      if (presence === "inaccessible") {
+        // `absent` rests on the scope having been "all", read BEFORE the probe. If an admin narrows
+        // the installation in between, a live repo dropped from the selection 404s and this stale
+        // "all" would write it off — the very failure the fresh lookup exists to prevent, moved
+        // inside a single call. So confirm the scope again, now that the 404 is in hand.
+        //
+        // Re-ordering alone would not help: reading only AFTER the probe just inverts the race (a
+        // widening between probe and read would mislead us identically). Requiring "all" on BOTH
+        // sides is what raises the bar from one administrative change mid-request to two in
+        // opposite directions, which is not a thing that happens. Costs one request, and only on
+        // the path where we are about to write to the database.
+        const confirmed = await resolveRepositorySelection();
+        if (confirmed === "all") {
+          throw new RepositoryMissingError(`${owner}/${repo}`);
+        }
+        // Scope changed under us. "selected" means the 404 is now unattributable; anything else
+        // means we no longer know, so fall through and let the original 404 be retried.
+        if (confirmed === "selected") {
+          throw new RepositoryUnreadableError(`${owner}/${repo}`);
+        }
+      } else if (presence === "inaccessible") {
         throw new RepositoryUnreadableError(`${owner}/${repo}`);
       }
     }
