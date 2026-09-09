@@ -307,6 +307,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     observedTemplateRepo === null
       ? pointerWrite.is("template_repo", null)
       : pointerWrite.eq("template_repo", observedTemplateRepo);
+  // repo_mode is on the SAME table as the pointer, so it belongs in the same predicate rather than
+  // in a re-read that could go stale between the check and the write. An instructor switching the
+  // assignment to none/no_submission while createRepo ran has the edit flow clear template_repo to
+  // NULL — which still MATCHES the observed value on a first creation, so without this the derived
+  // handout would be attached after the opt-out. The solution call then rejects the new mode and
+  // the reconciler excludes no-repo modes, so nothing would ever clean it up.
+  pointerWrite = pointerWrite.not("repo_mode", "in", "(none,no_submission)");
   const { data: pointerRows, error: pointerError } = await pointerWrite.select("id");
   if (pointerError) {
     // Reporting success here would leave the handout repo created but unreferenced:
@@ -321,7 +328,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // being attached over the top.
     scope.setTag("template_repo_pointer", "superseded");
     throw new UserVisibleError(
-      `The handout repository for this assignment was changed while ${handoutFullName} was being created, so it was not attached. ` +
+      `This assignment's handout repository or submission mode changed while ${handoutFullName} was being created, so it was not attached. ` +
         `The repository exists — re-save if you intended to use it.`,
       409
     );

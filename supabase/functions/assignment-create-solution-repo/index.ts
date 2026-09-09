@@ -330,6 +330,30 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   //
   // Expected value: this repo's own name when the webhook already owns it and we touched nothing,
   // NULL otherwise (we either cleared a stale pointer above or never had one).
+  // repo_mode is re-read immediately before publishing. An instructor switching the assignment to
+  // none/no_submission while the GitHub work ran has the edit flow clear its repository
+  // configuration — but grader_repo would then be NULL, which is exactly what the compare-and-set
+  // below expects, so the pointer would be republished after the opt-out and the reconciler, which
+  // excludes no-repo modes, would never revisit it.
+  //
+  // Unlike the handout function, this cannot be folded into the write's predicate: repo_mode lives
+  // on `assignments` and the pointer on `autograder`. The gap between this read and the write
+  // remains, and is the price of not adding another RPC for a second conditional transition.
+  const { data: modeNow, error: modeError } = await adminSupabase
+    .from("assignments")
+    .select("repo_mode")
+    .eq("id", assignment_id)
+    .maybeSingle();
+  if (modeError) throw modeError;
+  if (!modeNow || !assignmentShouldHaveRepos(modeNow.repo_mode)) {
+    scope.setTag("grader_repo_pointer", "mode_changed");
+    throw new UserVisibleError(
+      `This assignment's repository configuration changed to "${modeNow?.repo_mode ?? "unknown"}" while ` +
+        `${solutionRepoFullName} was being created, so it was not attached.`,
+      409
+    );
+  }
+
   let pointerWrite = adminSupabase
     .from("autograder")
     .update({ grader_repo: solutionRepoFullName })

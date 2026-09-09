@@ -543,7 +543,9 @@ async function main() {
       // against org A and then create repositories in an excluded org B.
       const { data: fresh, error: freshError } = await supabase
         .from("assignments")
-        .select("archived_at, template_repo, classes(archived, github_org), autograder(grader_repo, workflow_sha)")
+        .select(
+          "archived_at, template_repo, classes(archived, github_org, slug), autograder(grader_repo, workflow_sha)"
+        )
         .eq("id", row.id)
         .maybeSingle();
       const currentOrg = (fresh?.classes as { github_org: string | null } | null)?.github_org ?? null;
@@ -598,7 +600,16 @@ async function main() {
         );
         continue;
       }
-      const derivedHandoutNow = `${currentOrg}/${row.classes?.slug}-handout-${row.slug}`;
+      // Derived from the RELOADED class slug. An admin can change a class's slug — the GitHub
+      // prefix every repo name is built from — while earlier repairs in this sweep run, and using
+      // the plan-time slug would judge a handout named for the old prefix as still "derived",
+      // letting the endpoint create a repository under the new prefix and replace the pointer.
+      const currentSlug = (fresh.classes as { slug: string | null } | null)?.slug ?? null;
+      if (!currentSlug) {
+        console.log(`  skipping assignment ${row.id}: its class no longer has a slug`);
+        continue;
+      }
+      const derivedHandoutNow = `${currentOrg}/${currentSlug}-handout-${row.slug}`;
       if (
         functions.includes("assignment-create-handout-repo") &&
         freshTemplate !== null &&
