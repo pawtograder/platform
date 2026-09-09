@@ -258,7 +258,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // Best-effort for the same reason as the first pass.
   try {
     const currentHead = await getCommit(solutionRepoFullName, "HEAD", scope);
-    if (currentHead.sha !== headCommit.sha) {
+    // Re-read what is STORED before writing anything. The compare-and-set inside
+    // reconcileHeadMetadata guards only the SHA, so on its own it would reject a stale SHA while
+    // the config and points writes preceding it had already landed — leaving the webhook's newer
+    // SHA paired with this request's older config. Checking first means a webhook that won the race
+    // is left entirely alone rather than half-overwritten.
+    const { data: storedAutograder, error: storedError } = await adminSupabase
+      .from("autograder")
+      .select("latest_autograder_sha")
+      .eq("id", assignment_id)
+      .maybeSingle();
+    if (storedError) throw storedError;
+    const storedSha = storedAutograder?.latest_autograder_sha ?? null;
+    if (storedSha !== headCommit.sha) {
+      // Something else — the push webhook, now that grader_repo is published — has already moved
+      // this on. It is by definition at least as new as anything this request saw.
+      scope.setTag("solution_head_recheck", "superseded");
+      console.log(
+        `Skipping head recheck for ${solutionRepoFullName}: latest_autograder_sha is ${storedSha}, not the ${headCommit.sha} this request wrote`
+      );
+    } else if (currentHead.sha !== headCommit.sha) {
       scope.setTag("solution_head_moved_during_creation", "true");
       console.log(
         `Solution repo ${solutionRepoFullName} moved from ${headCommit.sha} to ${currentHead.sha} during creation; re-reading config`

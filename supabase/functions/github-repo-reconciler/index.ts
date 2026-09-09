@@ -318,6 +318,40 @@ async function repairMissingSolutionRepos(opts: {
       break;
     }
     if (new Date(a.created_at).getTime() < oldestRepairable) continue;
+
+    // Revalidate the retirement guards immediately before acting. This pass is detached and may run
+    // for minutes, so an operator can archive the assignment or its class, or mark the org excluded,
+    // between the scan and this candidate's turn — and creating repositories for something somebody
+    // has just deliberately retired is exactly what those guards exist to prevent. The solution
+    // handler rechecks repo_mode itself, but it reads neither archive flag nor the org exclusion.
+    const { data: fresh, error: freshError } = await supabase
+      .from("assignments")
+      .select("repo_mode, archived_at, classes!inner(slug, github_org, archived)")
+      .eq("id", a.id)
+      .maybeSingle();
+    if (freshError) {
+      // A failed read is not permission to proceed.
+      console.warn(`[github-repo-reconciler] Could not revalidate assignment ${a.id}; skipping this tick`);
+      continue;
+    }
+    const stillEligible =
+      fresh !== null &&
+      fresh.archived_at === null &&
+      assignmentShouldHaveRepos(fresh.repo_mode) &&
+      isEligibleForRepoWork(
+        {
+          ...a,
+          repo_mode: fresh.repo_mode,
+          classes: fresh.classes as AssignmentRow["classes"]
+        },
+        excludedOrgSet
+      );
+    if (!stillEligible) {
+      scope.setTag("repair_skipped_revalidation", "true");
+      console.log(`[github-repo-reconciler] Assignment ${a.id} no longer eligible for repair; skipping`);
+      continue;
+    }
+
     attempts++;
     try {
       // A non-NULL template_repo proves the handout call reached its pointer write — but that write

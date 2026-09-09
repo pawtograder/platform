@@ -9,81 +9,25 @@
 -- admin page cannot see that an org is excluded, let alone reverse the seeded exclusions.
 
 ----------------------------------------------------------------------------------------
--- Collapse case-duplicate rows, then forbid new ones
+-- Forbid case-duplicate rows
 ----------------------------------------------------------------------------------------
 
--- `org_name` is a case-sensitive text primary key while GitHub org logins are not, so
--- `github_orgs` can already hold `Pawtograder-Playground` AND `pawtograder-playground` — a state
--- the admin RPC itself could produce before this migration. Coalescing on lower(org_name) in the
--- read is not enough: the LEFT JOIN is then one-to-many and expands the key straight back into two
--- result rows, both showing an arbitrarily chosen display name, while the upsert updates whichever
--- one LIMIT 1 happened to pick. Unticking the flag on one leaves the other excluding the org.
+-- `org_name` is a case-sensitive text primary key while GitHub org logins are not, so the table can
+-- in principle hold `Pawtograder-Playground` AND `pawtograder-playground`. That state makes the
+-- case-insensitive joins below one-to-many and lets an admin untick a flag on one variant while the
+-- other keeps applying, so it must not exist.
 --
--- Merge rather than pick a winner, so nothing configured is silently dropped: the surviving row is
--- the oldest, its exemption list becomes the UNION of all variants, and its automation flag is true
--- if ANY variant had it set. Losing an exemption would strip a protected account off repos; losing
--- an exclusion would let automation into an org marked off-limits. Both are worse than keeping a
--- setting somebody can remove from the admin page.
-WITH dupes AS (
-    SELECT lower(org_name) AS key
-    FROM public.github_orgs
-    GROUP BY lower(org_name)
-    HAVING COUNT(*) > 1
-),
-merged AS (
-    SELECT
-        d.key,
-        (SELECT g.org_name FROM public.github_orgs g WHERE lower(g.org_name) = d.key
-          ORDER BY g.created_at, g.org_name LIMIT 1) AS keep_name,
-        (SELECT bool_or(g.excluded_from_automation) FROM public.github_orgs g WHERE lower(g.org_name) = d.key) AS any_excluded,
-        (SELECT COALESCE(array_agg(DISTINCT u ORDER BY u), '{}'::text[])
-           FROM public.github_orgs g, unnest(g.permission_sync_exempt_users) AS u
-          WHERE lower(g.org_name) = d.key) AS all_exempt
-    FROM dupes d
-)
-UPDATE public.github_orgs g
-SET excluded_from_automation = m.any_excluded,
-    permission_sync_exempt_users = m.all_exempt,
-    updated_at = now()
-FROM merged m
-WHERE g.org_name = m.keep_name;
-
--- Repoint dependent class rows at the surviving spelling BEFORE anything is deleted. Several
--- consumers still compare github_org EXACTLY — `resolve_class_template_repos` joins on equality,
--- and `readOrgPermissionSyncExemptions` filters on it — so a class left holding a spelling this
--- migration is about to delete would fall back to site-level templates and, worse, read an EMPTY
--- exemption list and let permission sync remove the very collaborators the merge above just
--- preserved. Canonicalizing the classes keeps those exact comparisons finding the surviving row.
-UPDATE public.classes c
-SET github_org = (
-    SELECT g.org_name FROM public.github_orgs g
-     WHERE lower(g.org_name) = lower(c.github_org)
-     ORDER BY g.created_at, g.org_name
-     LIMIT 1
-)
-WHERE c.github_org IS NOT NULL
-  AND EXISTS (
-      SELECT 1 FROM public.github_orgs g
-       WHERE lower(g.org_name) = lower(c.github_org)
-         AND g.org_name <> c.github_org
-  );
-
--- Then drop every variant that is not the keeper for its key.
-DELETE FROM public.github_orgs g
-WHERE EXISTS (
-    SELECT 1 FROM public.github_orgs o
-     WHERE lower(o.org_name) = lower(g.org_name)
-       AND o.org_name <> g.org_name
-)
-AND g.org_name <> (
-    SELECT g2.org_name FROM public.github_orgs g2
-     WHERE lower(g2.org_name) = lower(g.org_name)
-     ORDER BY g2.created_at, g2.org_name
-     LIMIT 1
-);
-
--- With the duplicates gone, forbid the state entirely. This is what makes the case-insensitive
--- joins below single-valued rather than merely usually-single-valued.
+-- The index only FORBIDS it; it deliberately does not repair it. An earlier draft of this migration
+-- merged duplicates automatically — OR-ing the automation flag, unioning the exemption lists,
+-- repointing dependent classes and deleting the losers — and every review pass found another thing
+-- that silently destroyed: the losing row's template defaults, and the classes left pointing at a
+-- spelling whose exact-match consumers (resolve_class_template_repos, and the exemption read in
+-- GitHubWrapper) then found nothing. Production has 2 github_orgs rows and ZERO case-duplicate
+-- groups, so that machinery was carrying real risk for a state that does not occur.
+--
+-- If some deployment does have duplicates, this migration fails and an operator resolves them
+-- deliberately. A blocked deploy is a much better outcome than a migration quietly discarding
+-- somebody's template configuration.
 CREATE UNIQUE INDEX IF NOT EXISTS github_orgs_org_name_lower_key ON public.github_orgs (lower(org_name));
 
 ----------------------------------------------------------------------------------------
