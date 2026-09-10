@@ -2509,6 +2509,50 @@ export async function resolveExistingTeamSlug(org: string, team_slug: string, oc
   return pending;
 }
 
+/**
+ * Is there a pending invitation for this user that ALREADY carries the team we are about to attach?
+ *
+ * Org invitations are org-scoped but carry a team list, and two classes can share one organization
+ * (see 20260803120000_unique_class_slug_per_github_org.sql). "This user has a pending invitation"
+ * is therefore not evidence that OUR class's invitation has been sent: the outstanding invitation
+ * may attach a sibling class's team and nothing else, and suppressing on it would leave this class's
+ * enrollment unattached, unconfirmed, and — since the sweep has already refreshed its
+ * invitation_date — untouched for another staleness period.
+ *
+ * Only an invitation that already includes this team is a true duplicate.
+ *
+ * Fails OPEN: any error reading the invitation list is answered "no", so a transient failure sends
+ * a possibly-duplicate invitation rather than skipping a repair.
+ */
+async function pendingInvitationIncludesTeam(
+  octokit: Octokit,
+  org: string,
+  githubUsername: string,
+  teamId: number,
+  scope?: Sentry.Scope
+): Promise<boolean> {
+  try {
+    const invitations = await octokit.paginate("GET /orgs/{org}/invitations", { org, per_page: 100 });
+    const pending = invitations.find((i) => (i.login ?? "").toLowerCase() === githubUsername.toLowerCase());
+    if (!pending) return false;
+    // An org-only invitation (no teams) never covers this team.
+    if ((pending.team_count ?? 0) === 0) return false;
+    const teams = await octokit.paginate("GET /orgs/{org}/invitations/{invitation_id}/teams", {
+      org,
+      invitation_id: pending.id,
+      per_page: 100
+    });
+    return teams.some((t) => t.id === teamId);
+  } catch (e) {
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Could not read pending invitations for ${githubUsername} in ${org}; sending the invitation anyway: ${e}`,
+      level: "warning"
+    });
+    return false;
+  }
+}
+
 export async function reinviteToOrgTeam(
   org: string,
   team_slug: string,
@@ -2583,7 +2627,10 @@ export async function reinviteToOrgTeam(
     });
     return await reinviteToOrgTeam(org, team_slug, currentUsername, scope, {
       skipUsernameReresolve: true,
-      userId: options.userId
+      userId: options.userId,
+      // Carry the caller's automation flags into the retry, or a renamed account silently loses the
+      // duplicate-invitation guard on the path most likely to need it.
+      skipIfInvitationPending: options.skipIfInvitationPending
     });
   }
   const userID = user.data.id;
@@ -2687,16 +2734,25 @@ export async function reinviteToOrgTeam(
   }
 
   if (hasPendingInvitation && options.skipIfInvitationPending) {
-    // Returning false is "nothing changed", which is what callers do with it. Note it does NOT mean
-    // "already a member": the two callers that read this value to mark a role org-confirmed
-    // (github-user-sync) never set skipIfInvitationPending, precisely so a pending invitation is
-    // never mistaken for membership.
+    // Team-scoped, not org-scoped: see pendingInvitationIncludesTeam. A pending invitation for a
+    // sibling class in the same org must NOT suppress this one.
+    if (await pendingInvitationIncludesTeam(octokit, org, githubUsername, teamID, scope)) {
+      // Returning false is "nothing changed", which is what callers do with it. Note it does NOT
+      // mean "already a member": the callers that read this value to mark a role org-confirmed
+      // (github-user-sync) never set skipIfInvitationPending, precisely so a pending invitation is
+      // never mistaken for membership.
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} already has a pending invitation to ${org} covering team ${resolvedSlug}; not sending another`,
+        level: "info"
+      });
+      return false;
+    }
     scope?.addBreadcrumb({
       category: "github",
-      message: `User ${githubUsername} already has a pending invitation to ${org}; not sending another`,
+      message: `User ${githubUsername} has a pending invitation to ${org}, but it does not cover team ${resolvedSlug}; sending one that does`,
       level: "info"
     });
-    return false;
   }
 
   if (isAlreadyActiveOrgMember) {

@@ -300,20 +300,22 @@ begin
        -- Only for a class actually in session: leaving a finished course is not a defect to repair.
        and public.github_org_invite_window_open(c.archived, c.start_date, c.end_date)
   loop
-    begin
-      perform public.enqueue_github_org_reinvite(
-        r.class_id::bigint,
-        r.github_org,
-        r.slug,
-        r.user_id,
-        r.role in ('instructor', 'grader', 'admin'),
-        'departure-role-' || r.id || '-' || extract(epoch from now())::bigint
-      );
-      v_enqueued := v_enqueued + 1;
-    exception
-      when others then
-        raise warning 'clear_org_membership_and_repair: failed to enqueue user_role %: %', r.id, sqlerrm;
-    end;
+    -- Deliberately NOT wrapped in an exception handler, unlike the sweep's loop. There, skipping one
+    -- broken row so the batch continues is right and the next hourly pass retries it. Here the
+    -- caller is a webhook delivery that CAN be retried, this is the only enrollment being repaired,
+    -- and swallowing the failure would report success for work that did not happen — leaving the
+    -- enrollment unconfirmed with an invitation_date too recent for the sweep to reconsider for a
+    -- full staleness period. Raising rolls back the confirmation clear along with it, so GitHub's
+    -- redelivery re-applies both.
+    perform public.enqueue_github_org_reinvite(
+      r.class_id::bigint,
+      r.github_org,
+      r.slug,
+      r.user_id,
+      r.role in ('instructor', 'grader', 'admin'),
+      'departure-role-' || r.id || '-' || extract(epoch from now())::bigint
+    );
+    v_enqueued := v_enqueued + 1;
   end loop;
 
   return v_enqueued;
