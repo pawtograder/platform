@@ -801,8 +801,9 @@ export async function processEnvelope(
             // Never reinvite a dropped student. The disable-triggered sync routes their id here, and
             // the class-wide reconcile below is what removes them from the team — reinviting would
             // immediately undo that, and an accepted invitation would let the membership webhook mark
-            // the disabled role confirmed. Harmless while this gate required invitation_date IS NULL
-            // (a dropped student has one); with stale re-invites it is not. Matches the staff path.
+            // the disabled role confirmed. Narrow while this gate required invitation_date IS NULL,
+            // which excluded any student who had ever been invited; the staleness branch matches
+            // precisely those students instead. Matches the staff path.
             .eq("disabled", false)
             .maybeSingle();
           if (error) throw error;
