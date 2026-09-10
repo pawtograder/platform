@@ -604,6 +604,50 @@ async function checkAndTripErrorCircuitBreaker(
  */
 const PGMQ_MAX_READ_CT = 10;
 
+/**
+ * Every GitHub username that should be on a class's student or staff team, read in pages.
+ *
+ * This is the INTENDED-MEMBER list, and it is subtractive: syncTeam removes every current GitHub
+ * team member absent from it. A capped read is therefore not a truncated answer but a wrong one —
+ * for a class with more members than the cap, everyone past it is treated as no longer belonging
+ * and is removed from the team, losing the repository access that team grants, with no enrollment
+ * change behind it. The previous `.limit(1000)` / `.limit(5000)` reads were exactly that shape, and
+ * the membership reconciler makes these syncs run far more often than enrollment changes do.
+ *
+ * Paged with an explicit `range` and stopped on a short page, rather than one large limit, because
+ * PostgREST applies its own `max_rows` ceiling per request regardless of what the limit says.
+ */
+async function fetchIntendedTeamUsernames(
+  adminSupabase: SupabaseClient<Database>,
+  classId: number,
+  kind: "student" | "staff"
+): Promise<string[]> {
+  const PAGE = 1000;
+  const usernames: string[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const base = adminSupabase
+      .from("user_roles")
+      .select("github_org_confirmed, users(github_username)")
+      .eq("class_id", classId)
+      .eq("disabled", false);
+    const scoped =
+      kind === "student"
+        ? base.eq("role", "student")
+        : base.in("role", ["instructor", "grader", "admin"]).eq("github_org_confirmed", true);
+    const { data, error } = await scoped.order("id").range(from, from + PAGE - 1);
+    if (error) throw error;
+    const page = data ?? [];
+    for (const row of page) {
+      // Both teams require org-confirmed membership: syncTeam cannot add a user GitHub does not
+      // consider an org member, and the staff query already filters on it in SQL.
+      if (row.github_org_confirmed && row.users?.github_username) {
+        usernames.push(row.users.github_username);
+      }
+    }
+    if (page.length < PAGE) return usernames;
+  }
+}
+
 export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
@@ -832,19 +876,7 @@ export async function processEnvelope(
         await github.syncStudentTeam(
           args.org,
           args.courseSlug,
-          async () => {
-            const { data, error } = await adminSupabase
-              .from("user_roles")
-              .select("github_org_confirmed, users(github_username)")
-              .eq("class_id", envelope.class_id || 0)
-              .eq("role", "student")
-              .eq("disabled", false)
-              .limit(1000);
-            if (error) throw error;
-            return (data || [])
-              .filter((s) => s.users?.github_username && s.github_org_confirmed)
-              .map((s) => s.users!.github_username!);
-          },
+          async () => await fetchIntendedTeamUsernames(adminSupabase, envelope.class_id || 0, "student"),
           scope
         );
         // If an affected user is provided and they haven't been invited yet, ensure org invitation to students team
@@ -951,18 +983,7 @@ export async function processEnvelope(
         await github.syncStaffTeam(
           args.org,
           args.courseSlug,
-          async () => {
-            const { data, error } = await adminSupabase
-              .from("user_roles")
-              .select("users(github_username)")
-              .eq("class_id", envelope.class_id || 0)
-              .in("role", ["instructor", "grader", "admin"])
-              .eq("github_org_confirmed", true)
-              .eq("disabled", false)
-              .limit(5000);
-            if (error) throw error;
-            return (data || []).map((s) => s.users!.github_username!).filter(Boolean);
-          },
+          async () => await fetchIntendedTeamUsernames(adminSupabase, envelope.class_id || 0, "staff"),
           scope
         );
         if (args.userId && envelope.class_id && !invitedThisRun) {

@@ -133,20 +133,25 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
       if (resp) {
         madeChanges = true;
         repairKinds.add("staff_org_invite");
-      } else if (c.github_org_confirmed !== true) {
-        // Not an invitation, but not nothing either: the role went unconfirmed -> confirmed, which
-        // is what clears the "accept your invitation" banner. Recorded as a repair so the event
-        // fires; deliberately NOT folded into madeChanges, which drives the user-facing "repositories
-        // were updated" message.
-        repairKinds.add("staff_org_confirmed");
-      }
-      if (!resp) {
+      } else {
         // Either already in the team, or just added directly via PUT. Mark confirmed for this class.
-        await adminSupabase
+        const { error: confirmError } = await adminSupabase
           .from("user_roles")
           .update({ github_org_confirmed: true })
           .eq("user_id", userID)
           .eq("class_id", c.class_id);
+        // supabase-js resolves with { error } rather than throwing, so this write cannot fail into
+        // the catch below — it has to be inspected. A silent failure here leaves the "accept your
+        // invitation" banner up for a user who is in fact in the team.
+        if (confirmError) {
+          Sentry.captureException(confirmError, scope);
+          errorMessages.push(`Error confirming GitHub organization membership for ${c.classes.github_org}`);
+        } else if (c.github_org_confirmed !== true) {
+          // Not an invitation, but not nothing either: the role went unconfirmed -> confirmed, which
+          // is what clears the banner. Recorded as a repair so the event fires; deliberately NOT
+          // folded into madeChanges, which drives the user-facing "repositories were updated" message.
+          repairKinds.add("staff_org_confirmed");
+        }
       }
     } catch (e) {
       Sentry.captureException(e, scope);
@@ -204,16 +209,21 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         if (resp) {
           madeChanges = true;
           repairKinds.add("student_org_invite");
-        } else if (c!.github_org_confirmed !== true) {
-          // Same unconfirmed -> confirmed repair as the staff loop above.
-          repairKinds.add("student_org_confirmed");
         }
         if (!resp) {
-          await adminSupabase
+          const { error: confirmError } = await adminSupabase
             .from("user_roles")
             .update({ github_org_confirmed: true })
             .eq("user_id", userID)
             .eq("class_id", c!.class_id);
+          // Inspected rather than assumed, for the reason given in the staff loop above.
+          if (confirmError) {
+            Sentry.captureException(confirmError, scope);
+            errorMessages.push(`Error confirming GitHub organization membership for ${c!.classes.github_org}`);
+          } else if (c!.github_org_confirmed !== true) {
+            // Same unconfirmed -> confirmed repair as the staff loop.
+            repairKinds.add("student_org_confirmed");
+          }
         }
       } catch (e) {
         Sentry.captureException(e, scope);
@@ -333,10 +343,13 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
                 repoName
               })
             ) {
-              await adminSupabase
+              const { error: e2eReadyError } = await adminSupabase
                 .from("repositories")
                 .update({ synced_repo_sha: `e2e-skip-${repoName}`, is_github_ready: true })
                 .eq("id", dbRepo!.id);
+              if (e2eReadyError) {
+                throw e2eReadyError;
+              }
               repairKinds.add("group_repo_create");
               return assignment;
             }
@@ -463,7 +476,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         });
         // E2E fixtures must never hit real GitHub (see group-repo path above).
         if (shouldSkipRealGithubForE2eFixture({ org: assignment.classes!.github_org, courseSlug, repoName })) {
-          await adminSupabase
+          const { error: e2eReadyError } = await adminSupabase
             .from("repositories")
             .update({
               synced_repo_sha: `e2e-skip-${repoName}`,
@@ -471,6 +484,9 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
               is_github_ready: true
             })
             .eq("id", dbRepo!.id);
+          if (e2eReadyError) {
+            throw e2eReadyError;
+          }
           repairKinds.add("individual_repo_create");
           return `e2e-skip-${repoName}`;
         }
@@ -482,7 +498,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
           jobScope
         );
         await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], jobScope);
-        await adminSupabase
+        const { error: readyError } = await adminSupabase
           .from("repositories")
           .update({
             synced_repo_sha: new_repo_sha,
@@ -490,6 +506,12 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             is_github_ready: true
           })
           .eq("id", dbRepo!.id);
+        // The repo exists on GitHub but the row still says otherwise: a real failure, and one the
+        // reconciler repairs. Throwing routes it through the same catch as a createRepo failure
+        // rather than reporting a completed repair.
+        if (readyError) {
+          throw readyError;
+        }
         repairKinds.add("individual_repo_create");
 
         return new_repo_sha;
