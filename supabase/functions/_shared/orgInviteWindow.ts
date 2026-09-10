@@ -103,6 +103,26 @@ export function isOrgInviteWindowOpen(cls: ClassInviteWindow, now: Date = new Da
 }
 
 /**
+ * Does this class have term dates that PROVE automation should not be inviting right now?
+ *
+ * The inverse of {@link isOrgInviteWindowOpen} for the one caller that must not treat "we don't
+ * know" as "no": github-user-sync, which a student reaches by pressing "Sync GitHub Account" and
+ * which the login callback runs on their behalf. That path is the escape hatch when everything else
+ * has failed, so blocking it for a class with no term dates — most of them today — would take the
+ * only self-service repair away from the students who need it most.
+ *
+ * So this returns true only on evidence: the class is archived, or it has BOTH dates and today
+ * falls outside the window. That is enough to stop the case worth stopping — a student who left an
+ * old course's org, or was removed from it, being mailed a fresh invitation to rejoin a course that
+ * finished months ago the next time they sign in.
+ */
+export function isOrgInviteWindowKnownClosed(cls: ClassInviteWindow, now: Date = new Date()): boolean {
+  if (cls.archived === true) return true;
+  if (dateOnlyToUtcMs(cls.start_date) === null || dateOnlyToUtcMs(cls.end_date) === null) return false;
+  return !isOrgInviteWindowOpen(cls, now);
+}
+
+/**
  * Is a recorded invitation old enough that GitHub has certainly expired it?
  *
  * `null` is NOT stale: it means no invitation was ever recorded, which is the first-invite case and
@@ -124,9 +144,15 @@ export function isInvitationStale(
 /**
  * The whole decision for one (user_role, class) pair, as the async worker asks it.
  *
- * `forceReinvite` is set only by the membership reconciler, which has already applied the term
- * window in SQL when it chose this candidate; it bypasses the staleness check so a reconciler
- * enqueue cannot be defeated by the reconciler's own `invitation_date` stamp.
+ * `forceReinvite` is set only by the membership reconciler. It bypasses the staleness check —
+ * without that, the reconciler's own enqueue-time `invitation_date` stamp would make the repair it
+ * just queued look freshly invited, and the envelope would be a no-op.
+ *
+ * It does NOT bypass the term window, even though the reconciler already applied that window in SQL
+ * when it chose the candidate. The two checks happen at different times: an envelope can sit in the
+ * queue through a backlog, a retry ladder, or a dead-letter re-drive, and `drainQueue` permits
+ * redelivery after an archive failure. Re-checking here is what makes the window a property of the
+ * moment the invitation is actually sent rather than of the moment it was queued.
  */
 export function shouldSendOrgInvitation(opts: {
   invitationDate: string | null | undefined;
@@ -135,7 +161,7 @@ export function shouldSendOrgInvitation(opts: {
   now?: Date;
 }): boolean {
   const now = opts.now ?? new Date();
-  if (opts.forceReinvite === true) return true;
+  if (opts.forceReinvite === true) return isOrgInviteWindowOpen(opts.cls, now);
   // First invitation for this enrollment: unchanged behavior, deliberately NOT window-gated. This
   // is the enrollment path, it fires once, and gating it would break onboarding for every class
   // that has not filled in its term dates.

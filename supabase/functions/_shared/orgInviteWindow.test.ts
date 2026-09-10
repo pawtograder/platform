@@ -14,6 +14,7 @@ import {
   INVITE_WINDOW_LEAD_DAYS,
   INVITE_WINDOW_TRAIL_DAYS,
   isInvitationStale,
+  isOrgInviteWindowKnownClosed,
   isOrgInviteWindowOpen,
   shouldSendOrgInvitation
 } from "./orgInviteWindow.ts";
@@ -114,4 +115,33 @@ Deno.test("shouldSendOrgInvitation: forceReinvite bypasses staleness (the reconc
     shouldSendOrgInvitation({ invitationDate: "2026-10-01T11:59:00Z", cls: TERM, forceReinvite: true, now }),
     true
   );
+});
+
+Deno.test("shouldSendOrgInvitation: forceReinvite does NOT bypass the window", () => {
+  // An envelope can be delivered long after it was queued (backlog, retry ladder, dead-letter
+  // re-drive, or a redelivery after an archive failure), so the window has to hold at send time and
+  // not merely at enqueue time.
+  const now = at("2026-10-01T12:00:00Z");
+  const forced = { invitationDate: "2026-10-01T11:59:00Z", forceReinvite: true, now };
+  assertEquals(
+    shouldSendOrgInvitation({ ...forced, cls: { start_date: "2026-01-06", end_date: "2026-04-20" } }),
+    false
+  );
+  assertEquals(shouldSendOrgInvitation({ ...forced, cls: { ...TERM, archived: true } }), false);
+  assertEquals(shouldSendOrgInvitation({ ...forced, cls: { start_date: null, end_date: null } }), false);
+});
+
+Deno.test("isOrgInviteWindowKnownClosed: only on evidence, so the self-service escape hatch survives", () => {
+  const now = at("2026-10-01T12:00:00Z");
+  // Undated classes are "unknown", not "closed": github-user-sync must keep reconciling them, which
+  // is the opposite of what isOrgInviteWindowOpen says about the same class.
+  assertEquals(isOrgInviteWindowKnownClosed({ start_date: null, end_date: null }, now), false);
+  assertEquals(isOrgInviteWindowOpen({ start_date: null, end_date: null }, now), false);
+  assertEquals(isOrgInviteWindowKnownClosed({ ...TERM, end_date: null }, now), false);
+  // Dated and finished, or archived: proven closed.
+  assertEquals(isOrgInviteWindowKnownClosed({ start_date: "2026-01-06", end_date: "2026-04-20" }, now), true);
+  assertEquals(isOrgInviteWindowKnownClosed({ start_date: "2027-01-06", end_date: "2027-04-20" }, now), true);
+  assertEquals(isOrgInviteWindowKnownClosed({ start_date: null, end_date: null, archived: true }, now), true);
+  // In session: open.
+  assertEquals(isOrgInviteWindowKnownClosed(TERM, now), false);
 });

@@ -17,6 +17,7 @@ import {
 } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { isOrgInviteWindowKnownClosed } from "../_shared/orgInviteWindow.ts";
 import type {
   GitHubLinkStatus,
   GitHubMembershipStatus,
@@ -67,6 +68,13 @@ function getAdminSupabase() {
 type RepairKind =
   | "staff_org_invite"
   | "student_org_invite"
+  // reinviteToOrgTeam returns false for two very different outcomes: the user was already in the
+  // team (a no-op), or they were already in the ORG and it just added them to the team (a repair,
+  // and the one that leaves a staff member able to see the course's repositories). The boolean
+  // cannot tell them apart, but our own row can: an enrollment that was unconfirmed before the call
+  // and confirmed after it changed, whichever branch did it.
+  | "staff_org_confirmed"
+  | "student_org_confirmed"
   | "group_repo_create"
   | "individual_repo_create"
   | "repo_permission_sync"
@@ -79,7 +87,7 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
   );
   const { data: staffRoles, error: staffError } = await adminSupabase
     .from("user_roles")
-    .select("class_id, role, github_org_confirmed, classes(slug, github_org)")
+    .select("class_id, role, github_org_confirmed, classes(slug, github_org, start_date, end_date, archived)")
     .eq("disabled", false)
     .in("role", ["instructor", "grader", "admin"])
     .eq("user_id", userID);
@@ -101,6 +109,17 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
     if (!c.classes?.github_org || !c.classes?.slug) {
       continue;
     }
+    // Don't mail an invitation to rejoin a course that is demonstrably over (or archived). Only
+    // acts on evidence — a class with no term dates still reconciles, because this function is the
+    // student- and instructor-facing escape hatch and most classes have no dates set.
+    if (isOrgInviteWindowKnownClosed(c.classes)) {
+      Sentry.addBreadcrumb({
+        category: "github",
+        message: `Skipping staff org reconcile for ${c.classes.github_org}/${c.classes.slug}: outside the class term window`,
+        level: "info"
+      });
+      continue;
+    }
     const team_slug = `${c.classes.slug}-staff`;
     Sentry.addBreadcrumb({
       category: "github",
@@ -114,6 +133,12 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
       if (resp) {
         madeChanges = true;
         repairKinds.add("staff_org_invite");
+      } else if (c.github_org_confirmed !== true) {
+        // Not an invitation, but not nothing either: the role went unconfirmed -> confirmed, which
+        // is what clears the "accept your invitation" banner. Recorded as a repair so the event
+        // fires; deliberately NOT folded into madeChanges, which drives the user-facing "repositories
+        // were updated" message.
+        repairKinds.add("staff_org_confirmed");
       }
       if (!resp) {
         // Either already in the team, or just added directly via PUT. Mark confirmed for this class.
@@ -138,7 +163,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     .select(
       // "*"
       // "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*,assignments(*), assignment_groups(*,repositories(*)), user_roles(users(github_username)))))",
-      "class_id, github_org_confirmed, classes(slug, github_org, time_zone), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
+      "class_id, github_org_confirmed, classes(slug, github_org, time_zone, start_date, end_date, archived), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
     )
     .eq("disabled", false)
     .eq("role", "student")
@@ -159,7 +184,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     // Require both org and slug: the student team name is derived as `${slug}-students`, so a class
     // with github_org set but slug still NULL would reconcile against a bogus `null-students` team.
     // Mirrors the staff loop above and the team-sync migration (20260611120001).
-    if (c!.classes.github_org && c!.classes.slug) {
+    if (c!.classes.github_org && c!.classes.slug && !isOrgInviteWindowKnownClosed(c!.classes)) {
       Sentry.addBreadcrumb({
         category: "github",
         message: `Reinviting user ${githubUsername} to org ${c!.classes.github_org}, team ${c!.classes.slug + "-students"}`,
@@ -179,6 +204,9 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         if (resp) {
           madeChanges = true;
           repairKinds.add("student_org_invite");
+        } else if (c!.github_org_confirmed !== true) {
+          // Same unconfirmed -> confirmed repair as the staff loop above.
+          repairKinds.add("student_org_confirmed");
         }
         if (!resp) {
           await adminSupabase

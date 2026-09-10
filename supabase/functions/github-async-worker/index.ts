@@ -798,6 +798,12 @@ export async function processEnvelope(
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .eq("role", "student")
+            // Never reinvite a dropped student. The disable-triggered sync routes their id here, and
+            // the class-wide reconcile below is what removes them from the team — reinviting would
+            // immediately undo that, and an accepted invitation would let the membership webhook mark
+            // the disabled role confirmed. Harmless while this gate required invitation_date IS NULL
+            // (a dropped student has one); with stale re-invites it is not. Matches the staff path.
+            .eq("disabled", false)
             .maybeSingle();
           if (error) throw error;
           if (
@@ -850,7 +856,12 @@ export async function processEnvelope(
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .eq("role", "student")
-            .single();
+            // Same as the pre-reconcile lookup above: a dropped student must not be reinvited.
+            .eq("disabled", false)
+            // maybeSingle (not single): with the disabled filter — and on a role DELETE, where the
+            // trigger still routes the removed user's id here — no row is the normal case rather
+            // than an error. This lookup's errors are swallowed by the `!error &&` guard anyway.
+            .maybeSingle();
           if (
             !error &&
             ur &&
