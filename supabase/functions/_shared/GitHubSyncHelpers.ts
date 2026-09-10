@@ -12,6 +12,12 @@ import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { applyPatch } from "https://esm.sh/diff@5.1.0";
 import { encodeBase64 } from "https://deno.land/std@0.221.0/encoding/base64.ts";
+import {
+  decodeGitHubBase64Text,
+  decodeGitHubTextBytes,
+  encodeTextAsGitHubBase64,
+  type GitHubTextFile
+} from "./GitHubTextEncoding.ts";
 import * as github from "./GitHubWrapper.ts";
 import { getCreateContentLimiter } from "./GitHubWrapper.ts";
 // (Redis-related imports consolidated above into the one createRedis line)
@@ -686,7 +692,7 @@ async function fetchTextBlobFromRepo(
   blobSha: string,
   filePath: string,
   scope?: Sentry.Scope
-): Promise<string> {
+): Promise<GitHubTextFile> {
   const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
   const [owner, repo] = repoFullName.split("/");
@@ -717,7 +723,7 @@ async function fetchTextBlobFromRepo(
     const limitMb = (MAX_SYNC_FILE_BYTES / (1024 * 1024)).toFixed(0);
     throw new Error(`File '${filePath}' is ${mb}MB which exceeds the per-file sync limit of ${limitMb}MB`);
   }
-  return await response.text();
+  return decodeGitHubTextBytes(new Uint8Array(await response.arrayBuffer()));
 }
 
 /**
@@ -729,7 +735,7 @@ async function fetchTextFileAtRef(
   path: string,
   ref: string,
   scope?: Sentry.Scope
-): Promise<{ content: string; sha?: string }> {
+): Promise<GitHubTextFile & { sha?: string }> {
   const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
   const [owner, repo] = repoFullName.split("/");
@@ -748,12 +754,12 @@ async function fetchTextFileAtRef(
   const meta = fileData as ContentsFileMeta;
 
   if (meta.encoding === "base64" && typeof meta.content === "string") {
-    return { content: atob(meta.content.replace(/\n/g, "")), sha: meta.sha };
+    return { ...decodeGitHubBase64Text(meta.content), sha: meta.sha };
   }
 
   if (meta.sha) {
     return {
-      content: await fetchTextBlobFromRepo(repoFullName, meta.sha, path, scope),
+      ...(await fetchTextBlobFromRepo(repoFullName, meta.sha, path, scope)),
       sha: meta.sha
     };
   }
@@ -766,7 +772,7 @@ async function fetchTextFileAtRef(
     if (!response.ok) {
       throw new Error(`Failed to download '${path}' from ${repoFullName}: ${response.status}`);
     }
-    return { content: await response.text() };
+    return decodeGitHubTextBytes(new Uint8Array(await response.arrayBuffer()));
   }
 
   throw new Error(`No content available for '${path}' at ${ref} in ${repoFullName}`);
@@ -927,8 +933,8 @@ export async function createBranchAndCommit(
         }
 
         try {
-          const { content: templateContent } = await fetchTextFileAtRef(templateRepo, file.path, templateSha, scope);
-          const encoded = btoa(templateContent);
+          const template = await fetchTextFileAtRef(templateRepo, file.path, templateSha, scope);
+          const encoded = template.encode(template.text);
           const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
             owner,
             repo,
@@ -967,10 +973,18 @@ export async function createBranchAndCommit(
         level: "info"
       });
 
-      // Fetch the current content from the student repo at baseSha
+      // Fetch the current content from the student repo at baseSha. `encodePatched` is the
+      // encoder that inverts however this file was read, and it moves with the content: the
+      // fallback below replaces the text with the template's, so it replaces the encoder too.
       let baseContent = "";
+      let encodePatched: (text: string) => string = encodeTextAsGitHubBase64;
       try {
-        ({ content: baseContent } = await fetchTextFileAtRef(repoFullName, file.path, baseSha, scope));
+        ({ text: baseContent, encode: encodePatched } = await fetchTextFileAtRef(
+          repoFullName,
+          file.path,
+          baseSha,
+          scope
+        ));
       } catch (fetchError: unknown) {
         if (isGitHubNotFound(fetchError)) {
           // File doesn't exist in student repo (new file), use empty content
@@ -1021,11 +1035,9 @@ export async function createBranchAndCommit(
 
           try {
             // Prefer the compare blob SHA — avoids the Contents API 1MB inline limit.
-            if (file.sha) {
-              patchedContent = await fetchTextBlobFromRepo(templateRepo, file.sha, file.path, scope);
-            } else {
-              ({ content: patchedContent } = await fetchTextFileAtRef(templateRepo, file.path, templateSha, scope));
-            }
+            ({ text: patchedContent, encode: encodePatched } = file.sha
+              ? await fetchTextBlobFromRepo(templateRepo, file.sha, file.path, scope)
+              : await fetchTextFileAtRef(templateRepo, file.path, templateSha, scope));
             scope?.addBreadcrumb({
               message: `Successfully fetched full content from template repo for ${file.path}`,
               category: "patch",
@@ -1072,7 +1084,7 @@ export async function createBranchAndCommit(
       const incrementalBytes = Math.max(0, transientPeak - preCharged);
       enforceSizeBudget(incrementalBytes, file.path);
 
-      const encodedPatched = btoa(patchedContent);
+      const encodedPatched = encodePatched(patchedContent);
       const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
         owner,
         repo,
@@ -1316,7 +1328,7 @@ export async function isRepoAlreadyInSync(
       let studentContent: string;
       let studentBlobSha: string | undefined;
       try {
-        ({ content: studentContent, sha: studentBlobSha } = await fetchTextFileAtRef(
+        ({ text: studentContent, sha: studentBlobSha } = await fetchTextFileAtRef(
           repoFullName,
           file.path,
           "main",
@@ -1350,9 +1362,11 @@ export async function isRepoAlreadyInSync(
             // Patch failed to apply - could mean conflicts or already applied differently.
             // Compare student's file to expected template content as a loose secondary check.
             try {
-              const expectedContent = file.sha
-                ? await fetchTextBlobFromRepo(templateRepo, file.sha, file.path, scope)
-                : (await fetchTextFileAtRef(templateRepo, file.path, templateToSha, scope)).content;
+              const expectedContent = (
+                file.sha
+                  ? await fetchTextBlobFromRepo(templateRepo, file.sha, file.path, scope)
+                  : await fetchTextFileAtRef(templateRepo, file.path, templateToSha, scope)
+              ).text;
               if (studentContent.includes(expectedContent) || expectedContent === studentContent) {
                 continue;
               }
