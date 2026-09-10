@@ -12780,6 +12780,7 @@ export type Database = {
         Args: {
           p_action?: string;
           p_class_id: number;
+          p_membership_verified_at?: string;
           p_role: Database["public"]["Enums"]["app_role"];
           p_user_id: string;
         };
@@ -13834,6 +13835,7 @@ export type Database = {
       request_discord_reinvite: {
         Args: { p_class_id: number; p_user_id?: string };
         Returns: {
+          channels_repaired: number;
           queued: number;
           roles_repaired: number;
         }[];
