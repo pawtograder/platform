@@ -3196,17 +3196,40 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
 async function handleOrgMemberRemoved(
   adminSupabase: SupabaseClient<Database>,
   organizationName: string,
-  removedUserLogin: string,
+  removedUser: { login: string; id?: number | null },
   scope: Sentry.Scope
 ) {
-  const { data: userData, error: userError } = await adminSupabase
-    .from("users")
-    .select("user_id")
-    .ilike("github_username", removedUserLogin)
-    .maybeSingle();
-  if (userError) {
-    Sentry.captureException(userError, scope);
-    return;
+  // Resolve by GitHub ACCOUNT ID first, falling back to the login. A user who renames their GitHub
+  // account and then leaves arrives here under the new login while `users.github_username` may
+  // still hold the old one, so a login-only lookup finds nothing and the enrollment stays falsely
+  // confirmed forever — the exact latch this handler exists to release. The account id is the
+  // stable identity, and it is the same one `reresolveMissingGitHubLogin` recovers renames from.
+  let userData: { user_id: string } | null = null;
+  if (removedUser.id !== undefined && removedUser.id !== null) {
+    const { data, error } = await adminSupabase
+      .from("users")
+      .select("user_id")
+      .eq("github_user_id", String(removedUser.id))
+      .maybeSingle();
+    if (error) {
+      Sentry.captureException(error, scope);
+      return;
+    }
+    userData = data;
+  }
+  if (!userData) {
+    const { data, error } = await adminSupabase
+      .from("users")
+      .select("user_id")
+      // Case-insensitive: GitHub logins are, and `users.github_username` stores whatever casing was
+      // current when the account was linked.
+      .ilike("github_username", removedUser.login)
+      .maybeSingle();
+    if (error) {
+      Sentry.captureException(error, scope);
+      return;
+    }
+    userData = data;
   }
   if (!userData) {
     // Not one of ours (an org owner, a bot, someone added out of band). Not an error.
@@ -3216,7 +3239,11 @@ async function handleOrgMemberRemoved(
   const { data: classesData, error: classesError } = await adminSupabase
     .from("classes")
     .select("id")
-    .eq("github_org", organizationName);
+    // ilike, not eq: the webhook reports GitHub's canonical casing for the org while
+    // `classes.github_org` holds whatever an instructor typed when configuring the course. A
+    // casing difference would find no classes and silently skip the repair. Org logins cannot
+    // contain `%` or `_`, so there is no pattern to escape here.
+    .ilike("github_org", organizationName);
   if (classesError) {
     Sentry.captureException(classesError, scope);
     return;
@@ -3225,9 +3252,16 @@ async function handleOrgMemberRemoved(
     return;
   }
 
+  // Clear the confirmation, but KEEP invitation_date. It records when we last mailed an invitation,
+  // and that did not stop being true because the user left. Clearing it would also erase the
+  // difference between "left the org" and "never invited", and github-user-sync re-invites an
+  // enrollment with no invitation_date unconditionally — so the next login would mail a fresh
+  // invitation for a course someone deliberately left, including one whose term is over. Left in
+  // place, the hourly reconciler picks the row up on its own terms: in-window, and once the
+  // invitation is old enough to be worth resending.
   const { error: updateError } = await adminSupabase
     .from("user_roles")
-    .update({ github_org_confirmed: false, invitation_date: null })
+    .update({ github_org_confirmed: false })
     .eq("user_id", userData.user_id)
     .eq("disabled", false)
     .in(
@@ -3240,7 +3274,7 @@ async function handleOrgMemberRemoved(
   }
   scope?.setTag("org_membership_cleared", "true");
   console.log(
-    `[github-repo-webhook] ${removedUserLogin} left ${organizationName}; cleared github_org_confirmed for their live enrollments`
+    `[github-repo-webhook] ${removedUser.login} left ${organizationName}; cleared github_org_confirmed for their live enrollments`
   );
 }
 
@@ -3269,9 +3303,14 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
     // A departure is the mirror of an invitation: it must un-confirm the enrollment, or the row
     // claims a membership that no longer exists and no repair path will ever look at it again.
     if (payload.action === "member_removed") {
-      const removedUserLogin = "membership" in payload ? payload.membership?.user?.login : undefined;
-      if (removedUserLogin && organizationName) {
-        await handleOrgMemberRemoved(adminSupabase, organizationName, removedUserLogin, scope);
+      const removedUser = "membership" in payload ? payload.membership?.user : undefined;
+      if (removedUser?.login && organizationName) {
+        await handleOrgMemberRemoved(
+          adminSupabase,
+          organizationName,
+          { login: removedUser.login, id: removedUser.id },
+          scope
+        );
       }
       return;
     }
