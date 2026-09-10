@@ -20,6 +20,8 @@ import {
   NonRetryableGitHubError,
   NonRetryableRepoError,
   NonRetryableUserError,
+  RepositoryMissingError,
+  RepositoryUnreadableError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
@@ -1159,10 +1161,64 @@ export async function processEnvelope(
         //Otherwise we might race against a createRepo, and end up overwriting to the wrong githubUsernames.
         const { data: repository } = await adminSupabase
           .from("repositories")
-          .select("is_github_ready")
+          .select("is_github_ready, creation_error")
           .eq("repository", `${org}/${repoName}`)
           .maybeSingle();
         if (!repository?.is_github_ready) {
+          // "Not ready" covers two states that deserve opposite answers. With no creation_error the
+          // repo is still on its way — requeue and let it land, which is what this gate was written
+          // for. With one recorded, the row is parked: creation failed for good, or the repo turned
+          // out to be missing (RepositoryMissingError, handled below). Requeueing that is pure
+          // waste — nothing will change it, and the message just redelivers every visibility
+          // timeout until read_ct trips the poison-pill limit ~50 minutes later. Archive it and
+          // say why.
+          if (repository?.creation_error) {
+            console.log(`repo is parked, dropping permission sync: ${org}/${repoName} — ${repository.creation_error}`);
+            scope.setTag("permission_sync_skipped", "repo_parked");
+            // Close out the api_gateway_calls row this envelope opened. enqueue_* inserts it with
+            // status_code = 0, and archiving the message ends its life — so without this the row
+            // stays pending forever and every dropped duplicate inflates the call totals with no
+            // completion status or latency. 422: the job was well-formed but can never succeed,
+            // matching the non-retryable path below.
+            recordMetric(
+              adminSupabase,
+              {
+                method: envelope.method,
+                status_code: 422,
+                class_id: envelope.class_id,
+                debug_id: envelope.debug_id,
+                enqueued_at: meta.enqueued_at,
+                log_id: envelope.log_id
+              },
+              scope
+            );
+            // DLQ before archiving, rather than just dropping the message.
+            //
+            // The subtle case this protects: when the error path below parks the row but its own
+            // sendToDeadLetterQueue call fails, it deliberately leaves the message UNARCHIVED so
+            // that write can be retried. That redelivered message arrives back here, and it is
+            // indistinguishable from a duplicate — so simply archiving would consume the very
+            // retry the error path was preserving, and the terminal failure would vanish from DLQ
+            // tracking during exactly the transient outage the retry exists for.
+            //
+            // Routing every parked message through the DLQ makes both cases correct without having
+            // to tell them apart, and matches the handler's convention that terminal work leaves a
+            // DLQ record. It does mean a genuine duplicate also lands there, which is the intended
+            // trade: a redundant DLQ row is recoverable, a lost one is not.
+            const dlqSuccess = await sendToDeadLetterQueue(
+              adminSupabase,
+              envelope,
+              meta,
+              new Error(`Repository is parked and cannot be synced: ${repository.creation_error}`),
+              scope
+            );
+            if (!dlqSuccess) {
+              // Leave it unarchived so the DLQ write is retried; read_ct's poison limit bounds this.
+              console.error(`Failed to DLQ parked permission sync for ${org}/${repoName}, leaving unarchived`);
+              return false;
+            }
+            return true;
+          }
           console.log("repo is not ready", `${org}/${repoName}`);
           return false;
         }
@@ -2258,6 +2314,17 @@ export async function processEnvelope(
       // one issue per method is enough. The offending login is on the tag and in the message.
       scope.setFingerprint(["github-non-retryable-user", envelope.method]);
       scope.setTag("github_username", error.githubUsername);
+    } else if (error instanceof RepositoryMissingError) {
+      // Deleting an assignment's repos by hand turns up dozens of these at once (146 rows for one
+      // sp26 assignment on 2026-09-09). Group them; the repo is on the tag and in the message.
+      scope.setFingerprint(["github-repository-missing", envelope.method]);
+      scope.setTag("missing_repository", error.fullName);
+    } else if (error instanceof RepositoryUnreadableError) {
+      // Narrowing an installation's repo selection would produce one of these per affected repo at
+      // once, so group them the same way. Kept separate from the missing case because the operator
+      // action differs: re-grant access, versus accept that the repo is gone.
+      scope.setFingerprint(["github-repository-unreadable", envelope.method]);
+      scope.setTag("unreadable_repository", error.fullName);
     }
 
     const errorId = Sentry.captureException(error, scope);
@@ -2294,20 +2361,98 @@ export async function processEnvelope(
           scope.setTag("non_retryable_repo_error", "true");
         }
         const reason = error.message;
+        // A repo that is gone is not just "this job failed" — the ROW is wrong, and every future
+        // job derived from it will fail the same way. Clearing is_github_ready parks the row, so
+        // the sync_repo_permissions pre-flight gate drops the duplicates already queued for it
+        // (see that gate) instead of each one paying for its own discovery, and the row stops
+        // silently claiming a working repo.
+        //
+        // Safe to pair with creation_error and only with it: reconcile_stuck_repo_creations
+        // re-enqueues create_repo for rows with `is_github_ready = false AND creation_error IS
+        // NULL`, so clearing the flag on its own would hand a deleted repo to the reconciler and
+        // have it recreated. Setting both in one update keeps the row parked.
+        const repoUpdate =
+          error instanceof RepositoryMissingError
+            ? { creation_error: reason, is_github_ready: false }
+            : { creation_error: reason };
+        // Two ways this write can fail without throwing, both of which would leave us believing a
+        // row was parked when it was not:
+        //
+        //   1. postgrest-js RESOLVES with `{ error }` rather than throwing, so a PostgREST or
+        //      database failure is invisible to the catch below.
+        //   2. An UPDATE that matches ZERO rows is a success in both Postgres and PostgREST. The
+        //      by-name fallback is the exposed one: `.eq("repository", ...)` is case-sensitive
+        //      while GitHub treats owner/repo case-insensitively, so an envelope whose casing
+        //      differs from the stored value silently parks nothing — as would a row already
+        //      deleted.
+        //
+        // Parking is what stops the next job repeating this failure, so "we think we parked it"
+        // has to mean a row actually changed. `.select("id")` makes the affected rows observable;
+        // zero of them is a failed park, and a failed park means do not archive, because
+        // redelivery is the only thing that gets us another attempt.
+        let parked = true;
         try {
-          if (envelope.repo_id) {
-            await adminSupabase.from("repositories").update({ creation_error: reason }).eq("id", envelope.repo_id);
+          if (error instanceof RepositoryUnreadableError) {
+            // Terminal for this job, but it says nothing about the row: the repo may be alive and
+            // simply not granted to this installation. Recording a creation_error here would put a
+            // failure in front of an instructor for a repo that is fine, and the cause is on our
+            // side of the fence. Stop the work, leave the data alone.
+            scope.setTag("repository_unreadable", error.fullName);
+          } else if (envelope.repo_id) {
+            const { data: rows, error: e } = await adminSupabase
+              .from("repositories")
+              .update(repoUpdate)
+              .eq("id", envelope.repo_id)
+              .select("id");
+            if (e) throw e;
+            if (!rows?.length) throw new Error(`no repositories row matched id ${envelope.repo_id}`);
           } else if (envelope.method === "create_repo" && envelope.class_id) {
             const { org: eo, repoName: ern } = envelope.args as CreateRepoArgs;
-            await adminSupabase
+            const { data: rows, error: e } = await adminSupabase
               .from("repositories")
-              .update({ creation_error: reason })
+              .update(repoUpdate)
               .eq("class_id", envelope.class_id)
-              .eq("repository", `${eo}/${ern}`);
+              .eq("repository", `${eo}/${ern}`)
+              .select("id");
+            if (e) throw e;
+            if (!rows?.length)
+              throw new Error(`no repositories row matched ${eo}/${ern} in class ${envelope.class_id}`);
+          } else if (error instanceof RepositoryMissingError) {
+            // sync_repo_permissions envelopes carry no repo_id (enqueue_github_sync_repo_permissions
+            // takes org + repo, not a row id), so match on the full name the error actually
+            // confirmed missing. Not scoped by class_id: `repository` carries a UNIQUE index
+            // (unique_repo_name), so this touches at most one row, and the envelope's class_id is
+            // absent on some paths.
+            const { data: rows, error: e } = await adminSupabase
+              .from("repositories")
+              .update(repoUpdate)
+              .eq("repository", error.fullName)
+              .select("id");
+            if (e) throw e;
+            if (!rows?.length) {
+              // Most likely an owner/repo casing difference between the envelope and the stored
+              // value, since GitHub is case-insensitive here and this filter is not. Naming it
+              // explicitly beats a silent no-op that reports success.
+              throw new Error(
+                `no repositories row matched ${error.fullName} (casing mismatch, or row already deleted)`
+              );
+            }
           }
         } catch (markErr) {
+          parked = false;
           console.error("Failed to record creation_error on repository row:", markErr);
           Sentry.captureException(markErr, scope);
+        }
+        // Only for a missing repo, where the park IS the fix. Every other non-retryable error is
+        // already terminal on its own and has always gone to the DLQ regardless of this write —
+        // holding those back on a transient DB blip would be a new way to wedge the queue.
+        if (!parked && error instanceof RepositoryMissingError) {
+          scope.setTag("park_failed", "true");
+          Sentry.captureMessage(
+            `Could not park ${error.fullName}; leaving msg ${meta.msg_id} unarchived to retry the park`,
+            scope
+          );
+          return false;
         }
         recordMetric(
           adminSupabase,
