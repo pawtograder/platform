@@ -340,8 +340,18 @@ grant execute on function public.clear_org_membership_and_repair(uuid, text) to 
 -- `missing_term_dates` is the deliberate blind spot of the conservative window: those classes have
 -- people stuck outside the org and the sweep will NOT touch them. Reporting them is what keeps
 -- "skip when we cannot tell if the class is running" from meaning "fail silently forever".
+-- Signature changed while in review; drop the older arity so no stale overload survives.
+drop function if exists public.get_stuck_org_membership_alerts(int);
+
 create or replace function public.get_stuck_org_membership_alerts(
-  p_days int default 14
+  p_days int default 14,
+  -- How long this enrollment's own invitation must have been outstanding. Deliberately just under
+  -- the sweep's staleness threshold: an invitation older than that is about to be replaced, so
+  -- "nearly expired and still not accepted" is the strongest per-row evidence available. Both
+  -- bounds have to be satisfied — the CLASS has been running p_days, and THIS invitation has been
+  -- outstanding p_invitation_age_days — or a student who enrolled last week into a term-old class
+  -- would be reported as stuck while their invitation was still perfectly valid.
+  p_invitation_age_days int default 6
 ) returns table (
   class_id bigint,
   class_slug text,
@@ -397,25 +407,27 @@ as $$
      and (c.end_date is null or c.end_date >= current_date - 30)
      -- Nor about ancient course shells that were never configured and never will be.
      and c.created_at > now() - interval '365 days'
-     -- Skip an enrollment touched in the last two days: at term start every student is briefly
-     -- unconfirmed, and someone who enrolled this morning is not stuck. Two days is a fraction of
-     -- the seven-day sweep cadence, so a genuinely stuck enrollment still qualifies for most of
-     -- each cycle rather than being masked by the sweep's own stamp.
+     -- This enrollment's OWN invitation must be nearly expired. The sweep rewrites invitation_date
+     -- every staleness period, so a row's invitation age cycles between zero and that threshold and
+     -- can never reach the p_days figure the class bound uses; requiring p_days here would mean the
+     -- alert never fires at all. Requiring a couple of days instead fires far too eagerly in the
+     -- other direction — a student who joins a term-old class is swept within the hour and would be
+     -- reported as stuck two days later, while their invitation was still valid for five more.
      --
-     -- Falls back to updated_at for a role with no invitation at all, which is the late enrollee in
-     -- an established class: the sweep holds those for p_new_role_grace_minutes so the enrollment
-     -- trigger's own invitation can land first, and without this the alert would report them as
-     -- stuck while that invitation was still in flight. user_roles has no created_at, and
-     -- set_updated_at_on_user_roles makes updated_at "last modified" rather than "created" — so
-     -- this is a lower bound on the row's age. It errs toward delaying an alert for a role that was
-     -- edited recently, never toward raising one that isn't real, which is the right direction for
-     -- something that pages a human.
-     and coalesce(ur.invitation_date, ur.updated_at) < now() - interval '2 days'
+     -- Just under the sweep threshold is the setting that means something: the invitation has been
+     -- outstanding almost its entire life and has still not been accepted. It holds for the day or
+     -- so before the next re-invite, which at hourly cadence is ample.
+     --
+     -- Falls back to updated_at for a role with no invitation at all. user_roles has no created_at,
+     -- and set_updated_at_on_user_roles makes updated_at "last modified" rather than "created", so
+     -- this is a lower bound on the row's age: it can delay an alert for a recently edited role,
+     -- which is the safe direction.
+     and coalesce(ur.invitation_date, ur.updated_at) < now() - make_interval(days => p_invitation_age_days)
    group by c.id, c.slug, c.github_org, c.start_date, c.end_date, c.archived
 $$;
 
-revoke all on function public.get_stuck_org_membership_alerts(int) from public;
-grant execute on function public.get_stuck_org_membership_alerts(int) to service_role;
+revoke all on function public.get_stuck_org_membership_alerts(int, int) from public;
+grant execute on function public.get_stuck_org_membership_alerts(int, int) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- Cron: invoke the membership reconciler hourly.

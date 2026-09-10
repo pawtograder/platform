@@ -13212,7 +13212,7 @@ export type Database = {
         }[];
       };
       get_stuck_org_membership_alerts: {
-        Args: { p_days?: number };
+        Args: { p_days?: number; p_invitation_age_days?: number };
         Returns: {
           class_id: number;
           class_slug: string;

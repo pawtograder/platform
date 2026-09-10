@@ -71,11 +71,23 @@ const MAX_REINVITES_PER_CLASS_PER_PASS = 3;
 const NEW_ROLE_GRACE_MINUTES = 30;
 
 /**
- * Days unconfirmed before a class is alerted on. Comfortably longer than the staleness threshold:
- * the first re-invite should have gone out and been accepted well inside this, so crossing it means
- * the repair itself is not working.
+ * How long a class must have been running before its unconfirmed enrollments are worth alerting on.
+ * Comfortably longer than the staleness threshold: the first re-invite should have gone out and
+ * been accepted well inside this, so crossing it means the repair itself is not working.
  */
 const ALERT_AFTER_DAYS = 14;
+
+/**
+ * How long THIS enrollment's invitation must have been outstanding, on top of the class bound.
+ *
+ * One day short of the sweep's staleness threshold, which is the only setting that says something
+ * true. The sweep rewrites invitation_date every {@link INVITE_STALE_DAYS} days, so a row's
+ * invitation age never reaches {@link ALERT_AFTER_DAYS} and requiring that would silence the alert
+ * completely; requiring only a day or two would report a student who joined a term-old class as
+ * stuck while their invitation was still valid. Just under the threshold means "outstanding almost
+ * its whole life and still not accepted".
+ */
+const ALERT_INVITATION_AGE_DAYS = INVITE_STALE_DAYS - 1;
 
 type MembershipAlert = {
   class_id: number;
@@ -107,7 +119,10 @@ function alertOnStuckClasses(alerts: MembershipAlert[], scope: Sentry.Scope) {
       end_date: alert.term_end,
       unconfirmed_memberships: alert.stuck_count,
       oldest_invitation: alert.oldest_invitation,
-      unconfirmed_for_days: ALERT_AFTER_DAYS,
+      // Both bounds, named for what they actually mean. The single "unconfirmed_for_days: 14" this
+      // replaces was not true of any individual enrollment — it described the class.
+      class_running_at_least_days: ALERT_AFTER_DAYS,
+      invitation_outstanding_at_least_days: ALERT_INVITATION_AGE_DAYS,
       invite_window_open: alert.window_open
     });
     classScope.setLevel("warning");
@@ -186,7 +201,8 @@ Deno.serve(async (req) => {
     // Runs regardless of what the sweep did: the alert is the entire escalation path for both the
     // classes it skipped and the ones where re-inviting is not the answer.
     const { data: alertRows, error: alertError } = await supabase.rpc("get_stuck_org_membership_alerts", {
-      p_days: ALERT_AFTER_DAYS
+      p_days: ALERT_AFTER_DAYS,
+      p_invitation_age_days: ALERT_INVITATION_AGE_DAYS
     });
     if (alertError) {
       console.error("[github-membership-reconciler] get_stuck_org_membership_alerts failed:", alertError);
