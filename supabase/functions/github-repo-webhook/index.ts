@@ -3211,10 +3211,12 @@ async function handleOrgMemberRemoved(
       .select("user_id")
       .eq("github_user_id", String(removedUser.id))
       .maybeSingle();
-    if (error) {
-      Sentry.captureException(error, scope);
-      return;
-    }
+    // Throw rather than capture-and-return. Every early return here looks to the dispatcher exactly
+    // like "handled", so it marks the delivery complete and GitHub never redelivers — and nothing
+    // else in the system clears this latch, so a transient database error would leave the departed
+    // member confirmed until some unrelated role mutation. The organization handler's own catch
+    // captures with the org/user tags already on the scope.
+    if (error) throw error;
     userData = data;
   }
   if (!userData) {
@@ -3225,10 +3227,7 @@ async function handleOrgMemberRemoved(
       // current when the account was linked.
       .ilike("github_username", removedUser.login)
       .maybeSingle();
-    if (error) {
-      Sentry.captureException(error, scope);
-      return;
-    }
+    if (error) throw error;
     userData = data;
   }
   if (!userData) {
@@ -3244,10 +3243,7 @@ async function handleOrgMemberRemoved(
     // casing difference would find no classes and silently skip the repair. Org logins cannot
     // contain `%` or `_`, so there is no pattern to escape here.
     .ilike("github_org", organizationName);
-  if (classesError) {
-    Sentry.captureException(classesError, scope);
-    return;
-  }
+  if (classesError) throw classesError;
   if (!classesData || classesData.length === 0) {
     return;
   }
@@ -3268,10 +3264,7 @@ async function handleOrgMemberRemoved(
       "class_id",
       classesData.map((c) => c.id)
     );
-  if (updateError) {
-    Sentry.captureException(updateError, scope);
-    return;
-  }
+  if (updateError) throw updateError;
   scope?.setTag("org_membership_cleared", "true");
   console.log(
     `[github-repo-webhook] ${removedUser.login} left ${organizationName}; cleared github_org_confirmed for their live enrollments`

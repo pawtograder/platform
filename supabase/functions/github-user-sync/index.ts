@@ -296,8 +296,12 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         });
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
+          // madeChanges covers the row we are about to insert, which is a real change even if GitHub
+          // then fails. The repair KIND is recorded only once the repository is ready — the catch
+          // below turns a failure into an error message, so tagging here would report a successful
+          // creation for a repair that did not happen, in the one event this PR adds to make those
+          // outcomes countable.
           madeChanges = true;
-          repairKinds.add("group_repo_create");
           jobScope?.addBreadcrumb({
             category: "github",
             message: `Creating repo ${repoName}`,
@@ -333,6 +337,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
                 .from("repositories")
                 .update({ synced_repo_sha: `e2e-skip-${repoName}`, is_github_ready: true })
                 .eq("id", dbRepo!.id);
+              repairKinds.add("group_repo_create");
               return assignment;
             }
             const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!, {}, jobScope);
@@ -346,6 +351,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             if (updateRepoError) {
               throw updateRepoError;
             }
+            repairKinds.add("group_repo_create");
           } catch (e) {
             Sentry.captureException(e, jobScope);
             // Keep the row (is_github_ready stays false) so the reconciler + self-healing createRepo
@@ -431,8 +437,8 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         });
         return;
       }
+      // Recorded after the repository is ready, for the reason given on the group path above.
       madeChanges = true;
-      repairKinds.add("individual_repo_create");
       //Use service role key to insert the repo into the database
       const { error, data: dbRepo } = await adminSupabase
         .from("repositories")
@@ -465,6 +471,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
               is_github_ready: true
             })
             .eq("id", dbRepo!.id);
+          repairKinds.add("individual_repo_create");
           return `e2e-skip-${repoName}`;
         }
         const new_repo_sha = await createRepo(
@@ -483,6 +490,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             is_github_ready: true
           })
           .eq("id", dbRepo!.id);
+        repairKinds.add("individual_repo_create");
 
         return new_repo_sha;
       } catch (e) {
@@ -1012,7 +1020,7 @@ async function handleStudentGitHubSync(req: Request, source: string, scope: Sent
   }
   const { data: classRows, error: classError } = await supabase
     .from("classes")
-    .select("github_org, user_roles!inner(user_id, disabled, github_org_confirmed)")
+    .select("github_org, start_date, end_date, archived, user_roles!inner(user_id, disabled, github_org_confirmed)")
     .eq("user_roles.user_id", user.id)
     .eq("user_roles.disabled", false)
     .not("github_org", "is", "null");
@@ -1034,8 +1042,14 @@ async function handleStudentGitHubSync(req: Request, source: string, scope: Sent
   // Treat NULL github_org_confirmed as unconfirmed too (the column is nullable): the invitation
   // banner shows whenever github_org_confirmed is falsy, so `!== true` keeps this force decision
   // aligned with the banner instead of skipping NULL rows that still show the stuck banner.
-  const hasUnconfirmedEnrollment = (classRows ?? []).some((c) =>
-    (c.user_roles ?? []).some((r) => r.github_org_confirmed !== true)
+  //
+  // A class whose window is provably closed does NOT count, because nothing will ever confirm that
+  // enrollment again: this function skips reconciling a closed class, and so does the hourly
+  // reconciler. Leaving it in would make an enrollment that ends unconfirmed — a user who left the
+  // org after the course finished, which the member_removed webhook now records — force a full
+  // reconciliation, GitHub calls included, on every login the user ever makes.
+  const hasUnconfirmedEnrollment = (classRows ?? []).some(
+    (c) => !isOrgInviteWindowKnownClosed(c) && (c.user_roles ?? []).some((r) => r.github_org_confirmed !== true)
   );
 
   // syncGitHubUser reconciles ALL of the user's enrolled orgs/teams internally (see

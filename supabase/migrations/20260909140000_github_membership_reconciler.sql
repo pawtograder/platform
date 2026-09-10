@@ -287,11 +287,20 @@ as $$
      and (c.end_date is null or c.end_date >= current_date - 30)
      -- Nor about ancient course shells that were never configured and never will be.
      and c.created_at > now() - interval '365 days'
-     -- Skip an enrollment invited in the last two days: at term start every student is briefly
+     -- Skip an enrollment touched in the last two days: at term start every student is briefly
      -- unconfirmed, and someone who enrolled this morning is not stuck. Two days is a fraction of
      -- the seven-day sweep cadence, so a genuinely stuck enrollment still qualifies for most of
      -- each cycle rather than being masked by the sweep's own stamp.
-     and (ur.invitation_date is null or ur.invitation_date < now() - interval '2 days')
+     --
+     -- Falls back to updated_at for a role with no invitation at all, which is the late enrollee in
+     -- an established class: the sweep holds those for p_new_role_grace_minutes so the enrollment
+     -- trigger's own invitation can land first, and without this the alert would report them as
+     -- stuck while that invitation was still in flight. user_roles has no created_at, and
+     -- set_updated_at_on_user_roles makes updated_at "last modified" rather than "created" — so
+     -- this is a lower bound on the row's age. It errs toward delaying an alert for a role that was
+     -- edited recently, never toward raising one that isn't real, which is the right direction for
+     -- something that pages a human.
+     and coalesce(ur.invitation_date, ur.updated_at) < now() - interval '2 days'
    group by c.id, c.slug, c.github_org, c.start_date, c.end_date, c.archived
 $$;
 
