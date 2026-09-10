@@ -21,6 +21,7 @@ const {
   destinationHasContent,
   assertSourceNotEmpty,
   computeCollaboratorRemovals,
+  confirmedRemovals,
   filterToDirectCollaborators,
   getGitHubUserIfExists,
   getTeamAndCreateIfNeeded,
@@ -1087,4 +1088,27 @@ Deno.test("isValidRepoFullName: whitespace is rejected", () => {
 Deno.test("isValidRepoFullName: non-strings are rejected", () => {
   assertEquals(isValidRepoFullName(42), false);
   assertEquals(isValidRepoFullName({ owner: "a", repo: "b" }), false);
+});
+
+/**
+ * The team sync's removal set is computed before its add loop, which is one network round-trip per
+ * new member, while the queue drains envelopes for the same class team concurrently. These pin the
+ * intersection that keeps a user confirmed inside that window from being deleted by the stale set.
+ */
+Deno.test("confirmedRemovals: keeps a user who became intended after the original read", () => {
+  assertEquals(confirmedRemovals(["alice", "bob"], ["bob"]), ["alice"]);
+});
+
+Deno.test("confirmedRemovals: removes users still absent from the fresh roster", () => {
+  assertEquals(confirmedRemovals(["alice", "bob"], []), ["alice", "bob"]);
+  assertEquals(confirmedRemovals(["alice"], ["carol"]), ["alice"]);
+});
+
+Deno.test("confirmedRemovals: compares logins case-insensitively, as GitHub does", () => {
+  assertEquals(confirmedRemovals(["Alice"], ["alice"]), []);
+  assertEquals(confirmedRemovals(["alice"], ["ALICE"]), []);
+});
+
+Deno.test("confirmedRemovals: an empty candidate set stays empty", () => {
+  assertEquals(confirmedRemovals([], ["alice"]), []);
 });

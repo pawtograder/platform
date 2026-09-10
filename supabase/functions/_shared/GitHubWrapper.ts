@@ -2794,6 +2794,28 @@ export async function syncStudentTeam(
  *     This function should be idempotent, and should not throw an error if the team already exists (or not).
  *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
  */
+/**
+ * Which of the candidate removals should actually be deleted from the team?
+ *
+ * `syncTeam` computes its removal set from a roster read taken BEFORE it adds anyone, and the add
+ * loop is one network round-trip per new member — so on a large class the set can be minutes stale
+ * by the time the DELETEs go out. Meanwhile the queue drains envelopes concurrently, and several
+ * can target the same class team at once (the membership reconciler enqueues one per stale
+ * invitation). If a sibling envelope confirms a user inside that window, this run's stale set still
+ * lists them and deletes them — a confirmed enrollment silently loses the repository access the
+ * team grants, and nothing repairs it, because every repair path skips roles that already read as
+ * confirmed.
+ *
+ * So the removal set is intersected with a roster re-read taken immediately before the destructive
+ * half. That does not make the operation atomic — nothing available here would — but it collapses
+ * the exposure from "the whole add loop" to "one RPC round-trip", and it removes the case that
+ * actually happens.
+ */
+export function confirmedRemovals(candidates: string[], intendedNow: string[]): string[] {
+  const stillIntended = new Set(intendedNow.map((u) => u.toLowerCase()));
+  return candidates.filter((u) => !stillIntended.has(u.toLowerCase()));
+}
+
 export async function syncTeam(
   team_slug: string,
   org: string,
@@ -2864,7 +2886,25 @@ export async function syncTeam(
       Sentry.captureException(e, newScope);
     }
   }
-  for (const username of removeMembers) {
+  // Re-read the roster before deleting anyone: see confirmedRemovals. The set above was computed
+  // before the add loop, which is one round-trip per new member.
+  let toRemove = removeMembers;
+  if (removeMembers.length > 0) {
+    const intendedNow = await githubUsernamesFetcher();
+    toRemove = confirmedRemovals(removeMembers, intendedNow);
+    const spared = removeMembers.filter((u) => !toRemove.includes(u));
+    if (spared.length > 0) {
+      // Worth a breadcrumb: it means a concurrent sync confirmed someone mid-run, which is exactly
+      // the case this re-read exists to catch.
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `Sparing ${spared.join(", ")} from removal in ${resolvedSlug}: confirmed since this sync began`,
+        level: "info"
+      });
+      console.log(`Sparing newly confirmed members from removal in ${resolvedSlug}: ${spared.join(", ")}`);
+    }
+  }
+  for (const username of toRemove) {
     await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
       team_slug: resolvedSlug,
