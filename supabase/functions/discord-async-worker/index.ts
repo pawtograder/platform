@@ -27,6 +27,7 @@ import {
   parseDiscordApiError,
   DISCORD_UNKNOWN_GUILD
 } from "../_shared/DiscordErrorClassification.ts";
+import { freshMembershipHintAgeMs } from "../_shared/DiscordMembershipHint.ts";
 import { discordApiBase, isDiscordApiMocked } from "../_shared/DiscordApiBase.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
@@ -1698,11 +1699,16 @@ async function processBatchRoleSync(
     if (membership.result === "member") {
       // User is in guild, enqueue role sync
       try {
+        // The membership this loop just established is handed to the envelope, so the
+        // add_member_role handler does not re-read the same guild member endpoint a second later.
+        // That duplicate pair -- one lookup here, an identical one from the handler, 4-wide in
+        // parallel -- is what emptied the per-route bucket and produced the 429s.
         const { error: syncError } = await adminSupabase.rpc("enqueue_discord_role_sync", {
           p_user_id: record.user_id,
           p_class_id: record.class_id,
           p_role: record.role,
-          p_action: "add"
+          p_action: "add",
+          p_membership_verified_at: new Date().toISOString()
         });
 
         if (syncError) {
@@ -2767,10 +2773,29 @@ export async function processEnvelope(
         }
 
         try {
-          // First check if user is in the guild
-          const member = await discord.getGuildMember(args.guild_id, args.user_id, scope);
+          // First check if the user is in the guild -- unless the enqueuer just did, and said so.
+          //
+          // The result is only ever read as a presence check, so a boolean is what this needs; the
+          // hint can answer it without inventing a member object the rest of the branch would then
+          // have to be trusted not to look inside.
+          //
+          // Safe because a hint is only ever written after a 200, so the user was in the guild
+          // moments ago. If they left in between, the add_member_role below 404s -- which
+          // classifyDiscordError already treats as terminal. The alternative failure, wrongly taking
+          // the `!inGuild` branch, is the expensive one: it records the student as not joined and
+          // mints an invite they do not need.
+          const hintAgeMs = freshMembershipHintAgeMs(envelope.membership_verified_at);
+          let inGuild: boolean;
+          if (hintAgeMs !== undefined) {
+            console.log(
+              `[processEnvelope] Skipping guild member lookup for ${args.user_id}; verified ${hintAgeMs}ms ago by the enqueuer`
+            );
+            inGuild = true;
+          } else {
+            inGuild = (await discord.getGuildMember(args.guild_id, args.user_id, scope)) !== null;
+          }
 
-          if (!member) {
+          if (!inGuild) {
             // The user has not joined the server. That is a permanent state until the user acts, so
             // this operation is finished either way — the invite below is a courtesy, and its failure
             // is recorded rather than retried.
@@ -3195,6 +3220,12 @@ export async function processEnvelope(
     const rt = detectRateLimit(error);
     console.log(`[processEnvelope] Rate limit detected: ${rt.isRateLimit}, retry_after: ${rt.retryAfter}`);
     scope.setTag("rate_limit", rt.isRateLimit ? "true" : "false");
+    // A rate limit that reaches here is backpressure, not a fault: the envelope is requeued below and
+    // the operation still happens. Filing it at `error` put a self-correcting 429 in the same bucket
+    // as a lost message and made the Discord worker look like it was failing when it was waiting.
+    // Still captured -- a sustained limit is worth seeing, and DiscordWrapper only propagates the ones
+    // too long to wait out -- but at a level that does not page.
+    if (rt.isRateLimit) scope.setLevel("warning");
     const errorId = Sentry.captureException(error, scope);
     console.log(`[processEnvelope] Recorded error with Sentry ID: ${errorId}`);
 

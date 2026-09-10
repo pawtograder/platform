@@ -172,6 +172,20 @@ export type DiscordAsyncEnvelope = {
   debug_id?: string;
   log_id?: number;
   retry_count?: number;
+  /**
+   * When the enqueuer last saw this user in the guild, as an ISO timestamp.
+   *
+   * Set only by the batch role sync, which reads `GET /guilds/{g}/members/{u}` for every candidate
+   * and then enqueues an `add_member_role` whose handler used to read the very same endpoint again
+   * about a second later. Two identical calls per user is what exhausted the per-route bucket: the
+   * 429s all landed on the second one. The handler skips its own lookup while this is fresh (see
+   * MEMBERSHIP_HINT_TTL_MS).
+   *
+   * Deliberately a timestamp rather than a boolean, so an envelope that sat in the queue -- retried,
+   * delayed by backoff, redelivered after a visibility timeout -- falls back to checking rather than
+   * trusting an observation of unknown age.
+   */
+  membership_verified_at?: string;
   // For message tracking
   discord_message_id?: string; // For update_message, the message ID to update
   discord_channel_id?: string; // For send_message, store the channel ID
