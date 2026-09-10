@@ -12,6 +12,7 @@ import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { applyPatch } from "https://esm.sh/diff@5.1.0";
 import { encodeBase64 } from "https://deno.land/std@0.221.0/encoding/base64.ts";
+import { decodeGitHubBase64Text, encodeTextAsGitHubBase64 } from "./GitHubTextEncoding.ts";
 import * as github from "./GitHubWrapper.ts";
 import { getCreateContentLimiter } from "./GitHubWrapper.ts";
 // (Redis-related imports consolidated above into the one createRedis line)
@@ -748,7 +749,7 @@ async function fetchTextFileAtRef(
   const meta = fileData as ContentsFileMeta;
 
   if (meta.encoding === "base64" && typeof meta.content === "string") {
-    return { content: atob(meta.content.replace(/\n/g, "")), sha: meta.sha };
+    return { content: decodeGitHubBase64Text(meta.content), sha: meta.sha };
   }
 
   if (meta.sha) {
@@ -928,7 +929,7 @@ export async function createBranchAndCommit(
 
         try {
           const { content: templateContent } = await fetchTextFileAtRef(templateRepo, file.path, templateSha, scope);
-          const encoded = btoa(templateContent);
+          const encoded = encodeTextAsGitHubBase64(templateContent);
           const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
             owner,
             repo,
@@ -1072,7 +1073,7 @@ export async function createBranchAndCommit(
       const incrementalBytes = Math.max(0, transientPeak - preCharged);
       enforceSizeBudget(incrementalBytes, file.path);
 
-      const encodedPatched = btoa(patchedContent);
+      const encodedPatched = encodeTextAsGitHubBase64(patchedContent);
       const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
         owner,
         repo,
