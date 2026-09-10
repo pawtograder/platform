@@ -190,6 +190,12 @@ begin
      -- re-serving whichever rows happen to sort first.
      order by ur.invitation_date asc nulls first, ur.id
      limit p_max
+     -- Two overlapping runs (a cron tick racing a pg_net retry, or a manual invocation) would
+     -- otherwise both select the same rows before either invitation_date stamp commits, and each
+     -- would enqueue its own invitation — a duplicate email to the student, which is the specific
+     -- harm this reconciler exists to avoid. Every join here is inner, so locking `ur` alone is
+     -- valid; SKIP LOCKED makes the second run take the next candidates instead of blocking.
+     for update of ur skip locked
   loop
     begin
       update public.user_roles set invitation_date = now() where id = r.id;
@@ -263,14 +269,29 @@ as $$
      and coalesce(c.is_demo, false) = false
      and not (c.github_org = 'pawtograder-playground' and c.slug like 'e2e-ignore-%')
      -- Only once the class has been running long enough that not being in the org is a real problem
-     -- rather than a student who has not opened their email yet. A class with no start_date cannot
-     -- be judged this way, so it is admitted here and separated by missing_term_dates below.
-     and (c.start_date is null or c.start_date <= current_date - p_days)
+     -- rather than a student who has not opened their email yet.
+     --
+     -- Anchored on IMMUTABLE values, which rules out the obvious choice: reconcile_stale_org_invitations
+     -- rewrites invitation_date on every sweep, and the edge function sweeps before it queries these
+     -- alerts, so a row aged off invitation_date would be refreshed a few milliseconds before being
+     -- asked how old it is — the "still stuck" alert could never fire at all. A dated class is aged
+     -- from start_date; an undated one (which the sweep will not touch, and which this function
+     -- reports so somebody fills the dates in) is aged from when the class was created.
+     and (
+           case when c.start_date is not null
+                then c.start_date <= current_date - p_days
+                else c.created_at < now() - make_interval(days => p_days)
+           end
+         )
      -- Don't keep alerting about classes that are long over.
      and (c.end_date is null or c.end_date >= current_date - 30)
      -- Nor about ancient course shells that were never configured and never will be.
      and c.created_at > now() - interval '365 days'
-     and (ur.invitation_date is null or ur.invitation_date < now() - make_interval(days => p_days))
+     -- Skip an enrollment invited in the last two days: at term start every student is briefly
+     -- unconfirmed, and someone who enrolled this morning is not stuck. Two days is a fraction of
+     -- the seven-day sweep cadence, so a genuinely stuck enrollment still qualifies for most of
+     -- each cycle rather than being masked by the sweep's own stamp.
+     and (ur.invitation_date is null or ur.invitation_date < now() - interval '2 days')
    group by c.id, c.slug, c.github_org, c.start_date, c.end_date, c.archived
 $$;
 
