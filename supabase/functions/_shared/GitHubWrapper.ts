@@ -54,6 +54,46 @@ export class NonRetryableRepoError extends NonRetryableGitHubError {
 }
 
 /**
+ * The repository we were asked to operate on is not on GitHub at all. Distinct from a bare 404,
+ * which on a freshly-created repo usually means read-after-create replication lag and IS worth
+ * retrying: this error is only raised once a direct `GET /repos/{owner}/{repo}` has confirmed the
+ * repo is really gone. Someone deleted it out of band, or the row was left behind when the repo was
+ * renamed. Either way the row no longer describes anything, so the worker records the reason and
+ * clears `is_github_ready` rather than retrying.
+ */
+export class RepositoryMissingError extends NonRetryableGitHubError {
+  readonly fullName: string;
+  constructor(fullName: string) {
+    super(
+      `Repository ${fullName} does not exist on GitHub. It was deleted or renamed outside Pawtograder, so there is nothing to sync.`
+    );
+    this.name = "RepositoryMissingError";
+    this.fullName = fullName;
+  }
+}
+
+/**
+ * The repo 404s and we cannot attribute it: the installation is scoped to selected repositories, so
+ * this is either a deleted repo or a live one we were never granted. Sibling of
+ * RepositoryMissingError, and the distinction is exactly what we are allowed to DO about it.
+ *
+ * Both are per-repo failures, so neither should trip the org-wide circuit breaker or spend the
+ * retry ladder — nothing about one repo says the org is unhealthy. Only RepositoryMissingError
+ * carries proof of deletion, so only it may park the row; this one leaves `repositories` untouched,
+ * because the row may be perfectly correct and the problem ours.
+ */
+export class RepositoryUnreadableError extends NonRetryableGitHubError {
+  readonly fullName: string;
+  constructor(fullName: string) {
+    super(
+      `Repository ${fullName} returned 404 and this installation is scoped to selected repositories, so it is either deleted or not granted to us. Cannot sync it, and cannot safely conclude it is gone.`
+    );
+    this.name = "RepositoryUnreadableError";
+    this.fullName = fullName;
+  }
+}
+
+/**
  * The GitHub login we have on file for a user doesn't exist, and we couldn't recover a current one
  * from the numeric account id we stored when they linked their account (see
  * `reresolveMissingGitHubLogin`). Either the account was deleted or the username was never really
@@ -2401,6 +2441,248 @@ function isGitHubNotFoundError(error: unknown): boolean {
   );
 }
 
+/**
+ * Read the org installation's repo selection ("all" | "selected") STRAIGHT FROM GitHub.
+ *
+ * Deliberately not cached, and deliberately not taken from the `installations` array: that array
+ * is filled once per isolate and only refilled while empty, so a value read from it is arbitrarily
+ * stale. An installation narrowed from "All repositories" to "Only select repositories" would keep
+ * reporting "all" for the life of the isolate, and the first live repo dropped from the selection
+ * would be read as deleted and durably parked — the exact failure the selection check exists to
+ * prevent. Proof has to be fresh to be proof.
+ *
+ * Costs one app-authenticated request, and only on the 404 path (see
+ * `listCollaboratorsOrThrowMissing`), never on the happy path.
+ *
+ * Returns `undefined` on ANY failure, meaning strictly "could not find out" — never "all" and never
+ * "selected". `classifyRepoPresence` maps that to its retryable `unknown` state, so a 5xx or rate
+ * limit from this auxiliary lookup cannot terminate a job. Reading it as "selected" would be just
+ * as wrong as reading it as "all": one discards a live sync, the other parks a live repo.
+ */
+export async function fetchRepositorySelection(org: string): Promise<"all" | "selected" | undefined> {
+  try {
+    const resp = await app.octokit.request("GET /orgs/{org}/installation", { org });
+    return resp.data.repository_selection;
+  } catch (error) {
+    // One failure must NOT be flattened into undefined: a rate limit. Swallowing it here loses the
+    // response and its Retry-After before the worker's detectRateLimitType ever sees them, so the
+    // job comes back as a generic failure — opening the org-method circuit and counting toward the
+    // eight-hour threshold — when the correct answer was "back off for N seconds and try again".
+    // Propagate it and let the worker's rate-limit handling do its job.
+    if (carriesRateLimitSignal(error)) {
+      throw error;
+    }
+    Sentry.addBreadcrumb({
+      category: "github",
+      message: `Could not read installation repo selection for ${org}; treating repo presence as unprovable`,
+      level: "warning",
+      data: { error: error instanceof Error ? error.message : String(error) }
+    });
+    return undefined;
+  }
+}
+
+/**
+ * Does this error carry the rate-limit signal the async worker keys off?
+ *
+ * Mirrors the INPUTS of github-async-worker's `detectRateLimitType` (the two rate-limit error
+ * classes, a 429, or a 403 carrying Retry-After / an exhausted x-ratelimit-remaining) rather than
+ * its decision tree, because all we need here is "is this worth preserving for that function to
+ * classify". Erring either way is survivable and neither is silent: a false positive propagates an
+ * error the worker then declines to treat as a rate limit, and a false negative just falls back to
+ * the `unknown` path, which retries.
+ *
+ * A plain 403 with no rate-limit headers is deliberately NOT a match — that is a permission
+ * problem, and propagating it would trip the org circuit over a lookup we can simply do without.
+ */
+function carriesRateLimitSignal(error: unknown): boolean {
+  if (error instanceof SecondaryRateLimitError || error instanceof PrimaryRateLimitError) return true;
+  const status = error instanceof RequestError ? error.status : undefined;
+  if (status === 429) return true;
+  if (status !== 403) return false;
+  const raw = (error as { response?: { headers?: Record<string, unknown> } })?.response?.headers;
+  if (!raw) return false;
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) headers[k.toLowerCase()] = String(v);
+  return headers["retry-after"] !== undefined || headers["x-ratelimit-remaining"] === "0";
+}
+
+/**
+ * Four states, because the caller has to make two independent decisions from one 404 — may we keep
+ * retrying, and may we write the row off — and collapsing them gets one of the two wrong:
+ *
+ *   present      — 200. The repo is there, so the collaborators 404 was replication lag. Retry.
+ *   unknown      — we learned nothing, from either input: the probe ITSELF failed (403, 5xx,
+ *                  network), or the installation scope came back undefined because THAT lookup
+ *                  failed. Says nothing about the repo and nothing about the row. Retry.
+ *   absent       — 404, AND this installation can see every repo in the org, so there was nothing
+ *                  to hide: the repo really is gone. Terminal, and provably so — safe to park.
+ *   inaccessible — 404, AND the installation is confirmed scoped to SELECTED repos, so a live repo
+ *                  we were never granted 404s identically to a deleted one. Terminal for this job
+ *                  — retrying cannot make an ungranted repo readable — but NOT proof about the row.
+ *
+ * `undefined` scope means "we could not find out", and it has to land on `unknown` rather than on
+ * `inaccessible`: a transient 5xx or rate limit from the scope lookup would otherwise be
+ * indistinguishable from a confirmed selected-repos installation, and would terminate the job —
+ * permanently discarding a permission sync, or leaving a genuinely missing row unparked, because
+ * an auxiliary lookup blipped. Ignorance is never grounds to stop.
+ *
+ * `github-check-app-installation` already reads a repo 404 as "installed in the org but not granted
+ * access to this repo". Collapsing that into "deleted" would park a LIVE repo; collapsing it into
+ * "retry" would spend the 93s ladder and then let a bare 404 escape and trip the org-wide circuit,
+ * throttling every other class over one repo. Hence two terminal states rather than one: both stop
+ * the work, only `absent` is allowed to change the database.
+ */
+export type RepoPresence = "present" | "unknown" | "absent" | "inaccessible";
+
+export async function classifyRepoPresence(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  repositorySelection: "all" | "selected" | undefined
+): Promise<RepoPresence> {
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    return "present";
+  } catch (error) {
+    // A rate-limited probe is not "unknown", it is "ask again later", and only the caller's caller
+    // knows how to wait. Flattening it here would strip the response and its Retry-After before
+    // the worker's detectRateLimitType could see them, so the job would surface as a generic
+    // failure — ladder, org-method circuit, error threshold — instead of a backoff. Same reasoning
+    // as fetchRepositorySelection; propagating still cannot classify the repo as absent, because
+    // this throws instead of returning.
+    if (carriesRateLimitSignal(error)) {
+      throw error;
+    }
+    // Status, NOT `isGitHubNotFoundError`. That helper falls back to `message.includes("Not Found")`
+    // so that callers doing benign things still recognise a 404 behind a wrapper — but here the
+    // answer can DELETE a row's readiness, and a statusless transport/proxy error or a wrapped 5xx
+    // whose body happens to carry "Not Found" would then be read as proof of deletion. This is the
+    // one place in the file where the loose check is unsafe, so require the real thing.
+    const isRealNotFound = error instanceof RequestError && error.status === 404;
+    if (!isRealNotFound) {
+      // A 5xx, transport error, or non-rate-limited 403 leaves the caller holding the original 404,
+      // which the ladder then retries — deliberately. Propagating the probe error instead would be
+      // worse, not better: retryWithBackoff only retries 404 / "git repository is empty", so a
+      // 5xx would get ZERO retries and land on the worker's generic path, opening the org-method
+      // circuit on the first transient blip. Retrying the 404 re-runs this probe too, which is the
+      // thing most likely to clear it.
+      //
+      // Rate limits are the deliberate exception above, because there the worker genuinely knows
+      // better than the ladder does: it has Retry-After and a real backoff. For a 5xx it has
+      // neither, so the ladder is the better handler. What IS lost is attribution — the escaping
+      // error says 404 when the proximate cause was a 500 — so leave the real reason behind.
+      Sentry.addBreadcrumb({
+        category: "github",
+        message: `Presence probe for ${owner}/${repo} failed; repo presence unknown, retrying the original 404`,
+        level: "warning",
+        data: {
+          probe_status: error instanceof RequestError ? error.status : "none",
+          probe_error: error instanceof Error ? error.message : String(error)
+        }
+      });
+      return "unknown";
+    }
+    if (repositorySelection === "all") return "absent";
+    if (repositorySelection === "selected") return "inaccessible";
+    return "unknown";
+  }
+}
+
+/**
+ * List a repo's collaborators, distinguishing the two things a 404 can mean.
+ *
+ * The caller wraps this in `retryWithBackoff`, whose 404 ladder exists for read-after-create lag:
+ * syncRepoPermissions runs immediately after createRepo in the same worker message, and the
+ * collaborators endpoint can 404 briefly on a repo that does exist. A repo that is GONE returns
+ * exactly the same 404, and paying the ladder for it costs 93 seconds of a worker slot and then
+ * escapes as a bare RequestError — which the async worker reads as a systemic failure and answers
+ * by opening the `<org>:sync_repo_permissions` circuit, throttling that method for every other
+ * class in the org over one dead row.
+ *
+ * So ask instead of guessing, and answer the two questions separately:
+ *
+ *   absent       -> RepositoryMissingError. Terminal AND provable: park the row.
+ *   inaccessible -> RepositoryUnreadableError. Terminal but unprovable: stop, touch nothing.
+ *   present      -> rethrow the original 404; the ladder covers the lag it was written for.
+ *   unknown      -> rethrow too. The probe failed, so we have no grounds to terminate.
+ *
+ * Both terminal cases are NonRetryableGitHubError, which is what keeps a single dead or ungranted
+ * repo out of the org-wide circuit breaker and out of the error-threshold counter. Returning a
+ * bare 404 for the inaccessible case instead would spend the full ladder and then be read as a
+ * systemic failure — the original incident, just narrowed to selected-repos installations.
+ *
+ * `resolveRepositorySelection` is a thunk, not a value, for two reasons: it is only needed on the
+ * 404 path so the happy path pays nothing for it, and passing it in keeps this function testable —
+ * an earlier version read the module-level installation cache directly, and a unit test caught that
+ * a cold cache reports `undefined`, degrades to `inaccessible`, and would have left the one branch
+ * that must be provably correct never exercised. Production passes
+ * `() => fetchRepositorySelection(owner)`, which asks GitHub rather than trusting a cache.
+ */
+export async function listCollaboratorsOrThrowMissing(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  resolveRepositorySelection: () => Promise<"all" | "selected" | undefined>,
+  options: { affiliation?: "direct" | "outside" | "all" } = {}
+) {
+  try {
+    return await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
+      owner,
+      repo,
+      per_page: 100,
+      ...(options.affiliation ? { affiliation: options.affiliation } : {})
+    });
+  } catch (error) {
+    const reinterpreted = await reinterpretRepoNotFound(octokit, owner, repo, error, resolveRepositorySelection);
+    if (reinterpreted) throw reinterpreted;
+    throw error;
+  }
+}
+
+/**
+ * Given an error from a repo-scoped call, decide whether it should be re-reported as a per-repo
+ * terminal condition, and which one. Returns undefined to mean "leave this error exactly as it is".
+ *
+ * Shared by the collaborator read and by the whole-sync backstop, so the "when may we conclude the
+ * repo is gone" rule lives in one place. Verifying rather than assuming is what makes the backstop
+ * safe to apply broadly: a 404 from
+ * `PUT /repos/{owner}/{repo}/collaborators/{username}` can mean the USERNAME does not exist, and
+ * treating that as a missing repo would park a live repo because a student deleted their GitHub
+ * account. Since this probes the repo before concluding anything, that case comes back `present`
+ * and the original error is passed through untouched.
+ */
+async function reinterpretRepoNotFound(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  error: unknown,
+  resolveRepositorySelection: () => Promise<"all" | "selected" | undefined>
+): Promise<RepositoryMissingError | RepositoryUnreadableError | undefined> {
+  if (!isGitHubNotFoundError(error)) return undefined;
+  const presence = await classifyRepoPresence(octokit, owner, repo, await resolveRepositorySelection());
+  if (presence === "inaccessible") {
+    return new RepositoryUnreadableError(`${owner}/${repo}`);
+  }
+  if (presence !== "absent") {
+    // present -> the 404 was about something else (a user, a team); unknown -> we have no grounds.
+    return undefined;
+  }
+  // `absent` rests on the scope having been "all", read BEFORE the probe. If an admin narrows the
+  // installation in between, a live repo dropped from the selection 404s and that stale "all"
+  // would write it off — the failure the fresh lookup exists to prevent, moved inside one call.
+  // So confirm the scope again, now that the 404 is in hand.
+  //
+  // Re-ordering alone would not help: reading only AFTER the probe inverts the race, since a
+  // widening between probe and read misleads us identically. Requiring "all" on BOTH sides raises
+  // the bar from one administrative change mid-request to two in opposite directions. Costs one
+  // request, and only on the path about to write to the database.
+  const confirmed = await resolveRepositorySelection();
+  if (confirmed === "all") return new RepositoryMissingError(`${owner}/${repo}`);
+  if (confirmed === "selected") return new RepositoryUnreadableError(`${owner}/${repo}`);
+  return undefined;
+}
+
 export async function archiveRepoAndLock(org: string, repo: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "archive_repo");
   scope?.setTag("org", org);
@@ -3419,6 +3701,50 @@ export async function syncRepoPermissions(
     // Same reasoning as createRepo: flag only what escapes. This path recovers from a missing staff
     // team on purpose (TeamNotFoundError degrades to "do not remove anyone" and carries on).
     timings.noteEscapingError(error);
+    // Backstop for every OTHER repo-scoped call in the sync. The collaborator read classifies its
+    // own 404 because it sits inside the retry ladder and has to short-circuit those 93 seconds,
+    // but the sync goes on to read the repo's teams and to add/remove collaborators — and this
+    // function has been measured at 94 seconds, so a repo deleted part-way through is not
+    // hypothetical. During the 2026-09-09 sp26 cleanup an instructor deleted 146 repos by hand;
+    // any one of those could have landed mid-sync. Without this, such a 404 escapes bare and the
+    // worker reads it as systemic, opening the org-wide circuit — the original incident, entered
+    // through a different call.
+    //
+    // Safe to apply this broadly precisely because it verifies instead of assuming: a 404 that was
+    // never about the repo (a deleted GitHub account on a collaborator PUT) probes back `present`
+    // and is rethrown untouched.
+    let reinterpreted: RepositoryMissingError | RepositoryUnreadableError | undefined;
+    try {
+      const [owner, repoName] = repo.includes("/") ? repo.split("/") : [org, repo];
+      const octokit = await getOctoKit(owner, _scope);
+      if (octokit) {
+        reinterpreted = await reinterpretRepoNotFound(octokit, owner, repoName, error, () =>
+          fetchRepositorySelection(owner)
+        );
+      }
+    } catch (reinterpretError) {
+      // A rate limit hit WHILE classifying outranks the 404 that prompted the classification: it is
+      // the actionable one, it carries Retry-After, and the worker has real backoff for it. Losing
+      // it here would report the 404 instead and open the org circuit — the same mistake this
+      // function exists to prevent, one level up. (classifyRepoPresence and
+      // fetchRepositorySelection both rethrow rate limits, so they can reach this catch.)
+      if (carriesRateLimitSignal(reinterpretError)) {
+        throw reinterpretError;
+      }
+      // Anything else is just a failed attempt to explain the original error, and must not mask it.
+      Sentry.addBreadcrumb({
+        category: "github",
+        message: `Could not classify the 404 escaping sync for ${org}/${repo}; reporting the original error`,
+        level: "warning",
+        data: {
+          classify_error: reinterpretError instanceof Error ? reinterpretError.message : String(reinterpretError)
+        }
+      });
+    }
+    // Thrown OUTSIDE the try on purpose: the previous shape threw here from inside it, so my own
+    // intended throw landed in my own catch and had to be fished back out by instanceof — which is
+    // exactly how the rate-limit case came to be swallowed.
+    if (reinterpreted) throw reinterpreted;
     throw error;
   } finally {
     timings.finish((snapshot) => attachStepTimingsToScope(snapshot, _scope));
@@ -3538,16 +3864,13 @@ async function syncRepoPermissionsInstrumented(
     const orgMembers = await timeStep(timings, "org_members", () => orgMembershipCache.get(org));
     allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
   }
-  // maxRetries 5 / baseDelayMs 3000 — the same 93s worst-case ladder as get_head_sha. No retry
-  // lines appear in the 2026-09-07 logs, so it did not fire; timed so we can say that from data.
+  // maxRetries 5 / baseDelayMs 3000 — the same 93s worst-case ladder as get_head_sha, and still
+  // the right ladder for the read-after-create lag it was written for. A repo that is GONE 404s
+  // identically, so `listCollaboratorsOrThrowMissing` classifies the 404 before we spend the
+  // ladder on it; see that function for what the ambiguity used to cost.
   const existingAccess = await timeStep(timings, "list_collaborators", () =>
     retryWithBackoff(
-      () =>
-        octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
-          owner: org,
-          repo,
-          per_page: 100
-        }),
+      () => listCollaboratorsOrThrowMissing(octokit, org, repo, () => fetchRepositorySelection(org)),
       5,
       3000,
       scope
@@ -3773,14 +4096,16 @@ async function syncRepoPermissionsInstrumented(
   // common no-op sync keeps costing exactly the requests it costs today.
   let removeAccess: string[] = [];
   if (removalCandidates.length > 0) {
+    // Same classification as the first collaborator read, and for the same reason: this is the
+    // sync's OTHER retry ladder, and the whole-sync backstop sits outside it. Left bare, a repo
+    // deleted between the two reads would spend a second 93-second ladder here before the backstop
+    // ever saw the error. The two ladders are the only places that need in-band classification;
+    // every other repo-scoped call in this function fails fast and the backstop catches it.
     const directAccess = await timeStep(timings, "list_direct_collaborators", () =>
       retryWithBackoff(
         () =>
-          octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
-            owner: org,
-            repo,
-            affiliation: "direct",
-            per_page: 100
+          listCollaboratorsOrThrowMissing(octokit, org, repo, () => fetchRepositorySelection(org), {
+            affiliation: "direct"
           }),
         5,
         3000,
