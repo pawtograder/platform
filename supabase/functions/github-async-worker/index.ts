@@ -29,6 +29,7 @@ import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { shouldSendOrgInvitation } from "../_shared/orgInviteWindow.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -605,6 +606,32 @@ async function checkAndTripErrorCircuitBreaker(
  */
 const PGMQ_MAX_READ_CT = 10;
 
+/**
+ * The GitHub usernames that should be on a class's student or staff team.
+ *
+ * One RPC, deliberately, because syncTeam is SUBTRACTIVE — it removes every current team member
+ * absent from this list — which makes the read's consistency a correctness property. Reading the
+ * roster across several requests, by offset or by key, gives each page its own snapshot: a student
+ * who accepts their invitation midway is read as unconfirmed in an early page and missing from the
+ * list, while the webhook has since confirmed them and GitHub has added them to the team. syncTeam
+ * removes them, and because the role now reads confirmed, neither the sweep nor the alert will ever
+ * reconsider it — a silent, permanent loss of access. The function also returns an array rather
+ * than rows, which keeps PostgREST's max_rows ceiling from truncating a large class into the same
+ * subtractive damage.
+ */
+async function fetchIntendedTeamUsernames(
+  adminSupabase: SupabaseClient<Database>,
+  classId: number,
+  kind: "student" | "staff"
+): Promise<string[]> {
+  const { data, error } = await adminSupabase.rpc("class_team_member_usernames", {
+    p_class_id: classId,
+    p_kind: kind
+  });
+  if (error) throw error;
+  return (data ?? []).filter((u): u is string => Boolean(u));
+}
+
 export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
@@ -783,74 +810,95 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Syncing student team for user ${args.userId}`, level: "info" });
+        // At most ONE invitation per envelope. The pre- and post-reconcile checks below can match
+        // the same row — nothing in-process records that we invited, and the webhook that stamps
+        // invitation_date may not have arrived yet — which mails the student twice for one
+        // enrollment. Latent until now because both checks required invitation_date IS NULL and
+        // were reached almost only on a fresh enrollment; re-invites make the overlap routine.
+        let invitedThisRun = false;
         if (args.userId) {
           //Make sure that the student has been invited to the org
           const { data, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .eq("role", "student")
+            // Never reinvite a dropped student. The disable-triggered sync routes their id here, and
+            // the class-wide reconcile below is what removes them from the team — reinviting would
+            // immediately undo that, and an accepted invitation would let the membership webhook mark
+            // the disabled role confirmed. Narrow while this gate required invitation_date IS NULL,
+            // which excluded any student who had ever been invited; the staleness branch matches
+            // precisely those students instead. Matches the staff path.
+            .eq("disabled", false)
             .maybeSingle();
           if (error) throw error;
           if (
             data &&
-            data.invitation_date === null &&
             data.users?.github_username &&
             data.classes?.github_org &&
-            data.classes?.slug
+            data.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: data.invitation_date,
+              cls: data.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               data.classes.github_org,
               `${data.classes.slug}-students`,
               data.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              { userId: args.userId, skipIfInvitationPending: true }
             );
+            invitedThisRun = true;
           }
         }
 
         await github.syncStudentTeam(
           args.org,
           args.courseSlug,
-          async () => {
-            const { data, error } = await adminSupabase
-              .from("user_roles")
-              .select("github_org_confirmed, users(github_username)")
-              .eq("class_id", envelope.class_id || 0)
-              .eq("role", "student")
-              .eq("disabled", false)
-              .limit(1000);
-            if (error) throw error;
-            return (data || [])
-              .filter((s) => s.users?.github_username && s.github_org_confirmed)
-              .map((s) => s.users!.github_username!);
-          },
+          async () => await fetchIntendedTeamUsernames(adminSupabase, envelope.class_id || 0, "student"),
           scope
         );
         // If an affected user is provided and they haven't been invited yet, ensure org invitation to students team
-        if (args.userId && envelope.class_id) {
+        if (args.userId && envelope.class_id && !invitedThisRun) {
           const { data: ur, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .eq("role", "student")
-            .single();
+            // Same as the pre-reconcile lookup above: a dropped student must not be reinvited.
+            .eq("disabled", false)
+            // maybeSingle (not single): with the disabled filter — and on a role DELETE, where the
+            // trigger still routes the removed user's id here — no row is the normal case rather
+            // than an error. This lookup's errors are swallowed by the `!error &&` guard anyway.
+            .maybeSingle();
           if (
             !error &&
             ur &&
-            ur.invitation_date === null &&
             ur.users?.github_username &&
             ur.classes?.github_org &&
-            ur.classes?.slug
+            ur.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: ur.invitation_date,
+              cls: ur.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               ur.classes.github_org,
               `${ur.classes.slug}-students`,
               ur.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              { userId: args.userId, skipIfInvitationPending: true }
             );
           }
         }
@@ -875,6 +923,8 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Syncing staff team for org ${args.org}`, level: "info" });
+        // One invitation per envelope, for the reason spelled out on the student path above.
+        let invitedThisRun = false;
         if (args.userId) {
           scope.setTag("user_id", args.userId);
           //Make sure that the student has been invited to the org
@@ -884,7 +934,9 @@ export async function processEnvelope(
           // row simply means "no per-user reinvite to do".
           const { data, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
@@ -895,41 +947,38 @@ export async function processEnvelope(
           if (error) throw error;
           if (
             data &&
-            data.invitation_date === null &&
             data.users?.github_username &&
             data.classes?.github_org &&
-            data.classes?.slug
+            data.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: data.invitation_date,
+              cls: data.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               data.classes.github_org,
               `${data.classes.slug}-staff`,
               data.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              { userId: args.userId, skipIfInvitationPending: true }
             );
+            invitedThisRun = true;
           }
         }
         await github.syncStaffTeam(
           args.org,
           args.courseSlug,
-          async () => {
-            const { data, error } = await adminSupabase
-              .from("user_roles")
-              .select("users(github_username)")
-              .eq("class_id", envelope.class_id || 0)
-              .in("role", ["instructor", "grader", "admin"])
-              .eq("github_org_confirmed", true)
-              .eq("disabled", false)
-              .limit(5000);
-            if (error) throw error;
-            return (data || []).map((s) => s.users!.github_username!).filter(Boolean);
-          },
+          async () => await fetchIntendedTeamUsernames(adminSupabase, envelope.class_id || 0, "staff"),
           scope
         );
-        if (args.userId && envelope.class_id) {
+        if (args.userId && envelope.class_id && !invitedThisRun) {
           const { data: ur, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
@@ -940,17 +989,22 @@ export async function processEnvelope(
           if (
             !error &&
             ur &&
-            ur.invitation_date === null &&
             ur.users?.github_username &&
             ur.classes?.github_org &&
-            ur.classes?.slug
+            ur.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: ur.invitation_date,
+              cls: ur.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               ur.classes.github_org,
               `${ur.classes.slug}-staff`,
               ur.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              { userId: args.userId, skipIfInvitationPending: true }
             );
           }
         }

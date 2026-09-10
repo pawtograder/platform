@@ -171,7 +171,7 @@ export async function GET(request: Request) {
               // Supabase queries don't throw; surface the error so the catch reports it to Sentry.
               if (fetchError) throw fetchError;
               if (unconfirmed && unconfirmed.length > 0) {
-                await syncGitHubAccount(supabase);
+                await syncGitHubAccount(supabase, "login");
               }
             } catch (error) {
               console.error("Background GitHub org reconciliation failed:", error);

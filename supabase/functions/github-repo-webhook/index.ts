@@ -3177,6 +3177,82 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
 });
 
 // Handle organization invitation events
+/**
+ * A user left (or was removed from) a course's GitHub org.
+ *
+ * Until this handler existed, `github_org_confirmed` was a one-way latch: set true when the user
+ * joined the team, and never cleared. An enrollment whose org membership disappeared therefore
+ * looked confirmed forever, so nothing re-invited them, the team sync kept counting them as an
+ * intended member, and the student's only symptom was repo permissions that silently stopped
+ * working. Clearing both columns puts the row back into the state the ordinary invite machinery
+ * already knows how to repair: the enrollment triggers on the next role change, and the hourly
+ * membership reconciler otherwise.
+ *
+ * Only rows for classes IN THIS ORG are touched, and only live enrollments — a dropped student who
+ * is removed from the org must stay removed. This is also the shape the instructor unlink flow
+ * produces (github-user-sync removes the member, then clears the link); clearing there is harmless
+ * because every re-invite path requires a non-null github_username.
+ */
+async function handleOrgMemberRemoved(
+  adminSupabase: SupabaseClient<Database>,
+  organizationName: string,
+  removedUser: { login: string; id?: number | null },
+  scope: Sentry.Scope
+) {
+  // Resolve by GitHub ACCOUNT ID first, falling back to the login. A user who renames their GitHub
+  // account and then leaves arrives here under the new login while `users.github_username` may
+  // still hold the old one, so a login-only lookup finds nothing and the enrollment stays falsely
+  // confirmed forever — the exact latch this handler exists to release. The account id is the
+  // stable identity, and it is the same one `reresolveMissingGitHubLogin` recovers renames from.
+  let userData: { user_id: string } | null = null;
+  if (removedUser.id !== undefined && removedUser.id !== null) {
+    const { data, error } = await adminSupabase
+      .from("users")
+      .select("user_id")
+      .eq("github_user_id", String(removedUser.id))
+      .maybeSingle();
+    // Throw rather than capture-and-return. Every early return here looks to the dispatcher exactly
+    // like "handled", so it marks the delivery complete and GitHub never redelivers — and nothing
+    // else in the system clears this latch, so a transient database error would leave the departed
+    // member confirmed until some unrelated role mutation. The organization handler's own catch
+    // captures with the org/user tags already on the scope.
+    if (error) throw error;
+    userData = data;
+  }
+  if (!userData) {
+    const { data, error } = await adminSupabase
+      .from("users")
+      .select("user_id")
+      // Case-insensitive: GitHub logins are, and `users.github_username` stores whatever casing was
+      // current when the account was linked.
+      .ilike("github_username", removedUser.login)
+      .maybeSingle();
+    if (error) throw error;
+    userData = data;
+  }
+  if (!userData) {
+    // Not one of ours (an org owner, a bot, someone added out of band). Not an error.
+    return;
+  }
+
+  // One RPC for the whole repair: it clears the confirmation for the user's live enrollments in
+  // this org's classes and, for the classes actually in session, enqueues a forced re-invite. The
+  // enqueue matters — clearing alone would leave the student waiting for the sweep, which only
+  // reconsiders an enrollment whose invitation is a staleness period old, so someone removed days
+  // after accepting would have no repository access for the rest of that period. The window check
+  // and the org's case-insensitive match live in SQL alongside the predicate they share.
+  const { data: enqueued, error: repairError } = await adminSupabase.rpc("clear_org_membership_and_repair", {
+    p_user_id: userData.user_id,
+    p_org: organizationName
+  });
+  if (repairError) throw repairError;
+  scope?.setTag("org_membership_repairs_enqueued", String(enqueued ?? 0));
+  scope?.setTag("org_membership_cleared", "true");
+  console.log(
+    `[github-repo-webhook] ${removedUser.login} left ${organizationName}; cleared github_org_confirmed for their live enrollments, enqueued ${enqueued ?? 0} repair(s)`
+  );
+}
+
 eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent }) => {
   // Extract organization name early for e2e-ignore guard
   const organizationName = payload.organization?.login;
@@ -3198,6 +3274,21 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
 
   try {
     const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+    // A departure is the mirror of an invitation: it must un-confirm the enrollment, or the row
+    // claims a membership that no longer exists and no repair path will ever look at it again.
+    if (payload.action === "member_removed") {
+      const removedUser = "membership" in payload ? payload.membership?.user : undefined;
+      if (removedUser?.login && organizationName) {
+        await handleOrgMemberRemoved(
+          adminSupabase,
+          organizationName,
+          { login: removedUser.login, id: removedUser.id },
+          scope
+        );
+      }
+      return;
+    }
 
     // Only process member invitation events
     if (payload.action !== "member_invited") {

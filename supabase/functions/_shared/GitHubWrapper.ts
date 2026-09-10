@@ -2794,6 +2794,28 @@ export async function syncStudentTeam(
  *     This function should be idempotent, and should not throw an error if the team already exists (or not).
  *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
  */
+/**
+ * Which of the candidate removals should actually be deleted from the team?
+ *
+ * `syncTeam` computes its removal set from a roster read taken BEFORE it adds anyone, and the add
+ * loop is one network round-trip per new member — so on a large class the set can be minutes stale
+ * by the time the DELETEs go out. Meanwhile the queue drains envelopes concurrently, and several
+ * can target the same class team at once (the membership reconciler enqueues one per stale
+ * invitation). If a sibling envelope confirms a user inside that window, this run's stale set still
+ * lists them and deletes them — a confirmed enrollment silently loses the repository access the
+ * team grants, and nothing repairs it, because every repair path skips roles that already read as
+ * confirmed.
+ *
+ * So the removal set is intersected with a roster re-read taken immediately before the destructive
+ * half. That does not make the operation atomic — nothing available here would — but it collapses
+ * the exposure from "the whole add loop" to "one RPC round-trip", and it removes the case that
+ * actually happens.
+ */
+export function confirmedRemovals(candidates: string[], intendedNow: string[]): string[] {
+  const stillIntended = new Set(intendedNow.map((u) => u.toLowerCase()));
+  return candidates.filter((u) => !stillIntended.has(u.toLowerCase()));
+}
+
 export async function syncTeam(
   team_slug: string,
   org: string,
@@ -2864,7 +2886,25 @@ export async function syncTeam(
       Sentry.captureException(e, newScope);
     }
   }
-  for (const username of removeMembers) {
+  // Re-read the roster before deleting anyone: see confirmedRemovals. The set above was computed
+  // before the add loop, which is one round-trip per new member.
+  let toRemove = removeMembers;
+  if (removeMembers.length > 0) {
+    const intendedNow = await githubUsernamesFetcher();
+    toRemove = confirmedRemovals(removeMembers, intendedNow);
+    const spared = removeMembers.filter((u) => !toRemove.includes(u));
+    if (spared.length > 0) {
+      // Worth a breadcrumb: it means a concurrent sync confirmed someone mid-run, which is exactly
+      // the case this re-read exists to catch.
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `Sparing ${spared.join(", ")} from removal in ${resolvedSlug}: confirmed since this sync began`,
+        level: "info"
+      });
+      console.log(`Sparing newly confirmed members from removal in ${resolvedSlug}: ${spared.join(", ")}`);
+    }
+  }
+  for (const username of toRemove) {
     await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
       team_slug: resolvedSlug,
@@ -2992,6 +3032,50 @@ export async function resolveTeamSlugIfExists(
   return pending;
 }
 
+/**
+ * Is there a pending invitation for this user that ALREADY carries the team we are about to attach?
+ *
+ * Org invitations are org-scoped but carry a team list, and two classes can share one organization
+ * (see 20260803120000_unique_class_slug_per_github_org.sql). "This user has a pending invitation"
+ * is therefore not evidence that OUR class's invitation has been sent: the outstanding invitation
+ * may attach a sibling class's team and nothing else, and suppressing on it would leave this class's
+ * enrollment unattached, unconfirmed, and — since the sweep has already refreshed its
+ * invitation_date — untouched for another staleness period.
+ *
+ * Only an invitation that already includes this team is a true duplicate.
+ *
+ * Fails OPEN: any error reading the invitation list is answered "no", so a transient failure sends
+ * a possibly-duplicate invitation rather than skipping a repair.
+ */
+async function pendingInvitationIncludesTeam(
+  octokit: Octokit,
+  org: string,
+  githubUsername: string,
+  teamId: number,
+  scope?: Sentry.Scope
+): Promise<boolean> {
+  try {
+    const invitations = await octokit.paginate("GET /orgs/{org}/invitations", { org, per_page: 100 });
+    const pending = invitations.find((i) => (i.login ?? "").toLowerCase() === githubUsername.toLowerCase());
+    if (!pending) return false;
+    // An org-only invitation (no teams) never covers this team.
+    if ((pending.team_count ?? 0) === 0) return false;
+    const teams = await octokit.paginate("GET /orgs/{org}/invitations/{invitation_id}/teams", {
+      org,
+      invitation_id: pending.id,
+      per_page: 100
+    });
+    return teams.some((t) => t.id === teamId);
+  } catch (e) {
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Could not read pending invitations for ${githubUsername} in ${org}; sending the invitation anyway: ${e}`,
+      level: "warning"
+    });
+    return false;
+  }
+}
+
 export async function reinviteToOrgTeam(
   org: string,
   team_slug: string,
@@ -3010,6 +3094,19 @@ export async function reinviteToOrgTeam(
      * for the same person may already have replaced it.
      */
     userId?: string;
+    /**
+     * Do nothing if GitHub already has an invitation pending for this user.
+     *
+     * For AUTOMATION only. Background repair can run the same repair more than once — a redelivered
+     * queue message, two envelopes for one user, an hourly sweep overlapping a trigger — and each
+     * extra POST mails the student another invitation. GitHub's own membership state is the reliable
+     * evidence of an outstanding invitation, and the probe below already fetches it, so this costs
+     * no extra request.
+     *
+     * The manual "Resend invitation" paths deliberately do NOT set this: resending is the entire
+     * point when a student never received or lost the first email.
+     */
+    skipIfInvitationPending?: boolean;
   } = {}
 ) {
   scope?.setTag("github_operation", "reinvite_to_team");
@@ -3053,7 +3150,10 @@ export async function reinviteToOrgTeam(
     });
     return await reinviteToOrgTeam(org, team_slug, currentUsername, scope, {
       skipUsernameReresolve: true,
-      userId: options.userId
+      userId: options.userId,
+      // Carry the caller's automation flags into the retry, or a renamed account silently loses the
+      // duplicate-invitation guard on the path most likely to need it.
+      skipIfInvitationPending: options.skipIfInvitationPending
     });
   }
   const userID = user.data.id;
@@ -3120,7 +3220,12 @@ export async function reinviteToOrgTeam(
   // them to the team directly with PUT /orgs/{org}/teams/{team_slug}/memberships/{username}.
   // Relying on the POST error message is fragile (it varies between "this org" and "this organization"),
   // so we check membership state explicitly first.
-  let isAlreadyActiveOrgMember = false;
+  // TRI-STATE, not two booleans. "Not pending" and "we could not find out" must not be the same
+  // value: the confirmation decision in the error handler below turns an unknown into a claim that
+  // the user has accepted, and a role confirmed while the user is only invited is invisible to the
+  // membership reconciler and to the stuck alert — so if that invitation expires, the enrollment is
+  // broken permanently with nothing watching it.
+  let membershipState: "active" | "pending" | "absent" | "unknown" = "unknown";
   try {
     const orgMembership = await octokit.request("GET /orgs/{org}/memberships/{username}", {
       org,
@@ -3128,7 +3233,9 @@ export async function reinviteToOrgTeam(
     });
     const state = (orgMembership.data as { state?: string } | undefined)?.state;
     if (orgMembership.status === 200 && state === "active") {
-      isAlreadyActiveOrgMember = true;
+      membershipState = "active";
+    } else if (orgMembership.status === 200 && state === "pending") {
+      membershipState = "pending";
     }
     scope?.addBreadcrumb({
       category: "github",
@@ -3138,12 +3245,15 @@ export async function reinviteToOrgTeam(
   } catch (e) {
     const status = (e as { status?: number })?.status;
     if (status === 404) {
+      // A definite answer: no membership and no outstanding invitation.
+      membershipState = "absent";
       scope?.addBreadcrumb({
         category: "github",
         message: `User ${githubUsername} is not a member of ${org} (404), will send invitation`,
         level: "info"
       });
     } else {
+      // Stays "unknown": anything else is a failed probe, not evidence of absence.
       scope?.addBreadcrumb({
         category: "github",
         message: `Error checking org membership for ${githubUsername} in ${org}: ${e}`,
@@ -3152,7 +3262,45 @@ export async function reinviteToOrgTeam(
     }
   }
 
-  if (isAlreadyActiveOrgMember) {
+  if (membershipState === "pending" && options.skipIfInvitationPending) {
+    // Team-scoped, not org-scoped: see pendingInvitationIncludesTeam. A pending invitation for a
+    // sibling class in the same org must NOT suppress this one.
+    if (await pendingInvitationIncludesTeam(octokit, org, githubUsername, teamID, scope)) {
+      // Returning false is "nothing changed", which is what callers do with it. Note it does NOT
+      // mean "already a member": the callers that read this value to mark a role org-confirmed
+      // (github-user-sync) never set skipIfInvitationPending, precisely so a pending invitation is
+      // never mistaken for membership.
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} already has a pending invitation to ${org} covering team ${resolvedSlug}; not sending another`,
+        level: "info"
+      });
+      return false;
+    }
+    // Pending, but for a different team (a sibling class in the same org). Attach OUR team to the
+    // user directly rather than posting a second org invitation: GitHub rejects the duplicate with
+    // an `already_exists` validation error, and the handler below reads that as "already an active
+    // member" — which would mark this role org-confirmed for someone who has not accepted anything.
+    // A confirmed role is invisible to the reconciler and to the stuck alert, so if the invitation
+    // then expires the enrollment is broken permanently and silently. The team endpoint extends the
+    // invitation to this team and leaves the membership pending, which is the truth.
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `User ${githubUsername} has a pending invitation to ${org} that does not cover team ${resolvedSlug}; adding the team to it`,
+      level: "info"
+    });
+    await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
+      org,
+      team_slug: resolvedSlug,
+      username: githubUsername,
+      role: "member"
+    });
+    // Deliberately NOT markUserRoleOrgConfirmedForTeam: the user is still pending. Returning true
+    // reports "an invitation was extended", which is what callers record as a change.
+    return true;
+  }
+
+  if (membershipState === "active") {
     scope?.addBreadcrumb({
       category: "github",
       message: `User ${githubUsername} is already in org ${org}; adding directly to team ${resolvedSlug}`,
@@ -3236,9 +3384,28 @@ export async function reinviteToOrgTeam(
         username: githubUsername,
         role: "member"
       });
-      //...and mark the corresponding class's user_role as org-confirmed.
-      await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
-      return false;
+      // ...and do NOT mark the role org-confirmed here. This used to, and that was the one write
+      // capable of breaking an enrollment permanently.
+      //
+      // GitHub answers a duplicate invitation with the same `already_exists` error whether the
+      // invitee has accepted or not, so reaching this branch proves only that GitHub knows the
+      // invitee. It cannot prove membership: the active case returns further up, on a successful
+      // probe — the compiler agrees, since `membershipState` is narrowed to
+      // "pending" | "absent" | "unknown" by the time control reaches here. So every route into
+      // this branch is one where the user may hold nothing but an invitation.
+      //
+      // A role confirmed while the user is merely invited is invisible to the membership
+      // reconciler and to the stuck alert, so an invitation that then expires leaves the
+      // enrollment broken forever with nothing watching it. Leaving it unconfirmed costs nothing
+      // by comparison: the reconciler retries hourly, and the team-membership check at the top of
+      // this function confirms the role the moment the user actually appears in the team.
+      scope?.setTag("membership_state_at_invite", membershipState);
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} is not a confirmed member of ${org} (state: ${membershipState}); team ${resolvedSlug} attached, leaving the role unconfirmed`,
+        level: "info"
+      });
+      return true;
     }
     throw err;
   }
