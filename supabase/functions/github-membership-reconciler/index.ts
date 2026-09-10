@@ -21,14 +21,15 @@ import { INVITE_STALE_DAYS } from "../_shared/orgInviteWindow.ts";
  *     those rows and queues an ordinary async-worker envelope per user, bounded per pass, and only
  *     for classes whose term window is open.
  *
- *  2. Alert on classes where students are stuck ANYWAY. Two shapes, deliberately distinguished:
+ *  2. Alert on classes where enrolled users are stuck ANYWAY. Two shapes, deliberately distinguished:
  *
  *       missing term dates   The sweep skips these on purpose — with no start_date/end_date we
  *                            cannot tell whether the class is in session, and the wrong guess mails
  *                            GitHub invitations to a roster that is not enrolled yet. This alert is
  *                            what stops "skip" from meaning "fail silently"; it names the class and
  *                            says which dates to fill in.
- *       still stuck          Term dates set, window open, and students remain unconfirmed anyway —
+ *       still stuck          Term dates set, window open, and enrolled users remain unconfirmed
+ *                            anyway —
  *                            a broken App installation, a login GitHub no longer recognizes, an org
  *                            that requires SSO. Automation cannot fix these; a human has to look.
  *
@@ -100,7 +101,7 @@ function alertOnStuckClasses(alerts: MembershipAlert[], scope: Sentry.Scope) {
       github_org: alert.github_org,
       start_date: alert.term_start,
       end_date: alert.term_end,
-      students_not_in_org: alert.stuck_count,
+      unconfirmed_memberships: alert.stuck_count,
       oldest_invitation: alert.oldest_invitation,
       unconfirmed_for_days: ALERT_AFTER_DAYS,
       invite_window_open: alert.window_open
@@ -123,7 +124,7 @@ function alertOnStuckClasses(alerts: MembershipAlert[], scope: Sentry.Scope) {
       continue;
     }
     classScope.setFingerprint(["github-org-membership-stuck", String(alert.class_id)]);
-    Sentry.captureMessage("Students are still not in the class GitHub org after re-invitation", classScope);
+    Sentry.captureMessage("Enrolled users are still outside the class GitHub org after re-invitation", classScope);
     stuckInWindow++;
   }
 
@@ -192,7 +193,7 @@ Deno.serve(async (req) => {
     const { unsetTermDates, stuckInWindow } = alertOnStuckClasses(alerts, scope);
     if (unsetTermDates > 0 || stuckInWindow > 0) {
       console.warn(
-        `[github-membership-reconciler] Alerted: ${stuckInWindow} class(es) with students still outside the org, ` +
+        `[github-membership-reconciler] Alerted: ${stuckInWindow} class(es) with enrolled users still outside the org, ` +
           `${unsetTermDates} class(es) skipped for unset term dates`
       );
     }

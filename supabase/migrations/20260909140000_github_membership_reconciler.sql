@@ -227,8 +227,13 @@ grant execute on function public.reconcile_stale_org_invitations(int, int, int) 
 -- whole roster at once, and one Sentry issue per class is the difference between a signal and a
 -- flood (the same lesson the Discord terminal-failure work learned from a 30,332-row storm).
 --
+-- Counts EVERY role, not just students. A grader or instructor stranded outside the org is at least
+-- as blocking as a student — they cannot see the repositories they are meant to grade — and the
+-- sweep repairs both, so the alert reports both. The caller's message and context say "enrolled
+-- users" rather than "students" for that reason.
+--
 -- `missing_term_dates` is the deliberate blind spot of the conservative window: those classes have
--- students stuck outside the org and the sweep will NOT touch them. Reporting them is what keeps
+-- people stuck outside the org and the sweep will NOT touch them. Reporting them is what keeps
 -- "skip when we cannot tell if the class is running" from meaning "fail silently forever".
 create or replace function public.get_stuck_org_membership_alerts(
   p_days int default 14
