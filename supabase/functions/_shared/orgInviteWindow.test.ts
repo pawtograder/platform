@@ -145,3 +145,30 @@ Deno.test("isOrgInviteWindowKnownClosed: only on evidence, so the self-service e
   // In session: open.
   assertEquals(isOrgInviteWindowKnownClosed(TERM, now), false);
 });
+
+Deno.test("shouldSendOrgInvitation: a redelivered forced envelope does not mail a second invitation", () => {
+  const now = at("2026-10-01T12:00:00Z");
+  const stampedAt = "2026-10-01T11:00:00Z";
+  const forced = { cls: TERM, forceReinvite: true, stampedAt, now };
+
+  // Normal path: the reconciler stamps and enqueues in one transaction, so the row and the message
+  // carry the SAME timestamp. That must still send, or every repair would be a no-op.
+  assertEquals(shouldSendOrgInvitation({ ...forced, invitationDate: stampedAt }), true);
+
+  // Redelivery after the invitation went out: the member_invited webhook has since written a later
+  // invitation_date, so this envelope's work is already done.
+  assertEquals(shouldSendOrgInvitation({ ...forced, invitationDate: "2026-10-01T11:00:05Z" }), false);
+
+  // An older invitation_date is not evidence of a send for this envelope.
+  assertEquals(shouldSendOrgInvitation({ ...forced, invitationDate: "2026-09-01T00:00:00Z" }), true);
+});
+
+Deno.test("shouldSendOrgInvitation: missing or unreadable stamps fall back to sending", () => {
+  // An envelope queued before stampedAt existed, or a value we cannot parse, must not suppress a
+  // repair: the cost of sending is one extra email, the cost of not sending is a student locked out.
+  const now = at("2026-10-01T12:00:00Z");
+  const base = { cls: TERM, forceReinvite: true, invitationDate: "2026-10-01T11:00:05Z", now };
+  assertEquals(shouldSendOrgInvitation({ ...base }), true);
+  assertEquals(shouldSendOrgInvitation({ ...base, stampedAt: null }), true);
+  assertEquals(shouldSendOrgInvitation({ ...base, stampedAt: "not-a-timestamp" }), true);
+});

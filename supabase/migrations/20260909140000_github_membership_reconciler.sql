@@ -77,13 +77,22 @@ grant execute on function public.github_org_invite_window_open(boolean, date, da
 -- reconcile they also perform is idempotent (and is itself drift repair we otherwise only do on
 -- enrollment changes). `forceReinvite` tells the worker to invite without consulting
 -- invitation_date, which reconcile_stale_org_invitations has just stamped.
+-- Dropped first because the argument list changed while this migration was in review; a bare
+-- CREATE OR REPLACE would leave the older overload behind on any database that already ran it.
+drop function if exists public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text);
+
 create or replace function public.enqueue_github_org_reinvite(
   p_class_id bigint,
   p_org text,
   p_course_slug text,
   p_user_id uuid,
   p_is_staff boolean,
-  p_debug_id text default null
+  p_debug_id text default null,
+  -- The invitation_date this envelope's caller just wrote. Travels with the message so a
+  -- REDELIVERED envelope can tell "nothing has happened since I was queued" from "the invitation
+  -- already went out and the member_invited webhook recorded it" — the second of which must not
+  -- mail the student again. See _shared/orgInviteWindow.ts.
+  p_stamped_at timestamptz default null
 ) returns bigint
 language plpgsql
 security definer
@@ -111,7 +120,8 @@ begin
         'org', p_org,
         'courseSlug', p_course_slug,
         'userId', p_user_id,
-        'forceReinvite', true
+        'forceReinvite', true,
+        'stampedAt', p_stamped_at
       )
     )
   ) into message_id;
@@ -120,8 +130,8 @@ begin
 end;
 $$;
 
-revoke all on function public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text) from public;
-grant execute on function public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text) to service_role;
+revoke all on function public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text, timestamptz) from public;
+grant execute on function public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text, timestamptz) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- The sweep.
@@ -155,6 +165,9 @@ as $$
 declare
   r record;
   v_count integer := 0;
+  -- One value for both the row and the message. now() is the transaction timestamp, so the stamp
+  -- the worker compares against is exactly the stamp written here, not a re-read of the clock.
+  v_stamped_at timestamptz := now();
 begin
   for r in
     select ur.id,
@@ -198,14 +211,15 @@ begin
      for update of ur skip locked
   loop
     begin
-      update public.user_roles set invitation_date = now() where id = r.id;
+      update public.user_roles set invitation_date = v_stamped_at where id = r.id;
       perform public.enqueue_github_org_reinvite(
         r.class_id::bigint,
         r.github_org,
         r.slug,
         r.user_id,
         r.role in ('instructor', 'grader', 'admin'),
-        'reinvite-role-' || r.id || '-' || extract(epoch from now())::bigint
+        'reinvite-role-' || r.id || '-' || extract(epoch from v_stamped_at)::bigint,
+        v_stamped_at
       );
       v_count := v_count + 1;
     exception

@@ -624,20 +624,27 @@ async function fetchIntendedTeamUsernames(
 ): Promise<string[]> {
   const PAGE = 1000;
   const usernames: string[] = [];
-  for (let from = 0; ; from += PAGE) {
+  // KEYSET, not offset. The pages are separate requests, so a roster change between two of them
+  // shifts an offset window and drops exactly one eligible row — and on a subtractive list, a
+  // dropped row is a user removed from the team. Paging by the last id seen is unaffected by rows
+  // appearing or disappearing behind the cursor.
+  let lastId = 0;
+  for (;;) {
     const base = adminSupabase
       .from("user_roles")
-      .select("github_org_confirmed, users(github_username)")
+      .select("id, github_org_confirmed, users(github_username)")
       .eq("class_id", classId)
-      .eq("disabled", false);
+      .eq("disabled", false)
+      .gt("id", lastId);
     const scoped =
       kind === "student"
         ? base.eq("role", "student")
         : base.in("role", ["instructor", "grader", "admin"]).eq("github_org_confirmed", true);
-    const { data, error } = await scoped.order("id").range(from, from + PAGE - 1);
+    const { data, error } = await scoped.order("id", { ascending: true }).limit(PAGE);
     if (error) throw error;
     const page = data ?? [];
     for (const row of page) {
+      lastId = row.id;
       // Both teams require org-confirmed membership: syncTeam cannot add a user GitHub does not
       // consider an org member, and the staff query already filters on it in SQL.
       if (row.github_org_confirmed && row.users?.github_username) {
@@ -859,7 +866,8 @@ export async function processEnvelope(
             shouldSendOrgInvitation({
               invitationDate: data.invitation_date,
               cls: data.classes,
-              forceReinvite: args.forceReinvite
+              forceReinvite: args.forceReinvite,
+              stampedAt: args.stampedAt
             })
           ) {
             await github.reinviteToOrgTeam(
@@ -904,7 +912,8 @@ export async function processEnvelope(
             shouldSendOrgInvitation({
               invitationDate: ur.invitation_date,
               cls: ur.classes,
-              forceReinvite: args.forceReinvite
+              forceReinvite: args.forceReinvite,
+              stampedAt: args.stampedAt
             })
           ) {
             await github.reinviteToOrgTeam(
@@ -967,7 +976,8 @@ export async function processEnvelope(
             shouldSendOrgInvitation({
               invitationDate: data.invitation_date,
               cls: data.classes,
-              forceReinvite: args.forceReinvite
+              forceReinvite: args.forceReinvite,
+              stampedAt: args.stampedAt
             })
           ) {
             await github.reinviteToOrgTeam(
@@ -1008,7 +1018,8 @@ export async function processEnvelope(
             shouldSendOrgInvitation({
               invitationDate: ur.invitation_date,
               cls: ur.classes,
-              forceReinvite: args.forceReinvite
+              forceReinvite: args.forceReinvite,
+              stampedAt: args.stampedAt
             })
           ) {
             await github.reinviteToOrgTeam(

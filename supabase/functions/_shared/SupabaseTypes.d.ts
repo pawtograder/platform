@@ -12817,6 +12817,7 @@ export type Database = {
           p_debug_id?: string;
           p_is_staff: boolean;
           p_org: string;
+          p_stamped_at?: string;
           p_user_id: string;
         };
         Returns: number;

@@ -21,6 +21,12 @@ export type SyncTeamArgs = {
    * already applied the class's term window in SQL; see _shared/orgInviteWindow.ts.
    */
   forceReinvite?: boolean;
+  /**
+   * The `invitation_date` value the reconciler wrote when it enqueued this envelope, so a
+   * redelivered message can tell "nothing has happened since" from "the invitation already went
+   * out and the webhook recorded it". See _shared/orgInviteWindow.ts.
+   */
+  stampedAt?: string;
 };
 
 export type BranchProtectionConfig = {
