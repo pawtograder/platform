@@ -104,17 +104,66 @@ describe("read-task predicates", () => {
 });
 
 describe("write-task predicates", () => {
+  /** The answers the task prompt dictates — a fully correct submission. */
+  const goodResponse = {
+    q1: "Ada Lovelace",
+    q2: "Just right",
+    q3: ["Graphs"],
+    q4: "The pace worked well for me."
+  };
+
   it("survey-complete demands is_submitted=true, not just a row", async () => {
     const notSubmitted = await SURVEY_COMPLETE_TASK.predicate(
       null,
-      ctx({ queryRow: async () => ({ is_submitted: false }) })
+      ctx({ queryRow: async () => ({ is_submitted: false, response: goodResponse }) })
     );
     expect(notSubmitted.success).toBe(false);
     const submitted = await SURVEY_COMPLETE_TASK.predicate(
       null,
-      ctx({ queryRow: async () => ({ is_submitted: true }) })
+      ctx({ queryRow: async () => ({ is_submitted: true, response: goodResponse }) })
     );
     expect(submitted.success).toBe(true);
+  });
+
+  // Issue #913: the NVDA driver's own sweep was arrowing through the q2 radio
+  // group, so the submitted answer was whichever option the last arrow landed
+  // on. `is_submitted === true` was the entire predicate, so the run stayed
+  // green and the defect was filed against the app instead of the driver.
+  it("survey-complete rejects a submitted survey whose pace answer was arrowed past", async () => {
+    for (const wrong of ["Too slow", "Too fast"]) {
+      const result = await SURVEY_COMPLETE_TASK.predicate(
+        null,
+        ctx({ queryRow: async () => ({ is_submitted: true, response: { ...goodResponse, q2: wrong } }) })
+      );
+      expect(result.success).toBe(false);
+      expect(result.detail).toContain("q2 (pace)");
+    }
+  });
+
+  it("survey-complete rejects a submitted survey with missing answers", async () => {
+    const noQ2 = await SURVEY_COMPLETE_TASK.predicate(
+      null,
+      ctx({ queryRow: async () => ({ is_submitted: true, response: { ...goodResponse, q2: undefined } }) })
+    );
+    expect(noQ2.success).toBe(false);
+    const noTopics = await SURVEY_COMPLETE_TASK.predicate(
+      null,
+      ctx({ queryRow: async () => ({ is_submitted: true, response: { ...goodResponse, q3: [] } }) })
+    );
+    expect(noTopics.success).toBe(false);
+    const blankComment = await SURVEY_COMPLETE_TASK.predicate(
+      null,
+      ctx({ queryRow: async () => ({ is_submitted: true, response: { ...goodResponse, q4: "   " } }) })
+    );
+    expect(blankComment.success).toBe(false);
+  });
+
+  it("survey-complete accepts the name in any casing — it travels through real keystrokes", async () => {
+    const result = await SURVEY_COMPLETE_TASK.predicate(
+      null,
+      ctx({ queryRow: async () => ({ is_submitted: true, response: { ...goodResponse, q1: "  ada LOVELACE " } }) })
+    );
+    expect(result.success).toBe(true);
   });
 
   it("discussion-reply rejects the marker text matching only the root thread", async () => {
