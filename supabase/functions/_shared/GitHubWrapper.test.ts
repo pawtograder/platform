@@ -17,6 +17,7 @@ import { Octokit, RequestError } from "npm:octokit";
 // import so the env is set first — static imports would hoist above this).
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
 const {
+  assertSourceForkable,
   assertSourceNotEmpty,
   computeCollaboratorRemovals,
   filterToDirectCollaborators,
@@ -139,6 +140,78 @@ Deno.test("assertSourceNotEmpty: missing source (404 on repo) -> NonRetryableRep
     NonRetryableRepoError
   );
   assertEquals(err.message.includes("not found"), true);
+});
+
+// --- Fork-source preflight (assertSourceForkable) ---
+//
+// Regression cover for the CS 4535 incident of 2026-09-09: a private handout in an org that
+// forbids forking private repos made every create_repo for the assignment fail with a 403 that
+// nothing classified as terminal, so the reconciler re-enqueued the rows for 8.5 hours.
+
+Deno.test("assertSourceForkable: forkable source -> no throw", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => ({ data: { allow_forking: true, private: true } })
+  });
+  // Should not throw: private is fine as long as the org permits forking private repos.
+  await assertSourceForkable(octokit, "org", "handout", "org/handout");
+});
+
+Deno.test("assertSourceForkable: private + forking disabled -> names the org policy", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => ({ data: { allow_forking: false, private: true } })
+  });
+  const err = await assertRejects(
+    () => assertSourceForkable(octokit, "org", "handout", "org/handout"),
+    NonRetryableRepoError
+  );
+  // The instructor needs both remedies, and this is the one that matches a private source.
+  assertEquals(err.message.includes("does not allow forking private repositories"), true);
+  assertEquals(err.message.includes("make org/handout public"), true);
+});
+
+Deno.test("assertSourceForkable: public + forking disabled -> names the repo setting", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => ({ data: { allow_forking: false, private: false } })
+  });
+  const err = await assertRejects(
+    () => assertSourceForkable(octokit, "org", "handout", "org/handout"),
+    NonRetryableRepoError
+  );
+  assertEquals(err.message.includes("forking is disabled on that repository"), true);
+});
+
+Deno.test("assertSourceForkable: missing source (404) -> NonRetryableRepoError", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  const err = await assertRejects(
+    () => assertSourceForkable(octokit, "org", "handout", "org/handout"),
+    NonRetryableRepoError
+  );
+  assertEquals(err.message.includes("not found"), true);
+});
+
+Deno.test("assertSourceForkable: absent allow_forking is not treated as disabled", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => ({ data: { private: true } })
+  });
+  // If GitHub ever stops sending the field, undefined must not park every fork-mode creation.
+  await assertSourceForkable(octokit, "org", "handout", "org/handout");
+});
+
+Deno.test("assertSourceForkable: a transient read failure stays retryable", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(500, "Internal Server Error");
+    }
+  });
+  // Must NOT become NonRetryableRepoError: one failed read of the source is not evidence that the
+  // course is misconfigured, and parking on it would strand a healthy assignment.
+  const err = await assertRejects(() => assertSourceForkable(octokit, "org", "handout", "org/handout"));
+  assertEquals(err instanceof NonRetryableRepoError, false);
+  assertEquals((err as RequestError).status, 500);
 });
 
 // --- Idempotent team creation (getTeamAndCreateIfNeeded) ---

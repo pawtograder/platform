@@ -1431,6 +1431,114 @@ export async function assertSourceNotEmpty(
 }
 
 /**
+ * Throws NonRetryableRepoError when the fork source cannot be forked at all.
+ *
+ * WHY THIS IS A PREFLIGHT AND NOT JUST ERROR HANDLING (2026-09-09, CS 4535). A private handout in
+ * an org whose "Allow forking of private repositories" member privilege is off makes
+ * `POST /repos/{owner}/{repo}/forks` fail with 403 "The repository exists, but forking is
+ * disabled." That is a course CONFIGURATION fault, identical for every student on the assignment,
+ * and no retry can fix it. Left unclassified it fell into the worker's generic retry ladder: the
+ * repository row never got a `creation_error`, so `reconcile_stuck_repo_creations` kept treating
+ * the rows as TRANSIENT and re-enqueued them on a doubling backoff. Three repos were re-enqueued
+ * six times over 8.5 hours -- 108 doomed GitHub calls -- and three students had no repo for 17
+ * hours, until an instructor noticed and made the handout public.
+ *
+ * Checking first costs one `GET /repos` per fork-mode creation. That GET is not scheduled through
+ * the fleet-wide `create_content:<org>` limiter, whereas the doomed fork it replaces WOULD hold one
+ * of that limiter's 40 slots. On a burst (58 repos on 2026-09-07) the preflight is therefore
+ * cheaper than the failure it prevents, not just faster to diagnose.
+ *
+ * The repo-level `allow_forking` flag reflects the ORG policy, not just the repository toggle:
+ * verified 2026-09-09 against neu-cs4535, where every private repo reports `allow_forking: false`
+ * while `orgs/neu-cs4535.members_can_fork_private_repositories` is false. One GET is therefore
+ * enough; we do not also need to read the org.
+ *
+ * A 403 from the fork call itself is still classified in `createRepo` -- this preflight can race a
+ * policy change, and belt-and-braces is cheap.
+ */
+export async function assertSourceForkable(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  sourceFullName: string
+): Promise<void> {
+  let meta: { allow_forking?: boolean; private?: boolean };
+  try {
+    const resp = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    meta = resp.data as { allow_forking?: boolean; private?: boolean };
+  } catch (e) {
+    if (e instanceof RequestError && e.status === 404) {
+      throw new NonRetryableRepoError(`Source repository ${sourceFullName} was not found`);
+    }
+    // Anything else (a 5xx, a rate limit) is transient: let the caller retry rather than parking a
+    // repo because we could not read the source once.
+    throw e;
+  }
+  // Only a definitive `false` blocks. If GitHub ever stops returning the field, `undefined` must
+  // not be read as "cannot fork" -- that would park every fork-mode creation on a schema change.
+  if (meta.allow_forking === false) {
+    throw new NonRetryableRepoError(forkingDisabledMessage(sourceFullName, owner, meta.private === true));
+  }
+}
+
+/**
+ * The instructor-facing remedy for a disabled fork. Both causes produce the same GitHub error, so
+ * name the one that matches what we observed about the source and keep the other as the fallback.
+ * This string lands in `repositories.creation_error` and is shown next to the Retry button.
+ */
+function forkingDisabledMessage(sourceFullName: string, owner: string, sourceIsPrivate: boolean): string {
+  if (sourceIsPrivate) {
+    return (
+      `Cannot fork ${sourceFullName}: it is private, and the ${owner} organization does not allow ` +
+      `forking private repositories. Either make ${sourceFullName} public, or turn on ` +
+      `"Allow forking of private repositories" in the ${owner} organization settings ` +
+      `(Settings > Member privileges), then use Retry.`
+    );
+  }
+  return (
+    `Cannot fork ${sourceFullName}: forking is disabled on that repository. Turn on ` +
+    `"Allow forking" in its settings (Settings > General > Features), then use Retry.`
+  );
+}
+
+/**
+ * True when a fork request failed because forking is disabled for the source -- either the
+ * repository's own toggle is off, or it is private and the org forbids forking private repos.
+ * GitHub returns 403 and puts the phrase on the top-level message, but check `errors[]` too for the
+ * same reason `isRepoNameAlreadyExistsError` does: the shape is not contractual.
+ */
+function isForkingDisabledError(e: unknown): boolean {
+  if (!(e instanceof RequestError) || e.status !== 403) return false;
+  const haystacks: string[] = [e.message ?? ""];
+  const errors = (e.response?.data as { errors?: unknown } | undefined)?.errors;
+  if (Array.isArray(errors)) {
+    for (const err of errors) {
+      if (typeof err === "string") {
+        haystacks.push(err);
+      } else if (err && typeof err === "object") {
+        const eo = err as { message?: string };
+        haystacks.push(eo.message ?? "");
+      }
+    }
+  }
+  return haystacks.join(" ").toLowerCase().includes("forking is disabled");
+}
+
+/**
+ * Best-effort read of a repo's visibility, used only to pick the wording of an error we are already
+ * throwing. A failure here must not mask that error, so it falls back to "not private" -- the
+ * message then names the repository toggle and keeps the org policy as the secondary remedy.
+ */
+async function isRepoPrivate(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
+  try {
+    const resp = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    return (resp.data as { private?: boolean }).private === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when a repo create/generate/fork request failed because the target name is already taken.
  * GitHub returns 422 and the human phrase ("Name already exists on this account") may live on the
  * top-level message OR inside response.data.errors[], so check both rather than a single brittle
@@ -1798,6 +1906,13 @@ async function createRepoInstrumented(
   scope?.setTag("org", org);
   console.log("Creating repo", template_repo, owner, repoName, org, "via", creation_method);
 
+  // Preflight the fork source ONCE, before any create attempt. Hoisted out of createAndWaitReady
+  // (which runs twice on the delete+regenerate repair path) because the answer cannot change
+  // between those two passes, and because a doomed fork holds a content-limiter slot.
+  if (creation_method === "fork") {
+    await timeStep(timings, "assert_source_forkable", () => assertSourceForkable(octokit, owner, repo, template_repo));
+  }
+
   try {
     await createAndWaitReady();
   } catch (createErr) {
@@ -1861,6 +1976,13 @@ async function createRepoInstrumented(
         assertSourceNotEmpty(octokit, owner, repo, template_repo)
       );
       throw createErr;
+    } else if (isForkingDisabledError(createErr)) {
+      // The preflight above should have caught this, so reaching here means the policy changed
+      // under us (or GitHub disagreed with `allow_forking`). Either way it is deterministic: park
+      // the row with the same remedy rather than letting it ride the generic retry ladder.
+      console.error("Error creating repo: forking disabled for source", createErr);
+      const sourceIsPrivate = await isRepoPrivate(octokit, owner, repo);
+      throw new NonRetryableRepoError(forkingDisabledMessage(template_repo, owner, sourceIsPrivate));
     } else {
       console.error("Error creating repo", createErr);
       throw createErr;
