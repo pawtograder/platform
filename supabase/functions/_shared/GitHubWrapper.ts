@@ -1525,6 +1525,24 @@ function isForkingDisabledError(e: unknown): boolean {
 }
 
 /**
+ * True when the destination repo already exists AND has content, i.e. an earlier run already
+ * created it and this call is an idempotent re-run that should ADOPT rather than create.
+ *
+ * Only consulted when the fork preflight has already decided the source is unforkable, so the
+ * extra request is off the happy path. A 404 (nothing to adopt) and an empty repo (a half-created
+ * leftover, which the normal path REPAIRS by delete+regenerate -- impossible if we cannot fork)
+ * both mean "no", and the caller then parks the row with the preflight's error.
+ */
+export async function destinationHasContent(octokit: Octokit, org: string, repoName: string): Promise<boolean> {
+  try {
+    return !(await isRepoEmpty(octokit, org, repoName));
+  } catch (e) {
+    if (e instanceof RequestError && e.status === 404) return false;
+    throw e;
+  }
+}
+
+/**
  * Best-effort read of a repo's visibility, used only to pick the wording of an error we are already
  * throwing. A failure here must not mask that error, so it falls back to "not private" -- the
  * message then names the repository toggle and keeps the org policy as the secondary remedy.
@@ -1909,12 +1927,38 @@ async function createRepoInstrumented(
   // Preflight the fork source ONCE, before any create attempt. Hoisted out of createAndWaitReady
   // (which runs twice on the delete+regenerate repair path) because the answer cannot change
   // between those two passes, and because a doomed fork holds a content-limiter slot.
+  //
+  // An unforkable source is NOT automatically a failure. createRepo is idempotent: when the
+  // destination already exists with content, the create call 422s on the duplicate name and the
+  // catch below ADOPTS it. Parking on the preflight alone would break that re-run for any
+  // assignment whose repos were provisioned while forking was still allowed and whose handout was
+  // made private afterwards -- work that used to succeed would start reporting a config error.
+  // So when the source cannot be forked, ask whether there is anything to adopt before giving up.
+  let adoptWithoutCreating = false;
   if (creation_method === "fork") {
-    await timeStep(timings, "assert_source_forkable", () => assertSourceForkable(octokit, owner, repo, template_repo));
+    try {
+      await timeStep(timings, "assert_source_forkable", () =>
+        assertSourceForkable(octokit, owner, repo, template_repo)
+      );
+    } catch (preflightErr) {
+      if (!(preflightErr instanceof NonRetryableRepoError)) throw preflightErr;
+      const adoptable = await timeStep(timings, "adoptable_destination_probe", () =>
+        destinationHasContent(octokit, org, repoName)
+      );
+      if (!adoptable) throw preflightErr;
+      scope?.setTag("adopted_despite_unforkable_source", "true");
+      timings.setMeta("adopted_despite_unforkable_source", true);
+      adoptWithoutCreating = true;
+    }
   }
 
   try {
-    await createAndWaitReady();
+    if (adoptWithoutCreating) {
+      // Nothing to create: fall through to the shared finalize block, exactly as the
+      // duplicate-name adoption path below does.
+    } else {
+      await createAndWaitReady();
+    }
   } catch (createErr) {
     if (isRepoNameAlreadyExistsError(createErr)) {
       // A repo already exists under this name. If it has content, adopt it (idempotent re-run). If

@@ -18,6 +18,7 @@ import { Octokit, RequestError } from "npm:octokit";
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
 const {
   assertSourceForkable,
+  destinationHasContent,
   assertSourceNotEmpty,
   computeCollaboratorRemovals,
   filterToDirectCollaborators,
@@ -211,6 +212,57 @@ Deno.test("assertSourceForkable: a transient read failure stays retryable", asyn
   // course is misconfigured, and parking on it would strand a healthy assignment.
   const err = await assertRejects(() => assertSourceForkable(octokit, "org", "handout", "org/handout"));
   assertEquals(err instanceof NonRetryableRepoError, false);
+  assertEquals((err as RequestError).status, 500);
+});
+
+// --- Adoption probe when the fork source is unforkable (destinationHasContent) ---
+//
+// createRepo is idempotent: when the destination already exists with content, the create call
+// 422s on the duplicate name and the repo is ADOPTED. The fork preflight runs before that, so
+// without this probe an unforkable source would park an assignment whose repos were provisioned
+// while forking was still allowed and whose handout was made private afterwards -- turning a
+// re-run that used to succeed into a reported config error.
+//
+// createRepo itself resolves its own Octokit through getOctoKit(org), so it cannot be driven by
+// this file's fake-request router; these cover the decision input the new branch reads.
+
+Deno.test("destinationHasContent: existing repo with content -> true (adopt)", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": META_OK,
+    "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({ data: { ref: "refs/heads/main" } })
+  });
+  assertEquals(await destinationHasContent(octokit, "org", "student-repo"), true);
+});
+
+Deno.test("destinationHasContent: existing but EMPTY repo -> false (do not adopt a blank repo)", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": META_OK,
+    "GET /repos/{owner}/{repo}/git/ref/{ref}": () => {
+      throw requestError(409, "Git Repository is empty.");
+    }
+  });
+  // The normal path REPAIRS an empty leftover by delete+regenerate, which is impossible when the
+  // source cannot be forked -- so there is nothing to adopt and the preflight error must stand.
+  assertEquals(await destinationHasContent(octokit, "org", "student-repo"), false);
+});
+
+Deno.test("destinationHasContent: no such repo (404) -> false", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  assertEquals(await destinationHasContent(octokit, "org", "student-repo"), false);
+});
+
+Deno.test("destinationHasContent: a transient failure propagates rather than reading as 'no'", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(500, "Internal Server Error");
+    }
+  });
+  // Swallowing this would park a repo that may well have been adoptable.
+  const err = await assertRejects(() => destinationHasContent(octokit, "org", "student-repo"));
   assertEquals((err as RequestError).status, 500);
 });
 

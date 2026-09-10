@@ -78,4 +78,34 @@ SELECT repository,
  WHERE repository IN ('test-org/dlq-park-case-a', 'test-org/dlq-park-case-b')
  ORDER BY repository;
 
+-- Assert it, rather than leaving the result to be eyeballed. A harness whose output has to be
+-- read by a human passes silently when it regresses, which defeats the point of committing it.
+DO $$
+DECLARE
+  v_total   integer;
+  v_parked_a boolean;
+  v_parked_b boolean;
+BEGIN
+  SELECT count(*) INTO v_total
+    FROM public.repositories
+   WHERE repository IN ('test-org/dlq-park-case-a', 'test-org/dlq-park-case-b');
+  IF v_total <> 2 THEN
+    RAISE EXCEPTION 'fixture broken: expected 2 test rows, found %', v_total;
+  END IF;
+
+  SELECT creation_error IS NOT NULL INTO v_parked_a
+    FROM public.repositories WHERE repository = 'test-org/dlq-park-case-a';
+  SELECT creation_error IS NOT NULL INTO v_parked_b
+    FROM public.repositories WHERE repository = 'test-org/dlq-park-case-b';
+
+  IF NOT v_parked_a THEN
+    RAISE EXCEPTION 'case-a NOT parked: a repository whose most recent create_repo was dead-lettered must be parked, not re-enqueued';
+  END IF;
+  IF v_parked_b THEN
+    RAISE EXCEPTION 'case-b WAS parked: a dead-letter predating last_creation_attempt_at means the instructor already retried, and the fresh job must be left alone';
+  END IF;
+
+  RAISE NOTICE 'OK: case-a parked, case-b untouched';
+END $$;
+
 ROLLBACK;
