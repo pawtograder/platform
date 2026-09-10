@@ -54,6 +54,46 @@ export class NonRetryableRepoError extends NonRetryableGitHubError {
 }
 
 /**
+ * The repository we were asked to operate on is not on GitHub at all. Distinct from a bare 404,
+ * which on a freshly-created repo usually means read-after-create replication lag and IS worth
+ * retrying: this error is only raised once a direct `GET /repos/{owner}/{repo}` has confirmed the
+ * repo is really gone. Someone deleted it out of band, or the row was left behind when the repo was
+ * renamed. Either way the row no longer describes anything, so the worker records the reason and
+ * clears `is_github_ready` rather than retrying.
+ */
+export class RepositoryMissingError extends NonRetryableGitHubError {
+  readonly fullName: string;
+  constructor(fullName: string) {
+    super(
+      `Repository ${fullName} does not exist on GitHub. It was deleted or renamed outside Pawtograder, so there is nothing to sync.`
+    );
+    this.name = "RepositoryMissingError";
+    this.fullName = fullName;
+  }
+}
+
+/**
+ * The repo 404s and we cannot attribute it: the installation is scoped to selected repositories, so
+ * this is either a deleted repo or a live one we were never granted. Sibling of
+ * RepositoryMissingError, and the distinction is exactly what we are allowed to DO about it.
+ *
+ * Both are per-repo failures, so neither should trip the org-wide circuit breaker or spend the
+ * retry ladder — nothing about one repo says the org is unhealthy. Only RepositoryMissingError
+ * carries proof of deletion, so only it may park the row; this one leaves `repositories` untouched,
+ * because the row may be perfectly correct and the problem ours.
+ */
+export class RepositoryUnreadableError extends NonRetryableGitHubError {
+  readonly fullName: string;
+  constructor(fullName: string) {
+    super(
+      `Repository ${fullName} returned 404 and this installation is scoped to selected repositories, so it is either deleted or not granted to us. Cannot sync it, and cannot safely conclude it is gone.`
+    );
+    this.name = "RepositoryUnreadableError";
+    this.fullName = fullName;
+  }
+}
+
+/**
  * The GitHub login we have on file for a user doesn't exist, and we couldn't recover a current one
  * from the numeric account id we stored when they linked their account (see
  * `reresolveMissingGitHubLogin`). Either the account was deleted or the username was never really
@@ -374,6 +414,21 @@ export async function getOrgId(org: string, scope?: Sentry.Scope): Promise<numbe
     orgIdCache.set(org, undefined);
     return undefined;
   }
+}
+
+/**
+ * Is this a repository name the GitHub helpers here can actually use — exactly `owner/name`?
+ *
+ * `getOctoKit`, `getFileFromRepo` and `getDefaultBranchHeadSha` all take the first two
+ * slash-separated components and pass them straight to the API, so `owner/name/extra` silently
+ * targets `owner/name`, and `/name`, `owner/` or `/` build a request with an empty owner or repo.
+ * A merely-present slash (the check this replaces at the callers) accepts all four.
+ *
+ * Same shape as the "owner/repo" validation `admin_upsert_github_org` applies to the template repo
+ * defaults, deliberately: these values come from the same kind of admin-typed form field.
+ */
+export function isValidRepoFullName(repo: unknown): repo is string {
+  return typeof repo === "string" && /^[^/\s]+\/[^/\s]+$/.test(repo);
 }
 
 export async function getOctoKitAndInstallationID(repoOrOrgName: string, scope?: Sentry.Scope) {
@@ -1416,6 +1471,132 @@ export async function assertSourceNotEmpty(
 }
 
 /**
+ * Throws NonRetryableRepoError when the fork source cannot be forked at all.
+ *
+ * WHY THIS IS A PREFLIGHT AND NOT JUST ERROR HANDLING (2026-09-09, CS 4535). A private handout in
+ * an org whose "Allow forking of private repositories" member privilege is off makes
+ * `POST /repos/{owner}/{repo}/forks` fail with 403 "The repository exists, but forking is
+ * disabled." That is a course CONFIGURATION fault, identical for every student on the assignment,
+ * and no retry can fix it. Left unclassified it fell into the worker's generic retry ladder: the
+ * repository row never got a `creation_error`, so `reconcile_stuck_repo_creations` kept treating
+ * the rows as TRANSIENT and re-enqueued them on a doubling backoff. Three repos were re-enqueued
+ * six times over 8.5 hours -- 108 doomed GitHub calls -- and three students had no repo for 17
+ * hours, until an instructor noticed and made the handout public.
+ *
+ * Checking first costs one `GET /repos` per fork-mode creation. That GET is not scheduled through
+ * the fleet-wide `create_content:<org>` limiter, whereas the doomed fork it replaces WOULD hold one
+ * of that limiter's 40 slots. On a burst (58 repos on 2026-09-07) the preflight is therefore
+ * cheaper than the failure it prevents, not just faster to diagnose.
+ *
+ * The repo-level `allow_forking` flag reflects the ORG policy, not just the repository toggle:
+ * verified 2026-09-09 against neu-cs4535, where every private repo reports `allow_forking: false`
+ * while `orgs/neu-cs4535.members_can_fork_private_repositories` is false. One GET is therefore
+ * enough; we do not also need to read the org.
+ *
+ * A 403 from the fork call itself is still classified in `createRepo` -- this preflight can race a
+ * policy change, and belt-and-braces is cheap.
+ */
+export async function assertSourceForkable(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  sourceFullName: string
+): Promise<void> {
+  let meta: { allow_forking?: boolean; private?: boolean };
+  try {
+    const resp = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    meta = resp.data as { allow_forking?: boolean; private?: boolean };
+  } catch (e) {
+    if (e instanceof RequestError && e.status === 404) {
+      throw new NonRetryableRepoError(`Source repository ${sourceFullName} was not found`);
+    }
+    // Anything else (a 5xx, a rate limit) is transient: let the caller retry rather than parking a
+    // repo because we could not read the source once.
+    throw e;
+  }
+  // Only a definitive `false` blocks. If GitHub ever stops returning the field, `undefined` must
+  // not be read as "cannot fork" -- that would park every fork-mode creation on a schema change.
+  if (meta.allow_forking === false) {
+    throw new NonRetryableRepoError(forkingDisabledMessage(sourceFullName, owner, meta.private === true));
+  }
+}
+
+/**
+ * The instructor-facing remedy for a disabled fork. Both causes produce the same GitHub error, so
+ * name the one that matches what we observed about the source and keep the other as the fallback.
+ * This string lands in `repositories.creation_error` and is shown next to the Retry button.
+ */
+function forkingDisabledMessage(sourceFullName: string, owner: string, sourceIsPrivate: boolean): string {
+  if (sourceIsPrivate) {
+    return (
+      `Cannot fork ${sourceFullName}: it is private, and the ${owner} organization does not allow ` +
+      `forking private repositories. Either make ${sourceFullName} public, or turn on ` +
+      `"Allow forking of private repositories" in the ${owner} organization settings ` +
+      `(Settings > Member privileges), then use Retry.`
+    );
+  }
+  return (
+    `Cannot fork ${sourceFullName}: forking is disabled on that repository. Turn on ` +
+    `"Allow forking" in its settings (Settings > General > Features), then use Retry.`
+  );
+}
+
+/**
+ * True when a fork request failed because forking is disabled for the source -- either the
+ * repository's own toggle is off, or it is private and the org forbids forking private repos.
+ * GitHub returns 403 and puts the phrase on the top-level message, but check `errors[]` too for the
+ * same reason `isRepoNameAlreadyExistsError` does: the shape is not contractual.
+ */
+function isForkingDisabledError(e: unknown): boolean {
+  if (!(e instanceof RequestError) || e.status !== 403) return false;
+  const haystacks: string[] = [e.message ?? ""];
+  const errors = (e.response?.data as { errors?: unknown } | undefined)?.errors;
+  if (Array.isArray(errors)) {
+    for (const err of errors) {
+      if (typeof err === "string") {
+        haystacks.push(err);
+      } else if (err && typeof err === "object") {
+        const eo = err as { message?: string };
+        haystacks.push(eo.message ?? "");
+      }
+    }
+  }
+  return haystacks.join(" ").toLowerCase().includes("forking is disabled");
+}
+
+/**
+ * True when the destination repo already exists AND has content, i.e. an earlier run already
+ * created it and this call is an idempotent re-run that should ADOPT rather than create.
+ *
+ * Only consulted when the fork preflight has already decided the source is unforkable, so the
+ * extra request is off the happy path. A 404 (nothing to adopt) and an empty repo (a half-created
+ * leftover, which the normal path REPAIRS by delete+regenerate -- impossible if we cannot fork)
+ * both mean "no", and the caller then parks the row with the preflight's error.
+ */
+export async function destinationHasContent(octokit: Octokit, org: string, repoName: string): Promise<boolean> {
+  try {
+    return !(await isRepoEmpty(octokit, org, repoName));
+  } catch (e) {
+    if (e instanceof RequestError && e.status === 404) return false;
+    throw e;
+  }
+}
+
+/**
+ * Best-effort read of a repo's visibility, used only to pick the wording of an error we are already
+ * throwing. A failure here must not mask that error, so it falls back to "not private" -- the
+ * message then names the repository toggle and keeps the org policy as the secondary remedy.
+ */
+async function isRepoPrivate(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
+  try {
+    const resp = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    return (resp.data as { private?: boolean }).private === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when a repo create/generate/fork request failed because the target name is already taken.
  * GitHub returns 422 and the human phrase ("Name already exists on this account") may live on the
  * top-level message OR inside response.data.errors[], so check both rather than a single brittle
@@ -1783,8 +1964,41 @@ async function createRepoInstrumented(
   scope?.setTag("org", org);
   console.log("Creating repo", template_repo, owner, repoName, org, "via", creation_method);
 
+  // Preflight the fork source ONCE, before any create attempt. Hoisted out of createAndWaitReady
+  // (which runs twice on the delete+regenerate repair path) because the answer cannot change
+  // between those two passes, and because a doomed fork holds a content-limiter slot.
+  //
+  // An unforkable source is NOT automatically a failure. createRepo is idempotent: when the
+  // destination already exists with content, the create call 422s on the duplicate name and the
+  // catch below ADOPTS it. Parking on the preflight alone would break that re-run for any
+  // assignment whose repos were provisioned while forking was still allowed and whose handout was
+  // made private afterwards -- work that used to succeed would start reporting a config error.
+  // So when the source cannot be forked, ask whether there is anything to adopt before giving up.
+  let adoptWithoutCreating = false;
+  if (creation_method === "fork") {
+    try {
+      await timeStep(timings, "assert_source_forkable", () =>
+        assertSourceForkable(octokit, owner, repo, template_repo)
+      );
+    } catch (preflightErr) {
+      if (!(preflightErr instanceof NonRetryableRepoError)) throw preflightErr;
+      const adoptable = await timeStep(timings, "adoptable_destination_probe", () =>
+        destinationHasContent(octokit, org, repoName)
+      );
+      if (!adoptable) throw preflightErr;
+      scope?.setTag("adopted_despite_unforkable_source", "true");
+      timings.setMeta("adopted_despite_unforkable_source", true);
+      adoptWithoutCreating = true;
+    }
+  }
+
   try {
-    await createAndWaitReady();
+    if (adoptWithoutCreating) {
+      // Nothing to create: fall through to the shared finalize block, exactly as the
+      // duplicate-name adoption path below does.
+    } else {
+      await createAndWaitReady();
+    }
   } catch (createErr) {
     if (isRepoNameAlreadyExistsError(createErr)) {
       // A repo already exists under this name. If it has content, adopt it (idempotent re-run). If
@@ -1846,6 +2060,13 @@ async function createRepoInstrumented(
         assertSourceNotEmpty(octokit, owner, repo, template_repo)
       );
       throw createErr;
+    } else if (isForkingDisabledError(createErr)) {
+      // The preflight above should have caught this, so reaching here means the policy changed
+      // under us (or GitHub disagreed with `allow_forking`). Either way it is deterministic: park
+      // the row with the same remedy rather than letting it ride the generic retry ladder.
+      console.error("Error creating repo: forking disabled for source", createErr);
+      const sourceIsPrivate = await isRepoPrivate(octokit, owner, repo);
+      throw new NonRetryableRepoError(forkingDisabledMessage(template_repo, owner, sourceIsPrivate));
     } else {
       console.error("Error creating repo", createErr);
       throw createErr;
@@ -2220,6 +2441,248 @@ function isGitHubNotFoundError(error: unknown): boolean {
   );
 }
 
+/**
+ * Read the org installation's repo selection ("all" | "selected") STRAIGHT FROM GitHub.
+ *
+ * Deliberately not cached, and deliberately not taken from the `installations` array: that array
+ * is filled once per isolate and only refilled while empty, so a value read from it is arbitrarily
+ * stale. An installation narrowed from "All repositories" to "Only select repositories" would keep
+ * reporting "all" for the life of the isolate, and the first live repo dropped from the selection
+ * would be read as deleted and durably parked — the exact failure the selection check exists to
+ * prevent. Proof has to be fresh to be proof.
+ *
+ * Costs one app-authenticated request, and only on the 404 path (see
+ * `listCollaboratorsOrThrowMissing`), never on the happy path.
+ *
+ * Returns `undefined` on ANY failure, meaning strictly "could not find out" — never "all" and never
+ * "selected". `classifyRepoPresence` maps that to its retryable `unknown` state, so a 5xx or rate
+ * limit from this auxiliary lookup cannot terminate a job. Reading it as "selected" would be just
+ * as wrong as reading it as "all": one discards a live sync, the other parks a live repo.
+ */
+export async function fetchRepositorySelection(org: string): Promise<"all" | "selected" | undefined> {
+  try {
+    const resp = await app.octokit.request("GET /orgs/{org}/installation", { org });
+    return resp.data.repository_selection;
+  } catch (error) {
+    // One failure must NOT be flattened into undefined: a rate limit. Swallowing it here loses the
+    // response and its Retry-After before the worker's detectRateLimitType ever sees them, so the
+    // job comes back as a generic failure — opening the org-method circuit and counting toward the
+    // eight-hour threshold — when the correct answer was "back off for N seconds and try again".
+    // Propagate it and let the worker's rate-limit handling do its job.
+    if (carriesRateLimitSignal(error)) {
+      throw error;
+    }
+    Sentry.addBreadcrumb({
+      category: "github",
+      message: `Could not read installation repo selection for ${org}; treating repo presence as unprovable`,
+      level: "warning",
+      data: { error: error instanceof Error ? error.message : String(error) }
+    });
+    return undefined;
+  }
+}
+
+/**
+ * Does this error carry the rate-limit signal the async worker keys off?
+ *
+ * Mirrors the INPUTS of github-async-worker's `detectRateLimitType` (the two rate-limit error
+ * classes, a 429, or a 403 carrying Retry-After / an exhausted x-ratelimit-remaining) rather than
+ * its decision tree, because all we need here is "is this worth preserving for that function to
+ * classify". Erring either way is survivable and neither is silent: a false positive propagates an
+ * error the worker then declines to treat as a rate limit, and a false negative just falls back to
+ * the `unknown` path, which retries.
+ *
+ * A plain 403 with no rate-limit headers is deliberately NOT a match — that is a permission
+ * problem, and propagating it would trip the org circuit over a lookup we can simply do without.
+ */
+function carriesRateLimitSignal(error: unknown): boolean {
+  if (error instanceof SecondaryRateLimitError || error instanceof PrimaryRateLimitError) return true;
+  const status = error instanceof RequestError ? error.status : undefined;
+  if (status === 429) return true;
+  if (status !== 403) return false;
+  const raw = (error as { response?: { headers?: Record<string, unknown> } })?.response?.headers;
+  if (!raw) return false;
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) headers[k.toLowerCase()] = String(v);
+  return headers["retry-after"] !== undefined || headers["x-ratelimit-remaining"] === "0";
+}
+
+/**
+ * Four states, because the caller has to make two independent decisions from one 404 — may we keep
+ * retrying, and may we write the row off — and collapsing them gets one of the two wrong:
+ *
+ *   present      — 200. The repo is there, so the collaborators 404 was replication lag. Retry.
+ *   unknown      — we learned nothing, from either input: the probe ITSELF failed (403, 5xx,
+ *                  network), or the installation scope came back undefined because THAT lookup
+ *                  failed. Says nothing about the repo and nothing about the row. Retry.
+ *   absent       — 404, AND this installation can see every repo in the org, so there was nothing
+ *                  to hide: the repo really is gone. Terminal, and provably so — safe to park.
+ *   inaccessible — 404, AND the installation is confirmed scoped to SELECTED repos, so a live repo
+ *                  we were never granted 404s identically to a deleted one. Terminal for this job
+ *                  — retrying cannot make an ungranted repo readable — but NOT proof about the row.
+ *
+ * `undefined` scope means "we could not find out", and it has to land on `unknown` rather than on
+ * `inaccessible`: a transient 5xx or rate limit from the scope lookup would otherwise be
+ * indistinguishable from a confirmed selected-repos installation, and would terminate the job —
+ * permanently discarding a permission sync, or leaving a genuinely missing row unparked, because
+ * an auxiliary lookup blipped. Ignorance is never grounds to stop.
+ *
+ * `github-check-app-installation` already reads a repo 404 as "installed in the org but not granted
+ * access to this repo". Collapsing that into "deleted" would park a LIVE repo; collapsing it into
+ * "retry" would spend the 93s ladder and then let a bare 404 escape and trip the org-wide circuit,
+ * throttling every other class over one repo. Hence two terminal states rather than one: both stop
+ * the work, only `absent` is allowed to change the database.
+ */
+export type RepoPresence = "present" | "unknown" | "absent" | "inaccessible";
+
+export async function classifyRepoPresence(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  repositorySelection: "all" | "selected" | undefined
+): Promise<RepoPresence> {
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    return "present";
+  } catch (error) {
+    // A rate-limited probe is not "unknown", it is "ask again later", and only the caller's caller
+    // knows how to wait. Flattening it here would strip the response and its Retry-After before
+    // the worker's detectRateLimitType could see them, so the job would surface as a generic
+    // failure — ladder, org-method circuit, error threshold — instead of a backoff. Same reasoning
+    // as fetchRepositorySelection; propagating still cannot classify the repo as absent, because
+    // this throws instead of returning.
+    if (carriesRateLimitSignal(error)) {
+      throw error;
+    }
+    // Status, NOT `isGitHubNotFoundError`. That helper falls back to `message.includes("Not Found")`
+    // so that callers doing benign things still recognise a 404 behind a wrapper — but here the
+    // answer can DELETE a row's readiness, and a statusless transport/proxy error or a wrapped 5xx
+    // whose body happens to carry "Not Found" would then be read as proof of deletion. This is the
+    // one place in the file where the loose check is unsafe, so require the real thing.
+    const isRealNotFound = error instanceof RequestError && error.status === 404;
+    if (!isRealNotFound) {
+      // A 5xx, transport error, or non-rate-limited 403 leaves the caller holding the original 404,
+      // which the ladder then retries — deliberately. Propagating the probe error instead would be
+      // worse, not better: retryWithBackoff only retries 404 / "git repository is empty", so a
+      // 5xx would get ZERO retries and land on the worker's generic path, opening the org-method
+      // circuit on the first transient blip. Retrying the 404 re-runs this probe too, which is the
+      // thing most likely to clear it.
+      //
+      // Rate limits are the deliberate exception above, because there the worker genuinely knows
+      // better than the ladder does: it has Retry-After and a real backoff. For a 5xx it has
+      // neither, so the ladder is the better handler. What IS lost is attribution — the escaping
+      // error says 404 when the proximate cause was a 500 — so leave the real reason behind.
+      Sentry.addBreadcrumb({
+        category: "github",
+        message: `Presence probe for ${owner}/${repo} failed; repo presence unknown, retrying the original 404`,
+        level: "warning",
+        data: {
+          probe_status: error instanceof RequestError ? error.status : "none",
+          probe_error: error instanceof Error ? error.message : String(error)
+        }
+      });
+      return "unknown";
+    }
+    if (repositorySelection === "all") return "absent";
+    if (repositorySelection === "selected") return "inaccessible";
+    return "unknown";
+  }
+}
+
+/**
+ * List a repo's collaborators, distinguishing the two things a 404 can mean.
+ *
+ * The caller wraps this in `retryWithBackoff`, whose 404 ladder exists for read-after-create lag:
+ * syncRepoPermissions runs immediately after createRepo in the same worker message, and the
+ * collaborators endpoint can 404 briefly on a repo that does exist. A repo that is GONE returns
+ * exactly the same 404, and paying the ladder for it costs 93 seconds of a worker slot and then
+ * escapes as a bare RequestError — which the async worker reads as a systemic failure and answers
+ * by opening the `<org>:sync_repo_permissions` circuit, throttling that method for every other
+ * class in the org over one dead row.
+ *
+ * So ask instead of guessing, and answer the two questions separately:
+ *
+ *   absent       -> RepositoryMissingError. Terminal AND provable: park the row.
+ *   inaccessible -> RepositoryUnreadableError. Terminal but unprovable: stop, touch nothing.
+ *   present      -> rethrow the original 404; the ladder covers the lag it was written for.
+ *   unknown      -> rethrow too. The probe failed, so we have no grounds to terminate.
+ *
+ * Both terminal cases are NonRetryableGitHubError, which is what keeps a single dead or ungranted
+ * repo out of the org-wide circuit breaker and out of the error-threshold counter. Returning a
+ * bare 404 for the inaccessible case instead would spend the full ladder and then be read as a
+ * systemic failure — the original incident, just narrowed to selected-repos installations.
+ *
+ * `resolveRepositorySelection` is a thunk, not a value, for two reasons: it is only needed on the
+ * 404 path so the happy path pays nothing for it, and passing it in keeps this function testable —
+ * an earlier version read the module-level installation cache directly, and a unit test caught that
+ * a cold cache reports `undefined`, degrades to `inaccessible`, and would have left the one branch
+ * that must be provably correct never exercised. Production passes
+ * `() => fetchRepositorySelection(owner)`, which asks GitHub rather than trusting a cache.
+ */
+export async function listCollaboratorsOrThrowMissing(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  resolveRepositorySelection: () => Promise<"all" | "selected" | undefined>,
+  options: { affiliation?: "direct" | "outside" | "all" } = {}
+) {
+  try {
+    return await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
+      owner,
+      repo,
+      per_page: 100,
+      ...(options.affiliation ? { affiliation: options.affiliation } : {})
+    });
+  } catch (error) {
+    const reinterpreted = await reinterpretRepoNotFound(octokit, owner, repo, error, resolveRepositorySelection);
+    if (reinterpreted) throw reinterpreted;
+    throw error;
+  }
+}
+
+/**
+ * Given an error from a repo-scoped call, decide whether it should be re-reported as a per-repo
+ * terminal condition, and which one. Returns undefined to mean "leave this error exactly as it is".
+ *
+ * Shared by the collaborator read and by the whole-sync backstop, so the "when may we conclude the
+ * repo is gone" rule lives in one place. Verifying rather than assuming is what makes the backstop
+ * safe to apply broadly: a 404 from
+ * `PUT /repos/{owner}/{repo}/collaborators/{username}` can mean the USERNAME does not exist, and
+ * treating that as a missing repo would park a live repo because a student deleted their GitHub
+ * account. Since this probes the repo before concluding anything, that case comes back `present`
+ * and the original error is passed through untouched.
+ */
+async function reinterpretRepoNotFound(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  error: unknown,
+  resolveRepositorySelection: () => Promise<"all" | "selected" | undefined>
+): Promise<RepositoryMissingError | RepositoryUnreadableError | undefined> {
+  if (!isGitHubNotFoundError(error)) return undefined;
+  const presence = await classifyRepoPresence(octokit, owner, repo, await resolveRepositorySelection());
+  if (presence === "inaccessible") {
+    return new RepositoryUnreadableError(`${owner}/${repo}`);
+  }
+  if (presence !== "absent") {
+    // present -> the 404 was about something else (a user, a team); unknown -> we have no grounds.
+    return undefined;
+  }
+  // `absent` rests on the scope having been "all", read BEFORE the probe. If an admin narrows the
+  // installation in between, a live repo dropped from the selection 404s and that stale "all"
+  // would write it off — the failure the fresh lookup exists to prevent, moved inside one call.
+  // So confirm the scope again, now that the 404 is in hand.
+  //
+  // Re-ordering alone would not help: reading only AFTER the probe inverts the race, since a
+  // widening between probe and read misleads us identically. Requiring "all" on BOTH sides raises
+  // the bar from one administrative change mid-request to two in opposite directions. Costs one
+  // request, and only on the path about to write to the database.
+  const confirmed = await resolveRepositorySelection();
+  if (confirmed === "all") return new RepositoryMissingError(`${owner}/${repo}`);
+  if (confirmed === "selected") return new RepositoryUnreadableError(`${owner}/${repo}`);
+  return undefined;
+}
+
 export async function archiveRepoAndLock(org: string, repo: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "archive_repo");
   scope?.setTag("org", org);
@@ -2455,7 +2918,7 @@ export async function getTeamAndCreateIfNeeded(org: string, team_slug: string, o
   }
 }
 
-const teamSlugCache = new Map<string, Promise<string>>();
+const teamSlugCache = new Map<string, Promise<string | null>>();
 
 /**
  * Resolve a team's actual GitHub slug, tolerating the case where GitHub normalized the team's slug
@@ -2471,6 +2934,29 @@ const teamSlugCache = new Map<string, Promise<string>>();
  * the miss would keep every retry hitting the wrong slug until cold start.
  */
 export async function resolveExistingTeamSlug(org: string, team_slug: string, octokit: Octokit): Promise<string> {
+  return (await resolveTeamSlugIfExists(org, team_slug, octokit)) ?? team_slug;
+}
+
+/**
+ * Same resolution as {@link resolveExistingTeamSlug}, but reports ABSENCE as `null` instead of
+ * echoing back the requested slug.
+ *
+ * The fallback in `resolveExistingTeamSlug` makes "resolved to a real team" and "this team does not
+ * exist" indistinguishable to the caller, and every team endpoint below takes a slug — so a caller
+ * that only wanted a spelling correction would happily go on to PUT against a team that isn't
+ * there. That 404s, and because it happens inside `syncRepoPermissions`, it took down
+ * assignment-create-handout-repo for every brand-new course: the `<slug>-students` team is created
+ * lazily by the student-team sync, so a course with nothing enrolled yet has no students team at
+ * all, and mode-2 handout creation failed with a bare "Not Found" AFTER the repo was already made.
+ *
+ * Callers that must not create a team can now branch on the absence; the one caller that genuinely
+ * requires the team (a mode-2 handout grant) creates it explicitly.
+ */
+export async function resolveTeamSlugIfExists(
+  org: string,
+  team_slug: string,
+  octokit: Octokit
+): Promise<string | null> {
   // JSON tuple, not `org + "-" + team_slug`: string concat is ambiguous (org "a-b"/slug "c" would
   // collide with org "a"/slug "b-c") and could reuse one course's resolved slug for another.
   const cacheKey = JSON.stringify([org, team_slug]);
@@ -2479,12 +2965,10 @@ export async function resolveExistingTeamSlug(org: string, team_slug: string, oc
     return cached;
   }
   const pending = (async () => {
-    let slug = team_slug;
-    let resolved = false;
+    let slug: string | null = null;
     try {
       const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
       slug = team.data.slug ?? team_slug;
-      resolved = true;
     } catch (e) {
       if (!(e instanceof RequestError && e.status === 404)) {
         throw e;
@@ -2493,11 +2977,10 @@ export async function resolveExistingTeamSlug(org: string, team_slug: string, oc
       const match = teams.find((t) => t.slug === team_slug || t.name === team_slug);
       if (match?.slug) {
         slug = match.slug;
-        resolved = true;
       }
     }
-    // Don't retain a no-match fallback so a retry re-checks once the team exists.
-    if (!resolved) {
+    // Don't retain a no-match so a retry re-checks once the team exists.
+    if (slug === null) {
       teamSlugCache.delete(cacheKey);
     }
     return slug;
@@ -2889,6 +3372,74 @@ export async function reinviteToOrgTeam(
 }
 const staffTeamCache = new Map<string, Promise<string[]>>();
 const orgMembershipCache = new Map<string, Promise<Endpoints["GET /orgs/{org}/members"]["response"]["data"][]>>();
+// A READ FAILURE is not cached at all, so a retry re-asks rather than inheriting a wrong answer.
+//
+// Bounded, unlike the staff-team and org-membership caches above, because this list is edited in the
+// admin UI and nothing invalidates a warm isolate: an unbounded entry means an exemption added right
+// after a sync does not apply until that isolate is recycled, which can be hours. The TTL is short
+// enough that an admin edit takes effect on the next sync but still collapses the burst that matters
+// — assignment-create-all-repos syncs every repo in a course back to back against the same org.
+const ORG_EXEMPTION_CACHE_TTL_MS = 60_000;
+const orgExemptionCache = new Map<string, { readAt: number; users: Promise<string[]> }>();
+
+/**
+ * Per-org allowlist of GitHub logins that permission sync must never remove.
+ *
+ * Some accounts hold access the course roster cannot explain and should keep it — institutional IT,
+ * an integration account, faculty carried on a repo directly rather than through the staff team.
+ * That used to be `adminsThatShouldNotBeListedAsAdmins`: five names hardcoded here, applied to every
+ * org, invisible to the admins who know who those people actually are, and changeable only by a
+ * deploy. `github_orgs.permission_sync_exempt_users` is the same decision moved to the per-org
+ * config admins already manage; the constant stays as a global backstop so nothing regresses.
+ *
+ * THROWS when the list could not be read, which is distinct from an empty list — and aborts the
+ * sync, exactly as an unreadable staff roster does. Degrading instead would finish the run having
+ * performed only the additive half, and the callers that ignore `removalsSkipped` (both repo
+ * creation paths, github-user-sync, the async worker) would record the repo as ready: a student
+ * dropped from the course keeps write access and nothing retries. An exemption list that silently
+ * reads as absent is the other half of the same failure — it strips a protected account off a repo.
+ */
+async function getOrgPermissionSyncExemptions(org: string, scope?: Sentry.Scope): Promise<string[]> {
+  try {
+    return await readOrgPermissionSyncExemptions(org);
+  } catch (err) {
+    // Tagged before rethrowing so the abort is attributable to the config read rather than looking
+    // like a GitHub failure. The failure is not cached, so the retry re-asks.
+    scope?.setTag("org_permission_exemptions", "unavailable");
+    throw err;
+  }
+}
+
+function readOrgPermissionSyncExemptions(org: string): Promise<string[]> {
+  const cached = orgExemptionCache.get(org);
+  if (cached && Date.now() - cached.readAt < ORG_EXEMPTION_CACHE_TTL_MS) {
+    return cached.users;
+  }
+  const pending = (async () => {
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+    const { data, error } = await adminSupabase
+      .from("github_orgs")
+      .select("permission_sync_exempt_users")
+      .eq("org_name", org)
+      .maybeSingle();
+    // maybeSingle: an org with no configuration row is `null` with no error, and that is a real
+    // answer (no exemptions). Only a genuine error is unknown.
+    if (error) {
+      throw error;
+    }
+    // Lowercased on write by admin_upsert_github_org, and again here: a row edited directly with
+    // SQL would otherwise never match the lowercased logins the sync compares against.
+    return (data?.permission_sync_exempt_users ?? []).map((u) => u.toLowerCase());
+  })().catch((err) => {
+    orgExemptionCache.delete(org);
+    throw err;
+  });
+  orgExemptionCache.set(org, { readAt: Date.now(), users: pending });
+  return pending;
+}
 /**
  * The team does not exist on GitHub at all.
  *
@@ -3002,6 +3553,34 @@ export function computeCollaboratorRemovals({
   return existingUsernames.filter(
     (u) => !desiredUsernames.includes(u) && !staffRoster.includes(u) && !adminExclusions.includes(u)
   );
+}
+
+/**
+ * Narrow removal candidates to the ones a removal can actually act on.
+ *
+ * `DELETE /repos/{owner}/{repo}/collaborators/{username}` removes a DIRECT collaborator grant. It
+ * cannot revoke access someone holds through a team or through org ownership — GitHub accepts the
+ * call, reports success, and the person keeps their access. `GET .../collaborators` defaults to
+ * `affiliation=all`, so the candidate list it feeds contains all three kinds mixed together, and
+ * every team-derived or owner-derived entry became one serial DELETE that changed nothing.
+ *
+ * Measured on a real course org: a freshly created handout repo listed 37 collaborators, of which
+ * ZERO were direct (org `default_repository_permission` is `none`; all 37 came from the staff team
+ * plus org owners). The sync issued 22 removals, took 63.6s doing it, revoked nothing, and would
+ * have repeated the same 63.6s on every subsequent sync of that repo. That is what pushed handout
+ * creation past 95s and made the browser give up before the chained solution-repo call.
+ *
+ * Filtering here rather than fetching only `affiliation=direct` in the first place: the unfiltered
+ * list is still the right input for the "already has access, do not re-add" check, since access via
+ * a team is real access and a redundant direct grant would be wrong.
+ *
+ * The hardcoded `adminsThatShouldNotBeListedAsAdmins` allowlist is the same problem patched by hand
+ * for five specific people; this covers every org owner without naming them, and that list stays as
+ * a backstop.
+ */
+export function filterToDirectCollaborators(candidates: string[], directUsernames: string[]): string[] {
+  const direct = new Set(directUsernames.map((u) => u.toLowerCase()));
+  return candidates.filter((u) => direct.has(u.toLowerCase()));
 }
 async function getOrgMembers(
   org: string,
@@ -3249,6 +3828,50 @@ export async function syncRepoPermissions(
     // Same reasoning as createRepo: flag only what escapes. This path recovers from a missing staff
     // team on purpose (TeamNotFoundError degrades to "do not remove anyone" and carries on).
     timings.noteEscapingError(error);
+    // Backstop for every OTHER repo-scoped call in the sync. The collaborator read classifies its
+    // own 404 because it sits inside the retry ladder and has to short-circuit those 93 seconds,
+    // but the sync goes on to read the repo's teams and to add/remove collaborators — and this
+    // function has been measured at 94 seconds, so a repo deleted part-way through is not
+    // hypothetical. During the 2026-09-09 sp26 cleanup an instructor deleted 146 repos by hand;
+    // any one of those could have landed mid-sync. Without this, such a 404 escapes bare and the
+    // worker reads it as systemic, opening the org-wide circuit — the original incident, entered
+    // through a different call.
+    //
+    // Safe to apply this broadly precisely because it verifies instead of assuming: a 404 that was
+    // never about the repo (a deleted GitHub account on a collaborator PUT) probes back `present`
+    // and is rethrown untouched.
+    let reinterpreted: RepositoryMissingError | RepositoryUnreadableError | undefined;
+    try {
+      const [owner, repoName] = repo.includes("/") ? repo.split("/") : [org, repo];
+      const octokit = await getOctoKit(owner, _scope);
+      if (octokit) {
+        reinterpreted = await reinterpretRepoNotFound(octokit, owner, repoName, error, () =>
+          fetchRepositorySelection(owner)
+        );
+      }
+    } catch (reinterpretError) {
+      // A rate limit hit WHILE classifying outranks the 404 that prompted the classification: it is
+      // the actionable one, it carries Retry-After, and the worker has real backoff for it. Losing
+      // it here would report the 404 instead and open the org circuit — the same mistake this
+      // function exists to prevent, one level up. (classifyRepoPresence and
+      // fetchRepositorySelection both rethrow rate limits, so they can reach this catch.)
+      if (carriesRateLimitSignal(reinterpretError)) {
+        throw reinterpretError;
+      }
+      // Anything else is just a failed attempt to explain the original error, and must not mask it.
+      Sentry.addBreadcrumb({
+        category: "github",
+        message: `Could not classify the 404 escaping sync for ${org}/${repo}; reporting the original error`,
+        level: "warning",
+        data: {
+          classify_error: reinterpretError instanceof Error ? reinterpretError.message : String(reinterpretError)
+        }
+      });
+    }
+    // Thrown OUTSIDE the try on purpose: the previous shape threw here from inside it, so my own
+    // intended throw landed in my own catch and had to be fished back out by instanceof — which is
+    // exactly how the rate-limit case came to be swallowed.
+    if (reinterpreted) throw reinterpreted;
     throw error;
   } finally {
     timings.finish((snapshot) => attachStepTimingsToScope(snapshot, _scope));
@@ -3293,9 +3916,12 @@ async function syncRepoPermissionsInstrumented(
   // Resolve to the team's real GitHub slug: if the team was created out-of-band and GitHub
   // normalized its slug differently from `${courseSlug}-staff`, the literal would 404 on the
   // members/repo-access endpoints below, silently leaving repos without staff access.
-  const team_slug = await timeStep(timings, "resolve_staff_team_slug", () =>
-    resolveExistingTeamSlug(org, `${courseSlug}-staff`, octokit)
+  const resolvedStaffTeamSlug = await timeStep(timings, "resolve_staff_team_slug", () =>
+    resolveTeamSlugIfExists(org, `${courseSlug}-staff`, octokit)
   );
+  // Keep the derived name as the slug we *use*, so the members read below still produces the
+  // TeamNotFoundError the degradation path downstream is written against.
+  const team_slug = resolvedStaffTeamSlug ?? `${courseSlug}-staff`;
   // JSON tuple, not `org + "-" + courseSlug`, for the same reason as teamSlugCache above: string
   // concat is ambiguous and could serve one course's staff roster to another.
   const staffCacheKey = JSON.stringify([org, courseSlug]);
@@ -3342,29 +3968,36 @@ async function syncRepoPermissionsInstrumented(
     });
     console.error(`Could not read staff team for ${org}/${courseSlug}; not removing any collaborators`, err);
   }
-  if (!orgMembershipCache.has(org)) {
-    orgMembershipCache.set(
-      org,
-      getOrgMembers(org, octokit).catch((err) => {
-        orgMembershipCache.delete(org);
-        throw err;
-      })
-    );
+  // The org roster answers exactly one question — "is this person I am about to ADD already in the
+  // org?" — so with nobody to add it is pure cost. Handout and solution repo creation both pass an
+  // empty username list, and on a large org this paginated read took 18.8s of the 95.6s that made
+  // handout creation outlive the browser's patience. Both consumers below are optional-chained, so
+  // leaving it undefined is the same code path as a failed lookup.
+  let allOrgMembers: string[] | undefined;
+  if (githubUsernames.length === 0) {
+    scope?.setTag("org_members_skipped", "no_desired_users");
+  } else {
+    if (!orgMembershipCache.has(org)) {
+      orgMembershipCache.set(
+        org,
+        getOrgMembers(org, octokit).catch((err) => {
+          orgMembershipCache.delete(org);
+          throw err;
+        })
+      );
+    }
+    // Same promise-cache note as the staff roster above. On a cold isolate this is a PAGINATED list
+    // of every member of the org, which for a large course org is many sequential requests.
+    const orgMembers = await timeStep(timings, "org_members", () => orgMembershipCache.get(org));
+    allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
   }
-  // Same promise-cache note as the staff roster above. On a cold isolate this is a PAGINATED list
-  // of every member of the org, which for a large course org is many sequential requests.
-  const orgMembers = await timeStep(timings, "org_members", () => orgMembershipCache.get(org));
-  const allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
-  // maxRetries 5 / baseDelayMs 3000 — the same 93s worst-case ladder as get_head_sha. No retry
-  // lines appear in the 2026-09-07 logs, so it did not fire; timed so we can say that from data.
+  // maxRetries 5 / baseDelayMs 3000 — the same 93s worst-case ladder as get_head_sha, and still
+  // the right ladder for the read-after-create lag it was written for. A repo that is GONE 404s
+  // identically, so `listCollaboratorsOrThrowMissing` classifies the 404 before we spend the
+  // ladder on it; see that function for what the ambiguity used to cost.
   const existingAccess = await timeStep(timings, "list_collaborators", () =>
     retryWithBackoff(
-      () =>
-        octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
-          owner: org,
-          repo,
-          per_page: 100
-        }),
+      () => listCollaboratorsOrThrowMissing(octokit, org, repo, () => fetchRepositorySelection(org)),
       5,
       3000,
       scope
@@ -3386,7 +4019,14 @@ async function syncRepoPermissionsInstrumented(
       repo
     })
   );
-  if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
+  // `resolvedStaffTeamSlug === null` means the course has no staff team on GitHub. Reading its
+  // roster already degrades to "remove nobody" a few lines up (see the TeamNotFoundError catch);
+  // this grant did not, and PUT-ing to a team that does not exist 404s and takes the whole sync —
+  // and its caller — down. Skip it for the same reason: a course that legitimately has no staff
+  // team must not be broken by it, and the staff-team sync is what owns creating one.
+  if (resolvedStaffTeamSlug === null) {
+    scope?.setTag("staff_team_grant", "skipped_absent");
+  } else if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
     madeChanges = true;
     await timeStep(timings, "grant_staff_team", () =>
       octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
@@ -3400,25 +4040,45 @@ async function syncRepoPermissionsInstrumented(
   }
   // Optionally grant the students team read access (mode 2 handout repos). Resolve the real slug for
   // the same reason as the staff team above, so grant/revoke hit the correct team endpoint.
-  const studentsTeamSlug = await timeStep(timings, "resolve_students_team_slug", () =>
-    resolveExistingTeamSlug(org, `${courseSlug}-students`, octokit)
+  let studentsTeamSlug = await timeStep(timings, "resolve_students_team_slug", () =>
+    resolveTeamSlugIfExists(org, `${courseSlug}-students`, octokit)
   );
-  if (options.studentTeamPermission) {
-    // Bound to a local so the narrowing survives into the closure below: TypeScript discards the
+  // The students team is created LAZILY, by the student-team sync, the first time somebody is
+  // enrolled. A mode-2 handout is normally created before that has ever run — a brand-new course
+  // has nobody enrolled — so the team the grant below needs does not exist yet, and the grant 404s
+  // AFTER the handout repo has already been created but before `template_repo` is persisted. That
+  // is a 500 on every first mode-2 handout of a new course, and a retry hits it again.
+  //
+  // Create it here rather than skipping, because `studentTeamPermission` is only ever set by the
+  // mode-2 handout path, which REQUIRES students to be able to read the handout. Skipping would
+  // let creation report success while leaving the repo unreadable, and nothing revisits the
+  // handout's team grants once the team later appears. Creating an empty `<slug>-students` team is
+  // exactly what the student-team sync would do on the next enrollment anyway.
+  if (options.studentTeamPermission && studentsTeamSlug === null) {
+    const created = await timeStep(timings, "create_students_team", () =>
+      getTeamAndCreateIfNeeded(org, `${courseSlug}-students`, octokit)
+    );
+    studentsTeamSlug = created.data.slug ?? `${courseSlug}-students`;
+    scope?.setTag("students_team_created", "true");
+  }
+  if (options.studentTeamPermission && studentsTeamSlug) {
+    // Bound to locals so the narrowing survives into the closure below: TypeScript discards the
     // `if (options.studentTeamPermission)` narrowing inside a callback (options is a mutable
     // parameter), so passing `options.studentTeamPermission` there would widen back to
     // `"pull" | null | undefined`. Same value, same request — this is a typing artifact of wrapping
-    // the call in a timing closure, not a behavior change.
+    // the call in a timing closure, not a behavior change. `studentsTeamSlug` needs the same
+    // treatment now that it is a mutable `string | null`.
     const studentTeamPermission = options.studentTeamPermission;
+    const studentsTeam = studentsTeamSlug;
     const hasStudentsTeam = teamsWithAccess.some(
-      (t) => t.slug === studentsTeamSlug && t.permission === studentTeamPermission
+      (t) => t.slug === studentsTeam && t.permission === studentTeamPermission
     );
     if (!hasStudentsTeam) {
       madeChanges = true;
       await timeStep(timings, "grant_students_team", () =>
         octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
           org,
-          team_slug: studentsTeamSlug,
+          team_slug: studentsTeam,
           owner: org,
           repo,
           permission: studentTeamPermission
@@ -3426,26 +4086,29 @@ async function syncRepoPermissionsInstrumented(
       );
       scope?.addBreadcrumb({
         category: "github",
-        message: `${org}/${repo} granted ${studentsTeamSlug} team ${options.studentTeamPermission}`,
+        message: `${org}/${repo} granted ${studentsTeam} team ${options.studentTeamPermission}`,
         level: "info"
       });
     }
-  } else {
-    // No student access desired — revoke any stale students-team grant.
-    const hasStudentsTeamAccess = teamsWithAccess.some((t) => t.slug === studentsTeamSlug);
+  } else if (studentsTeamSlug) {
+    // No student access desired — revoke any stale students-team grant. Guarded on the team
+    // existing: with no students team there is no grant to revoke, and `teamsWithAccess` could
+    // never match an absent team anyway.
+    const studentsTeam = studentsTeamSlug;
+    const hasStudentsTeamAccess = teamsWithAccess.some((t) => t.slug === studentsTeam);
     if (hasStudentsTeamAccess) {
       madeChanges = true;
       await timeStep(timings, "revoke_students_team", () =>
         octokit.request("DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
           org,
-          team_slug: studentsTeamSlug,
+          team_slug: studentsTeam,
           owner: org,
           repo
         })
       );
       scope?.addBreadcrumb({
         category: "github",
-        message: `${org}/${repo} removed ${studentsTeamSlug} team access`,
+        message: `${org}/${repo} removed ${studentsTeam} team access`,
         level: "info"
       });
     }
@@ -3540,12 +4203,50 @@ async function syncRepoPermissionsInstrumented(
   const newAccess = githubUsernames.filter(
     (u) => !existingUsernames.includes(u) && verifiedOrgMembers.has(u.toLowerCase())
   );
-  const removeAccess = computeCollaboratorRemovals({
+  // Read BEFORE computing removals, and it THROWS rather than degrading when the read fails, for
+  // the same reason the staff roster aborts on a 403: a removal made against an incomplete
+  // exemption list is not recoverable by the next sync — the access is already gone — and a run
+  // that quietly skipped the removal half would be recorded as complete by the callers that do not
+  // inspect `removalsSkipped`.
+  const orgExemptions = await timeStep(timings, "org_permission_exemptions", () =>
+    getOrgPermissionSyncExemptions(org, scope)
+  );
+  const removalCandidates = computeCollaboratorRemovals({
     existingUsernames,
     desiredUsernames: githubUsernames,
     staffRoster: staffTeamUsernames,
-    adminExclusions: adminsThatShouldNotBeListedAsAdmins
+    // Per-org config first, then the legacy global constant as a backstop. Once every org that
+    // needs one has a row, the constant can be deleted.
+    adminExclusions: [...adminsThatShouldNotBeListedAsAdmins, ...orgExemptions]
   });
+  // Only ask for the direct-collaborator list when something might actually be removed, so the
+  // common no-op sync keeps costing exactly the requests it costs today.
+  let removeAccess: string[] = [];
+  if (removalCandidates.length > 0) {
+    // Same classification as the first collaborator read, and for the same reason: this is the
+    // sync's OTHER retry ladder, and the whole-sync backstop sits outside it. Left bare, a repo
+    // deleted between the two reads would spend a second 93-second ladder here before the backstop
+    // ever saw the error. The two ladders are the only places that need in-band classification;
+    // every other repo-scoped call in this function fails fast and the backstop catches it.
+    const directAccess = await timeStep(timings, "list_direct_collaborators", () =>
+      retryWithBackoff(
+        () =>
+          listCollaboratorsOrThrowMissing(octokit, org, repo, () => fetchRepositorySelection(org), {
+            affiliation: "direct"
+          }),
+        5,
+        3000,
+        scope
+      )
+    );
+    removeAccess = filterToDirectCollaborators(
+      removalCandidates,
+      directAccess.map((c) => c.login)
+    );
+    // The gap between these two is the futile work this guard removes. Counted so a regression
+    // shows up as a number rather than as latency somebody has to go and explain.
+    countStep(timings, "removals_skipped_not_direct", removalCandidates.length - removeAccess.length);
+  }
   for (const username of newAccess) {
     madeChanges = true;
     // Accumulated across the loop, with a counter for how many writes were actually issued. One
@@ -3598,6 +4299,9 @@ async function syncRepoPermissionsInstrumented(
   // dropped from the course keeps push access and reconcile_stuck_repo_creations, which scans only
   // is_github_ready = false, never revisits it. That is the outcome the TeamNotFoundError comment
   // above rejects for a 403; the flag is what stops it happening for a 404.
+  //
+  // The staff roster is the only input that can be unknown here: an unreadable exemption list
+  // throws out of this function rather than reaching this line.
   return { madeChanges, removalsSkipped: staffTeamUsernames === null };
 }
 /**

@@ -3,8 +3,13 @@
  */
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { getFileFromRepo, updateAutograderWorkflowHash, getDefaultBranchHeadSha } from "../_shared/GitHubWrapper.ts";
-import { UserVisibleError, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import {
+  getFileFromRepo,
+  updateAutograderWorkflowHash,
+  getDefaultBranchHeadSha,
+  isValidRepoFullName
+} from "../_shared/GitHubWrapper.ts";
+import { UserVisibleError, SecurityError, wrapRequestHandler, readJsonObjectBody } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { parse } from "jsr:@std/yaml";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
@@ -43,16 +48,46 @@ export const GITHUB_APP_WEBHOOK_EVENTS = [
   "organization",
   "deployment_status"
 ] as const;
-type RequestBody = {
-  new_repo: string;
-  assignment_id: number;
-  watch_type: "grader_solution" | "template_repo";
-};
 async function handleRequest(req: Request, scope: Sentry.Scope) {
-  const { assignment_id, new_repo, watch_type }: RequestBody = await req.json();
+  // Not `await req.json()` destructured directly: malformed JSON throws a SyntaxError and a body of
+  // JSON `null` throws a TypeError on the destructuring itself, and neither is a typed error, so
+  // both came back as a 500 and paged us. No declared body shape either — this is a request body,
+  // so a type would be a claim about the caller rather than a guarantee. Every field is checked.
+  const { assignment_id, new_repo, watch_type } = await readJsonObjectBody(req);
   scope?.setTag("function", "github-repo-configure-webhook");
+
+  // Validated BEFORE the Sentry tags: `assignment_id.toString()` on a missing or null id threw
+  // outside any UserVisibleError, so wrapRequestHandler classified it as unexpected and answered
+  // 500 — the same "An unknown error occurred" this function is being fixed to stop producing.
+  if (typeof assignment_id !== "number" || !Number.isFinite(assignment_id)) {
+    throw new UserVisibleError("assignment_id is required", 400);
+  }
+  if (watch_type !== "grader_solution" && watch_type !== "template_repo") {
+    throw new UserVisibleError("watch_type must be either grader_solution or template_repo", 400);
+  }
   scope?.setTag("assignment_id", assignment_id.toString());
-  scope?.setTag("new_repo", new_repo);
+  scope?.setTag("new_repo", typeof new_repo === "string" ? new_repo : String(new_repo));
+
+  // The autograder page sends `new_repo: values.grader_repo` straight from the form, and
+  // `autograder.grader_repo` is NULL whenever solution-repo creation never completed — which is
+  // exactly the state a failed or abandoned assignment-create-solution-repo leaves behind. The
+  // value then flowed unchecked into getFileFromRepo -> getOctoKit, where `repo.includes("/")`
+  // threw `TypeError: Cannot read properties of null (reading 'includes')` and the instructor got
+  // a 500 with "An unknown error occurred" — no indication that the fix is to create the repo.
+  //
+  // Checked here rather than at the getFileFromRepo call, so the template_repo branch is covered
+  // by the same guard and neither branch can grow a new unchecked use. Full `owner/name` rather
+  // than "contains a slash": the helpers downstream take the first two components, so `owner/` and
+  // `/name` reach GitHub as a request with an empty field and `owner/name/extra` quietly acts on a
+  // repository the instructor did not name.
+  if (!isValidRepoFullName(new_repo)) {
+    throw new UserVisibleError(
+      `This assignment has no ${watch_type === "grader_solution" ? "grader" : "handout"} repository ` +
+        `configured yet, so there is nothing to read its configuration from. This usually means ` +
+        `repository creation did not finish — re-save the assignment to retry it.`,
+      400
+    );
+  }
   scope?.setTag("watch_type", watch_type);
   //Validate that the user is an instructor
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
@@ -288,11 +323,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         );
       }
     }
-  } else {
-    return {
-      message: "Webhook already configured"
-    };
   }
+  // No trailing `else`: watch_type is validated at the top of the function, so the three branches
+  // above are exhaustive. The branch that used to be here answered 200 "Webhook already configured"
+  // to anything else, telling the caller the work had been done when nothing had run at all.
 }
 Deno.serve(async (req) => {
   return await wrapRequestHandler(req, handleRequest);
