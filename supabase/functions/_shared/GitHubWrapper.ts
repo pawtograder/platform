@@ -2748,11 +2748,27 @@ export async function reinviteToOrgTeam(
       });
       return false;
     }
+    // Pending, but for a different team (a sibling class in the same org). Attach OUR team to the
+    // user directly rather than posting a second org invitation: GitHub rejects the duplicate with
+    // an `already_exists` validation error, and the handler below reads that as "already an active
+    // member" — which would mark this role org-confirmed for someone who has not accepted anything.
+    // A confirmed role is invisible to the reconciler and to the stuck alert, so if the invitation
+    // then expires the enrollment is broken permanently and silently. The team endpoint extends the
+    // invitation to this team and leaves the membership pending, which is the truth.
     scope?.addBreadcrumb({
       category: "github",
-      message: `User ${githubUsername} has a pending invitation to ${org}, but it does not cover team ${resolvedSlug}; sending one that does`,
+      message: `User ${githubUsername} has a pending invitation to ${org} that does not cover team ${resolvedSlug}; adding the team to it`,
       level: "info"
     });
+    await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
+      org,
+      team_slug: resolvedSlug,
+      username: githubUsername,
+      role: "member"
+    });
+    // Deliberately NOT markUserRoleOrgConfirmedForTeam: the user is still pending. Returning true
+    // reports "an invitation was extended", which is what callers record as a change.
+    return true;
   }
 
   if (isAlreadyActiveOrgMember) {
@@ -2839,9 +2855,22 @@ export async function reinviteToOrgTeam(
         username: githubUsername,
         role: "member"
       });
-      //...and mark the corresponding class's user_role as org-confirmed.
-      await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
-      return false;
+      // ...and mark the class's user_role org-confirmed — but ONLY if the membership probe above
+      // did not tell us the user is merely PENDING. GitHub answers a duplicate invitation with the
+      // same `already_exists` error whether the user has accepted or not, so this branch cannot
+      // tell the two apart on its own. Confirming a pending user is the worst available outcome: a
+      // confirmed role is invisible to the membership reconciler and to the stuck alert, so if the
+      // invitation later expires the enrollment stays broken forever with nothing looking at it.
+      if (!hasPendingInvitation) {
+        await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
+        return false;
+      }
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} is still pending in ${org}; team ${resolvedSlug} attached, leaving the role unconfirmed`,
+        level: "info"
+      });
+      return true;
     }
     throw err;
   }

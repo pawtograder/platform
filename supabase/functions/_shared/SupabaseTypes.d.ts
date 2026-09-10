@@ -12810,6 +12810,10 @@ export type Database = {
         };
         Returns: number;
       };
+      class_team_member_usernames: {
+        Args: { p_class_id: number; p_kind: string };
+        Returns: string[];
+      };
       clear_org_membership_and_repair: {
         Args: { p_org: string; p_user_id: string };
         Returns: number;

@@ -605,54 +605,29 @@ async function checkAndTripErrorCircuitBreaker(
 const PGMQ_MAX_READ_CT = 10;
 
 /**
- * Every GitHub username that should be on a class's student or staff team, read in pages.
+ * The GitHub usernames that should be on a class's student or staff team.
  *
- * This is the INTENDED-MEMBER list, and it is subtractive: syncTeam removes every current GitHub
- * team member absent from it. A capped read is therefore not a truncated answer but a wrong one —
- * for a class with more members than the cap, everyone past it is treated as no longer belonging
- * and is removed from the team, losing the repository access that team grants, with no enrollment
- * change behind it. The previous `.limit(1000)` / `.limit(5000)` reads were exactly that shape, and
- * the membership reconciler makes these syncs run far more often than enrollment changes do.
- *
- * Paged with an explicit `range` and stopped on a short page, rather than one large limit, because
- * PostgREST applies its own `max_rows` ceiling per request regardless of what the limit says.
+ * One RPC, deliberately, because syncTeam is SUBTRACTIVE — it removes every current team member
+ * absent from this list — which makes the read's consistency a correctness property. Reading the
+ * roster across several requests, by offset or by key, gives each page its own snapshot: a student
+ * who accepts their invitation midway is read as unconfirmed in an early page and missing from the
+ * list, while the webhook has since confirmed them and GitHub has added them to the team. syncTeam
+ * removes them, and because the role now reads confirmed, neither the sweep nor the alert will ever
+ * reconsider it — a silent, permanent loss of access. The function also returns an array rather
+ * than rows, which keeps PostgREST's max_rows ceiling from truncating a large class into the same
+ * subtractive damage.
  */
 async function fetchIntendedTeamUsernames(
   adminSupabase: SupabaseClient<Database>,
   classId: number,
   kind: "student" | "staff"
 ): Promise<string[]> {
-  const PAGE = 1000;
-  const usernames: string[] = [];
-  // KEYSET, not offset. The pages are separate requests, so a roster change between two of them
-  // shifts an offset window and drops exactly one eligible row — and on a subtractive list, a
-  // dropped row is a user removed from the team. Paging by the last id seen is unaffected by rows
-  // appearing or disappearing behind the cursor.
-  let lastId = 0;
-  for (;;) {
-    const base = adminSupabase
-      .from("user_roles")
-      .select("id, github_org_confirmed, users(github_username)")
-      .eq("class_id", classId)
-      .eq("disabled", false)
-      .gt("id", lastId);
-    const scoped =
-      kind === "student"
-        ? base.eq("role", "student")
-        : base.in("role", ["instructor", "grader", "admin"]).eq("github_org_confirmed", true);
-    const { data, error } = await scoped.order("id", { ascending: true }).limit(PAGE);
-    if (error) throw error;
-    const page = data ?? [];
-    for (const row of page) {
-      lastId = row.id;
-      // Both teams require org-confirmed membership: syncTeam cannot add a user GitHub does not
-      // consider an org member, and the staff query already filters on it in SQL.
-      if (row.github_org_confirmed && row.users?.github_username) {
-        usernames.push(row.users.github_username);
-      }
-    }
-    if (page.length < PAGE) return usernames;
-  }
+  const { data, error } = await adminSupabase.rpc("class_team_member_usernames", {
+    p_class_id: classId,
+    p_kind: kind
+  });
+  if (error) throw error;
+  return (data ?? []).filter((u): u is string => Boolean(u));
 }
 
 export async function processEnvelope(

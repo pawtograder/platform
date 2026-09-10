@@ -251,6 +251,50 @@ revoke all on function public.reconcile_stale_org_invitations(int, int, int, int
 grant execute on function public.reconcile_stale_org_invitations(int, int, int, int) to service_role;
 
 -- ---------------------------------------------------------------------------
+-- The intended-member list for a class's GitHub team, in ONE statement.
+-- ---------------------------------------------------------------------------
+-- github-async-worker hands this list to syncTeam, which is SUBTRACTIVE: it removes every current
+-- team member absent from the list. That makes the read's consistency a correctness property, not a
+-- performance detail, and it is why this is a function returning an array rather than a paged scan.
+--
+-- Paging it — by offset OR by key — reads the roster across several statements, each with its own
+-- snapshot. A student who accepts their invitation while a later page is being fetched was read as
+-- unconfirmed in an earlier page and is therefore missing from the list, while the webhook has since
+-- confirmed them and GitHub has added them to the team. syncTeam then removes them, and because
+-- their role now reads as confirmed, neither the sweep nor the alert will ever reconsider them: a
+-- silent, permanent loss of repository access. One statement, one snapshot, no such window.
+--
+-- Returning an array also sidesteps PostgREST's max_rows ceiling, which silently truncates a
+-- table read and would produce the same subtractive damage for any class larger than the cap.
+create or replace function public.class_team_member_usernames(
+  p_class_id bigint,
+  p_kind text
+) returns text[]
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(array_agg(u.github_username order by u.github_username), array[]::text[])
+    from public.user_roles ur
+    join public.users u on u.user_id = ur.user_id
+   where ur.class_id = p_class_id
+     and ur.disabled = false
+     and ur.github_org_confirmed = true
+     and u.github_username is not null
+     and case
+           when p_kind = 'staff' then ur.role in ('instructor', 'grader', 'admin')
+           else ur.role = 'student'
+         end;
+$$;
+
+comment on function public.class_team_member_usernames(bigint, text) is
+  'GitHub usernames that should be on a class''s student or staff team, as one snapshot. The caller''s team sync removes anyone absent from this list, so it must never be read in pages.';
+
+revoke all on function public.class_team_member_usernames(bigint, text) from public;
+grant execute on function public.class_team_member_usernames(bigint, text) to service_role;
+
+-- ---------------------------------------------------------------------------
 -- A departure observed by the webhook: un-confirm, and repair now rather than in a week.
 -- ---------------------------------------------------------------------------
 -- github-repo-webhook calls this when GitHub reports `member_removed`. Clearing the confirmation
