@@ -3235,39 +3235,21 @@ async function handleOrgMemberRemoved(
     return;
   }
 
-  const { data: classesData, error: classesError } = await adminSupabase
-    .from("classes")
-    .select("id")
-    // ilike, not eq: the webhook reports GitHub's canonical casing for the org while
-    // `classes.github_org` holds whatever an instructor typed when configuring the course. A
-    // casing difference would find no classes and silently skip the repair. Org logins cannot
-    // contain `%` or `_`, so there is no pattern to escape here.
-    .ilike("github_org", organizationName);
-  if (classesError) throw classesError;
-  if (!classesData || classesData.length === 0) {
-    return;
-  }
-
-  // Clear the confirmation, but KEEP invitation_date. It records when we last mailed an invitation,
-  // and that did not stop being true because the user left. Clearing it would also erase the
-  // difference between "left the org" and "never invited", and github-user-sync re-invites an
-  // enrollment with no invitation_date unconditionally — so the next login would mail a fresh
-  // invitation for a course someone deliberately left, including one whose term is over. Left in
-  // place, the hourly reconciler picks the row up on its own terms: in-window, and once the
-  // invitation is old enough to be worth resending.
-  const { error: updateError } = await adminSupabase
-    .from("user_roles")
-    .update({ github_org_confirmed: false })
-    .eq("user_id", userData.user_id)
-    .eq("disabled", false)
-    .in(
-      "class_id",
-      classesData.map((c) => c.id)
-    );
-  if (updateError) throw updateError;
+  // One RPC for the whole repair: it clears the confirmation for the user's live enrollments in
+  // this org's classes and, for the classes actually in session, enqueues a forced re-invite. The
+  // enqueue matters — clearing alone would leave the student waiting for the sweep, which only
+  // reconsiders an enrollment whose invitation is a staleness period old, so someone removed days
+  // after accepting would have no repository access for the rest of that period. The window check
+  // and the org's case-insensitive match live in SQL alongside the predicate they share.
+  const { data: enqueued, error: repairError } = await adminSupabase.rpc("clear_org_membership_and_repair", {
+    p_user_id: userData.user_id,
+    p_org: organizationName
+  });
+  if (repairError) throw repairError;
+  scope?.setTag("org_membership_repairs_enqueued", String(enqueued ?? 0));
   scope?.setTag("org_membership_cleared", "true");
   console.log(
-    `[github-repo-webhook] ${removedUser.login} left ${organizationName}; cleared github_org_confirmed for their live enrollments`
+    `[github-repo-webhook] ${removedUser.login} left ${organizationName}; cleared github_org_confirmed for their live enrollments, enqueued ${enqueued ?? 0} repair(s)`
   );
 }
 

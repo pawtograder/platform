@@ -2527,6 +2527,19 @@ export async function reinviteToOrgTeam(
      * for the same person may already have replaced it.
      */
     userId?: string;
+    /**
+     * Do nothing if GitHub already has an invitation pending for this user.
+     *
+     * For AUTOMATION only. Background repair can run the same repair more than once — a redelivered
+     * queue message, two envelopes for one user, an hourly sweep overlapping a trigger — and each
+     * extra POST mails the student another invitation. GitHub's own membership state is the reliable
+     * evidence of an outstanding invitation, and the probe below already fetches it, so this costs
+     * no extra request.
+     *
+     * The manual "Resend invitation" paths deliberately do NOT set this: resending is the entire
+     * point when a student never received or lost the first email.
+     */
+    skipIfInvitationPending?: boolean;
   } = {}
 ) {
   scope?.setTag("github_operation", "reinvite_to_team");
@@ -2638,6 +2651,7 @@ export async function reinviteToOrgTeam(
   // Relying on the POST error message is fragile (it varies between "this org" and "this organization"),
   // so we check membership state explicitly first.
   let isAlreadyActiveOrgMember = false;
+  let hasPendingInvitation = false;
   try {
     const orgMembership = await octokit.request("GET /orgs/{org}/memberships/{username}", {
       org,
@@ -2646,6 +2660,9 @@ export async function reinviteToOrgTeam(
     const state = (orgMembership.data as { state?: string } | undefined)?.state;
     if (orgMembership.status === 200 && state === "active") {
       isAlreadyActiveOrgMember = true;
+    }
+    if (orgMembership.status === 200 && state === "pending") {
+      hasPendingInvitation = true;
     }
     scope?.addBreadcrumb({
       category: "github",
@@ -2667,6 +2684,19 @@ export async function reinviteToOrgTeam(
         level: "warning"
       });
     }
+  }
+
+  if (hasPendingInvitation && options.skipIfInvitationPending) {
+    // Returning false is "nothing changed", which is what callers do with it. Note it does NOT mean
+    // "already a member": the two callers that read this value to mark a role org-confirmed
+    // (github-user-sync) never set skipIfInvitationPending, precisely so a pending invitation is
+    // never mistaken for membership.
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `User ${githubUsername} already has a pending invitation to ${org}; not sending another`,
+      level: "info"
+    });
+    return false;
   }
 
   if (isAlreadyActiveOrgMember) {

@@ -146,29 +146,13 @@ Deno.test("isOrgInviteWindowKnownClosed: only on evidence, so the self-service e
   assertEquals(isOrgInviteWindowKnownClosed(TERM, now), false);
 });
 
-Deno.test("shouldSendOrgInvitation: a redelivered forced envelope does not mail a second invitation", () => {
+Deno.test("shouldSendOrgInvitation: force does not read invitation_date at all", () => {
+  // Deliberate: invitation_date is stamped org-wide by the member_invited webhook, so a fresh value
+  // can mean "another class in the same org just invited this user", not "this envelope already
+  // ran". Suppressing on it would skip a real repair and hold the sweep off for another staleness
+  // period; duplicate sends are suppressed in reinviteToOrgTeam, against GitHub's own state.
   const now = at("2026-10-01T12:00:00Z");
-  const stampedAt = "2026-10-01T11:00:00Z";
-  const forced = { cls: TERM, forceReinvite: true, stampedAt, now };
-
-  // Normal path: the reconciler stamps and enqueues in one transaction, so the row and the message
-  // carry the SAME timestamp. That must still send, or every repair would be a no-op.
-  assertEquals(shouldSendOrgInvitation({ ...forced, invitationDate: stampedAt }), true);
-
-  // Redelivery after the invitation went out: the member_invited webhook has since written a later
-  // invitation_date, so this envelope's work is already done.
-  assertEquals(shouldSendOrgInvitation({ ...forced, invitationDate: "2026-10-01T11:00:05Z" }), false);
-
-  // An older invitation_date is not evidence of a send for this envelope.
-  assertEquals(shouldSendOrgInvitation({ ...forced, invitationDate: "2026-09-01T00:00:00Z" }), true);
-});
-
-Deno.test("shouldSendOrgInvitation: missing or unreadable stamps fall back to sending", () => {
-  // An envelope queued before stampedAt existed, or a value we cannot parse, must not suppress a
-  // repair: the cost of sending is one extra email, the cost of not sending is a student locked out.
-  const now = at("2026-10-01T12:00:00Z");
-  const base = { cls: TERM, forceReinvite: true, invitationDate: "2026-10-01T11:00:05Z", now };
-  assertEquals(shouldSendOrgInvitation({ ...base }), true);
-  assertEquals(shouldSendOrgInvitation({ ...base, stampedAt: null }), true);
-  assertEquals(shouldSendOrgInvitation({ ...base, stampedAt: "not-a-timestamp" }), true);
+  const forced = { cls: TERM, forceReinvite: true, now };
+  assertEquals(shouldSendOrgInvitation({ ...forced, invitationDate: "2026-10-01T11:59:59Z" }), true);
+  assertEquals(shouldSendOrgInvitation({ ...forced, invitationDate: null }), true);
 });

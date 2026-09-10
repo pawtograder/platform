@@ -78,8 +78,8 @@ grant execute on function public.github_org_invite_window_open(boolean, date, da
 -- enrollment changes). `forceReinvite` tells the worker to invite without consulting
 -- invitation_date, which reconcile_stale_org_invitations has just stamped.
 -- Dropped first because the argument list changed while this migration was in review; a bare
--- CREATE OR REPLACE would leave the older overload behind on any database that already ran it.
-drop function if exists public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text);
+-- CREATE OR REPLACE would leave a stale overload behind on any database that already ran it.
+drop function if exists public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text, timestamptz);
 
 create or replace function public.enqueue_github_org_reinvite(
   p_class_id bigint,
@@ -87,12 +87,7 @@ create or replace function public.enqueue_github_org_reinvite(
   p_course_slug text,
   p_user_id uuid,
   p_is_staff boolean,
-  p_debug_id text default null,
-  -- The invitation_date this envelope's caller just wrote. Travels with the message so a
-  -- REDELIVERED envelope can tell "nothing has happened since I was queued" from "the invitation
-  -- already went out and the member_invited webhook recorded it" — the second of which must not
-  -- mail the student again. See _shared/orgInviteWindow.ts.
-  p_stamped_at timestamptz default null
+  p_debug_id text default null
 ) returns bigint
 language plpgsql
 security definer
@@ -120,8 +115,7 @@ begin
         'org', p_org,
         'courseSlug', p_course_slug,
         'userId', p_user_id,
-        'forceReinvite', true,
-        'stampedAt', p_stamped_at
+        'forceReinvite', true
       )
     )
   ) into message_id;
@@ -130,8 +124,8 @@ begin
 end;
 $$;
 
-revoke all on function public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text, timestamptz) from public;
-grant execute on function public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text, timestamptz) to service_role;
+revoke all on function public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text) from public;
+grant execute on function public.enqueue_github_org_reinvite(bigint, text, text, uuid, boolean, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- The sweep.
@@ -153,10 +147,20 @@ grant execute on function public.enqueue_github_org_reinvite(bigint, text, text,
 --
 -- The stamp and the enqueue share one exception block so a failed send rolls the stamp back rather
 -- than parking the row for a week on the strength of work that never happened.
+-- Signature changed while in review; drop the older arity so no stale overload survives.
+drop function if exists public.reconcile_stale_org_invitations(int, int, int);
+
 create or replace function public.reconcile_stale_org_invitations(
   p_stale_days int default 7,
   p_new_role_grace_minutes int default 30,
-  p_max int default 50
+  p_max int default 10,
+  -- Per-class ceiling, because the work is not per-user in cost. Each envelope runs a full team
+  -- reconcile, and both it and the invitation itself paginate the whole GitHub team; on a
+  -- 5,000-member team that is ~100 list requests EACH. Without this, one class with a large backlog
+  -- would spend an installation's entire hourly rate limit in a single pass and trip the circuit
+  -- breaker for every other GitHub operation. Small and frequent beats large and throttled: the
+  -- sweep runs hourly, so this still drains a realistic backlog within a day.
+  p_max_per_class int default 3
 ) returns integer
 language plpgsql
 security definer
@@ -170,16 +174,24 @@ declare
   v_stamped_at timestamptz := now();
 begin
   for r in
-    select ur.id,
-           ur.class_id,
-           ur.user_id,
-           ur.role,
-           c.github_org,
-           c.slug
-      from public.user_roles ur
-      join public.users u on u.user_id = ur.user_id
-      join public.classes c on c.id = ur.class_id
-     where ur.disabled = false
+    -- The per-class ranking has to live in a CTE: FOR UPDATE cannot be applied to a query that
+    -- contains window functions, so the outer statement re-joins user_roles by id and locks that.
+    with candidates as (
+      select ur.id,
+             ur.class_id,
+             ur.user_id,
+             ur.role,
+             ur.invitation_date,
+             c.github_org,
+             c.slug,
+             row_number() over (
+               partition by ur.class_id
+               order by ur.invitation_date asc nulls first, ur.id
+             ) as rank_in_class
+        from public.user_roles ur
+        join public.users u on u.user_id = ur.user_id
+        join public.classes c on c.id = ur.class_id
+       where ur.disabled = false
        -- Nullable column: NULL means "not confirmed", same as the invitation banner's own condition.
        and ur.github_org_confirmed is not true
        -- No linked GitHub account means there is nobody to invite; that is a different problem
@@ -199,15 +211,20 @@ begin
               and ur.updated_at < now() - make_interval(mins => p_new_role_grace_minutes))
              or ur.invitation_date < now() - make_interval(days => p_stale_days)
            )
+    )
+    select cand.id, cand.class_id, cand.user_id, cand.role, cand.github_org, cand.slug
+      from candidates cand
+      join public.user_roles ur on ur.id = cand.id
+     where cand.rank_in_class <= p_max_per_class
      -- Oldest grievance first, so a large backlog drains in a fair order across passes rather than
      -- re-serving whichever rows happen to sort first.
-     order by ur.invitation_date asc nulls first, ur.id
+     order by cand.invitation_date asc nulls first, cand.id
      limit p_max
      -- Two overlapping runs (a cron tick racing a pg_net retry, or a manual invocation) would
      -- otherwise both select the same rows before either invitation_date stamp commits, and each
      -- would enqueue its own invitation — a duplicate email to the student, which is the specific
-     -- harm this reconciler exists to avoid. Every join here is inner, so locking `ur` alone is
-     -- valid; SKIP LOCKED makes the second run take the next candidates instead of blocking.
+     -- harm this reconciler exists to avoid. SKIP LOCKED makes the second run take the next
+     -- candidates instead of blocking.
      for update of ur skip locked
   loop
     begin
@@ -218,8 +235,7 @@ begin
         r.slug,
         r.user_id,
         r.role in ('instructor', 'grader', 'admin'),
-        'reinvite-role-' || r.id || '-' || extract(epoch from v_stamped_at)::bigint,
-        v_stamped_at
+        'reinvite-role-' || r.id || '-' || extract(epoch from v_stamped_at)::bigint
       );
       v_count := v_count + 1;
     exception
@@ -231,8 +247,81 @@ begin
 end;
 $$;
 
-revoke all on function public.reconcile_stale_org_invitations(int, int, int) from public;
-grant execute on function public.reconcile_stale_org_invitations(int, int, int) to service_role;
+revoke all on function public.reconcile_stale_org_invitations(int, int, int, int) from public;
+grant execute on function public.reconcile_stale_org_invitations(int, int, int, int) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- A departure observed by the webhook: un-confirm, and repair now rather than in a week.
+-- ---------------------------------------------------------------------------
+-- github-repo-webhook calls this when GitHub reports `member_removed`. Clearing the confirmation
+-- alone is not enough: the sweep only reconsiders an enrollment whose invitation is a staleness
+-- period old, so a student removed days after accepting would sit without repository access for the
+-- rest of that period even though we have definitive evidence the membership is gone. A forced
+-- envelope repairs it on the spot.
+--
+-- invitation_date is deliberately NOT cleared. It records when we last mailed an invitation, which
+-- did not stop being true, and it is what keeps a closed-course departure from being re-invited by
+-- the paths that treat a null date as "never invited".
+create or replace function public.clear_org_membership_and_repair(
+  p_user_id uuid,
+  p_org text
+) returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  r record;
+  v_enqueued integer := 0;
+begin
+  update public.user_roles ur
+     set github_org_confirmed = false
+    from public.classes c
+   where c.id = ur.class_id
+     -- Case-insensitive: GitHub reports its canonical casing while the column holds whatever an
+     -- instructor typed.
+     and lower(c.github_org) = lower(p_org)
+     and ur.user_id = p_user_id
+     -- A dropped student removed from the org must stay removed.
+     and ur.disabled = false;
+
+  for r in
+    select ur.id, ur.class_id, ur.user_id, ur.role, c.github_org, c.slug
+      from public.user_roles ur
+      join public.users u on u.user_id = ur.user_id
+      join public.classes c on c.id = ur.class_id
+     where ur.user_id = p_user_id
+       and ur.disabled = false
+       and lower(c.github_org) = lower(p_org)
+       and c.slug is not null
+       and u.github_username is not null
+       and coalesce(c.is_demo, false) = false
+       and not (c.github_org = 'pawtograder-playground' and c.slug like 'e2e-ignore-%')
+       -- Only for a class actually in session: leaving a finished course is not a defect to repair.
+       and public.github_org_invite_window_open(c.archived, c.start_date, c.end_date)
+  loop
+    begin
+      perform public.enqueue_github_org_reinvite(
+        r.class_id::bigint,
+        r.github_org,
+        r.slug,
+        r.user_id,
+        r.role in ('instructor', 'grader', 'admin'),
+        'departure-role-' || r.id || '-' || extract(epoch from now())::bigint
+      );
+      v_enqueued := v_enqueued + 1;
+    exception
+      when others then
+        raise warning 'clear_org_membership_and_repair: failed to enqueue user_role %: %', r.id, sqlerrm;
+    end;
+  end loop;
+
+  return v_enqueued;
+end;
+$$;
+
+revoke all on function public.clear_org_membership_and_repair(uuid, text) from public;
+grant execute on function public.clear_org_membership_and_repair(uuid, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- Alerts: one row per class, for the edge function to report.

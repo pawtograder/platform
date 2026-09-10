@@ -12810,6 +12810,10 @@ export type Database = {
         };
         Returns: number;
       };
+      clear_org_membership_and_repair: {
+        Args: { p_org: string; p_user_id: string };
+        Returns: number;
+      };
       enqueue_github_org_reinvite: {
         Args: {
           p_class_id: number;
@@ -12817,7 +12821,6 @@ export type Database = {
           p_debug_id?: string;
           p_is_staff: boolean;
           p_org: string;
-          p_stamped_at?: string;
           p_user_id: string;
         };
         Returns: number;
@@ -13796,6 +13799,7 @@ export type Database = {
       reconcile_stale_org_invitations: {
         Args: {
           p_max?: number;
+          p_max_per_class?: number;
           p_new_role_grace_minutes?: number;
           p_stale_days?: number;
         };

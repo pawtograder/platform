@@ -142,58 +142,34 @@ export function isInvitationStale(
 }
 
 /**
- * Has an invitation been recorded since the reconciler stamped this enrollment?
- *
- * False when either timestamp is missing or unreadable: an envelope from before this field existed,
- * or a value we cannot parse, must not silently suppress a repair — the failure mode of sending is
- * one extra email, and of not sending is a student left outside the org.
- */
-function invitationRecordedAfterStamp(
-  invitationDate: string | null | undefined,
-  stampedAt: string | null | undefined
-): boolean {
-  if (!invitationDate || !stampedAt) return false;
-  const invitedMs = new Date(invitationDate).getTime();
-  const stampedMs = new Date(stampedAt).getTime();
-  if (Number.isNaN(invitedMs) || Number.isNaN(stampedMs)) return false;
-  return invitedMs > stampedMs;
-}
-
-/**
  * The whole decision for one (user_role, class) pair, as the async worker asks it.
  *
  * `forceReinvite` is set only by the membership reconciler. It bypasses the staleness check —
  * without that, the reconciler's own enqueue-time `invitation_date` stamp would make the repair it
  * just queued look freshly invited, and the envelope would be a no-op.
  *
- * It bypasses NOTHING else, because an envelope is not consumed at the moment it is queued. It can
- * sit through a backlog, a retry ladder, or a dead-letter re-drive, and `drainQueue` permits
- * redelivery after an archive failure. Two things therefore have to be re-checked at send time:
+ * It does NOT bypass the term window. An envelope is not consumed at the moment it is queued — it
+ * can sit through a backlog, a retry ladder, or a dead-letter re-drive, and `drainQueue` permits
+ * redelivery after an archive failure — so the window has to hold when the invitation is actually
+ * sent, not merely when it was queued.
  *
- *   - the term window, so a delayed envelope cannot mail an invitation for a course that has since
- *     finished;
- *   - whether an invitation already went out FOR THIS ENVELOPE. `stampedAt` is the reconciler's own
- *     `invitation_date` write, passed along in the message. If the stored invitation_date is later
- *     than that, something else has recorded a send since — in practice the `member_invited`
- *     webhook, firing on the invitation this very envelope already delivered before it failed
- *     somewhere downstream and was redelivered. Re-sending would mail the student a second time.
- *
- * Equal timestamps are the NORMAL case (the reconciler stamps and enqueues in one transaction, so
- * both carry the same transaction time) and must send: the comparison is strictly "later than".
+ * It does not try to detect "this envelope already sent its invitation" from `invitation_date`
+ * either, though an earlier revision of this branch did. That column is not a per-class marker: the
+ * `member_invited` webhook stamps it for EVERY role the user holds in EVERY class sharing the
+ * organization, so an invitation for one class would look like proof that another class's envelope
+ * had already run — skipping a real repair and, because the timestamp is now fresh, keeping the
+ * sweep away from it for another staleness period. A duplicate invitation email is the lesser
+ * failure. Duplicates are suppressed where the evidence is reliable instead: `reinviteToOrgTeam`
+ * skips the send outright when GitHub reports an invitation already pending for the user.
  */
 export function shouldSendOrgInvitation(opts: {
   invitationDate: string | null | undefined;
   cls: ClassInviteWindow;
   forceReinvite?: boolean;
-  /** The reconciler's enqueue-time `invitation_date` write, as an ISO timestamp. */
-  stampedAt?: string | null;
   now?: Date;
 }): boolean {
   const now = opts.now ?? new Date();
-  if (opts.forceReinvite === true) {
-    if (!isOrgInviteWindowOpen(opts.cls, now)) return false;
-    return !invitationRecordedAfterStamp(opts.invitationDate, opts.stampedAt);
-  }
+  if (opts.forceReinvite === true) return isOrgInviteWindowOpen(opts.cls, now);
   // First invitation for this enrollment: unchanged behavior, deliberately NOT window-gated. This
   // is the enrollment path, it fires once, and gating it would break onboarding for every class
   // that has not filled in its term dates.

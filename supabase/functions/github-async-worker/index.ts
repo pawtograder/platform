@@ -866,8 +866,7 @@ export async function processEnvelope(
             shouldSendOrgInvitation({
               invitationDate: data.invitation_date,
               cls: data.classes,
-              forceReinvite: args.forceReinvite,
-              stampedAt: args.stampedAt
+              forceReinvite: args.forceReinvite
             })
           ) {
             await github.reinviteToOrgTeam(
@@ -875,7 +874,8 @@ export async function processEnvelope(
               `${data.classes.slug}-students`,
               data.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              { userId: args.userId, skipIfInvitationPending: true }
             );
             invitedThisRun = true;
           }
@@ -912,8 +912,7 @@ export async function processEnvelope(
             shouldSendOrgInvitation({
               invitationDate: ur.invitation_date,
               cls: ur.classes,
-              forceReinvite: args.forceReinvite,
-              stampedAt: args.stampedAt
+              forceReinvite: args.forceReinvite
             })
           ) {
             await github.reinviteToOrgTeam(
@@ -921,7 +920,8 @@ export async function processEnvelope(
               `${ur.classes.slug}-students`,
               ur.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              { userId: args.userId, skipIfInvitationPending: true }
             );
           }
         }
@@ -976,8 +976,7 @@ export async function processEnvelope(
             shouldSendOrgInvitation({
               invitationDate: data.invitation_date,
               cls: data.classes,
-              forceReinvite: args.forceReinvite,
-              stampedAt: args.stampedAt
+              forceReinvite: args.forceReinvite
             })
           ) {
             await github.reinviteToOrgTeam(
@@ -985,7 +984,8 @@ export async function processEnvelope(
               `${data.classes.slug}-staff`,
               data.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              { userId: args.userId, skipIfInvitationPending: true }
             );
             invitedThisRun = true;
           }
@@ -1018,8 +1018,7 @@ export async function processEnvelope(
             shouldSendOrgInvitation({
               invitationDate: ur.invitation_date,
               cls: ur.classes,
-              forceReinvite: args.forceReinvite,
-              stampedAt: args.stampedAt
+              forceReinvite: args.forceReinvite
             })
           ) {
             await github.reinviteToOrgTeam(
@@ -1027,7 +1026,8 @@ export async function processEnvelope(
               `${ur.classes.slug}-staff`,
               ur.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              { userId: args.userId, skipIfInvitationPending: true }
             );
           }
         }

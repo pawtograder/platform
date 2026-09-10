@@ -51,13 +51,17 @@ if (Deno.env.get("SENTRY_DSN")) {
 }
 
 /**
- * Enrollments re-invited per pass.
+ * Enrollments re-invited per pass, and per class within a pass.
  *
- * Bounds a first run against existing damage (and any future org-wide breakage) so it drains in
- * waves instead of firing a term's worth of invitation mail in one tick. At hourly cadence this is
- * still 1200/day, far more than a real backlog.
+ * Sized by GitHub's rate limit, not by how fast a backlog could drain. Each re-invite becomes a
+ * team-sync envelope, and both the invitation and the sync paginate the whole GitHub team — on a
+ * 5,000-member team that is on the order of 100 list requests each. Fifty per pass could therefore
+ * spend an installation's entire hourly quota in one tick and trip the circuit breaker for every
+ * other GitHub operation in the class. Ten per pass, at most three from any one class, keeps a
+ * single large course from monopolizing the pass and still drains a realistic backlog within a day.
  */
-const MAX_REINVITES_PER_PASS = 50;
+const MAX_REINVITES_PER_PASS = 10;
+const MAX_REINVITES_PER_CLASS_PER_PASS = 3;
 
 /**
  * How long a `user_roles` row must have been settled before a NULL invitation_date counts as a
@@ -168,7 +172,8 @@ Deno.serve(async (req) => {
     const { data: reinvited, error: reconcileError } = await supabase.rpc("reconcile_stale_org_invitations", {
       p_stale_days: INVITE_STALE_DAYS,
       p_new_role_grace_minutes: NEW_ROLE_GRACE_MINUTES,
-      p_max: MAX_REINVITES_PER_PASS
+      p_max: MAX_REINVITES_PER_PASS,
+      p_max_per_class: MAX_REINVITES_PER_CLASS_PER_PASS
     });
     if (reconcileError) {
       console.error("[github-membership-reconciler] reconcile_stale_org_invitations failed:", reconcileError);
