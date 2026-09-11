@@ -1025,13 +1025,19 @@ async function assertSyncBranchSafeToReset(
   // could not attribute it at all.
   const commits: SyncBranchCommit[] = (comparison.commits ?? []).map((c) => ({
     subject: (c.commit?.message ?? "").split("\n")[0],
-    authorType: c.author?.type
+    authorType: c.author?.type,
+    committerLogin: c.committer?.login,
+    verified: c.commit?.verification?.verified
   }));
   if (isSyncBranchSafeToReset(commits)) return;
 
   const foreign = commits
     .filter((commit) => !isSyncBranchSafeToReset([commit]))
-    .map((commit) => `${commit.subject} (author type: ${commit.authorType ?? "unattributed"})`);
+    .map(
+      (commit) =>
+        `${commit.subject} (author type: ${commit.authorType ?? "unattributed"}, ` +
+        `committer: ${commit.committerLogin ?? "unattributed"}, verified: ${commit.verified === true})`
+    );
   scope?.setTag("sync_branch_foreign_commits", String(foreign.length));
   throw new SyncBranchNotOursError(repoFullName, branchName, foreign);
 }
@@ -1048,9 +1054,10 @@ async function assertSyncBranchSafeToReset(
  *
  * @param templateRepo - Optional template repo name for fallback when patch fails
  * @param templateSha - Optional template SHA to fetch content from when patch fails
- * @param templateFromSha - Handout SHA the update was computed FROM. Used to tell a file
- *                          the student edited from one they have not touched. Omit it and
- *                          nothing is protected, so callers that have it must pass it.
+ * @param studentModified - Paths the student has made their own, from
+ *                          `findStudentModifiedFiles`. Computed by the caller because the
+ *                          size pre-flight has to see it too, and computing it twice would
+ *                          be two more tree reads for the same answer.
  */
 export async function createBranchAndCommit(
   repoFullName: string,
@@ -1061,7 +1068,7 @@ export async function createBranchAndCommit(
   scope?: Sentry.Scope,
   templateRepo?: string,
   templateSha?: string,
-  templateFromSha?: string | null
+  studentModified: Map<string, UnresolvedReason> = new Map()
 ): Promise<UnresolvedFile[]> {
   const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) {
@@ -1170,19 +1177,6 @@ export async function createBranchAndCommit(
       );
     }
   };
-
-  // Which of these paths are the student's own work. Two tree reads, before any content is
-  // fetched, so every branch below can ask without another round trip.
-  const studentModified = templateRepo
-    ? await findStudentModifiedFiles(
-        repoFullName,
-        baseSha,
-        templateRepo,
-        templateFromSha ?? null,
-        files.map((f) => f.path),
-        scope
-      )
-    : new Map<string, UnresolvedReason>();
 
   const unresolved: UnresolvedFile[] = [];
   /**
@@ -1962,13 +1956,49 @@ export async function syncRepositoryToHandout(params: {
           };
         }
 
+        // Which of these files are the student's own work, decided BEFORE the size
+        // pre-flight below. The pre-flight aborts the whole sync on a single oversized
+        // file, and a file we are not going to touch must not be able to do that: the
+        // guard skips it without reading a byte, so its size is irrelevant. Doing it here
+        // also means the answer is computed once and passed down, rather than twice.
+        const studentModified = await findStudentModifiedFiles(
+          repositoryFullName,
+          syncedRepoSha,
+          templateRepo,
+          fromSha,
+          changedFiles.map((f) => f.path),
+          scope
+        );
+
+        // Everything the sync will actually write. Protected paths are reported separately
+        // in the PR body and take no part in any sizing.
+        const syncableFiles = changedFiles.filter((f) => !studentModified.has(f.path));
+
+        if (syncableFiles.length === 0) {
+          // Every changed file is the student's. There is no tree entry to make, so no
+          // commit and no PR, and saying so here is clearer than letting an empty branch
+          // fall through to GitHub's "No commits between" error.
+          scope?.setTag("all_changes_student_owned", "true");
+          scope?.addBreadcrumb({
+            message:
+              `Every file in this update is the student's own work in ${repositoryFullName} ` +
+              `(${changedFiles.length} file(s)); nothing to sync`,
+            category: "sync",
+            level: "info"
+          });
+          return {
+            success: true,
+            no_changes: true
+          };
+        }
+
         // Size pre-flight: decide concurrency class BEFORE doing any heavy work.
         // Sizes are populated by getChangedFiles from the recursive tree (Redis-cached),
         // so this is essentially free.
         let maxFileBytes = 0;
         let totalChangedBytes = 0;
         let largestFilePath = "";
-        for (const f of changedFiles) {
+        for (const f of syncableFiles) {
           if (typeof f.size === "number") {
             totalChangedBytes += f.size;
             if (f.size > maxFileBytes) {
@@ -2115,7 +2145,7 @@ This commit was automatically generated by an instructor to sync
 changes from the template repository.
 
 Changed files:
-${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
+${syncableFiles.map((f) => `- ${f.path}`).join("\n")}`;
 
         // For heavy syncs, serialize the memory-intensive work (blob fetch + commit)
         // through a per-isolate semaphore so we never hold multiple large blobs in
@@ -2125,12 +2155,16 @@ ${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
             repositoryFullName,
             branchName,
             syncedRepoSha,
+            // The FULL list, not syncableFiles: createBranchAndCommit has to see the
+            // protected paths to skip them explicitly and report them back, which is what
+            // holds the PR open. syncableFiles exists for the sizing gates, which must not
+            // weigh a file nobody is going to read.
             changedFiles,
             commitMessage,
             scope,
             templateRepo,
             toSha,
-            fromSha
+            studentModified
           );
         const unresolved: UnresolvedFile[] = isHeavySync ? await withHeavySyncLock(runCommit) : await runCommit();
 

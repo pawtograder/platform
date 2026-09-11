@@ -27,10 +27,16 @@ import {
 const BLOB_A = "a".repeat(40);
 const BLOB_B = "b".repeat(40);
 const blob = (sha: string): TreeEntry => ({ sha, type: "blob" });
-/** A commit the sync wrote: our subject line, and GitHub attributing it to the App. */
+/**
+ * A commit the sync wrote, shaped like the real thing. The field values are taken from
+ * production commits: `khoury-pawtograder[bot]` authors, GitHub's own `web-flow` account
+ * commits, and GitHub signs it.
+ */
 const ours = (sha = "abc1234"): SyncBranchCommit => ({
   subject: `Sync handout updates to ${sha}`,
-  authorType: "Bot"
+  authorType: "Bot",
+  committerLogin: "web-flow",
+  verified: true
 });
 
 Deno.test("a file the student has not touched is safe to overwrite", () => {
@@ -122,15 +128,62 @@ Deno.test("a sync branch carrying only our commits can be reset", () => {
 // A student resolving the update by hand pushes to this branch. Force-updating it then
 // deletes the resolution, which is the same class of loss as overwriting the file.
 Deno.test("a sync branch with someone else's commit is not ours to reset", () => {
-  const student: SyncBranchCommit = { subject: "fix merge conflict in user.service", authorType: "User" };
+  const student: SyncBranchCommit = {
+    subject: "fix merge conflict in user.service",
+    authorType: "User",
+    committerLogin: "student42",
+    verified: false
+  };
   assertEquals(isSyncBranchSafeToReset([ours(), student]), false);
+});
+
+// `git commit --amend` keeps the original AUTHOR, so a student amending our commit hands
+// back something that still says the App wrote it and still carries our subject. The
+// committer is the give-away: theirs, not GitHub's.
+Deno.test("an amended commit is not ours, even though the author survives the amend", () => {
+  const amended: SyncBranchCommit = {
+    subject: "Sync handout updates to abc1234",
+    authorType: "Bot",
+    committerLogin: "student42",
+    verified: false
+  };
+  assertEquals(isSyncBranchSafeToReset([amended]), false);
+});
+
+// The same amend from a student who has commit signing set up. GitHub reports the commit
+// as verified, because the signature is valid; it is just not ours.
+Deno.test("a verified signature is not ours when the committer is the student", () => {
+  const signedAmend: SyncBranchCommit = {
+    subject: "Sync handout updates to abc1234",
+    authorType: "Bot",
+    committerLogin: "student42",
+    verified: true
+  };
+  assertEquals(isSyncBranchSafeToReset([signedAmend]), false);
+});
+
+// GitHub maps a commit to an account by email, so committing as GitHub's own address makes
+// the committer login match. Signing is what that cannot fake.
+Deno.test("a spoofed committer without a valid signature is not ours", () => {
+  const spoofed: SyncBranchCommit = {
+    subject: "Sync handout updates to abc1234",
+    authorType: "Bot",
+    committerLogin: "web-flow",
+    verified: false
+  };
+  assertEquals(isSyncBranchSafeToReset([spoofed]), false);
 });
 
 // The subject is a string anyone can type. handoutSyncPush.ts records this repo already
 // misclassifying student commits as instructor machinery once, which silently discarded a
 // submission on a repo-only assignment; here the same mistake deletes the commit.
 Deno.test("a student commit wearing our subject line is still not ours", () => {
-  const impostor: SyncBranchCommit = { subject: "Sync handout updates to deadbee", authorType: "User" };
+  const impostor: SyncBranchCommit = {
+    subject: "Sync handout updates to deadbee",
+    authorType: "User",
+    committerLogin: "student42",
+    verified: false
+  };
   assertEquals(isSyncBranchSafeToReset([impostor]), false);
 });
 
@@ -139,20 +192,20 @@ Deno.test("an unattributed commit is not safe to reset", () => {
   assertEquals(isSyncBranchSafeToReset([{ subject: "Sync handout updates to abc1234" }]), false);
 });
 
+// Requiring account type "Bot" on the COMMITTER would have rejected every commit this sync
+// has ever written, because GitHub's committer account is an ordinary User.
+Deno.test("our own commits pass, with GitHub as an ordinary User committer", () => {
+  assertEquals(isSyncBranchSafeToReset([{ ...ours(), committerLogin: "web-flow" }]), true);
+});
+
 Deno.test("a branch with no commits ahead of the base is trivially resettable", () => {
   assertEquals(isSyncBranchSafeToReset([]), true);
 });
 
 // A commit subject that merely mentions the sync must not pass as ours.
 Deno.test("a subject that only looks like ours does not pass, even from the App", () => {
-  assertEquals(
-    isSyncBranchSafeToReset([{ subject: 'Revert "Sync handout updates to abc1234"', authorType: "Bot" }]),
-    false
-  );
-  assertEquals(
-    isSyncBranchSafeToReset([{ subject: "Sync handout updates to my own branch", authorType: "Bot" }]),
-    false
-  );
+  assertEquals(isSyncBranchSafeToReset([{ ...ours(), subject: 'Revert "Sync handout updates to abc1234"' }]), false);
+  assertEquals(isSyncBranchSafeToReset([{ ...ours(), subject: "Sync handout updates to my own branch" }]), false);
 });
 
 Deno.test("nothing unresolved renders no section, so the caller can concatenate it blind", () => {

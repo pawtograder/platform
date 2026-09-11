@@ -135,15 +135,26 @@ export function resolveAutoMerge(requested: boolean, unresolved: readonly Unreso
   return requested && unresolved.length === 0;
 }
 
+/**
+ * The account GitHub records as the committer when it writes a commit through the API on
+ * an App's behalf. Global to github.com rather than specific to a deployment or an org,
+ * unlike the App's own login, which differs everywhere this chart is installed.
+ */
+export const GITHUB_API_COMMITTER_LOGIN = "web-flow";
+
 /** One commit on a sync branch, as much of it as the reset decision needs. */
 export type SyncBranchCommit = {
   subject: string;
   /**
-   * GitHub account type of the commit's author, from the compare response. "Bot" is the
-   * App that writes these commits. Undefined when GitHub could not attribute the commit,
-   * which is not a claim that we wrote it.
+   * GitHub account type of the commit's author. "Bot" is the App that writes these
+   * commits. Undefined when GitHub could not attribute the commit, which is not a claim
+   * that we wrote it.
    */
   authorType?: string;
+  /** Login of the committer. Ours is GitHub's own, because GitHub built the commit. */
+  committerLogin?: string;
+  /** Whether GitHub considers the commit's signature valid. */
+  verified?: boolean;
 };
 
 /**
@@ -153,19 +164,43 @@ export type SyncBranchCommit = {
  * it. That is fine while every commit is one of ours, and destroys a student's conflict
  * resolution as soon as it is not.
  *
- * A commit counts as ours only when the subject matches AND GitHub attributes it to a Bot.
- * The subject alone is not enough: a student can write "Sync handout updates to deadbee"
- * by hand, and this repo has already been bitten by that exact misclassification. The
- * comments on SYNC_COMMIT_SUBJECT_RE and SYNC_PR_TITLE_RE record a looser match treating
- * ordinary student commits as instructor machinery, which silently discarded a submission
- * on a repo-only assignment. The same mistake here deletes their commit outright.
+ * Three things have to hold, and each covers a hole the others leave open.
  *
- * Authorship is read as an account TYPE rather than a login, because the login differs per
- * deployment. An unattributed commit is not safe, matching this module's stance that a
- * check we cannot make is not a check that passed.
+ * The SUBJECT is a string anyone can type, and this repo has already been bitten by
+ * matching on it too loosely: the comments on SYNC_COMMIT_SUBJECT_RE and SYNC_PR_TITLE_RE
+ * record ordinary student commits being taken for instructor machinery, which silently
+ * discarded a submission on a repo-only assignment. Here the same mistake deletes their
+ * commit outright.
+ *
+ * The AUTHOR being a Bot is necessary and nowhere near sufficient, because `git commit
+ * --amend` keeps the original author. A student can check out the sync branch, amend our
+ * commit, and hand back something that still says the App wrote it.
+ *
+ * So the COMMITTER has to be GitHub's own, which is what GitHub records when it builds the
+ * commit through the API, AND the signature has to verify. Neither alone is enough:
+ *
+ *   * Verification alone fails, because a student with commit signing configured produces
+ *     a commit GitHub reports as verified. It is their signature, not ours.
+ *   * The committer alone fails, because GitHub maps a commit to an account by email, so
+ *     setting the committer email to GitHub's makes the login match locally. That commit
+ *     cannot be signed with GitHub's key, so verification is what catches it.
+ *
+ * Note the committer is checked by LOGIN, not by account type. GitHub's committer account
+ * is an ordinary User, so requiring type "Bot" on the committer would reject every commit
+ * this sync has ever written.
+ *
+ * Anything unreadable is unsafe, matching this module's stance that a check we cannot make
+ * is not a check that passed. The failure direction is a refused reset, which is loud, and
+ * never a deleted commit, which is not.
  */
 export function isSyncBranchSafeToReset(commits: readonly SyncBranchCommit[]): boolean {
-  return commits.every((commit) => commit.authorType === "Bot" && SYNC_COMMIT_SUBJECT_RE.test(commit.subject.trim()));
+  return commits.every(
+    (commit) =>
+      commit.authorType === "Bot" &&
+      commit.committerLogin === GITHUB_API_COMMITTER_LOGIN &&
+      commit.verified === true &&
+      SYNC_COMMIT_SUBJECT_RE.test(commit.subject.trim())
+  );
 }
 
 const REASON_TEXT: Record<UnresolvedReason, string> = {
