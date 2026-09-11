@@ -1504,8 +1504,12 @@ echo "== Kong must bound the CLIENT REQUEST headers, not just upstream responses
 # the api host on every navigation and wss handshake, and @supabase/ssr's 3180 B
 # chunking puts a three-chunk session at 6.4-9.5 KB -- past the default.
 # Khoury prod, 2026-09-11: 8100 B passed, 8200 B 400'd with x-kong-request-id.
-assert_rendered_contains "kong raises large_client_header_buffers above the 8k default" \
-  templates/kong.yaml "KONG_NGINX_HTTP_LARGE_CLIENT_HEADER_BUFFERS"
+#
+# Pin the VALUE, not just the name: the regression this guards against is someone
+# restoring the "4 8k" default, and an env var set to the broken value is present
+# in the render exactly as much as one set to the working value.
+assert_env_value "kong pins large_client_header_buffers above the 8k default" \
+  templates/kong.yaml KONG_NGINX_HTTP_LARGE_CLIENT_HEADER_BUFFERS "4 16k"
 
 echo
 if [ "$FAILED" -ne 0 ]; then
