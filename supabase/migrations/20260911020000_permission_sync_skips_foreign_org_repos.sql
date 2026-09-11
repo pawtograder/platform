@@ -36,8 +36,17 @@
 -- Both loops get the filter. A group repo in a foreign org is exactly as unsyncable as an
 -- individual one, and the group loop reads its org from the same column.
 --
+-- WHY THE COMPARISON IS CASE-INSENSITIVE. It matches 20260909140000_github_membership_reconciler
+-- (lines 327 and 339), and for the same reason: GitHub organization names are case-insensitive
+-- and GitHub reports its own canonical casing, while classes.github_org holds whatever an
+-- instructor typed. No row in production differs only by case today, so this changes nothing
+-- now. It guards the direction that would hurt: `Neu-CS3650` typed into a free-form field where
+-- the repos say `neu-cs3650` would make every repo in the class look foreign and would disable
+-- permission sync for the whole class, silently and completely. That is a worse outcome than
+-- the doomed syncs this migration exists to prevent.
+--
 -- Body is otherwise verbatim from 20260909170000_org_join_sync_skips_archived_assignments.sql;
--- the only change is the added split_part predicate in each of the two loops.
+-- the only change is the added org predicate in each of the two loops.
 create or replace function public.sync_repo_permissions_for_student(
   p_user_id uuid,
   p_class_id integer
@@ -106,7 +115,7 @@ begin
         and r.repository is not null
         and r.repository != ''
         and position('/' in r.repository) > 0
-        and split_part(r.repository, '/', 1) = v_github_org
+        and lower(split_part(r.repository, '/', 1)) = lower(v_github_org)
     loop
       v_org_name := split_part(v_repo_record.repository, '/', 1);
       v_repo_name := split_part(v_repo_record.repository, '/', 2);
@@ -134,7 +143,7 @@ begin
         and r.repository is not null
         and r.repository != ''
         and position('/' in r.repository) > 0
-        and split_part(r.repository, '/', 1) = v_github_org
+        and lower(split_part(r.repository, '/', 1)) = lower(v_github_org)
     loop
       v_org_name := split_part(v_repo_record.repository, '/', 1);
       v_repo_name := split_part(v_repo_record.repository, '/', 2);
