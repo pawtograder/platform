@@ -102,6 +102,33 @@ spec:
               value: "160k"
             - name: KONG_NGINX_PROXY_PROXY_BUFFERS
               value: "64 160k"
+            # Those two bound the UPSTREAM RESPONSE headers. This one bounds the
+            # CLIENT REQUEST headers, and it is a different failure entirely.
+            #
+            # nginx defaults large_client_header_buffers to "4 8k", so one header
+            # line over ~8 KB is a 400 — which Kong's `error_page 400 ...
+            # /kong_error_handler` re-skins as {"message":"Request header or
+            # cookie too large","request_id":...}. The whole Cookie header is one
+            # line, and on an install that serves deployment channels the auth
+            # cookie is scoped to the parent zone (utils/channels.ts
+            # sessionCookieOptions), so the entire Supabase session is sent to the
+            # api host on every top-level navigation and wss handshake — including
+            # GoTrue's /auth/v1/callback, which does not read cookies at all.
+            # @supabase/ssr chunks at 3180 B, so a session needing a third chunk
+            # lands at 6.4-9.5 KB and trips this.
+            #
+            # Measured on Khoury prod 2026-09-11: 8100 B of Cookie passed, 8200 B
+            # 400'd, and the 400 carried x-kong-request-id — it was Kong, not the
+            # ingress in front of it, which passed 12 KB happily. PR #877 read the
+            # same 8 KB wall as the ingress's and worked around it by shrinking the
+            # cookie; it is ours, and this raises it.
+            #
+            # 16k lines up with the realtime.maxHeaderLength Khoury prod already
+            # runs (16384), so Kong and Cowboy agree. The real ceiling above both
+            # is the ingress, measured at ~12 KB. Buffers are allocated on demand,
+            # so a request that does not need them pays nothing.
+            - name: KONG_NGINX_HTTP_LARGE_CLIENT_HEADER_BUFFERS
+              value: "4 16k"
             - name: SUPABASE_ANON_KEY
               valueFrom:
                 secretKeyRef:

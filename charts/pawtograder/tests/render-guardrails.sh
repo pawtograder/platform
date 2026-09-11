@@ -1497,6 +1497,16 @@ assert_primary_checksum_scope() {
 }
 assert_primary_checksum_scope
 
+echo "== Kong must bound the CLIENT REQUEST headers, not just upstream responses =="
+# nginx defaults large_client_header_buffers to "4 8k", and Kong re-skins the
+# resulting 400 as its own JSON, so an oversized Cookie reads as an application
+# error. On a channels install the auth cookie is parent-zone scoped and reaches
+# the api host on every navigation and wss handshake, and @supabase/ssr's 3180 B
+# chunking puts a three-chunk session at 6.4-9.5 KB -- past the default.
+# Khoury prod, 2026-09-11: 8100 B passed, 8200 B 400'd with x-kong-request-id.
+assert_rendered_contains "kong raises large_client_header_buffers above the 8k default" \
+  templates/kong.yaml "KONG_NGINX_HTTP_LARGE_CLIENT_HEADER_BUFFERS"
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"
