@@ -29,11 +29,24 @@ export type UnresolvedReason =
   /** The file exists only in the student's repo, so the handout is adding a path they already use. */
   | "only_in_your_repo"
   /** The student deleted a file the handout is still changing. */
-  | "deleted_in_your_repo";
+  | "deleted_in_your_repo"
+  /** The path is a directory or submodule in the student's repo, not a file. */
+  | "directory_in_your_repo"
+  /** A parent of the path is a file in the student's repo, so the directory cannot exist. */
+  | "path_blocked_in_your_repo";
 
 export type UnresolvedFile = {
   path: string;
   reason: UnresolvedReason;
+};
+
+/** Git object kinds a recursive tree listing can return for a path. */
+export type TreeEntryType = "blob" | "tree" | "commit";
+
+/** One path in a repo at one commit. `commit` is a submodule. */
+export type TreeEntry = {
+  sha: string;
+  type: TreeEntryType;
 };
 
 /**
@@ -47,17 +60,50 @@ export type UnresolvedFile = {
  * copy is known to be the handout's copy and overwriting costs nothing.
  */
 export function classifyStudentFile(
-  studentBlobSha: string | undefined,
-  handoutBlobSha: string | undefined
+  student: TreeEntry | undefined,
+  handout: TreeEntry | undefined
 ): "unmodified" | UnresolvedReason {
-  if (studentBlobSha === undefined && handoutBlobSha === undefined) {
+  // A directory or submodule where the handout wants a file is the worst case in this whole
+  // module. Writing a blob at that path replaces the tree, which deletes every file the
+  // student has underneath it, and a blob-only view of the tree cannot see it coming: both
+  // sides look absent and the path reads as a new file nobody owns.
+  if (student && student.type !== "blob") return "directory_in_your_repo";
+
+  if (student === undefined && handout === undefined) {
     // Neither side has the path. The handout is adding a genuinely new file and there is
     // nothing of the student's to protect.
     return "unmodified";
   }
-  if (studentBlobSha === undefined) return "deleted_in_your_repo";
-  if (handoutBlobSha === undefined) return "only_in_your_repo";
-  return studentBlobSha === handoutBlobSha ? "unmodified" : "content_differs";
+  if (student === undefined) return "deleted_in_your_repo";
+  if (handout === undefined) return "only_in_your_repo";
+  return student.sha === handout.sha ? "unmodified" : "content_differs";
+}
+
+/**
+ * The student's file that stands where one of this path's parent directories has to go.
+ *
+ * The inverse of the directory case: the handout adds `foo/bar.ts` while the student has a
+ * file called `foo`. Writing the new path requires `foo` to become a directory, so their
+ * file is replaced. Returns the blocking path, or undefined when the way is clear.
+ */
+export function findBlockingAncestor(path: string, student: Map<string, TreeEntry>): string | undefined {
+  const segments = path.split("/");
+  // Every proper ancestor, shortest first. The path itself is classifyStudentFile's job.
+  for (let i = 1; i < segments.length; i++) {
+    const ancestor = segments.slice(0, i).join("/");
+    if (student.get(ancestor)?.type === "blob") return ancestor;
+  }
+  return undefined;
+}
+
+/** Every proper ancestor of a path, shortest first. */
+export function ancestorPaths(path: string): string[] {
+  const segments = path.split("/");
+  const ancestors: string[] = [];
+  for (let i = 1; i < segments.length; i++) {
+    ancestors.push(segments.slice(0, i).join("/"));
+  }
+  return ancestors;
 }
 
 /**
@@ -70,12 +116,12 @@ export function classifyStudentFile(
  * needs no lookups, because a missing path there really is absent.
  */
 export function pathsNeedingBlobLookup(
-  shas: Map<string, string>,
+  entries: Map<string, TreeEntry>,
   truncated: boolean,
   paths: readonly string[]
 ): string[] {
   if (!truncated) return [];
-  return paths.filter((path) => !shas.has(path));
+  return paths.filter((path) => !entries.has(path));
 }
 
 /**
@@ -89,22 +135,45 @@ export function resolveAutoMerge(requested: boolean, unresolved: readonly Unreso
   return requested && unresolved.length === 0;
 }
 
+/** One commit on a sync branch, as much of it as the reset decision needs. */
+export type SyncBranchCommit = {
+  subject: string;
+  /**
+   * GitHub account type of the commit's author, from the compare response. "Bot" is the
+   * App that writes these commits. Undefined when GitHub could not attribute the commit,
+   * which is not a claim that we wrote it.
+   */
+  authorType?: string;
+};
+
 /**
  * Whether an existing sync branch can be reset to a new base.
  *
  * The sync force-updates its branch when it already exists, which discards whatever is on
  * it. That is fine while every commit is one of ours, and destroys a student's conflict
- * resolution as soon as it is not. Commits we wrote have the sync subject line; anything
- * else on the branch belongs to someone who pushed to it deliberately.
+ * resolution as soon as it is not.
+ *
+ * A commit counts as ours only when the subject matches AND GitHub attributes it to a Bot.
+ * The subject alone is not enough: a student can write "Sync handout updates to deadbee"
+ * by hand, and this repo has already been bitten by that exact misclassification. The
+ * comments on SYNC_COMMIT_SUBJECT_RE and SYNC_PR_TITLE_RE record a looser match treating
+ * ordinary student commits as instructor machinery, which silently discarded a submission
+ * on a repo-only assignment. The same mistake here deletes their commit outright.
+ *
+ * Authorship is read as an account TYPE rather than a login, because the login differs per
+ * deployment. An unattributed commit is not safe, matching this module's stance that a
+ * check we cannot make is not a check that passed.
  */
-export function isSyncBranchSafeToReset(commitSubjects: readonly string[]): boolean {
-  return commitSubjects.every((subject) => SYNC_COMMIT_SUBJECT_RE.test(subject.trim()));
+export function isSyncBranchSafeToReset(commits: readonly SyncBranchCommit[]): boolean {
+  return commits.every((commit) => commit.authorType === "Bot" && SYNC_COMMIT_SUBJECT_RE.test(commit.subject.trim()));
 }
 
 const REASON_TEXT: Record<UnresolvedReason, string> = {
   content_differs: "you changed this file, so the handout's version was not written over yours",
   only_in_your_repo: "this file is yours; the handout added a file at the same path",
-  deleted_in_your_repo: "you deleted this file, so it was not restored or changed"
+  deleted_in_your_repo: "you deleted this file, so it was not restored or changed",
+  directory_in_your_repo: "you have a folder at this path, and writing a file here would delete what is inside it",
+  path_blocked_in_your_repo: "you have a file where this path needs a folder, so it was left alone"
 };
 
 /**

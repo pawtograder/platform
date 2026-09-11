@@ -8,11 +8,15 @@
 import { createRedis, bottleneckRedisOptions, type RedisClient } from "./Redis.ts";
 import { SYNC_COMMIT_MESSAGE_PREFIX, SYNC_COMMIT_SUBJECT_RE } from "./handoutSyncPush.ts";
 import {
+  ancestorPaths,
   classifyStudentFile,
+  findBlockingAncestor,
   isSyncBranchSafeToReset,
   pathsNeedingBlobLookup,
   renderUnresolvedSection,
   resolveAutoMerge,
+  type SyncBranchCommit,
+  type TreeEntry,
   type UnresolvedFile,
   type UnresolvedReason
 } from "./syncConflictGuard.ts";
@@ -400,12 +404,12 @@ export async function getTreeBlobSizes(
  * Cached in Redis (12h TTL) keyed by (repo, sha). Both shas this is called with are
  * immutable commits, so a hit can never be stale.
  */
-export async function getTreeBlobShas(
+export async function getTreeEntries(
   repoFullName: string,
   sha: string,
   scope?: Sentry.Scope
-): Promise<{ shas: Map<string, string>; truncated: boolean }> {
-  const cacheKey = `github:tree-blob-shas:${repoFullName}/${sha}`;
+): Promise<{ entries: Map<string, TreeEntry>; truncated: boolean }> {
+  const cacheKey = `github:tree-entries:${repoFullName}/${sha}`;
   const redis = getRedisClient();
 
   if (redis) {
@@ -413,13 +417,13 @@ export async function getTreeBlobShas(
       const cached = await redis.get(cacheKey);
       if (cached != null) {
         const parsed = (typeof cached === "string" ? JSON.parse(cached) : cached) as {
-          e: [string, string][];
+          e: [string, TreeEntry][];
           t: boolean;
         };
-        return { shas: new Map(parsed.e), truncated: parsed.t };
+        return { entries: new Map(parsed.e), truncated: parsed.t };
       }
     } catch (error) {
-      console.error("Redis cache read error (tree-blob-shas):", error);
+      console.error("Redis cache read error (tree-entries):", error);
     }
   }
 
@@ -445,37 +449,44 @@ export async function getTreeBlobShas(
     });
   }
 
-  const shas = new Map<string, string>();
+  // Every entry, not just blobs. A tree or a submodule at a path the handout wants to write
+  // a file to is the case a blob-only map cannot see: both sides read as absent, the path
+  // looks like a new file, and the write replaces the directory.
+  const entries = new Map<string, TreeEntry>();
   for (const item of tree.tree) {
-    if (item.type === "blob" && item.path && item.sha) {
-      shas.set(item.path, item.sha);
+    if (!item.path || !item.sha) continue;
+    if (item.type === "blob" || item.type === "tree" || item.type === "commit") {
+      entries.set(item.path, { sha: item.sha, type: item.type });
     }
   }
 
   if (redis) {
     try {
-      await redis.setex(cacheKey, 43200, JSON.stringify({ e: Array.from(shas.entries()), t: !!tree.truncated }));
+      await redis.setex(cacheKey, 43200, JSON.stringify({ e: Array.from(entries.entries()), t: !!tree.truncated }));
     } catch (error) {
-      console.error("Redis cache write error (tree-blob-shas):", error);
+      console.error("Redis cache write error (tree-entries):", error);
     }
   }
 
-  return { shas, truncated: !!tree.truncated };
+  return { entries, truncated: !!tree.truncated };
 }
 
 /**
- * Blob sha for one path at one ref, for the paths a truncated tree could not answer.
+ * One path at one ref, for the paths a truncated tree could not answer.
  *
- * Returns undefined when the file is genuinely absent. Any other failure propagates:
+ * Returns undefined when the path is genuinely absent. Any other failure propagates:
  * guessing here would hand `classifyStudentFile` a false "absent" and re-enable the
  * overwrite the guard exists to prevent.
+ *
+ * An array response is a directory, which the Contents API returns instead of an object.
+ * That is the collision case, so it is reported as a tree rather than discarded.
  */
-async function fetchBlobShaAtRef(
+async function fetchTreeEntryAtRef(
   repoFullName: string,
   path: string,
   ref: string,
   scope?: Sentry.Scope
-): Promise<string | undefined> {
+): Promise<TreeEntry | undefined> {
   const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
   const [owner, repo] = repoFullName.split("/");
@@ -486,8 +497,12 @@ async function fetchBlobShaAtRef(
       path,
       ref
     });
-    if (Array.isArray(data)) return undefined;
-    return (data as { sha?: string }).sha;
+    if (Array.isArray(data)) return { sha: "", type: "tree" };
+    const meta = data as { sha?: string; type?: string };
+    if (!meta.sha) return undefined;
+    if (meta.type === "dir") return { sha: meta.sha, type: "tree" };
+    if (meta.type === "submodule") return { sha: meta.sha, type: "commit" };
+    return { sha: meta.sha, type: "blob" };
   } catch (error) {
     if (isGitHubNotFound(error)) return undefined;
     throw error;
@@ -517,28 +532,40 @@ export async function findStudentModifiedFiles(
   if (!fromSha || paths.length === 0) return modified;
 
   const [student, handout] = await Promise.all([
-    getTreeBlobShas(repoFullName, syncedRepoSha, scope),
-    getTreeBlobShas(templateRepo, fromSha, scope)
+    getTreeEntries(repoFullName, syncedRepoSha, scope),
+    getTreeEntries(templateRepo, fromSha, scope)
   ]);
 
-  const studentShas = new Map(student.shas);
-  const handoutShas = new Map(handout.shas);
+  const studentEntries = new Map(student.entries);
+  const handoutEntries = new Map(handout.entries);
 
-  const studentLookups = pathsNeedingBlobLookup(studentShas, student.truncated, paths);
-  const handoutLookups = pathsNeedingBlobLookup(handoutShas, handout.truncated, paths);
+  // A truncated tree cannot answer for a path it omitted, and the ancestors matter as much
+  // as the paths themselves: a file standing where a directory has to go is the inverse of
+  // the directory collision, and is just as invisible to a map that never listed it.
+  const studentPathsOfInterest = student.truncated
+    ? Array.from(new Set(paths.flatMap((path) => [path, ...ancestorPaths(path)])))
+    : paths;
 
-  for (const path of studentLookups) {
-    const sha = await fetchBlobShaAtRef(repoFullName, path, syncedRepoSha, scope);
-    if (sha) studentShas.set(path, sha);
+  for (const path of pathsNeedingBlobLookup(studentEntries, student.truncated, studentPathsOfInterest)) {
+    const entry = await fetchTreeEntryAtRef(repoFullName, path, syncedRepoSha, scope);
+    if (entry) studentEntries.set(path, entry);
   }
-  for (const path of handoutLookups) {
-    const sha = await fetchBlobShaAtRef(templateRepo, path, fromSha, scope);
-    if (sha) handoutShas.set(path, sha);
+  for (const path of pathsNeedingBlobLookup(handoutEntries, handout.truncated, paths)) {
+    const entry = await fetchTreeEntryAtRef(templateRepo, path, fromSha, scope);
+    if (entry) handoutEntries.set(path, entry);
   }
 
   for (const path of paths) {
-    const verdict = classifyStudentFile(studentShas.get(path), handoutShas.get(path));
-    if (verdict !== "unmodified") modified.set(path, verdict);
+    const verdict = classifyStudentFile(studentEntries.get(path), handoutEntries.get(path));
+    if (verdict !== "unmodified") {
+      modified.set(path, verdict);
+      continue;
+    }
+    // The path itself is clear. It can still be unreachable, when a file of the student's
+    // stands where one of its parent directories has to go.
+    if (findBlockingAncestor(path, studentEntries)) {
+      modified.set(path, "path_blocked_in_your_repo");
+    }
   }
   return modified;
 }
@@ -991,10 +1018,20 @@ async function assertSyncBranchSafeToReset(
     basehead: `${baseSha}...${branchName}`
   });
 
-  const subjects = (comparison.commits ?? []).map((c) => (c.commit?.message ?? "").split("\n")[0]);
-  if (isSyncBranchSafeToReset(subjects)) return;
+  // Subject AND authorship. The subject alone is a string anyone can type, and this repo
+  // has already lost work to exactly that kind of over-matching (see the comments on
+  // SYNC_COMMIT_SUBJECT_RE in handoutSyncPush.ts). `author` is the GitHub account GitHub
+  // attributed the commit to, whose `type` is "Bot" for an App, and it is null when GitHub
+  // could not attribute it at all.
+  const commits: SyncBranchCommit[] = (comparison.commits ?? []).map((c) => ({
+    subject: (c.commit?.message ?? "").split("\n")[0],
+    authorType: c.author?.type
+  }));
+  if (isSyncBranchSafeToReset(commits)) return;
 
-  const foreign = subjects.filter((subject) => !SYNC_COMMIT_SUBJECT_RE.test(subject.trim()));
+  const foreign = commits
+    .filter((commit) => !isSyncBranchSafeToReset([commit]))
+    .map((commit) => `${commit.subject} (author type: ${commit.authorType ?? "unattributed"})`);
   scope?.setTag("sync_branch_foreign_commits", String(foreign.length));
   throw new SyncBranchNotOursError(repoFullName, branchName, foreign);
 }
@@ -1170,12 +1207,26 @@ export async function createBranchAndCommit(
     // branch would write over their copy does it stop.
     const modifiedReason = studentModified.get(file.path);
 
+    // Decided before the size charge below. These three branches never merge anything: they
+    // write the handout's version over whatever the student has, so when the file is theirs
+    // the sync is not going to read or write a byte of it and it must not count against the
+    // budget. Charging first would let a run of skipped files abort a sync that does no work.
+    //
+    // The patch branch is deliberately NOT here. Its skip depends on the patch failing, and
+    // a patch that applies merges the instructor's change into the student's own content,
+    // which is the outcome worth keeping.
+    const overwritesUnconditionally =
+      file.status === "removed" ||
+      file.isBinary ||
+      file.status === "added" ||
+      (!!file.patch && !file.isBinary && patchDeletesEntireFile(file.patch));
+    if (modifiedReason && overwritesUnconditionally) {
+      skipFile(file.path, modifiedReason);
+      continue;
+    }
+
     // Handle removed files
     if (file.status === "removed") {
-      if (modifiedReason) {
-        skipFile(file.path, modifiedReason);
-        continue;
-      }
       treeItems.push({
         path: file.path,
         mode: "100644" as const,
@@ -1196,10 +1247,6 @@ export async function createBranchAndCommit(
       // with status "modified". Don't try to apply that patch against the student copy —
       // either mirror the template's current file (if it still exists) or delete it.
       if (patchDeletesEntireFile(file.patch)) {
-        if (modifiedReason) {
-          skipFile(file.path, modifiedReason);
-          continue;
-        }
         scope?.addBreadcrumb({
           message: `Patch for ${file.path} deletes entire file; mirroring template at ${templateSha}`,
           category: "patch",
@@ -1392,14 +1439,10 @@ export async function createBranchAndCommit(
     // streaming-Blob path (see `copyBlobBetweenRepos`), so peak memory stays
     // around 2.33× the file size instead of the ~3× the Octokit JSON path
     // would force.
+    // No patch is attempted on this branch, so the copy is unconditional. A student who
+    // edited a binary file, or who created a file at a path the handout now adds, used to
+    // lose it here with no diagnostic; that case is skipped above, before the size charge.
     if (file.isBinary || file.status === "added") {
-      // No patch is attempted on this branch, so the copy is unconditional. A student who
-      // edited a binary file, or who created a file at a path the handout now adds, would
-      // lose it here with no diagnostic.
-      if (modifiedReason) {
-        skipFile(file.path, modifiedReason);
-        continue;
-      }
       if (!file.sha) {
         throw new Error(`File ${file.path} is binary/added but has no template blob SHA`);
       }
