@@ -1,0 +1,138 @@
+// Decisions that keep a handout sync from overwriting a student's own work.
+//
+// The sync branch is based on `syncedRepoSha`, so GitHub does a real 3-way merge and a
+// student's commits made AFTER the last sync are safe: they appear on the other side of
+// the merge and collide as conflicts GitHub reports. Work done BEFORE the last sync is
+// not protected by that, because `createBranchAndCommit` writes the template's content
+// into the branch on top of it. The overwrite then reads as an intentional change from
+// base to head, `pr.mergeable` comes back true, and auto-merge lands it with no conflict
+// shown to anyone.
+//
+// That is not theoretical. On 2026-09-11 a handout sync replaced
+// server/src/services/user.service.ts in neu-cs4530/fa26-ip1-Shashankmore20 with the
+// template's copy, dropping 16 lines of the student's implementation, and the merge was
+// clean. The patch had failed to apply precisely BECAUSE the student had edited the file,
+// so the fallback was most destructive exactly where there was most to lose.
+//
+// The primitive below is the question nothing in the sync used to ask: has the student
+// touched this file since the last sync? Git blob shas are content addresses, so the
+// student's blob at `syncedRepoSha` and the handout's blob at `fromSha` are equal exactly
+// when the file is byte-identical. Anything else means the student's copy is theirs, and
+// no sync path may write over it.
+
+import { SYNC_COMMIT_SUBJECT_RE } from "./handoutSyncPush.ts";
+
+/** Why the sync left a file alone instead of writing the handout's version. */
+export type UnresolvedReason =
+  /** The student's copy differs from the handout copy the update was computed against. */
+  | "content_differs"
+  /** The file exists only in the student's repo, so the handout is adding a path they already use. */
+  | "only_in_your_repo"
+  /** The student deleted a file the handout is still changing. */
+  | "deleted_in_your_repo";
+
+export type UnresolvedFile = {
+  path: string;
+  reason: UnresolvedReason;
+};
+
+/**
+ * Decide whether the sync may write over a file.
+ *
+ * Both arguments are blob shas, or undefined when the path is absent on that side.
+ * `studentBlobSha` is read at the last sync point, `handoutBlobSha` at the handout
+ * revision the update was computed from.
+ *
+ * Returns "unmodified" when the two agree, which is the only case where the student's
+ * copy is known to be the handout's copy and overwriting costs nothing.
+ */
+export function classifyStudentFile(
+  studentBlobSha: string | undefined,
+  handoutBlobSha: string | undefined
+): "unmodified" | UnresolvedReason {
+  if (studentBlobSha === undefined && handoutBlobSha === undefined) {
+    // Neither side has the path. The handout is adding a genuinely new file and there is
+    // nothing of the student's to protect.
+    return "unmodified";
+  }
+  if (studentBlobSha === undefined) return "deleted_in_your_repo";
+  if (handoutBlobSha === undefined) return "only_in_your_repo";
+  return studentBlobSha === handoutBlobSha ? "unmodified" : "content_differs";
+}
+
+/**
+ * Paths that a truncated tree cannot answer for, and which therefore need a per-file
+ * lookup before any overwrite decision is made.
+ *
+ * GitHub truncates a recursive tree response for very large repos. A path missing from a
+ * truncated tree is unknown, not absent, and reading it as absent would classify the file
+ * as unmodified and re-enable the overwrite this module exists to prevent. A complete tree
+ * needs no lookups, because a missing path there really is absent.
+ */
+export function pathsNeedingBlobLookup(
+  shas: Map<string, string>,
+  truncated: boolean,
+  paths: readonly string[]
+): string[] {
+  if (!truncated) return [];
+  return paths.filter((path) => !shas.has(path));
+}
+
+/**
+ * Whether auto-merge may proceed.
+ *
+ * A sync that left any file to the student is a sync with work still to do in it, so the
+ * PR has to stay open for them to finish. This only ever removes auto-merge: a caller that
+ * did not ask for it does not get it.
+ */
+export function resolveAutoMerge(requested: boolean, unresolved: readonly UnresolvedFile[]): boolean {
+  return requested && unresolved.length === 0;
+}
+
+/**
+ * Whether an existing sync branch can be reset to a new base.
+ *
+ * The sync force-updates its branch when it already exists, which discards whatever is on
+ * it. That is fine while every commit is one of ours, and destroys a student's conflict
+ * resolution as soon as it is not. Commits we wrote have the sync subject line; anything
+ * else on the branch belongs to someone who pushed to it deliberately.
+ */
+export function isSyncBranchSafeToReset(commitSubjects: readonly string[]): boolean {
+  return commitSubjects.every((subject) => SYNC_COMMIT_SUBJECT_RE.test(subject.trim()));
+}
+
+const REASON_TEXT: Record<UnresolvedReason, string> = {
+  content_differs: "you changed this file, so the handout's version was not written over yours",
+  only_in_your_repo: "this file is yours; the handout added a file at the same path",
+  deleted_in_your_repo: "you deleted this file, so it was not restored or changed"
+};
+
+/**
+ * The section of the PR body that tells the student which files the sync did not touch.
+ *
+ * Returns an empty string when there is nothing to report, so the caller can concatenate
+ * it unconditionally.
+ */
+export function renderUnresolvedSection(unresolved: readonly UnresolvedFile[]): string {
+  if (unresolved.length === 0) return "";
+
+  const rows = unresolved
+    .slice()
+    .sort((a, b) => a.path.localeCompare(b.path))
+    .map((file) => `- \`${file.path}\` (${REASON_TEXT[file.reason]})`)
+    .join("\n");
+
+  return `### Files this update did not change
+
+The instructor changed the files below, and so did you. Your versions are untouched and
+this PR does not carry the handout's versions of them, so nothing you wrote is overwritten
+when it merges.
+
+${rows}
+
+Apply those changes yourself if you want them. Compare your copy against the handout and
+take what you need. This PR will NOT merge on its own while these files are listed, so
+merge it when you are ready.
+
+`;
+}

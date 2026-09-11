@@ -6,7 +6,16 @@
  */
 
 import { createRedis, bottleneckRedisOptions, type RedisClient } from "./Redis.ts";
-import { SYNC_COMMIT_MESSAGE_PREFIX } from "./handoutSyncPush.ts";
+import { SYNC_COMMIT_MESSAGE_PREFIX, SYNC_COMMIT_SUBJECT_RE } from "./handoutSyncPush.ts";
+import {
+  classifyStudentFile,
+  isSyncBranchSafeToReset,
+  pathsNeedingBlobLookup,
+  renderUnresolvedSection,
+  resolveAutoMerge,
+  type UnresolvedFile,
+  type UnresolvedReason
+} from "./syncConflictGuard.ts";
 import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
@@ -374,6 +383,164 @@ export async function getTreeBlobSizes(
   }
 
   return sizes;
+}
+
+/**
+ * Fetch the recursive blob tree for a repo at a specific SHA and return a map of
+ * path -> blob sha, plus whether GitHub truncated the response.
+ *
+ * Blob shas are content addresses, so two repos hold byte-identical copies of a file
+ * exactly when this map gives the same sha for that path. That equality is what
+ * `classifyStudentFile` uses to tell a file the student has edited from one they have not
+ * touched since the last sync.
+ *
+ * `truncated` is returned rather than only logged. A path missing from a truncated tree is
+ * unknown, not absent, and the caller has to resolve it per file before deciding anything.
+ *
+ * Cached in Redis (12h TTL) keyed by (repo, sha). Both shas this is called with are
+ * immutable commits, so a hit can never be stale.
+ */
+export async function getTreeBlobShas(
+  repoFullName: string,
+  sha: string,
+  scope?: Sentry.Scope
+): Promise<{ shas: Map<string, string>; truncated: boolean }> {
+  const cacheKey = `github:tree-blob-shas:${repoFullName}/${sha}`;
+  const redis = getRedisClient();
+
+  if (redis) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached != null) {
+        const parsed = (typeof cached === "string" ? JSON.parse(cached) : cached) as {
+          e: [string, string][];
+          t: boolean;
+        };
+        return { shas: new Map(parsed.e), truncated: parsed.t };
+      }
+    } catch (error) {
+      console.error("Redis cache read error (tree-blob-shas):", error);
+    }
+  }
+
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) {
+    throw new Error(`No octokit found for repository ${repoFullName}`);
+  }
+  const [owner, repo] = repoFullName.split("/");
+
+  const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
+    owner,
+    repo,
+    tree_sha: sha,
+    recursive: "true"
+  });
+
+  if (tree.truncated) {
+    console.warn(`Tree for ${repoFullName}@${sha} is truncated; blob shas will be looked up per file`);
+    scope?.addBreadcrumb({
+      message: `Tree truncated for ${repoFullName}@${sha}; falling back to per-file blob sha lookups`,
+      category: "sync",
+      level: "warning"
+    });
+  }
+
+  const shas = new Map<string, string>();
+  for (const item of tree.tree) {
+    if (item.type === "blob" && item.path && item.sha) {
+      shas.set(item.path, item.sha);
+    }
+  }
+
+  if (redis) {
+    try {
+      await redis.setex(cacheKey, 43200, JSON.stringify({ e: Array.from(shas.entries()), t: !!tree.truncated }));
+    } catch (error) {
+      console.error("Redis cache write error (tree-blob-shas):", error);
+    }
+  }
+
+  return { shas, truncated: !!tree.truncated };
+}
+
+/**
+ * Blob sha for one path at one ref, for the paths a truncated tree could not answer.
+ *
+ * Returns undefined when the file is genuinely absent. Any other failure propagates:
+ * guessing here would hand `classifyStudentFile` a false "absent" and re-enable the
+ * overwrite the guard exists to prevent.
+ */
+async function fetchBlobShaAtRef(
+  repoFullName: string,
+  path: string,
+  ref: string,
+  scope?: Sentry.Scope
+): Promise<string | undefined> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
+  const [owner, repo] = repoFullName.split("/");
+  try {
+    const { data } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+      owner,
+      repo,
+      path,
+      ref
+    });
+    if (Array.isArray(data)) return undefined;
+    return (data as { sha?: string }).sha;
+  } catch (error) {
+    if (isGitHubNotFound(error)) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Which of `paths` the student has made their own since the last sync.
+ *
+ * Compares the student's repo at `syncedRepoSha` against the handout at `fromSha`, one
+ * recursive tree each, and falls back to per-file lookups only for paths a truncated tree
+ * left unanswered.
+ *
+ * `fromSha` null means there is no previous sync. The branch base is then the repo's
+ * pristine starting state, nothing in it can be the student's own work yet, and the map is
+ * empty.
+ */
+export async function findStudentModifiedFiles(
+  repoFullName: string,
+  syncedRepoSha: string,
+  templateRepo: string,
+  fromSha: string | null,
+  paths: readonly string[],
+  scope?: Sentry.Scope
+): Promise<Map<string, UnresolvedReason>> {
+  const modified = new Map<string, UnresolvedReason>();
+  if (!fromSha || paths.length === 0) return modified;
+
+  const [student, handout] = await Promise.all([
+    getTreeBlobShas(repoFullName, syncedRepoSha, scope),
+    getTreeBlobShas(templateRepo, fromSha, scope)
+  ]);
+
+  const studentShas = new Map(student.shas);
+  const handoutShas = new Map(handout.shas);
+
+  const studentLookups = pathsNeedingBlobLookup(studentShas, student.truncated, paths);
+  const handoutLookups = pathsNeedingBlobLookup(handoutShas, handout.truncated, paths);
+
+  for (const path of studentLookups) {
+    const sha = await fetchBlobShaAtRef(repoFullName, path, syncedRepoSha, scope);
+    if (sha) studentShas.set(path, sha);
+  }
+  for (const path of handoutLookups) {
+    const sha = await fetchBlobShaAtRef(templateRepo, path, fromSha, scope);
+    if (sha) handoutShas.set(path, sha);
+  }
+
+  for (const path of paths) {
+    const verdict = classifyStudentFile(studentShas.get(path), handoutShas.get(path));
+    if (verdict !== "unmodified") modified.set(path, verdict);
+  }
+  return modified;
 }
 
 /**
@@ -779,11 +946,74 @@ async function fetchTextFileAtRef(
 }
 
 /**
+ * Thrown when a sync branch carries commits the sync did not write.
+ */
+export class SyncBranchNotOursError extends Error {
+  constructor(
+    readonly repoFullName: string,
+    readonly branchName: string,
+    readonly foreignSubjects: string[]
+  ) {
+    super(
+      `Refusing to reset ${repoFullName} branch '${branchName}': it carries ${foreignSubjects.length} ` +
+        `commit(s) this sync did not write, which is someone resolving this update by hand. ` +
+        `First commit subject: ${JSON.stringify(foreignSubjects[0] ?? "")}. ` +
+        `Merge or close the open pull request, or delete the branch, then sync again.`
+    );
+    this.name = "SyncBranchNotOursError";
+  }
+}
+
+/**
+ * Refuse to reset a sync branch that someone else has pushed to.
+ *
+ * The branch is force-updated when it already exists, which throws away everything on it.
+ * That is harmless while every commit ahead of the base is one of ours, and it deletes a
+ * student's conflict resolution as soon as it is not. Commits we write carry the sync
+ * subject line, so anything else on the branch was put there deliberately.
+ *
+ * A comparison we cannot make is treated as unsafe rather than assumed fine: resetting on
+ * a failed read is the exact outcome this is here to prevent.
+ */
+async function assertSyncBranchSafeToReset(
+  repoFullName: string,
+  branchName: string,
+  baseSha: string,
+  scope?: Sentry.Scope
+): Promise<void> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
+  const [owner, repo] = repoFullName.split("/");
+
+  const { data: comparison } = await octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+    owner,
+    repo,
+    basehead: `${baseSha}...${branchName}`
+  });
+
+  const subjects = (comparison.commits ?? []).map((c) => (c.commit?.message ?? "").split("\n")[0]);
+  if (isSyncBranchSafeToReset(subjects)) return;
+
+  const foreign = subjects.filter((subject) => !SYNC_COMMIT_SUBJECT_RE.test(subject.trim()));
+  scope?.setTag("sync_branch_foreign_commits", String(foreign.length));
+  throw new SyncBranchNotOursError(repoFullName, branchName, foreign);
+}
+
+/**
  * Create a branch and commit changes to a target repository
  * For text files with patches, applies the patch to the content at baseSha
  * For binary files or files with full content, uses the provided content
+ *
+ * Files the student has made their own since the last sync are left exactly as they are
+ * at `baseSha`: no tree entry is emitted for them, so the branch inherits their version
+ * from `base_tree` and the merge cannot overwrite it. Every such file is returned so the
+ * caller can hold the PR open and tell the student which changes are theirs to apply.
+ *
  * @param templateRepo - Optional template repo name for fallback when patch fails
  * @param templateSha - Optional template SHA to fetch content from when patch fails
+ * @param templateFromSha - Handout SHA the update was computed FROM. Used to tell a file
+ *                          the student edited from one they have not touched. Omit it and
+ *                          nothing is protected, so callers that have it must pass it.
  */
 export async function createBranchAndCommit(
   repoFullName: string,
@@ -793,8 +1023,9 @@ export async function createBranchAndCommit(
   commitMessage: string,
   scope?: Sentry.Scope,
   templateRepo?: string,
-  templateSha?: string
-): Promise<void> {
+  templateSha?: string,
+  templateFromSha?: string | null
+): Promise<UnresolvedFile[]> {
   const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) {
     throw new Error(`No octokit found for repository ${repoFullName}`);
@@ -825,6 +1056,11 @@ export async function createBranchAndCommit(
 
     // If branch already exists, force-update it to the base SHA
     if (errorMessage.includes("Reference already exists")) {
+      // The branch is about to be discarded. That is ours to do while everything on it is
+      // ours, and is the student's conflict resolution being deleted as soon as it is not,
+      // so check who wrote the commits ahead of the base before touching it.
+      await assertSyncBranchSafeToReset(repoFullName, branchName, baseSha, scope);
+
       scope?.addBreadcrumb({
         message: `Branch ${branchName} already exists, force-updating to ${baseSha}`,
         category: "git",
@@ -898,10 +1134,48 @@ export async function createBranchAndCommit(
     }
   };
 
+  // Which of these paths are the student's own work. Two tree reads, before any content is
+  // fetched, so every branch below can ask without another round trip.
+  const studentModified = templateRepo
+    ? await findStudentModifiedFiles(
+        repoFullName,
+        baseSha,
+        templateRepo,
+        templateFromSha ?? null,
+        files.map((f) => f.path),
+        scope
+      )
+    : new Map<string, UnresolvedReason>();
+
+  const unresolved: UnresolvedFile[] = [];
+  /**
+   * Leave the student's copy alone. Emitting no tree entry means `base_tree` supplies the
+   * file, so the branch carries their version and the merge has nothing to overwrite.
+   */
+  const skipFile = (path: string, reason: UnresolvedReason) => {
+    unresolved.push({ path, reason });
+    scope?.addBreadcrumb({
+      message: `Leaving ${path} untouched: ${reason}`,
+      category: "sync",
+      level: "info"
+    });
+    console.log(`[sync] leaving ${repoFullName} ${path} untouched (${reason})`);
+  };
+
   const treeItems: { path: string; mode: "100644"; type: "blob"; sha: string | null }[] = [];
   for (const file of files) {
+    // Not every path below is destructive. A patch that applies to the student's own
+    // content merges the instructor's change INTO their work, which is the outcome worth
+    // having, so the guard is asked per branch rather than once at the top: only where a
+    // branch would write over their copy does it stop.
+    const modifiedReason = studentModified.get(file.path);
+
     // Handle removed files
     if (file.status === "removed") {
+      if (modifiedReason) {
+        skipFile(file.path, modifiedReason);
+        continue;
+      }
       treeItems.push({
         path: file.path,
         mode: "100644" as const,
@@ -922,6 +1196,10 @@ export async function createBranchAndCommit(
       // with status "modified". Don't try to apply that patch against the student copy —
       // either mirror the template's current file (if it still exists) or delete it.
       if (patchDeletesEntireFile(file.patch)) {
+        if (modifiedReason) {
+          skipFile(file.path, modifiedReason);
+          continue;
+        }
         scope?.addBreadcrumb({
           message: `Patch for ${file.path} deletes entire file; mirroring template at ${templateSha}`,
           category: "patch",
@@ -1025,6 +1303,14 @@ export async function createBranchAndCommit(
         console.error(`Patch preview: ${patchPreview}`);
         console.error(`Base content preview: ${baseContentPreview}`);
 
+        // The patch did not apply. When the student has edited this file that is the
+        // expected outcome and the fallback below would replace their copy with the
+        // template's, so stop here instead. Their version stays, and the PR reports it.
+        if (modifiedReason) {
+          skipFile(file.path, modifiedReason);
+          continue;
+        }
+
         // Fallback: fetch full content from template repo if available
         if (templateRepo && templateSha) {
           scope?.addBreadcrumb({
@@ -1107,6 +1393,13 @@ export async function createBranchAndCommit(
     // around 2.33× the file size instead of the ~3× the Octokit JSON path
     // would force.
     if (file.isBinary || file.status === "added") {
+      // No patch is attempted on this branch, so the copy is unconditional. A student who
+      // edited a binary file, or who created a file at a path the handout now adds, would
+      // lose it here with no diagnostic.
+      if (modifiedReason) {
+        skipFile(file.path, modifiedReason);
+        continue;
+      }
       if (!file.sha) {
         throw new Error(`File ${file.path} is binary/added but has no template blob SHA`);
       }
@@ -1157,6 +1450,8 @@ export async function createBranchAndCommit(
     ref: `heads/${branchName}`,
     sha: newCommit.sha
   });
+
+  return unresolved;
 }
 
 /**
@@ -1528,14 +1823,34 @@ export async function attemptAutoMerge(
     return { merged: false };
   }
 
-  const { data: mergeResult } = await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
-    owner,
-    repo,
-    pull_number: prNumber,
-    merge_method: "merge"
-  });
+  // Merge the head we just read, not whatever the head is by the time this lands. A student
+  // pushing to the branch between the two calls gets a 409 here instead of having their
+  // commit merged sight unseen by a run that never saw it, which is the same reason
+  // assignment-sync-autograder-workflow passes a blob sha to its rollback delete.
+  try {
+    const { data: mergeResult } = await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
+      owner,
+      repo,
+      pull_number: prNumber,
+      merge_method: "merge",
+      sha: pr.head.sha
+    });
 
-  return { merged: true, mergeSha: mergeResult.sha };
+    return { merged: true, mergeSha: mergeResult.sha };
+  } catch (error) {
+    const status = error && typeof error === "object" && "status" in error ? (error as { status: number }).status : 0;
+    // 409 is "head moved"; 405 is "not mergeable any more". Both mean the branch is no
+    // longer the thing this run decided to merge, so leave the PR for a human.
+    if (status === 409 || status === 405) {
+      scope?.addBreadcrumb({
+        message: `Auto-merge skipped for ${repoFullName} PR #${prNumber}: head moved or became unmergeable (${status})`,
+        category: "sync",
+        level: "info"
+      });
+      return { merged: false };
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1771,21 +2086,40 @@ ${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
             commitMessage,
             scope,
             templateRepo,
-            toSha
+            toSha,
+            fromSha
           );
-        if (isHeavySync) {
-          await withHeavySyncLock(runCommit);
-        } else {
-          await runCommit();
+        const unresolved: UnresolvedFile[] = isHeavySync ? await withHeavySyncLock(runCommit) : await runCommit();
+
+        // A sync that left files to the student is a sync with work still in it. The PR
+        // has to stay open for them to finish, whatever the caller asked for.
+        const effectiveAutoMerge = resolveAutoMerge(autoMerge, unresolved);
+        scope?.setTag("unresolved_file_count", String(unresolved.length));
+        scope?.setTag("effective_auto_merge", effectiveAutoMerge.toString());
+        if (autoMerge && !effectiveAutoMerge) {
+          scope?.addBreadcrumb({
+            message:
+              `Auto-merge disabled for ${repositoryFullName}: ${unresolved.length} file(s) are the student's own ` +
+              `work and were left untouched (${unresolved.map((f) => f.path).join(", ")})`,
+            category: "sync",
+            level: "info"
+          });
+          console.log(
+            `[sync] ${repositoryFullName}: holding PR open, ${unresolved.length} file(s) left to the student`
+          );
         }
 
         // Create PR
         const prTitle = `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;
 
-        // Categorize files for better PR description
-        const textFiles = changedFiles.filter((f) => !f.isBinary && f.status !== "removed");
-        const binaryFiles = changedFiles.filter((f) => f.isBinary && f.status !== "removed");
-        const removedFiles = changedFiles.filter((f) => f.status === "removed");
+        // Categorize files for better PR description. Anything left to the student is
+        // reported in its own section instead, so these lists describe what this PR
+        // actually carries rather than everything the instructor changed.
+        const unresolvedPaths = new Set(unresolved.map((f) => f.path));
+        const syncedFiles = changedFiles.filter((f) => !unresolvedPaths.has(f.path));
+        const textFiles = syncedFiles.filter((f) => !f.isBinary && f.status !== "removed");
+        const binaryFiles = syncedFiles.filter((f) => f.isBinary && f.status !== "removed");
+        const removedFiles = syncedFiles.filter((f) => f.status === "removed");
 
         const prBody = `## Handout Update
 
@@ -1805,11 +2139,15 @@ This PR uses a **3-way merge strategy** to preserve your work:
 
 GitHub will automatically merge these together. If you modified the same parts of files that the instructor updated, you'll see merge conflicts that need to be resolved.
 
-### Changed Files
+${renderUnresolvedSection(unresolved)}### Changed Files
 
-${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${textFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${binaryFiles.length > 0 ? `**Binary files** (will overwrite your version):\n${binaryFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${removedFiles.length > 0 ? `**Removed files**:\n${removedFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}
+${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${textFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${binaryFiles.length > 0 ? `**Binary files** (replaced with the handout's version):\n${binaryFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${removedFiles.length > 0 ? `**Removed files**:\n${removedFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}
 ---
-*This PR was automatically generated. It will be auto-merged if there are no conflicts. If there are merge conflicts, they will be shown in the GitHub UI - you can resolve them directly on GitHub or locally. If you need help, ask your course staff.*`;
+*This PR was automatically generated. ${
+          unresolved.length > 0
+            ? "It will NOT be merged automatically, because some of the files the instructor changed are files you have edited. Review the list above, then merge when you are ready."
+            : "It will be auto-merged if there are no conflicts."
+        } If there are merge conflicts, they will be shown in the GitHub UI - you can resolve them directly on GitHub or locally. If you need help, ask your course staff.*`;
 
         let prNumber: number;
         let prUrl: string;
@@ -1895,7 +2233,7 @@ ${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${
         let merged = false;
         let mergeSha: string | undefined;
 
-        if (autoMerge) {
+        if (effectiveAutoMerge) {
           // Wait for GitHub to update mergeable state
           await new Promise((resolve) => setTimeout(resolve, waitBeforeMerge));
           const mergeResult = await attemptAutoMerge(repositoryFullName, prNumber, scope);
