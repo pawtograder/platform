@@ -40,6 +40,59 @@ export type UnresolvedFile = {
   reason: UnresolvedReason;
 };
 
+/**
+ * The shape of one changed file, as much of it as the merge decision needs. Mirrors the
+ * fields of `FileChange` that `createBranchAndCommit` branches on.
+ */
+export type ChangedFileShape = {
+  status?: string;
+  isBinary?: boolean;
+  /** The file carries a text patch. */
+  hasPatch: boolean;
+  /** That patch only deletes, which the sync handles by mirroring or removing. */
+  patchDeletesFile: boolean;
+};
+
+/** What the sync should do with one changed file. */
+export type FileAction =
+  /** Not the student's. Handle it the way the sync always has. */
+  | "write"
+  /** The student's, but a normal text patch. Try to merge into their copy; skip if it fails. */
+  | "attempt_patch"
+  /** The student's, and nothing here can merge. Leave their version completely alone. */
+  | "skip";
+
+/**
+ * The single decision both the size pre-flight and the commit path ask.
+ *
+ * They have to agree. Sizing a file the commit path then writes under-counts the budget;
+ * sizing a file the commit path skips aborts syncs over bytes nobody reads; and filtering a
+ * file out of the sync entirely when it was merge-eligible loses the instructor's change
+ * with no PR to show for it.
+ *
+ * Only one combination merges: a normal text patch against a file whose content differs.
+ * That is the case `createBranchAndCommit` applies the patch for, which is the one path
+ * that merges the instructor's change INTO the student's work rather than over it. Every
+ * other reason, and every other file shape, has no merge available:
+ *
+ *   * A deletion, a delete-only patch, a binary, or an added file is written wholesale.
+ *   * A file the student deleted must stay deleted. Its patch would otherwise apply against
+ *     the empty base the 404 handling substitutes, and recreate the file they removed.
+ *   * A directory, a submodule, or a blocked path cannot be written at all, and must not
+ *     reach the patch handling, where fetching it throws "Path is a directory, not a file".
+ */
+export function decideFileAction(file: ChangedFileShape, reason: UnresolvedReason | undefined): FileAction {
+  if (!reason) return "write";
+  if (reason !== "content_differs") return "skip";
+  const mergeableShape = file.hasPatch && !file.isBinary && !file.patchDeletesFile && file.status !== "removed";
+  return mergeableShape ? "attempt_patch" : "skip";
+}
+
+/** Whether the sync will read and write this file, and so whether its size counts. */
+export function countsTowardSyncSize(file: ChangedFileShape, reason: UnresolvedReason | undefined): boolean {
+  return decideFileAction(file, reason) !== "skip";
+}
+
 /** Git object kinds a recursive tree listing can return for a path. */
 export type TreeEntryType = "blob" | "tree" | "commit";
 
@@ -91,7 +144,11 @@ export function findBlockingAncestor(path: string, student: Map<string, TreeEntr
   // Every proper ancestor, shortest first. The path itself is classifyStudentFile's job.
   for (let i = 1; i < segments.length; i++) {
     const ancestor = segments.slice(0, i).join("/");
-    if (student.get(ancestor)?.type === "blob") return ancestor;
+    const entry = student.get(ancestor);
+    // Anything that is not a directory blocks, not just a file. A submodule at `vendor`
+    // is a `commit` entry, and writing vendor/config.ts through it replaces the gitlink,
+    // which loses the student's pinned revision as surely as overwriting a file.
+    if (entry && entry.type !== "tree") return ancestor;
   }
   return undefined;
 }

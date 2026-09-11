@@ -14,11 +14,14 @@ import { assertEquals, assertStringIncludes } from "jsr:@std/assert@^1";
 import {
   ancestorPaths,
   classifyStudentFile,
+  countsTowardSyncSize,
+  decideFileAction,
   findBlockingAncestor,
   isSyncBranchSafeToReset,
   pathsNeedingBlobLookup,
   renderUnresolvedSection,
   resolveAutoMerge,
+  type ChangedFileShape,
   type SyncBranchCommit,
   type TreeEntry,
   type UnresolvedFile
@@ -206,6 +209,62 @@ Deno.test("a branch with no commits ahead of the base is trivially resettable", 
 Deno.test("a subject that only looks like ours does not pass, even from the App", () => {
   assertEquals(isSyncBranchSafeToReset([{ ...ours(), subject: 'Revert "Sync handout updates to abc1234"' }]), false);
   assertEquals(isSyncBranchSafeToReset([{ ...ours(), subject: "Sync handout updates to my own branch" }]), false);
+});
+
+// A normal text patch, the shape the sync can actually merge.
+const textPatch: ChangedFileShape = { status: "modified", isBinary: false, hasPatch: true, patchDeletesFile: false };
+
+// The one combination that merges. createBranchAndCommit applies the patch to the student's
+// own content, which is the outcome worth having, so it is fetched and written and its size
+// has to count. The previous version filtered these out of the sync entirely, which lost the
+// instructor's change with no PR to show for it.
+Deno.test("a text file the student edited is still patched, and still counts toward size", () => {
+  assertEquals(decideFileAction(textPatch, "content_differs"), "attempt_patch");
+  assertEquals(countsTowardSyncSize(textPatch, "content_differs"), true);
+});
+
+Deno.test("a file nobody has touched is written normally", () => {
+  assertEquals(decideFileAction(textPatch, undefined), "write");
+  assertEquals(countsTowardSyncSize(textPatch, undefined), true);
+});
+
+// Every other shape of a content_differs file is written wholesale, so there is no merge to
+// attempt and no reason to weigh bytes nobody reads.
+Deno.test("content_differs on a shape with no merge available is skipped and not sized", () => {
+  const shapes: Record<string, ChangedFileShape> = {
+    binary: { status: "modified", isBinary: true, hasPatch: false, patchDeletesFile: false },
+    added: { status: "added", isBinary: false, hasPatch: false, patchDeletesFile: false },
+    removed: { status: "removed", isBinary: false, hasPatch: true, patchDeletesFile: false },
+    deleteOnlyPatch: { status: "modified", isBinary: false, hasPatch: true, patchDeletesFile: true }
+  };
+  for (const [name, shape] of Object.entries(shapes)) {
+    assertEquals(decideFileAction(shape, "content_differs"), "skip", name);
+    assertEquals(countsTowardSyncSize(shape, "content_differs"), false, name);
+  }
+});
+
+// A file the student deleted must stay deleted. Its patch would otherwise apply against the
+// empty base the 404 handling substitutes, recreating the file they removed, with nothing
+// reported and auto-merge still on.
+Deno.test("a file the student deleted is never recreated, even by a patch that would apply", () => {
+  assertEquals(decideFileAction(textPatch, "deleted_in_your_repo"), "skip");
+  assertEquals(countsTowardSyncSize(textPatch, "deleted_in_your_repo"), false);
+});
+
+// These cannot be written at all, and must not reach the patch handling: fetching a
+// directory there throws "Path is a directory, not a file".
+Deno.test("a directory, a submodule or a blocked path never reaches patch handling", () => {
+  for (const reason of ["directory_in_your_repo", "path_blocked_in_your_repo", "only_in_your_repo"] as const) {
+    assertEquals(decideFileAction(textPatch, reason), "skip", reason);
+    assertEquals(countsTowardSyncSize(textPatch, reason), false, reason);
+  }
+});
+
+// A submodule ancestor is a `commit` entry, not a blob. Writing vendor/config.ts through it
+// replaces the gitlink and loses the student's pinned revision.
+Deno.test("a submodule standing where a parent directory has to go blocks the path", () => {
+  const student = new Map<string, TreeEntry>([["vendor", { sha: BLOB_A, type: "commit" }]]);
+  assertEquals(findBlockingAncestor("vendor/config.ts", student), "vendor");
 });
 
 Deno.test("nothing unresolved renders no section, so the caller can concatenate it blind", () => {

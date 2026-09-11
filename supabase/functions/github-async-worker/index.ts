@@ -1544,8 +1544,34 @@ export async function processEnvelope(
             throw new Error(result.error || "Sync failed");
           }
 
-          // Update repository with sync status
-          if (result.no_changes) {
+          // Update repository with sync status.
+          //
+          // The handout held something new and none of it could be written, because every
+          // changed file is the student's own work. synced_handout_sha deliberately does
+          // NOT advance: recording this as synced would mark an update delivered that never
+          // reached the repo, permanently, with no PR to point at. Leaving it behind while
+          // desired_handout_sha advances is what makes the repo show up as out of date.
+          if (result.blocked_by_student_changes) {
+            const { error: updateError } = await adminSupabase
+              .from("repositories")
+              .update({
+                desired_handout_sha: to_sha,
+                sync_data: {
+                  last_sync_attempt: new Date().toISOString(),
+                  status: "blocked_by_student_changes",
+                  blocked_handout_sha: to_sha,
+                  unresolved_paths: result.unresolved_paths ?? []
+                }
+              })
+              .eq("id", repository_id);
+            if (updateError) throw updateError;
+            Sentry.addBreadcrumb({
+              message:
+                `Handout ${to_sha.substring(0, 7)} not delivered to ${repository_full_name}: ` +
+                `${(result.unresolved_paths ?? []).length} changed file(s) are the student's own work`,
+              level: "warning"
+            });
+          } else if (result.no_changes) {
             const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({

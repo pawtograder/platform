@@ -10,11 +10,14 @@ import { SYNC_COMMIT_MESSAGE_PREFIX, SYNC_COMMIT_SUBJECT_RE } from "./handoutSyn
 import {
   ancestorPaths,
   classifyStudentFile,
+  countsTowardSyncSize,
+  decideFileAction,
   findBlockingAncestor,
   isSyncBranchSafeToReset,
   pathsNeedingBlobLookup,
   renderUnresolvedSection,
   resolveAutoMerge,
+  type ChangedFileShape,
   type SyncBranchCommit,
   type TreeEntry,
   type UnresolvedFile,
@@ -111,7 +114,19 @@ export interface SyncResult {
   merged?: boolean;
   merge_sha?: string;
   error?: string;
+  /** The handout holds nothing new for this repo. Safe to record as fully synced. */
   no_changes?: boolean;
+  /**
+   * The handout DOES hold something new, and none of it could be written, because every
+   * changed file is the student's own work.
+   *
+   * Distinct from `no_changes` on purpose: a caller that records this as synced would mark
+   * an update delivered that never reached the repo. There is no PR here either, so the
+   * only trace is this flag and the paths below.
+   */
+  blocked_by_student_changes?: boolean;
+  /** The paths that blocked it, for the caller to record. */
+  unresolved_paths?: string[];
 }
 
 // Redis client for caching. createRedis picks ioredis (REDIS_URL) or
@@ -973,6 +988,65 @@ async function fetchTextFileAtRef(
 }
 
 /**
+ * Re-read a branch and fail unless it is still where the caller last saw it.
+ *
+ * Used immediately before a destructive ref update, so the validation that authorised it is
+ * as fresh as it can be made without a compare-and-swap.
+ */
+async function assertBranchStillAt(
+  repoFullName: string,
+  branchName: string,
+  expectedSha: string,
+  scope?: Sentry.Scope
+): Promise<void> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
+  const [owner, repo] = repoFullName.split("/");
+  const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+    owner,
+    repo,
+    ref: `heads/${branchName}`
+  });
+  if (ref.object.sha !== expectedSha) {
+    scope?.setTag("sync_branch_moved_during_validation", "true");
+    throw new SyncBranchMovedError(repoFullName, branchName, expectedSha, ref.object.sha);
+  }
+}
+
+/**
+ * The fields of a FileChange the merge decision branches on, in the shape
+ * `decideFileAction` takes. Built in one place so the size gate and the commit path cannot
+ * describe the same file differently.
+ */
+function shapeOf(file: FileChange): ChangedFileShape {
+  return {
+    status: file.status,
+    isBinary: file.isBinary,
+    hasPatch: !!file.patch,
+    patchDeletesFile: !!file.patch && patchDeletesEntireFile(file.patch)
+  };
+}
+
+/**
+ * Thrown when a sync branch moves between being validated and being reset.
+ */
+export class SyncBranchMovedError extends Error {
+  constructor(
+    readonly repoFullName: string,
+    readonly branchName: string,
+    readonly expectedSha: string,
+    readonly actualSha: string
+  ) {
+    super(
+      `Refusing to reset ${repoFullName} branch '${branchName}': it moved from ${expectedSha.substring(0, 7)} ` +
+        `to ${actualSha.substring(0, 7)} while being checked, so someone is pushing to it right now. ` +
+        `Retry the sync once the branch is settled.`
+    );
+    this.name = "SyncBranchMovedError";
+  }
+}
+
+/**
  * Thrown when a sync branch carries commits the sync did not write.
  */
 export class SyncBranchNotOursError extends Error {
@@ -1007,7 +1081,7 @@ async function assertSyncBranchSafeToReset(
   branchName: string,
   baseSha: string,
   scope?: Sentry.Scope
-): Promise<void> {
+): Promise<string> {
   const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
   const [owner, repo] = repoFullName.split("/");
@@ -1023,13 +1097,17 @@ async function assertSyncBranchSafeToReset(
   // SYNC_COMMIT_SUBJECT_RE in handoutSyncPush.ts). `author` is the GitHub account GitHub
   // attributed the commit to, whose `type` is "Bot" for an App, and it is null when GitHub
   // could not attribute it at all.
+  const validatedHead = comparison.commits?.length
+    ? comparison.commits[comparison.commits.length - 1].sha
+    : (comparison.merge_base_commit?.sha ?? baseSha);
+
   const commits: SyncBranchCommit[] = (comparison.commits ?? []).map((c) => ({
     subject: (c.commit?.message ?? "").split("\n")[0],
     authorType: c.author?.type,
     committerLogin: c.committer?.login,
     verified: c.commit?.verification?.verified
   }));
-  if (isSyncBranchSafeToReset(commits)) return;
+  if (isSyncBranchSafeToReset(commits)) return validatedHead;
 
   const foreign = commits
     .filter((commit) => !isSyncBranchSafeToReset([commit]))
@@ -1103,7 +1181,16 @@ export async function createBranchAndCommit(
       // The branch is about to be discarded. That is ours to do while everything on it is
       // ours, and is the student's conflict resolution being deleted as soon as it is not,
       // so check who wrote the commits ahead of the base before touching it.
-      await assertSyncBranchSafeToReset(repoFullName, branchName, baseSha, scope);
+      const validatedHead = await assertSyncBranchSafeToReset(repoFullName, branchName, baseSha, scope);
+      // ...and confirm the branch is still where it was when that answer was computed. A
+      // push between the two invalidates it, and this is a destructive write.
+      //
+      // This NARROWS the window, it does not close it: a push landing between this read and
+      // the write below is still lost. REST has no expected-head parameter on a ref update,
+      // so closing it properly means GraphQL updateRefs with beforeOid, which is a compare
+      // and swap. That is the right fix and it is not free, so it is recorded here rather
+      // than implied to be done.
+      await assertBranchStillAt(repoFullName, branchName, validatedHead, scope);
 
       scope?.addBreadcrumb({
         message: `Branch ${branchName} already exists, force-updating to ${baseSha}`,
@@ -1128,6 +1215,11 @@ export async function createBranchAndCommit(
           category: "git",
           level: "warning"
         });
+
+        // Deleting the ref is more destructive than the update that just failed, and one
+        // reason that update fails is the branch having moved. Re-check before deleting
+        // rather than treating a failed write as permission to try a bigger one.
+        await assertBranchStillAt(repoFullName, branchName, validatedHead, scope);
 
         try {
           await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
@@ -1201,21 +1293,15 @@ export async function createBranchAndCommit(
     // branch would write over their copy does it stop.
     const modifiedReason = studentModified.get(file.path);
 
-    // Decided before the size charge below. These three branches never merge anything: they
-    // write the handout's version over whatever the student has, so when the file is theirs
-    // the sync is not going to read or write a byte of it and it must not count against the
-    // budget. Charging first would let a run of skipped files abort a sync that does no work.
-    //
-    // The patch branch is deliberately NOT here. Its skip depends on the patch failing, and
-    // a patch that applies merges the instructor's change into the student's own content,
-    // which is the outcome worth keeping.
-    const overwritesUnconditionally =
-      file.status === "removed" ||
-      file.isBinary ||
-      file.status === "added" ||
-      (!!file.patch && !file.isBinary && patchDeletesEntireFile(file.patch));
-    if (modifiedReason && overwritesUnconditionally) {
-      skipFile(file.path, modifiedReason);
+    // The same decision the size pre-flight made, from the same predicate, so the two gates
+    // cannot disagree about a file. "skip" resolves before the per-file charge below, since
+    // a file the sync will not read must not be able to exhaust the budget. "attempt_patch"
+    // falls through to the patch handling and skips only if the patch fails.
+    const action = decideFileAction(shapeOf(file), modifiedReason);
+    if (action === "skip") {
+      // modifiedReason is always set when the action is "skip"; decideFileAction returns
+      // "write" for an unclassified file.
+      skipFile(file.path, modifiedReason as UnresolvedReason);
       continue;
     }
 
@@ -1970,25 +2056,38 @@ export async function syncRepositoryToHandout(params: {
           scope
         );
 
-        // Everything the sync will actually write. Protected paths are reported separately
-        // in the PR body and take no part in any sizing.
-        const syncableFiles = changedFiles.filter((f) => !studentModified.has(f.path));
+        // The files the sync will actually read and write. NOT simply "the ones the student
+        // has not touched": a text file whose content differs is still patchable, and
+        // createBranchAndCommit does merge those, so it is fetched and written and its size
+        // counts. Both gates ask the same predicate so they cannot disagree.
+        const syncableFiles = changedFiles.filter((f) => countsTowardSyncSize(shapeOf(f), studentModified.get(f.path)));
 
         if (syncableFiles.length === 0) {
-          // Every changed file is the student's. There is no tree entry to make, so no
-          // commit and no PR, and saying so here is clearer than letting an empty branch
-          // fall through to GitHub's "No commits between" error.
-          scope?.setTag("all_changes_student_owned", "true");
+          // Every changed file belongs to the student and none of them can be merged. There
+          // is no tree entry to make, so no commit and no PR.
+          //
+          // This must NOT report no_changes. The worker reads that as "the handout holds
+          // nothing new for this repo" and advances synced_handout_sha to to_sha, which
+          // would record an update as delivered that was never written, permanently and
+          // with nothing to point at. Reporting it as blocked leaves synced_handout_sha
+          // where it is, so the repo stays visibly behind the handout.
+          const unresolvedPaths = changedFiles.map((f) => f.path);
+          scope?.setTag("sync_blocked_by_student_changes", "true");
           scope?.addBreadcrumb({
             message:
               `Every file in this update is the student's own work in ${repositoryFullName} ` +
-              `(${changedFiles.length} file(s)); nothing to sync`,
+              `(${unresolvedPaths.join(", ")}); nothing can be merged and nothing was written`,
             category: "sync",
-            level: "info"
+            level: "warning"
           });
+          console.warn(
+            `[sync] ${repositoryFullName}: handout update ${toSha.substring(0, 7)} not delivered, ` +
+              `all ${unresolvedPaths.length} changed file(s) are the student's own work`
+          );
           return {
             success: true,
-            no_changes: true
+            blocked_by_student_changes: true,
+            unresolved_paths: unresolvedPaths
           };
         }
 
