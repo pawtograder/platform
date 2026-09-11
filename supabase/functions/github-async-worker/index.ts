@@ -1431,6 +1431,15 @@ export async function processEnvelope(
             .select("synced_handout_sha, synced_repo_sha")
             .eq("id", repository_id)
             .maybeSingle();
+          // The handout revision this repo is actually on, read in the SAME row as
+          // synced_repo_sha just above. The envelope's from_sha was recorded when the job
+          // was queued, and a second handout revision queued while the first sync was in
+          // flight leaves it stale: classifying with a stale from_sha against a current
+          // synced_repo_sha makes the files the FIRST sync installed look like the
+          // student's work, so the second sync skips its own machine-written content and
+          // can block on it. Both sides of the comparison have to come from one moment.
+          const currentSyncedHandoutSha = currentRepo?.synced_handout_sha ?? from_sha;
+
           if (currentRepo?.synced_handout_sha === to_sha) {
             Sentry.addBreadcrumb({
               message: `Repository ${repository_full_name} is already up to date`,
@@ -1531,7 +1540,7 @@ export async function processEnvelope(
           const result = await syncRepositoryToHandout({
             repositoryFullName: repository_full_name,
             templateRepo: template_repo,
-            fromSha: from_sha,
+            fromSha: currentSyncedHandoutSha,
             toSha: to_sha,
             syncedRepoSha,
             autoMerge: true,
@@ -1552,10 +1561,18 @@ export async function processEnvelope(
           // reached the repo, permanently, with no PR to point at. Leaving it behind while
           // desired_handout_sha advances is what makes the repo show up as out of date.
           if (result.blocked_by_student_changes) {
+            // desired_handout_sha is NOT written here. queue_repository_syncs already set
+            // it to the latest template sha before it enqueued this job, so writing it
+            // again is a no-op, and leaving it high is what keeps the repo reading as
+            // behind the handout. What makes the repo retryable is the status below:
+            // queue_repository_syncs enqueues a repo whose sync_data says it is blocked
+            // even when desired_handout_sha already matches (20260911030000).
+            //
+            // Re-running a blocked sync re-classifies, re-blocks, and overwrites this same
+            // object, so repeated attempts accumulate nothing.
             const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({
-                desired_handout_sha: to_sha,
                 sync_data: {
                   last_sync_attempt: new Date().toISOString(),
                   status: "blocked_by_student_changes",
@@ -1588,7 +1605,9 @@ export async function processEnvelope(
             const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({
-                synced_handout_sha: result.merged ? to_sha : from_sha,
+                // Not the envelope's from_sha: writing that back would move
+                // synced_handout_sha BACKWARDS when a newer sync has already advanced it.
+                synced_handout_sha: result.merged ? to_sha : currentSyncedHandoutSha,
                 synced_repo_sha: result.merged ? result.merge_sha : undefined,
                 desired_handout_sha: to_sha,
                 sync_data: {

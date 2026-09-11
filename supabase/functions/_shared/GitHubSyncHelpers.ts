@@ -988,6 +988,22 @@ async function fetchTextFileAtRef(
 }
 
 /**
+ * The commit the repo's default branch currently points at.
+ */
+async function resolveDefaultBranchHead(repoFullName: string, scope?: Sentry.Scope): Promise<string> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
+  const [owner, repo] = repoFullName.split("/");
+  const { data: repoData } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+  const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+    owner,
+    repo,
+    ref: `heads/${repoData.default_branch}`
+  });
+  return ref.object.sha;
+}
+
+/**
  * Re-read a branch and fail unless it is still where the caller last saw it.
  *
  * Used immediately before a destructive ref update, so the validation that authorised it is
@@ -2072,6 +2088,40 @@ export async function syncRepositoryToHandout(params: {
           // with nothing to point at. Reporting it as blocked leaves synced_handout_sha
           // where it is, so the repo stays visibly behind the handout.
           const unresolvedPaths = changedFiles.map((f) => f.path);
+
+          // Everything here is classified against syncedRepoSha, the state at the LAST sync.
+          // Someone may have applied these changes to the default branch by hand since then,
+          // in which case the repo already holds the handout's content and there is nothing
+          // blocked about it. Comparing the branch as it stands now against the handout at
+          // toSha answers that: an empty result means every one of these paths already
+          // matches the target, so this is an ordinary no_changes and recording the repo as
+          // synced is correct, because the content really is there.
+          //
+          // This costs two tree reads and only runs on the blocked path, which is rare.
+          const headSha = await resolveDefaultBranchHead(repositoryFullName, scope);
+          const stillDiffering = await findStudentModifiedFiles(
+            repositoryFullName,
+            headSha,
+            templateRepo,
+            toSha,
+            unresolvedPaths,
+            scope
+          );
+          if (stillDiffering.size === 0) {
+            scope?.setTag("blocked_paths_already_current", "true");
+            scope?.addBreadcrumb({
+              message:
+                `${repositoryFullName} already holds the handout's version of every path this update ` +
+                `touches; recording it as synced rather than blocked`,
+              category: "sync",
+              level: "info"
+            });
+            return {
+              success: true,
+              no_changes: true
+            };
+          }
+
           scope?.setTag("sync_blocked_by_student_changes", "true");
           scope?.addBreadcrumb({
             message:

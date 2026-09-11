@@ -260,7 +260,30 @@ async function main() {
     }
 
     // 5. Update database based on result (mirrors async worker behavior)
-    if (result.no_changes) {
+    if (result.blocked_by_student_changes) {
+      // Nothing was written and no PR exists, so there is no pr_number to report and
+      // synced_handout_sha must not advance: the handout update did not reach this repo.
+      // Falling through to the PR branch below would print an undefined PR number and
+      // record pr_state "open" for a pull request that was never opened.
+      const paths = result.unresolved_paths ?? [];
+      console.log(`\n⚠ Not applied: all ${paths.length} changed file(s) are the student's own work`);
+      for (const path of paths) {
+        console.log(`    - ${path}`);
+      }
+      console.log("  The repository stays behind the handout. Ask the student to merge these changes.");
+      const { error } = await adminSupabase
+        .from("repositories")
+        .update({
+          sync_data: {
+            last_sync_attempt: new Date().toISOString(),
+            status: "blocked_by_student_changes",
+            blocked_handout_sha: repo.assignments.latest_template_sha,
+            unresolved_paths: paths
+          }
+        })
+        .eq("id", repo.id);
+      if (error) throw error;
+    } else if (result.no_changes) {
       console.log("\n✓ No changes needed - repository already up to date");
       const { error } = await adminSupabase
         .from("repositories")
