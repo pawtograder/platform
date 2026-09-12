@@ -172,7 +172,11 @@ cannot detect.
 {{- if .Values.seed.enabled -}}
 {{- fail "seed.enabled=true loads demo classes and canned auth users — never in production." -}}
 {{- end -}}
-{{- range $name, $img := dict "web" .Values.web.image "edgeFunctions" .Values.edgeFunctions.image "migrations" .Values.migrations.image -}}
+{{- /* backup is in here too: it is only pulled on the nightly run, so an
+       unpinned tag fails at 04:00 rather than at deploy time. Its default
+       (supabase/postgres:17.4.1.075) is already pinned, so this only bites an
+       install that repoints backup.image and forgets the tag. */ -}}
+{{- range $name, $img := dict "web" .Values.web.image "edgeFunctions" .Values.edgeFunctions.image "migrations" .Values.migrations.image "backup" .Values.backup.image -}}
 {{- $tag := $img.tag | default "" -}}
 {{- if or (eq $tag "latest") (hasSuffix "-latest" $tag) -}}
 {{- fail (printf "%s.image.tag=%q is a floating tag — production deploys must pin an immutable tag (vX.Y.Z or <branch>-<sha>) for traceability and rollback." $name $tag) -}}
@@ -342,6 +346,28 @@ element to mean anything.
 {{- $top := last $buckets | float64 -}}
 {{- if lt $top (float64 $lifeSec) -}}
 {{- fail (printf "edgeFunctions.metrics.buckets ends at %v seconds, below edgeFunctions.worker.timeoutMs (%ds). Every request that runs to the worker lifetime would land in +Inf, so p95/p99 stop meaning anything at exactly the moment this tier is in trouble. Extend the list so its last element is >= %d (keep it strictly increasing; the default list ends ON the default 400s lifetime)." $top $lifeSec $lifeSec) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+Floating backup image tag + a caching pull policy = a stale nightly dump.
+
+Kubernetes only defaults imagePullPolicy to Always for a tag that is literally
+`:latest`. Anything else that floats — `staging-latest`, `main-latest`,
+`<channel>-latest` — defaults to IfNotPresent, so once a node has pulled it, it
+keeps serving that cached layer after the registry alias moves. For most
+workloads a rollout re-pulls soon enough to hide this; the backup image is
+pulled only when the CronJob fires, so the failure mode is a nightly dump that
+silently runs a months-old image. Any environment, because floating tags are
+legitimate outside production (production refuses them outright above).
+*/ -}}
+{{- if .Values.backup.enabled -}}
+{{- $btag := .Values.backup.image.tag | default "" -}}
+{{- $bpol := .Values.backup.image.pullPolicy | default "" -}}
+{{- if or (eq $btag "latest") (hasSuffix "-latest" $btag) -}}
+{{- if ne $bpol "Always" -}}
+{{- fail (printf "backup.image.tag=%q floats but backup.image.pullPolicy=%q. Kubernetes only defaults to Always for a literal \":latest\", so this resolves to IfNotPresent and a node will keep its cached copy after the registry alias moves — the nightly dump then silently runs a stale image, and because the image is pulled only when the CronJob fires you would not find out at deploy time. Set backup.image.pullPolicy=Always, or pin an immutable tag." $btag $bpol) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

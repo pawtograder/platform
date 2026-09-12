@@ -393,6 +393,25 @@ studio:
 # ----- Nightly Postgres backups to S3 ---------------------------------------
 backup:
   enabled: true
+  # Baked mc — see charts/pawtograder/images/backup/Dockerfile. Pin this rather
+  # than leaving the default (plain supabase/postgres), or every backup,
+  # backup-verify and restore-drill run falls back to fetching mc at runtime
+  # from a third party. That is the dependency that broke backups on
+  # 2026-09-12, when MinIO archived the open-source mc project and dl.min.io
+  # started returning 410 for every binary.
+  # Tag it like the other Pawtograder images (release version or <branch>-<sha>),
+  # NOT with the Postgres version — release-images.yml publishes this repo as
+  # backup:<version>. What tracks postgres.image.tag is the Dockerfile's FROM,
+  # so pg_dump still matches the server it dumps.
+  image:
+    repository: ghcr.io/pawtograder/backup
+    tag: staging-latest
+    # staging-latest FLOATS, and it is not literally ":latest", so the k8s
+    # default would be IfNotPresent — a node would keep its cached copy after
+    # release-images.yml moves the alias, and the nightly dump would silently
+    # run a stale image. The automated deploy pins staging-<sha> and does not
+    # need this; scripts/redeploy-staging.sh uses this file as-is and does.
+    pullPolicy: Always
   schedule: "0 4 * * *"
   retentionDays: 14
   # Dump staging goes on ceph-rbd, NOT the local-path class postgres uses above.
