@@ -586,6 +586,13 @@ Key mechanics:
   installs. Because a retained Job keeps its pod and each pod keeps its claim,
   `backup.successfulJobsHistoryLimit` defaults to 1 (failures keep 3); turn
   both down under a namespace storage quota.
+  Point `backup.image` at the image built from
+  `charts/pawtograder/images/backup/Dockerfile` — supabase/postgres with a
+  SHA-pinned `mc` baked in. The jobs fall back to installing `mc` at runtime
+  when it isn't on PATH, but that fetch is a third-party dependency on the one
+  run that has to work: it broke production on 2026-09-12 when MinIO archived
+  the open-source `mc` project and `dl.min.io` began returning 410 for every
+  binary. Keep the image tag in lockstep with `postgres.image.tag`.
 - **Web images are environment-specific**: `NEXT_PUBLIC_*` values (incl. the
   cluster's anon key) are baked at build time. Build prod images via
   `release-images.yml` `workflow_dispatch` with the prod hostname/namespace

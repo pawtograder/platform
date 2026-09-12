@@ -72,10 +72,15 @@ spec:
                 - -c
                 - |
                   set -euo pipefail
-                  apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-                  curl -fsSL "{{ .Values.backup.mc.url }}" -o /usr/local/bin/mc
-                  echo "{{ .Values.backup.mc.sha256 }}  /usr/local/bin/mc" | sha256sum -c -
-                  chmod +x /usr/local/bin/mc
+                  # Baked-in mc, with the same runtime fallback as
+                  # backup.yaml — see the rationale there.
+                  if ! command -v mc >/dev/null 2>&1; then
+                    echo "[drill] mc not in image — installing at runtime (see backup.image)"
+                    apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+                    curl -fsSL "{{ .Values.backup.mc.url }}" -o /usr/local/bin/mc
+                    echo "{{ .Values.backup.mc.sha256 }}  /usr/local/bin/mc" | sha256sum -c -
+                    chmod +x /usr/local/bin/mc
+                  fi
                   mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
                   LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true)
                   if [ -z "$LATEST" ]; then

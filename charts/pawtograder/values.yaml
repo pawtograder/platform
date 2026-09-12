@@ -1872,6 +1872,17 @@ backup:
   # a run that exceeds this fails LOUDLY rather than hanging forever.
   activeDeadlineSeconds: 3600
   startingDeadlineSeconds: 1800
+  # Point this at the image built from
+  # charts/pawtograder/images/backup/Dockerfile — supabase/postgres with a
+  # pinned mc baked in. That is the supported configuration: it removes a
+  # third-party download from the one run that has to work. The default below
+  # is plain supabase/postgres, which still works via the runtime-install
+  # fallback in the job scripts — but that fallback is exactly what broke
+  # production on 2026-09-12, when MinIO archived the open-source mc project
+  # and dl.min.io began returning 410 for every binary.
+  #
+  # Keep the tag in lockstep with postgres.image.tag either way, so pg_dump
+  # matches the server it dumps.
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"
@@ -1986,8 +1997,18 @@ backup:
   # supabase/postgres image doesn't include it. Pin both URL and
   # SHA256 together; any mismatch fails the job before secrets are
   # used. Update both when bumping the version.
+  # FALLBACK ONLY — used when backup.image has no mc on PATH. Prefer baking it
+  # in (see backup.image above).
+  #
+  # No longer dl.min.io: MinIO archived the open-source mc project around
+  # 2026-09-12 and pulled every binary, so that host returns "410 Gone" for
+  # the pinned archive build AND the rolling release URL. This is the GitHub
+  # release asset for the same RELEASE tag — a byte-identical binary, hence
+  # the unchanged checksum (verified against upstream's own .sha256sum).
+  # Upstream is archived, so treat this as a frozen artifact that will get no
+  # security updates. Change both fields together.
   mc:
-    url: "https://dl.min.io/client/mc/release/linux-amd64/archive/mc.RELEASE.2025-08-13T08-35-41Z"
+    url: "https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z"
     sha256: "01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
 
 # -----------------------------------------------------------------------------
