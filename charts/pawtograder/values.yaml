@@ -1881,8 +1881,10 @@ backup:
   # production on 2026-09-12, when MinIO archived the open-source mc project
   # and dl.min.io began returning 410 for every binary.
   #
-  # Keep the tag in lockstep with postgres.image.tag either way, so pg_dump
-  # matches the server it dumps.
+  # Tag it like the other Pawtograder images (release version or
+  # <branch>-<sha>), NOT with the Postgres version: release-images.yml
+  # publishes this repo as backup:<version>. What tracks postgres.image.tag is
+  # the Dockerfile's FROM, so pg_dump still matches the server it dumps.
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"

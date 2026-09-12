@@ -335,24 +335,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # supabase/postgres + a SHA-pinned mc. Published so installs can point
-      # backup.image at it instead of letting the jobs fetch mc from a third
-      # party on every run — the dependency that broke backups on 2026-09-12
-      # when MinIO archived the open-source mc project and dl.min.io began
-      # returning 410 for every binary.
-      - name: Build & push backup image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: charts/pawtograder/images/backup/Dockerfile
-          push: true
-          tags: ${{ format('{0}/{1}/backup:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
-          build-args: |
-            GIT_SHA=${{ github.sha }}
-            VERSION=${{ needs.meta.outputs.version }}
-          cache-from: type=gha,scope=backup
-          cache-to: type=gha,scope=backup,mode=max
-
       - name: Build & push maintenance image
         uses: docker/build-push-action@v6
         with:
@@ -376,6 +358,52 @@ jobs:
               ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/maintenance:${{ needs.meta.outputs.version }}
           done
 
+  # supabase/postgres + a SHA-pinned mc, so the nightly dump does not fetch its
+  # uploader from a third party on the run that has to work — the dependency
+  # that broke backups on 2026-09-12, when MinIO archived the open-source mc
+  # project and dl.min.io began returning 410 for every binary.
+  #
+  # Its own job, not a step inside build-maintenance, so that it (a) gets the
+  # same "Tag additional refs" aliasing every other image gets — without it
+  # `backup:<channel>-latest` never exists and the CronJobs ImagePullBackOff on
+  # the next run — and (b) can gate publish-chart on its own.
+  build-backup:
+    needs: meta
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push backup image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/backup/Dockerfile
+          push: true
+          tags: ${{ format('{0}/{1}/backup:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ needs.meta.outputs.version }}
+          cache-from: type=gha,scope=backup
+          cache-to: type=gha,scope=backup,mode=max
+
+      - name: Tag additional refs
+        run: |
+          set -euo pipefail
+          for t in $(echo '${{ needs.meta.outputs.tags }}' | tr ',' ' '); do
+            [ "$t" = "${{ needs.meta.outputs.version }}" ] && continue
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/backup:${t} \
+              ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/backup:${{ needs.meta.outputs.version }}
+          done
+
   publish-chart:
     # Note: build-web is intentionally not a dep — on v* tag pushes the web
     # image is not built here (URLs would have to be baked at tag time and
@@ -383,7 +411,7 @@ jobs:
     # by tag only, so it's fine to publish the chart without a same-tag
     # web image; consumers of the chart override web.image.tag to a
     # workflow_dispatch-built image keyed to their environment.
-    needs: [meta, build-edge-functions, build-migrations]
+    needs: [meta, build-edge-functions, build-migrations, build-backup]
     if: needs.meta.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -433,7 +461,7 @@ jobs:
       # server rejecting anything, so the fix is on this side.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance]
+    needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance, build-backup]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     # MUST run on the self-hosted, in-network runner. The cluster API
     # (talos.ripley.cloud:6443) is a private 10.201.2.x address, unreachable
@@ -513,6 +541,7 @@ jobs:
             --set web.image.tag="$VERSION" \
             --set edgeFunctions.image.tag="$VERSION" \
             --set migrations.image.tag="$VERSION" \
+            --set backup.image.tag="$VERSION" \
             --set maintenance.enabled=true \
             --set maintenance.image.repository=ghcr.io/pawtograder/maintenance \
             --set maintenance.image.tag="$VERSION" \

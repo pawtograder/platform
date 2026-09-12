@@ -595,7 +595,10 @@ Key mechanics:
   when it isn't on PATH, but that fetch is a third-party dependency on the one
   run that has to work: it broke production on 2026-09-12 when MinIO archived
   the open-source `mc` project and `dl.min.io` began returning 410 for every
-  binary. Keep the image tag in lockstep with `postgres.image.tag`.
+  binary. Tag it like the other Pawtograder images (release version or
+  `<branch>-<sha>`), *not* with the Postgres version — `release-images.yml`
+  publishes it as `backup:<version>`. What tracks `postgres.image.tag` is the
+  Dockerfile's `FROM`, so `pg_dump` still matches the server it dumps.
 - **Web images are environment-specific**: `NEXT_PUBLIC_*` values (incl. the
   cluster's anon key) are baked at build time. Build prod images via
   `release-images.yml` `workflow_dispatch` with the prod hostname/namespace

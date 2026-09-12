@@ -257,8 +257,11 @@ backup:
   # backup-verify and restore-drill run falls back to fetching mc at runtime
   # from a third party. That is the dependency that broke backups on
   # 2026-09-12, when MinIO archived the open-source mc project and dl.min.io
-  # started returning 410 for every binary. Keep the tag in lockstep with
-  # postgres.image.tag so pg_dump matches the server it dumps.
+  # started returning 410 for every binary.
+  # Tag it like the other Pawtograder images (release version or <branch>-<sha>),
+  # NOT with the Postgres version — release-images.yml publishes this repo as
+  # backup:<version>. What tracks postgres.image.tag is the Dockerfile's FROM,
+  # so pg_dump still matches the server it dumps.
   image:
     repository: ghcr.io/pawtograder/backup
     tag: ""             # ← pin per release
