@@ -11,30 +11,42 @@
 # at build time, into an image we control". It also removes a per-run MITM
 # surface, and it means a backup no longer needs egress to anywhere but S3.
 #
+# WHY A REGISTRY PULL, NOT curl. The first version of this file fetched the
+# GitHub release asset. That timed out (`curl: (28) SSL connection timeout`,
+# after 313s) on the Khoury builder, which mirrors the Ubuntu archive but has
+# unreliable egress to GitHub's release CDN — one build succeeded and the next
+# failed. Copying from a registry uses the one network path that provably
+# works there, since that is how every other image in this chart is built.
+#
+# quay.io still serves the archived project's images; docker.io/minio/mc and
+# dl.min.io are both gone. The binary in this image is byte-identical to what
+# was previously pinned, so MC_SHA256 is unchanged and still verified below —
+# the registry is a transport, not a new trust anchor.
+#
 # The base image MUST stay pinned to the same tag as postgres.image /
 # backup.image so pg_dump and pg_restore match the server they dump. Bump both
 # together.
 #
 # Build context: repository root.
 #   docker build -f charts/pawtograder/images/backup/Dockerfile -t <ref> .
+ARG MC_IMAGE="quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z"
+FROM ${MC_IMAGE} AS mc
+
 FROM supabase/postgres:17.4.1.075
 
-# Pinned by digest-equivalent checksum, not by trusting the host. Upstream is
-# archived, so this URL is a frozen artifact: the GitHub release asset for the
-# same RELEASE tag dl.min.io used to serve. The binary is byte-identical to
-# what was previously pinned — verified against upstream's own .sha256sum.
-# To move to a different build, change BOTH args together.
-ARG MC_URL="https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z"
+# Unchanged from the dl.min.io pin: same release, same bytes. Verified below so
+# a swapped upstream image cannot slip a different binary in.
 ARG MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
 
-# ca-certificates is a RUNTIME dependency, not just a build one: mc needs a
-# trust store to talk HTTPS to the S3 endpoint. curl is left installed rather
-# than purged — `apt-get purge --auto-remove curl` also takes libcurl, which
-# the base image's own tooling links against.
+COPY --from=mc /usr/bin/mc /usr/local/bin/mc
+
+# ca-certificates is a RUNTIME dependency: mc needs a trust store to talk
+# HTTPS to the S3 endpoint. It comes from the Ubuntu mirror, which is the
+# reliable path on this builder. curl is no longer installed at all — nothing
+# downloads anything any more.
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends curl ca-certificates; \
-    curl -fsSL "$MC_URL" -o /usr/local/bin/mc; \
+    apt-get install -y --no-install-recommends ca-certificates; \
     echo "$MC_SHA256  /usr/local/bin/mc" | sha256sum -c -; \
     chmod 0755 /usr/local/bin/mc; \
     mc --version; \
