@@ -393,6 +393,16 @@ studio:
 # ----- Nightly Postgres backups to S3 ---------------------------------------
 backup:
   enabled: true
+  # Baked mc — see charts/pawtograder/images/backup/Dockerfile. Pin this rather
+  # than leaving the default (plain supabase/postgres), or every backup,
+  # backup-verify and restore-drill run falls back to fetching mc at runtime
+  # from a third party. That is the dependency that broke backups on
+  # 2026-09-12, when MinIO archived the open-source mc project and dl.min.io
+  # started returning 410 for every binary. Keep the tag in lockstep with
+  # postgres.image.tag so pg_dump matches the server it dumps.
+  image:
+    repository: ghcr.io/pawtograder/backup
+    tag: staging-latest
   schedule: "0 4 * * *"
   retentionDays: 14
   # Dump staging goes on ceph-rbd, NOT the local-path class postgres uses above.

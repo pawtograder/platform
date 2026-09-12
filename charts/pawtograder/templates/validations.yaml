@@ -172,7 +172,11 @@ cannot detect.
 {{- if .Values.seed.enabled -}}
 {{- fail "seed.enabled=true loads demo classes and canned auth users — never in production." -}}
 {{- end -}}
-{{- range $name, $img := dict "web" .Values.web.image "edgeFunctions" .Values.edgeFunctions.image "migrations" .Values.migrations.image -}}
+{{- /* backup is in here too: it is only pulled on the nightly run, so an
+       unpinned tag fails at 04:00 rather than at deploy time. Its default
+       (supabase/postgres:17.4.1.075) is already pinned, so this only bites an
+       install that repoints backup.image and forgets the tag. */ -}}
+{{- range $name, $img := dict "web" .Values.web.image "edgeFunctions" .Values.edgeFunctions.image "migrations" .Values.migrations.image "backup" .Values.backup.image -}}
 {{- $tag := $img.tag | default "" -}}
 {{- if or (eq $tag "latest") (hasSuffix "-latest" $tag) -}}
 {{- fail (printf "%s.image.tag=%q is a floating tag — production deploys must pin an immutable tag (vX.Y.Z or <branch>-<sha>) for traceability and rollback." $name $tag) -}}

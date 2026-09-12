@@ -586,9 +586,12 @@ Key mechanics:
   installs. Because a retained Job keeps its pod and each pod keeps its claim,
   `backup.successfulJobsHistoryLimit` defaults to 1 (failures keep 3); turn
   both down under a namespace storage quota.
-  Point `backup.image` at the image built from
-  `charts/pawtograder/images/backup/Dockerfile` — supabase/postgres with a
-  SHA-pinned `mc` baked in. The jobs fall back to installing `mc` at runtime
+  Point `backup.image` at `ghcr.io/pawtograder/backup` (published by
+  `release-images.yml` from `charts/pawtograder/images/backup/Dockerfile`) —
+  supabase/postgres with a SHA-pinned `mc` baked in. Pin the tag: in
+  production an empty or floating `backup.image.tag` is refused, because the
+  image is only pulled on the nightly run and would otherwise fail at 04:00
+  rather than at deploy time. The jobs fall back to installing `mc` at runtime
   when it isn't on PATH, but that fetch is a third-party dependency on the one
   run that has to work: it broke production on 2026-09-12 when MinIO archived
   the open-source `mc` project and `dl.min.io` began returning 410 for every

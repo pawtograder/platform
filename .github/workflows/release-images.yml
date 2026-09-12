@@ -335,6 +335,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # supabase/postgres + a SHA-pinned mc. Published so installs can point
+      # backup.image at it instead of letting the jobs fetch mc from a third
+      # party on every run — the dependency that broke backups on 2026-09-12
+      # when MinIO archived the open-source mc project and dl.min.io began
+      # returning 410 for every binary.
+      - name: Build & push backup image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/backup/Dockerfile
+          push: true
+          tags: ${{ format('{0}/{1}/backup:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ needs.meta.outputs.version }}
+          cache-from: type=gha,scope=backup
+          cache-to: type=gha,scope=backup,mode=max
+
       - name: Build & push maintenance image
         uses: docker/build-push-action@v6
         with:
