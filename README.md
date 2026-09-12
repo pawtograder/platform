@@ -67,7 +67,11 @@ For development work that requires changes to the database schema or backend fun
      --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
      --override-name auth.anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
      --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY >> .env.local
+   npx supabase status -o env --override-name api.url=SUPABASE_URL |
+     grep '^SUPABASE_URL=' >> .env.local
    ```
+
+   `--override-name` renames each value once, so the API URL needs the second command to also land under the server-side name `SUPABASE_URL`.
 
    This appends rather than replaces, so delete any earlier copies of those keys from `.env.local` afterwards.
 
