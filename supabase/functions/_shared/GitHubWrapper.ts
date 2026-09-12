@@ -946,6 +946,26 @@ export async function writeFileToRepo(
  * returns no commit sha, yet the assignment still needs a `latest_template_sha` to give
  * student syncs a target.
  */
+/**
+ * The repo's default branch name.
+ *
+ * Resolved rather than assumed for the reason createRepo already documents: a fork inherits the
+ * UPSTREAM's default branch and a template-generated repo inherits the template's, so either can be
+ * `master`. The webhook handlers all learned this the hard way — a grader/solution repo on `master`
+ * had every push ignored until they started reading `payload.repository.default_branch`. A caller
+ * with no push payload to read it from needs to ask GitHub.
+ */
+export async function getDefaultBranch(repoName: string, scope?: Sentry.Scope): Promise<string> {
+  scope?.setTag("github_operation", "get_default_branch");
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error("No octokit found for repository " + repoName);
+  }
+  const [owner, repo] = repoName.split("/");
+  const repoData = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+  return repoData.data.default_branch || "main";
+}
+
 export async function getDefaultBranchHeadSha(repoName: string, scope?: Sentry.Scope): Promise<string | undefined> {
   scope?.setTag("github_operation", "get_default_branch_head");
   scope?.setTag("repository", repoName);
@@ -1386,7 +1406,7 @@ export type CreateRepoOptions = {
 //                                            mergeForkUpstream return shape so
 //                                            tests can exercise the fallback.
 // -----------------------------------------------------------------------------
-function isGithubStubEnabled(): boolean {
+export function isGithubStubEnabled(): boolean {
   return Deno.env.get("PAWTOGRADER_GITHUB_STUB") === "1";
 }
 
@@ -3463,7 +3483,12 @@ function readOrgPermissionSyncExemptions(org: string): Promise<string[]> {
     const { data, error } = await adminSupabase
       .from("github_orgs")
       .select("permission_sync_exempt_users")
-      .eq("org_name", org)
+      // Case-insensitive: GitHub org logins are, `github_orgs.org_name` is a case-sensitive text
+      // key, and admin_create_class stores whatever capitalization was typed. An exact miss here
+      // reads as "no exemptions", which is the one wrong answer that costs something — permission
+      // sync would remove the protected accounts. A unique index on lower(org_name) guarantees this
+      // still matches at most one row.
+      .ilike("org_name", org)
       .maybeSingle();
     // maybeSingle: an org with no configuration row is `null` with no error, and that is a real
     // answer (no exemptions). Only a genuine error is unknown.

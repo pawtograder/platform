@@ -4,6 +4,7 @@ import { EnterCourseAsInstructorButton } from "@/components/admin/EnterCourseAsI
 import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
@@ -38,20 +39,42 @@ export default function GitHubOrgDetailPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const revalidateServerCaches = useRevalidateServerCaches();
+  // The org's OWN stored defaults, blank when it stores none and inherits the deployment's. Filled
+  // from the raw override columns rather than the resolved ones on purpose: rendering the resolved
+  // value here would make every save post it back as an explicit override, which is how an org that
+  // was inheriting stopped inheriting the moment an admin opened this page to tick a checkbox.
   const [handout, setHandout] = useState("");
   const [solution, setSolution] = useState("");
-  // The persisted org defaults (distinct from the live inputs above). The file editor is gated
-  // on these so that typing into the inputs doesn't mount RepoFileEditor and fire GitHub fetches
-  // for half-typed or not-yet-saved repos.
+  // What is actually in force, override or inherited. Shown as the inputs' placeholder, and the
+  // file editor is gated on these: a repo in this org is editable whether it is pinned here or
+  // inherited from the deployment default. Distinct from the live inputs so that typing doesn't
+  // mount RepoFileEditor and fire GitHub fetches for a half-typed or not-yet-saved repo.
   const [savedHandout, setSavedHandout] = useState("");
   const [savedSolution, setSavedSolution] = useState("");
   // Held as the raw text the admin typed, not as a parsed array, so a half-typed entry doesn't
   // vanish from the box while they're still writing it. Parsed on save.
   const [exemptUsers, setExemptUsers] = useState("");
+  const [excludedFromAutomation, setExcludedFromAutomation] = useState(false);
+  // Whether admin_get_github_orgs actually returned this org. PostgREST caps that RPC at max_rows
+  // (1000), so on a deployment with more orgs than that the target may simply be absent from the
+  // response — and every field would then initialize to its empty value and be written back on the
+  // next save, silently clearing a real exemption list or automation exclusion.
+  // Starts FALSE. If either RPC throws, `load` reaches its catch before populating anything, and a
+  // guard that defaulted to true left the page showing empty inputs and an enabled Save — which
+  // would then write an empty exemption array, a false exclusion, and deployment-default templates
+  // over whatever was actually stored. Saving is enabled only once the org has genuinely loaded.
+  const [orgFound, setOrgFound] = useState(false);
+  // What the exclusion was when this page loaded. The RPC reads `undefined` as "not supplied by
+  // this caller" and keeps the stored value, so sending the checkbox only when it actually changed
+  // lets two admins edit different fields without one silently reverting the other's. This flag is
+  // the switch that stops background GitHub mutations, so losing an enable is the expensive
+  // direction.
+  const [loadedExcluded, setLoadedExcluded] = useState(false);
   const [courses, setCourses] = useState<OrgCourse[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setOrgFound(false);
     const supabase = createClient();
     try {
       const [{ data: orgs, error: orgsError }, { data: orgCourses, error: coursesError }] = await Promise.all([
@@ -60,14 +83,20 @@ export default function GitHubOrgDetailPage() {
       ]);
       if (orgsError) throw orgsError;
       if (coursesError) throw coursesError;
-      const thisOrg = (orgs ?? []).find((o) => o.org_name === orgName);
-      const loadedHandout = thisOrg?.default_handout_template_repo ?? "";
-      const loadedSolution = thisOrg?.default_solution_template_repo ?? "";
-      setHandout(loadedHandout);
-      setSolution(loadedSolution);
-      setSavedHandout(loadedHandout);
-      setSavedSolution(loadedSolution);
+      // Matched case-insensitively. The RPC reports one spelling per org and the URL carries
+      // whatever the list page rendered, but GitHub logins are case-insensitive and nothing
+      // guarantees a caller arrived here from that list — a hand-typed or bookmarked URL with a
+      // different capitalization would otherwise fail to match, leave `orgFound` false, and disable
+      // saving on an org that is perfectly readable.
+      const thisOrg = (orgs ?? []).find((o) => o.org_name.toLowerCase() === orgName.toLowerCase());
+      setHandout(thisOrg?.override_handout_template_repo ?? "");
+      setSolution(thisOrg?.override_solution_template_repo ?? "");
+      setSavedHandout(thisOrg?.default_handout_template_repo ?? "");
+      setSavedSolution(thisOrg?.default_solution_template_repo ?? "");
       setExemptUsers((thisOrg?.permission_sync_exempt_users ?? []).join(", "));
+      setExcludedFromAutomation(thisOrg?.excluded_from_automation ?? false);
+      setLoadedExcluded(thisOrg?.excluded_from_automation ?? false);
+      setOrgFound(thisOrg !== undefined);
       setCourses((orgCourses ?? []) as OrgCourse[]);
     } catch (err) {
       toaster.error({ title: "Failed to load org", description: (err as Error).message });
@@ -81,11 +110,22 @@ export default function GitHubOrgDetailPage() {
   }, [load]);
 
   const handleSave = useCallback(async () => {
+    if (!orgFound) {
+      // Refuse rather than write defaults over whatever is actually stored.
+      toaster.error({
+        title: "Cannot save",
+        description: "This org was not returned by the admin org list, so its current settings are unknown."
+      });
+      return;
+    }
     setSaving(true);
     const supabase = createClient();
     try {
       const { error } = await supabase.rpc("admin_upsert_github_org", {
         p_org_name: orgName,
+        // Blank is sent as `undefined`, which the RPC stores as NULL: "this org pins nothing, use
+        // the deployment default". For these two fields that is the admin's actual intent, because
+        // the inputs render the stored override and nothing else.
         p_handout: handout.trim() === "" ? undefined : handout.trim(),
         p_solution: solution.trim() === "" ? undefined : solution.trim(),
         // Always sent, including as an empty array: `undefined` means "leave as-is" to the RPC, so
@@ -93,7 +133,11 @@ export default function GitHubOrgDetailPage() {
         p_permission_sync_exempt_users: exemptUsers
           .split(/[\s,]+/)
           .map((u) => u.trim())
-          .filter((u) => u !== "")
+          .filter((u) => u !== ""),
+        // Sent only when this page changed it. Always sending would have one admin's unrelated
+        // template or exemption save silently revert an exclusion another admin enabled after this
+        // page loaded. Ticking and unticking both still send, so the box remains usable.
+        p_excluded_from_automation: excludedFromAutomation === loadedExcluded ? undefined : excludedFromAutomation
       });
       if (error) throw error;
       toaster.success({ title: "Org defaults saved" });
@@ -106,7 +150,17 @@ export default function GitHubOrgDetailPage() {
     } finally {
       setSaving(false);
     }
-  }, [orgName, handout, solution, exemptUsers, load, revalidateServerCaches]);
+  }, [
+    orgName,
+    handout,
+    solution,
+    exemptUsers,
+    excludedFromAutomation,
+    loadedExcluded,
+    orgFound,
+    load,
+    revalidateServerCaches
+  ]);
 
   // A course in this org gives the edge function a valid auth/ownership context for editing the
   // org's template repos. (Writes are restricted to the course's own org.) Prefer a non-archived
@@ -118,8 +172,14 @@ export default function GitHubOrgDetailPage() {
   // for whatever is currently typed.
   const handoutRepo = useMemo(() => parseRepo(savedHandout), [savedHandout]);
   const solutionRepo = useMemo(() => parseRepo(savedSolution), [savedSolution]);
-  const canEditHandout = authCourseId !== undefined && handoutRepo !== null && handoutRepo.org === orgName;
-  const canEditSolution = authCourseId !== undefined && solutionRepo !== null && solutionRepo.org === orgName;
+  // Case-insensitive for the same reason the org lookup above is: the template repo's owner and the
+  // org in the URL can be spelled differently and still be the same GitHub org, and an exact
+  // comparison would disable the editor for a repo that is genuinely in this org.
+  // The `!== null` stays inline rather than moving into the helper: TypeScript narrows
+  // handoutRepo/solutionRepo from these consts, and the editors below dereference them.
+  const sameOrg = (owner: string) => owner.toLowerCase() === orgName.toLowerCase();
+  const canEditHandout = authCourseId !== undefined && handoutRepo !== null && sameOrg(handoutRepo.org);
+  const canEditSolution = authCourseId !== undefined && solutionRepo !== null && sameOrg(solutionRepo.org);
 
   if (loading) {
     return <Spinner />;
@@ -145,11 +205,27 @@ export default function GitHubOrgDetailPage() {
         </Card.Header>
         <Card.Body>
           <VStack align="stretch" gap={4} maxW="2xl">
-            <Field label="Default handout template repository">
-              <Input value={handout} onChange={(e) => setHandout(e.target.value)} fontFamily="mono" />
+            <Field
+              label="Default handout template repository"
+              helperText={`Leave blank to follow this deployment's default (${savedHandout}).`}
+            >
+              <Input
+                value={handout}
+                onChange={(e) => setHandout(e.target.value)}
+                fontFamily="mono"
+                placeholder={savedHandout}
+              />
             </Field>
-            <Field label="Default solution (grader) template repository">
-              <Input value={solution} onChange={(e) => setSolution(e.target.value)} fontFamily="mono" />
+            <Field
+              label="Default solution (grader) template repository"
+              helperText={`Leave blank to follow this deployment's default (${savedSolution}).`}
+            >
+              <Input
+                value={solution}
+                onChange={(e) => setSolution(e.target.value)}
+                fontFamily="mono"
+                placeholder={savedSolution}
+              />
             </Field>
             <Field
               label="Permission sync exemptions"
@@ -162,7 +238,30 @@ export default function GitHubOrgDetailPage() {
                 placeholder="octocat, some-ops-account"
               />
             </Field>
-            <Button colorPalette="green" alignSelf="flex-start" onClick={handleSave} loading={saving}>
+            <Field
+              label="Exclude from background automation"
+              helperText="Stops the reconciler creating missing handout and solution repos for assignments in this org. For test, dev, and demo orgs. It does NOT stop student-repo reconciliation (reconcile_stuck_repo_creations), and instructor-initiated actions are unaffected."
+            >
+              <Checkbox
+                checked={excludedFromAutomation}
+                onCheckedChange={(e) => setExcludedFromAutomation(!!e.checked)}
+              >
+                Excluded from automation
+              </Checkbox>
+            </Field>
+            {!orgFound && (
+              <Alert status="warning">
+                This org was not returned by the admin org list, so its stored settings could not be read. Saving is
+                disabled to avoid overwriting them.
+              </Alert>
+            )}
+            <Button
+              colorPalette="green"
+              alignSelf="flex-start"
+              onClick={handleSave}
+              loading={saving}
+              disabled={!orgFound}
+            >
               Save defaults
             </Button>
           </VStack>
