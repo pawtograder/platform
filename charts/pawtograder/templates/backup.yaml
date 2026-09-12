@@ -12,21 +12,45 @@ spec:
   # Skip (and mark missed) a run that couldn't start within this window of
   # its slot, instead of piling up stale runs after controller downtime.
   startingDeadlineSeconds: {{ .Values.backup.startingDeadlineSeconds | default 1800 }}
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  # Each retained pod holds its scratch PVC until the pod is deleted, so these
+  # limits are also the retained-storage lever: worst case is
+  # (successful + failed x attempts) x backup.scratchSize of REQUESTED capacity,
+  # which matters under a namespace storage quota even though `rm` frees the
+  # bytes. Successful runs default to 1 for that reason; failures keep 3,
+  # because with restartPolicy: Never each attempt is a separate pod and those
+  # logs are the whole point of retaining them.
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit | default 1 }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit | default 3 }}
   jobTemplate:
     spec:
       backoffLimit: 2
       # Hard ceiling so a wedged dump/upload fails loudly rather than
       # running forever (Forbid would then silently skip every later run).
       activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds | default 3600 }}
+      # NOTE: deliberately NO ttlSecondsAfterFinished here. The
+      # PawtograderBackupJobFailed alert reads kube_job_status_failed off this
+      # Job object, so a TTL would let a failed backup delete its own alert.
+      # Reclamation is left to successful/failedJobsHistoryLimit above, which
+      # reap each pod's scratch PVC along with the Job.
       template:
         metadata:
           labels:
             {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup") | nindent 12 }}
         spec:
-          restartPolicy: OnFailure
+          # Never, NOT OnFailure. Under OnFailure the backoff limit counts
+          # container restarts INSIDE one pod, so status.failed reads 1 (not 3)
+          # and the controller DELETES the pod when the limit trips — taking
+          # every attempt's logs with it, which is exactly the state a failed
+          # nightly backup leaves you to debug. With Never each attempt is its
+          # own pod whose logs survive until the history limit reaps the Job.
+          restartPolicy: Never
           serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+          # Deliberately NO fsGroup, unlike the restore-drill: this container
+          # runs as root (it apt-installs mc), so it needs no group ownership
+          # help, and setting fsGroup would make kubelet chown the volume root —
+          # which a root-squashed NFS export rejects. What actually lets a
+          # squashed-root writer use a brand-new NetApp volume is the 0777
+          # Trident annotation on the claim below.
           {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
           containers:
             - name: backup
@@ -46,7 +70,11 @@ spec:
                   # (which the backup-verify CronJob runs weekly against the
                   # newest object). Restore with:
                   #   pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file>
-                  FILE="/tmp/pawtograder-${TS}.dump"
+                  # /scratch, NOT /tmp: a ~7 GB dump on the container's
+                  # writable layer is unaccounted node ephemeral storage, and
+                  # filling it kills the dump mid-write while pressuring every
+                  # other pod on the node. /scratch is a per-pod ephemeral PVC.
+                  FILE="/scratch/pawtograder-${TS}.dump"
                   pg_dump -Fc > "$FILE"
                   # Verify the archive's TOC parses BEFORE uploading — a
                   # truncated/corrupt dump must fail here, not on restore day.
@@ -75,6 +103,10 @@ spec:
                     exit 1
                   fi
                   echo "[backup] uploaded + size-verified $REMOTE"
+                  # Drop the local copy now the remote is byte-verified, so a
+                  # retained completed pod's PVC doesn't hold a dump-sized chunk
+                  # of the scratch tier until the history limit reaps it.
+                  rm -f "$FILE"
                   # Retention is enforced via a bucket ILM expiry rule. Adding
                   # a duplicate errors, so add only when absent — but a bucket
                   # with NO expiry rule and a failing add is a hard error
@@ -83,6 +115,8 @@ spec:
                     mc ilm rule add --expiry-days {{ .Values.backup.retentionDays }} "s3/${S3_BUCKET}"
                     echo "[backup] created ILM expiry rule ({{ .Values.backup.retentionDays }}d)"
                   fi
+              volumeMounts:
+                - { name: scratch, mountPath: /scratch }
               env:
                 - name: PGHOST
                   value: {{ include "pawtograder.postgres.host" . }}
@@ -111,4 +145,27 @@ spec:
                     secretKeyRef:
                       name: {{ .Values.secrets.names.s3 }}
                       key: AWS_SECRET_ACCESS_KEY
+          volumes:
+            # Dump staging area. A generic ephemeral volume, not an emptyDir:
+            # an emptyDir — even with sizeLimit — still draws on the same node
+            # ephemeral storage, so it would only convert a silent disk-full
+            # into a fast eviction. This gives the dump its own volume, created
+            # per pod and deleted with it.
+            - name: scratch
+              ephemeral:
+                volumeClaimTemplate:
+                  metadata:
+                    annotations:
+                      trident.netapp.io/unixPermissions: "0777"
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    {{- with .Values.backup.scratchStorageClass | default .Values.postgres.persistence.storageClass }}
+                    # Omitted when empty so the cluster's DEFAULT StorageClass
+                    # applies — an explicit "" would instead disable dynamic
+                    # provisioning entirely and leave the PVC Pending forever.
+                    storageClassName: {{ . | quote }}
+                    {{- end }}
+                    resources:
+                      requests:
+                        storage: {{ .Values.backup.scratchSize | default "30Gi" | quote }}
 {{- end }}

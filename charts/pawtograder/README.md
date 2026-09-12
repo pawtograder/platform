@@ -576,6 +576,16 @@ Key mechanics:
   and a weekly `backup-verify` CronJob re-downloads the newest object,
   re-parses its TOC, and fails if the newest backup is older than 48 h.
   Restore with `pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file>`.
+  Both jobs stage the dump on a per-pod ephemeral PVC, sized by
+  `backup.scratchSize` (30Gi default) on `backup.scratchStorageClass` — the
+  dump must fit whole, since its TOC is verified locally before upload. Size
+  this for your database and point it at a cheap tier; leaving it on node
+  ephemeral storage is what makes a nightly backup fail part-written and put
+  the whole node under DiskPressure. Point it at NETWORK storage — it falls
+  back to `postgres.persistence.storageClass`, which is node-local on some
+  installs. Because a retained Job keeps its pod and each pod keeps its claim,
+  `backup.successfulJobsHistoryLimit` defaults to 1 (failures keep 3); turn
+  both down under a namespace storage quota.
 - **Web images are environment-specific**: `NEXT_PUBLIC_*` values (incl. the
   cluster's anon key) are baked at build time. Build prod images via
   `release-images.yml` `workflow_dispatch` with the prod hostname/namespace

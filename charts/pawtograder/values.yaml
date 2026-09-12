@@ -1875,6 +1875,35 @@ backup:
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"
+  # Staging space for the dump before it is uploaded. This is a per-pod GENERIC
+  # EPHEMERAL VOLUME (created with the pod, deleted with it) — NOT the node's
+  # ephemeral storage. It has to be a real volume: the dump is the size of the
+  # compressed database (~7 GB on a large install and growing), and staging that
+  # on the container's writable layer is unaccounted node disk that the
+  # scheduler cannot see. When it runs out, pg_dump dies part-written and every
+  # other pod on that node gets DiskPressure. An emptyDir would not fix it —
+  # sizeLimit only turns the disk-full into a faster eviction.
+  #
+  # Size for your DB with room to grow: the dump must fit whole, since the
+  # archive's TOC is verified locally before upload. Empty storageClass inherits
+  # postgres.persistence.storageClass; point it at a cheap/slow tier (this is
+  # write-once-read-once, it does not need the primary's fast tier).
+  # NOTE: point this at NETWORK storage. It falls back to
+  # postgres.persistence.storageClass, which on some installs is a node-local
+  # class (local-path) — staging the dump there puts it back on the node
+  # filesystem, defeating the point, and worse than /tmp in one way: a
+  # local-path PVC is not charged to the pod's ephemeral storage, so kubelet
+  # will not evict the pod before the node fills.
+  scratchSize: 30Gi
+  scratchStorageClass: ""
+  # Retained Jobs each keep their pod, and each pod keeps its scratch PVC, so
+  # these are the retained-storage lever as well as the log-retention one.
+  # Worst case is (successful + failed x attempts) x scratchSize of REQUESTED
+  # capacity — 30Gi x 1 successful + 30Gi x 3 failed x 3 attempts here. `rm`
+  # frees the bytes after upload but not the claim, so under a namespace
+  # storage quota or a capacity-bound provisioner, turn these down.
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
   s3:
     endpoint: ""
     region: "us-east-1"
@@ -1890,6 +1919,12 @@ backup:
     schedule: "0 6 * * 1" # weekly, after Monday's backup
     activeDeadlineSeconds: 1800
     startingDeadlineSeconds: 1800
+    # Verify downloads the whole newest dump, so it needs the same staging space
+    # as the backup itself. Empty → inherit backup.scratchSize/StorageClass.
+    scratchSize: ""
+    scratchStorageClass: ""
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
   # Restore DRILL: the full-restore rehearsal `verify` stops short of. It
   # restores the newest dump into a throwaway database on the LIVE postgres,
   # asserts a core table has a plausible row count, then drops the scratch DB.

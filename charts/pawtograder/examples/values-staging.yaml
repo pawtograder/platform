@@ -395,6 +395,13 @@ backup:
   enabled: true
   schedule: "0 4 * * *"
   retentionDays: 14
+  # Dump staging goes on ceph-rbd, NOT the local-path class postgres uses above.
+  # The chart falls back to postgres.persistence.storageClass when this is
+  # unset, and inheriting local-path here would stage the whole dump on the
+  # worker's NVMe — the node-filling failure mode the scratch volume exists to
+  # avoid. Staging's DB is small, so 20Gi is ample.
+  scratchSize: 20Gi
+  scratchStorageClass: ceph-rbd
   s3:
     endpoint: https://s3.talos.ripley.cloud
     region: us-east-1

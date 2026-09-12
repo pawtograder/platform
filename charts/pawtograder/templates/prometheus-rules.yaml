@@ -42,11 +42,30 @@ spec:
         # separately (below), not as a backup outage. The recency guard (Job
         # started within backupMaxAgeHours) keeps a RETAINED failed Job
         # (failedJobsHistoryLimit) from firing forever after a later run recovers.
+        #
+        # kube_job_status_failed counts failed PODS, not terminal Job failure, and
+        # the dump Job runs restartPolicy: Never — so a transient first attempt
+        # that the controller then retries successfully leaves the count at 1
+        # forever. Both `unless` guards exist to stop that paging: `succeeded`
+        # suppresses a Job that ultimately uploaded a good dump, and `active`
+        # suppresses one that is still retrying (a pending or running replacement
+        # pod counts as active). What survives both is a Job with failed pods, no
+        # success, and nothing left in flight — i.e. terminally failed.
         - alert: PawtograderBackupJobFailed
           expr: |
             (
               max by (job_name, namespace) (
                 kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+              ) > 0
+            )
+            unless on (job_name, namespace) (
+              max by (job_name, namespace) (
+                kube_job_status_succeeded{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+              ) > 0
+            )
+            unless on (job_name, namespace) (
+              max by (job_name, namespace) (
+                kube_job_status_active{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
               ) > 0
             )
             and on (job_name, namespace) (
@@ -93,11 +112,22 @@ spec:
         # three drill Job types ({{ $backupJob }}-{verify,restore-drill,pitr-drill}-
         # <timestamp>) while still excluding the dump Job ({{ $backupJob }}-<digit>).
         # Recency-guarded like the dump alert.
+        # Same retry-aware guards as the dump alert above.
         - alert: PawtograderBackupVerifyJobFailed
           expr: |
             (
               max by (job_name, namespace) (
                 kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill|pitr-drill)-[0-9].*"}
+              ) > 0
+            )
+            unless on (job_name, namespace) (
+              max by (job_name, namespace) (
+                kube_job_status_succeeded{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill|pitr-drill)-[0-9].*"}
+              ) > 0
+            )
+            unless on (job_name, namespace) (
+              max by (job_name, namespace) (
+                kube_job_status_active{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-(verify|restore-drill|pitr-drill)-[0-9].*"}
               ) > 0
             )
             and on (job_name, namespace) (

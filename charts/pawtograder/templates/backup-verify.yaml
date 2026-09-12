@@ -22,8 +22,12 @@ spec:
   schedule: {{ .Values.backup.verify.schedule | quote }}
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: {{ .Values.backup.verify.startingDeadlineSeconds | default 1800 }}
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  # Each retained pod holds its scratch PVC until the pod is deleted, so these
+  # limits are also the retained-storage lever. Successful runs default to 1:
+  # the dump is already uploaded and size-verified, so older success logs are
+  # not worth a claim each. Failures keep 3 — that is what you debug.
+  successfulJobsHistoryLimit: {{ .Values.backup.verify.successfulJobsHistoryLimit | default 1 }}
+  failedJobsHistoryLimit: {{ .Values.backup.verify.failedJobsHistoryLimit | default 3 }}
   jobTemplate:
     spec:
       backoffLimit: 2
@@ -33,7 +37,10 @@ spec:
           labels:
             {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-verify") | nindent 12 }}
         spec:
-          restartPolicy: OnFailure
+          # Never, not OnFailure — see backup.yaml: OnFailure counts container
+          # restarts inside one pod and deletes that pod when the limit trips,
+          # destroying the logs of every attempt.
+          restartPolicy: Never
           serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
           {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
           containers:
@@ -58,10 +65,13 @@ spec:
                     exit 1
                   fi
                   echo "[verify] newest backup: $LATEST"
-                  mc cp "s3/${S3_BUCKET}/${LATEST}" /tmp/latest.dump
+                  # /scratch, not /tmp — this download is the same ~7 GB
+                  # as the dump itself, and on the container writable layer it
+                  # was pushing nodes into DiskPressure. See backup.yaml.
+                  mc cp "s3/${S3_BUCKET}/${LATEST}" /scratch/latest.dump
                   # TOC must parse and contain a sane number of entries.
-                  ENTRIES=$(pg_restore --list /tmp/latest.dump | grep -c '^[0-9]' || true)
-                  echo "[verify] pg_restore --list OK: ${ENTRIES} TOC entries, $(stat -c%s /tmp/latest.dump) bytes"
+                  ENTRIES=$(pg_restore --list /scratch/latest.dump | grep -c '^[0-9]' || true)
+                  echo "[verify] pg_restore --list OK: ${ENTRIES} TOC entries, $(stat -c%s /scratch/latest.dump) bytes"
                   if [ "${ENTRIES}" -lt 10 ]; then
                     echo "[verify] FATAL: suspiciously small TOC (${ENTRIES} entries) — dump is likely empty/corrupt"
                     exit 1
@@ -77,6 +87,12 @@ spec:
                     echo "[verify] FATAL: newest backup is older than 48h — the backup CronJob is not producing output"
                     exit 1
                   fi
+                  # Nothing below reads the download again, and a retained pod
+                  # keeps its claim, so free the space now rather than holding a
+                  # dump-sized chunk of the scratch tier until the Job is reaped.
+                  rm -f /scratch/latest.dump
+              volumeMounts:
+                - { name: scratch, mountPath: /scratch }
               env:
                 - name: S3_ENDPOINT
                   value: {{ required "backup.s3.endpoint is required when backup.enabled=true" .Values.backup.s3.endpoint | quote }}
@@ -92,4 +108,22 @@ spec:
                     secretKeyRef:
                       name: {{ .Values.secrets.names.s3 }}
                       key: AWS_SECRET_ACCESS_KEY
+          volumes:
+            # Download staging area — per-pod ephemeral PVC, same rationale as
+            # backup.yaml. Falls back to the backup job's own scratch settings.
+            - name: scratch
+              ephemeral:
+                volumeClaimTemplate:
+                  metadata:
+                    annotations:
+                      trident.netapp.io/unixPermissions: "0777"
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    {{- with .Values.backup.verify.scratchStorageClass | default .Values.backup.scratchStorageClass | default .Values.postgres.persistence.storageClass }}
+                    # Omitted when empty — see backup.yaml.
+                    storageClassName: {{ . | quote }}
+                    {{- end }}
+                    resources:
+                      requests:
+                        storage: {{ .Values.backup.verify.scratchSize | default .Values.backup.scratchSize | default "30Gi" | quote }}
 {{- end }}
