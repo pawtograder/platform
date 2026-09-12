@@ -46,6 +46,7 @@ spec:
           containers:
             - name: verify
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.backup.image) }}
+              imagePullPolicy: {{ .Values.backup.image.pullPolicy }}
               # bash, not sh — see backup.yaml (dash rejects pipefail).
               command:
                 - bash

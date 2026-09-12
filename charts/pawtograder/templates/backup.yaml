@@ -55,6 +55,7 @@ spec:
           containers:
             - name: backup
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.backup.image) }}
+              imagePullPolicy: {{ .Values.backup.image.pullPolicy }}
               # Run under bash, not sh: the supabase/postgres image's /bin/sh is
               # dash, which rejects `set -o pipefail` ("Illegal option -o
               # pipefail", exit 2) — without pipefail a failing pg_dump piped to

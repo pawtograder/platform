@@ -65,6 +65,7 @@ spec:
             # needs root (apt), but the postgres container must not run as root.
             - name: fetch-dump
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.backup.image) }}
+              imagePullPolicy: {{ .Values.backup.image.pullPolicy }}
               securityContext:
                 runAsUser: 0
               command:

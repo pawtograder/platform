@@ -1888,6 +1888,11 @@ backup:
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"
+    # MUST be Always if the tag above floats (anything ending -latest). A
+    # floating tag that is not literally ":latest" defaults to IfNotPresent, so
+    # a node keeps serving its cached copy after the alias moves and the nightly
+    # job silently runs a stale image. Pinned tags want IfNotPresent.
+    pullPolicy: IfNotPresent
   # Staging space for the dump before it is uploaded. This is a per-pod GENERIC
   # EPHEMERAL VOLUME (created with the pod, deleted with it) — NOT the node's
   # ephemeral storage. It has to be a real volume: the dump is the size of the
