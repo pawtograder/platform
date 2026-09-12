@@ -12,8 +12,15 @@ spec:
   # Skip (and mark missed) a run that couldn't start within this window of
   # its slot, instead of piling up stale runs after controller downtime.
   startingDeadlineSeconds: {{ .Values.backup.startingDeadlineSeconds | default 1800 }}
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  # Each retained pod holds its scratch PVC until the pod is deleted, so these
+  # limits are also the retained-storage lever: worst case is
+  # (successful + failed x attempts) x backup.scratchSize of REQUESTED capacity,
+  # which matters under a namespace storage quota even though `rm` frees the
+  # bytes. Successful runs default to 1 for that reason; failures keep 3,
+  # because with restartPolicy: Never each attempt is a separate pod and those
+  # logs are the whole point of retaining them.
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit | default 1 }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit | default 3 }}
   jobTemplate:
     spec:
       backoffLimit: 2

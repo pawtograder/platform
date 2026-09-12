@@ -22,8 +22,12 @@ spec:
   schedule: {{ .Values.backup.verify.schedule | quote }}
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: {{ .Values.backup.verify.startingDeadlineSeconds | default 1800 }}
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  # Each retained pod holds its scratch PVC until the pod is deleted, so these
+  # limits are also the retained-storage lever. Successful runs default to 1:
+  # the dump is already uploaded and size-verified, so older success logs are
+  # not worth a claim each. Failures keep 3 — that is what you debug.
+  successfulJobsHistoryLimit: {{ .Values.backup.verify.successfulJobsHistoryLimit | default 1 }}
+  failedJobsHistoryLimit: {{ .Values.backup.verify.failedJobsHistoryLimit | default 3 }}
   jobTemplate:
     spec:
       backoffLimit: 2
@@ -83,6 +87,10 @@ spec:
                     echo "[verify] FATAL: newest backup is older than 48h — the backup CronJob is not producing output"
                     exit 1
                   fi
+                  # Nothing below reads the download again, and a retained pod
+                  # keeps its claim, so free the space now rather than holding a
+                  # dump-sized chunk of the scratch tier until the Job is reaped.
+                  rm -f /scratch/latest.dump
               volumeMounts:
                 - { name: scratch, mountPath: /scratch }
               env:
