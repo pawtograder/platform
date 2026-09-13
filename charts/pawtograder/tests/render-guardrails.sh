@@ -1655,11 +1655,11 @@ assert_alert_uses_unless "stuck alert subtracts the draining case with unless" \
 assert_rendered_contains "aging guard reads the labelled depth gauge" \
   templates/prometheus-rules.yaml \
   'deriv(pawtograder_queue_depth{namespace="default", queue!~".*_dlq|async_calls_low_priority"}[15m])' \
-  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+  --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 assert_rendered_contains "stuck guard reads the labelled depth gauge" \
   templates/prometheus-rules.yaml \
   'deriv(pawtograder_queue_depth{namespace="default", queue="async_calls"}[15m])' \
-  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+  --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 
 # deriv() returns a PER-SECOND rate and draining is a FALLING gauge, so the
 # comparison has to be scaled by 60 and negative. Drop the minus sign and the
@@ -1687,7 +1687,7 @@ assert_rendered_contains "drain floor is configurable" \
 assert_rendered_contains "aging alert still excludes DLQs and low-priority on both sides" \
   templates/prometheus-rules.yaml \
   'pawtograder_queue_depth{namespace="default", queue!~".*_dlq|async_calls_low_priority"}' \
-  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+  --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 
 # The `queue` label values in metrics/index.ts must be IDENTICAL between the two
 # arrays that feed pawtograder_queue_oldest_message_seconds and
