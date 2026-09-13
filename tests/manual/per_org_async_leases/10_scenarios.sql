@@ -236,9 +236,10 @@ select harness.seed(107, 5);
 select harness.seed_raw(jsonb_build_object('method', 'sync_repo_permissions', 'class_id', 999999,
                                            'log_id', 1, 'args', jsonb_build_object('repo', 'x/y')));
 -- no class_id at all (should not happen per the 5522/5522 measurement, but must not be invisible)
-select harness.seed_raw(jsonb_build_object('method', 'mystery', 'log_id', 2));
+select harness.seed_raw(jsonb_build_object('method', 'sync_repo_permissions', 'log_id', 2));
 -- class_id present but not a number: the text join must tolerate it rather than raise
-select harness.seed_raw(jsonb_build_object('method', 'mystery', 'class_id', 'not-a-number', 'log_id', 3));
+select harness.seed_raw(jsonb_build_object('method', 'sync_repo_permissions',
+                                           'class_id', 'not-a-number', 'log_id', 3));
 -- and one real org alongside, so the sentinel has to actually compete
 select harness.seed(101, 40);
 
@@ -982,6 +983,81 @@ begin
   perform harness.expect('17 status', 'a successful claim returns only claimed rows', '{claimed}',
     (select array_agg(distinct t.status)::text
        from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'st-h8', 300, 4, 8) t));
+end $$;
+
+-- =============================================================================================
+\echo '### scenario 19: org fields other than args.org, and methods the key does not know'
+-- =============================================================================================
+-- processEnvelope does not read args.org for every method. rerun_autograder takes the owner from
+-- args.repository and sync_repo_to_handout from args.repository_full_name, and those are the org
+-- the handler will actually call. If a class is repointed at a new GitHub org while either job type
+-- is queued, budgeting them against the class row lets the OLD org exceed max_per_org while the
+-- handlers keep calling it.
+select harness.reset('async_calls');
+insert into public.classes(id, github_org) values (204, 'org-current')
+on conflict (id) do update set github_org = excluded.github_org;
+
+-- rerun_autograder: owner comes from args.repository
+select harness.seed_raw(jsonb_build_object(
+  'method', 'rerun_autograder', 'class_id', 204, 'log_id', 1,
+  'args', jsonb_build_object('repository', 'org-legacy/assignment-1-alice')));
+-- sync_repo_to_handout: owner comes from args.repository_full_name, and the fold applies here too
+select harness.seed_raw(jsonb_build_object(
+  'method', 'sync_repo_to_handout', 'class_id', 204, 'log_id', 2,
+  'args', jsonb_build_object('repository_full_name', 'ORG-LEGACY/assignment-1-bob',
+                             'repository_id', 7)));
+-- a method the partition key does not know: it must NOT quietly join the class's bucket
+select harness.seed_raw(jsonb_build_object(
+  'method', 'brand_new_method', 'class_id', 204, 'log_id', 3,
+  'args', jsonb_build_object('org', 'org-current')));
+-- and one ordinary job on the class's current org, so the buckets have to be told apart
+select harness.seed_raw(jsonb_build_object(
+  'method', 'create_repo', 'class_id', 204, 'log_id', 4,
+  'args', jsonb_build_object('org', 'org-current')));
+
+do $$
+declare
+  i int;
+begin
+  -- max_per_org = 1, so each distinct org bucket needs its own claim to drain.
+  for i in 1..5 loop
+    insert into harness.claims(scenario, holder, org, msg_id)
+    select '19 org field coverage', 'ofc-h' || i, t.org, t.msg_id
+      from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'ofc-h' || i, 300, 1, 8) t
+     where t.status = 'claimed';
+  end loop;
+
+  -- Three buckets from one class: the repository owner, the class's current org, and the method
+  -- this key does not recognize.
+  perform harness.expect('19 org field coverage', 'org buckets derived from one class',
+    '{(unknown-method),org-current,org-legacy}',
+    (select array_agg(distinct org order by org)::text from harness.claims
+      where scenario = '19 org field coverage'));
+
+  -- Both repository-bearing methods land on the owner from the envelope, folded, and together.
+  perform harness.expect('19 org field coverage', 'rerun_autograder and sync_repo_to_handout share the owner bucket',
+    '2', (select count(*)::text from harness.claims
+           where scenario = '19 org field coverage' and org = 'org-legacy'));
+  perform harness.expect('19 org field coverage', 'rerun_autograder took the owner of args.repository',
+    'org-legacy',
+    (select c.org from harness.claims c join pgmq.q_async_calls q on q.msg_id = c.msg_id
+      where c.scenario = '19 org field coverage' and q.message->>'method' = 'rerun_autograder'));
+  perform harness.expect('19 org field coverage', 'sync_repo_to_handout took the folded owner of args.repository_full_name',
+    'org-legacy',
+    (select c.org from harness.claims c join pgmq.q_async_calls q on q.msg_id = c.msg_id
+      where c.scenario = '19 org field coverage' and q.message->>'method' = 'sync_repo_to_handout'));
+
+  -- The unknown method is quarantined rather than charged to the class's org.
+  perform harness.expect('19 org field coverage', 'unknown method bucketed separately', '(unknown-method)',
+    (select c.org from harness.claims c join pgmq.q_async_calls q on q.msg_id = c.msg_id
+      where c.scenario = '19 org field coverage' and q.message->>'method' = 'brand_new_method'));
+  perform harness.expect('19 org field coverage', 'only the create_repo job used the class org', '1',
+    (select count(*)::text from harness.claims
+      where scenario = '19 org field coverage' and org = 'org-current'));
+
+  -- Quarantined is not stranded. Everything drains.
+  perform harness.expect('19 org field coverage', 'whole queue drained', '0',
+    (select count(*)::text from pgmq.q_async_calls where vt <= clock_timestamp()));
 end $$;
 
 -- =============================================================================================

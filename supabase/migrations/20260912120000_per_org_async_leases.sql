@@ -175,6 +175,12 @@ declare
   -- pgmq.format_table_name is not just convenience. It is the injection guard, rejecting a
   -- queue_name containing $, ; or -- before it is ever interpolated with %I.
   v_qtable text := pgmq.format_table_name(queue_name, 'q');
+  -- lower() because pgmq.format_table_name and pgmq.create both lowercase. 'Async_Calls' would
+  -- otherwise find the queue TABLE but match no slot rows, which looks exactly like an exhausted
+  -- pool and would claim nothing forever.
+  v_queue text := lower(queue_name);
+  v_own_slot int;
+  v_own_count int;
   v_sql text;
 begin
   if holder is null or holder = '' then
@@ -204,11 +210,9 @@ begin
   -- than a runtime state, so it arrives as an exception on the first call. One index-only lookup on
   -- the (queue_name, slot) key, taken before the advisory lock so a misconfigured caller cannot
   -- serialize anyone else while it fails.
-  if not exists (select 1 from public.async_worker_slots s
-                  where s.queue_name = lower(claim_org_slot_and_read.queue_name)) then
+  if not exists (select 1 from public.async_worker_slots s where s.queue_name = v_queue) then
     raise exception 'claim_org_slot_and_read: no slot pool seeded for queue %, so this queue can '
-                    'never drain. Seed public.async_worker_slots in a migration.',
-                    lower(claim_org_slot_and_read.queue_name);
+                    'never drain. Seed public.async_worker_slots in a migration.', v_queue;
   end if;
 
   -- ONE GLOBAL LOCK, NOT ONE PER QUEUE, and the difference affects correctness rather than style.
@@ -222,34 +226,116 @@ begin
   -- from the single-bigint space the gradebook functions use.
   perform pg_advisory_xact_lock(1346850129, 0);
 
+  -- TAKE OUR OWN ROW FIRST, AND TAKE IT BLOCKING.
+  --
+  -- The allocator used to express "reuse the slot I already hold" as an ORDER BY preference inside
+  -- the claim statement, under FOR UPDATE SKIP LOCKED. That is not an invariant, it is a hint, and
+  -- SKIP LOCKED discards it precisely when it matters: if the caller's own renewal timer holds the
+  -- row lock at that instant, the preferred row is skipped and the claim takes a DIFFERENT free row
+  -- instead. The holder then owns two rows in one pool, renew_org_slot refreshes both forever
+  -- (it matches on queue and holder, not on slot), and the extra one occupies global_cap and
+  -- max_per_org while no isolate is doing its work. The global advisory lock does not help, because
+  -- it serializes allocators against each other and renew_org_slot never takes it.
+  --
+  -- So the caller's own row is resolved in its own statement, with a plain blocking FOR UPDATE, and
+  -- the claim below is then restricted to that one row. A row already locked by the CURRENT
+  -- transaction is not skipped by SKIP LOCKED, so the reuse becomes unconditional.
+  --
+  -- WHY THIS CANNOT DEADLOCK, now that two lock types are in play:
+  --
+  --   * Allocator against allocator is impossible. Every allocator takes the global advisory lock
+  --     before any row lock and holds it until commit, so only one is ever inside this section.
+  --   * Allocator against renew or release. This statement only ever waits on rows bearing its OWN
+  --     holder. renew_org_slot and release_org_slot select rows by (queue_name, holder) and take no
+  --     other lock of any kind, so once either of them is running it cannot wait on anything and
+  --     cannot be the second edge of a cycle. Only a renew or release for THIS SAME holder can
+  --     contend at all, and the wait is on one row of one single-row UPDATE.
+  --   * Ordering. Our own row is locked BEFORE any free row. The reverse order would be the risky
+  --     one, because then we could hold a free row while waiting for our own.
+  --
+  -- The cost is that a blocking wait happens while the global advisory lock is held, so a slow
+  -- blocker stalls every allocator. The blocker is one single-row UPDATE with no further locks to
+  -- acquire, so the wait is bounded by that statement rather than by anything a caller controls.
+  --
+  -- Locking every row we own rather than just one also repairs the damage the old race could
+  -- already have done: a holder that ended up on two rows is cut back to one here, and the surplus
+  -- is released rather than left to be renewed forever.
+  with mine as (
+    select s.slot
+      from public.async_worker_slots s
+     where s.queue_name = v_queue
+       and s.holder = claim_org_slot_and_read.holder
+     order by s.slot
+       for update
+  )
+  select min(m.slot), count(*) into v_own_slot, v_own_count from mine m;
+
+  if coalesce(v_own_count, 0) > 1 then
+    update public.async_worker_slots s
+       set org = null, holder = null, claimed_at = null, expires_at = '-infinity'
+     where s.queue_name = v_queue
+       and s.holder = claim_org_slot_and_read.holder
+       and s.slot <> v_own_slot;
+  end if;
+
   v_sql := format($QUERY$
     with ready as (
         -- The partition key, defined ONCE. Everything downstream reads it from here rather than
         -- recomputing it, because `demand` and `picked` disagreeing about which org a message
         -- belongs to would mean claiming a slot for one org and then reading another org's work.
         --
-        -- THREE decisions are packed into this expression:
+        -- This MIRRORS the worker's own org resolver, the one guarding the circuit breaker in
+        -- github-async-worker/index.ts (the `if (envelope.method === ...)` chain that ends in
+        -- `throw new Error("Unknown method...")`). It has to: the budget must be charged to the org
+        -- the handler is going to call, and that resolver is what decides which org that is.
         --
-        -- 1. args.org FIRST. The handler calls GitHub against the org baked into the envelope, not
-        --    against whatever classes.github_org says today. If an instructor repoints a class at a
-        --    new org while envelopes are queued, attributing that in-flight work to the new org
-        --    charges the budget to an org no handler is going to call.
-        -- 2. classes.github_org as the FALLBACK, and it carries real traffic. args.org is missing
+        --   create_repo, sync_student_team, sync_staff_team, sync_repo_permissions,
+        --   archive_repo_and_lock, fetch_repo_analytics        -> args.org
+        --   rerun_autograder                                   -> owner of args.repository
+        --   sync_repo_to_handout                               -> owner of args.repository_full_name
+        --
+        -- The set is CLOSED, not open-ended: those eight are exactly the `case` labels in
+        -- processEnvelope, and the resolver throws on anything else, so a ninth method fails loudly
+        -- in the worker before it can reach here. The three envelope fields are mutually exclusive
+        -- by method, so the coalesce order among them does not matter. Four decisions:
+        --
+        -- 1. THE ENVELOPE FIRST. The handler calls GitHub against the owner baked into the
+        --    envelope, not against whatever classes.github_org says today. If an instructor
+        --    repoints a class at a new org while jobs are queued, attributing that in-flight work
+        --    to the new org charges the budget to an org no handler is going to touch, and lets the
+        --    old one exceed max_per_org. split_part(x, '/', 1) is the SQL spelling of the
+        --    resolver's repo.split("/")[0].
+        -- 2. classes.github_org as the FALLBACK, and it carries real traffic: args.org is missing
         --    from about one envelope in seven (see the header for the measurement), and those are
-        --    not a random seventh: they are every sync_repo_permissions job. Note that a literal
-        --    percent sign cannot appear anywhere in this string, because the whole block is a
-        --    format() template. Joining on c.id::text rather than casting the
-        --    envelope to bigint cannot raise on a malformed class_id, and it puts the cast on
-        --    `classes` (a few hundred rows) instead of on every queued message.
-        -- 3. lower() over the whole thing. GitHub org names are case-insensitive and one class in
+        --    not a random seventh. Joining on c.id::text rather than casting the envelope to bigint
+        --    cannot raise on a malformed class_id, and it puts the cast on `classes` (a few hundred
+        --    rows) instead of on every queued message.
+        -- 3. A METHOD THIS LIST DOES NOT KNOW gets its own bucket rather than the class fallback.
+        --    A method whose name we do not recognize is a method whose org field we may not
+        --    recognize either, so falling back to the class would be the same silent mis-budgeting
+        --    this whole expression exists to stop. The bucket still drains like any other org, so
+        --    nothing is stranded. Because the worker throws on exactly these methods, a non-empty
+        --    '(unknown-method)' bucket in async_worker_slots.org means the two lists have drifted.
+        -- 4. lower() over the whole thing. GitHub org names are case-insensitive and one class in
         --    prod already stores a mixed-case github_org, so 'Khoury-CS' and 'khoury-cs' are one
         --    org sharing one rate-limit bucket. Without the fold they would each draw a full
         --    max_per_org allowance against that single bucket.
+        --
+        -- Note that a literal percent sign cannot appear anywhere in this string, because the whole
+        -- block is a format() template.
         select q.msg_id,
-               lower(coalesce(
-                 nullif(q.message->'args'->>'org', ''),
-                 c.github_org,
-                 '(unresolved)')) as org
+               case when q.message->>'method' in (
+                         'create_repo', 'sync_student_team', 'sync_staff_team',
+                         'sync_repo_permissions', 'archive_repo_and_lock', 'fetch_repo_analytics',
+                         'rerun_autograder', 'sync_repo_to_handout')
+                    then lower(coalesce(
+                           nullif(q.message->'args'->>'org', ''),
+                           nullif(split_part(q.message->'args'->>'repository', '/', 1), ''),
+                           nullif(split_part(q.message->'args'->>'repository_full_name', '/', 1), ''),
+                           c.github_org,
+                           '(unresolved)'))
+                    else '(unknown-method)'
+               end as org
           from pgmq.%1$I q
           left join public.classes c on c.id::text = q.message->>'class_id'
          where q.vt <= clock_timestamp()
@@ -303,15 +389,18 @@ begin
         -- Within THIS queue's pool. queue_name is carried through to `claimed` because the key is
         -- (queue_name, slot) and slot 7 exists once per queue, so joining on slot alone would claim
         -- a row out of a different pool.
+        --
+        -- $6 is the slot this holder already owns here, locked by the step above, or NULL. When it
+        -- is set it is the ONLY candidate: reusing our own row is what keeps one holder to one row
+        -- per pool, and it is not a preference that can be lost. SKIP LOCKED does not skip a row
+        -- locked by the CURRENT transaction, so having taken it above is exactly what makes it
+        -- unskippable here. When it is NULL we own nothing, and any expired row will do.
         select s.queue_name, s.slot
           from public.async_worker_slots s
          where s.queue_name = $5
-           and (s.expires_at <= clock_timestamp() or s.holder = $1)
            and exists (select 1 from winner)
-         -- Prefer the slot we already hold, so a repeat caller overwrites its own row instead of
-         -- taking a second one. `IS NOT DISTINCT FROM` rather than `=` because DESC sorts NULLs
-         -- first, which would otherwise rank an unheld slot above our own.
-         order by (s.holder is not distinct from $1) desc, s.slot asc
+           and case when $6 is null then s.expires_at <= clock_timestamp() else s.slot = $6 end
+         order by s.slot asc
          limit 1
          for update of s skip locked
     ),
@@ -372,10 +461,7 @@ begin
     make_interval(secs => sleep_seconds)
   );
 
-  -- lower(queue_name) for the slot lookup, because pgmq.format_table_name and pgmq.create both
-  -- lowercase. 'Async_Calls' would otherwise find the queue TABLE but match no slot rows, which
-  -- looks exactly like an exhausted pool and would claim nothing forever.
-  return query execute v_sql using holder, n, max_per_org, global_cap, lower(queue_name);
+  return query execute v_sql using holder, n, max_per_org, global_cap, v_queue, v_own_slot;
 end;
 $function$;
 

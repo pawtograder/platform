@@ -1754,12 +1754,113 @@ assert_promrules_suite_present() {
   elif [ ! -f "$CHART/tests/promrules-unit.yaml" ]; then
     echo "FAIL [$label]: charts/pawtograder/tests/promrules-unit.yaml is missing"
     FAILED=1
+  elif [ ! -f "$CHART/tests/promrules-unit-extreme.yaml" ]; then
+    echo "FAIL [$label]: charts/pawtograder/tests/promrules-unit-extreme.yaml is missing"
+    FAILED=1
   else
     echo "ok   [$label]"
   fi
 }
 
+# The drain-floor CEILING lives in two places: validations.yaml refuses anything
+# above it, and promrules-unit.sh renders a scenario AT it to prove the last
+# permitted value still discriminates. Raise the bound and forget the suite, and
+# the suite keeps evaluating the old value — passing, while the range it claims
+# to cover has grown past the measurement behind it. The two numbers have to
+# move together, so they are compared here.
+assert_drain_ceiling_agreement() {
+  local label="$1"
+  local bound runner
+  bound="$(grep -oE 'is outside 1-[0-9]+ messages/minute' "$CHART/templates/validations.yaml" \
+    | grep -oE '[0-9]+ messages' | grep -oE '^[0-9]+')"
+  runner="$(grep -oE '^EXTREME_FLOOR=[0-9]+' "$CHART/tests/promrules-unit.sh" | grep -oE '[0-9]+$')"
+  if [ -z "$bound" ] || [ -z "$runner" ]; then
+    echo "FAIL [$label]: could not read the ceiling from validations.yaml ($bound)"
+    echo "       or EXTREME_FLOOR from promrules-unit.sh ($runner)"
+    FAILED=1
+  elif [ "$bound" != "$runner" ]; then
+    echo "FAIL [$label]: validations.yaml permits up to $bound msg/min but"
+    echo "       promrules-unit.sh only evaluates $runner. The ceiling grew past"
+    echo "       the value the behavioural suite proves still works — re-measure"
+    echo "       the drain and move EXTREME_FLOOR with the bound."
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+assert_drain_ceiling_agreement "the drain-floor ceiling and its proof are the same number"
+
 assert_promrules_suite_present "the promtool behaviour suite is present and runnable"
+
+# A threshold that cannot page is worse than no threshold. Every
+# monitoring.prometheusRules number is interpolated verbatim into PromQL or into
+# a `for:` duration, and nothing between values.yaml and Prometheus type-checks
+# it: the chart renders, the CRD accepts it, `kubectl apply` succeeds, and
+# Prometheus refuses the RULE GROUP — taking every alert in it off duty with the
+# only evidence in the operator's log. That is the same silent-loss shape the
+# `unless` operator above was chosen to avoid, reached through the values file.
+assert_refused "refuses a non-numeric drain floor" \
+  "must be a plain non-negative number" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=fast
+assert_refused "refuses a negative drain floor" \
+  "must be a plain non-negative number" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=-2
+
+# Both bounds are the guard losing its discrimination, in opposite directions.
+# At 0 the floor suppresses every queue that is moving at all, the 0.66 msg/min
+# 2026-09-07 stall included. Above 7 it is above the slowest healthy window ever
+# measured (7.27 msg/min, 2026-09-13), so it matches nothing and silently
+# restores the release pages — which is exactly what promrules-unit.sh's third
+# negative control demonstrates by mutating the floor to a value no drain can
+# reach.
+assert_refused "refuses a drain floor of zero" \
+  "is outside 1-7" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=0
+assert_refused "refuses a drain floor above every measured healthy drain" \
+  "is outside 1-7" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=20
+
+# The band is narrow (0.66 stall to 7.27 healthy), so fractional floors have to
+# work or the only tuning available is a 1-in-7 step.
+assert_renders "permits a fractional drain floor" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=1.5
+
+# The same class of typo on the DURATION thresholds. An unquoted 10m in YAML is
+# the string the rule needs; an unquoted 10 is an integer, and a bare integer is
+# not a valid Prometheus duration — `for: 5` is refused by the operator.
+assert_refused "refuses a bare integer where a duration is required" \
+  "must be a Prometheus duration" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.postgresUnavailableFor=5
+
+# ...and on a pre-existing numeric threshold, to prove the guard covers the
+# class rather than only the value this change added.
+assert_refused "refuses a non-numeric value on a pre-existing threshold" \
+  "must be a plain non-negative number" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueOldestSeconds=twenty
+
+# Gated on the rules actually rendering. A deployment that emits no
+# PrometheusRule must not fail an upgrade over numbers with no effect — the same
+# rule the org-slot coherence checks follow, and the reason an install that once
+# experimented with a value is not wedged by it forever.
+assert_renders "a monitoring-disabled deployment ignores a garbage threshold" \
+  --set monitoring.enabled=false \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=fast
+
+# Helm parses YAML numbers as float64, so the shipped replicationLagBytesWarning
+# (104857600) stringifies as 1.048576e+08. PromQL accepts that literal and the
+# rule casts with int64 anyway, but the shape check has to allow what PromQL
+# allows rather than what looks tidy in values.yaml — the default values file
+# must render, and it did not on the first attempt at this guard.
+assert_renders "the shipped defaults pass their own threshold validation" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"

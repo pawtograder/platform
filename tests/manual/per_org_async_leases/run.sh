@@ -40,7 +40,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-MIGRATION="$REPO/supabase/migrations/20260912120000_per_org_async_leases.sql"
+# HARNESS_MIGRATION exists so a reviewer can point this at a MODIFIED copy of the migration and
+# watch a scenario fail. That is the only way to show a concurrency scenario is not vacuous: revert
+# the own-row lock in a scratch copy, re-run, and scenario 18 must go red. See the report.
+MIGRATION="${HARNESS_MIGRATION:-$REPO/supabase/migrations/20260912120000_per_org_async_leases.sql}"
 
 IMAGE="supabase/postgres:17.4.1.075"
 EXPECTED_PGMQ="1.4.4"
@@ -173,6 +176,63 @@ run_sql -c "select harness.note('5 concurrency', 'parallel sessions', '$WORKERS'
 
 echo ">> scenario 5: assertions"
 run_sql -f "$HERE/30_storm_assert.sql"
+
+# ------------------------------------------------------------------------------------------------
+# Scenario 18: a renewal's row lock interleaved with a claim by the same holder.
+#
+# This one cannot be staged from a single session. The bug needs one transaction holding the row
+# lock on a holder's slot while ANOTHER transaction runs that holder's next claim, and calling the
+# two in sequence passes against the broken allocator. So: two psql sessions, started together.
+# ------------------------------------------------------------------------------------------------
+echo ">> scenario 18: renewal/claim race setup"
+run_sql -f "$HERE/40_race_setup.sql"
+
+echo ">> scenario 18: deterministic race (renewal holds the row lock across the claim)"
+run_sql -f "$HERE/41_race_renew.sql" >/dev/null &
+RENEW_PID=$!
+run_sql -f "$HERE/42_race_claim.sql" >/dev/null &
+CLAIM_PID=$!
+wait "$RENEW_PID"
+wait "$CLAIM_PID"
+run_sql -f "$HERE/43_race_assert.sql"
+
+# And the same overlap generated at random by many sessions, so a fix that merely narrows the
+# window rather than closing it still fails here.
+#
+# Each holder is driven by a PAIR of sessions: one claiming, one renewing, both under the same
+# holder string. That pairing is what makes this test non-vacuous. A single session doing claim then
+# renew cannot reproduce the bug, because its own two statements are sequential.
+RACE_WORKERS=$(( WORKERS / 2 ))
+[ "$RACE_WORKERS" -ge 8 ] || RACE_WORKERS=8
+RACE_ITERS=20
+
+: > "$WORK/race_claim_body.sql"
+for ((k = 1; k <= RACE_ITERS; k++)); do cat "$HERE/44_race_worker.sql" >> "$WORK/race_claim_body.sql"; done
+
+# The renew half loops harder than the claim half, so a claim is likely to land inside a renewal's
+# row lock rather than between two of them.
+: > "$WORK/race_renew_body.sql"
+for ((k = 1; k <= RACE_ITERS * 8; k++)); do cat "$HERE/46_race_renew_worker.sql" >> "$WORK/race_renew_body.sql"; done
+
+cat > "$WORK/race_worker.sh" <<RACEWORKER
+#!/usr/bin/env bash
+set -euo pipefail
+export PGPASSWORD=postgres
+# \$1 is "claim" or "renew"; \$2 is the holder id.
+exec psql -X -q -h 127.0.0.1 -p $PORT -U postgres -d postgres -v ON_ERROR_STOP=1 \\
+  -v h="race-\$2" -f "$WORK/race_\$1_body.sql" -o /dev/null
+RACEWORKER
+chmod +x "$WORK/race_worker.sh"
+
+echo ">> scenario 18: $RACE_WORKERS holders, each driven by a claim session and a renew session"
+run_sql -c "select harness.reset('async_calls')" >/dev/null
+run_sql -c "select harness.seed(101, 600), harness.seed(102, 600), harness.seed(103, 600)" >/dev/null
+# Both halves of every pair start together, so the two statement streams interleave for real.
+{
+  seq 1 "$RACE_WORKERS" | sed 's/^/renew /'
+  seq 1 "$RACE_WORKERS" | sed 's/^/claim /'
+} | xargs -P "$(( RACE_WORKERS * 2 ))" -n 2 "$WORK/race_worker.sh"
+run_sql -f "$HERE/45_race_storm_assert.sql"
 
 # ------------------------------------------------------------------------------------------------
 echo

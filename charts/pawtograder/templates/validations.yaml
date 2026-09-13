@@ -392,3 +392,83 @@ element to mean anything.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /*
+PROMETHEUS RULE THRESHOLDS.
+
+Every value below is interpolated VERBATIM into a PromQL expression or a `for:`
+duration in templates/prometheus-rules.yaml. Nothing between here and Prometheus
+type-checks it: helm renders, the PrometheusRule CRD accepts it (its schema says
+`expr` is a string), `kubectl apply` succeeds, and the failure lands in the one
+place nobody is watching. A rule group whose expression will not parse is
+rejected AS A GROUP, so every alert in that group stops evaluating. The result is
+a critical alert that no longer pages, with no symptom anywhere except the
+Prometheus operator's log.
+
+That is the same silent-loss shape PawtograderQueueOldestMessageAging's `unless`
+was chosen to avoid, reached through the values file instead of the expression.
+A threshold that cannot page is worse than no threshold, because the dashboard
+still looks monitored.
+
+Three ways a plain typo gets there, all of which render cleanly today:
+
+  queueDrainMessagesPerMinute: fast   ->  `... * 60 < -fast`   unparseable
+  queueDrainMessagesPerMinute: -2     ->  `... * 60 < --2`     unparseable
+  replicationLagBytesWarning: 100MiB  ->  int64 CASTS it to 0, so the rule
+    renders as `> 0` and pages permanently instead of never -- the quiet one,
+    because sprig coerces rather than fails and the render looks fine.
+
+SHAPE ONLY for the pre-existing thresholds. Each of those has its argument in
+values.yaml, and inventing numeric bounds here without a measurement behind them
+would be worse than leaving them open -- every other bound in this file is
+defended with a date and a number. The one value whose range IS argued from
+measurements is range-checked below.
+
+Gated on the rules actually rendering, for the same reason the org-slot
+coherence rules are gated on the feature being on: a deployment that emits no
+PrometheusRule must not fail a render over numbers that have no effect.
+*/ -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled -}}
+{{- $pr := .Values.monitoring.prometheusRules -}}
+{{- /* Plain numbers. A leading sign is rejected on purpose: every one of these
+     is a magnitude, and a negative reaches PromQL as a double operator.
+     Scientific notation IS accepted, and has to be: Helm parses YAML numbers as
+     float64, so the shipped replicationLagBytesWarning: 104857600 stringifies as
+     1.048576e+08. PromQL accepts that literal, and the rule casts with int64
+     anyway -- but a large value on any threshold that is NOT cast would reach
+     the expression in that form, so the check has to allow what PromQL allows
+     rather than what looks tidy in values.yaml. */ -}}
+{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "replicationLagBytesWarning") -}}
+{{- $raw := "" -}}
+{{- if hasKey $pr $k -}}{{- $raw = (index $pr $k) | toString -}}{{- end -}}
+{{- if and (ne $raw "") (not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $raw)) -}}
+{{- fail (printf "monitoring.prometheusRules.%s must be a plain non-negative number (got %q). It is interpolated straight into a PromQL expression in templates/prometheus-rules.yaml, so a word or a leading sign produces an expression Prometheus cannot parse -- and Prometheus rejects the whole RULE GROUP, silently taking every other alert in it off duty. A suffixed unit (100MiB, 30s) is worse still: sprig casts it to 0 rather than failing, the chart renders, and the alert fires permanently instead of never. Write the bare number in the unit the values.yaml comment names." $k $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- /* Prometheus durations. Same failure, different grammar: these land in
+     `for:`, which the operator's admission webhook parses with model.ParseDuration
+     -- a bare integer is NOT a valid duration there. */ -}}
+{{- range $k := (list "discordCircuitOpenFor" "postgresUnavailableFor" "workflowMetricsAbsentFor") -}}
+{{- $raw := "" -}}
+{{- if hasKey $pr $k -}}{{- $raw = (index $pr $k) | toString -}}{{- end -}}
+{{- if and (ne $raw "") (not (regexMatch "^([0-9]+(ms|[smhdwy]))+$" $raw)) -}}
+{{- fail (printf "monitoring.prometheusRules.%s must be a Prometheus duration such as 30s, 10m or 1h30m (got %q). It is interpolated into a rule's `for:` field; a bare number or an unknown unit is not a valid duration and the rule group is refused, which takes every alert in that group with it. Note YAML: an unquoted 10m is the string you want, but an unquoted 10 is an integer and will NOT parse as a duration." $k $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+THE DRAIN FLOOR HAS A RANGE, not just a shape.
+
+This is the rate below which a queue counts as STALLED rather than busy, and it
+is the only thing standing between PawtograderQueueOldestMessageAging /
+PawtograderAsyncQueueStuck and paging on every assignment release. Both bounds
+are failures of the same kind -- the guard stops discriminating -- in opposite
+directions, and neither is visible from the rendered rule.
+*/ -}}
+{{- $drainRaw := "" -}}
+{{- if hasKey $pr "queueDrainMessagesPerMinute" -}}{{- $drainRaw = $pr.queueDrainMessagesPerMinute | toString -}}{{- end -}}
+{{- if ne $drainRaw "" -}}
+{{- $drain := $drainRaw | float64 -}}
+{{- if or (lt $drain 1.0) (gt $drain 7.0) -}}
+{{- fail (printf "monitoring.prometheusRules.queueDrainMessagesPerMinute=%v is outside 1-7 messages/minute. BELOW 1 the floor closes on the 0.66 msg/min of the 2026-09-07 stall (CS 4530, 58 messages over 88 minutes, a confirmed true positive) and the guard starts suppressing genuine stalls; at 0 it suppresses every queue that is moving at all, which is every queue. ABOVE 7 it is above every drain a real release produces -- the slowest rolling 15m window of the healthy 2026-09-13 release was 7.27 msg/min -- so the guard matches nothing, suppresses nothing, and silently restores the release pages it was added to stop. There is a hard ceiling behind that measurement: one class is one GitHub org, and that org's Bottleneck content limiter refreshes 40 per 60s, so no release can drain faster than 40 msg/min however much worker capacity is added. If throughput has genuinely risen, re-measure the drain and move this bound WITH the number -- charts/pawtograder/tests/promrules-unit.sh has a scenario at the ceiling that will go red if you move it without doing so." $drainRaw) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

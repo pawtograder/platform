@@ -165,8 +165,8 @@ promtool_run() {
 # parser is involved on purpose: this script's only hard dependency should be
 # helm, exactly as render-guardrails.sh's is.
 render_rules() {
-  local out="$1"
-  helm template pawtograder "$CHART" "${BASE[@]}" \
+  local out="$1"; shift
+  helm template pawtograder "$CHART" "${BASE[@]}" "$@" \
     --show-only templates/prometheus-rules.yaml 2>"$SCRATCH/helm.err" \
     | awk '/^spec:$/ { f = 1; next } f' | sed 's/^  //' > "$out"
   if [ ! -s "$out" ]; then
@@ -185,6 +185,18 @@ render_rules "$WORK/rendered-rules.yaml" || exit 1
 cp "$TESTS/promrules-unit.yaml" "$WORK/promrules-unit.yaml"
 cp "$WORK/rendered-rules.yaml" "$SCRATCH/rendered-rules.pristine"
 
+# A second render at the MAXIMUM value templates/validations.yaml permits.
+# Validation only proves the chart refuses garbage; it says nothing about
+# whether a value the chart ACCEPTS still produces a rule that discriminates.
+# The ceiling is where that stops being obvious — 7 msg/min sits 0.27 below the
+# slowest healthy drain ever measured — so it is the value worth evaluating.
+# The floor is deliberately NOT parameterised here: the fixtures assert the
+# rendered annotation text, which contains the number.
+EXTREME_FLOOR=7
+render_rules "$WORK/rendered-rules-extreme.yaml" \
+  --set "monitoring.prometheusRules.queueDrainMessagesPerMinute=$EXTREME_FLOOR" || exit 1
+cp "$TESTS/promrules-unit-extreme.yaml" "$WORK/promrules-unit-extreme.yaml"
+
 echo "promtool: $PROMTOOL_MODE${RUNTIME:+ via $RUNTIME $PROMETHEUS_IMAGE}"
 echo
 
@@ -192,7 +204,7 @@ echo
 # they drift, no series matches any selector, every "must not fire" expectation
 # passes for the wrong reason, and the only tests that would notice are the ones
 # that expect an alert. Checked directly rather than left to the reader.
-for f in rendered-rules.yaml promrules-unit.yaml; do
+for f in rendered-rules.yaml promrules-unit.yaml rendered-rules-extreme.yaml promrules-unit-extreme.yaml; do
   if ! grep -q "namespace=\"$NS\"" "$WORK/$f"; then
     echo "FAIL [namespace agreement]: $f has no namespace=\"$NS\" selector —"
     echo "       the fixtures and the rendered rules have drifted apart and the"
@@ -218,6 +230,19 @@ if promtool_run test rules promrules-unit.yaml; then
   echo "ok   [queue alert behaviour]"
 else
   echo "FAIL [queue alert behaviour]"
+  sed 's/^/       /' "$LOG"
+  FAILED=1
+fi
+
+echo
+echo "== a permitted-but-extreme drain floor ($EXTREME_FLOOR msg/min) must still discriminate =="
+if promtool_run test rules promrules-unit-extreme.yaml; then
+  cat "$LOG"
+  echo "ok   [queue alert behaviour at the permitted ceiling]"
+else
+  echo "FAIL [queue alert behaviour at the permitted ceiling]"
+  echo "       If validations.yaml's upper bound moved, this is the measurement"
+  echo "       it moved away from. Re-measure the drain before raising it."
   sed 's/^/       /' "$LOG"
   FAILED=1
 fi

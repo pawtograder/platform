@@ -892,10 +892,10 @@ Deno.test("a renewal for the lease still held is acted on normally", async () =>
   assertEquals(run.shouldContinue(), false, "a current renewal answering false still ends the run");
 });
 
-// Re-claiming the same queue is the same lease, so renewals in flight for it stay valid. If this
-// bumped the generation, a busy drain would discard a renewal on every iteration and the lease
-// would lapse under exactly the load it is meant to survive.
-Deno.test("re-claiming the same queue does not invalidate its renewals", async () => {
+// The guard discards on OVERLAP, not on claim count. A renewal whose in-flight window does not
+// straddle a claim is applied exactly as it always was, however many claims came before it --
+// otherwise bumping on every claim would blind the run to a genuinely lost lease.
+Deno.test("a renewal issued after the last claim is applied normally", async () => {
   const f = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
   let clock = 0;
   const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, leaseTtlMs: 30_000, now: () => clock });
@@ -908,6 +908,63 @@ Deno.test("re-claiming the same queue does not invalidate its renewals", async (
   await run.heartbeat();
   assertEquals(f.renewCalls, 1);
   assertEquals(run.shouldContinue(), true, "the renewal was applied, not discarded");
+});
+
+// WHY DISCARDING AGGRESSIVELY IS FREE, which is the asymmetry the whole guard rests on. The renewal
+// RPC still runs and still commits server-side; only the client's handling of the ANSWER is
+// dropped. So a discarded success cannot un-extend anything -- it leaves `lastRenewAt` stale, which
+// makes the next heartbeat renew more eagerly rather than less, while the interval timer (which
+// never reads it) carries on regardless. An earlier version of this module bumped the generation
+// only on a queue change precisely because this was assumed to be false.
+Deno.test("a discarded successful renewal still extended the lease server-side", async () => {
+  let clock = 0;
+  let parkNextRenew = true;
+  let parked = false;
+  const gate = deferred();
+
+  const t = fakeSlotTable({ work: () => [row(1, "acme")], now: () => clock });
+  const gated: OrgSlotRpc = {
+    ...t.rpc,
+    renew: async (args) => {
+      if (parkNextRenew) {
+        parkNextRenew = false;
+        parked = true;
+        await gate.promise;
+      }
+      return await t.rpc.renew(args);
+    }
+  };
+
+  const timers = fakeTimers();
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: gated,
+    leaseTtlMs: 30_000,
+    now: () => clock,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+
+  await run.claim();
+  const slot = t.rows[0];
+  assertEquals(slot.expiresAt, 30_000);
+
+  clock += 10_000;
+  timers.fireAll();
+  await flush();
+  assertEquals(parked, true);
+
+  // A same-queue re-claim lands while that renewal is in flight, so its result will be discarded.
+  await run.claim();
+
+  clock += 5_000;
+  gate.resolve();
+  await flush();
+
+  assertEquals(slot.renewals, 1, "the renewal reached the server even though the answer was dropped");
+  assertEquals(slot.expiresAt, 45_000, "and pushed the expiry out");
+  assertEquals(run.shouldContinue(), true);
+  assertEquals(timers.active, 1, "the lease is still being kept alive");
 });
 
 // ── Saturation: no_capacity vs no_demand ───────────────────────────────────────
@@ -1019,4 +1076,63 @@ Deno.test("an empty result reads as no_demand rather than no_capacity", async ()
   assertEquals(await run.claim(), null);
   assertEquals(run.lastOutcome(), "no_demand");
   assertEquals(run.shouldContinue(), true);
+});
+
+// The same class of bug as the rotation race, in the case the first guard deliberately excluded.
+// A renewal can evaluate to false server-side (the TTL lapsed a moment earlier) and have its
+// response delayed; meanwhile `claim()` re-takes the SAME queue and the SQL refreshes `expires_at`.
+// A guard keyed only on the queue NAME sees no change, applies the stale false to the refreshed
+// lease, and stops its timer while the newly claimed batch runs -- so the lease lapses and another
+// worker enters the org. A successful claim is newer and more authoritative evidence of ownership
+// than an older renewal's answer, so it has to invalidate that answer.
+Deno.test("a renewal that resolves false after a same-queue re-claim cannot kill the refreshed lease", async () => {
+  let parkNextRenew = true;
+  let parked = false;
+  const gate = deferred();
+
+  const t = fakeSlotTable({ work: () => [row(1, "acme")] });
+  const gated: OrgSlotRpc = {
+    ...t.rpc,
+    renew: async (args) => {
+      if (parkNextRenew) {
+        parkNextRenew = false;
+        parked = true;
+        await gate.promise;
+        // Evaluated BEFORE the re-claim, delivered after: the lease really had lapsed at the moment
+        // the server looked, and the answer is only now arriving.
+        return { data: false, error: null };
+      }
+      return await t.rpc.renew(args);
+    }
+  };
+
+  const timers = fakeTimers();
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: gated,
+    leaseTtlMs: 30_000,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+
+  await run.claim();
+  assertEquals(run.heldQueue(), "async_calls");
+
+  // A renewal is in flight and parked; it is going to come back false.
+  timers.fireAll();
+  await flush();
+  assertEquals(parked, true, "the renewal must actually be in flight, or this test proves nothing");
+
+  // The loop re-claims the SAME queue underneath it. The SQL refreshes this holder's row, so the
+  // run demonstrably owns a live slot -- newer information than the parked renewal carries.
+  assertNotEquals(await run.claim(), null);
+  assertEquals(run.heldQueue(), "async_calls");
+  assertEquals(t.rows.length, 1);
+
+  gate.resolve();
+  await flush();
+
+  assertEquals(run.shouldContinue(), true, "a renewal older than the re-claim must not end the run");
+  assertEquals(run.heldQueue(), "async_calls", "nor drop the lease the re-claim established");
+  assertEquals(timers.active, 1, "nor stop the timer keeping that refreshed lease alive");
 });

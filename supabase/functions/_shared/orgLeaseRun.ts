@@ -717,11 +717,29 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
         consecutiveClaimErrors = 0;
         idleDeadline = null;
         held = true;
-        // A CHANGE OF QUEUE IS A CHANGE OF LEASE. Bumping here is what lets an in-flight renewal
-        // issued for the queue we are leaving recognise that its answer no longer applies. Claiming
-        // the SAME queue again does not bump: that is the same lease, and invalidating a renewal on
-        // every iteration of a busy drain would throw away renewals we need.
-        if (heldQueueName !== queueName) leaseGeneration++;
+        // EVERY SUCCESSFUL CLAIM INVALIDATES ANY RENEWAL IN FLIGHT, including one that re-takes the
+        // queue we were already on.
+        //
+        // A claim that returns rows is the server stating, just now, that this holder owns a live
+        // slot — `claim_org_slot_and_read` sets `expires_at = clock_timestamp() + ttl` on the row it
+        // claims. That is strictly newer and more authoritative than the answer to a renewal issued
+        // before it. Letting the older answer win is the bug: a renewal can evaluate to false
+        // because the TTL lapsed a moment earlier, have its response delayed, and land after a
+        // re-claim has already refreshed the same row — killing a lease the server considers live,
+        // stopping its timer while the batch runs, and letting another worker into the org.
+        //
+        // An earlier version bumped only when the QUEUE NAME changed, on the theory that discarding
+        // renewals during a busy same-queue drain would let the lease lapse under load. That was
+        // wrong, and the asymmetry is worth stating because it is what makes aggressive discarding
+        // free: applying a stale FAILURE kills a live lease and breaches the per-org cap, whereas
+        // discarding a stale SUCCESS costs nothing at all. `renew_org_slot` has already committed
+        // server-side by the time its response is in flight, so dropping the response cannot
+        // un-extend the lease; the only client-side effect of a successful renewal is `lastRenewAt`,
+        // which merely debounces `heartbeat()`. Leaving it stale makes the next heartbeat renew
+        // MORE eagerly, not less, and the independent interval timer — which never consults it —
+        // keeps renewing on its own cadence regardless. There is no path from a discarded success
+        // to a lapsed lease.
+        leaseGeneration++;
         heldQueueName = queueName;
         // RE-READ THE ORG EVERY TIME; do not assume a leaseholder keeps the org it started with.
         // A holder holds at most one slot, and a repeat claim prefers re-taking the slot it already
