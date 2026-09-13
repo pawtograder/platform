@@ -354,6 +354,28 @@ assert_control "removing the dlq/low-priority exclusion is caught by the exclusi
   's/, queue!~"[.][*]_dlq|async_calls_low_priority"//g' \
   "dlq and low-priority queues stay excluded from the age alert"
 
+# The msg_id threshold, moved DOWN into the range ordinary traffic occupies.
+# 1e+5 is below the 137,603 the busiest prod sequence already holds, so the alert
+# starts reporting growth on a completely healthy system -- and an alert that
+# fires on healthy prod gets raised or silenced, after which nothing is watching
+# for the sequence SET it was built to catch. This is the failure the lower bound
+# in validations.yaml refuses, demonstrated on the rendered rule where no
+# validation can intervene. It must surface as the prod-shaped scenario, and only
+# that one: a sequence that really was set still pages at any threshold this low.
+assert_control "a msg_id threshold inside organic range is caught by the prod-shaped scenario" \
+  's/) > 1e+12$/) > 1e+5/' \
+  "prod-shaped msg_id sequence values do not fire either alert"
+
+# The msg_id threshold, moved UP to the cliff itself -- which is what "size it as
+# a fraction of 2^53" produces. Nothing is wrong with the arithmetic; it is the
+# reasoning that is wrong, because the number it yields only fires once msg_ids
+# have already stopped round-tripping. The rendered rule looks entirely sane, so
+# the only thing that catches it is a scenario asserting that a sequence somebody
+# SET, far below the cliff and far above anything organic, still raises a ticket.
+assert_control "a msg_id threshold at the cliff is caught by the sequence-set scenario" \
+  's/) > 1e+12$/) > 9.007199254740992e+15/' \
+  "a sequence set into the impossible band raises the warning only"
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "PROMETHEUS RULE UNIT TESTS FAILED"

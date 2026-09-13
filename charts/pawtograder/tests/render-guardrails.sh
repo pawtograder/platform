@@ -1862,6 +1862,176 @@ assert_renders "a monitoring-disabled deployment ignores a garbage threshold" \
 assert_renders "the shipped defaults pass their own threshold validation" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 
+echo
+
+echo "== the pgmq msg_id cliff guard =="
+
+# ---------------------------------------------------------------------------
+# pgmq msg_id vs the 2^53 client-side cliff.
+#
+# msg_id is a bigint and PostgREST emits it exactly -- a preview round-trip
+# returned 9007199254740993 (2^53+1) byte-for-byte -- but JSON.parse in the
+# workers rounds anything above 2^53, so pgmq_public.archive /
+# pgmq_public.delete get an id one off from the message that was processed:
+# silent work loss, or infinite redelivery.
+#
+# Nothing organic goes there (the busiest prod sequence was at 137,603 on
+# 2026-09-13, moving ~7 msg/h -- order 10^11 years from the cliff), so the
+# alerts watch for a sequence that was SET: a restore, a migration, a backfill,
+# a manual ALTER SEQUENCE ... RESTART WITH. That is why the thresholds are not
+# a fraction of the ceiling, and why the bounds below exist.
+# ---------------------------------------------------------------------------
+
+# The metric name and its label. Block key + column name TOGETHER are the metric
+# name the alert expr queries; `queue` must be a LABEL or there is nothing to
+# join to the depth/age series and nothing to name the queue in the page.
+assert_exporter_metric pawtograder_queue_msg_id last_value queue
+
+# assert_msgid_query_shape
+# Three properties of the SQL itself. Scoped to the `query: |` text of the
+# pawtograder_queue_msg_id block rather than the whole rendered file, because
+# helm passes YAML comments through and the block's own comment names the
+# rewrite it is warning against -- a file-wide grep would match the warning and
+# report the bug it exists to prevent.
+#
+#   ANCHORED STRIP. The label value must be the sequence name with `q_` and
+#   `_msg_id_seq` removed by an anchored regexp. The obvious rewrite, an
+#   unanchored replace() of `q_`, renders, runs, and returns garbage for exactly
+#   the DLQ queues: `q_` occurs a second time inside every `..._dlq_msg_id_seq`,
+#   so q_async_calls_dlq_msg_id_seq comes out as `async_calls_dlmsg_id_seq`.
+#   That label matches no pawtograder_queue_depth series and no alert selector,
+#   and nothing else in the build would notice.
+#
+#   ZERO-FILL. pg_sequences.last_value is NULL for a sequence nextval() has
+#   never touched, and two prod queues are in that state
+#   (async_calls_low_priority, gradebook_row_recalculate_dlq, both confirmed
+#   NULL on 2026-09-13). Without COALESCE those series vanish rather than
+#   reading 0, and an absent series is indistinguishable from a healthy one.
+#
+#   ONE ROW PER LABEL SET. A duplicate `queue` label does not mis-rank a panel;
+#   it makes the exporter's registry return HTTP 500 for the whole /metrics
+#   endpoint. The GROUP BY is what keeps that impossible if the schema filter is
+#   ever widened.
+assert_msgid_query_shape() {
+  local label="msg_id query shape"
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+      --show-only templates/postgres-exporter-queries.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  # The `query: |` literal of this block only: from the block key to the next
+  # 6-space key (master:/metrics:) that closes it.
+  local q
+  q="$(awk '
+    $0 == "    pawtograder_queue_msg_id:" { inb = 1; next }
+    inb && $0 == "      query: |" { inq = 1; next }
+    inq && /^      [^ ]/ { exit }
+    inq { print }
+  ' "$OUTFILE")"
+  if [ -z "$q" ]; then
+    echo "FAIL [$label]: no query text found for block pawtograder_queue_msg_id"
+    FAILED=1
+    return
+  fi
+  local bad=0
+  if ! printf '%s\n' "$q" | grep -qF '^q_(.*)_msg_id_seq$'; then
+    echo "FAIL [$label]: the queue label is not stripped by the anchored regexp"
+    echo "       an unanchored replace() of 'q_' mangles every *_dlq queue name"
+    bad=1
+  fi
+  if printf '%s\n' "$q" | grep -qE '[^_]replace\(sequencename'; then
+    echo "FAIL [$label]: the queue label uses an unanchored replace(sequencename, ...)"
+    echo "       q_async_calls_dlq_msg_id_seq becomes 'async_calls_dlmsg_id_seq',"
+    echo "       which joins to no pawtograder_queue_depth series"
+    bad=1
+  fi
+  if ! printf '%s\n' "$q" | grep -qF 'COALESCE(last_value, 0)'; then
+    echo "FAIL [$label]: last_value is not zero-filled — a never-used sequence is"
+    echo "       NULL, and its series would be absent rather than 0"
+    bad=1
+  fi
+  if ! printf '%s\n' "$q" | grep -qE '^\s*GROUP BY'; then
+    echo "FAIL [$label]: the query does not GROUP BY the queue label — two rows with"
+    echo "       the same label set 500 the entire /metrics endpoint"
+    bad=1
+  fi
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
+}
+
+assert_msgid_query_shape
+
+# Both rules render against the metric the exporter actually emits. A typo here
+# is a rule that parses, loads, and never matches anything.
+assert_rendered_contains "msg_id warning alert reads the exporter's sequence gauge" \
+  templates/prometheus-rules.yaml \
+  'max by (namespace, queue) (pawtograder_queue_msg_id_last_value{namespace="default"}) > 1e+12' \
+  --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+assert_rendered_contains "msg_id critical alert sits one doubling below 2^53" \
+  templates/prometheus-rules.yaml \
+  'max by (namespace, queue) (pawtograder_queue_msg_id_last_value{namespace="default"}) > 4.503599627370496e+15' \
+  --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# Both thresholds are values, not literals.
+assert_rendered_contains "msg_id warning threshold is configurable" \
+  templates/prometheus-rules.yaml '> 2000000000000' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdWarning=2000000000000
+assert_rendered_contains "msg_id critical threshold is configurable" \
+  templates/prometheus-rules.yaml '> 5000000000000000' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdCritical=5000000000000000
+
+# The durable fix is a note, not code, and a note only survives if something
+# asserts it. Same precedent as the backlog alert's no-drain-guard rationale
+# above: helm renders YAML comments through to the manifest, so it is assertable.
+assert_rendered_contains "msg_id alert records the durable fix it is not doing" \
+  templates/prometheus-rules.yaml \
+  "Returning it as TEXT from" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# Shape, same class as the drain floor.
+assert_refused "refuses a non-numeric msg_id threshold" \
+  "must be a plain non-negative number" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdWarning=huge
+
+# BELOW the band: at 1000 this is a capacity threshold on a number that grows,
+# so it fires on ordinary enqueueing, gets silenced or raised, and stops watching
+# for the set it was built to catch.
+assert_refused "refuses a msg_id warning inside the range traffic can reach" \
+  "is below 1e9" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdWarning=1000
+
+# AT the cliff: a warning that only fires once ids have already stopped
+# round-tripping has no lead time on the damage it describes.
+assert_refused "refuses a msg_id warning at the 2^53 cliff itself" \
+  "is at or above 2^53" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdWarning=9007199254740992
+
+# PAST the cliff: a critical there pages about a loss that has already happened.
+assert_refused "refuses a msg_id critical past the 2^53 cliff" \
+  "is above 2^53" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdCritical=90071992547409920
+
+# Collapsed tiers: if critical is not above warning, every warning is also a page
+# and the ticket tier does not exist.
+assert_refused "refuses a msg_id critical at or below the warning" \
+  "is not above queueMsgIdWarning" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdCritical=1000000000
+
+# A value inside the band must still be accepted -- the bounds are a band, not a
+# pin, and an operator who wants more lead time has to be able to take it.
+assert_renders "permits a msg_id warning inside the band" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdWarning=2000000000000
+
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"
   exit 1

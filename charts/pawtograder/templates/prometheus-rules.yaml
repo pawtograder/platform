@@ -637,6 +637,106 @@ spec:
               the last hour — rows exhausted their version-mismatch retry budget, so their stored
               scores are stale and nothing will recompute them. Inspect
               pgmq.q_gradebook_row_recalculate_dlq and re-enqueue after fixing the contention source.
+        # pgmq msg_id heading for the 2^53 client-side cliff.
+        #
+        # THIS IS NOT A CAPACITY ALERT. msg_id is a bigint and the wire carries it
+        # exactly -- a PostgREST round-trip against this PR's preview returned
+        # 9007199254740993 (2^53 + 1) byte-for-byte. The loss is in the CLIENT: V8's
+        # JSON.parse has no bigint path and rounds that to ...992, so a worker calls
+        # pgmq_public.archive / pgmq_public.delete with an id one off from the message it
+        # just processed. It archives a message nobody handled (silent work loss) and
+        # leaves its own to be redelivered forever.
+        #
+        # Organic growth cannot get there and these thresholds are NOT sized as a
+        # fraction of the ceiling. Measured on prod 2026-09-13: q_discord_async_calls,
+        # the busiest sequence, stands at 137,603 and advances ~7 messages/hour, steady
+        # across 14 hours. That is order 10^11 years from 2^53. A threshold justified as
+        # "90% of 2^53" would be arithmetic with no failure mode behind it.
+        #
+        # The failure mode is a sequence SET, not a sequence grown: a restore replaying a
+        # setval from another cluster, a migration or a backfill that seeds ids, or a
+        # hand-run ALTER SEQUENCE ... RESTART WITH. (The condition was produced by hand
+        # in the preview exactly that way while testing this.) It is a jump, not a climb,
+        # so both thresholds sit where organic traffic cannot reach them and only a jump
+        # can -- which also means the two tiers will usually fire together. The tiering
+        # buys SEVERITY ROUTING, a ticket against a page, not lead time: at 1e12 there is
+        # ~9,000x of margin and time to plan, at 2^52 the next mistake of the same kind
+        # lands past the cliff.
+        #
+        # WHAT TO DO WHEN IT FIRES -- "the sequence is too high" is not self-evidently
+        # actionable:
+        #   1. Do NOT raise the threshold. Nothing legitimate moves this number by the
+        #      orders of magnitude needed to cross it.
+        #   2. Find what set it. Recent restores, recent migrations, anything that ran
+        #      setval() or ALTER SEQUENCE against schema pgmq.
+        #   3. Compare against reality:
+        #        SELECT max(msg_id) FROM pgmq.q_<queue>;
+        #        SELECT max(msg_id) FROM pgmq.a_<queue>;
+        #      If the sequence is far above both, the ids in flight are fine and only the
+        #      sequence is wrong.
+        #   4. Correct it with the queue drained, and RESTART WITH a value strictly above
+        #      both maxima above -- restarting below a live msg_id collides on the primary
+        #      key and the queue starts failing inserts.
+        #   5. Until it is corrected, treat any worker archive/delete on that queue as
+        #      suspect if the value is already past 2^53 (9007199254740992).
+        #
+        # THE DURABLE FIX, deliberately NOT done here. The cliff exists only because
+        # msg_id crosses into JavaScript as a JSON number. Returning it as TEXT from
+        # pgmq_public.claim_org_slot_and_read, and having the workers hand that string
+        # straight back to pgmq_public.archive / pgmq_public.delete, removes the cliff
+        # outright -- PostgREST already emits every digit, only JSON.parse loses them.
+        # Out of scope for this PR on two counts: it changes the RPC's return contract
+        # and every caller's generated type, and the PRE-EXISTING pgmq_public.read path
+        # (supabase/functions/discord-async-worker/index.ts, github-async-worker) has the
+        # identical exposure, so fixing only the new RPC would leave the cliff standing.
+        # Whoever takes it on should do both together. These alerts are a guard, not a
+        # cure.
+        #
+        # max by (namespace, queue): the exporter's ServiceMonitor attaches pod/instance/
+        # endpoint/server labels, and this should be one alert per queue rather than one
+        # per label set -- the same reason the connection and exporter rules above use it.
+        # The `queue` label is spelled to match pawtograder_queue_depth and
+        # pawtograder_queue_oldest_message_seconds, so an operator can pull up the same
+        # queue's depth and age from the alert's labels.
+        - alert: PawtograderQueueMsgIdHigh
+          expr: |
+            max by (namespace, queue) (pawtograder_queue_msg_id_last_value{namespace="{{ $ns }}"}) > {{ .Values.monitoring.prometheusRules.queueMsgIdWarning | default 1e12 }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder queue {{`{{ $labels.queue }}`}} msg_id sequence is implausibly high"
+            description: >-
+              The pgmq msg_id sequence for queue {{`{{ $labels.queue }}`}} ({{ $ns }}) is above
+              {{ .Values.monitoring.prometheusRules.queueMsgIdWarning | default 1e12 }}.
+              Traffic cannot put it there — the busiest prod sequence was at 137,603 on 2026-09-13
+              and moves ~7 msg/h — so something SET it: a restore replaying a foreign setval, a
+              migration or backfill seeding ids, or a manual ALTER SEQUENCE ... RESTART WITH. Above 2^53
+              (9007199254740992) a msg_id no longer survives JSON.parse in the workers and they
+              archive or delete the wrong message. Do not raise this threshold; find what moved the
+              sequence, compare it with max(msg_id) in pgmq.q_{{`{{ $labels.queue }}`}} and
+              pgmq.a_{{`{{ $labels.queue }}`}}, and reset it above both with the queue drained.
+              Runbook: docs/operations/monitoring-alerting.md.
+        # The critical tier. 2^52 is one doubling below the point where msg_id stops
+        # round-tripping, so this says: the next set of the same kind lands past the
+        # cliff, and there is no organic process that will walk it back.
+        - alert: PawtograderQueueMsgIdCritical
+          expr: |
+            max by (namespace, queue) (pawtograder_queue_msg_id_last_value{namespace="{{ $ns }}"}) > {{ .Values.monitoring.prometheusRules.queueMsgIdCritical | default 4503599627370496 }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder queue {{`{{ $labels.queue }}`}} msg_id sequence is near the 2^53 cliff"
+            description: >-
+              The pgmq msg_id sequence for queue {{`{{ $labels.queue }}`}} ({{ $ns }}) is above
+              {{ .Values.monitoring.prometheusRules.queueMsgIdCritical | default 4503599627370496 }},
+              within a factor of two of 2^53 (9007199254740992) — the value above which a msg_id no
+              longer survives JSON.parse in the workers, which then archive or delete a DIFFERENT
+              message than the one they processed. Stop enqueueing to this queue, drain it, and reset
+              the sequence just above max(msg_id) in pgmq.q_{{`{{ $labels.queue }}`}} and
+              pgmq.a_{{`{{ $labels.queue }}`}} before resuming. Runbook:
+              docs/operations/monitoring-alerting.md.
         # Discord per-guild circuit breaker open.
         #
         # A level alert is right here, unlike for the DLQs: the breaker closes itself when its window

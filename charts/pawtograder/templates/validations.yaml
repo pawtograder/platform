@@ -437,7 +437,7 @@ PrometheusRule must not fail a render over numbers that have no effect.
      anyway -- but a large value on any threshold that is NOT cast would reach
      the expression in that form, so the check has to allow what PromQL allows
      rather than what looks tidy in values.yaml. */ -}}
-{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "replicationLagBytesWarning") -}}
+{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "replicationLagBytesWarning" "queueMsgIdWarning" "queueMsgIdCritical") -}}
 {{- $raw := "" -}}
 {{- if hasKey $pr $k -}}{{- $raw = (index $pr $k) | toString -}}{{- end -}}
 {{- if and (ne $raw "") (not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $raw)) -}}
@@ -469,6 +469,43 @@ directions, and neither is visible from the rendered rule.
 {{- $drain := $drainRaw | float64 -}}
 {{- if or (lt $drain 1.0) (gt $drain 7.0) -}}
 {{- fail (printf "monitoring.prometheusRules.queueDrainMessagesPerMinute=%v is outside 1-7 messages/minute. BELOW 1 the floor closes on the 0.66 msg/min of the 2026-09-07 stall (CS 4530, 58 messages over 88 minutes, a confirmed true positive) and the guard starts suppressing genuine stalls; at 0 it suppresses every queue that is moving at all, which is every queue. ABOVE 7 it is above every drain a real release produces -- the slowest rolling 15m window of the healthy 2026-09-13 release was 7.27 msg/min -- so the guard matches nothing, suppresses nothing, and silently restores the release pages it was added to stop. There is a hard ceiling behind that measurement: one class is one GitHub org, and that org's Bottleneck content limiter refreshes 40 per 60s, so no release can drain faster than 40 msg/min however much worker capacity is added. If throughput has genuinely risen, re-measure the drain and move this bound WITH the number -- charts/pawtograder/tests/promrules-unit.sh has a scenario at the ceiling that will go red if you move it without doing so." $drainRaw) -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+THE MSG_ID THRESHOLDS HAVE A RANGE AND AN ORDER.
+
+These two are the easiest numbers in this file to get wrong in a way that still
+renders, because the obvious way to pick them -- a fraction of the 2^53 ceiling
+-- is the wrong reasoning. Nothing organic approaches that ceiling: the busiest
+prod sequence was at 137,603 on 2026-09-13 moving ~7 msg/h, which is order 10^11
+years from it. The alerts exist for a sequence that was SET (a restore, a
+migration, a backfill, a manual RESTART WITH), so the thresholds have to sit in
+the band no traffic can reach and every accident lands in.
+
+Both bounds are the alert losing its meaning, in opposite directions, and
+neither is visible from the rendered rule.
+*/ -}}
+{{- $msgIdCliff := 9007199254740992.0 -}}
+{{- $msgWarnRaw := "" -}}
+{{- if hasKey $pr "queueMsgIdWarning" -}}{{- $msgWarnRaw = $pr.queueMsgIdWarning | toString -}}{{- end -}}
+{{- if ne $msgWarnRaw "" -}}
+{{- $msgWarn := $msgWarnRaw | float64 -}}
+{{- if lt $msgWarn 1000000000.0 -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdWarning=%v is below 1e9, which turns a corruption alarm into a capacity threshold. The busiest pgmq sequence on prod was at 137,603 on 2026-09-13 and advances ~7 messages/hour, so 1e9 is already ~7,000x the largest value the platform has ever held and thousands of years of the measured rate. Set it lower and normal enqueueing eventually crosses it, at which point the alert reports growth -- which is harmless, since 2^53 is ~9,000x further on -- and gets silenced or raised, leaving nothing watching for the thing it was built for: a sequence SET past the cliff by a restore, a migration, a backfill or a manual ALTER SEQUENCE ... RESTART WITH. The threshold must be unreachable by traffic and reachable only by accident." $msgWarnRaw) -}}
+{{- end -}}
+{{- if ge $msgWarn $msgIdCliff -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdWarning=%v is at or above 2^53 (9007199254740992), so it can only fire AFTER msg_ids have stopped round-tripping. PostgREST emits msg_id exactly, but JSON.parse in the workers rounds anything above 2^53 -- 9007199254740993 becomes ...992 -- and they then archive or delete a different message than the one they processed. A warning with no lead time on the damage it describes is not a warning. Keep it well below the cliff; the shipped 1e12 sits ~9,000x under it." $msgWarnRaw) -}}
+{{- end -}}
+{{- end -}}
+{{- $msgCritRaw := "" -}}
+{{- if hasKey $pr "queueMsgIdCritical" -}}{{- $msgCritRaw = $pr.queueMsgIdCritical | toString -}}{{- end -}}
+{{- if ne $msgCritRaw "" -}}
+{{- $msgCrit := $msgCritRaw | float64 -}}
+{{- if gt $msgCrit $msgIdCliff -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdCritical=%v is above 2^53 (9007199254740992). Past that value the workers are already archiving and deleting msg_ids they never read, so a critical placed there pages about a loss that has happened rather than one that is about to. The shipped 2^52 (4503599627370496) is the last doubling before the cliff." $msgCritRaw) -}}
+{{- end -}}
+{{- if and (ne $msgWarnRaw "") (le $msgCrit ($msgWarnRaw | float64)) -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdCritical=%v is not above queueMsgIdWarning=%v, so the warning tier cannot exist on its own: every value that trips the warning also pages. The two tiers are severity ROUTING -- a ticket at a value only an accident can produce, a page at a value one more accident puts past the 2^53 cliff -- and collapsing them discards the ticket." $msgCritRaw $msgWarnRaw) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

@@ -2193,6 +2193,32 @@ monitoring:
     # only lands here after eight backed-off recovery attempts, and each one is a gradebook row whose
     # stored score is stale with nothing left to recompute it.
     gradebookRecalcDlqGrowthPerHour: 5
+    # pgmq msg_id sequence position (per queue) above which the two
+    # PawtograderQueueMsgId* alerts fire. These are NOT capacity headroom, and sizing
+    # them as a fraction of the ceiling would be the wrong reasoning even where it
+    # happens to land on a workable number.
+    #
+    # The ceiling is real: msg_id is a bigint, PostgREST emits it exactly (a preview
+    # round-trip returned 9007199254740993 = 2^53+1 byte-for-byte), and V8's JSON.parse
+    # then rounds it to ...992 -- after which a worker archives or deletes a msg_id that
+    # is not the one it processed. Silent work loss, or infinite redelivery.
+    #
+    # But nothing organic goes there. Measured on prod 2026-09-13: the busiest sequence
+    # (q_discord_async_calls) is at 137,603 and advances ~7 messages/hour, steady over 14
+    # hours. Reaching 2^53 at that rate takes order 10^11 years. What CAN happen is a
+    # sequence being SET: a restore replaying a foreign setval, a migration or backfill
+    # seeding ids, a hand-run ALTER SEQUENCE ... RESTART WITH. That is a jump, not a
+    # climb, so both thresholds are placed where organic traffic cannot reach them and
+    # only a jump can.
+    #
+    # 1e12 is ~7 million times the largest value prod has ever held and still ~9,000x
+    # below 2^53, so it cannot false-positive from growth and it fires with enormous
+    # lead time. 2^52 (4503599627370496) is the critical: within a factor of two of the
+    # point where ids stop round-tripping, i.e. one more mistake of the same kind lands
+    # past the cliff. Both usually fire together on a bad restore -- the tiering buys
+    # severity routing (ticket vs page), not lead time.
+    queueMsgIdWarning: 1000000000000
+    queueMsgIdCritical: 4503599627370496
     # How long a Discord per-guild circuit breaker may stay open before
     # PawtograderDiscordCircuitBreakerOpen fires. Must stay comfortably BELOW the breaker's shortest
     # window, which is the 30-minute permission_storm base in open_discord_circuit(): the gauge is
