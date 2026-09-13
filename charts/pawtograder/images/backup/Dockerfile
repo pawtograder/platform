@@ -29,7 +29,11 @@
 #
 # Build context: repository root.
 #   docker build -f charts/pawtograder/images/backup/Dockerfile -t <ref> .
-ARG MC_IMAGE="quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z"
+# Digest-pinned, not just tag-pinned: a Quay tag is mutable, and MC_SHA256
+# below would catch a retargeted tag by FAILING THE BUILD. Pinning the digest
+# means upstream cannot break our build in the first place. Resolve a new one
+# with: docker buildx imagetools inspect <ref> --format '{{.Manifest.Digest}}'
+ARG MC_IMAGE="quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
 FROM ${MC_IMAGE} AS mc
 
 FROM supabase/postgres:17.4.1.075
