@@ -1712,6 +1712,9 @@ export type Database = {
           created_at: string;
           discussion_threads_total: number | null;
           gradebook_columns_total: number | null;
+          grading_actions_comment_total: number;
+          grading_actions_release_total: number;
+          grading_actions_rubric_check_total: number;
           help_request_messages_total: number | null;
           help_requests_open: number | null;
           help_requests_total: number | null;
@@ -1743,6 +1746,9 @@ export type Database = {
           created_at?: string;
           discussion_threads_total?: number | null;
           gradebook_columns_total?: number | null;
+          grading_actions_comment_total?: number;
+          grading_actions_release_total?: number;
+          grading_actions_rubric_check_total?: number;
           help_request_messages_total?: number | null;
           help_requests_open?: number | null;
           help_requests_total?: number | null;
@@ -1774,6 +1780,9 @@ export type Database = {
           created_at?: string;
           discussion_threads_total?: number | null;
           gradebook_columns_total?: number | null;
+          grading_actions_comment_total?: number;
+          grading_actions_release_total?: number;
+          grading_actions_rubric_check_total?: number;
           help_request_messages_total?: number | null;
           help_requests_open?: number | null;
           help_requests_total?: number | null;
@@ -2202,6 +2211,8 @@ export type Database = {
           last_retry_requested_at: string | null;
           observed_count: number;
           observed_discord_id: string | null;
+          self_retry_count: number;
+          self_retry_window_started_at: string | null;
           state: Database["public"]["Enums"]["discord_membership_state"];
           user_id: string;
         };
@@ -2217,6 +2228,8 @@ export type Database = {
           last_retry_requested_at?: string | null;
           observed_count?: number;
           observed_discord_id?: string | null;
+          self_retry_count?: number;
+          self_retry_window_started_at?: string | null;
           state: Database["public"]["Enums"]["discord_membership_state"];
           user_id: string;
         };
@@ -2232,6 +2245,8 @@ export type Database = {
           last_retry_requested_at?: string | null;
           observed_count?: number;
           observed_discord_id?: string | null;
+          self_retry_count?: number;
+          self_retry_window_started_at?: string | null;
           state?: Database["public"]["Enums"]["discord_membership_state"];
           user_id?: string;
         };
@@ -6701,6 +6716,8 @@ export type Database = {
           profile_id: string | null;
           repository: string;
           rerun_queued_at: string | null;
+          sync_block_reason: string | null;
+          sync_blocked_at: string | null;
           sync_data: Json | null;
           synced_handout_sha: string | null;
           synced_repo_sha: string | null;
@@ -6720,6 +6737,8 @@ export type Database = {
           profile_id?: string | null;
           repository: string;
           rerun_queued_at?: string | null;
+          sync_block_reason?: string | null;
+          sync_blocked_at?: string | null;
           sync_data?: Json | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
@@ -6739,6 +6758,8 @@ export type Database = {
           profile_id?: string | null;
           repository?: string;
           rerun_queued_at?: string | null;
+          sync_block_reason?: string | null;
+          sync_blocked_at?: string | null;
           sync_data?: Json | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
@@ -12408,6 +12429,10 @@ export type Database = {
           winning_invite_url: string;
         }[];
       };
+      class_team_member_usernames: {
+        Args: { p_class_id: number; p_kind: string };
+        Returns: string[];
+      };
       cleanup_discord_async_errors: { Args: never; Returns: undefined };
       cleanup_expired_realtime_subscriptions: {
         Args: never;
@@ -12435,6 +12460,10 @@ export type Database = {
           p_rubric_part_ids?: number[];
         };
         Returns: Json;
+      };
+      clear_org_membership_and_repair: {
+        Args: { p_org: string; p_user_id: string };
+        Returns: number;
       };
       clear_unfinished_review_assignments: {
         Args: {
@@ -12687,14 +12716,6 @@ export type Database = {
         Returns: boolean;
       };
       custom_access_token_hook: { Args: { event: Json }; Returns: Json };
-      database_ram_metrics: {
-        Args: never;
-        Returns: {
-          metric_labels: Json;
-          metric_name: string;
-          metric_value: number;
-        }[];
-      };
       deactivate_expired_polls: { Args: never; Returns: undefined };
       delete_assignment_with_all_data: {
         Args: { p_assignment_id: number; p_class_id: number };
@@ -12818,14 +12839,6 @@ export type Database = {
           p_student_team_permission?: string;
           p_template_repo: string;
         };
-        Returns: number;
-      };
-      class_team_member_usernames: {
-        Args: { p_class_id: number; p_kind: string };
-        Returns: string[];
-      };
-      clear_org_membership_and_repair: {
-        Args: { p_org: string; p_user_id: string };
         Returns: number;
       };
       enqueue_github_org_reinvite: {
@@ -13669,6 +13682,14 @@ export type Database = {
         Args: { p_class_id?: number };
         Returns: number;
       };
+      metrics_workflow_errors_by_category: {
+        Args: { window_hours?: number };
+        Returns: {
+          category: string;
+          class_id: string;
+          count: number;
+        }[];
+      };
       metrics_workflow_errors_by_name: {
         Args: { window_hours?: number };
         Returns: {
@@ -13799,7 +13820,7 @@ export type Database = {
         Returns: Json;
       };
       queue_repository_syncs: {
-        Args: { p_repository_ids: number[] };
+        Args: { p_force?: boolean; p_repository_ids: number[] };
         Returns: Json;
       };
       recalculate_discussion_thread_children_counts: {
@@ -13880,6 +13901,13 @@ export type Database = {
       reorder_surveys_in_series: {
         Args: { p_ordinal_updates: Json; p_series_id: string };
         Returns: undefined;
+      };
+      repo_ids_with_dead_lettered_create: {
+        Args: never;
+        Returns: {
+          dead_lettered_at: string;
+          repo_id: string;
+        }[];
       };
       repo_ids_with_queued_create: { Args: never; Returns: string[] };
       request_discord_reinvite: {
@@ -14160,6 +14188,17 @@ export type Database = {
           p_sync_status?: string;
         };
         Returns: number;
+      };
+      upsert_assignment_leaderboard_entry: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_max_score: number;
+          p_public_profile_id: string;
+          p_score: number;
+          p_submission_id: number;
+        };
+        Returns: undefined;
       };
       upsert_github_deployment: {
         Args: {

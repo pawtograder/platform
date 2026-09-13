@@ -161,6 +161,44 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
     );
   }
 
+  if (status === "Sync Blocked") {
+    // Nothing was written and no PR exists, so `unresolved_paths` is the only record of why
+    // the update did not arrive. Showing it here is what turns "this repo is behind" into
+    // something an instructor can act on: these are the files to ask the student about.
+    const blockedPaths = syncData?.unresolved_paths ?? [];
+    return (
+      <VStack gap={2} alignItems="flex-start" width="full">
+        <HStack gap={2}>
+          <Badge colorPalette="orange">Sync Blocked</Badge>
+          {syncData?.pr_number && syncData?.pr_url && (
+            <Link href={syncData.pr_url} target="_blank">
+              <HStack gap={1} fontSize="sm" color="blue.600">
+                <Icon as={GitPullRequest} boxSize={3} />
+                <Text>PR#{syncData.pr_number}</Text>
+              </HStack>
+            </Link>
+          )}
+        </HStack>
+        <Box
+          borderWidth="1px"
+          borderColor="orange.500"
+          bg="orange.50"
+          _dark={{ bg: "orange.950", borderColor: "orange.800" }}
+          px={3}
+          py={2}
+          borderRadius="md"
+          width="full"
+        >
+          <Text fontSize="sm" color="orange.700" _dark={{ color: "orange.300" }} wordBreak="break-word">
+            {blockedPaths.length > 0
+              ? `The student has edited every file this update changes, so nothing was written: ${blockedPaths.join(", ")}. Ask them to apply the changes, then sync again.`
+              : "Every file this update changes is the student's own work, so nothing was written. Ask them to apply the changes, then sync again."}
+          </Text>
+        </Box>
+      </VStack>
+    );
+  }
+
   if (status === "Sync Error") {
     return (
       <VStack gap={2} alignItems="flex-start" width="full">
@@ -200,8 +238,14 @@ function SyncButton({
     setIsSyncing(true);
 
     try {
+      // An explicit human press, so it enqueues whatever the row currently says. This is the
+      // recovery path for a repo whose sync ended in a state the enqueue condition cannot see:
+      // the instructor pressing Sync means "try again now", not "try again if you think it is
+      // needed". The assignment-wide sync keeps the default: forcing there would enqueue one
+      // job per repository in a 1000-student course on every autograder toggle.
       const { data, error } = await supabase.rpc("queue_repository_syncs", {
-        p_repository_ids: [repoId]
+        p_repository_ids: [repoId],
+        p_force: true
       });
 
       if (error) throw error;
@@ -888,8 +932,11 @@ export default function RepositoriesPage() {
     setIsBulkSyncing(true);
 
     try {
+      // Selected by hand, one repository at a time, so this is as explicit as the single press
+      // above and forces for the same reason.
       const { data: result, error } = await supabase.rpc("queue_repository_syncs", {
-        p_repository_ids: selectedIds
+        p_repository_ids: selectedIds,
+        p_force: true
       });
 
       if (error) throw error;
@@ -1105,6 +1152,7 @@ export default function RepositoriesPage() {
                                   { label: "PR Open", value: "PR Open" },
                                   { label: "Sync Finalizing", value: "Sync Finalizing" },
                                   { label: "Sync in Progress", value: "Sync in Progress" },
+                                  { label: "Sync Blocked", value: "Sync Blocked" },
                                   { label: "Sync Error", value: "Sync Error" }
                                 ]}
                                 placeholder="Filter by sync status..."

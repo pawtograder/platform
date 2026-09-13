@@ -16,6 +16,12 @@ export type SyncData = {
   last_sync_attempt?: string;
   last_sync_error?: string;
   merge_sha?: string;
+  /** Worker-reported outcome of the last attempt. "blocked_by_student_changes" is terminal. */
+  status?: string;
+  /** The handout revision that could not be delivered, when `status` is blocked. */
+  blocked_handout_sha?: string;
+  /** The student's files that blocked it. There is no PR in this case, so this is the only record. */
+  unresolved_paths?: string[];
 } | null;
 
 export type SyncStatus =
@@ -25,6 +31,7 @@ export type SyncStatus =
   | "PR Open"
   | "Sync Finalizing"
   | "Sync Error"
+  | "Sync Blocked"
   | "Sync in Progress";
 
 /**
@@ -51,6 +58,15 @@ export function computeSyncStatus(repositoryRow: RepositoryRow, latestSha?: stri
     } else {
       return "Synced";
     }
+  }
+
+  // The handout update could not be delivered: every file it changed is the student's own
+  // work, so nothing was written and no PR was opened. Checked before `pr_state` because a
+  // PR carried over from an EARLIER revision does not make this revision any less blocked,
+  // and without this branch the row falls all the way through to "Sync in Progress" and
+  // shows an in-flight spinner for a sync that already finished and will never move.
+  if (syncData?.status === "blocked_by_student_changes") {
+    return "Sync Blocked";
   }
 
   if (syncData?.pr_state === "open") {

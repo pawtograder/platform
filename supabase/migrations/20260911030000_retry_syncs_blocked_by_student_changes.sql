@@ -10,8 +10,8 @@
 -- added alongside this migration: a sync where every changed file is the student's own work
 -- writes nothing, opens no PR, and reports blocked_by_student_changes. The repo is behind
 -- the handout with nothing to click on, and pressing Sync again finds desired already equal
--- to the latest sha, enqueues nothing, and reports the repo up to date. Permanently stuck,
--- and quietly.
+-- to the latest sha, enqueues nothing, and reports the repo up to date. It is stuck there
+-- permanently, and nothing an instructor can see says so.
 --
 -- THE FIX. Enqueue a repo whose last sync says it is blocked, whatever desired_handout_sha
 -- says. Pressing Sync then re-runs it, which is exactly what an instructor expects that
