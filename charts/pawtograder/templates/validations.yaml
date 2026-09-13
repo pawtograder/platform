@@ -254,6 +254,53 @@ defence in depth against the chart being bypassed (a hand-edited Deployment,
 {{- if or (lt $vt 60) (gt $vt 1800) -}}
 {{- fail (printf "edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=%d is outside 60-1800. Below 60s a single create_repo (~105s of serialized GitHub work, measured 2026-09-07) is guaranteed to be re-served while still in flight; above 1800s the timeout becomes the RECOVERY LATENCY for a message whose isolate really died, and 1800s is already 1.5x the PawtograderQueueOldestMessageAging window so a genuinely stuck message still pages someone." $vt) -}}
 {{- end -}}
+{{- /*
+Per-org leaseholder rules. These bound a DIFFERENT axis from the two above:
+drainConcurrency sizes one leaseholder's batch inside a single isolate, these
+size how many leaseholders exist. They are checked whenever the values parse,
+but the COHERENCE rules only fire when orgSlotGlobalCap > 0 — a disabled
+deployment must not fail a render over numbers that have no effect, the same
+reason resolveAsyncWorkerTuning only records these issues when the feature is on.
+*/ -}}
+{{- $capRaw := $gaw.orgSlotGlobalCap | toString -}}
+{{- $mpoRaw := $gaw.orgSlotMaxPerOrg | toString -}}
+{{- $ttlRaw := $gaw.orgSlotLeaseTtlSeconds | toString -}}
+{{- if not (regexMatch "^[0-9]+$" $capRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotGlobalCap must be an integer 0-8 (got %q). 0 disables per-org leaseholders; a non-numeric value would be clamped back to 0 at runtime, so the deploy would silently keep the single-leaseholder path it was meant to replace." $capRaw) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $mpoRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg must be an integer 1-2 (got %q)." $mpoRaw) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $ttlRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds must be an integer 45-300 (got %q)." $ttlRaw) -}}
+{{- end -}}
+{{- $cap := int $capRaw -}}
+{{- $mpo := int $mpoRaw -}}
+{{- $ttl := int $ttlRaw -}}
+{{- if gt $cap 8 -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=%d is above 8. Each leaseholder is a RESIDENT isolate holding one admission slot and one worker.memoryLimitMb heap, and the pod memory budget is written as (maxParallelism x worker.memoryLimitMb); the cap is fleet-wide while maxParallelism (%d) is per-pod, so 8 is the worst-case-colocation number. Note also the slot POOL is seeded by migration (async_calls 64, async_calls_low_priority 16) — raising the cap past a pool would silently cap the budget at the pool size instead." $cap (int .Values.edgeFunctions.maxParallelism)) -}}
+{{- end -}}
+{{- if or (lt $mpo 1) (gt $mpo 2) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=%d is outside 1-2. In-flight per org is orgSlotMaxPerOrg x drainConcurrency against ONE org's content limiter (reservoir 40 / maxConcurrent 40 / refresh 40 per 60s). The RESERVOIR binds before the concurrency pool does: at the post-permission-sync-fix create_repo p50 of 23.1s (2026-09-13, 242 messages) 8 in flight is ~21 starts/min of a 40/min refresh, and 16 would be ~42/min — over budget. 8 is also the already-argued 20%% of the 40-slot pool, which is what leaves org invitations and handout syncs their headroom." $mpo) -}}
+{{- end -}}
+{{- if or (lt $ttl 45) (gt $ttl 300) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=%d is outside 45-300. Below 45s the renewal timer — which shares an event loop with the handlers — can reap a slot from a leaseholder that is still working, because the longest single message measured was 32.2s (2026-09-13). Above 300s the TTL becomes the slot-recovery latency for a leaseholder that really died, and it must not outlive the messages it is holding." $ttl) -}}
+{{- end -}}
+{{- if gt $cap 0 -}}
+{{- if gt (mul $mpo $n) 8 -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=%d x drainConcurrency=%d is %d in flight for a SINGLE org, above the 8 ceiling. That ceiling is 20%% of the fleet-wide per-org content limiter (40 concurrent, shared with org invitations and handout syncs), and the 40-per-minute reservoir is the tighter of the two. Lower orgSlotMaxPerOrg rather than drainConcurrency — drainConcurrency is already coherent with visibilityTimeoutSeconds and worker.timeoutMs, and lowering it would break that pairing to fix a different budget." $mpo $n (mul $mpo $n)) -}}
+{{- end -}}
+{{- if gt $mpo $cap -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=%d exceeds orgSlotGlobalCap=%d, so the per-org ceiling can never be reached and the value is a lie about what this deploy does. Set orgSlotGlobalCap >= orgSlotMaxPerOrg." $mpo $cap) -}}
+{{- end -}}
+{{- $ttlLifetimeS := div (.Values.edgeFunctions.worker.timeoutMs | int) 1000 -}}
+{{- if gt $ttl $vt -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=%d exceeds visibilityTimeoutSeconds=%d. The lease must not outlive the messages it holds: pgmq would re-serve the batch to someone else while this leaseholder still believes it owns the org's slot, which is the redelivery failure the visibility timeout exists to prevent, with a slot pinned on top of it." $ttl $vt) -}}
+{{- end -}}
+{{- if gt $ttl $ttlLifetimeS -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=%d exceeds the isolate lifetime edgeFunctions.worker.timeoutMs=%ds. A lease that outlives the isolate holding it pins an org's slot for the remainder of the TTL after the isolate is already gone, and since beforeUnload.wallClockRatio=%v retires isolates at HALF the lifetime, the real exposure is larger than this comparison suggests." $ttl $ttlLifetimeS .Values.edgeFunctions.beforeUnload.wallClockRatio) -}}
+{{- end -}}
+{{- end -}}
 {{- $need := mul $n 120 -}}
 {{- $isLegacyPair := and (eq $n 4) (eq $vt 300) -}}
 {{- if not $isLegacyPair -}}

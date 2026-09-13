@@ -290,6 +290,19 @@ spec:
               value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.drainConcurrency | quote }}
             - name: GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS
               value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds | quote }}
+            # Per-org leaseholders. A SECOND scaling axis to the two above: those
+            # make one leaseholder's batch bigger inside a single 256MiB isolate,
+            # these run more leaseholders, one isolate each, one GitHub org each.
+            # globalCap 0 = off, which is the shipped default, so this renders the
+            # pre-2026-09-13 behaviour until an operator sets it. Rendered as
+            # explicit `env` (an `env` entry beats `envFrom`), so envFromSecrets
+            # cannot override them — same rule as the two knobs above.
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotGlobalCap | quote }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_ORG
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg | quote }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_LEASE_TTL_SECONDS
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds | quote }}
             # Latency histogram bounds in seconds. The top finite bucket must be
             # >= worker.timeoutMs/1000 or every request that hits the worker
             # timeout lands in +Inf and the upper quantiles become an

@@ -1452,9 +1452,62 @@ edgeFunctions:
   # and the render-time rules make all of that impossible in the first place. Note these are rendered as explicit `env` entries, and
   # an `env` entry beats `envFrom`, so edgeFunctions.envFromSecrets CANNOT be
   # used to override them: set them here.
+  # ---------------------------------------------------------------------------
+  # PER-ORG LEASEHOLDERS (orgSlot*) — a SECOND, independent scaling axis
+  # ---------------------------------------------------------------------------
+  # drainConcurrency above buys concurrency by making ONE leaseholder's batch
+  # bigger, and it is capped at 8 because all of those handlers share a single
+  # 256MiB isolate and one visibility-timeout budget. These three knobs buy it
+  # by running MORE leaseholders, each its own isolate, each claiming a slot for
+  # ONE GitHub org. So the memory cap and the `n x 120` ceiling apply PER
+  # LEASEHOLDER and stop binding the aggregate — which is why enabling this
+  # needs no change to drainConcurrency, visibilityTimeoutSeconds or
+  # worker.timeoutMs.
+  #
+  # WHY IT EXISTS. The Bottleneck content limiter is per ORG (reservoir 40 /
+  # maxConcurrent 40 / refresh 40 per 60s, keyed create_content:<org>:<app id>),
+  # but the worker's concurrency was GLOBAL. Measured on Khoury prod 2026-09-13:
+  # CS 2000 released Project 1 at 04:00:00 UTC, 242 create_repo messages in one
+  # transaction, drained 04:00:00 -> 04:30:51 at ~8 msg/min. With four classes
+  # in four DIFFERENT orgs releasing at once there are 4 x 40 = 160 concurrent
+  # GitHub slots available and the worker would use 4 — ~2.5% — while all four
+  # classes queue behind one FIFO drain.
+  #
+  # Peak simultaneous activity observed over 7 days was 8 distinct orgs in one
+  # hour (2026-09-11, 377 messages), against 15 distinct github_org values in
+  # public.classes total.
+  #
+  # DEFAULTS ARE OFF, deliberately, exactly like drainConcurrency's defaults
+  # reproduce the old hardcoded pair: globalCap 0 selects the single-leaseholder
+  # path that shipped before this, so upgrading the chart changes nothing until
+  # an operator opts in. RECOMMENDED once you do: globalCap 8, maxPerOrg 2.
+  #
+  #   orgSlotGlobalCap: 8        # fleet-wide leaseholders; 8 = edgeFunctions.maxParallelism
+  #   orgSlotMaxPerOrg: 2        # 2 x drainConcurrency 4 = 8 in flight per org
+  #
+  # maxPerOrg 2 is bounded by the RESERVOIR, not the concurrency pool: at the
+  # post-permission-sync-fix create_repo p50 of 23.1s (2026-09-13, 242 messages)
+  # 8 in flight is ~21 starts/min against a 40/min refresh, and 16 would be
+  # ~42/min — over budget. It is also the already-argued 20% of the 40-slot
+  # pool, so org invitations and handout syncs keep their headroom.
+  #
+  # Slot pools are seeded by migration (async_calls 64, async_calls_low_priority
+  # 16), so globalCap can be raised as config but the POOL needs a migration.
+  # claim_org_slot_and_read RAISES on a queue with no pool rather than returning
+  # zero rows, because "no pool" and "empty queue" are otherwise indistinguish-
+  # able — the same silence this whole design exists to avoid.
   githubAsyncWorker:
     drainConcurrency: 4
     visibilityTimeoutSeconds: 300
+    # 0 disables per-org leaseholders entirely (the pre-2026-09-13 path). 1-8 to enable.
+    orgSlotGlobalCap: 0
+    # In-flight per org is orgSlotMaxPerOrg x drainConcurrency; must be <= 8 and <= orgSlotGlobalCap.
+    orgSlotMaxPerOrg: 1
+    # Slot-recovery latency for a leaseholder that dies. Must not outlive the
+    # messages (visibilityTimeoutSeconds) or the isolate (worker.timeoutMs), and
+    # must exceed the longest single message (32.2s max, 2026-09-13) or the
+    # renewal timer can reap a slot from a leaseholder that is still working.
+    orgSlotLeaseTtlSeconds: 60
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)

@@ -1512,6 +1512,70 @@ assert_env_value "kong pins large_client_header_buffers above the 8k default" \
   templates/kong.yaml KONG_NGINX_HTTP_LARGE_CLIENT_HEADER_BUFFERS "4 16k"
 
 echo
+
+echo "== per-org leaseholders must ship OFF and refuse incoherent budgets =="
+# This is a SECOND scaling axis to drainConcurrency: that one sizes a single
+# leaseholder's batch inside one 256MiB isolate, these size how many
+# leaseholders exist (one isolate, one GitHub org each). The knobs are only
+# meaningful together, and every rule below has a way of failing SILENTLY in
+# production if the chart does not catch it here.
+#
+# Shipping OFF is the load-bearing default: globalCap 0 selects the
+# single-leaseholder path that ran before 2026-09-13, so upgrading the chart
+# changes nothing until an operator opts in — exactly the property
+# drainConcurrency's own defaults were chosen for.
+assert_env_value "per-org leaseholders ship disabled" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP 0
+assert_env_value "orgSlotMaxPerOrg defaults to 1" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_ORG 1
+assert_env_value "orgSlotLeaseTtlSeconds defaults to 60" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_LEASE_TTL_SECONDS 60
+
+# The recommended prod pair must actually render, or the documentation in
+# values.yaml is advice that cannot be taken.
+assert_env_value "recommended prod cap renders" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP 8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2
+
+# maxPerOrg x drainConcurrency is in-flight work against ONE org's content
+# limiter (40 concurrent / 40 per minute, shared with org invitations and
+# handout syncs). Past 8 the 40/min reservoir is the binding constraint, and
+# the symptom is students' org invitations convoying behind repo creations —
+# nothing about it looks like a queue problem.
+assert_refused "refuses more than 8 in flight for one org" \
+  "in flight for a SINGLE org" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2 \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960 \
+  --set edgeFunctions.worker.timeoutMs=960000 \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=1000 \
+  --set edgeFunctions.terminationGracePeriodSeconds=1030
+
+# A per-org ceiling above the fleet-wide cap can never be reached, so the value
+# claims a concurrency the deploy cannot deliver.
+assert_refused "refuses maxPerOrg above globalCap" \
+  "exceeds orgSlotGlobalCap=1" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=1 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2
+
+# The lease must not outlive the messages it holds: pgmq would re-serve the
+# batch while this leaseholder still believes it owns the org's slot.
+assert_refused "refuses a lease TTL above the visibility timeout" \
+  "exceeds visibilityTimeoutSeconds" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=290 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=280 \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=2
+
+# Coherence is checked ONLY when the feature is on. A disabled deployment
+# carrying leftover values must still render, or every install that ever
+# experimented with this is wedged at upgrade time by numbers with no effect.
+assert_renders "disabled deployment ignores incoherent org-slot values" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=0 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2
+
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"
   exit 1
