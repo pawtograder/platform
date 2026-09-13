@@ -7,6 +7,28 @@
 
 import { createRedis, bottleneckRedisOptions, type RedisClient } from "./Redis.ts";
 import { SYNC_COMMIT_MESSAGE_PREFIX } from "./handoutSyncPush.ts";
+import {
+  ancestorPaths,
+  classifyStudentFile,
+  countsTowardSyncSize,
+  decideFileAction,
+  decodeRepoTree,
+  encodeRepoTree,
+  findBlockingAncestor,
+  GRADE_WORKFLOW_PATH as GUARD_GRADE_WORKFLOW_PATH,
+  isOurSyncCommit,
+  isSyncBranchSafeToReset,
+  pathsNeedingBlobLookup,
+  renderUnresolvedSection,
+  resolveAutoMerge,
+  type ChangedFileShape,
+  type RepoTree,
+  type RepoTreeEntry,
+  type SyncBranchCommit,
+  type TreeEntry,
+  type UnresolvedFile,
+  type UnresolvedReason
+} from "./syncConflictGuard.ts";
 import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
@@ -22,6 +44,15 @@ import * as github from "./GitHubWrapper.ts";
 import { getCreateContentLimiter } from "./GitHubWrapper.ts";
 // (Redis-related imports consolidated above into the one createRedis line)
 import { Database } from "./SupabaseTypes.d.ts";
+
+/**
+ * Pins the guard module's copy of the grading workflow path to the one the rest of the
+ * codebase writes and reads. `syncConflictGuard.ts` carries its own literal so it can stay
+ * free of GitHub imports and be unit-tested against no mock at all; this file imports both,
+ * so it is the one place that can hold them together. Changing either literal stops this
+ * assignment compiling, which is the entire point of it.
+ */
+const _gradeWorkflowPathsAgree: typeof github.GRADE_WORKFLOW_PATH = GUARD_GRADE_WORKFLOW_PATH;
 
 export interface FileChange {
   path: string;
@@ -98,7 +129,47 @@ export interface SyncResult {
   merged?: boolean;
   merge_sha?: string;
   error?: string;
+  /** The handout holds nothing new for this repo. Safe to record as fully synced. */
   no_changes?: boolean;
+  /**
+   * The handout DOES hold something new, and none of it could be written, because every
+   * changed file is the student's own work.
+   *
+   * Distinct from `no_changes` on purpose: a caller that records this as synced would mark
+   * an update delivered that never reached the repo. There is no PR here either, so the
+   * only trace is this flag and the paths below.
+   */
+  blocked_by_student_changes?: boolean;
+  /** The paths that blocked it, for the caller to record. */
+  unresolved_paths?: string[];
+  /**
+   * The repository's head commit, reported ONLY when this sync read it and reached its
+   * conclusion from it.
+   *
+   * `synced_repo_sha` and `synced_handout_sha` are a matched pair: the first is the baseline
+   * the conflict guard classifies against, so advancing the second alone leaves the baseline
+   * describing an older tree, and every path someone has since brought into line with the
+   * handout reads as the student's own work against content that is already correct. The
+   * caller needs this value to move the pair together.
+   *
+   * Absent is a meaningful answer and means "do not move the baseline". The field is set only
+   * where the head was the BASIS of the decision, never read afterwards to fill the field in:
+   * a head read after the fact can contain a push the student made in the meantime, and
+   * recording that as the machine-written baseline hands their next commit to the overwrite
+   * this guard exists to prevent.
+   */
+  repo_head_sha?: string;
+  /**
+   * Set when the failure was a `TerminalSyncError`: this repository's own problem, which
+   * retrying will not fix and which says nothing about GitHub's health.
+   *
+   * Carried as a field because `success: false` is where the class is lost. Every error here
+   * is flattened to a message string, so a caller branching on `instanceof` sees nothing, and
+   * the worker's generic path then reads a student's hand-resolved branch as a GitHub outage
+   * and pauses handout delivery for the whole org. The value is `TerminalSyncError.reason` --
+   * a stable code, not a message -- so the caller can branch per case.
+   */
+  terminal_reason?: string;
 }
 
 // Redis client for caching. createRedis picks ioredis (REDIS_URL) or
@@ -148,79 +219,6 @@ function getSyncLimiter(org: string): Bottleneck {
   }
   syncLimiters.set(key, limiter);
   return limiter;
-}
-
-/**
- * Get the first (initial) commit in a repository
- */
-export async function getFirstCommit(repoFullName: string, branch: string, scope?: Sentry.Scope): Promise<string> {
-  const octokit = await github.getOctoKit(repoFullName, scope);
-  if (!octokit) {
-    throw new Error(`No octokit found for repository ${repoFullName}`);
-  }
-
-  const [owner, repo] = repoFullName.split("/");
-
-  // Start from the branch HEAD and traverse back to find the first commit.
-  let oldestSha: string | undefined;
-
-  const fetchHeadSha = async (br: string): Promise<string> => {
-    const { data } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-      owner,
-      repo,
-      ref: `heads/${br}`
-    });
-    return data.object.sha;
-  };
-
-  // The requested branch may not exist (e.g. a fork whose default branch is not
-  // "main"); fall back to the repo's actual default branch in that case.
-  let currentSha: string;
-  try {
-    currentSha = await fetchHeadSha(branch);
-  } catch (e) {
-    const status = (e as { status?: number }).status;
-    if (status !== 404) throw e;
-    const { data: repoData } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
-    const defaultBranch = repoData.default_branch;
-    if (!defaultBranch || defaultBranch === branch) throw e;
-    scope?.addBreadcrumb({
-      message: `Branch ${branch} not found in ${repoFullName}; falling back to default branch ${defaultBranch}`,
-      category: "git",
-      level: "info"
-    });
-    currentSha = await fetchHeadSha(defaultBranch);
-  }
-
-  // Keep following parent commits until we find one with no parents
-  while (currentSha) {
-    const { data: commit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
-      owner,
-      repo,
-      commit_sha: currentSha
-    });
-
-    if (!commit.parents || commit.parents.length === 0) {
-      // Found the first commit (no parents)
-      oldestSha = commit.sha;
-      break;
-    }
-
-    // Follow the first parent (in case of merge commits)
-    currentSha = commit.parents[0].sha;
-  }
-
-  if (!oldestSha) {
-    throw new Error(`Could not find first commit in repository ${repoFullName}`);
-  }
-
-  scope?.addBreadcrumb({
-    message: `Found first commit in ${repoFullName}: ${oldestSha}`,
-    category: "git",
-    level: "info"
-  });
-
-  return oldestSha;
 }
 
 /**
@@ -298,44 +296,87 @@ function isGitHubNotFound(error: unknown): boolean {
   );
 }
 
+/** 12 hours. Every sha this is called with is an immutable commit, so a hit cannot be stale. */
+const TREE_CACHE_TTL_SECONDS = 43200;
+
 /**
- * Fetch the recursive blob tree for a template at a specific SHA and return a map
- * of path → size in bytes. Used to populate per-file sizes on FileChange entries so
- * the sync can make size-aware concurrency decisions BEFORE downloading any content.
+ * Above this, the tree is fetched every time instead of cached.
  *
- * Cached in Redis (12h TTL) keyed by (templateRepo, sha). The tree response is small
- * (metadata only) so the cache value is on the order of tens of KB even for large
- * repos and is safe to cache.
+ * Upstash rejects a request whose body exceeds its per-request limit, and `setex` sends the
+ * whole value in one body. A repo big enough to produce a larger payload than this would fail
+ * to cache it on every single sync, log the failure where nobody reads it, and pay the full
+ * GitHub fetch anyway. Skipping it deliberately and reporting the skip beats attempting it and
+ * losing it.
  */
-export async function getTreeBlobSizes(
-  templateRepo: string,
+const MAX_TREE_CACHE_BYTES = 512 * 1024;
+
+/**
+ * Trees being fetched right now, by cache key.
+ *
+ * The per-org limiter lets 20 syncs run at once inside one isolate, and on a handout push
+ * every one of them wants the same two trees. Without this they all miss the same cold cache
+ * key in the same instant and issue 20 identical full-tree requests, each of which can be
+ * megabytes. Sharing the in-flight promise makes that one request. Entries are removed when
+ * the fetch settles, so nothing here outlives the work it belongs to.
+ */
+const inFlightTrees = new Map<string, Promise<RepoTree>>();
+
+/**
+ * The recursive tree of a repo at a commit: every path, its kind, its blob sha, its size.
+ *
+ * One function and one cache key for what used to be two of each. The sizes the pre-flight
+ * reads and the blob shas the student-work guard reads come from the same GitHub response,
+ * and fetching it twice under two keys meant the handout tree at a given sha was pulled once
+ * for its sizes and again, seconds later, for its shas.
+ *
+ * Blob shas are content addresses, so two repos hold byte-identical copies of a file exactly
+ * when this map gives the same sha for that path. That equality is what `classifyStudentFile`
+ * uses to tell a file the student has edited from one they have not touched since the last
+ * sync.
+ */
+export async function getRepoTree(repoFullName: string, sha: string, scope?: Sentry.Scope): Promise<RepoTree> {
+  const cacheKey = `github:tree:v1:${repoFullName}/${sha}`;
+  const inFlight = inFlightTrees.get(cacheKey);
+  if (inFlight) return await inFlight;
+
+  const fetching = fetchRepoTree(repoFullName, sha, cacheKey, scope);
+  inFlightTrees.set(cacheKey, fetching);
+  try {
+    return await fetching;
+  } finally {
+    inFlightTrees.delete(cacheKey);
+  }
+}
+
+async function fetchRepoTree(
+  repoFullName: string,
   sha: string,
+  cacheKey: string,
   scope?: Sentry.Scope
-): Promise<Map<string, number>> {
-  const cacheKey = `github:tree-sizes:${templateRepo}/${sha}`;
+): Promise<RepoTree> {
   const redis = getRedisClient();
 
   if (redis) {
     try {
-      // createRedis()'s get() auto-JSON-parses values that round-trip as JSON
-      // (the ioredis-compat proxy and the Upstash adapter both do), so a hit can
-      // arrive already parsed. Only JSON.parse when it's still a raw string —
-      // otherwise the old `typeof === "string"` guard silently missed every hit.
+      // createRedis()'s get() auto-JSON-parses values that round-trip as JSON (the
+      // ioredis-compat proxy and the Upstash adapter both do), so a hit can arrive already
+      // parsed. Only JSON.parse when it is still a raw string. Otherwise the old
+      // `typeof === "string"` guard silently missed every hit.
       const cached = await redis.get(cacheKey);
       if (cached != null) {
-        const arr = (typeof cached === "string" ? JSON.parse(cached) : cached) as [string, number][];
-        return new Map(arr);
+        const decoded = decodeRepoTree(cached);
+        if (decoded) return decoded;
       }
     } catch (error) {
-      console.error("Redis cache read error (tree-sizes):", error);
+      console.error("Redis cache read error (tree):", error);
     }
   }
 
-  const octokit = await github.getOctoKit(templateRepo, scope);
+  const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) {
-    throw new Error(`No octokit found for repository ${templateRepo}`);
+    throw new Error(`No octokit found for repository ${repoFullName}`);
   }
-  const [owner, repo] = templateRepo.split("/");
+  const [owner, repo] = repoFullName.split("/");
 
   const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
     owner,
@@ -344,36 +385,359 @@ export async function getTreeBlobSizes(
     recursive: "true"
   });
 
-  // GitHub truncates the tree response for very large repos (~100k entries / 7MB).
-  // When that happens we silently miss sizes for entries past the cutoff, which means
-  // the per-file size guard in syncRepositoryToHandout can be bypassed. The runtime
-  // guard in copyBlobBetweenRepos (Content-Length check) catches the worst case, but
-  // we still want operators to know that size metadata is incomplete.
+  // GitHub truncates the tree response for very large repos (~100k entries / 7MB). Two
+  // things degrade at once: the per-file size guard in syncRepositoryToHandout cannot see
+  // sizes past the cutoff, and the student-work guard has to resolve the paths it needs one
+  // at a time. Operators should know it is happening.
   if (tree.truncated) {
-    console.warn(`Tree for ${templateRepo}@${sha} is truncated — size metadata incomplete`);
+    console.warn(
+      `Tree for ${repoFullName}@${sha} is truncated; sizes are incomplete and blob shas need per-file reads`
+    );
     scope?.addBreadcrumb({
-      message: `Tree truncated for ${templateRepo}@${sha}; per-file size guard may not apply to all files`,
+      message: `Tree truncated for ${repoFullName}@${sha}; falling back to per-file lookups and partial size metadata`,
       category: "sync",
       level: "warning"
     });
   }
 
-  const sizes = new Map<string, number>();
+  // Every entry, not just blobs. A tree or a submodule standing at a path the handout writes a
+  // file to is the case a blob-only map cannot see: both sides read as absent, the path looks
+  // like a new file, and writing the blob replaces the directory.
+  const entries = new Map<string, RepoTreeEntry>();
   for (const item of tree.tree) {
-    if (item.type === "blob" && item.path && typeof item.size === "number") {
-      sizes.set(item.path, item.size);
+    if (!item.path || !item.type) continue;
+    if (item.type === "blob" || item.type === "tree" || item.type === "commit") {
+      if (item.type === "blob" && !item.sha) continue;
+      entries.set(item.path, {
+        sha: item.sha ?? "",
+        type: item.type,
+        size: typeof item.size === "number" ? item.size : undefined
+      });
     }
   }
 
-  if (redis) {
-    try {
-      await redis.setex(cacheKey, 43200, JSON.stringify(Array.from(sizes.entries())));
-    } catch (error) {
-      console.error("Redis cache write error (tree-sizes):", error);
-    }
+  const result: RepoTree = { entries, truncated: !!tree.truncated };
+  await cacheRepoTree(cacheKey, result, repoFullName, sha, scope);
+  return result;
+}
+
+/**
+ * Write a tree to Redis, and report it when that fails.
+ *
+ * Dropping the value silently produces a permanent cache miss that looks exactly like a cache
+ * that is working: every sync pays the full tree fetch, and the only record is a console line
+ * in an edge function's logs. Both the oversize case and a write request that fails are
+ * reported where they can be seen.
+ */
+async function cacheRepoTree(
+  cacheKey: string,
+  tree: RepoTree,
+  repoFullName: string,
+  sha: string,
+  scope?: Sentry.Scope
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+
+  const payload = encodeRepoTree(tree);
+  if (payload.length > MAX_TREE_CACHE_BYTES) {
+    const kb = Math.round(payload.length / 1024);
+    console.warn(
+      `Tree for ${repoFullName}@${sha} serializes to ~${kb}KB, over the ${Math.round(
+        MAX_TREE_CACHE_BYTES / 1024
+      )}KB cache limit; every sync of this repo will refetch it`
+    );
+    scope?.addBreadcrumb({
+      message: `Tree for ${repoFullName}@${sha} too large to cache (~${kb}KB); refetching on every sync`,
+      category: "sync",
+      level: "warning"
+    });
+    scope?.setTag("tree_too_large_to_cache", "true");
+    return;
   }
 
-  return sizes;
+  try {
+    await redis.setex(cacheKey, TREE_CACHE_TTL_SECONDS, payload);
+  } catch (error) {
+    console.error("Redis cache write error (tree):", error);
+    scope?.addBreadcrumb({
+      message: `Failed to cache tree for ${repoFullName}@${sha}: ${error}`,
+      category: "sync",
+      level: "warning"
+    });
+    Sentry.captureMessage(`Redis cache write failed for tree ${repoFullName}@${sha}: ${error}`, "warning");
+  }
+}
+
+/**
+ * A blob sha that can never equal a real one, for a path we could not read.
+ *
+ * `classifyStudentFile` compares shas, and an unequal sha classifies the path as the
+ * student's, which leaves it alone. That is the conservative direction, and it is the only
+ * honest answer for a path whose content we were not allowed to see.
+ *
+ * Distinct per call, so that an unreadable path on BOTH sides of the comparison does not
+ * compare equal to itself and read as "unmodified", which would hand back the overwrite
+ * this sentinel exists to prevent.
+ */
+let unreadableBlobCounter = 0;
+function unreadableBlobSha(): string {
+  unreadableBlobCounter += 1;
+  return `unreadable-${unreadableBlobCounter}`;
+}
+
+/**
+ * One path at one ref, for the paths a truncated tree could not answer.
+ *
+ * Returns undefined only when the path is genuinely absent: a 404.
+ *
+ * A blob too large for the Contents API's 1MB inline limit answers 403, not 404, and the
+ * only repos that reach this fallback at all are ones large enough for GitHub to truncate
+ * their recursive tree, which is exactly where such a blob lives. That case resolves to an
+ * unreadable blob, never to "absent": a false "absent" would classify the file as unmodified
+ * and re-enable the overwrite the guard exists to prevent, while an unreadable one classifies
+ * it as the student's and leaves it alone.
+ *
+ * A TRANSIENT failure -- a rate limit, a 5xx, a reset connection -- still throws. Resolving
+ * those to "the student's own work" would turn a retryable outage into a permanent,
+ * `success: true` non-delivery that the queue never retries, and would tell the student
+ * "you changed this file" about a file they never opened.
+ *
+ * An array response is a directory, which the Contents API returns instead of an object.
+ * That is the collision case, so it is reported as a tree rather than discarded.
+ */
+async function fetchTreeEntryAtRef(
+  repoFullName: string,
+  path: string,
+  ref: string,
+  scope?: Sentry.Scope
+): Promise<TreeEntry | undefined> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
+  const [owner, repo] = repoFullName.split("/");
+  try {
+    const { data } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+      owner,
+      repo,
+      path,
+      ref
+    });
+    if (Array.isArray(data)) return { sha: "", type: "tree" };
+    const meta = data as { sha?: string; type?: string };
+    if (!meta.sha) return { sha: unreadableBlobSha(), type: "blob" };
+    if (meta.type === "dir") return { sha: meta.sha, type: "tree" };
+    if (meta.type === "submodule") return { sha: meta.sha, type: "commit" };
+    return { sha: meta.sha, type: "blob" };
+  } catch (error) {
+    if (isGitHubNotFound(error)) return undefined;
+    if (!isBlobTooLargeForContentsApi(error)) throw error;
+    scope?.addBreadcrumb({
+      message: `${repoFullName} ${path} at ${ref} is too large to read through the Contents API; treating it as the student's own work`,
+      category: "sync",
+      level: "warning"
+    });
+    console.warn(`[sync] oversized path ${repoFullName} ${path}@${ref}: ${error}`);
+    return { sha: unreadableBlobSha(), type: "blob" };
+  }
+}
+
+/**
+ * A 403 that means "this blob is bigger than the Contents API will inline", as opposed to a
+ * 403 that means "slow down" or "you are not allowed in".
+ *
+ * The distinction decides whether the caller may treat the path as unreadable-and-therefore
+ * the-student's, or has to fail and be retried. GitHub's oversize response says so in the
+ * message; its secondary rate limit and permission failures say something else.
+ */
+function isBlobTooLargeForContentsApi(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  if (!("status" in error) || (error as { status: number }).status !== 403) return false;
+  const message = String((error as { message?: unknown }).message ?? "").toLowerCase();
+  if (message.includes("rate limit") || message.includes("abuse")) return false;
+  return message.includes("too large") || message.includes("up to 1 mb") || message.includes("larger than");
+}
+
+/**
+ * How many per-path Contents reads one sync may make while resolving a truncated tree.
+ *
+ * There has to be a number. The work grows with the size of the handout update times the
+ * depth of its paths, it runs inside a sync holding one of 20 per-org slots, and pgmq
+ * redelivers the message if the batch outlives the visibility timeout, so an uncapped run
+ * does not eventually finish, it runs again from the start, forever.
+ *
+ * Sized against that timeout rather than picked: `DEFAULT_VISIBILITY_TIMEOUT_SECONDS` is
+ * 300 and a whole batch of jobs shares it, so this phase may have about 60 seconds of it.
+ * At `TRUNCATED_TREE_LOOKUP_CONCURRENCY` in flight and roughly 200ms a call, that is around
+ * 2400 reads. A repo that needs more is not slow, it is the wrong shape: a committed
+ * `node_modules` and a handout-wide update. It needs an instructor, not a longer wait.
+ *
+ * Stopping at a stated limit and reporting it is the honest failure. Classifying the paths
+ * we ran out of budget for as "not the student's" is the dishonest one, and it overwrites
+ * their work.
+ */
+const MAX_TRUNCATED_TREE_LOOKUPS = 2400;
+
+/** How many of those reads run at once. Reads only, so GitHub's advice on concurrent writes does not bind. */
+const TRUNCATED_TREE_LOOKUP_CONCURRENCY = 8;
+
+function assertLookupBudget(lookups: number, repoFullName: string, templateRepo: string, scope?: Sentry.Scope): void {
+  if (lookups <= MAX_TRUNCATED_TREE_LOOKUPS) return;
+  scope?.setTag("truncated_tree_lookups", String(lookups));
+  throw new SyncTreeTooLargeError(repoFullName, templateRepo, lookups, MAX_TRUNCATED_TREE_LOOKUPS);
+}
+
+/**
+ * Resolve paths a few at a time, handing each answer to `record` as it arrives.
+ *
+ * A plain `Promise.all` over every path would open as many requests as there are paths,
+ * which on the repos that reach this fallback is thousands. Workers pull from a shared
+ * cursor, so a slow path delays only itself.
+ */
+async function resolvePathsInParallel(
+  paths: readonly string[],
+  fetchOne: (path: string) => Promise<TreeEntry | undefined>,
+  record: (path: string, entry: TreeEntry) => void
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < paths.length) {
+      const path = paths[next++];
+      const entry = await fetchOne(path);
+      if (entry) record(path, entry);
+    }
+  };
+  const workers = Math.min(TRUNCATED_TREE_LOOKUP_CONCURRENCY, paths.length);
+  await Promise.all(Array.from({ length: workers }, worker));
+}
+
+/**
+ * The commit to read the student's repo at, for a row that records no baseline.
+ *
+ * `synced_repo_sha` is the repo-side half of a matched pair: the state the LAST sync left
+ * behind, which is what makes "this file differs from the baseline" mean "the student wrote
+ * it". Rows exist without one: repositories are inserted with `synced_handout_sha` set and
+ * `synced_repo_sha` left null. Something has to stand in.
+ *
+ * The repository's current head is that stand-in, and it is NOT the repo's first commit. The
+ * root commit was the previous fallback and it compared two unrelated trees, so nearly every
+ * changed file came back `content_differs` and repositories where the student had changed
+ * nothing reported themselves blocked. Reading the head instead makes the comparison the one
+ * the baseline approximates in the first place: repository content against the handout at
+ * `fromSha`. It errs the safe way: a file the student edited long ago still differs from the
+ * handout, so it still reads as theirs.
+ *
+ * Undefined when there is no head to read, which the E2E stub and the suffixed E2E repo names
+ * both produce. Callers must treat that as "nothing is known about this repository", never as
+ * "nothing in it is the student's".
+ */
+export async function resolveSyncBaselineSha(
+  repoFullName: string,
+  syncedRepoSha: string | null,
+  scope?: Sentry.Scope
+): Promise<string | undefined> {
+  if (syncedRepoSha) return syncedRepoSha;
+  const head = await github.getDefaultBranchHeadSha(repoFullName, scope);
+  scope?.setTag("sync_baseline_from_head", head ? "true" : "unavailable");
+  return head;
+}
+
+/**
+ * Which of `paths` the student has made their own since the last sync.
+ *
+ * Compares the student's repo at `syncedRepoSha` against the handout at `fromSha`, one
+ * recursive tree each, and falls back to per-file lookups only for paths a truncated tree
+ * left unanswered.
+ *
+ * `fromSha` null means there is no previous sync. The branch base is then the repo's
+ * pristine starting state, nothing in it can be the student's own work yet, and the map is
+ * empty.
+ *
+ * `syncedRepoSha` null means the row records no baseline. There is then no such thing as
+ * "what the last sync left behind", so the question changes from "has this file moved since
+ * we wrote it?" to "does this file match the handout it was written from?" That is the
+ * repository as it stands now, against the handout at `fromSha`, resolved by
+ * `resolveSyncBaselineSha`. A file that matches is one nobody has touched; anything else is
+ * the student's and is left alone.
+ *
+ * A caller that already resolved a baseline should pass it rather than null, so the head is
+ * read once: the classification and the branch it is written onto have to be the same
+ * commit. Reading the head twice at two moments lets a push arrive between them, and if the
+ * branch base is the newer of the two, the student's commit is inside the base while the
+ * classification says the path is untouched, which is an overwrite.
+ *
+ * When no baseline can be resolved at all, every path is reported as the student's. That is
+ * the only honest answer for a repository we cannot see, and the failure direction is a
+ * blocked sync rather than a silent overwrite.
+ */
+export async function findStudentModifiedFiles(
+  repoFullName: string,
+  syncedRepoSha: string | null,
+  templateRepo: string,
+  fromSha: string | null,
+  paths: readonly string[],
+  scope?: Sentry.Scope
+): Promise<Map<string, UnresolvedReason>> {
+  const modified = new Map<string, UnresolvedReason>();
+  if (!fromSha || paths.length === 0) return modified;
+
+  const baselineSha = await resolveSyncBaselineSha(repoFullName, syncedRepoSha, scope);
+  if (!baselineSha) {
+    scope?.setTag("sync_baseline_unavailable", "true");
+    return new Map(paths.map((path) => [path, "content_differs" as UnresolvedReason]));
+  }
+
+  const [student, handout] = await Promise.all([
+    getRepoTree(repoFullName, baselineSha, scope),
+    getRepoTree(templateRepo, fromSha, scope)
+  ]);
+
+  const studentEntries = new Map<string, TreeEntry>(student.entries);
+  const handoutEntries = new Map<string, TreeEntry>(handout.entries);
+
+  // A truncated tree cannot answer for a path it omitted, and the ancestors matter as much
+  // as the paths themselves: a file standing where a directory has to go is the inverse of
+  // the directory collision, and is just as invisible to a map that never listed it.
+  const studentPathsOfInterest = student.truncated
+    ? Array.from(new Set(paths.flatMap((path) => [path, ...ancestorPaths(path)])))
+    : paths;
+
+  const studentLookups = pathsNeedingBlobLookup(studentEntries, student.truncated, studentPathsOfInterest);
+  const handoutLookups = pathsNeedingBlobLookup(handoutEntries, handout.truncated, paths);
+  assertLookupBudget(studentLookups.length + handoutLookups.length, repoFullName, templateRepo, scope);
+
+  // Both sides at once, and several paths at a time within each. These are reads of two
+  // different repos with no ordering between them, and the sequential version was the
+  // slowest thing in the sync: a 300-file update at depth four expands to more than 1200
+  // lookups on the student side alone, which at a couple of hundred milliseconds each is
+  // minutes of wall clock spent holding one of the 20 per-org sync slots, and long enough
+  // to overrun the pgmq visibility timeout, which redelivers the message and runs the whole
+  // sync a second time.
+  await Promise.all([
+    resolvePathsInParallel(
+      studentLookups,
+      (path) => fetchTreeEntryAtRef(repoFullName, path, baselineSha, scope),
+      (path, entry) => studentEntries.set(path, entry)
+    ),
+    resolvePathsInParallel(
+      handoutLookups,
+      (path) => fetchTreeEntryAtRef(templateRepo, path, fromSha, scope),
+      (path, entry) => handoutEntries.set(path, entry)
+    )
+  ]);
+
+  for (const path of paths) {
+    const verdict = classifyStudentFile(studentEntries.get(path), handoutEntries.get(path));
+    if (verdict !== "unmodified") {
+      modified.set(path, verdict);
+      continue;
+    }
+    // The path itself is clear. It can still be unreachable, when a file of the student's
+    // stands where one of its parent directories has to go.
+    if (findBlockingAncestor(path, studentEntries)) {
+      modified.set(path, "path_blocked_in_your_repo");
+    }
+  }
+  return modified;
 }
 
 /**
@@ -434,21 +798,21 @@ export async function getChangedFiles(
     // Content is intentionally NOT fetched here: doing so on a large handout
     // (e.g. a CSV dataset or many PDFs) easily exceeds Edge Function memory.
     // `createBranchAndCommit` fetches each blob lazily and discards it after use.
-    const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
-      owner,
-      repo,
-      tree_sha: toSha,
-      recursive: "true"
-    });
+    //
+    // Through `getRepoTree` rather than a request of its own: this is the same listing the
+    // compare path reads for its sizes and the student-work guard reads for its blob shas,
+    // so sharing it means one fetch, one cache entry, and a truncation warning this path
+    // used to skip.
+    const { entries } = await getRepoTree(templateRepo, toSha, scope);
 
-    for (const item of tree.tree) {
-      if (item.type === "blob" && item.path && item.sha) {
+    for (const [path, entry] of entries) {
+      if (entry.type === "blob" && entry.sha) {
         fileChanges.push({
-          path: item.path,
-          sha: item.sha,
-          isBinary: isBinaryPath(item.path),
+          path,
+          sha: entry.sha,
+          isBinary: isBinaryPath(path),
           status: "added",
-          size: typeof item.size === "number" ? item.size : undefined
+          size: entry.size
         });
       }
     }
@@ -463,11 +827,12 @@ export async function getChangedFiles(
 
     // The `compare` endpoint doesn't return per-file sizes, but we want sizes
     // populated on every FileChange so callers can make size-aware concurrency
-    // decisions without downloading any blobs. Pull sizes from the recursive tree
-    // at toSha (single API call, Redis-cached).
-    let sizesAtToSha: Map<string, number> | undefined;
+    // decisions without downloading any blobs. Pull them from the recursive tree at
+    // toSha: one API call, Redis-cached, and the same listing the student-work guard
+    // reads, so the two share a fetch rather than making one each.
+    let treeAtToSha: RepoTree | undefined;
     try {
-      sizesAtToSha = await getTreeBlobSizes(templateRepo, toSha, scope);
+      treeAtToSha = await getRepoTree(templateRepo, toSha, scope);
     } catch (error) {
       // Non-fatal: if the tree fetch fails we just don't have sizes; the size guard
       // inside createBranchAndCommit still applies during the lazy blob fetch.
@@ -497,7 +862,7 @@ export async function getChangedFiles(
       }
 
       const isBinary = !file.patch || isBinaryPath(file.filename);
-      const sizeAtToSha = sizesAtToSha?.get(file.filename);
+      const sizeAtToSha = treeAtToSha?.entries.get(file.filename)?.size;
 
       if (isBinary) {
         if (!file.sha) {
@@ -779,11 +1144,276 @@ async function fetchTextFileAtRef(
 }
 
 /**
+ * The commit a branch currently points at.
+ *
+ * Throws rather than returning undefined when the read request fails: every caller here is
+ * guarding a destructive ref update, and `github.resolveRef` hides errors, which would turn
+ * the guard into a no-op.
+ */
+async function readBranchHeadSha(repoFullName: string, branchName: string, scope?: Sentry.Scope): Promise<string> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
+  const [owner, repo] = repoFullName.split("/");
+  const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+    owner,
+    repo,
+    ref: `heads/${branchName}`
+  });
+  return ref.object.sha;
+}
+
+/**
+ * Re-read a branch and fail unless it is still where the caller last saw it.
+ *
+ * Used immediately before a destructive ref update, so the validation that authorized it is
+ * as fresh as it can be made without a compare-and-swap.
+ */
+async function assertBranchStillAt(
+  repoFullName: string,
+  branchName: string,
+  expectedSha: string,
+  scope?: Sentry.Scope
+): Promise<void> {
+  const actualSha = await readBranchHeadSha(repoFullName, branchName, scope);
+  if (actualSha !== expectedSha) {
+    scope?.setTag("sync_branch_moved_during_validation", "true");
+    throw new SyncBranchMovedError(repoFullName, branchName, expectedSha, actualSha);
+  }
+}
+
+/**
+ * The fields of a FileChange the merge decision branches on, in the shape
+ * `decideFileAction` takes. Built in one place so the size gate and the commit path cannot
+ * describe the same file differently.
+ */
+function shapeOf(file: FileChange): ChangedFileShape {
+  return {
+    path: file.path,
+    status: file.status,
+    isBinary: file.isBinary,
+    hasPatch: !!file.patch,
+    patchDeletesFile: !!file.patch && patchDeletesEntireFile(file.patch)
+  };
+}
+
+/**
+ * A sync failure that belongs to ONE repository, and that retrying this job cannot change.
+ *
+ * The distinction this draws is whose problem the failure is, rather than whether retrying
+ * could help. The worker's generic failure path treats an error as evidence that GitHub
+ * itself is failing: it opens a 30-second circuit breaker scoped to `<org>:sync_repo_to_handout`
+ * and feeds the counter that trips an 8-hour org-wide pause. That is the right response to a
+ * rate limit or an outage, and the wrong one to a single student's branch, where it stops
+ * handout delivery for an entire course over one repo: six times over, once per retry,
+ * before the job dead-letters.
+ *
+ * Deliberately NOT `NonRetryableGitHubError`: that class is terminal in the same way, but
+ * the worker pairs it with writing `creation_error` onto the repository row, which is the
+ * field for a repo that could not be created and would put a creation failure in front of an
+ * instructor whose repo was created months ago. `reason` is a stable machine-readable code
+ * so the worker can record the failure against the sync and decide its own policy per case
+ * without parsing a message.
+ */
+export class TerminalSyncError extends Error {
+  constructor(
+    message: string,
+    /** Stable snake_case code identifying the case, for the caller to record and branch on. */
+    readonly reason: string
+  ) {
+    super(message);
+    this.name = "TerminalSyncError";
+  }
+}
+
+/**
+ * Thrown when resolving a truncated tree would cost more per-path reads than one sync may
+ * make. See `MAX_TRUNCATED_TREE_LOOKUPS`.
+ *
+ * Terminal because the next attempt faces the same repo, the same update and the same
+ * budget. A later, smaller update may well fit, which is why this is reported against the
+ * sync rather than parked on the repository row.
+ */
+export class SyncTreeTooLargeError extends TerminalSyncError {
+  constructor(
+    readonly repoFullName: string,
+    readonly templateRepo: string,
+    readonly lookupsNeeded: number,
+    readonly budget: number
+  ) {
+    super(
+      `Cannot verify ${repoFullName} against ${templateRepo} safely: GitHub truncated the file listing for at ` +
+        `least one of them, and answering this update would take ${lookupsNeeded} per-file reads against a limit ` +
+        `of ${budget}. Splitting the handout change into smaller updates, or removing large generated ` +
+        `directories from the repository, brings it back under the limit.`,
+      "sync_tree_too_large"
+    );
+    this.name = "SyncTreeTooLargeError";
+  }
+}
+
+/**
+ * Thrown when a repository records no baseline and its head cannot be read.
+ *
+ * There is nothing to branch from and nothing to classify against, so every outcome the sync
+ * could report would be a guess. Terminal because the next attempt reads the same repository
+ * the same way: an empty repository, a revoked installation, or a name GitHub does not have.
+ */
+export class SyncBaselineUnavailableError extends TerminalSyncError {
+  constructor(readonly repoFullName: string) {
+    super(
+      `Cannot sync ${repoFullName}: it records no previous sync and its default branch head could not be read, ` +
+        `so there is no commit to build the update on. Check that the repository exists, has at least one commit, ` +
+        `and is still granted to the GitHub App.`,
+      "sync_baseline_unavailable"
+    );
+    this.name = "SyncBaselineUnavailableError";
+  }
+}
+
+/**
+ * Thrown when a sync branch moves between being validated and being reset.
+ *
+ * Terminal for THIS job even though the underlying condition is transient: the validation
+ * that authorized the reset is stale, and the only safe thing to do with a stale
+ * authorization is discard it. The next handout push, or an instructor pressing Sync, gets a
+ * fresh one, which is a better answer than six retries against a branch someone is actively
+ * pushing to.
+ */
+export class SyncBranchMovedError extends TerminalSyncError {
+  constructor(
+    readonly repoFullName: string,
+    readonly branchName: string,
+    readonly expectedSha: string,
+    readonly actualSha: string
+  ) {
+    super(
+      `Refusing to reset ${repoFullName} branch '${branchName}': it moved from ${expectedSha.substring(0, 7)} ` +
+        `to ${actualSha.substring(0, 7)} while being checked, so someone is pushing to it right now. ` +
+        `Retry the sync once the branch is settled.`,
+      "sync_branch_moved"
+    );
+    this.name = "SyncBranchMovedError";
+  }
+}
+
+/**
+ * Thrown when a sync branch carries commits the sync did not write.
+ *
+ * The student is doing exactly what the pull request asks of them -- resolving the update by
+ * hand -- so this is the one failure here that is a person at work rather than anything
+ * wrong. Retrying cannot change the answer: the branch still carries their commits on the
+ * next attempt and every attempt after that, until they merge the PR, close it, or delete
+ * the branch.
+ */
+export class SyncBranchNotOursError extends TerminalSyncError {
+  constructor(
+    readonly repoFullName: string,
+    readonly branchName: string,
+    readonly foreignSubjects: string[]
+  ) {
+    super(
+      `Refusing to reset ${repoFullName} branch '${branchName}': it carries ${foreignSubjects.length} ` +
+        `commit(s) this sync did not write, which is someone resolving this update by hand. ` +
+        `First commit subject: ${JSON.stringify(foreignSubjects[0] ?? "")}. ` +
+        `Merge or close the open pull request, or delete the branch, then sync again.`,
+      "sync_branch_not_ours"
+    );
+    this.name = "SyncBranchNotOursError";
+  }
+}
+
+/**
+ * Refuse to reset a sync branch that someone else has pushed to.
+ *
+ * The branch is force-updated when it already exists, which throws away everything on it.
+ * That is harmless while every commit ahead of the base is one of ours, and it deletes a
+ * student's conflict resolution as soon as it is not. Commits we write carry the sync
+ * subject line, so anything else on the branch was put there deliberately.
+ *
+ * A comparison we cannot make is treated as unsafe rather than assumed fine: resetting
+ * because the read request failed is the exact outcome this is here to prevent.
+ */
+async function assertSyncBranchSafeToReset(
+  repoFullName: string,
+  branchName: string,
+  baseSha: string,
+  scope?: Sentry.Scope
+): Promise<string> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
+  const [owner, repo] = repoFullName.split("/");
+
+  // Read the ref FIRST and compare against that exact sha, rather than against the branch
+  // name. Comparing by name and then reconstructing the head from the compare payload gets
+  // the head wrong on a branch more than 250 commits ahead, because GitHub caps
+  // `comparison.commits` at 250 and the last entry is then a mid-branch commit; the
+  // `assertBranchStillAt` that follows would compare the real head against that and report
+  // a push nobody made. Reading it once gives the reset one unambiguous sha to be
+  // authorized against.
+  const branchHead = await readBranchHeadSha(repoFullName, branchName, scope);
+
+  const { data: comparison } = await octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+    owner,
+    repo,
+    basehead: `${baseSha}...${branchHead}`
+  });
+
+  // The same 250-commit cap, from the other side: a branch that far ahead is one we cannot
+  // read in full, and a check we cannot make is not a check that passed.
+  const totalCommits = comparison.total_commits ?? comparison.commits?.length ?? 0;
+  const readCommits = comparison.commits?.length ?? 0;
+  if (totalCommits > readCommits) {
+    scope?.setTag("sync_branch_commits_truncated", "true");
+    throw new SyncBranchNotOursError(repoFullName, branchName, [
+      `${totalCommits} commit(s) ahead of the base, of which GitHub returned only ${readCommits}; ` +
+        `the rest cannot be inspected`
+    ]);
+  }
+
+  // Subject AND authorship. The subject alone is a string anyone can type, and this repo
+  // has already lost work to exactly that kind of over-matching (see the comments on
+  // SYNC_COMMIT_SUBJECT_RE in handoutSyncPush.ts). `author` and `committer` are the GitHub
+  // accounts GitHub attributed the commit to; either is null when it could not attribute it
+  // at all. See `isOurSyncCommit` for why both the type and the login matter.
+  const commits: SyncBranchCommit[] = (comparison.commits ?? []).map((c) => ({
+    subject: (c.commit?.message ?? "").split("\n")[0],
+    authorType: c.author?.type,
+    committerLogin: c.committer?.login,
+    committerType: c.committer?.type,
+    verified: c.commit?.verification?.verified
+  }));
+  if (isSyncBranchSafeToReset(commits)) return branchHead;
+
+  const foreign = commits
+    .filter((commit) => !isOurSyncCommit(commit))
+    .map(
+      (commit) =>
+        `${commit.subject} (author type: ${commit.authorType ?? "unattributed"}, ` +
+        `committer: ${commit.committerLogin ?? "unattributed"} [${commit.committerType ?? "unattributed"}], ` +
+        `verified: ${commit.verified === true})`
+    );
+  scope?.setTag("sync_branch_foreign_commits", String(foreign.length));
+  throw new SyncBranchNotOursError(repoFullName, branchName, foreign);
+}
+
+/**
  * Create a branch and commit changes to a target repository
  * For text files with patches, applies the patch to the content at baseSha
  * For binary files or files with full content, uses the provided content
+ *
+ * Files the student has made their own since the last sync are left exactly as they are
+ * at `baseSha`: no tree entry is emitted for them, so the branch inherits their version
+ * from `base_tree` and the merge cannot overwrite it. Every such file is returned so the
+ * caller can hold the PR open and tell the student which changes are theirs to apply.
+ *
  * @param templateRepo - Optional template repo name for fallback when patch fails
  * @param templateSha - Optional template SHA to fetch content from when patch fails
+ * @param studentModified - Paths the student has made their own, from
+ *                          `findStudentModifiedFiles`. Computed by the caller because the
+ *                          size pre-flight has to see it too, and computing it twice would
+ *                          be two more tree reads for the same answer.
+ * @returns `unresolved`, the files left to the student, and `committed`, false when every
+ *          file was left to them and there was nothing to commit at all.
  */
 export async function createBranchAndCommit(
   repoFullName: string,
@@ -793,8 +1423,9 @@ export async function createBranchAndCommit(
   commitMessage: string,
   scope?: Sentry.Scope,
   templateRepo?: string,
-  templateSha?: string
-): Promise<void> {
+  templateSha?: string,
+  studentModified: Map<string, UnresolvedReason> = new Map()
+): Promise<{ unresolved: UnresolvedFile[]; committed: boolean }> {
   const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) {
     throw new Error(`No octokit found for repository ${repoFullName}`);
@@ -825,6 +1456,20 @@ export async function createBranchAndCommit(
 
     // If branch already exists, force-update it to the base SHA
     if (errorMessage.includes("Reference already exists")) {
+      // The branch is about to be discarded. That is ours to do while everything on it is
+      // ours, and is the student's conflict resolution being deleted as soon as it is not,
+      // so check who wrote the commits ahead of the base before touching it.
+      const validatedHead = await assertSyncBranchSafeToReset(repoFullName, branchName, baseSha, scope);
+      // ...and confirm the branch is still where it was when that answer was computed. A
+      // push between the two invalidates it, and this is a destructive write.
+      //
+      // This NARROWS the window, it does not close it: a push arriving between this check and
+      // the ref update below is still lost. REST has no expected-head parameter on a ref update,
+      // so closing it properly means GraphQL updateRefs with beforeOid, which is a compare
+      // and swap. That is the right fix and it is not free, so it is recorded here rather
+      // than implied to be done.
+      await assertBranchStillAt(repoFullName, branchName, validatedHead, scope);
+
       scope?.addBreadcrumb({
         message: `Branch ${branchName} already exists, force-updating to ${baseSha}`,
         category: "git",
@@ -848,6 +1493,12 @@ export async function createBranchAndCommit(
           category: "git",
           level: "warning"
         });
+
+        // Deleting the ref is more destructive than the update that just failed, and one
+        // reason that update fails is the branch having moved. Re-check before deleting
+        // rather than treating the failed update as permission to try something more
+        // destructive.
+        await assertBranchStillAt(repoFullName, branchName, validatedHead, scope);
 
         try {
           await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
@@ -898,8 +1549,47 @@ export async function createBranchAndCommit(
     }
   };
 
+  const unresolved: UnresolvedFile[] = [];
+  /**
+   * Leave the student's copy alone. Emitting no tree entry means `base_tree` supplies the
+   * file, so the branch carries their version and the merge has nothing to overwrite.
+   */
+  const skipFile = (path: string, reason: UnresolvedReason) => {
+    unresolved.push({ path, reason });
+    scope?.addBreadcrumb({
+      message: `Leaving ${path} untouched: ${reason}`,
+      category: "sync",
+      level: "info"
+    });
+    console.log(`[sync] leaving ${repoFullName} ${path} untouched (${reason})`);
+  };
+
   const treeItems: { path: string; mode: "100644"; type: "blob"; sha: string | null }[] = [];
   for (const file of files) {
+    // Not every path below is destructive. A patch that applies to the student's own
+    // content merges the instructor's change INTO their work, which is the outcome worth
+    // having, so the guard is asked per branch rather than once at the top: only where a
+    // branch would write over their copy does it stop.
+    const modifiedReason = studentModified.get(file.path);
+
+    // The same decision the size pre-flight made, from the same predicate, so the two gates
+    // cannot disagree about a file. "skip" and "noop" resolve before the per-file charge
+    // below, since a file the sync will not read must not be able to exhaust the budget.
+    // "attempt_patch" falls through to the patch handling and skips only if the patch fails.
+    const action = decideFileAction(shapeOf(file), modifiedReason);
+    if (action === "noop") {
+      // The handout is deleting a file the student already deleted. Nothing to write, and
+      // nothing to tell them: reporting it would hold the pull request open over a deletion
+      // that needed no action.
+      continue;
+    }
+    if (action === "skip") {
+      // modifiedReason is always set when the action is "skip"; decideFileAction returns
+      // "write" for an unclassified file.
+      skipFile(file.path, modifiedReason as UnresolvedReason);
+      continue;
+    }
+
     // Handle removed files
     if (file.status === "removed") {
       treeItems.push({
@@ -1025,6 +1715,14 @@ export async function createBranchAndCommit(
         console.error(`Patch preview: ${patchPreview}`);
         console.error(`Base content preview: ${baseContentPreview}`);
 
+        // The patch did not apply. When the student has edited this file that is the
+        // expected outcome and the fallback below would replace their copy with the
+        // template's, so stop here instead. Their version stays, and the PR reports it.
+        if (modifiedReason) {
+          skipFile(file.path, modifiedReason);
+          continue;
+        }
+
         // Fallback: fetch full content from template repo if available
         if (templateRepo && templateSha) {
           scope?.addBreadcrumb({
@@ -1106,6 +1804,9 @@ export async function createBranchAndCommit(
     // streaming-Blob path (see `copyBlobBetweenRepos`), so peak memory stays
     // around 2.33× the file size instead of the ~3× the Octokit JSON path
     // would force.
+    // No patch is attempted on this branch, so the copy is unconditional. A student who
+    // edited a binary file, or who created a file at a path the handout now adds, used to
+    // lose it here with no diagnostic; that case is skipped above, before the size charge.
     if (file.isBinary || file.status === "added") {
       if (!file.sha) {
         throw new Error(`File ${file.path} is binary/added but has no template blob SHA`);
@@ -1137,6 +1838,40 @@ export async function createBranchAndCommit(
     throw new Error(`File ${file.path} has neither patch nor blob SHA`);
   }
 
+  // Nothing survived. The caller's pre-flight cannot see this coming: a text file the
+  // student edited counts as syncable because its patch MIGHT merge into their copy, and
+  // when every such patch fails -- which is the expected outcome precisely because they
+  // edited it -- every file ends up skipped and there is no tree entry left to make.
+  //
+  // Committing anyway would post an empty `tree` array and then open a pull request with a
+  // zero-line diff, which auto-merge is suppressed on and nobody will ever merge. Say so
+  // instead, so the caller can report the update as blocked rather than as delivered.
+  //
+  // The ref was written at the top of this function, before any file was examined, so there
+  // IS a branch to clean up. Leaving it would strand a `sync-to-<sha7>` branch pointing at a
+  // months-old commit in the student's repo with no pull request attached, and hand the next
+  // run a "Reference already exists" to authorize a reset against for no reason.
+  if (treeItems.length === 0) {
+    scope?.setTag("sync_commit_empty", "true");
+    console.log(`[sync] ${repoFullName}: nothing left to write after ${unresolved.length} skip(s); no commit made`);
+    try {
+      await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+        owner,
+        repo,
+        ref: `heads/${branchName}`
+      });
+    } catch (cleanupError) {
+      // Best effort. A branch we could not remove is untidy; failing the sync over it would
+      // turn a clean "nothing to deliver" into an error the instructor has to chase.
+      scope?.addBreadcrumb({
+        message: `Could not delete empty sync branch ${branchName}: ${cleanupError}`,
+        category: "git",
+        level: "warning"
+      });
+    }
+    return { unresolved, committed: false };
+  }
+
   const { data: newTree } = await octokit.request("POST /repos/{owner}/{repo}/git/trees", {
     owner,
     repo,
@@ -1157,6 +1892,8 @@ export async function createBranchAndCommit(
     ref: `heads/${branchName}`,
     sha: newCommit.sha
   });
+
+  return { unresolved, committed: true };
 }
 
 /**
@@ -1329,7 +2066,7 @@ export async function isRepoAlreadyInSync(
       let studentBlobSha: string | undefined;
       try {
         ({ text: studentContent, sha: studentBlobSha } = await fetchTextFileAtRef(
-          repoFullName,
+          studentRepoFullName,
           file.path,
           "main",
           scope
@@ -1528,14 +2265,34 @@ export async function attemptAutoMerge(
     return { merged: false };
   }
 
-  const { data: mergeResult } = await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
-    owner,
-    repo,
-    pull_number: prNumber,
-    merge_method: "merge"
-  });
+  // Merge the head we just read, not whatever the head is by the time this request arrives. A
+  // student pushing to the branch between the two calls gets a 409 here instead of having their
+  // commit merged by a run that never saw it, which is the same reason
+  // assignment-sync-autograder-workflow passes a blob sha to its rollback delete.
+  try {
+    const { data: mergeResult } = await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
+      owner,
+      repo,
+      pull_number: prNumber,
+      merge_method: "merge",
+      sha: pr.head.sha
+    });
 
-  return { merged: true, mergeSha: mergeResult.sha };
+    return { merged: true, mergeSha: mergeResult.sha };
+  } catch (error) {
+    const status = error && typeof error === "object" && "status" in error ? (error as { status: number }).status : 0;
+    // 409 is "head moved"; 405 is "not mergeable any more". Both mean the branch is no
+    // longer the thing this run decided to merge, so leave the PR for a human.
+    if (status === 409 || status === 405) {
+      scope?.addBreadcrumb({
+        message: `Auto-merge skipped for ${repoFullName} PR #${prNumber}: head moved or became unmergeable (${status})`,
+        category: "sync",
+        level: "info"
+      });
+      return { merged: false };
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1546,13 +2303,17 @@ export async function attemptAutoMerge(
  *
  * @param syncedRepoSha - The SHA of the student repo at the last successful sync (Student_orig).
  *                        This is used as the base for the PR branch to enable proper 3-way merging.
+ *                        Null for a row that records no baseline, which is resolved once, here,
+ *                        to the repository's current head; see `resolveSyncBaselineSha`. It is
+ *                        resolved ONCE because the commit the guard classifies against and the
+ *                        commit the branch is built on have to be the same one.
  */
 export async function syncRepositoryToHandout(params: {
   repositoryFullName: string;
   templateRepo: string;
   fromSha: string | null;
   toSha: string;
-  syncedRepoSha: string;
+  syncedRepoSha: string | null;
   adminSupabase: SupabaseClient<Database>;
   autoMerge?: boolean;
   waitBeforeMerge?: number; // milliseconds to wait before attempting merge
@@ -1582,7 +2343,7 @@ export async function syncRepositoryToHandout(params: {
       scope?.setTag("template_repo", templateRepo);
       scope?.setTag("from_sha", fromSha);
       scope?.setTag("to_sha", toSha);
-      scope?.setTag("synced_repo_sha", syncedRepoSha);
+      scope?.setTag("synced_repo_sha", syncedRepoSha ?? "none");
       scope?.setTag("auto_merge", autoMerge.toString());
       scope?.setTag("wait_before_merge", waitBeforeMerge.toString());
       scope?.setTag("sync_operation", "sync_repository_to_handout");
@@ -1604,13 +2365,133 @@ export async function syncRepositoryToHandout(params: {
           };
         }
 
+        // The commit this sync treats as the repository's baseline, resolved ONCE.
+        //
+        // Everything downstream uses this one value: the guard classifies against it, the
+        // branch is created at it, and the pull request describes it. That is not tidiness.
+        // A row with no baseline resolves to the repository's current head, and reading that
+        // head twice lets a student's push arrive in between. If the branch base is the newer
+        // of the two, their commit is inside the base while the classification still says the
+        // path is untouched, and the sync writes over work it was built to protect. One
+        // request cannot disagree with itself.
+        const baselineSha = await resolveSyncBaselineSha(repositoryFullName, syncedRepoSha, scope);
+        if (!baselineSha) {
+          // No recorded baseline and no readable head. There is no commit to branch from and
+          // nothing to classify against, so there is no safe sync to attempt. Saying so is
+          // better than picking a commit and hoping.
+          throw new SyncBaselineUnavailableError(repositoryFullName);
+        }
+        scope?.setTag("baseline_sha", baselineSha);
+
+        // Which of these files are the student's own work, decided BEFORE the size
+        // pre-flight below. The pre-flight aborts the whole sync on a single oversized
+        // file, and a file we are not going to touch must not be able to do that: the
+        // guard skips it without reading a byte, so its size is irrelevant. Doing it here
+        // also means the answer is computed once and passed down, rather than twice.
+        const studentModified = await findStudentModifiedFiles(
+          repositoryFullName,
+          baselineSha,
+          templateRepo,
+          fromSha,
+          changedFiles.map((f) => f.path),
+          scope
+        );
+
+        // The files the sync will actually read and write. NOT simply "the ones the student
+        // has not touched": a text file whose content differs is still patchable, and
+        // createBranchAndCommit does merge those, so it is fetched and written and its size
+        // counts. Both gates ask the same predicate so they cannot disagree.
+        const syncableFiles = changedFiles.filter((f) => countsTowardSyncSize(shapeOf(f), studentModified.get(f.path)));
+
+        /**
+         * The outcome for an update where nothing could be written: every changed file is
+         * the student's own work, so there is no tree entry to make, no commit and no PR.
+         *
+         * This must NOT report no_changes. The worker reads that as "the handout holds
+         * nothing new for this repo" and advances synced_handout_sha to to_sha, which would
+         * record an update as delivered that was never written, permanently and with
+         * nothing to point at. Reporting it as blocked leaves synced_handout_sha where it
+         * is, so the repo stays visibly behind the handout.
+         *
+         * Reached from two places, which is why it is a function: the pre-flight below
+         * (nothing is even worth reading) and, after the commit is built, the case where
+         * every file that WAS worth reading turned out to be unwritable once its patch
+         * failed. Both end with an empty tree, and both have to report the same thing.
+         */
+        const blockedByStudentChanges = async (unresolvedPaths: string[]): Promise<SyncResult> => {
+          // Everything here is classified against the baseline, the state at the LAST sync.
+          // Someone may have applied these changes to the default branch by hand since then,
+          // in which case the repo already holds the handout's content and there is nothing
+          // blocked about it. Comparing the branch as it stands now against the handout at
+          // toSha answers that: an empty result means every one of these paths already
+          // matches the target, so this is an ordinary no_changes and recording the repo as
+          // synced is correct, because the content really is there.
+          //
+          // `getDefaultBranchHeadSha` returns undefined under the E2E GitHub stub and for
+          // the suffixed E2E repo names that do not exist on GitHub. No head means no second
+          // opinion, so the update is reported blocked, which is the conservative direction.
+          const headSha = await github.getDefaultBranchHeadSha(repositoryFullName, scope);
+          const stillDiffering = headSha
+            ? await findStudentModifiedFiles(repositoryFullName, headSha, templateRepo, toSha, unresolvedPaths, scope)
+            : new Map(unresolvedPaths.map((path) => [path, "content_differs" as UnresolvedReason]));
+          if (stillDiffering.size === 0) {
+            scope?.setTag("blocked_paths_already_current", "true");
+            scope?.addBreadcrumb({
+              message:
+                `${repositoryFullName} already holds the handout's version of every path this update ` +
+                `touches; recording it as synced rather than blocked`,
+              category: "sync",
+              level: "info"
+            });
+            return {
+              success: true,
+              no_changes: true,
+              // The head this decision was made FROM, so the caller can move the baseline to
+              // the commit that was actually inspected. `findStudentModifiedFiles` read the
+              // repository at this exact sha to conclude the paths already match, so the pair
+              // it records describes a state that was really there. Re-reading the head to
+              // fill this in would be a different commit and a different claim.
+              repo_head_sha: headSha
+            };
+          }
+
+          scope?.setTag("sync_blocked_by_student_changes", "true");
+          scope?.addBreadcrumb({
+            message:
+              `Every file in this update is the student's own work in ${repositoryFullName} ` +
+              `(${unresolvedPaths.join(", ")}); nothing can be merged and nothing was written`,
+            category: "sync",
+            level: "warning"
+          });
+          console.warn(
+            `[sync] ${repositoryFullName}: handout update ${toSha.substring(0, 7)} not delivered, ` +
+              `all ${unresolvedPaths.length} changed file(s) are the student's own work`
+          );
+          return {
+            success: true,
+            blocked_by_student_changes: true,
+            unresolved_paths: unresolvedPaths
+          };
+        };
+
+        if (syncableFiles.length === 0) {
+          // The paths that actually BLOCK, not every path in the update. A "noop" file -- a
+          // handout deletion the student already made -- is unsyncable and needs no action,
+          // so naming it here would report a file as blocking that nothing is waiting on.
+          return await blockedByStudentChanges(
+            changedFiles
+              .filter((f) => decideFileAction(shapeOf(f), studentModified.get(f.path)) !== "noop")
+              .map((f) => f.path)
+          );
+        }
+
         // Size pre-flight: decide concurrency class BEFORE doing any heavy work.
         // Sizes are populated by getChangedFiles from the recursive tree (Redis-cached),
         // so this is essentially free.
         let maxFileBytes = 0;
         let totalChangedBytes = 0;
         let largestFilePath = "";
-        for (const f of changedFiles) {
+        for (const f of syncableFiles) {
           if (typeof f.size === "number") {
             totalChangedBytes += f.size;
             if (f.size > maxFileBytes) {
@@ -1749,7 +2630,7 @@ export async function syncRepositoryToHandout(params: {
           }
         }
 
-        // Create branch and commit based on syncedRepoSha (Student_orig)
+        // Create branch and commit based on the baseline (Student_orig)
         // This enables proper 3-way merging when the PR targets current main
         const commitMessage = `${SYNC_COMMIT_MESSAGE_PREFIX} ${toSha.substring(0, 7)}
 
@@ -1757,7 +2638,7 @@ This commit was automatically generated by an instructor to sync
 changes from the template repository.
 
 Changed files:
-${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
+${syncableFiles.map((f) => `- ${f.path}`).join("\n")}`;
 
         // For heavy syncs, serialize the memory-intensive work (blob fetch + commit)
         // through a per-isolate semaphore so we never hold multiple large blobs in
@@ -1766,26 +2647,56 @@ ${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
           createBranchAndCommit(
             repositoryFullName,
             branchName,
-            syncedRepoSha,
+            baselineSha,
+            // The FULL list, not syncableFiles: createBranchAndCommit has to see the
+            // protected paths to skip them explicitly and report them back, which is what
+            // holds the PR open. syncableFiles exists for the sizing gates, which must not
+            // weigh a file nobody is going to read.
             changedFiles,
             commitMessage,
             scope,
             templateRepo,
-            toSha
+            toSha,
+            studentModified
           );
-        if (isHeavySync) {
-          await withHeavySyncLock(runCommit);
-        } else {
-          await runCommit();
+        const { unresolved, committed } = isHeavySync ? await withHeavySyncLock(runCommit) : await runCommit();
+
+        // Every file was left to the student after all, so there is nothing to open a pull
+        // request about. Report it the same way the pre-flight would have, rather than
+        // opening an empty PR and recording the update as delivered.
+        if (!committed) {
+          return await blockedByStudentChanges(unresolved.map((f) => f.path));
+        }
+
+        // A sync that left files to the student is a sync with work still in it. The PR
+        // has to stay open for them to finish, whatever the caller asked for.
+        const effectiveAutoMerge = resolveAutoMerge(autoMerge, unresolved);
+        scope?.setTag("unresolved_file_count", String(unresolved.length));
+        scope?.setTag("effective_auto_merge", effectiveAutoMerge.toString());
+        if (autoMerge && !effectiveAutoMerge) {
+          scope?.addBreadcrumb({
+            message:
+              `Auto-merge disabled for ${repositoryFullName}: ${unresolved.length} file(s) are the student's own ` +
+              `work and were left untouched (${unresolved.map((f) => f.path).join(", ")})`,
+            category: "sync",
+            level: "info"
+          });
+          console.log(
+            `[sync] ${repositoryFullName}: holding PR open, ${unresolved.length} file(s) left to the student`
+          );
         }
 
         // Create PR
         const prTitle = `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;
 
-        // Categorize files for better PR description
-        const textFiles = changedFiles.filter((f) => !f.isBinary && f.status !== "removed");
-        const binaryFiles = changedFiles.filter((f) => f.isBinary && f.status !== "removed");
-        const removedFiles = changedFiles.filter((f) => f.status === "removed");
+        // Categorize files for better PR description. Anything left to the student is
+        // reported in its own section instead, so these lists describe what this PR
+        // actually carries rather than everything the instructor changed.
+        const unresolvedPaths = new Set(unresolved.map((f) => f.path));
+        const syncedFiles = changedFiles.filter((f) => !unresolvedPaths.has(f.path));
+        const textFiles = syncedFiles.filter((f) => !f.isBinary && f.status !== "removed");
+        const binaryFiles = syncedFiles.filter((f) => f.isBinary && f.status !== "removed");
+        const removedFiles = syncedFiles.filter((f) => f.status === "removed");
 
         const prBody = `## Handout Update
 
@@ -1794,22 +2705,32 @@ This pull request syncs the latest changes from the assignment template reposito
 **Triggered by:** Instructor
 **Template commit:** ${toSha}
 **Previous sync:** ${fromSha || "Initial sync"}
-**Base commit:** ${syncedRepoSha.substring(0, 7)}
+**Base commit:** ${baselineSha.substring(0, 7)}
 
 ### How This Works
 
 This PR uses a **3-way merge strategy** to preserve your work:
-- **Base**: The state of your repo at the last sync (${syncedRepoSha.substring(0, 7)})
+- **Base**: ${
+          syncedRepoSha
+            ? `The state of your repo at the last sync (${baselineSha.substring(0, 7)})`
+            : `Your repo as it stands now (${baselineSha.substring(0, 7)}), because no earlier sync was recorded for it`
+        }
 - **Changes**: Updates from the handout template
 - **Your Work**: Any commits you've made since the last sync
 
 GitHub will automatically merge these together. If you modified the same parts of files that the instructor updated, you'll see merge conflicts that need to be resolved.
 
-### Changed Files
+${renderUnresolvedSection(unresolved)}### Changed Files
 
-${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${textFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${binaryFiles.length > 0 ? `**Binary files** (will overwrite your version):\n${binaryFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${removedFiles.length > 0 ? `**Removed files**:\n${removedFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}
+${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${textFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${binaryFiles.length > 0 ? `**Binary files** (replaced with the handout's version):\n${binaryFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${removedFiles.length > 0 ? `**Removed files**:\n${removedFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}
 ---
-*This PR was automatically generated. It will be auto-merged if there are no conflicts. If there are merge conflicts, they will be shown in the GitHub UI - you can resolve them directly on GitHub or locally. If you need help, ask your course staff.*`;
+*This PR was automatically generated. ${
+          effectiveAutoMerge
+            ? "It will be auto-merged if there are no conflicts."
+            : unresolved.length > 0
+              ? "It will NOT be merged automatically, because some of the files the instructor changed are files you have edited. Review the list above, then merge when you are ready."
+              : "It will NOT be merged automatically. Review it, then merge when you are ready."
+        } If there are merge conflicts, they will be shown in the GitHub UI - you can resolve them directly on GitHub or locally. If you need help, ask your course staff.*`;
 
         let prNumber: number;
         let prUrl: string;
@@ -1895,7 +2816,7 @@ ${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${
         let merged = false;
         let mergeSha: string | undefined;
 
-        if (autoMerge) {
+        if (effectiveAutoMerge) {
           // Wait for GitHub to update mergeable state
           await new Promise((resolve) => setTimeout(resolve, waitBeforeMerge));
           const mergeResult = await attemptAutoMerge(repositoryFullName, prNumber, scope);
@@ -1908,14 +2829,26 @@ ${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${
           pr_number: prNumber,
           pr_url: prUrl,
           merged,
-          merge_sha: mergeSha
+          merge_sha: mergeSha,
+          // The partial outcome carries this as well as the fully blocked one. Some of the
+          // instructor's changes were not delivered here either, and without this the only
+          // record of which ones is the pull request body. The moment it is merged the row
+          // reads "Synced" and nobody can name the files that never arrived.
+          unresolved_paths: unresolved.length > 0 ? unresolved.map((f) => f.path) : undefined
         };
       } catch (error) {
         console.trace(error);
+        if (error instanceof TerminalSyncError) {
+          // One repository's own problem, and one the instructor or the student can act on.
+          // Tag it rather than reporting it as another anonymous sync failure, so the org's
+          // error rate is not driven by students resolving their own merges.
+          scope?.setTag("terminal_sync_reason", error.reason);
+        }
         Sentry.captureException(error, scope);
         return {
           success: false,
-          error: error instanceof Error ? error.message : String(error)
+          error: error instanceof Error ? error.message : String(error),
+          terminal_reason: error instanceof TerminalSyncError ? error.reason : undefined
         };
       }
     });

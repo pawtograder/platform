@@ -14,7 +14,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { getOctoKit } from "../_shared/GitHubWrapper.ts";
-import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
+import { syncRepositoryToHandout } from "../_shared/GitHubSyncHelpers.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 
@@ -235,13 +235,14 @@ async function main() {
     console.log(`  From SHA: ${repo.synced_handout_sha || "(initial)"}`);
     console.log(`  To SHA:   ${repo.assignments.latest_template_sha}`);
 
-    // Get syncedRepoSha - either from DB or fetch first commit if not set
-    let syncedRepoSha = repo.synced_repo_sha;
-    if (!syncedRepoSha) {
-      console.log("  No synced_repo_sha found, fetching first commit in main branch...");
-      syncedRepoSha = await getFirstCommit(repo.repository, "main", scope);
-      console.log(`  Using first commit: ${syncedRepoSha}`);
-    }
+    // A null baseline is passed straight through. This used to substitute the repository's first
+    // commit, which made the guard classify a root-commit tree against the handout: nearly every
+    // path came back as the student's work and the sync reported itself blocked on a repository
+    // where the student had changed nothing. syncRepositoryToHandout now decides what a missing
+    // baseline means (see resolveSyncBaselineSha), and this script has to ask the same question
+    // the worker does or it is not a rehearsal of it.
+    const syncedRepoSha = repo.synced_repo_sha;
+    console.log(`  Repo baseline: ${syncedRepoSha || "(none recorded)"}`);
 
     const result = await syncRepositoryToHandout({
       repositoryFullName: repo.repository,
@@ -260,7 +261,36 @@ async function main() {
     }
 
     // 5. Update database based on result (mirrors async worker behavior)
-    if (result.no_changes) {
+    if (result.blocked_by_student_changes) {
+      // Nothing was written and no PR exists, so there is no pr_number to report and
+      // synced_handout_sha must not advance: the handout update did not reach this repo.
+      // Falling through to the PR branch below would print an undefined PR number and
+      // record pr_state "open" for a pull request that was never opened.
+      const paths = result.unresolved_paths ?? [];
+      console.log(`\n⚠ Not applied: all ${paths.length} changed file(s) are the student's own work`);
+      for (const path of paths) {
+        console.log(`    - ${path}`);
+      }
+      console.log("  The repository stays behind the handout. Ask the student to merge these changes.");
+      const { error } = await adminSupabase
+        .from("repositories")
+        .update({
+          // desired_handout_sha is raised here, which `queue_repository_syncs` would have
+          // done before enqueueing had this come from the Sync button. Without it the row
+          // still reads desired === synced, and `computeSyncStatus` short-circuits on that
+          // before it ever reaches the blocked branch, so the badge and the list of
+          // blocking files never appear, and the only record is this script's stdout.
+          desired_handout_sha: repo.assignments.latest_template_sha,
+          sync_data: {
+            last_sync_attempt: new Date().toISOString(),
+            status: "blocked_by_student_changes",
+            blocked_handout_sha: repo.assignments.latest_template_sha,
+            unresolved_paths: paths
+          }
+        })
+        .eq("id", repo.id);
+      if (error) throw error;
+    } else if (result.no_changes) {
       console.log("\n✓ No changes needed - repository already up to date");
       const { error } = await adminSupabase
         .from("repositories")

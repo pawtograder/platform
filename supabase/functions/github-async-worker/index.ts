@@ -27,7 +27,7 @@ import {
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
+import { syncRepositoryToHandout, TerminalSyncError } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { shouldSendOrgInvitation } from "../_shared/orgInviteWindow.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
@@ -75,6 +75,70 @@ async function getAssignmentTemplateSha(
     .maybeSingle();
   if (error) throw error;
   return data?.latest_template_sha ?? null;
+}
+
+/**
+ * Which way the handout moved between the revision a repository is on and the revision this job
+ * carries.
+ *
+ * A sync writes the diff `from → to` into the student's repository, so the direction has to be
+ * settled before anything is written. Two things deliver a job whose `to_sha` is OLDER than the
+ * revision the row already reached: revisions queued close together and processed out of order,
+ * and a redelivery after the pgmq visibility timeout of a job whose successor already merged.
+ * The only guard was exact equality of the two shas, and that passes both.
+ *
+ * Handed a `from` newer than `to`, getChangedFiles returns the REVERSE diff, and every file in
+ * it matches the handout at the revision the repository is already on, so the conflict guard
+ * reads the whole diff as machine-written, skips nothing, the pull request self-merges, and the
+ * student's repository is rolled back to the older handout with synced_handout_sha written
+ * backwards to match. Nothing downstream can tell that apart from an ordinary sync.
+ *
+ * The comparison is its own request rather than reading the one getChangedFiles makes: that
+ * one is served from a 12-hour Redis cache, so on a cache hit there is no comparison to read.
+ *
+ * Everything this cannot settle reads as forward, and deliberately so: the handout is
+ * unreachable, a sha stopped resolving because its history was rewritten, the E2E stub answered
+ * in a shape with no status in it. Those repositories sync as they did before this check
+ * existed. A guard for a rare ordering fault that can park every repository in a course when it
+ * misreads its own input is worse than the fault, so only the two answers that MEAN the handout
+ * moved the other way stop a sync.
+ */
+async function classifyHandoutDirection(
+  templateRepo: string,
+  fromSha: string | null,
+  toSha: string,
+  scope: Sentry.Scope
+): Promise<"forward" | "identical" | "stale" | "unknown"> {
+  // No recorded revision: the repository has never been synced, so every revision is forward.
+  if (!fromSha) return "forward";
+  if (fromSha === toSha) return "identical";
+  // An E2E repository name carries a per-run `--<suffix>` that exists only in our database, so
+  // asking GitHub to compare two revisions of it is neither possible nor meaningful. Same
+  // reasoning as getDefaultBranchHeadSha, which skips these for the same reason.
+  if (templateRepo.startsWith(github.END_TO_END_REPO_PREFIX)) return "unknown";
+  try {
+    const octokit = await github.getOctoKit(templateRepo, scope);
+    if (!octokit) return "unknown";
+    const [owner, repo] = templateRepo.split("/");
+    const { data } = await octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+      owner,
+      repo,
+      basehead: `${fromSha}...${toSha}`
+    });
+    // `status` is relative to the base. "behind" and "diverged" are the two answers that say the
+    // handout does not contain this job's revision as a descendant, which is the case worth
+    // stopping for; everything else, including a status GitHub adds later, syncs.
+    if (data.status === "behind" || data.status === "diverged") return "stale";
+    if (data.status === "identical") return "identical";
+    return "forward";
+  } catch (error) {
+    console.error(`Could not compare ${fromSha}...${toSha} on ${templateRepo}:`, error);
+    Sentry.addBreadcrumb({
+      message: `Handout direction undetermined for ${templateRepo} (${fromSha.substring(0, 7)}...${toSha.substring(0, 7)})`,
+      level: "warning"
+    });
+    return "unknown";
+  }
 }
 
 const PGMQ_ARCHIVE_MAX_ATTEMPTS = 3;
@@ -1428,13 +1492,44 @@ export async function processEnvelope(
           // truncated-SHA false-positives in the past, see FixStuckSyncs `[truncated SHA]`).
           const { data: currentRepo } = await adminSupabase
             .from("repositories")
-            .select("synced_handout_sha, synced_repo_sha")
+            .select("synced_handout_sha, synced_repo_sha, sync_data")
             .eq("id", repository_id)
             .maybeSingle();
+          // The handout revision this repo is actually on, read in the SAME row as
+          // synced_repo_sha just above. The envelope's from_sha was recorded when the job
+          // was queued, and a second handout revision queued while the first sync was in
+          // flight leaves it stale: classifying with a stale from_sha against a current
+          // synced_repo_sha makes the files the FIRST sync installed look like the
+          // student's work, so the second sync skips its own machine-written content and
+          // can block on it. Both sides of the comparison have to come from one moment.
+          const currentSyncedHandoutSha = currentRepo?.synced_handout_sha ?? from_sha;
+
           if (currentRepo?.synced_handout_sha === to_sha) {
             Sentry.addBreadcrumb({
               message: `Repository ${repository_full_name} is already up to date`,
               level: "info"
+            });
+            return true;
+          }
+
+          // Establish the direction before anything is written, and before the in_progress marker
+          // below: a stale job that rewrote sync_data on its way to doing nothing would overwrite
+          // the blocked status a live revision is relying on. A job the handout has moved past is
+          // finished work, not failed work: archive it and report success, because requeueing it
+          // only redelivers the same stale revision.
+          //
+          // Only "stale" stops here. "identical" goes down the ordinary path, which finds no
+          // changed files and records the revision: the early return above covers the case
+          // where the row already holds to_sha, so what is left is a row holding no revision at
+          // all, and skipping that one would leave it holding none.
+          const direction = await classifyHandoutDirection(template_repo, currentSyncedHandoutSha, to_sha, scope);
+          scope.setTag("handout_direction", direction);
+          if (direction === "stale") {
+            Sentry.addBreadcrumb({
+              message:
+                `Skipping sync of ${repository_full_name} to ${to_sha.substring(0, 7)}: the repository is ` +
+                `on ${(currentSyncedHandoutSha ?? "").substring(0, 7)}, which the handout reached later`,
+              level: "warning"
             });
             return true;
           }
@@ -1478,6 +1573,10 @@ export async function processEnvelope(
                   synced_handout_sha: to_sha,
                   synced_repo_sha: merge.mergedSha,
                   desired_handout_sha: to_sha,
+                  // GitHub merged the upstream itself, so anything that blocked a template_pr
+                  // attempt on an earlier revision is delivered now.
+                  sync_blocked_at: null,
+                  sync_block_reason: null,
                   sync_data: {
                     last_sync_attempt: new Date().toISOString(),
                     status: merge.kind === "synced" ? "merged_via_fork_sync" : "no_changes_needed",
@@ -1513,16 +1612,22 @@ export async function processEnvelope(
             });
           }
 
-          // Get syncedRepoSha - either from DB or fetch first commit if not set
-          let syncedRepoSha = currentRepo?.synced_repo_sha;
+          // The repo-side commit the last sync produced, and the baseline the conflict guard
+          // classifies against: a file that differs from it is the student's own work.
+          //
+          // A missing baseline is passed through as null rather than replaced with the
+          // repository's first commit. That fallback compared two unrelated trees -- the root
+          // commit of the student's repo against the handout at from_sha -- so on a repository
+          // whose row predates the column, nearly every changed file came back content_differs
+          // or only_in_your_repo. Binaries were skipped, text patches failed against stale root
+          // content and were skipped too, and a repository where the student had changed nothing
+          // reported blocked_by_student_changes. With null, the guard falls back to comparing
+          // repository content against the handout at from_sha, which is what a baseline tree
+          // approximates in the first place.
+          const syncedRepoSha = currentRepo?.synced_repo_sha ?? null;
           if (!syncedRepoSha) {
             Sentry.addBreadcrumb({
-              message: `No synced_repo_sha found for ${repository_full_name}, fetching first commit`,
-              level: "info"
-            });
-            syncedRepoSha = await getFirstCommit(repository_full_name, "main", scope);
-            Sentry.addBreadcrumb({
-              message: `Using first commit as base: ${syncedRepoSha}`,
+              message: `No synced_repo_sha recorded for ${repository_full_name}; classifying against the handout itself`,
               level: "info"
             });
           }
@@ -1531,7 +1636,7 @@ export async function processEnvelope(
           const result = await syncRepositoryToHandout({
             repositoryFullName: repository_full_name,
             templateRepo: template_repo,
-            fromSha: from_sha,
+            fromSha: currentSyncedHandoutSha,
             toSha: to_sha,
             syncedRepoSha,
             autoMerge: true,
@@ -1541,16 +1646,155 @@ export async function processEnvelope(
           });
 
           if (!result.success) {
+            // A TERMINAL failure is about this one repository and fails the same way on every
+            // attempt: a student pushed their own commits onto the sync branch, the branch moved
+            // while it was being checked, or the update needs more per-file reads than one sync
+            // is allowed to make. Throwing sent those
+            // through the generic error path, which opens a 30-second circuit breaker keyed
+            // `<org>:sync_repo_to_handout` and feeds the 8-hour org-wide trip, so one student's
+            // branch paused handout syncs for a whole course org, once per attempt, six times
+            // over before the job dead-lettered. Record it on the repository and archive the job.
+            //
+            // `terminal_reason` is the stable code the helper carries across that flattening,
+            // because `success: false` is where the error's class is lost.
+            const terminalReason = result.terminal_reason;
+            if (terminalReason) {
+              scope.setTag("terminal_sync_error", terminalReason);
+              // Neither sha moves: nothing reached the repository, and the revision it is on is
+              // still the revision it is on.
+              //
+              // sync_blocked_at is set here for the same reason the blocked outcome sets it, and
+              // it is the same trap either way. queue_repository_syncs raised
+              // desired_handout_sha to the latest sha before this job ran, so the row now reads
+              // desired = latest with a sync that delivered nothing. Without the timestamp the
+              // only clause that could still reach it is p_force, recoverable from the Sync
+              // button, invisible to every other caller, including the autograder toggle, which
+              // would then report an assignment fully propagated while this repository still
+              // holds the wrong workflow. A state a person has to act on has to be a state the
+              // enqueue condition can see.
+              //
+              // No automated re-enqueue can loop on this: queue_repository_syncs is the only
+              // producer of sync_repo_to_handout jobs, and it opens with an auth.uid() check, so
+              // every job exists because a person asked for one. A repository that keeps failing
+              // this way costs one job per press, which is exactly what pressing Sync means.
+              const { error: updateError } = await adminSupabase
+                .from("repositories")
+                .update({
+                  sync_blocked_at: new Date().toISOString(),
+                  // The code names the case; the message the error class carries names what the
+                  // person has to do about it: merge or close the pull request, wait for the
+                  // branch to settle, split the handout change. Taking that message as-is keeps
+                  // the two from drifting apart.
+                  sync_block_reason: `${terminalReason}: ${result.error ?? "no further detail was recorded"}`,
+                  sync_data: {
+                    last_sync_attempt: new Date().toISOString(),
+                    last_sync_error: result.error ?? terminalReason,
+                    status: "error",
+                    terminal_reason: terminalReason
+                  }
+                })
+                .eq("id", repository_id);
+              if (updateError) throw updateError;
+              Sentry.addBreadcrumb({
+                message: `Sync of ${repository_full_name} stopped terminally (${terminalReason}); a human has to act on it`,
+                level: "warning"
+              });
+              return true;
+            }
             throw new Error(result.error || "Sync failed");
           }
 
-          // Update repository with sync status
-          if (result.no_changes) {
+          // Update repository with sync status.
+          //
+          // The handout held something new and none of it could be written, because every
+          // changed file is the student's own work. synced_handout_sha deliberately does
+          // NOT advance: recording this as synced would mark an update delivered that never
+          // reached the repo, permanently, with no PR to point at. Leaving it behind while
+          // desired_handout_sha advances is what makes the repo show up as out of date.
+          if (result.blocked_by_student_changes) {
+            // desired_handout_sha is NOT written here. queue_repository_syncs already set
+            // it to the latest template sha before it enqueued this job, so writing it
+            // again is a no-op, and leaving it high is what keeps the repo reading as
+            // behind the handout. What makes the repo retryable is sync_blocked_at:
+            // queue_repository_syncs enqueues a repo carrying that timestamp even when
+            // desired_handout_sha already matches. The column holds where sync_data.status
+            // could not; 20260913120000 records why.
+            //
+            // Re-running a blocked sync re-classifies, re-blocks, and overwrites this same
+            // object, so repeated attempts accumulate nothing.
+            //
+            // The pull request an EARLIER revision opened is carried across rather than
+            // dropped. That PR is still open on GitHub and is still the thing the student
+            // has to merge, so replacing sync_data wholesale would delete the instructor's
+            // only link to it and drop the row out of the "PR Open" status. Read from the
+            // row that was already fetched above, so this costs no extra query.
+            const priorSyncData = (currentRepo?.sync_data ?? {}) as {
+              pr_number?: number;
+              pr_url?: string;
+              pr_state?: string;
+              branch_name?: string;
+            };
+            const carriedPr =
+              priorSyncData.pr_state === "open" && priorSyncData.pr_number
+                ? {
+                    pr_number: priorSyncData.pr_number,
+                    pr_url: priorSyncData.pr_url,
+                    pr_state: priorSyncData.pr_state,
+                    branch_name: priorSyncData.branch_name
+                  }
+                : {};
+            const blockingPaths = result.unresolved_paths ?? [];
+            const namedPaths = blockingPaths.slice(0, 3).join(", ");
+            const { error: updateError } = await adminSupabase
+              .from("repositories")
+              .update({
+                sync_blocked_at: new Date().toISOString(),
+                sync_block_reason:
+                  `${blockingPaths.length} file(s) changed in the handout are the student's own work` +
+                  (namedPaths
+                    ? `: ${namedPaths}${blockingPaths.length > 3 ? ` and ${blockingPaths.length - 3} more` : ""}`
+                    : ""),
+                sync_data: {
+                  ...carriedPr,
+                  last_sync_attempt: new Date().toISOString(),
+                  status: "blocked_by_student_changes",
+                  blocked_handout_sha: to_sha,
+                  unresolved_paths: blockingPaths
+                }
+              })
+              .eq("id", repository_id);
+            if (updateError) throw updateError;
+            Sentry.addBreadcrumb({
+              message:
+                `Handout ${to_sha.substring(0, 7)} not delivered to ${repository_full_name}: ` +
+                `${(result.unresolved_paths ?? []).length} changed file(s) are the student's own work`,
+              level: "warning"
+            });
+          } else if (result.no_changes) {
+            // The two shas move together or not at all. synced_repo_sha is the baseline the
+            // conflict guard classifies against, so advancing synced_handout_sha on its own
+            // leaves the baseline describing an older tree. That matters most on the recheck
+            // this outcome can come from: someone hand-applied the handout's changes, the repo
+            // genuinely holds to_sha's content, and with a stale baseline every hand-applied
+            // path reads as the student's own work against content that is already correct,
+            // making the repo likelier to block on every revision after this one.
+            //
+            // The head has to be the one the helper read while it reached that decision.
+            // Fetching it here instead would pick up a push the student made in between and
+            // record their work as the machine-written baseline, which is the single mistake
+            // this guard exists to prevent. So when the helper reports no head, the baseline
+            // stays where it is: their work keeps reading as theirs.
+            const helperRepoHead = result.repo_head_sha;
             const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({
                 synced_handout_sha: to_sha,
+                ...(helperRepoHead ? { synced_repo_sha: helperRepoHead } : {}),
                 desired_handout_sha: to_sha,
+                // This sync delivered everything the handout held, so whatever blocked an
+                // earlier revision no longer does.
+                sync_blocked_at: null,
+                sync_block_reason: null,
                 sync_data: {
                   last_sync_attempt: new Date().toISOString(),
                   status: "no_changes_needed"
@@ -1562,16 +1806,27 @@ export async function processEnvelope(
             const { error: updateError } = await adminSupabase
               .from("repositories")
               .update({
-                synced_handout_sha: result.merged ? to_sha : from_sha,
+                // Not the envelope's from_sha: writing that back would move
+                // synced_handout_sha BACKWARDS when a newer sync has already advanced it.
+                synced_handout_sha: result.merged ? to_sha : currentSyncedHandoutSha,
                 synced_repo_sha: result.merged ? result.merge_sha : undefined,
                 desired_handout_sha: to_sha,
+                // Cleared on both shapes. A merge delivered the update; an open pull request is
+                // the thing the student has to act on, and the instructor has a link to click.
+                // Neither is a repo the Sync button should have to force its way past.
+                sync_blocked_at: null,
+                sync_block_reason: null,
                 sync_data: {
                   pr_number: result.pr_number,
                   pr_url: result.pr_url,
                   pr_state: result.merged ? "merged" : "open",
                   branch_name: `sync-to-${to_sha.substring(0, 7)}`,
                   last_sync_attempt: new Date().toISOString(),
-                  merge_sha: result.merge_sha
+                  merge_sha: result.merge_sha,
+                  // Files the sync left to the student even though a PR was opened for the
+                  // rest. Recorded so the instructor can name them after the PR is merged
+                  // and the row goes back to reading "Synced"; absent on a clean sync.
+                  unresolved_paths: result.unresolved_paths
                 }
               })
               .eq("id", repository_id);
@@ -2404,6 +2659,61 @@ export async function processEnvelope(
     })();
 
     try {
+      // A sync that stopped on the state of one repository: a student pushed onto the sync
+      // branch, or the branch standing where the sync needs one was written by someone else.
+      // The handler above catches these from the helper's flattened result, so reaching here
+      // means one escaped: from outside that result, or from a path the flattening does not
+      // cover. Same treatment either way, and for the same reason as the branch below: retrying
+      // cannot change the answer, and it says nothing about GitHub's health. It is kept ahead of
+      // that branch because the two require different rows written: this one must NOT record
+      // creation_error, which describes how a repository was CREATED and would put a red
+      // provisioning failure in front of an instructor for a repo that exists and works.
+      // sync_data already carries the reason, written by the handler's own catch.
+      if (error instanceof TerminalSyncError) {
+        scope.setTag("terminal_sync_error", error.name);
+        // The same record the handler's own terminal path writes, for the same reason: the row is
+        // left behind the handout with desired_handout_sha already raised, and without this only
+        // a forcing caller could ever queue it again. Best-effort: the job is going to the DLQ
+        // either way, and a write request that fails here is worth knowing about but not worth
+        // holding the message for. The handler's catch has already recorded the reason in
+        // sync_data.
+        if (envelope.repo_id) {
+          const { error: hingeError } = await adminSupabase
+            .from("repositories")
+            .update({
+              sync_blocked_at: new Date().toISOString(),
+              sync_block_reason: `${error.reason}: ${error.message}`
+            })
+            .eq("id", envelope.repo_id);
+          if (hingeError) {
+            console.error("Failed to record sync_blocked_at for a terminal sync error:", hingeError);
+            Sentry.captureException(hingeError, scope);
+          }
+        }
+        recordMetric(
+          adminSupabase,
+          {
+            method: envelope.method,
+            status_code: 422,
+            class_id: envelope.class_id,
+            debug_id: envelope.debug_id,
+            enqueued_at: meta.enqueued_at,
+            log_id: envelope.log_id
+          },
+          scope
+        );
+        const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+        if (dlqSuccess) {
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        } else {
+          console.error(`Failed to send terminal sync message ${meta.msg_id} to DLQ, leaving unarchived`);
+          Sentry.captureMessage(`Terminal sync message ${meta.msg_id} not archived due to DLQ failure`, {
+            level: "error"
+          });
+        }
+        return false;
+      }
+
       // Deterministic failure about one repo or one person (an empty/missing template repo, a
       // GitHub login that no longer exists). Retrying will never succeed and this is not a systemic
       // problem, so record what we can and send the job straight to the DLQ — WITHOUT tripping the
