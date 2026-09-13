@@ -6,4 +6,5 @@
 -- :h is the holder, supplied by run.sh with psql -v h=storm-<n>.
 insert into harness.claims(scenario, holder, org, msg_id)
 select '5 concurrency', :'h', t.org, t.msg_id
-  from pgmq_public.claim_org_slot_and_read('async_calls', 600, 4, :'h', 4, 6, 16) t;
+  from pgmq_public.claim_org_slot_and_read('async_calls', 600, 4, :'h', 4, 6, 16) t
+ where t.status = 'claimed';

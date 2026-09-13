@@ -1576,6 +1576,191 @@ assert_renders "disabled deployment ignores incoherent org-slot values" \
   --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=0 \
   --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2
 
+echo
+
+echo "== queue alerts must not page on a healthy bulk release =="
+
+# ---------------------------------------------------------------------------
+# Queue drain-rate guard (PawtograderQueueOldestMessageAging,
+# PawtograderAsyncQueueStuck).
+#
+# Both alerts fire on a level -- oldest-message age, queue depth -- and both
+# were paging on healthy assignment releases, because a bulk enqueue of N
+# messages draining at rate R drives age to N/R and holds depth above the
+# threshold for N/R minutes no matter how healthy the workers are. The fix
+# subtracts the case "the queue is demonstrably draining" using the labelled
+# pawtograder_queue_depth gauge.
+#
+# The property these tests protect is the JOIN OPERATOR. `unless` and `and`
+# render almost identically and a reviewer reading a diff will not feel the
+# difference, but they fail in opposite directions when the right-hand side is
+# missing -- which it IS, every time, in the window between the chart upgrade
+# and the edge-function rollout that first emits pawtograder_queue_depth:
+#
+#   `and`    -> empty right side makes the whole expression empty, the critical
+#               alert SILENTLY STOPS FIRING, and nothing reports that it has.
+#   `unless` -> empty right side subtracts nothing and the alert behaves exactly
+#               as it did before the guard existed: noisy, but loud.
+#
+# Nothing else in the repository would notice the swap, so it is asserted here.
+
+# assert_alert_uses_unless "<label>" "<alertname>" <extra --set args...>
+# Renders prometheus-rules.yaml, extracts just the expr block of one alert (from
+# its `- alert:` line to the following `for:`), and asserts the block joins its
+# two halves with `unless` and contains no `and` operator at all. Scoped to the
+# expr block on purpose: `and` is an ordinary English word and the surrounding
+# comments and annotations are full of it.
+assert_alert_uses_unless() {
+  local label="$1" alert="$2"; shift 2
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+      "$@" --show-only templates/prometheus-rules.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local expr
+  expr="$(awk -v want="$alert" '
+    $0 ~ ("- alert: " want "$") { inblk = 1; next }
+    inblk && /^[[:space:]]*for:/ { inblk = 0 }
+    inblk { print }
+  ' "$OUTFILE")"
+  if [ -z "$expr" ]; then
+    echo "FAIL [$label]: no expr block found for alert $alert"
+    FAILED=1
+  elif ! printf '%s\n' "$expr" | grep -Eq '^[[:space:]]*unless[[:space:]]*$'; then
+    echo "FAIL [$label]: $alert does not join its halves with \`unless\`"
+    FAILED=1
+  elif printf '%s\n' "$expr" | grep -Ewq 'and'; then
+    echo "FAIL [$label]: $alert uses the \`and\` operator — an absent"
+    echo "       pawtograder_queue_depth would then silence the alert instead of"
+    echo "       degrading to its pre-guard behaviour. It must be \`unless\`."
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+assert_alert_uses_unless "aging alert subtracts the draining case with unless" \
+  PawtograderQueueOldestMessageAging
+assert_alert_uses_unless "stuck alert subtracts the draining case with unless" \
+  PawtograderAsyncQueueStuck
+
+# The guard is only a guard if it reads the labelled depth gauge. The per-queue
+# depth gauges (pawtograder_async_queue_size and friends) are separate metric
+# NAMES with no `queue` label and cannot be joined to the age series at all, so
+# a "simplification" back to one of those names would render, parse, and never
+# match anything.
+assert_rendered_contains "aging guard reads the labelled depth gauge" \
+  templates/prometheus-rules.yaml \
+  'deriv(pawtograder_queue_depth{namespace="default", queue!~".*_dlq|async_calls_low_priority"}[15m])' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+assert_rendered_contains "stuck guard reads the labelled depth gauge" \
+  templates/prometheus-rules.yaml \
+  'deriv(pawtograder_queue_depth{namespace="default", queue="async_calls"}[15m])' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# deriv() returns a PER-SECOND rate and draining is a FALLING gauge, so the
+# comparison has to be scaled by 60 and negative. Drop the minus sign and the
+# guard suppresses every queue that is filling instead of every queue that is
+# emptying — the exact inversion of the intended behaviour, and still valid
+# PromQL.
+assert_rendered_contains "drain floor is negative and scaled to per-minute" \
+  templates/prometheus-rules.yaml '[15m])) * 60 < -2' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# The floor is a value, not a literal, so an operator whose real stalls drift
+# faster than 2 msg/min can raise it without editing the template.
+assert_rendered_contains "drain floor is configurable" \
+  templates/prometheus-rules.yaml '[15m])) * 60 < -5' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=5
+
+# The DLQ and low-priority exclusions predate the drain guard and must survive
+# it on BOTH halves of the expression. A DLQ is never drained on a schedule and
+# async_calls_low_priority is starved by design, so either one included here
+# produces a permanent critical that gets silenced — taking the live queues with
+# it. The right-hand side carries the same matcher so the two sides produce the
+# same label set; `unless` joins on the full label set and silently subtracts
+# nothing if they diverge.
+assert_rendered_contains "aging alert still excludes DLQs and low-priority on both sides" \
+  templates/prometheus-rules.yaml \
+  'pawtograder_queue_depth{namespace="default", queue!~".*_dlq|async_calls_low_priority"}' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# The `queue` label values in metrics/index.ts must be IDENTICAL between the two
+# arrays that feed pawtograder_queue_oldest_message_seconds and
+# pawtograder_queue_depth. `unless` matches on the full label set, so one
+# renamed string does not error, does not warn, and does not break a dashboard —
+# it just quietly stops suppressing, and the release pages come back. Nothing
+# else in the build compares these two lists.
+assert_queue_label_parity() {
+  local label="$1"
+  local src="$CHART/../../supabase/functions/metrics/index.ts"
+  if [ ! -f "$src" ]; then
+    echo "FAIL [$label]: cannot find $src"
+    FAILED=1
+    return
+  fi
+  # Slice each array literal, then pull its queue names. Entries are not all on
+  # one line — prettier wraps the longer ones — so this reads the block, not the
+  # line.
+  queue_names_in() {
+    awk -v decl="$1" '
+      index($0, "const " decl) { inblk = 1 }
+      inblk && /^[[:space:]]*\];/ { inblk = 0 }
+      inblk && /queue:[[:space:]]*"/ { print }
+    ' "$src" | grep -oE 'queue:[[:space:]]*"[a-z_]+"' | grep -oE '"[a-z_]+"' | sort
+  }
+  local ages depths
+  ages="$(queue_names_in queueOldestSeconds)"
+  depths="$(queue_names_in queueDepths)"
+  if [ -z "$ages" ] || [ -z "$depths" ]; then
+    echo "FAIL [$label]: could not extract both queue label lists from metrics/index.ts"
+    FAILED=1
+  elif [ "$ages" != "$depths" ]; then
+    echo "FAIL [$label]: queue label sets differ between the age and depth gauges"
+    diff <(printf '%s\n' "$ages") <(printf '%s\n' "$depths") | sed 's/^/       /'
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+assert_queue_label_parity "queue labels match between the age and depth gauges"
+
+# PawtograderAsyncQueueBacklog (> 1000 for 5m) shares the blind spot and was
+# left unguarded on purpose: at a depth of 1000 even a healthy ~8 msg/min drain
+# needs over two hours, which is a capacity signal worth paging on regardless of
+# worker health, and no scheduled release comes close to the threshold. That
+# decision only survives if the argument for it does — helm renders YAML
+# comments through to the manifest, so the note is assertable.
+assert_rendered_contains "backlog alert documents why it has no drain guard" \
+  templates/prometheus-rules.yaml \
+  "SAME structural blind spot as PawtograderAsyncQueueStuck" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# The behavioural half of this lives in promrules-unit.sh, which evaluates the
+# rendered PromQL against series shaped like the 2026-09-13 release and the
+# 2026-09-07 stall. The assertions above pin the rule's TEXT; only that suite
+# pins what it DOES. Assert it is present and runnable, because a text-only
+# guard that silently lost its behavioural counterpart is the weaker half.
+assert_promrules_suite_present() {
+  local label="$1"
+  if [ ! -x "$CHART/tests/promrules-unit.sh" ]; then
+    echo "FAIL [$label]: charts/pawtograder/tests/promrules-unit.sh is missing or not executable"
+    FAILED=1
+  elif [ ! -f "$CHART/tests/promrules-unit.yaml" ]; then
+    echo "FAIL [$label]: charts/pawtograder/tests/promrules-unit.yaml is missing"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+assert_promrules_suite_present "the promtool behaviour suite is present and runnable"
+
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"
   exit 1

@@ -31,7 +31,10 @@
 #   HARNESS_WORKERS   parallel psql sessions in the storm        (default 48, clamped to the
 #                                                                 server's max_connections)
 #   HARNESS_ITERS     claims per storm session                   (default 40)
-#   HARNESS_KEEP=1    leave the container running for poking at  (default: always removed)
+#   HARNESS_KEEP=1    leave the container running for inspection  (default: always removed)
+#
+# interrupt_check.sh in this directory verifies the interrupted-run path: non-zero exit AND no
+# container left behind.
 
 set -euo pipefail
 
@@ -57,7 +60,18 @@ cleanup() {
   rm -rf "$WORK"
   exit "$rc"
 }
-trap cleanup EXIT INT TERM
+
+# EXIT does the cleanup; the signals only choose an exit status and let EXIT run.
+#
+# Trapping cleanup on INT and TERM as well looked equivalent and was not. `$?` inside the handler is
+# the status of whatever finished last, so a signal arriving just after a successful command made
+# cleanup exit 0: an interrupted run reported success, and CI would have accepted a validation run
+# that never reached the assertions. Here the signal handlers exit with the conventional
+# 128 + signal status, that status becomes `$?` in cleanup, and the container is still removed
+# because EXIT still fires. tests/manual/per_org_async_leases/interrupt_check.sh asserts both halves.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 export PGPASSWORD=postgres
 psql_args=(-X -q -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -v ON_ERROR_STOP=1)
@@ -85,8 +99,8 @@ echo
 # The version this whole migration is written against. pgmq gained pgmq.read's `conditional`
 # argument in 1.5.0; on 1.4.4 there is no such thing, which is exactly why the migration reimplements
 # pgmq.read's CTE rather than passing a filter to it. If this image ever ships something else, the
-# filtered read is either unnecessary or subtly wrong, and that has to be shouted about, not papered
-# over.
+# filtered read is either unnecessary or subtly wrong, and that has to be reported rather than
+# hidden.
 # ------------------------------------------------------------------------------------------------
 PGMQ_VER="$(scalar "select default_version from pg_available_extensions where name = 'pgmq'")"
 if [ "$PGMQ_VER" != "$EXPECTED_PGMQ" ]; then

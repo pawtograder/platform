@@ -2163,8 +2163,27 @@ monitoring:
     # Notification email queue depth (messages) above which PawtograderNotificationEmailBacklog fires.
     notificationEmailBacklog: 500
     # Oldest-message age (seconds) above which PawtograderQueueOldestMessageAging fires, for any
-    # queue. Scale-free, unlike the depth thresholds above, so it needs no per-term retuning.
+    # queue. Independent of enrollment, unlike the depth thresholds above, so it needs no per-term
+    # retuning — but it is NOT independent of batch size, which is what the floor below corrects.
     queueOldestSeconds: 1200
+    # Drain rate (messages/minute) at or below which a queue counts as stalled. Both
+    # PawtograderQueueOldestMessageAging and PawtograderAsyncQueueStuck are suppressed while a queue
+    # is emptying faster than this, because a bulk enqueue (an assignment release) drives depth and
+    # oldest-message age past any threshold on a completely healthy system: 242 create_repo messages
+    # released in one transaction on 2026-09-13 took 30m51s to drain at ~8 msg/min and paged, with
+    # 242/242 repos created and an empty DLQ. The genuine stall on 2026-09-07 drained at
+    # ~0.66 msg/min. 2 msg/min sits 4x above that stall and 4x below a healthy release.
+    #
+    # Checked against the real series rather than against the average: per-minute depth was
+    # reconstructed from pgmq.a_async_calls for the 2026-09-13 burst and every rolling 15m slope
+    # computed. The worst genuine drain window was 7.27 msg/min (04:11-04:26), 3.6x above this floor,
+    # and the drain was near-linear — there is no flat stretch inside a release for the guard to miss.
+    # The only negative slope is at 04:00:00, where depth goes 0 to 128 as the burst lands, and the
+    # age alert is not eligible there because the oldest message is still far under queueOldestSeconds.
+    #
+    # Raise it only if a real stall is drifting faster than 2 msg/min; lowering it re-admits the
+    # release pages. charts/pawtograder/tests/promrules-unit.sh fails if the change inverts the guard.
+    queueDrainMessagesPerMinute: 2
     # Growth in the Discord DLQ over an hour above which PawtograderDiscordDLQGrowing fires.
     # A rate, not a level: a poison message sits in the DLQ forever, so a level alert would fire
     # permanently and get silenced.

@@ -1,0 +1,197 @@
+# promtool unit tests for the queue alerting rules.
+#
+# render-guardrails.sh pins the TEXT of these rules — that the join operator is
+# `unless`, that the depth gauge is the labelled one, that the floor is negative
+# and scaled. This file pins their BEHAVIOUR, which is a different property and
+# the one that actually matters: an edit can keep every string those assertions
+# look for and still invert what the rule does.
+#
+# Four behaviours are load-bearing here, and every one of them fails silently:
+#
+#   1. A healthy bulk release must NOT page. This is the bug that prompted the
+#      change: 242 create_repo messages enqueued in one transaction on
+#      2026-09-13 drained in 30m51s at ~8 msg/min, 242/242 repos created, empty
+#      DLQ — and PawtograderQueueOldestMessageAging paged, because the oldest
+#      message in a batch of N draining at R ages to N/R however healthy the
+#      workers are.
+#   2. A genuine stall must STILL page. The 2026-09-07 incident (CS 4530, 58
+#      messages over 88 minutes, ~0.66 msg/min) was a true positive and the
+#      suppression must not swallow it.
+#   3. With pawtograder_queue_depth ABSENT, both alerts must still fire. The
+#      chart and the edge functions deploy independently, so this state exists
+#      on every upgrade until the functions roll. It is the whole reason the
+#      operator is `unless` and not `and`, and it is invisible in production:
+#      with `and` the critical alert simply stops firing and nothing reports it.
+#   4. The DLQ and low-priority exclusions must survive. Those queues are never
+#      drained on a schedule, so including them produces a permanent critical
+#      that gets silenced, taking the live queues with it.
+#
+# Namespace is `pawtograder` because the runner renders with that namespace; the
+# rules interpolate .Release.Namespace into every selector, so the series below
+# must carry the same value or nothing matches and every test passes vacuously.
+#
+# Run: charts/pawtograder/tests/promrules-unit.sh
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1. HEALTHY BULK RELEASE — must not page.
+  # 600 messages draining at the ~8 msg/min measured on 2026-09-13. Depth is
+  # still 40 at t=70m, so `> 10 for 1h` is satisfied and the alert would fire
+  # without the guard. The reconstructed production drain never fell below
+  # 7.27 msg/min in any rolling 15m window, so this is the real shape.
+  - interval: 1m
+    name: healthy bulk release does not trip the async queue stuck alert
+    input_series:
+      - series: 'pawtograder_async_queue_size{namespace="pawtograder"}'
+        values: "600-8x75"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="async_calls"}'
+        values: "600-8x75"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: PawtograderAsyncQueueStuck
+        exp_alerts: []
+
+  # 2. GENUINE STALL — must page.
+  # 58 messages creeping at 0.5 msg/min, the shape of the 2026-09-07 incident.
+  # Well under the 2 msg/min floor, so the guard subtracts nothing.
+  - interval: 1m
+    name: a stalled async queue still pages
+    input_series:
+      - series: 'pawtograder_async_queue_size{namespace="pawtograder"}'
+        values: "58-0.5x88"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="async_calls"}'
+        values: "58-0.5x88"
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: PawtograderAsyncQueueStuck
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, severity: critical }
+            exp_annotations:
+              summary: "Pawtograder async queue is not draining"
+              description:
+                "The async worker queue in pawtograder has held above 10 for 1h while draining slower than 2 msg/min — the
+                workers are stuck or starved rather than working through a bulk release. Check worker liveness."
+
+  # 3. DEPTH GAUGE ABSENT — must page. THE fail-loud test.
+  # pawtograder_queue_depth does not exist at all, which is exactly the state of
+  # a cluster between the chart upgrade and the edge-function rollout. `unless`
+  # subtracts an empty set and the alert behaves as it did before the guard.
+  # Swap the operator to `and` and this test goes red — that is the point of it.
+  - interval: 1m
+    name: async queue stuck still fires when the depth gauge is missing
+    input_series:
+      - series: 'pawtograder_async_queue_size{namespace="pawtograder"}'
+        values: "20x88"
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: PawtograderAsyncQueueStuck
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, severity: critical }
+            exp_annotations:
+              summary: "Pawtograder async queue is not draining"
+              description:
+                "The async worker queue in pawtograder has held above 10 for 1h while draining slower than 2 msg/min — the
+                workers are stuck or starved rather than working through a bulk release. Check worker liveness."
+
+  # 4. HEALTHY BULK RELEASE, AGE SIDE — must not page.
+  # Age climbs 60s per minute, so it crosses 1200s at t=20m and the `for: 10m`
+  # is satisfied from t=30m. The queue is draining at 8 msg/min throughout. This
+  # is the 2026-09-13 page, reproduced.
+  - interval: 1m
+    name: healthy bulk release does not trip the oldest-message alert
+    input_series:
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="async_calls"}'
+        values: "0+60x45"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="async_calls"}'
+        values: "600-8x45"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PawtograderQueueOldestMessageAging
+        exp_alerts: []
+
+  # 5. AGE CLIMBING, QUEUE NOT MOVING — must page.
+  # Same age curve, depth pinned at 58. deriv is 0, which is not below -2, so
+  # nothing is subtracted. Drop the minus sign from the floor and this test goes
+  # red, because 0 < 2 would suppress it.
+  - interval: 1m
+    name: a queue whose depth is not moving still pages on age
+    input_series:
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="async_calls"}'
+        values: "0+60x45"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="async_calls"}'
+        values: "58x45"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PawtograderQueueOldestMessageAging
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, queue: async_calls, severity: critical }
+            exp_annotations:
+              summary: "Pawtograder queue async_calls is not draining"
+              description:
+                "The oldest message in queue async_calls (pawtograder) has been waiting over 1200s AND the queue is
+                draining slower than 2 msg/min, so this is not a bulk release working through a backlog — the queue has
+                genuinely stopped moving."
+
+  # 6. AGE SIDE, DEPTH GAUGE ABSENT — must page. The second fail-loud test.
+  - interval: 1m
+    name: oldest-message alert still fires when the depth gauge is missing
+    input_series:
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="async_calls"}'
+        values: "0+60x45"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PawtograderQueueOldestMessageAging
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, queue: async_calls, severity: critical }
+            exp_annotations:
+              summary: "Pawtograder queue async_calls is not draining"
+              description:
+                "The oldest message in queue async_calls (pawtograder) has been waiting over 1200s AND the queue is
+                draining slower than 2 msg/min, so this is not a bulk release working through a backlog — the queue has
+                genuinely stopped moving."
+
+  # 7. A FILLING QUEUE IS NEVER SUPPRESSED.
+  # Age past the threshold while depth RISES at 8 msg/min — a stall that is also
+  # still being enqueued into. deriv is positive, so the guard must not match.
+  # This is the direct test of the slope's sign.
+  - interval: 1m
+    name: a filling queue is not mistaken for a draining one
+    input_series:
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="async_calls"}'
+        values: "0+60x45"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="async_calls"}'
+        values: "10+8x45"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PawtograderQueueOldestMessageAging
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, queue: async_calls, severity: critical }
+            exp_annotations:
+              summary: "Pawtograder queue async_calls is not draining"
+              description:
+                "The oldest message in queue async_calls (pawtograder) has been waiting over 1200s AND the queue is
+                draining slower than 2 msg/min, so this is not a bulk release working through a backlog — the queue has
+                genuinely stopped moving."
+
+  # 8. DLQ AND LOW-PRIORITY EXCLUSIONS SURVIVE.
+  # Both queues are ancient and motionless, which is their normal steady state:
+  # a DLQ is where poison messages go to stay, and async_calls_low_priority is
+  # read only when async_calls comes back empty. Neither may page.
+  - interval: 1m
+    name: dlq and low-priority queues stay excluded from the age alert
+    input_series:
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="async_calls_dlq"}'
+        values: "0+60x45"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="async_calls_dlq"}'
+        values: "12x45"
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="async_calls_low_priority"}'
+        values: "0+60x45"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="async_calls_low_priority"}'
+        values: "400x45"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PawtograderQueueOldestMessageAging
+        exp_alerts: []

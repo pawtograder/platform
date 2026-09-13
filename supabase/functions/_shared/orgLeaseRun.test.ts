@@ -9,18 +9,14 @@
  */
 
 import { assertEquals, assertNotEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@^1";
-import {
-  beginOrgLeaseRun,
-  OrgClaimError,
-  type OrgQueueMessage,
-  type OrgSlotRpc,
-  type RpcResult
-} from "./orgLeaseRun.ts";
+import { beginOrgLeaseRun, OrgClaimError, type OrgSlotRow, type OrgSlotRpc, type RpcResult } from "./orgLeaseRun.ts";
 
 type ClaimArgs = Parameters<OrgSlotRpc["claim"]>[0];
 
-function row(msgId: number, org: string): OrgQueueMessage {
+/** A claimed message row, as `claim_org_slot_and_read` returns it. */
+function row(msgId: number, org: string): OrgSlotRow {
   return {
+    status: "claimed",
     org,
     msg_id: msgId,
     read_ct: 1,
@@ -28,6 +24,23 @@ function row(msgId: number, org: string): OrgQueueMessage {
     vt: "2026-09-13T00:05:00Z",
     message: { method: "create_repo" }
   };
+}
+
+/** The single NULL-filled row the SQL returns when it claimed nothing. */
+function statusRow(status: "no_demand" | "no_capacity"): OrgSlotRow[] {
+  return [{ status, org: null, msg_id: null, read_ct: null, enqueued_at: null, vt: null, message: null }];
+}
+
+/**
+ * A promise a test can settle by hand, for interleaving an in-flight RPC with the loop. `resolve!`
+ * rather than a nullable, so the call sites type-check under `deno check`.
+ */
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 /**
@@ -41,7 +54,7 @@ function row(msgId: number, org: string): OrgQueueMessage {
  */
 function fakeRpc(
   init: {
-    claim?: (args: ClaimArgs, callIndex: number) => RpcResult<OrgQueueMessage[]> | Error;
+    claim?: (args: ClaimArgs, callIndex: number) => RpcResult<OrgSlotRow[]> | Error;
     renew?: (callIndex: number) => RpcResult<boolean> | Error;
   } = {}
 ) {
@@ -101,7 +114,7 @@ type SlotRow = { queue: string; holder: string; expiresAt: number; renewals: num
  * makes probing a queue you do not hold free.
  */
 function fakeSlotTable(init: {
-  work: (queueName: string) => OrgQueueMessage[];
+  work: (queueName: string) => OrgSlotRow[];
   now?: () => number;
   releaseFails?: () => boolean;
 }) {
@@ -112,9 +125,9 @@ function fakeSlotTable(init: {
   const rpc: OrgSlotRpc = {
     claim: (args) => {
       const out = init.work(args.queue_name);
-      // No work means no org qualified, so the SQL writes no slot row and leaves any existing one
-      // alone. That is what makes probing a queue you do not hold free.
-      if (out.length === 0) return Promise.resolve({ data: [], error: null });
+      // A status row means no org qualified, so the SQL writes no slot row and leaves any existing
+      // one alone. That is what makes probing a queue you do not hold free.
+      if (!out.some((r) => r.msg_id !== null)) return Promise.resolve({ data: out, error: null });
       const expiresAt = now() + args.lease_ttl_seconds * 1000;
       const existing = rows.find((r) => r.queue === args.queue_name && r.holder === args.holder);
       if (existing) existing.expiresAt = expiresAt;
@@ -282,27 +295,36 @@ Deno.test("a claim that finds no work releases the slot it was holding", async (
   assertEquals(f.releaseCalls, 0);
 
   assertEquals(await run.claim(), null);
-  // One per pool this run has sent a claim to: the slot it actually held, plus the low-priority pool
-  // it probed on the way past. The second is a no-op RPC, and it is kept deliberately -- a claim
-  // whose response was lost may have committed a row there, and one wasted call per idle transition
-  // is a better trade than tracking which responses arrived.
-  assertEquals(f.releaseCalls, 2);
-  assertEquals(f.releaseQueues, ["async_calls", "async_calls_low_priority"]);
+  // Only the pool a claim actually took a slot in. The low-priority pool was probed on the way past
+  // and answered "claimed nothing" definitively, which proves no row was committed there -- so it is
+  // not in the release set and costs no RPC.
+  assertEquals(f.releaseCalls, 1);
+  assertEquals(f.releaseQueues, ["async_calls"]);
   assertEquals(f.releaseArgs[0].holder, run.holder);
   assertEquals(run.heldOrg(), null);
   assertEquals(run.heldQueue(), null);
 });
 
-// Insurance against a claim whose response was lost after the server committed it: we would hold a
-// row we never learned about, and only an unconditional release cleans that up before the TTL.
-// Safe because the holder string is the row key, so this cannot touch anyone else's slot.
-Deno.test("exiting releases even when the run believes it holds nothing", async () => {
+// A claim whose response never arrived may still have committed a row on the server. That is the
+// one case where the run cannot know, so the queue stays in the release set and exit cleans it up.
+Deno.test("exiting releases a queue whose claim response never arrived", async () => {
+  const f = fakeRpc({ claim: () => new Error("socket hang up") });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, maxConsecutiveClaimErrors: 99 });
+
+  await assertRejects(() => run.claim(), OrgClaimError);
+  await run.release();
+  assertEquals(f.releaseQueues, ["async_calls"], "the queue we could not get an answer from");
+});
+
+// The converse: a definite "claimed nothing" answer is proof, so it must NOT leave a queue behind
+// to be released at exit. Getting this wrong costs a wasted RPC per pool on every idle isolate.
+Deno.test("a definite empty answer leaves nothing to release at exit", async () => {
   const f = fakeRpc();
   const run = beginOrgLeaseRun({ ...base, rpc: f.rpc });
 
   assertEquals(await run.claim(), null);
   await run.release();
-  assertEquals(f.releaseCalls, 2, "one per pool probed: either response could have been the lost one");
+  assertEquals(f.releaseCalls, 0);
 });
 
 Deno.test("a run that never claimed does not call release", async () => {
@@ -789,5 +811,212 @@ Deno.test("a transient error is still retried rather than treated as fatal", asy
   const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, maxConsecutiveClaimErrors: 3 });
 
   await assertRejects(() => run.claim(), OrgClaimError);
+  assertEquals(run.shouldContinue(), true);
+});
+
+// ── Renewal racing rotation ────────────────────────────────────────────────────
+// The renewal timer fires independently of the loop, so a renewal can be in flight while `claim()`
+// rotates the run onto the other queue. The renewal was issued for the OLD queue; rotation releases
+// that row; the RPC then correctly answers "you hold nothing there". Applying that answer to the
+// NEW lease marks a slot the run had just claimed as lost and stops renewing it, so it expires
+// mid-batch and a second leaseholder enters the same org -- breaking the per-org cap this feature
+// exists to hold. A happy-path test cannot see any of this; the interleaving is the test.
+
+Deno.test("a renewal that lands after a rotation cannot kill the new lease", async () => {
+  let mainHasWork = true;
+  let parkNextRenew = true;
+  let parked = false;
+  const gate = deferred();
+
+  const t = fakeSlotTable({
+    work: (q) => (q === "async_calls" ? (mainHasWork ? [row(1, "acme")] : statusRow("no_demand")) : [row(2, "globex")])
+  });
+  const gated: OrgSlotRpc = {
+    ...t.rpc,
+    renew: async (args) => {
+      if (parkNextRenew) {
+        parkNextRenew = false;
+        parked = true;
+        await gate.promise;
+      }
+      return await t.rpc.renew(args);
+    }
+  };
+
+  const timers = fakeTimers();
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: gated,
+    leaseTtlMs: 30_000,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+
+  await run.claim();
+  assertEquals(run.heldQueue(), "async_calls");
+
+  // A renewal for async_calls is now in flight and parked mid-call.
+  timers.fireAll();
+  await flush();
+  assertEquals(parked, true, "the renewal must actually be in flight, or this test proves nothing");
+
+  // The loop rotates underneath it, releasing the async_calls row. The parked renewal is now about
+  // to be told -- correctly -- that it holds nothing there.
+  mainHasWork = false;
+  await run.claim();
+  assertEquals(run.heldQueue(), "async_calls_low_priority");
+  assertEquals(t.rows.length, 1);
+
+  gate.resolve();
+  await flush();
+
+  assertEquals(run.shouldContinue(), true, "a stale renewal must not end the run");
+  assertEquals(run.heldQueue(), "async_calls_low_priority", "nor drop the lease it just took");
+  assertEquals(timers.active, 1, "nor stop the renewal timer keeping that lease alive");
+  assertEquals(t.rows.length, 1, "and the live slot is still there to be renewed");
+});
+
+// The guard must discriminate, not just suppress: a renewal that is still current and comes back
+// false has to end the run exactly as before, or losing a lease would go unnoticed.
+Deno.test("a renewal for the lease still held is acted on normally", async () => {
+  const f = fakeRpc({
+    claim: () => ({ data: [row(1, "acme")], error: null }),
+    renew: () => ({ data: false, error: null })
+  });
+  let clock = 0;
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, leaseTtlMs: 30_000, now: () => clock });
+
+  await run.claim();
+  clock += 10_001;
+  await run.heartbeat();
+  assertEquals(run.shouldContinue(), false, "a current renewal answering false still ends the run");
+});
+
+// Re-claiming the same queue is the same lease, so renewals in flight for it stay valid. If this
+// bumped the generation, a busy drain would discard a renewal on every iteration and the lease
+// would lapse under exactly the load it is meant to survive.
+Deno.test("re-claiming the same queue does not invalidate its renewals", async () => {
+  const f = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+  let clock = 0;
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, leaseTtlMs: 30_000, now: () => clock });
+
+  await run.claim();
+  await run.claim();
+  await run.claim();
+
+  clock += 10_001;
+  await run.heartbeat();
+  assertEquals(f.renewCalls, 1);
+  assertEquals(run.shouldContinue(), true, "the renewal was applied, not discarded");
+});
+
+// ── Saturation: no_capacity vs no_demand ───────────────────────────────────────
+// Zero rows used to mean both "nothing ready" and "ready work, no slot free", and the worker read
+// both as "move on to the fallback queue" -- sending isolates to do repo analytics with GitHub
+// capacity the backed-up main queue needed.
+
+Deno.test("no_capacity on the main queue does not fall through to low priority", async () => {
+  const f = fakeRpc({ claim: () => ({ data: statusRow("no_capacity"), error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc });
+
+  assertEquals(await run.claim(), null);
+  assertEquals(run.lastOutcome(), "no_capacity");
+  assertEquals(
+    f.claimArgs.map((a) => a.queue_name),
+    ["async_calls"],
+    "the fallback queue must not be probed while the main queue is backed up"
+  );
+});
+
+// Ending the run rather than polling: the fleet is at its configured concurrency by definition, so
+// another isolate adds occupancy and no throughput. Re-entry stays rate-limited by the cron.
+Deno.test("no_capacity ends the run instead of holding an admission slot", async () => {
+  const f = fakeRpc({ claim: () => ({ data: statusRow("no_capacity"), error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc });
+
+  await run.claim();
+  assertEquals(run.shouldContinue(), false);
+});
+
+// And it must not spend the idle sleep on the way out -- that is an admission slot held for
+// `idleSleepMs` on the one path whose entire point is to stop holding one.
+Deno.test("no_capacity returns from onIdle without sleeping", async () => {
+  let slept = 0;
+  const f = fakeRpc({ claim: () => ({ data: statusRow("no_capacity"), error: null }) });
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    sleep: () => {
+      slept += 1;
+      return Promise.resolve();
+    }
+  });
+
+  await run.claim();
+  assertEquals(await run.onIdle(), false);
+  assertEquals(slept, 0, "a run that is already over must not sleep first");
+});
+
+// A leaseholder that holds a slot and then hits no_capacity has an org with no more ready work.
+// Pinning it would count against global_cap and max_per_org for nothing.
+Deno.test("no_capacity gives back a slot the run was holding", async () => {
+  let saturated = false;
+  const f = fakeRpc({
+    claim: () => (saturated ? { data: statusRow("no_capacity"), error: null } : { data: [row(1, "acme")], error: null })
+  });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc });
+
+  await run.claim();
+  saturated = true;
+  await run.claim();
+
+  assertEquals(run.heldOrg(), null);
+  assertEquals(f.releaseQueues, ["async_calls"]);
+});
+
+// no_demand is the opposite call: nobody else is working this queue, so a resident isolate is the
+// lowest-latency way to pick up what arrives next, bounded by the idle budget.
+Deno.test("no_demand still falls through and still idles", async () => {
+  const f = fakeRpc({ claim: () => ({ data: statusRow("no_demand"), error: null }) });
+  let clock = 0;
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, idleBudgetMs: 1_000, now: () => clock });
+
+  assertEquals(await run.claim(), null);
+  assertEquals(run.lastOutcome(), "no_demand");
+  assertEquals(
+    f.claimArgs.map((a) => a.queue_name),
+    ["async_calls", "async_calls_low_priority"],
+    "an empty main queue is exactly when the fallback queue should be drained"
+  );
+  assertEquals(run.shouldContinue(), true);
+  clock += 500;
+  assertEquals(await run.onIdle(), true);
+});
+
+// Deploy skew in the other direction: an image that reaches a database still running the previous
+// function sees message rows with no `status` column at all. Claimed rows are therefore identified
+// by `msg_id`, never by the status string -- reading the status would drop a batch whose visibility
+// timeout had already been bumped and silently defer that work until the VT expired.
+Deno.test("messages are still claimed when the rows carry no status column", async () => {
+  const legacy = { ...row(1, "acme") } as Record<string, unknown>;
+  delete legacy.status;
+  const f = fakeRpc({ claim: () => ({ data: [legacy as unknown as OrgSlotRow], error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc });
+
+  const claimed = await run.claim();
+  assertEquals(claimed?.org, "acme");
+  assertEquals(claimed?.messages.length, 1);
+  assertEquals(run.lastOutcome(), "claimed");
+});
+
+// And a genuinely empty result -- the pre-status contract's way of saying "nothing here" -- has to
+// read as no_demand, not as no_capacity, or the worker would stop draining against a database that
+// simply has not been migrated yet.
+Deno.test("an empty result reads as no_demand rather than no_capacity", async () => {
+  const f = fakeRpc();
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc });
+
+  assertEquals(await run.claim(), null);
+  assertEquals(run.lastOutcome(), "no_demand");
   assertEquals(run.shouldContinue(), true);
 });

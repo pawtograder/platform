@@ -6,51 +6,59 @@
 -- supabase/functions/_shared/workerRun.ts), and that holder reads `qty = 4` messages at a time.
 -- Four in flight, fleet-wide, forever.
 --
--- Meanwhile the thing that actually bounds us -- GitHub's content-creation quota -- is PER
--- ORGANIZATION. `getCreateContentLimiter` in supabase/functions/_shared/GitHubWrapper.ts keys its
--- Bottleneck on `create_content:<org>:<GITHUB_APP_ID>` with reservoir 40 / maxConcurrent 40 /
--- refresh 40 per 60s. So when three classes in three different GitHub orgs release at once, GitHub
--- is offering 120 slots of headroom and we are using 4.
+-- Meanwhile the thing that actually bounds us is PER ORGANIZATION. `getCreateContentLimiter` in
+-- supabase/functions/_shared/GitHubWrapper.ts keys its Bottleneck on
+-- `create_content:<org>:<GITHUB_APP_ID>` with reservoir 40 / maxConcurrent 40 / refresh 40 per 60s.
+-- When three classes in three different GitHub orgs release at once, that quota allows 120
+-- concurrent content calls and we use 4.
 --
--- WHAT THIS MIGRATION ADDS. A fixed pool of lease slots in Postgres, and one RPC that ATOMICALLY
--- (a) decides which org may take one more leaseholder, (b) claims a slot for the caller, and
--- (c) hands back that org's messages -- filtered, vt-bumped and read_ct-incremented exactly the way
--- `pgmq.read` would have done it. One round trip, no read-then-act gap, and the worker never has to
--- ask "which org should I be draining?" because Postgres already answered by giving it messages.
+-- WHAT THIS MIGRATION ADDS. A fixed pool of lease slots in Postgres, and one RPC that atomically
+-- decides which org may take one more leaseholder, claims a slot for the caller, and hands back that
+-- org's messages, filtered and vt-bumped and read_ct-incremented exactly the way `pgmq.read` would
+-- have done it. One round trip and no read-then-act gap. The worker never has to ask which org it
+-- should be draining, because Postgres answered by giving it that org's messages.
 --
--- WHY class_id AND NOT args.org. The envelope is `{method, args, class_id, log_id, debug_id,
--- retry_count?}`. Over seven days of prod traffic `class_id` was present on 5522 of 5522 messages;
--- `args.org` on 86% of them. The missing 14% is not random -- it is every `sync_repo_permissions`
--- job. Keying the allocator on `args.org` would have silently dropped that whole method out of the
--- allocator's view, and since the read is FILTERED by the winning org, "out of the allocator's
--- view" means "never read at all". So the allocator joins `class_id` to `public.classes.github_org`
--- and everything that does not resolve lands in the `(unresolved)` sentinel bucket, which is a
--- first-class org for allocation purposes and therefore always drains. A message can be slow here;
--- it can never be invisible.
+-- HOW A MESSAGE IS ATTRIBUTED TO AN ORG. The envelope is `{method, args, class_id, log_id,
+-- debug_id, retry_count?}`. Over seven days of prod traffic `class_id` was present on 5522 of 5522
+-- messages and `args.org` on 86% of them, and the missing 14% is not random: it is every
+-- `sync_repo_permissions` job. So the key is `args.org` where the envelope carries one, falling
+-- back to `class_id` joined to `public.classes.github_org`, lowercased on both sides because GitHub
+-- org names are case-insensitive and share one rate-limit bucket across spellings. Keying on
+-- `args.org` alone would drop that whole method out of the allocator's view, and since the read is
+-- FILTERED by the winning org, out of the allocator's view means never read at all. Anything that
+-- resolves to neither lands in the `(unresolved)` sentinel bucket, which competes for slots like
+-- any other org and therefore always drains. Work can be slow there. It can never be invisible.
 --
--- WHY THERE IS AN ADVISORY LOCK. "Do it in one statement" is necessary but NOT sufficient for this
--- allocator, and it is worth being precise about why. All the sub-statements of a single query see
--- ONE snapshot and cannot see each other's writes -- that is exactly what makes a single statement
--- safe for the message read (`FOR UPDATE SKIP LOCKED` re-checks under EvalPlanQual, so two callers
--- cannot be handed the same msg_id). But the ALLOCATION decision is an aggregate over
--- `async_worker_slots` -- "how many slots does org X already hold?" -- and two concurrent callers
--- taking their snapshots microseconds apart both count the same N, both conclude org X may have one
--- more, and then claim two DIFFERENT slot rows. `SKIP LOCKED` does not save us: it only makes them
--- avoid each other's rows, which is precisely the wrong outcome here. Per-org caps would be
--- exceeded under exactly the burst they exist to bound.
+-- WHY THERE IS AN ADVISORY LOCK. "Do it in one statement" is necessary but not sufficient here, and
+-- the reason is worth stating precisely. All the sub-statements of a single query see one snapshot
+-- and cannot see each other's writes, which is exactly what makes a single statement safe for the
+-- message read: `FOR UPDATE SKIP LOCKED` re-checks under EvalPlanQual, so two callers cannot be
+-- handed the same msg_id. The ALLOCATION decision is different. It is an aggregate over
+-- `async_worker_slots` asking how many slots an org already holds, and two concurrent callers
+-- taking their snapshots microseconds apart both count the same N, both conclude the org may have
+-- one more, and then claim two different slot rows. `SKIP LOCKED` does not help. It only makes them
+-- avoid each other's rows, which is the wrong outcome: the caps would be exceeded under exactly the
+-- burst they exist to bound.
 --
--- So the allocator is serialized per queue with `pg_advisory_xact_lock(1346850129, hashtext(queue))`
--- -- the two-integer lock space, which is disjoint from the single-bigint space the gradebook
--- functions use. The lock is held for the life of one RPC transaction: one aggregate (0.376 ms
--- measured on prod's queue) plus one slot UPDATE plus one bounded read of `n` rows. Callers
--- serialize, but each holds the lock for single-digit milliseconds while the WORK it then goes off
--- and does takes seconds of GitHub round trips. This is a throughput ceiling of order 10^2-10^3
--- claims/second against an offered load of a few claims/second.
+-- So the allocator runs under `pg_advisory_xact_lock(1346850129, 0)`, one global key rather than one
+-- per queue, because the budgets are counted across every pool and so the protected state spans
+-- queues. The lock is held for the life of one RPC transaction: one aggregate (0.376 ms measured on
+-- prod's queue), one slot UPDATE, one bounded read of `n` rows. Callers serialize, but each holds
+-- the lock for single-digit milliseconds while the work it then goes off and does takes seconds of
+-- GitHub round trips. That is a throughput ceiling of order 10^2 to 10^3 claims per second against
+-- an offered load of a few per second.
 --
--- BREADTH BEFORE DEPTH. The ORDER BY is `active ASC` first and unmet demand second, not the other
--- way round. That is the anti-starvation property and it is load-bearing: a class releasing 600
--- repos must not be able to take every slot while a class with 3 stragglers waits. With `active`
--- leading, every org holding work gets its FIRST slot before any org gets its second.
+-- POOLS ARE PER QUEUE, BUDGETS ARE NOT. Slot rows are keyed (queue_name, slot) so each queue owns
+-- an independent pool, but `global_cap` and `max_per_org` are counted over every live slot in every
+-- pool. An isolate draining `async_calls_low_priority` occupies one of the edge tier's
+-- `maxParallelism` admission slots and spends its org's GitHub quota exactly as one draining
+-- `async_calls` does, so a budget counted per pool would admit a full `global_cap` per queue and
+-- defeat both bounds.
+--
+-- BREADTH BEFORE DEPTH. The ORDER BY puts slots-already-held first and unmet demand second, not the
+-- other way round. That is the anti-starvation property, and the whole feature depends on it: a
+-- class releasing 600 repos must not take every slot while a class with 3 stragglers waits. With
+-- slots-held leading, every org with work gets its first slot before any org gets its second.
 
 -- ---------------------------------------------------------------------------------------------
 -- The slot pool
@@ -123,7 +131,8 @@ on conflict (queue_name, slot) do nothing;
 -- priority', ...)` finds no free slot and returns zero rows FOREVER -- which the worker cannot tell
 -- apart from an empty queue, so repo-analytics work would stop draining the moment per-org mode was
 -- enabled, with every liveness signal still green. That is precisely the failure shape
--- asyncWorkerTuning.ts exists to prevent, so this seed is load-bearing, not housekeeping.
+-- asyncWorkerTuning.ts exists to prevent, so this seed is required for correctness rather than
+-- housekeeping.
 --
 -- Why 16 rather than another 64: this queue is a FALLBACK path, drained only while the main queue
 -- is idle, so it can never usefully carry more leaseholders than the main queue's own ceiling --
@@ -146,6 +155,9 @@ grant select, insert, update, delete on table public.async_worker_slots to servi
 -- Claim a slot for the neediest eligible org and read that org's messages
 -- ---------------------------------------------------------------------------------------------
 
+-- The return type gains a `status` column, so the old function has to go rather than be replaced.
+drop function if exists pgmq_public.claim_org_slot_and_read(text, integer, integer, text, integer, integer, integer);
+
 create or replace function pgmq_public.claim_org_slot_and_read(
   queue_name text,
   sleep_seconds integer,
@@ -155,12 +167,12 @@ create or replace function pgmq_public.claim_org_slot_and_read(
   max_per_org integer,
   global_cap integer
 )
-returns table(org text, msg_id bigint, read_ct integer, enqueued_at timestamptz, vt timestamptz, message jsonb)
+returns table(status text, org text, msg_id bigint, read_ct integer, enqueued_at timestamptz, vt timestamptz, message jsonb)
 language plpgsql
 set search_path to ''
 as $function$
 declare
-  -- pgmq.format_table_name is not just convenience: it is the injection guard, rejecting a
+  -- pgmq.format_table_name is not just convenience. It is the injection guard, rejecting a
   -- queue_name containing $, ; or -- before it is ever interpolated with %I.
   v_qtable text := pgmq.format_table_name(queue_name, 'q');
   v_sql text;
@@ -177,19 +189,21 @@ begin
   if lease_ttl_seconds is null or lease_ttl_seconds < 1 then
     raise exception 'claim_org_slot_and_read: lease_ttl_seconds must be >= 1 (got %)', lease_ttl_seconds;
   end if;
-  -- A zero or negative budget is a legitimate "stop claiming" instruction (a caller draining the
-  -- pool down), not an error. Claim nothing and read nothing.
+
+  -- A zero or negative budget is a legitimate "stop claiming" instruction, not an error, so report
+  -- it as lack of capacity rather than raising.
   if max_per_org is null or max_per_org < 1 or global_cap is null or global_cap < 1 then
+    return query select 'no_capacity'::text, null::text, null::bigint, null::integer,
+                        null::timestamptz, null::timestamptz, null::jsonb;
     return;
   end if;
 
-  -- FAIL LOUD ON AN UNSEEDED POOL. An empty pool and an empty queue are indistinguishable in the
-  -- return value -- both are zero rows -- and that ambiguity is exactly how the missing
-  -- async_calls_low_priority pool turned into "drains nothing forever while every liveness signal
-  -- stays green". A queue with no pool at all is never a runtime state; it is a deployment error,
-  -- and a deployment error should arrive as an exception on the first call rather than as silence.
-  -- One index-only lookup on the (queue_name, slot) key, taken BEFORE the advisory lock so a
-  -- misconfigured caller cannot serialize anyone else while failing.
+  -- FAIL LOUD ON AN UNSEEDED POOL. An empty pool and an empty queue used to produce the same answer,
+  -- and that ambiguity is how the missing async_calls_low_priority pool became "drains nothing while
+  -- every liveness signal stays green". A queue with no pool at all is a deployment error rather
+  -- than a runtime state, so it arrives as an exception on the first call. One index-only lookup on
+  -- the (queue_name, slot) key, taken before the advisory lock so a misconfigured caller cannot
+  -- serialize anyone else while it fails.
   if not exists (select 1 from public.async_worker_slots s
                   where s.queue_name = lower(claim_org_slot_and_read.queue_name)) then
     raise exception 'claim_org_slot_and_read: no slot pool seeded for queue %, so this queue can '
@@ -197,53 +211,98 @@ begin
                     lower(claim_org_slot_and_read.queue_name);
   end if;
 
-  -- See the header: this is what makes the allocation aggregate safe against concurrent callers.
-  -- 1346850129 is 0x50474D51 ('PGMQ') in the two-integer advisory lock space.
-  perform pg_advisory_xact_lock(1346850129, hashtext(queue_name));
+  -- ONE GLOBAL LOCK, NOT ONE PER QUEUE, and the difference affects correctness rather than style.
+  -- The budgets this function enforces are counted across every pool (see `live` below), so the
+  -- state the lock protects spans queues and the lock has to span them too. A per-queue key would
+  -- let an allocator on async_calls and one on async_calls_low_priority read the same slot counts
+  -- at the same instant and both admit a leaseholder, which is precisely the read-then-act race the
+  -- lock exists to close. Keying on the queue name also made the lock sensitive to the caller's
+  -- capitalization, so 'Async_Calls' and 'async_calls' serialized separately against one pool.
+  -- 1346850129 is 0x50474D51 ('PGMQ') in the two-integer advisory lock space, which is disjoint
+  -- from the single-bigint space the gradebook functions use.
+  perform pg_advisory_xact_lock(1346850129, 0);
 
   v_sql := format($QUERY$
-    with demand as (
-        -- The whole allocation input, in ONE aggregate scan of the ready portion of the queue.
-        -- Joining on c.id::text rather than casting the envelope to bigint is deliberate twice
-        -- over: it cannot raise on a malformed class_id, and it puts the cast on `classes` (a few
-        -- hundred rows) instead of on every queued message.
-        select coalesce(c.github_org, '(unresolved)') as org, count(*)::int as ready
+    with ready as (
+        -- The partition key, defined ONCE. Everything downstream reads it from here rather than
+        -- recomputing it, because `demand` and `picked` disagreeing about which org a message
+        -- belongs to would mean claiming a slot for one org and then reading another org's work.
+        --
+        -- THREE decisions are packed into this expression:
+        --
+        -- 1. args.org FIRST. The handler calls GitHub against the org baked into the envelope, not
+        --    against whatever classes.github_org says today. If an instructor repoints a class at a
+        --    new org while envelopes are queued, attributing that in-flight work to the new org
+        --    charges the budget to an org no handler is going to call.
+        -- 2. classes.github_org as the FALLBACK, and it carries real traffic. args.org is missing
+        --    from about one envelope in seven (see the header for the measurement), and those are
+        --    not a random seventh: they are every sync_repo_permissions job. Note that a literal
+        --    percent sign cannot appear anywhere in this string, because the whole block is a
+        --    format() template. Joining on c.id::text rather than casting the
+        --    envelope to bigint cannot raise on a malformed class_id, and it puts the cast on
+        --    `classes` (a few hundred rows) instead of on every queued message.
+        -- 3. lower() over the whole thing. GitHub org names are case-insensitive and one class in
+        --    prod already stores a mixed-case github_org, so 'Khoury-CS' and 'khoury-cs' are one
+        --    org sharing one rate-limit bucket. Without the fold they would each draw a full
+        --    max_per_org allowance against that single bucket.
+        select q.msg_id,
+               lower(coalesce(
+                 nullif(q.message->'args'->>'org', ''),
+                 c.github_org,
+                 '(unresolved)')) as org
           from pgmq.%1$I q
           left join public.classes c on c.id::text = q.message->>'class_id'
          where q.vt <= clock_timestamp()
-         group by 1
+    ),
+    demand as (
+        select r.org, count(*)::int as ready from ready r group by 1
     ),
     live as (
-        -- Slots held by SOMEONE ELSE. Excluding our own holder is what lets a caller in a
-        -- claim/work/claim loop re-take its slot without being counted as its own competitor, and
-        -- without the loop appearing to leak a slot per iteration.
-        select s.slot, s.org
+        -- EVERY POOL, not just this queue's. Slot ROWS belong to a queue; the BUDGETS do not.
+        -- global_cap bounds resident isolates against the edge tier's maxParallelism of 8, and
+        -- max_per_org bounds concurrent handlers against one org's GitHub content quota. An isolate
+        -- draining async_calls_low_priority occupies an admission slot and spends that org's GitHub
+        -- quota exactly as one draining async_calls does. Counting per pool let each queue admit a
+        -- full global_cap independently, so both bounds this feature exists to respect could be
+        -- exceeded by a factor of the number of queues.
+        select s.org, s.holder
           from public.async_worker_slots s
-         where s.queue_name = $5
-           and s.expires_at > clock_timestamp()
-           and s.holder is distinct from $1
+         where s.expires_at > clock_timestamp()
     ),
     active as (
-        select l.org, count(*)::int as active from live l group by 1
+        -- a_others excludes us, so a caller looping claim/work/claim is not counted as its own
+        -- competitor. a_all includes us, because the target below needs the work already in flight.
+        select l.org,
+               count(*) filter (where l.holder is distinct from $1)::int as a_others,
+               count(*)::int as a_all
+          from live l group by 1
     ),
     winner as (
         select d.org
           from demand d
           left join active a on a.org = d.org
-         -- global budget first; an org is only eligible if it is below its own target
-         where (select count(*) from live) < $4
-           and coalesce(a.active, 0) < least(ceil(d.ready::numeric / $2), $3)
-         -- BREADTH BEFORE DEPTH. `active` leads; unmet demand only breaks ties among orgs that
-         -- hold the same number of slots. org name last, purely for determinism.
-         order by coalesce(a.active, 0) asc,
-                  least(ceil(d.ready::numeric / $2), $3) - coalesce(a.active, 0) desc,
+         where (select count(*) from live l2 where l2.holder is distinct from $1) < $4
+           -- target = ceil(ready/n) + slots already held, capped at max_per_org.
+           --
+           -- The `+ a_all` term is what stops an org being throttled by its own progress. `ready`
+           -- counts only visible messages, so each claim hides n of them: an org with 8 ready and
+           -- max_per_org 2 would see ready fall to 4 after its first claim, compute a target of 1,
+           -- and refuse the second slot it is entitled to. Adding back the n messages each active
+           -- slot is already working on makes the target a statement about the org's whole backlog
+           -- rather than about the part nobody has picked up yet. Bursts of 5 to 8, and the tail of
+           -- every larger burst, ran at half their configured allowance without it.
+           and coalesce(a.a_others, 0) < least(ceil(d.ready::numeric / $2) + coalesce(a.a_all, 0), $3)
+         -- BREADTH BEFORE DEPTH. Slots held leads; unmet demand only breaks ties among orgs holding
+         -- the same number. Org name last, purely for determinism.
+         order by coalesce(a.a_others, 0) asc,
+                  least(ceil(d.ready::numeric / $2) + coalesce(a.a_all, 0), $3) - coalesce(a.a_others, 0) desc,
                   d.org asc
          limit 1
     ),
     free_slot as (
-        -- queue_name travels with slot from here all the way into `claimed`: the key is
-        -- (queue_name, slot) and slot 7 exists once per queue, so a join on slot alone would claim
-        -- a row belonging to a different queue's pool.
+        -- Within THIS queue's pool. queue_name is carried through to `claimed` because the key is
+        -- (queue_name, slot) and slot 7 exists once per queue, so joining on slot alone would claim
+        -- a row out of a different pool.
         select s.queue_name, s.slot
           from public.async_worker_slots s
          where s.queue_name = $5
@@ -251,7 +310,7 @@ begin
            and exists (select 1 from winner)
          -- Prefer the slot we already hold, so a repeat caller overwrites its own row instead of
          -- taking a second one. `IS NOT DISTINCT FROM` rather than `=` because DESC sorts NULLs
-         -- FIRST, which would otherwise rank an unheld slot above our own.
+         -- first, which would otherwise rank an unheld slot above our own.
          order by (s.holder is not distinct from $1) desc, s.slot asc
          limit 1
          for update of s skip locked
@@ -268,18 +327,19 @@ begin
         returning s.org
     ),
     picked as (
-        -- pgmq.read's CTE, with one extra predicate. Same ORDER BY msg_id, same LIMIT, same
-        -- FOR UPDATE SKIP LOCKED -- but `OF q`, never bare, because the join to classes would
-        -- otherwise make Postgres try to lock the nullable side of an outer join.
+        -- pgmq.read's CTE with one extra predicate. Same ORDER BY msg_id, same LIMIT, same
+        -- FOR UPDATE SKIP LOCKED, but `OF q` rather than bare: the semijoin below means the org
+        -- expression is evaluated once in `ready` instead of again here, and locking is restricted
+        -- to the queue table either way.
         --
-        -- If `claimed` produced no row the scalar subquery is NULL, the equality is NULL for every
-        -- row, and nothing is picked. That is the "no org qualified / no slot free" path: zero
-        -- rows out, nothing claimed.
+        -- If `claimed` produced no row the scalar subquery is NULL, every comparison is NULL, and
+        -- nothing is picked. That is the "no org qualified or no slot free" path, and it claims
+        -- nothing.
         select q.msg_id
           from pgmq.%3$I q
-          left join public.classes c on c.id::text = q.message->>'class_id'
          where q.vt <= clock_timestamp()
-           and coalesce(c.github_org, '(unresolved)') = (select k.org from claimed k)
+           and q.msg_id in (select r.msg_id from ready r
+                             where r.org = (select k.org from claimed k))
          order by q.msg_id asc
          limit $2
          for update of q skip locked
@@ -292,8 +352,18 @@ begin
          where m.msg_id = p.msg_id
         returning m.msg_id, m.read_ct, m.enqueued_at, m.vt, m.message
     )
-    select (select k.org from claimed k), d.msg_id, d.read_ct, d.enqueued_at, d.vt, d.message
+    select 'claimed'::text, (select k.org from claimed k),
+           d.msg_id, d.read_ct, d.enqueued_at, d.vt, d.message
       from drained d
+    union all
+    -- Zero message rows is two different answers and the caller has to tell them apart. An empty
+    -- `demand` means the queue has no visible work, so the worker should move on to the next queue
+    -- in its priority order. A non-empty `demand` means work is waiting and this caller has no room
+    -- for it, so moving on would leave urgent repo work backlogged while the worker drains
+    -- analytics. `demand` is already computed, so this costs nothing.
+    select case when exists (select 1 from demand) then 'no_capacity' else 'no_demand' end,
+           null::text, null::bigint, null::integer, null::timestamptz, null::timestamptz, null::jsonb
+     where not exists (select 1 from drained)
   $QUERY$,
     v_qtable,
     make_interval(secs => lease_ttl_seconds),
@@ -302,9 +372,9 @@ begin
     make_interval(secs => sleep_seconds)
   );
 
-  -- lower(queue_name) for the slot lookup, because pgmq.format_table_name lowercases and pgmq.create
-  -- lowercases, so 'Async_Calls' would find the queue TABLE but match no slot rows -- which would
-  -- look exactly like "the pool is exhausted" and silently claim nothing forever.
+  -- lower(queue_name) for the slot lookup, because pgmq.format_table_name and pgmq.create both
+  -- lowercase. 'Async_Calls' would otherwise find the queue TABLE but match no slot rows, which
+  -- looks exactly like an exhausted pool and would claim nothing forever.
   return query execute v_sql using holder, n, max_per_org, global_cap, lower(queue_name);
 end;
 $function$;
@@ -316,7 +386,10 @@ comment on function pgmq_public.claim_org_slot_and_read(text, integer, integer, 
   '(breadth before depth) then by unmet demand descending; global_cap bounds the whole queue. '
   'Messages whose class_id does not resolve to a classes.github_org are bucketed under the '
   '(unresolved) sentinel so they still drain. Returns zero rows and claims nothing when no org '
-  'qualifies or no slot is free. Serialized per queue by an advisory transaction lock.';
+  'qualifies or no slot is free, exactly one row is returned with status no_demand (the queue has '
+  'no visible work) or no_capacity (work is waiting but the caps are full), so a caller can tell '
+  'the two apart before moving to a lower-priority queue. Serialized by one global advisory '
+  'transaction lock, because the caps are counted across every queue''s pool.';
 
 -- ---------------------------------------------------------------------------------------------
 -- Lease maintenance
@@ -338,14 +411,14 @@ drop function if exists pgmq_public.release_org_slot(text);
 --
 -- What is not fine is what a holder-scoped renew then does to the abandoned one. `renew(holder)`
 -- would extend EVERY live lease bearing that name, so the slot the worker rotated AWAY from gets
--- its TTL pushed forward on every heartbeat, forever. It becomes a phantom leaseholder: it consumes
--- a `global_cap` slot it will never use and, because the allocator counts it in `active`, it pins
--- that org below its target for as long as the worker lives. Nothing decays, nothing alerts, and
--- the queue just runs slower than its configuration says it should.
+-- its TTL pushed forward on every heartbeat, forever. The result is an abandoned lease that never
+-- expires: it occupies a `global_cap` slot nobody will use and, because the allocator counts it,
+-- holds that org below its target for as long as the worker lives. Nothing expires it and nothing
+-- alerts on it. The queue simply runs slower than its configuration says it should.
 --
 -- Releasing before rotating -- fixing it in the caller -- is worth doing, but it CANNOT be the only
 -- mechanism, and the difference is not stylistic. Under holder scoping a forgotten release is
--- UNBOUNDED, because renew actively resurrects the phantom on every heartbeat. Under queue scoping
+-- UNBOUNDED, because renew revives the abandoned lease on every heartbeat. Under queue scoping
 -- the same forgotten release costs exactly one TTL, which is the identical bound the design already
 -- accepts for an isolate that crashes without releasing. So queue scoping turns a correctness
 -- requirement on the caller into a latency optimisation, which is the right place for that line:
@@ -389,9 +462,9 @@ $function$;
 comment on function pgmq_public.renew_org_slot(text, text, integer) is
   'Extend this holder''s lease on queue_name by lease_ttl_seconds. Scoped by (queue_name, holder): '
   'renewing one queue''s lease never extends the lease the same holder has in another queue''s pool, '
-  'so a worker that rotates between queues cannot keep a phantom leaseholder alive. Returns false -- '
-  'and changes nothing -- if the holder holds no CURRENTLY LIVE slot in that queue, so a lapsed '
-  'holder cannot resurrect a lease another isolate may already have taken.';
+  'so a worker that rotates between queues cannot keep an abandoned lease alive. Returns false, and '
+  'changes nothing, if the holder holds no CURRENTLY LIVE slot in that queue, so a lapsed holder '
+  'cannot resurrect a lease another isolate may already have taken.';
 
 create or replace function pgmq_public.release_org_slot(queue_name text, holder text)
 returns void

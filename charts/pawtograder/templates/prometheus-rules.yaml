@@ -435,6 +435,27 @@ spec:
               The async dead-letter queue in {{ $ns }} has exceeded 200 for 1m —
               jobs are failing repeatedly. Inspect the DLQ and the failing job class.
         # Async worker queue has a large backlog — enqueue rate outpaces workers.
+        #
+        # This rule has the SAME structural blind spot as PawtograderAsyncQueueStuck and
+        # PawtograderQueueOldestMessageAging below: it fires on a level, and a bulk enqueue drives
+        # the level up regardless of worker health. It deliberately does NOT carry the drain-rate
+        # guard those two got, for two reasons.
+        #
+        # First, nothing scheduled reaches it. The largest assignment release on the calendar is 684
+        # messages against a threshold of 1000, and releases are per class, in one transaction.
+        # Second, and the reason this is not just "we got lucky on the numbers": at a depth of 1000
+        # the guard's own premise stops holding. A healthy drain was measured at ~8 msg/min on
+        # 2026-09-13 (never below 7.27 msg/min in any rolling 15m window), so 1000 queued messages
+        # means over two hours to clear even with every worker healthy. That is a capacity signal
+        # worth paging on whether or not the queue is moving, and it is the only rule that carries
+        # it. Suppressing it on drain rate would delete the "the platform cannot absorb this batch"
+        # alarm and leave nothing in its place.
+        #
+        # Revisit when either becomes true: a single class releases more than ~1000 repos, or two
+        # large releases are scheduled close enough to overlap in the queue. Both make this fire on
+        # a healthy system. The fix then is the same `unless deriv(...)` guard used below — but with
+        # a HIGHER floor, because at that depth a healthy fleet drains considerably faster than the
+        # 2 msg/min that separates a stall from a 600-message release.
         - alert: PawtograderAsyncQueueBacklog
           expr: |
             max by (namespace) (pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 1000
@@ -448,17 +469,34 @@ spec:
               enqueue rate is outpacing worker drain. Check worker health/scaling.
         # Async worker queue is not draining — a small backlog that persists for an
         # hour means stuck/starved workers rather than a burst.
+        #
+        # "Rather than a burst" was the assumption, and a bulk enqueue breaks it the same way it
+        # breaks PawtograderQueueOldestMessageAging below (read that comment for the measured
+        # numbers). A release of 600 messages draining at the healthy ~8 msg/min observed on
+        # 2026-09-13 stays above 10 for ~75 minutes, so `> 10 for 1h` pages on a release that is
+        # working perfectly — and four releases of 574-684 messages are already on the calendar.
+        # Depth alone cannot tell a big batch from a stuck worker; the drain rate can.
+        #
+        # Same guard, same floor (2 msg/min, 4x above the 0.66 msg/min of the 2026-09-07 stall and
+        # 4x below a healthy release), and the same reason it must be `unless` and never `and`: the
+        # chart ships before the edge functions do, and with `and` a missing pawtograder_queue_depth
+        # would make this critical alert stop firing with no signal that it had. `unless` degrades
+        # to today's behaviour instead. deriv() is per-second, hence `* 60`; draining is negative.
+        # queue="async_calls" is the labelled twin of pawtograder_async_queue_size on the left.
         - alert: PawtograderAsyncQueueStuck
           expr: |
             max by (namespace) (pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 10
+            unless
+            max by (namespace) (deriv(pawtograder_queue_depth{namespace="{{ $ns }}", queue="async_calls"}[15m])) * 60 < -{{ .Values.monitoring.prometheusRules.queueDrainMessagesPerMinute | default 2 }}
           for: 1h
           labels:
             severity: critical
           annotations:
             summary: "Pawtograder async queue is not draining"
             description: >-
-              The async worker queue in {{ $ns }} has held above 10 for 1h — the
-              workers are stuck or starved rather than handling a burst. Check
+              The async worker queue in {{ $ns }} has held above 10 for 1h while draining slower than
+              {{ .Values.monitoring.prometheusRules.queueDrainMessagesPerMinute | default 2 }} msg/min
+              — the workers are stuck or starved rather than working through a bulk release. Check
               worker liveness.
         # Notification email backlog. This queue had no gauge at all until the metrics function
         # started reporting it, which is why an email pipeline that never delivered anything in
@@ -476,12 +514,50 @@ spec:
               {{ .Values.monitoring.prometheusRules.notificationEmailBacklog | default 500 }} for 15m.
               Check that SMTP is configured and reachable — with EMAIL_ENABLED set, a
               misconfiguration reports itself, but an unreachable relay still backs up here.
-        # Oldest-message age, one rule for every queue.
+        # Oldest-message age, one rule for every queue, with a drain-rate guard.
         #
         # Depth thresholds have to be tuned against enrollment and the deadline calendar, so they
-        # drift out of calibration and get raised until they stop firing. Age does not: a queue
-        # whose oldest message has been waiting twenty minutes is broken at any scale, in any week
-        # of the term. This is the queue signal that needs no seasonal retuning.
+        # drift out of calibration and get raised until they stop firing. Age is free of that: a
+        # queue whose oldest message has been waiting twenty minutes is usually broken at any scale,
+        # in any week of the term.
+        #
+        # This comment used to claim age needed no retuning at all and was "broken at any scale".
+        # That is FALSE for a bulk enqueue, and the rule paged on a healthy release because of it.
+        # When N messages are inserted in one transaction and drained at rate R, the oldest message's
+        # age climbs to N/R by arithmetic, however healthy the workers are — the alert measures the
+        # size of the batch, not the health of the drain. Assignment release is exactly that shape.
+        # Measured in production on 2026-09-13: CS 2000 enqueued 242 create_repo messages at
+        # 04:00:00 UTC and they were fully drained by 04:30:51 at ~8 msg/min — 242/242 repos created,
+        # zero errors, empty DLQ. With `> 1200` held `for: 10m` the rule pages at 30 minutes, so that
+        # release cleared the bar by 51 seconds and woke someone for a system doing its job. Bigger
+        # releases are already scheduled (302, 574, 600, 600, 684 messages), and every one of them
+        # would page.
+        #
+        # So the discriminator is the DRAIN RATE, not the age. Measured separation, same queue:
+        #   healthy bulk release  2026-09-13  242 msgs / 30m51s  = ~8 msg/min
+        #   genuine stall         2026-09-07  58 msgs / 88m      = ~0.66 msg/min  (a TRUE POSITIVE:
+        #                                     CS 4530, workers wedged, the page was correct)
+        # A 12x gap, so the floor sits at 2 msg/min — 4x above the stall it must still catch, 4x
+        # below the healthy release it must stop paging on. Configurable as
+        # monitoring.prometheusRules.queueDrainMessagesPerMinute.
+        #
+        # `unless`, NOT `and`. Do not "simplify" this. The chart and the edge functions deploy
+        # independently, so there is a window in which this rule exists and pawtograder_queue_depth
+        # does not. With `and`, an absent right-hand side makes the whole expression empty and the
+        # alert SILENTLY STOPS FIRING — a fail-open regression of the one critical queue alert,
+        # which is the exact failure mode the postgres-availability comment above exists to prevent.
+        # With `unless`, an absent right-hand side subtracts nothing: the alert degrades to precisely
+        # today's behaviour, noisy but loud. Fail-loud is the only acceptable direction here.
+        #
+        # deriv() over [15m], not delta()/increase(): deriv() is a least-squares fit, so it is robust
+        # to the scrape noise of a gauge sampled from several pods, and increase() is outright wrong
+        # on a gauge for the counter-reset reason spelled out under PawtograderDiscordDLQGrowing
+        # below. deriv() returns a PER-SECOND rate, hence the `* 60` to compare against a
+        # messages-per-minute floor; draining is a falling gauge, so the comparison is NEGATIVE.
+        # The depth series is pawtograder_queue_depth{queue="..."}, added to metrics/index.ts as a
+        # labelled parallel to the age gauge precisely so the two can be joined — the per-queue
+        # depth gauges (pawtograder_async_queue_size and friends) are separate metric NAMES with no
+        # queue label and cannot be.
         #
         # DLQs are excluded. A dead-letter queue is where poison messages go to STAY -- nothing
         # drains it on a schedule -- so its oldest message is older than any threshold within hours
@@ -499,6 +575,8 @@ spec:
         - alert: PawtograderQueueOldestMessageAging
           expr: |
             max by (namespace, queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue!~".*_dlq|async_calls_low_priority"}) > {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}
+            unless
+            max by (namespace, queue) (deriv(pawtograder_queue_depth{namespace="{{ $ns }}", queue!~".*_dlq|async_calls_low_priority"}[15m])) * 60 < -{{ .Values.monitoring.prometheusRules.queueDrainMessagesPerMinute | default 2 }}
           for: 10m
           labels:
             severity: critical
@@ -506,8 +584,11 @@ spec:
             summary: "Pawtograder queue {{`{{ $labels.queue }}`}} is not draining"
             description: >-
               The oldest message in queue {{`{{ $labels.queue }}`}} ({{ $ns }}) has been waiting over
-              {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}s. Unlike a
-              depth alert this does not depend on volume — the queue has genuinely stopped moving.
+              {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}s AND the queue
+              is draining slower than
+              {{ .Values.monitoring.prometheusRules.queueDrainMessagesPerMinute | default 2 }} msg/min,
+              so this is not a bulk release working through a backlog — the queue has genuinely
+              stopped moving.
         # Discord dead-letter queue, as a RATE rather than a level.
         #
         # The gauge was already exported and had no rule at all; only the GitHub queue was watched.

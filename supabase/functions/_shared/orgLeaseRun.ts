@@ -83,6 +83,21 @@ import { type EnvReader } from "./SentryContext.ts";
  * (bounded only by the stall guard and the isolate lifetime), and a run that finds nothing gets a
  * short wall-clock idle budget and then returns. The cost is idle latency, bounded by the cron
  * period, and it is the same trade workerRun.ts's bounded mode makes for the same reason.
+ *
+ * "FINDS NOTHING" SPLITS IN TWO, and they get different answers:
+ *
+ *   * `no_demand` — the queue is genuinely empty. Idle on the budget, because nobody else is
+ *     working this queue either and a resident isolate is the lowest-latency way to pick up whatever
+ *     arrives next. Waiting is useful.
+ *   * `no_capacity` — the queue has work and every slot is taken. RETURN IMMEDIATELY. The fleet is
+ *     at its configured concurrency by definition, so this isolate cannot add throughput, only
+ *     occupancy; and the event it would be waiting for is a whole batch completing, which outlasts
+ *     the idle budget anyway. Waiting is not useful, it is just a held admission slot.
+ *
+ * Once `globalCap` is reached this is the STEADY STATE, not an edge case — the cron spawns 2
+ * isolates a minute regardless, so several will hit `no_capacity` every minute for the length of a
+ * release. That is precisely why it must not sleep-and-retry: re-entry has to stay rate-limited by
+ * the cron rather than by a loop in here.
  */
 
 /**
@@ -102,6 +117,33 @@ export type OrgQueueMessage<T = unknown> = {
   vt: string;
   message: T;
 };
+
+/**
+ * A raw row from `claim_org_slot_and_read`, which no longer returns only messages.
+ *
+ * ZERO ROWS USED TO MEAN TWO DIFFERENT THINGS and the worker could not tell them apart: "this queue
+ * has no ready work" and "this queue has ready work but every slot is taken". Those want opposite
+ * responses — the first should move on to the fallback queue, the second must NOT, because the main
+ * queue is backed up and the fleet is already draining it at full configured concurrency. Treating
+ * the second as the first sent isolates off to do repo-analytics work with GitHub capacity the
+ * urgent queue needed.
+ *
+ * So a claim never comes back genuinely empty now. Either every row is a message with
+ * `status = 'claimed'`, or there is exactly ONE row carrying `no_demand` / `no_capacity` and NULLs
+ * everywhere else.
+ */
+export type OrgSlotRow<T = unknown> = {
+  status: string | null;
+  org: string | null;
+  msg_id: number | null;
+  read_ct: number | null;
+  enqueued_at: string | null;
+  vt: string | null;
+  message: T | null;
+};
+
+/** What one `claim_org_slot_and_read` call against one queue turned out to be. */
+export type OrgClaimStatus = "claimed" | "no_demand" | "no_capacity";
 
 /** A claimed slot and the batch that came with it. */
 export type OrgClaim<T = unknown> = {
@@ -134,7 +176,7 @@ export interface OrgSlotRpc {
     lease_ttl_seconds: number;
     max_per_org: number;
     global_cap: number;
-  }): Promise<RpcResult<OrgQueueMessage[]>>;
+  }): Promise<RpcResult<OrgSlotRow[]>>;
   // `queue_name` leads on all three, matching claim_org_slot_and_read. Renewal and release are
   // scoped to ONE pool: renewing the queue we are draining must not extend a lease the same holder
   // still has in another queue's pool, or an abandoned slot would be resurrected on every heartbeat
@@ -154,11 +196,16 @@ export interface OrgLeaseRun {
   /** False once the slot is lost, the idle budget is spent, or the run gave up on the RPC. */
   shouldContinue(): boolean;
   /**
-   * Claim a slot and read that org's messages. `null` means "nothing to do right now" — either the
-   * queues are empty or there is no slot headroom; the two are indistinguishable from here by
-   * design, and both are handled the same way. Throws when the RPC itself failed.
+   * Claim a slot and read that org's messages.
+   *
+   * `null` means nothing was claimed, and the two reasons are NOT equivalent any more — check
+   * `shouldContinue()` afterwards. `no_demand` on every queue leaves the run alive and idling;
+   * `no_capacity` ENDS it, because the fleet is already at its configured concurrency and this
+   * isolate cannot add throughput, only occupancy. Throws when the RPC itself failed.
    */
   claim(): Promise<OrgClaim | null>;
+  /** The status of the last claim attempt, for observability. */
+  lastOutcome(): OrgClaimStatus | null;
   /** Call once per loop iteration. Renews when due; ends the run if the slot is gone. */
   heartbeat(): Promise<void>;
   /** Called when a claim found no work. Returns whether to keep looping. */
@@ -283,11 +330,14 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
   const holder = `${leaseScope}:${opts.name}:${crypto.randomUUID()}`;
 
   /**
-   * Every queue this run has SENT a claim to — recorded before the call, not after it succeeds,
-   * because a claim whose response was lost may still have committed a row we never learned about.
-   * Exit releases every one of them; there are at most `queueNames.length` (two today).
+   * Queues this run may own a row in. A queue goes in BEFORE its claim is sent, because a claim
+   * whose response was lost may still have committed a row we never learned about, and comes back
+   * out as soon as the server tells us definitively that it claimed nothing there. Exit releases
+   * whatever is left; there are at most `queueNames.length` entries (two today).
    */
   const touchedQueues = new Set<string>();
+  /** Queues a claim has actually returned messages from. A subset of `touchedQueues`. */
+  const claimedQueues = new Set<string>();
 
   opts.scope?.setTag("worker_run_mode", "org_leased");
   opts.scope?.setTag("worker_lease_scope", leaseScope);
@@ -298,13 +348,23 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
   /** We believe the server has a slot row for us. Only ever set from a claim that returned rows. */
   let held = false;
   let heldOrgValue: string | null = null;
-  /** Which pool the held slot is in, and therefore which holder id renewal must target. */
+  /** Which pool the held slot is in, and therefore which queue renewal must target. */
   let heldQueueName: string | null = null;
+  /**
+   * Bumped whenever the IDENTITY of the held lease changes — a rotation onto another queue, or
+   * giving the slot up. An in-flight renewal records this and refuses to act on a result that
+   * arrived after its lease went away. Re-claiming the SAME queue deliberately does not bump it:
+   * that is the same lease, so a renewal in flight for it is still meaningful, and bumping would
+   * throw away a renewal on every iteration of a busy drain.
+   */
+  let leaseGeneration = 0;
   let lastRenewAt = now();
   /** Last time the LOOP called in. Distinct from `lastRenewAt`, which the timer also moves. */
   let lastProgressAt = now();
   /** Set on the first idle poll, cleared whenever work is found. */
   let idleDeadline: number | null = null;
+  /** What the most recent claim attempt resolved to. Observability only; nothing branches on it. */
+  let lastClaimOutcome: OrgClaimStatus | null = null;
   let consecutiveClaimErrors = 0;
   /**
    * Set when the claim RPC failed in a way retrying cannot fix: the function is missing (deploy
@@ -351,6 +411,7 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
         return false;
       }
       touchedQueues.delete(queueName);
+      claimedQueues.delete(queueName);
       return true;
     } catch (e) {
       opts.scope?.setTag("org_slot_release", "failed");
@@ -367,6 +428,9 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
     held = false;
     heldOrgValue = null;
     heldQueueName = null;
+    // Any renewal in flight was issued against the lease we are dropping, so its answer must not
+    // land on whatever this run does next.
+    leaseGeneration++;
     stopRenewTimer();
     for (const queueName of [...touchedQueues]) {
       await releaseQueue(queueName, reason);
@@ -397,15 +461,40 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
       return;
     }
 
+    // WHICH LEASE THIS RENEWAL IS ABOUT, captured before the await.
+    //
+    // The renewal timer fires independently of the loop, so a renewal can be in flight while
+    // `claim()` rotates this run onto the other queue. The renewal was issued for the OLD queue;
+    // rotation then releases that row; the RPC finds nothing live and returns false — and without
+    // this guard that false was applied to the state of the NEW lease, marking a slot we had just
+    // claimed as lost, stopping its renewal timer, and letting it expire while its batch was still
+    // running. Another leaseholder then enters the same org and the per-org cap is exceeded, which
+    // is the one invariant this whole feature exists to hold.
+    //
+    // A generation counter rather than a lock around claim-and-renew: the lock would have to be
+    // held across `claim()`, which awaits a network round trip and a whole batch, and blocking
+    // renewal behind that is exactly what the independent timer exists to prevent — a long batch
+    // would let the lease lapse. The counter is a single comparison and its rule is local and
+    // total: A RESULT MAY ONLY MUTATE THE LEASE IT WAS ISSUED AGAINST.
+    const issuedForQueue = heldQueueName;
+    const issuedGeneration = leaseGeneration;
+
     try {
       // THE HELD QUEUE, never "all of them". If this run also has a lease in the other pool — a
       // rotation whose eager release did not land — that lease is meant to LAPSE, and renewing it
       // here would resurrect it on every heartbeat and pin an org nobody is draining.
       const res = await opts.rpc.renew({
-        queue_name: heldQueueName,
+        queue_name: issuedForQueue,
         holder,
         lease_ttl_seconds: ttlSeconds
       });
+      if (issuedGeneration !== leaseGeneration) {
+        // The lease moved while this was in flight. Whatever the server said describes a lease this
+        // run no longer has, so it says nothing about the one it does. Drop it — including
+        // `lastRenewAt`, which would otherwise claim the CURRENT lease was renewed just now and
+        // suppress the next real renewal.
+        return;
+      }
       if (res.error) {
         // The lease and the queue are the same database. A renew that cannot reach it means the
         // claim and the archive cannot either, so this isolate has nothing useful left to do;
@@ -436,6 +525,9 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
         return;
       }
     } catch (e) {
+      // Same staleness rule as the success path: a throw from a renewal for a lease we have since
+      // left says nothing about the one we hold now.
+      if (issuedGeneration !== leaseGeneration) return;
       finished = true;
       held = false;
       heldOrgValue = null;
@@ -464,8 +556,19 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
     }, renewEvery);
   };
 
-  const claimOnce = async (queueName: string): Promise<OrgQueueMessage[]> => {
-    let res: RpcResult<OrgQueueMessage[]>;
+  /**
+   * One claim against one queue, reduced to an outcome.
+   *
+   * CLAIMED ROWS ARE IDENTIFIED BY `msg_id`, NOT BY `status`. That is deliberate: it is correct
+   * under the current contract (status rows carry NULLs everywhere but `status`) AND under the
+   * previous one, where message rows had no `status` column at all. Keying off the status string
+   * would mean that an image reaching a database whose migration had not been applied yet would see
+   * `status === undefined` on real message rows, drop a batch whose visibility timeout had already
+   * been bumped, and silently defer that work until the VT expired. Deploy skew must not be able to
+   * lose messages.
+   */
+  const claimOnce = async (queueName: string): Promise<{ status: OrgClaimStatus; messages: OrgQueueMessage[] }> => {
+    let res: RpcResult<OrgSlotRow[]>;
     // Recorded BEFORE the call, not after it succeeds: a claim whose response never arrives may
     // still have committed a row, and exit has to be able to clean that up.
     touchedQueues.add(queueName);
@@ -513,7 +616,25 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
       }
       throw new OrgClaimError(res.error.message ?? `rpc error ${res.error.code ?? "unknown"}`, queueName);
     }
-    return res.data ?? [];
+
+    const rows = res.data ?? [];
+    const messages = rows.filter((r): r is OrgSlotRow & OrgQueueMessage => r.msg_id !== null && r.msg_id !== undefined);
+    if (messages.length > 0) {
+      claimedQueues.add(queueName);
+      return { status: "claimed", messages };
+    }
+
+    // Nothing was claimed here, and the server has told us so definitively — so unlike the
+    // lost-response case, we KNOW no row was committed for us on this call. Drop the queue from the
+    // release-on-exit set, but only if an EARLIER claim did not already take a slot here: that row
+    // is untouched by a claim that finds nothing, and it is still ours to give back.
+    if (!claimedQueues.has(queueName)) touchedQueues.delete(queueName);
+
+    // An unrecognised or absent status resolves to `no_demand`, which is what zero rows meant before
+    // the status column existed. That is the conservative reading: it advances to the next queue
+    // exactly as the old code did, where reading it as `no_capacity` would stop a worker draining
+    // against a database that simply has not been migrated yet.
+    return { status: rows[0]?.status === "no_capacity" ? "no_capacity" : "no_demand", messages: [] };
   };
 
   return {
@@ -521,6 +642,7 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
     holder,
     heldOrg: () => heldOrgValue,
     heldQueue: () => heldQueueName,
+    lastOutcome: () => lastClaimOutcome,
     shouldContinue: () => !finished,
 
     claim: async () => {
@@ -542,9 +664,9 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
       // in which this run owns two rows, which over-counts `global_cap` rather than under-counting
       // it, and being briefly too conservative is the safe direction.
       for (const queueName of opts.queueNames) {
-        let rows: OrgQueueMessage[];
+        let outcome: { status: OrgClaimStatus; messages: OrgQueueMessage[] };
         try {
-          rows = await claimOnce(queueName);
+          outcome = await claimOnce(queueName);
         } catch (e) {
           consecutiveClaimErrors++;
           if (fatalClaimError !== null || consecutiveClaimErrors >= maxClaimErrors) {
@@ -557,12 +679,49 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
           throw e;
         }
 
-        if (rows.length === 0) continue;
+        lastClaimOutcome = outcome.status;
 
+        // NO_CAPACITY IS NOT "NOTHING TO DO", AND MUST NOT FALL THROUGH. This queue has ready work;
+        // the fleet is simply already draining it at the configured concurrency. Advancing to
+        // `async_calls_low_priority` here would send this isolate off to do repo-analytics work with
+        // GitHub capacity the backed-up queue needs — the precise inversion the status column was
+        // added to make visible.
+        if (outcome.status === "no_capacity") {
+          // Whatever slot we held is one this pass did not renew our claim on, and the org we were
+          // draining evidently has no more ready work; give it back rather than pin it.
+          if (held) await releaseSlot("no_capacity");
+          // AND END THE RUN, rather than sleeping and re-polling. Four reasons, and the last is the
+          // one that makes this not a spin loop:
+          //   * the fleet is at its configured maximum BY DEFINITION, so another isolate cannot add
+          //     throughput, only occupancy — and occupancy is an admission slot, which is the
+          //     resource workerRun.ts exists to protect;
+          //   * what it would be waiting for is a whole batch finishing, which at n=4 and a 23.1s
+          //     p50 is tens of seconds to minutes — longer than the idle budget, so a polling
+          //     isolate would usually burn the whole budget and exit having done nothing anyway;
+          //   * re-entry is cheap and automatic: pg_cron spawns 2 isolates a minute, so the retry
+          //     costs at most ~30s, the same order as the batch it is waiting on;
+          //   * and re-entry is RATE-LIMITED BY THE CRON, not by this code. Ending the run is
+          //     terminal; nothing here loops. A sleep-and-retry is what could spin once several
+          //     isolates a minute start hitting this, and at a saturated cap they will — this is
+          //     the steady state, not an edge case.
+          finished = true;
+          opts.scope?.setTag("org_slot", "no_capacity");
+          opts.scope?.setTag("org_slot_queue", queueName);
+          return null;
+        }
+
+        if (outcome.status === "no_demand") continue;
+
+        const rows = outcome.messages;
         const previousQueue = heldQueueName;
         consecutiveClaimErrors = 0;
         idleDeadline = null;
         held = true;
+        // A CHANGE OF QUEUE IS A CHANGE OF LEASE. Bumping here is what lets an in-flight renewal
+        // issued for the queue we are leaving recognise that its answer no longer applies. Claiming
+        // the SAME queue again does not bump: that is the same lease, and invalidating a renewal on
+        // every iteration of a busy drain would throw away renewals we need.
+        if (heldQueueName !== queueName) leaseGeneration++;
         heldQueueName = queueName;
         // RE-READ THE ORG EVERY TIME; do not assume a leaseholder keeps the org it started with.
         // A holder holds at most one slot, and a repeat claim prefers re-taking the slot it already
@@ -596,11 +755,15 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
         return { org: heldOrgValue, queueName, messages: rows };
       }
 
-      // Zero rows everywhere means no slot was claimed — and, importantly, that the slot we were
-      // already holding was NOT touched either: the SQL only writes the slot row when an org
-      // qualifies, so a holder that stops finding work keeps a live lease until its TTL unless it
-      // says otherwise. Releasing here is what keeps "holds a slot" and "is draining" from drifting
-      // apart, and it returns the org's headroom to the fleet now rather than in up to one TTL.
+      // `no_demand` on every queue: there is genuinely no ready work anywhere. Note that the slot we
+      // were already holding was NOT touched by any of those calls — the SQL only writes the slot row
+      // when an org qualifies — so a holder that stops finding work keeps a live lease until its TTL
+      // unless it says otherwise. Releasing here is what keeps "holds a slot" and "is draining" from
+      // drifting apart, and it returns the org's headroom to the fleet now rather than one TTL later.
+      //
+      // Unlike `no_capacity` this does NOT end the run: nobody else is working this queue, so a
+      // resident isolate is the lowest-latency way to pick up whatever arrives next, and the idle
+      // budget bounds how long it waits.
       if (held) await releaseSlot("no_work");
       idleDeadline ??= now() + idleBudget;
       return null;
@@ -613,6 +776,11 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
     },
 
     onIdle: async () => {
+      // A run that is already over must not spend the idle sleep first. `no_capacity` ends the run
+      // from inside `claim()`, and the caller's loop reaches `onIdle` before it re-checks
+      // `shouldContinue()`, so without this the isolate would hold an admission slot for another
+      // `idleSleepMs` on the one path whose entire point is to stop holding one.
+      if (finished) return false;
       await sleep(opts.idleSleepMs);
       markProgress();
       if (held) await renew();

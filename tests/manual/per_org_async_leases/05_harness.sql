@@ -49,7 +49,9 @@ create table harness.claims (
 
 -- Back to a clean slate between scenarios: empty queue, no leases, no recorded deliveries.
 -- Clears EVERY queue's pool, not just p_queue's, so a scenario can never inherit a live lease from
--- the previous one by way of a second pool.
+-- the previous one by way of a second pool. It also clears harness.claims, which the comment always
+-- promised and the body did not do: several scenarios assert absolute delivery counts, so leaving
+-- rows behind made 10_scenarios.sql fail on a second run unless 05_harness.sql was reapplied first.
 create or replace function harness.reset(p_queue text default 'async_calls')
 returns void language plpgsql as $$
 begin
@@ -57,6 +59,7 @@ begin
   update public.async_worker_slots
      set org = null, holder = null, claimed_at = null, expires_at = '-infinity';
   delete from harness.slot_log;
+  delete from harness.claims;
 end $$;
 
 -- Enqueue p_count envelopes shaped like the real ones: class_id always present, args.org only

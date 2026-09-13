@@ -59,7 +59,7 @@ begin
 end $$;
 
 -- Finish the drain single-threaded, to show the storm left nothing stranded: no message became
--- unreachable because its org lost its slot, and the (unresolved) bucket is not a black hole.
+-- unreachable because its org lost its slot, and the (unresolved) bucket drains like any other.
 do $$
 declare
   i int;
@@ -77,7 +77,8 @@ begin
   -- everything, just breadth-first across orgs instead of in msg_id order.
   for i in 1..2000 loop
     select count(*) into v_rows
-      from pgmq_public.claim_org_slot_and_read('async_calls', 3600, 8, 'drain-h1', 600, 64, 64);
+      from pgmq_public.claim_org_slot_and_read('async_calls', 3600, 8, 'drain-h1', 600, 64, 64) t
+     where t.status = 'claimed';
     v_total := v_total + v_rows;
     exit when v_rows = 0;
   end loop;

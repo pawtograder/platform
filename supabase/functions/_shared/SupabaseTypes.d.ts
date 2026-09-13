@@ -24,12 +24,13 @@ export type Database = {
           sleep_seconds: number;
         };
         Returns: {
-          enqueued_at: string;
-          message: Json;
-          msg_id: number;
-          org: string;
-          read_ct: number;
-          vt: string;
+          enqueued_at: string | null;
+          message: Json | null;
+          msg_id: number | null;
+          org: string | null;
+          read_ct: number | null;
+          status: string | null;
+          vt: string | null;
         }[];
       };
       delete: {

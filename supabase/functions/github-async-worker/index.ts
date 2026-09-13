@@ -26,7 +26,7 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
-import { beginOrgLeaseRun, type OrgQueueMessage, type OrgSlotRpc } from "../_shared/orgLeaseRun.ts";
+import { beginOrgLeaseRun, type OrgSlotRow, type OrgSlotRpc } from "../_shared/orgLeaseRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -3001,8 +3001,10 @@ function orgSlotRpc(adminSupabase: SupabaseClient<Database>): OrgSlotRpc {
   const pgmq = adminSupabase.schema("pgmq_public");
   return {
     claim: async (args) => {
+      // Rows come back either as messages (`status = 'claimed'`) or as a single status row saying
+      // why nothing was claimed. orgLeaseRun.ts does the discrimination; this only forwards.
       const { data, error } = await pgmq.rpc("claim_org_slot_and_read", args);
-      return { data: (data ?? []) as OrgQueueMessage<GitHubAsyncEnvelope>[], error };
+      return { data: (data ?? []) as OrgSlotRow<GitHubAsyncEnvelope>[], error };
     },
     // `queue_name` leads on all three. Renewal and release are scoped to ONE pool: a run that
     // rotates queues can hold a lease in each for a moment, and renewing the pool it is draining
