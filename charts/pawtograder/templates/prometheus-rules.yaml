@@ -465,6 +465,27 @@ spec:
               The async dead-letter queue in {{ $ns }} has exceeded 200 for 1m —
               jobs are failing repeatedly. Inspect the DLQ and the failing job class.
         # Async worker queue has a large backlog — enqueue rate outpaces workers.
+        #
+        # This rule has the SAME structural blind spot as PawtograderAsyncQueueStuck and
+        # PawtograderQueueOldestMessageAging below: it fires on a level, and a bulk enqueue drives
+        # the level up regardless of worker health. It deliberately does NOT carry the drain-rate
+        # guard those two got, for two reasons.
+        #
+        # First, nothing scheduled reaches it. The largest assignment release on the calendar is 684
+        # messages against a threshold of 1000, and releases are per class, in one transaction.
+        # Second, and the reason this is not just "we got lucky on the numbers": at a depth of 1000
+        # the guard's own premise stops holding. A healthy drain was measured at ~8 msg/min on
+        # 2026-09-13 (never below 7.27 msg/min in any rolling 15m window), so 1000 queued messages
+        # means over two hours to clear even with every worker healthy. That is a capacity signal
+        # worth paging on whether or not the queue is moving, and it is the only rule that carries
+        # it. Suppressing it on drain rate would delete the "the platform cannot absorb this batch"
+        # alarm and leave nothing in its place.
+        #
+        # Revisit when either becomes true: a single class releases more than ~1000 repos, or two
+        # large releases are scheduled close enough to overlap in the queue. Both make this fire on
+        # a healthy system. The fix then is the same `unless deriv(...)` guard used below — but with
+        # a HIGHER floor, because at that depth a healthy fleet drains considerably faster than the
+        # 2 msg/min that separates a stall from a 600-message release.
         - alert: PawtograderAsyncQueueBacklog
           expr: |
             max by (namespace) (pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 1000
@@ -478,17 +499,34 @@ spec:
               enqueue rate is outpacing worker drain. Check worker health/scaling.
         # Async worker queue is not draining — a small backlog that persists for an
         # hour means stuck/starved workers rather than a burst.
+        #
+        # "Rather than a burst" was the assumption, and a bulk enqueue breaks it the same way it
+        # breaks PawtograderQueueOldestMessageAging below (read that comment for the measured
+        # numbers). A release of 600 messages draining at the healthy ~8 msg/min observed on
+        # 2026-09-13 stays above 10 for ~75 minutes, so `> 10 for 1h` pages on a release that is
+        # working perfectly — and four releases of 574-684 messages are already on the calendar.
+        # Depth alone cannot tell a big batch from a stuck worker; the drain rate can.
+        #
+        # Same guard, same floor (2 msg/min, 4x above the 0.66 msg/min of the 2026-09-07 stall and
+        # 4x below a healthy release), and the same reason it must be `unless` and never `and`: the
+        # chart ships before the edge functions do, and with `and` a missing pawtograder_queue_depth
+        # would make this critical alert stop firing with no signal that it had. `unless` degrades
+        # to today's behaviour instead. deriv() is per-second, hence `* 60`; draining is negative.
+        # queue="async_calls" is the labelled twin of pawtograder_async_queue_size on the left.
         - alert: PawtograderAsyncQueueStuck
           expr: |
             max by (namespace) (pawtograder_async_queue_size{namespace="{{ $ns }}"}) > 10
+            unless
+            max by (namespace) (deriv(pawtograder_queue_depth{namespace="{{ $ns }}", queue="async_calls"}[15m])) * 60 < -{{ .Values.monitoring.prometheusRules.queueDrainMessagesPerMinute | default 2 }}
           for: 1h
           labels:
             severity: critical
           annotations:
             summary: "Pawtograder async queue is not draining"
             description: >-
-              The async worker queue in {{ $ns }} has held above 10 for 1h — the
-              workers are stuck or starved rather than handling a burst. Check
+              The async worker queue in {{ $ns }} has held above 10 for 1h while draining slower than
+              {{ .Values.monitoring.prometheusRules.queueDrainMessagesPerMinute | default 2 }} msg/min
+              — the workers are stuck or starved rather than working through a bulk release. Check
               worker liveness.
         # Notification email backlog. This queue had no gauge at all until the metrics function
         # started reporting it, which is why an email pipeline that never delivered anything in
@@ -506,12 +544,50 @@ spec:
               {{ .Values.monitoring.prometheusRules.notificationEmailBacklog | default 500 }} for 15m.
               Check that SMTP is configured and reachable — with EMAIL_ENABLED set, a
               misconfiguration reports itself, but an unreachable relay still backs up here.
-        # Oldest-message age, one rule for every queue.
+        # Oldest-message age, one rule for every queue, with a drain-rate guard.
         #
         # Depth thresholds have to be tuned against enrollment and the deadline calendar, so they
-        # drift out of calibration and get raised until they stop firing. Age does not: a queue
-        # whose oldest message has been waiting twenty minutes is broken at any scale, in any week
-        # of the term. This is the queue signal that needs no seasonal retuning.
+        # drift out of calibration and get raised until they stop firing. Age is free of that: a
+        # queue whose oldest message has been waiting twenty minutes is usually broken at any scale,
+        # in any week of the term.
+        #
+        # This comment used to claim age needed no retuning at all and was "broken at any scale".
+        # That is FALSE for a bulk enqueue, and the rule paged on a healthy release because of it.
+        # When N messages are inserted in one transaction and drained at rate R, the oldest message's
+        # age climbs to N/R by arithmetic, however healthy the workers are — the alert measures the
+        # size of the batch, not the health of the drain. Assignment release is exactly that shape.
+        # Measured in production on 2026-09-13: CS 2000 enqueued 242 create_repo messages at
+        # 04:00:00 UTC and they were fully drained by 04:30:51 at ~8 msg/min — 242/242 repos created,
+        # zero errors, empty DLQ. With `> 1200` held `for: 10m` the rule pages at 30 minutes, so that
+        # release cleared the bar by 51 seconds and woke someone for a system doing its job. Bigger
+        # releases are already scheduled (302, 574, 600, 600, 684 messages), and every one of them
+        # would page.
+        #
+        # So the discriminator is the DRAIN RATE, not the age. Measured separation, same queue:
+        #   healthy bulk release  2026-09-13  242 msgs / 30m51s  = ~8 msg/min
+        #   genuine stall         2026-09-07  58 msgs / 88m      = ~0.66 msg/min  (a TRUE POSITIVE:
+        #                                     CS 4530, workers wedged, the page was correct)
+        # A 12x gap, so the floor sits at 2 msg/min — 4x above the stall it must still catch, 4x
+        # below the healthy release it must stop paging on. Configurable as
+        # monitoring.prometheusRules.queueDrainMessagesPerMinute.
+        #
+        # `unless`, NOT `and`. Do not "simplify" this. The chart and the edge functions deploy
+        # independently, so there is a window in which this rule exists and pawtograder_queue_depth
+        # does not. With `and`, an absent right-hand side makes the whole expression empty and the
+        # alert SILENTLY STOPS FIRING — a fail-open regression of the one critical queue alert,
+        # which is the exact failure mode the postgres-availability comment above exists to prevent.
+        # With `unless`, an absent right-hand side subtracts nothing: the alert degrades to precisely
+        # today's behaviour, noisy but loud. Fail-loud is the only acceptable direction here.
+        #
+        # deriv() over [15m], not delta()/increase(): deriv() is a least-squares fit, so it is robust
+        # to the scrape noise of a gauge sampled from several pods, and increase() is outright wrong
+        # on a gauge for the counter-reset reason spelled out under PawtograderDiscordDLQGrowing
+        # below. deriv() returns a PER-SECOND rate, hence the `* 60` to compare against a
+        # messages-per-minute floor; draining is a falling gauge, so the comparison is NEGATIVE.
+        # The depth series is pawtograder_queue_depth{queue="..."}, added to metrics/index.ts as a
+        # labelled parallel to the age gauge precisely so the two can be joined — the per-queue
+        # depth gauges (pawtograder_async_queue_size and friends) are separate metric NAMES with no
+        # queue label and cannot be.
         #
         # DLQs are excluded. A dead-letter queue is where poison messages go to STAY -- nothing
         # drains it on a schedule -- so its oldest message is older than any threshold within hours
@@ -529,6 +605,8 @@ spec:
         - alert: PawtograderQueueOldestMessageAging
           expr: |
             max by (namespace, queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue!~".*_dlq|async_calls_low_priority"}) > {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}
+            unless
+            max by (namespace, queue) (deriv(pawtograder_queue_depth{namespace="{{ $ns }}", queue!~".*_dlq|async_calls_low_priority"}[15m])) * 60 < -{{ .Values.monitoring.prometheusRules.queueDrainMessagesPerMinute | default 2 }}
           for: 10m
           labels:
             severity: critical
@@ -536,8 +614,11 @@ spec:
             summary: "Pawtograder queue {{`{{ $labels.queue }}`}} is not draining"
             description: >-
               The oldest message in queue {{`{{ $labels.queue }}`}} ({{ $ns }}) has been waiting over
-              {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}s. Unlike a
-              depth alert this does not depend on volume — the queue has genuinely stopped moving.
+              {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}s AND the queue
+              is draining slower than
+              {{ .Values.monitoring.prometheusRules.queueDrainMessagesPerMinute | default 2 }} msg/min,
+              so this is not a bulk release working through a backlog — the queue has genuinely
+              stopped moving.
         # Discord dead-letter queue, as a RATE rather than a level.
         #
         # The gauge was already exported and had no rule at all; only the GitHub queue was watched.
@@ -586,6 +667,106 @@ spec:
               the last hour — rows exhausted their version-mismatch retry budget, so their stored
               scores are stale and nothing will recompute them. Inspect
               pgmq.q_gradebook_row_recalculate_dlq and re-enqueue after fixing the contention source.
+        # pgmq msg_id heading for the 2^53 client-side cliff.
+        #
+        # THIS IS NOT A CAPACITY ALERT. msg_id is a bigint and the wire carries it
+        # exactly -- a PostgREST round-trip against this PR's preview returned
+        # 9007199254740993 (2^53 + 1) byte-for-byte. The loss is in the CLIENT: V8's
+        # JSON.parse has no bigint path and rounds that to ...992, so a worker calls
+        # pgmq_public.archive / pgmq_public.delete with an id one off from the message it
+        # just processed. It archives a message nobody handled (silent work loss) and
+        # leaves its own to be redelivered forever.
+        #
+        # Organic growth cannot get there and these thresholds are NOT sized as a
+        # fraction of the ceiling. Measured on prod 2026-09-13: q_discord_async_calls,
+        # the busiest sequence, stands at 137,603 and advances ~7 messages/hour, steady
+        # across 14 hours. That is order 10^11 years from 2^53. A threshold justified as
+        # "90% of 2^53" would be arithmetic with no failure mode behind it.
+        #
+        # The failure mode is a sequence SET, not a sequence grown: a restore replaying a
+        # setval from another cluster, a migration or a backfill that seeds ids, or a
+        # hand-run ALTER SEQUENCE ... RESTART WITH. (The condition was produced by hand
+        # in the preview exactly that way while testing this.) It is a jump, not a climb,
+        # so both thresholds sit where organic traffic cannot reach them and only a jump
+        # can -- which also means the two tiers will usually fire together. The tiering
+        # buys SEVERITY ROUTING, a ticket against a page, not lead time: at 1e12 there is
+        # ~9,000x of margin and time to plan, at 2^52 the next mistake of the same kind
+        # lands past the cliff.
+        #
+        # WHAT TO DO WHEN IT FIRES -- "the sequence is too high" is not self-evidently
+        # actionable:
+        #   1. Do NOT raise the threshold. Nothing legitimate moves this number by the
+        #      orders of magnitude needed to cross it.
+        #   2. Find what set it. Recent restores, recent migrations, anything that ran
+        #      setval() or ALTER SEQUENCE against schema pgmq.
+        #   3. Compare against reality:
+        #        SELECT max(msg_id) FROM pgmq.q_<queue>;
+        #        SELECT max(msg_id) FROM pgmq.a_<queue>;
+        #      If the sequence is far above both, the ids in flight are fine and only the
+        #      sequence is wrong.
+        #   4. Correct it with the queue drained, and RESTART WITH a value strictly above
+        #      both maxima above -- restarting below a live msg_id collides on the primary
+        #      key and the queue starts failing inserts.
+        #   5. Until it is corrected, treat any worker archive/delete on that queue as
+        #      suspect if the value is already past 2^53 (9007199254740992).
+        #
+        # THE DURABLE FIX, deliberately NOT done here. The cliff exists only because
+        # msg_id crosses into JavaScript as a JSON number. Returning it as TEXT from
+        # pgmq_public.claim_org_slot_and_read, and having the workers hand that string
+        # straight back to pgmq_public.archive / pgmq_public.delete, removes the cliff
+        # outright -- PostgREST already emits every digit, only JSON.parse loses them.
+        # Out of scope for this PR on two counts: it changes the RPC's return contract
+        # and every caller's generated type, and the PRE-EXISTING pgmq_public.read path
+        # (supabase/functions/discord-async-worker/index.ts, github-async-worker) has the
+        # identical exposure, so fixing only the new RPC would leave the cliff standing.
+        # Whoever takes it on should do both together. These alerts are a guard, not a
+        # cure.
+        #
+        # max by (namespace, queue): the exporter's ServiceMonitor attaches pod/instance/
+        # endpoint/server labels, and this should be one alert per queue rather than one
+        # per label set -- the same reason the connection and exporter rules above use it.
+        # The `queue` label is spelled to match pawtograder_queue_depth and
+        # pawtograder_queue_oldest_message_seconds, so an operator can pull up the same
+        # queue's depth and age from the alert's labels.
+        - alert: PawtograderQueueMsgIdHigh
+          expr: |
+            max by (namespace, queue) (pawtograder_queue_msg_id_last_value{namespace="{{ $ns }}"}) > {{ .Values.monitoring.prometheusRules.queueMsgIdWarning | default 1e12 }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder queue {{`{{ $labels.queue }}`}} msg_id sequence is implausibly high"
+            description: >-
+              The pgmq msg_id sequence for queue {{`{{ $labels.queue }}`}} ({{ $ns }}) is above
+              {{ .Values.monitoring.prometheusRules.queueMsgIdWarning | default 1e12 }}.
+              Traffic cannot put it there — the busiest prod sequence was at 137,603 on 2026-09-13
+              and moves ~7 msg/h — so something SET it: a restore replaying a foreign setval, a
+              migration or backfill seeding ids, or a manual ALTER SEQUENCE ... RESTART WITH. Above 2^53
+              (9007199254740992) a msg_id no longer survives JSON.parse in the workers and they
+              archive or delete the wrong message. Do not raise this threshold; find what moved the
+              sequence, compare it with max(msg_id) in pgmq.q_{{`{{ $labels.queue }}`}} and
+              pgmq.a_{{`{{ $labels.queue }}`}}, and reset it above both with the queue drained.
+              Runbook: docs/operations/monitoring-alerting.md.
+        # The critical tier. 2^52 is one doubling below the point where msg_id stops
+        # round-tripping, so this says: the next set of the same kind lands past the
+        # cliff, and there is no organic process that will walk it back.
+        - alert: PawtograderQueueMsgIdCritical
+          expr: |
+            max by (namespace, queue) (pawtograder_queue_msg_id_last_value{namespace="{{ $ns }}"}) > {{ .Values.monitoring.prometheusRules.queueMsgIdCritical | default 4503599627370496 }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder queue {{`{{ $labels.queue }}`}} msg_id sequence is near the 2^53 cliff"
+            description: >-
+              The pgmq msg_id sequence for queue {{`{{ $labels.queue }}`}} ({{ $ns }}) is above
+              {{ .Values.monitoring.prometheusRules.queueMsgIdCritical | default 4503599627370496 }},
+              within a factor of two of 2^53 (9007199254740992) — the value above which a msg_id no
+              longer survives JSON.parse in the workers, which then archive or delete a DIFFERENT
+              message than the one they processed. Stop enqueueing to this queue, drain it, and reset
+              the sequence just above max(msg_id) in pgmq.q_{{`{{ $labels.queue }}`}} and
+              pgmq.a_{{`{{ $labels.queue }}`}} before resuming. Runbook:
+              docs/operations/monitoring-alerting.md.
         # Discord per-guild circuit breaker open.
         #
         # A level alert is right here, unlike for the DLQs: the breaker closes itself when its window

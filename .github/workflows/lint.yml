@@ -105,6 +105,17 @@ jobs:
       - name: Run chart guard-rail render tests
         run: charts/pawtograder/tests/render-guardrails.sh
 
+      # render-guardrails.sh pins the TEXT of the alerting rules; this pins their
+      # BEHAVIOUR through promtool. The two are not interchangeable: the queue
+      # alerts turn on `unless` rather than `and` so that an absent
+      # pawtograder_queue_depth series degrades to the old, louder rule instead of
+      # silently suppressing the alert, and only a behavioural test can show that
+      # property still holds. The runner SKIPs with exit 0 when neither promtool
+      # nor a container runtime is available, so check the step log rather than
+      # assuming a green tick means the suite ran.
+      - name: Run Prometheus rule behaviour tests
+        run: charts/pawtograder/tests/promrules-unit.sh
+
   # Fast, deterministic unit tests for the gradebook recalc computation (the math the
   # gradebook-calculations e2e fixtures exercise end-to-end through the async pipeline).
   # These run the real edge-function expression functions directly — no DB, no pipeline.
