@@ -40,10 +40,16 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-# HARNESS_MIGRATION exists so a reviewer can point this at a MODIFIED copy of the migration and
+# The migrations under test, applied in order. Two of them now: the allocator, and the pin_org
+# argument that continuous refill needs.
+#
+# HARNESS_MIGRATION exists so a reviewer can point this at a MODIFIED copy of the base allocator and
 # watch a scenario fail. That is the only way to show a concurrency scenario is not vacuous: revert
 # the own-row lock in a scratch copy, re-run, and scenario 18 must go red. See the report.
-MIGRATION="${HARNESS_MIGRATION:-$REPO/supabase/migrations/20260912120000_per_org_async_leases.sql}"
+MIGRATIONS=(
+  "${HARNESS_MIGRATION:-$REPO/supabase/migrations/20260912120000_per_org_async_leases.sql}"
+  "${HARNESS_PIN_MIGRATION:-$REPO/supabase/migrations/20260914120000_async_lease_pin_org.sql}"
+)
 
 IMAGE="supabase/postgres:17.4.1.075"
 EXPECTED_PGMQ="1.4.4"
@@ -81,7 +87,9 @@ psql_args=(-X -q -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -v ON_ERROR_STO
 run_sql() { psql "${psql_args[@]}" "$@"; }
 scalar()  { psql "${psql_args[@]}" -At -c "$1"; }
 
-[ -f "$MIGRATION" ] || { echo "!! migration not found: $MIGRATION" >&2; exit 2; }
+for m in "${MIGRATIONS[@]}"; do
+  [ -f "$m" ] || { echo "!! migration not found: $m" >&2; exit 2; }
+done
 
 echo ">> starting throwaway $IMAGE as $CONTAINER on 127.0.0.1:$PORT"
 docker run -d --rm \
@@ -124,8 +132,10 @@ fi
 echo ">> prerequisites"
 run_sql -f "$HERE/00_prereqs.sql" >/dev/null
 
-echo ">> applying $(basename "$MIGRATION") verbatim"
-run_sql -f "$MIGRATION" >/dev/null
+for m in "${MIGRATIONS[@]}"; do
+  echo ">> applying $(basename "$m") verbatim"
+  run_sql -f "$m" >/dev/null
+done
 
 echo ">> harness plumbing"
 run_sql -f "$HERE/05_harness.sql" >/dev/null

@@ -26,7 +26,7 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
-import { beginOrgLeaseRun, type OrgSlotRow, type OrgSlotRpc } from "../_shared/orgLeaseRun.ts";
+import { beginOrgLeaseRun, drainOrgLease, type OrgSlotRow, type OrgSlotRpc } from "../_shared/orgLeaseRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -2916,62 +2916,77 @@ async function processQueueMessages(
   queueName: "async_calls" | "async_calls_low_priority",
   scope: Sentry.Scope
 ) {
-  await Promise.allSettled(
-    messages.map(async (msg) => {
-      // ONE SCOPE PER MESSAGE, because `n` of these run CONCURRENTLY and
-      // Sentry.Scope is a mutable bag. `archiveMessage` writes to whatever scope
-      // it is handed — setContext("archive_error", { msg_id, … }) and
-      // setTag("pgmq_archive_failed", "true") — so handing it processBatch's
-      // shared scope let four concurrent archives scribble over each other:
-      // a capture could report a FOREIGN msg_id, and pgmq_archive_failed=true
-      // stuck on the shared object for the rest of the batch, so a later event
-      // for a message that archived cleanly still claimed an archive failure.
-      //
-      // NOT the same thing as processEnvelope's scope handling, and do not
-      // "fix" that by analogy: processEnvelope already clones per envelope (see
-      // `_scope?.clone()` at its top), and Scope.clone() copies context and tags
-      // BY VALUE, so its two archiveMessage call sites are already isolated and
-      // the step-timings snapshot attached inside it is already private. Adding
-      // another clone there would be harmful — see the comment on
-      // attachStepTimingsToScope in _shared/GitHubWrapper.ts. Only THIS call
-      // site was reading through to the shared object.
-      //
-      // Cloning rather than constructing fresh keeps the batch- and run-level
-      // context the shared scope carries (function, worker_run_mode, the drain
-      // tuning tags), which a `new Sentry.Scope()` would silently drop.
-      const msgScope = scope.clone();
-      msgScope.setTag("msg_id", String(msg.msg_id));
-      msgScope.setTag("queue_name", queueName);
-      if (msg.org) msgScope.setTag("github_org", msg.org);
+  await Promise.allSettled(messages.map((msg) => processOneQueueMessage(adminSupabase, msg, queueName, scope)));
+}
 
-      const ok = await processEnvelope(
-        adminSupabase,
-        msg.message,
-        { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, read_ct: msg.read_ct, queue_name: queueName },
-        msgScope
-      );
-      if (ok) {
-        const archived = await archiveMessage(adminSupabase, msg.msg_id, msgScope, queueName);
-        if (!archived) {
-          console.error(
-            `[pgmq] worker: handler returned OK but archive failed msg_id=${msg.msg_id} queue=${queueName} — message will redeliver after VT`
-          );
-          // This message's scope, positionally — not an options object. The
-          // options-object form is applied to the SDK's CURRENT scope, which is
-          // not this manually-built one, so the event would arrive without the
-          // worker's own tags; and the scope it does report must be the one only
-          // this message has written to.
-          const s = msgScope.clone();
-          s.setLevel("error");
-          s.setContext("archive_failed", { msg_id: msg.msg_id, queue_name: queueName });
-          Sentry.captureMessage(
-            "github-async-worker: processed message but failed to archive after retries; expect redelivery",
-            s
-          );
-        }
-      }
-    })
+/**
+ * One message: handler, archive, and the Sentry bookkeeping around both.
+ *
+ * Split out of `processQueueMessages` because the two drain paths now differ in WHEN a message
+ * starts, not in what happens to it. The batch path maps this over a whole read; the continuous
+ * refill path starts one of these per claimed message and tops the queue up as each settles. Both
+ * run the identical per-message logic, which is the point — the archive-failure report, the
+ * poison-pill accounting inside processEnvelope (PGMQ_MAX_READ_CT), the requeue-with-delay and DLQ
+ * paths and the per-message scope all live here and there is exactly one copy of them.
+ */
+async function processOneQueueMessage(
+  adminSupabase: SupabaseClient<Database>,
+  msg: QueueMessage<GitHubAsyncEnvelope> & { org?: string },
+  queueName: "async_calls" | "async_calls_low_priority",
+  scope: Sentry.Scope
+): Promise<void> {
+  // ONE SCOPE PER MESSAGE, because `n` of these run CONCURRENTLY and
+  // Sentry.Scope is a mutable bag. `archiveMessage` writes to whatever scope
+  // it is handed — setContext("archive_error", { msg_id, … }) and
+  // setTag("pgmq_archive_failed", "true") — so handing it processBatch's
+  // shared scope let four concurrent archives scribble over each other:
+  // a capture could report a FOREIGN msg_id, and pgmq_archive_failed=true
+  // stuck on the shared object for the rest of the batch, so a later event
+  // for a message that archived cleanly still claimed an archive failure.
+  //
+  // NOT the same thing as processEnvelope's scope handling, and do not
+  // "fix" that by analogy: processEnvelope already clones per envelope (see
+  // `_scope?.clone()` at its top), and Scope.clone() copies context and tags
+  // BY VALUE, so its two archiveMessage call sites are already isolated and
+  // the step-timings snapshot attached inside it is already private. Adding
+  // another clone there would be harmful — see the comment on
+  // attachStepTimingsToScope in _shared/GitHubWrapper.ts. Only THIS call
+  // site was reading through to the shared object.
+  //
+  // Cloning rather than constructing fresh keeps the batch- and run-level
+  // context the shared scope carries (function, worker_run_mode, the drain
+  // tuning tags), which a `new Sentry.Scope()` would silently drop.
+  const msgScope = scope.clone();
+  msgScope.setTag("msg_id", String(msg.msg_id));
+  msgScope.setTag("queue_name", queueName);
+  if (msg.org) msgScope.setTag("github_org", msg.org);
+
+  const ok = await processEnvelope(
+    adminSupabase,
+    msg.message,
+    { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, read_ct: msg.read_ct, queue_name: queueName },
+    msgScope
   );
+  if (ok) {
+    const archived = await archiveMessage(adminSupabase, msg.msg_id, msgScope, queueName);
+    if (!archived) {
+      console.error(
+        `[pgmq] worker: handler returned OK but archive failed msg_id=${msg.msg_id} queue=${queueName} — message will redeliver after VT`
+      );
+      // This message's scope, positionally — not an options object. The
+      // options-object form is applied to the SDK's CURRENT scope, which is
+      // not this manually-built one, so the event would arrive without the
+      // worker's own tags; and the scope it does report must be the one only
+      // this message has written to.
+      const s = msgScope.clone();
+      s.setLevel("error");
+      s.setContext("archive_failed", { msg_id: msg.msg_id, queue_name: queueName });
+      Sentry.captureMessage(
+        "github-async-worker: processed message but failed to archive after retries; expect redelivery",
+        s
+      );
+    }
+  }
 }
 
 /**
@@ -3034,12 +3049,30 @@ function orgSlotRpc(adminSupabase: SupabaseClient<Database>): OrgSlotRpc {
  * deliberately so: both ceilings in asyncWorkerTuning.ts are per-leaseholder, each leaseholder is
  * its own isolate, and concurrency here comes from more isolates rather than a bigger batch. See the
  * 2026-09-13 update in that file.
+ *
+ * WHAT `drainConcurrency` MEANS ON THIS PATH depends on the kill switch. With continuous refill on
+ * (the default) it is messages IN FLIGHT: `drainOrgLease` tops the in-flight set back up to `n` as
+ * each message settles rather than re-reading a whole batch once all `n` have. The ceiling is
+ * identical either way — no claim may ever ask for more than `n` — but the measured 2026-09-14 burst
+ * spent ~27% of every claimed slot-second waiting on the slowest message of its batch, and that is
+ * what refill recovers. With the switch off it is messages per read, and the loop is the pre-refill
+ * one. The Redis-leased path (`processBatch`, below) is untouched by all of this and always
+ * batch-at-a-time.
  */
 async function runOrgLeasedHandler(
   adminSupabase: SupabaseClient<Database>,
   scope: Sentry.Scope,
   tuning: ReturnType<typeof resolveAsyncWorkerTuning>
 ) {
+  // The lease and the driver share this set: the driver adds and removes, and the lease reads its
+  // size to decide whether it may give a slot back, whether it must keep renewing past the end of
+  // the run, whether the idle budget has started, and whether a claim must be pinned to the org it
+  // is already draining. See `inFlightCount` in orgLeaseRun.ts.
+  //
+  // It is wired up on BOTH shapes on purpose. The batch driver never puts anything in it, so with
+  // the kill switch off this reads 0 for the life of the run and every one of those decisions
+  // reverts to its pre-refill answer — the rollback is the whole state machine, not just the loop.
+  const inFlight = new Set<Promise<void>>();
   const run = beginOrgLeaseRun({
     name: "github_async_worker",
     scope,
@@ -3051,40 +3084,41 @@ async function runOrgLeasedHandler(
     globalCap: tuning.orgSlots.globalCap,
     leaseTtlMs: tuning.orgSlots.leaseTtlSeconds * 1000,
     idleSleepMs: 15000,
-    errorSleepMs: 5000
+    errorSleepMs: 5000,
+    inFlightCount: () => inFlight.size
   });
   scope.setTag("worker_run_mode", run.mode);
+  scope.setTag("org_slot_drain", tuning.orgSlots.continuousRefill ? "continuous_refill" : "batch");
 
   try {
-    while (run.shouldContinue()) {
-      await run.heartbeat();
-      if (!run.shouldContinue()) break;
-      try {
-        const claimed = await run.claim();
-        if (!claimed) {
-          if (!(await run.onIdle())) break;
-          continue;
-        }
-        // A CLONE PER CLAIM, for the same reason processBatch clones per message: the run-level
-        // scope is a mutable bag shared with the lease's own tagging, and `github_org` changes from
-        // one claim to the next. Writing it onto the shared scope would leave a stale org on events
-        // captured after this batch, which is exactly the kind of misattribution the per-message
-        // clone comment below warns about.
-        const claimScope = scope.clone();
-        claimScope.setTag("github_org", claimed.org);
-        claimScope.setTag("queue_name", claimed.queueName);
-        await processQueueMessages(
+    await drainOrgLease<GitHubAsyncEnvelope>({
+      run,
+      inFlight,
+      // THE KILL SWITCH, read as the boolean asyncWorkerTuning.ts already resolved. Not re-parsed
+      // here: that file reads GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL as a bounded INTEGER so
+      // a typo is reported instead of silently becoming truthy, and a second reading of the same env
+      // var in this file is how the two would eventually disagree about what "0" means.
+      continuousRefill: tuning.orgSlots.continuousRefill,
+      // The same `n` the claim is capped at. Keeping one number for both is what makes "shortfall"
+      // meaningful: a larger in-flight target than the claim ceiling could never be reached, and a
+      // smaller one would leave part of the leaseholder's allowance permanently unused.
+      maxInFlight: tuning.drainConcurrency,
+      // No per-claim scope clone any more, because there is no longer a per-claim batch to attribute
+      // — `processOneQueueMessage` clones per message and tags `github_org` from the message's own
+      // row, which is where the org belongs once several claims can be in flight at once. Writing it
+      // onto the shared run scope here would leave a stale org on every event captured afterwards.
+      process: (message, context) =>
+        processOneQueueMessage(
           adminSupabase,
-          claimed.messages as (QueueMessage<GitHubAsyncEnvelope> & { org: string })[],
-          claimed.queueName as "async_calls" | "async_calls_low_priority",
-          claimScope
-        );
-      } catch (e) {
-        Sentry.captureException(e, scope);
-        await run.onError();
-      }
-    }
+          { ...message, org: context.org },
+          context.queueName as "async_calls" | "async_calls_low_priority",
+          scope
+        ),
+      onError: (e) => Sentry.captureException(e, scope)
+    });
   } finally {
+    // AFTER the driver's drain, never before it: `drainWithContinuousRefill` does not return while
+    // messages are still running, so by here the slot has nothing left running under it.
     await run.release();
   }
 }

@@ -30,8 +30,13 @@ import {
   MAX_ORG_SLOT_GLOBAL_CAP,
   MIN_ORG_SLOT_MAX_PER_ORG,
   MAX_ORG_SLOT_MAX_PER_ORG,
+  MAX_ORG_SLOT_IN_FLIGHT_PER_ORG,
+  DEFAULT_ORG_SLOT_MAX_PER_ORG,
   MIN_ORG_SLOT_LEASE_TTL_SECONDS,
-  MAX_ORG_SLOT_LEASE_TTL_SECONDS
+  MAX_ORG_SLOT_LEASE_TTL_SECONDS,
+  ORG_SLOT_CONTINUOUS_REFILL_ENV,
+  DEFAULT_ORG_SLOT_CONTINUOUS_REFILL,
+  MAX_ORG_SLOT_CONTINUOUS_REFILL
 } from "@/supabase/functions/_shared/asyncWorkerTuning";
 
 function env(vars: Record<string, string | undefined>) {
@@ -483,7 +488,13 @@ describe("per-org slot tuning defaults", () => {
   it("turns on with only the global cap set, at the most conservative per-org setting", () => {
     // Enabling should buy CROSS-org parallelism without changing how hard any single org is hit.
     const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "4" }));
-    expect(t.orgSlots).toEqual({ enabled: true, globalCap: 4, maxPerOrg: 1, leaseTtlSeconds: 60 });
+    expect(t.orgSlots).toEqual({
+      enabled: true,
+      globalCap: 4,
+      maxPerOrg: 1,
+      leaseTtlSeconds: 60,
+      continuousRefill: true
+    });
     expect(t.issues.filter((i) => i.env.includes("ORG_SLOT"))).toHaveLength(0);
   });
 
@@ -539,17 +550,66 @@ describe("per-org slot tuning: parsing and bounds", () => {
     expect(high.orgSlots.leaseTtlSeconds).toBe(MAX_ORG_SLOT_LEASE_TTL_SECONDS);
   });
 
-  it("keeps the TTL floor above the longest measured single message", () => {
-    // 32.2s was the MAX create_repo on 2026-09-13. A TTL at or below that reaps slots from
-    // leaseholders that are working, and two holders on one org duplicate work against one limit.
-    expect(MIN_ORG_SLOT_LEASE_TTL_SECONDS).toBeGreaterThan(32.2);
+  it("does NOT tie the TTL floor to the longest measured single message", () => {
+    // This test asserted `MIN_ORG_SLOT_LEASE_TTL_SECONDS > 32.2` on the theory that a TTL below the
+    // longest unit of work reaps slots from leaseholders that are working. Both parts were wrong
+    // (2026-09-14). 32.2s was one org on one day; the real platform max across all methods on the
+    // VT=480 regime is 97.7s over 2,337 messages, and 1.5% of messages already exceed the SHIPPED
+    // 60s TTL. They renew through fine, because renewal is an independent setInterval at TTL/3 and
+    // the handlers await on GitHub I/O — so what lapses a lease is an event-loop stall of a whole
+    // TTL, not a long message.
+    //
+    // The floor is therefore deliberately BELOW the longest message, and pinning that inequality is
+    // the point: if someone "fixes" this by raising the floor past 97.7s they have re-encoded a
+    // coupling between the renewal timer and the handlers that does not exist.
+    const longestMeasuredMessageSeconds = 97.7;
+    expect(MIN_ORG_SLOT_LEASE_TTL_SECONDS).toBeLessThan(longestMeasuredMessageSeconds);
+
+    // What the floor IS about: tolerating an unyielding event loop for a whole TTL, and leaving a
+    // renewal interval (TTL/3) with orders of magnitude of margin over a Postgres round trip.
+    const heartbeatDivisor = 3;
+    expect(MIN_ORG_SLOT_LEASE_TTL_SECONDS / heartbeatDivisor).toBeGreaterThanOrEqual(15);
+  });
+
+  it("keeps the shipped lease TTL inside the range even though messages outlive it", () => {
+    // Khoury prod runs orgSlotLeaseTtlSeconds: 60 against a 97.7s worst message. That combination
+    // must be expressible and must not be clamped, or the chart would be refusing the configuration
+    // that has run ~17h with no cap breach and no lease lapse.
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_LEASE_TTL_ENV]: "60" }));
+    expect(t.orgSlots.leaseTtlSeconds).toBe(60);
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_LEASE_TTL_ENV)).toHaveLength(0);
+    expect(MIN_ORG_SLOT_LEASE_TTL_SECONDS).toBeLessThanOrEqual(60);
   });
 });
 
 describe("per-org slot tuning: coherence with the per-org rate limit", () => {
   it("holds maxPerOrg x n at or below the content limiter's budget", () => {
-    // 8 concurrent creations against one org is the 20%-of-pool occupancy MAX_DRAIN_CONCURRENCY
-    // already argues for. At n=8 there is room for exactly one leaseholder per org.
+    // The product ceiling is MAX_ORG_SLOT_IN_FLIGHT_PER_ORG (16), NOT MAX_DRAIN_CONCURRENCY (8):
+    // that one bounds a single isolate's batch, this one bounds one org's share of a fleet-wide
+    // GitHub limiter. At n=8 there is room for two leaseholders per org, and 4 is clamped to 2.
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "960",
+        [ISOLATE_LIFETIME_ENV]: "960000",
+        [ORG_SLOT_GLOBAL_CAP_ENV]: "8",
+        [ORG_SLOT_MAX_PER_ORG_ENV]: "4"
+      })
+    );
+    expect(t.drainConcurrency).toBe(8);
+    expect(t.orgSlots.maxPerOrg).toBe(2);
+    expect(t.orgSlots.maxPerOrg * t.drainConcurrency).toBeLessThanOrEqual(MAX_ORG_SLOT_IN_FLIGHT_PER_ORG);
+
+    const clamped = t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_MAX_PER_ORG_ENV);
+    expect(clamped).toHaveLength(1);
+    // The operator asked for more throughput; tell them where it actually comes from.
+    expect(clamped[0].message).toContain(ORG_SLOT_GLOBAL_CAP_ENV);
+  });
+
+  it("permits exactly MAX_ORG_SLOT_IN_FLIGHT_PER_ORG in flight, which the old ceiling refused", () => {
+    // 2 x 8 = 16 was clamped to 1 before 2026-09-14, when the product ceiling was
+    // MAX_DRAIN_CONCURRENCY. Asserting only the clamp above would still pass if the ceiling had
+    // never moved, so pin the newly-legal point too.
     const t = resolveAsyncWorkerTuning(
       env({
         [DRAIN_CONCURRENCY_ENV]: "8",
@@ -560,13 +620,42 @@ describe("per-org slot tuning: coherence with the per-org rate limit", () => {
       })
     );
     expect(t.drainConcurrency).toBe(8);
-    expect(t.orgSlots.maxPerOrg).toBe(1);
-    expect(t.orgSlots.maxPerOrg * t.drainConcurrency).toBeLessThanOrEqual(MAX_DRAIN_CONCURRENCY);
+    expect(t.orgSlots.maxPerOrg).toBe(2);
+    expect(t.orgSlots.maxPerOrg * t.drainConcurrency).toBe(MAX_ORG_SLOT_IN_FLIGHT_PER_ORG);
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_MAX_PER_ORG_ENV)).toHaveLength(0);
+  });
 
+  it("clamps to the raised per-org ceiling, not to the drain-concurrency ceiling", () => {
+    // The two constants used to be the same 8 and a single value could not tell them apart. At the
+    // shipped n=4 the per-org ceiling is floor(16/4) = 4 and the range maximum is also 4, so an
+    // operator asking for 4 gets 4 — under the OLD rule this landed on 2.
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_MAX_PER_ORG_ENV]: "4" }));
+    expect(t.drainConcurrency).toBe(DEFAULT_DRAIN_CONCURRENCY);
+    expect(t.orgSlots.maxPerOrg).toBe(MAX_ORG_SLOT_MAX_PER_ORG);
+    expect(t.orgSlots.maxPerOrg).toBe(4);
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_MAX_PER_ORG_ENV)).toHaveLength(0);
+    // And it is the per-org budget being spent, not the isolate's: 16 > MAX_DRAIN_CONCURRENCY.
+    expect(t.orgSlots.maxPerOrg * t.drainConcurrency).toBeGreaterThan(MAX_DRAIN_CONCURRENCY);
+  });
+
+  it("names the reservoir, not just the ceiling, when it clamps", () => {
+    // The clamp message is the only place an operator learns WHY the number moved. "Above 16" on
+    // its own reads as an arbitrary limit; the 40-starts-per-60s reservoir is the actual reason.
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "960",
+        [ISOLATE_LIFETIME_ENV]: "960000",
+        [ORG_SLOT_GLOBAL_CAP_ENV]: "8",
+        [ORG_SLOT_MAX_PER_ORG_ENV]: "4"
+      })
+    );
     const clamped = t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_MAX_PER_ORG_ENV);
     expect(clamped).toHaveLength(1);
-    // The operator asked for more throughput; tell them where it actually comes from.
-    expect(clamped[0].message).toContain(ORG_SLOT_GLOBAL_CAP_ENV);
+    expect(clamped[0].message).toContain("40 per minute");
+    expect(clamped[0].message).toContain("reservoir");
+    // 4 x 8 = 32 in flight at a 23.1s p50 is 60 x 32 / 23.1 = 83 starts/min against a 40/min refresh.
+    expect(clamped[0].message).toContain("83 creations/min");
   });
 
   it("allows the full per-org allowance at the shipped n", () => {
@@ -613,7 +702,109 @@ describe("per-org slot tuning: coherence with the per-org rate limit", () => {
   });
 
   it("keeps the constants themselves coherent at the shipped defaults", () => {
-    expect(MAX_ORG_SLOT_MAX_PER_ORG * DEFAULT_DRAIN_CONCURRENCY).toBeLessThanOrEqual(MAX_DRAIN_CONCURRENCY);
+    // The range maximum must be reachable at the shipped n, or the top of the range is unreachable
+    // and the number in values.yaml is a lie about what the deploy can do.
+    expect(MAX_ORG_SLOT_MAX_PER_ORG * DEFAULT_DRAIN_CONCURRENCY).toBeLessThanOrEqual(MAX_ORG_SLOT_IN_FLIGHT_PER_ORG);
+    expect(MAX_ORG_SLOT_MAX_PER_ORG * DEFAULT_DRAIN_CONCURRENCY).toBe(MAX_ORG_SLOT_IN_FLIGHT_PER_ORG);
+  });
+
+  it("keeps the per-org budget a SEPARATE constant from the per-isolate one", () => {
+    // These were the same 8 until 2026-09-14 and reusing one for the other was the bug: the isolate
+    // ceiling is about heap and the n x 120 VT model, the per-org ceiling is about a GitHub rate
+    // limit. If they ever collapse back to one number, raising either drags the other.
+    expect(MAX_ORG_SLOT_IN_FLIGHT_PER_ORG).toBe(16);
+    expect(MAX_DRAIN_CONCURRENCY).toBe(8);
+    expect(MAX_ORG_SLOT_IN_FLIGHT_PER_ORG).not.toBe(MAX_DRAIN_CONCURRENCY);
+  });
+
+  it("raises what is EXPRESSIBLE without raising what is SHIPPED", () => {
+    // The whole point of the 2026-09-14 change. orgSlotMaxPerOrg is a single global knob with no
+    // per-org dimension, and the measured create_repo p50 spread across orgs on one platform is 2x
+    // (23.1s neu-cs2000 -> 46.0s Khoury-CS3650). 16 in flight is 41.6 starts/min for the fast org —
+    // over the 40/min reservoir — and 20.9/min for the slow one. So the ceiling moves and the
+    // default does not: turning it up stays an operator decision taken against a measurement.
+    expect(MAX_ORG_SLOT_MAX_PER_ORG).toBe(4);
+    expect(DEFAULT_ORG_SLOT_MAX_PER_ORG).toBe(1);
+    expect(resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8" })).orgSlots.maxPerOrg).toBe(1);
+    // The reservoir arithmetic the ceiling is argued from, as an assertion rather than a comment.
+    const startsPerMin = (inFlight: number, p50: number) => (60 * inFlight) / p50;
+    expect(startsPerMin(MAX_ORG_SLOT_IN_FLIGHT_PER_ORG, 23.1)).toBeGreaterThan(40);
+    expect(startsPerMin(MAX_ORG_SLOT_IN_FLIGHT_PER_ORG, 46.0)).toBeLessThan(40);
+    expect(startsPerMin(DEFAULT_ORG_SLOT_MAX_PER_ORG * DEFAULT_DRAIN_CONCURRENCY, 23.1)).toBeLessThan(40);
+  });
+});
+
+describe("continuous refill kill switch", () => {
+  it("ships ON, so the PR's own change is what a default deployment gets", () => {
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8" }));
+    expect(t.orgSlots.continuousRefill).toBe(true);
+    expect(DEFAULT_ORG_SLOT_CONTINUOUS_REFILL).toBe(1);
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV)).toHaveLength(0);
+  });
+
+  it("turns OFF without giving up per-org leaseholders", () => {
+    // The entire reason the knob exists. Before it, rolling the drain shape back meant
+    // globalCap: 0, which also switches the feature off and gives back the cross-org throughput
+    // that is already working in production.
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: "0" }));
+    expect(t.orgSlots.continuousRefill).toBe(false);
+    expect(t.orgSlots.enabled).toBe(true);
+    expect(t.orgSlots.globalCap).toBe(8);
+    expect(t.orgSlots.maxPerOrg).toBe(1);
+  });
+
+  it("does not fail OPEN on a string boolean, which is why it is an integer", () => {
+    // `Boolean("false") === true`. If this knob parsed strings, "false" / "no" / "off" would all
+    // mean ON and the kill switch would not switch at the one moment anyone reaches for it.
+    // Through readBounded they are REJECTED and reported, and the fallback is visible.
+    for (const raw of ["false", "no", "off", "true"]) {
+      const t = resolveAsyncWorkerTuning(
+        env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: raw })
+      );
+      const rejected = t.issues.filter((i) => i.kind === "rejected" && i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV);
+      expect(rejected).toHaveLength(1);
+      // It falls back to the default rather than to "whatever the string coerced to".
+      expect(t.orgSlots.continuousRefill).toBe(true);
+      expect(rejected[0].effective).toBe(DEFAULT_ORG_SLOT_CONTINUOUS_REFILL);
+    }
+  });
+
+  it("clamps an out-of-range value instead of treating it as extra-on", () => {
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: "2" }));
+    expect(t.orgSlots.continuousRefill).toBe(true);
+    const clamped = t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV);
+    expect(clamped).toHaveLength(1);
+    expect(clamped[0].effective).toBe(MAX_ORG_SLOT_CONTINUOUS_REFILL);
+  });
+
+  it("is reported as CONFIGURED even when per-org leasing is off", () => {
+    // Forcing it to false when the feature is off would conflate "an operator rolled the drain
+    // shape back" with "per-org leasing is not on", and those need different responses.
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_CONTINUOUS_REFILL_ENV]: "0" }));
+    expect(t.orgSlots.enabled).toBe(false);
+    expect(t.orgSlots.continuousRefill).toBe(false);
+  });
+
+  it("adds no issues to the shipped defaults", () => {
+    // Same property the other org-slot knobs hold: a feature nobody turned on must not page.
+    const t = resolveAsyncWorkerTuning(env({}));
+    expect(t.orgSlots.continuousRefill).toBe(true);
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV)).toHaveLength(0);
+  });
+
+  it("changes nothing else: it shapes WHEN a claim happens, not how much is in flight", () => {
+    // No coherence rule of its own, so switching it must not perturb any other resolved value.
+    const on = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_MAX_PER_ORG_ENV]: "2" }));
+    const off = resolveAsyncWorkerTuning(
+      env({
+        [ORG_SLOT_GLOBAL_CAP_ENV]: "8",
+        [ORG_SLOT_MAX_PER_ORG_ENV]: "2",
+        [ORG_SLOT_CONTINUOUS_REFILL_ENV]: "0"
+      })
+    );
+    expect({ ...off.orgSlots, continuousRefill: true }).toEqual(on.orgSlots);
+    expect(off.drainConcurrency).toBe(on.drainConcurrency);
+    expect(off.visibilityTimeoutSeconds).toBe(on.visibilityTimeoutSeconds);
   });
 });
 

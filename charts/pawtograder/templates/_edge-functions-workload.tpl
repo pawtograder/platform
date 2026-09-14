@@ -303,6 +303,12 @@ spec:
               value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg | quote }}
             - name: GITHUB_ASYNC_WORKER_ORG_SLOT_LEASE_TTL_SECONDS
               value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds | quote }}
+            # Continuous-refill KILL SWITCH, 1 = on (shipped). Only meaningful on
+            # the org-leased path. It exists so the drain SHAPE can be rolled
+            # back without a code deploy and without setting orgSlotGlobalCap: 0,
+            # which would also give up per-org leaseholders.
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill | quote }}
             # Latency histogram bounds in seconds. The top finite bucket must be
             # >= worker.timeoutMs/1000 or every request that hits the worker
             # timeout lands in +Inf and the upper quantiles become an

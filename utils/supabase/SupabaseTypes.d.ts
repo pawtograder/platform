@@ -20,6 +20,12 @@ export type Database = {
           lease_ttl_seconds: number;
           max_per_org: number;
           n: number;
+          // Optional, with a server-side DEFAULT of null: given, the allocator considers only that
+          // org and does not fall back to re-picking the neediest one. Optional in BOTH directions
+          // on purpose — an old image that never sends it keeps working against a new database, and
+          // the worker omits the key entirely (rather than sending null) when it is not pinning, so
+          // a new image keeps working against a database that predates the parameter.
+          pin_org?: string;
           queue_name: string;
           sleep_seconds: number;
         };
