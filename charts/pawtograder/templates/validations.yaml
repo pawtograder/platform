@@ -254,6 +254,53 @@ defence in depth against the chart being bypassed (a hand-edited Deployment,
 {{- if or (lt $vt 60) (gt $vt 1800) -}}
 {{- fail (printf "edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=%d is outside 60-1800. Below 60s a single create_repo (~105s of serialized GitHub work, measured 2026-09-07) is guaranteed to be re-served while still in flight; above 1800s the timeout becomes the RECOVERY LATENCY for a message whose isolate really died, and 1800s is already 1.5x the PawtograderQueueOldestMessageAging window so a genuinely stuck message still pages someone." $vt) -}}
 {{- end -}}
+{{- /*
+Per-org leaseholder rules. These bound a DIFFERENT axis from the two above:
+drainConcurrency sizes one leaseholder's batch inside a single isolate, these
+size how many leaseholders exist. They are checked whenever the values parse,
+but the COHERENCE rules only fire when orgSlotGlobalCap > 0 — a disabled
+deployment must not fail a render over numbers that have no effect, the same
+reason resolveAsyncWorkerTuning only records these issues when the feature is on.
+*/ -}}
+{{- $capRaw := $gaw.orgSlotGlobalCap | toString -}}
+{{- $mpoRaw := $gaw.orgSlotMaxPerOrg | toString -}}
+{{- $ttlRaw := $gaw.orgSlotLeaseTtlSeconds | toString -}}
+{{- if not (regexMatch "^[0-9]+$" $capRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotGlobalCap must be an integer 0-8 (got %q). 0 disables per-org leaseholders; a non-numeric value would be clamped back to 0 at runtime, so the deploy would silently keep the single-leaseholder path it was meant to replace." $capRaw) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $mpoRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg must be an integer 1-2 (got %q)." $mpoRaw) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $ttlRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds must be an integer 45-300 (got %q)." $ttlRaw) -}}
+{{- end -}}
+{{- $cap := int $capRaw -}}
+{{- $mpo := int $mpoRaw -}}
+{{- $ttl := int $ttlRaw -}}
+{{- if gt $cap 8 -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=%d is above 8. Each leaseholder is a RESIDENT isolate holding one admission slot and one worker.memoryLimitMb heap, and the pod memory budget is written as (maxParallelism x worker.memoryLimitMb); the cap is fleet-wide while maxParallelism (%d) is per-pod, so 8 is the worst-case-colocation number. Note also the slot POOL is seeded by migration (async_calls 64, async_calls_low_priority 16) — raising the cap past a pool would silently cap the budget at the pool size instead." $cap (int .Values.edgeFunctions.maxParallelism)) -}}
+{{- end -}}
+{{- if or (lt $mpo 1) (gt $mpo 2) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=%d is outside 1-2. In-flight per org is orgSlotMaxPerOrg x drainConcurrency against ONE org's content limiter (reservoir 40 / maxConcurrent 40 / refresh 40 per 60s). The RESERVOIR binds before the concurrency pool does: at the post-permission-sync-fix create_repo p50 of 23.1s (2026-09-13, 242 messages) 8 in flight is ~21 starts/min of a 40/min refresh, and 16 would be ~42/min — over budget. 8 is also the already-argued 20%% of the 40-slot pool, which is what leaves org invitations and handout syncs their headroom." $mpo) -}}
+{{- end -}}
+{{- if or (lt $ttl 45) (gt $ttl 300) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=%d is outside 45-300. Below 45s the renewal timer — which shares an event loop with the handlers — can reap a slot from a leaseholder that is still working, because the longest single message measured was 32.2s (2026-09-13). Above 300s the TTL becomes the slot-recovery latency for a leaseholder that really died, and it must not outlive the messages it is holding." $ttl) -}}
+{{- end -}}
+{{- if gt $cap 0 -}}
+{{- if gt (mul $mpo $n) 8 -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=%d x drainConcurrency=%d is %d in flight for a SINGLE org, above the 8 ceiling. That ceiling is 20%% of the fleet-wide per-org content limiter (40 concurrent, shared with org invitations and handout syncs), and the 40-per-minute reservoir is the tighter of the two. Lower orgSlotMaxPerOrg rather than drainConcurrency — drainConcurrency is already coherent with visibilityTimeoutSeconds and worker.timeoutMs, and lowering it would break that pairing to fix a different budget." $mpo $n (mul $mpo $n)) -}}
+{{- end -}}
+{{- if gt $mpo $cap -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=%d exceeds orgSlotGlobalCap=%d, so the per-org ceiling can never be reached and the value is a lie about what this deploy does. Set orgSlotGlobalCap >= orgSlotMaxPerOrg." $mpo $cap) -}}
+{{- end -}}
+{{- $ttlLifetimeS := div (.Values.edgeFunctions.worker.timeoutMs | int) 1000 -}}
+{{- if gt $ttl $vt -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=%d exceeds visibilityTimeoutSeconds=%d. The lease must not outlive the messages it holds: pgmq would re-serve the batch to someone else while this leaseholder still believes it owns the org's slot, which is the redelivery failure the visibility timeout exists to prevent, with a slot pinned on top of it." $ttl $vt) -}}
+{{- end -}}
+{{- if gt $ttl $ttlLifetimeS -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=%d exceeds the isolate lifetime edgeFunctions.worker.timeoutMs=%ds. A lease that outlives the isolate holding it pins an org's slot for the remainder of the TTL after the isolate is already gone, and since beforeUnload.wallClockRatio=%v retires isolates at HALF the lifetime, the real exposure is larger than this comparison suggests." $ttl $ttlLifetimeS .Values.edgeFunctions.beforeUnload.wallClockRatio) -}}
+{{- end -}}
+{{- end -}}
 {{- $need := mul $n 120 -}}
 {{- $isLegacyPair := and (eq $n 4) (eq $vt 300) -}}
 {{- if not $isLegacyPair -}}
@@ -342,6 +389,123 @@ element to mean anything.
 {{- $top := last $buckets | float64 -}}
 {{- if lt $top (float64 $lifeSec) -}}
 {{- fail (printf "edgeFunctions.metrics.buckets ends at %v seconds, below edgeFunctions.worker.timeoutMs (%ds). Every request that runs to the worker lifetime would land in +Inf, so p95/p99 stop meaning anything at exactly the moment this tier is in trouble. Extend the list so its last element is >= %d (keep it strictly increasing; the default list ends ON the default 400s lifetime)." $top $lifeSec $lifeSec) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+PROMETHEUS RULE THRESHOLDS.
+
+Every value below is interpolated VERBATIM into a PromQL expression or a `for:`
+duration in templates/prometheus-rules.yaml. Nothing between here and Prometheus
+type-checks it: helm renders, the PrometheusRule CRD accepts it (its schema says
+`expr` is a string), `kubectl apply` succeeds, and the failure lands in the one
+place nobody is watching. A rule group whose expression will not parse is
+rejected AS A GROUP, so every alert in that group stops evaluating. The result is
+a critical alert that no longer pages, with no symptom anywhere except the
+Prometheus operator's log.
+
+That is the same silent-loss shape PawtograderQueueOldestMessageAging's `unless`
+was chosen to avoid, reached through the values file instead of the expression.
+A threshold that cannot page is worse than no threshold, because the dashboard
+still looks monitored.
+
+Three ways a plain typo gets there, all of which render cleanly today:
+
+  queueDrainMessagesPerMinute: fast   ->  `... * 60 < -fast`   unparseable
+  queueDrainMessagesPerMinute: -2     ->  `... * 60 < --2`     unparseable
+  replicationLagBytesWarning: 100MiB  ->  int64 CASTS it to 0, so the rule
+    renders as `> 0` and pages permanently instead of never -- the quiet one,
+    because sprig coerces rather than fails and the render looks fine.
+
+SHAPE ONLY for the pre-existing thresholds. Each of those has its argument in
+values.yaml, and inventing numeric bounds here without a measurement behind them
+would be worse than leaving them open -- every other bound in this file is
+defended with a date and a number. The one value whose range IS argued from
+measurements is range-checked below.
+
+Gated on the rules actually rendering, for the same reason the org-slot
+coherence rules are gated on the feature being on: a deployment that emits no
+PrometheusRule must not fail a render over numbers that have no effect.
+*/ -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled -}}
+{{- $pr := .Values.monitoring.prometheusRules -}}
+{{- /* Plain numbers. A leading sign is rejected on purpose: every one of these
+     is a magnitude, and a negative reaches PromQL as a double operator.
+     Scientific notation IS accepted, and has to be: Helm parses YAML numbers as
+     float64, so the shipped replicationLagBytesWarning: 104857600 stringifies as
+     1.048576e+08. PromQL accepts that literal, and the rule casts with int64
+     anyway -- but a large value on any threshold that is NOT cast would reach
+     the expression in that form, so the check has to allow what PromQL allows
+     rather than what looks tidy in values.yaml. */ -}}
+{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "replicationLagBytesWarning" "queueMsgIdWarning" "queueMsgIdCritical") -}}
+{{- $raw := "" -}}
+{{- if hasKey $pr $k -}}{{- $raw = (index $pr $k) | toString -}}{{- end -}}
+{{- if and (ne $raw "") (not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $raw)) -}}
+{{- fail (printf "monitoring.prometheusRules.%s must be a plain non-negative number (got %q). It is interpolated straight into a PromQL expression in templates/prometheus-rules.yaml, so a word or a leading sign produces an expression Prometheus cannot parse -- and Prometheus rejects the whole RULE GROUP, silently taking every other alert in it off duty. A suffixed unit (100MiB, 30s) is worse still: sprig casts it to 0 rather than failing, the chart renders, and the alert fires permanently instead of never. Write the bare number in the unit the values.yaml comment names." $k $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- /* Prometheus durations. Same failure, different grammar: these land in
+     `for:`, which the operator's admission webhook parses with model.ParseDuration
+     -- a bare integer is NOT a valid duration there. */ -}}
+{{- range $k := (list "discordCircuitOpenFor" "postgresUnavailableFor" "workflowMetricsAbsentFor") -}}
+{{- $raw := "" -}}
+{{- if hasKey $pr $k -}}{{- $raw = (index $pr $k) | toString -}}{{- end -}}
+{{- if and (ne $raw "") (not (regexMatch "^([0-9]+(ms|[smhdwy]))+$" $raw)) -}}
+{{- fail (printf "monitoring.prometheusRules.%s must be a Prometheus duration such as 30s, 10m or 1h30m (got %q). It is interpolated into a rule's `for:` field; a bare number or an unknown unit is not a valid duration and the rule group is refused, which takes every alert in that group with it. Note YAML: an unquoted 10m is the string you want, but an unquoted 10 is an integer and will NOT parse as a duration." $k $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+THE DRAIN FLOOR HAS A RANGE, not just a shape.
+
+This is the rate below which a queue counts as STALLED rather than busy, and it
+is the only thing standing between PawtograderQueueOldestMessageAging /
+PawtograderAsyncQueueStuck and paging on every assignment release. Both bounds
+are failures of the same kind -- the guard stops discriminating -- in opposite
+directions, and neither is visible from the rendered rule.
+*/ -}}
+{{- $drainRaw := "" -}}
+{{- if hasKey $pr "queueDrainMessagesPerMinute" -}}{{- $drainRaw = $pr.queueDrainMessagesPerMinute | toString -}}{{- end -}}
+{{- if ne $drainRaw "" -}}
+{{- $drain := $drainRaw | float64 -}}
+{{- if or (lt $drain 1.0) (gt $drain 7.0) -}}
+{{- fail (printf "monitoring.prometheusRules.queueDrainMessagesPerMinute=%v is outside 1-7 messages/minute. BELOW 1 the floor closes on the 0.66 msg/min of the 2026-09-07 stall (CS 4530, 58 messages over 88 minutes, a confirmed true positive) and the guard starts suppressing genuine stalls; at 0 it suppresses every queue that is moving at all, which is every queue. ABOVE 7 it is above every drain a real release produces -- the slowest rolling 15m window of the healthy 2026-09-13 release was 7.27 msg/min -- so the guard matches nothing, suppresses nothing, and silently restores the release pages it was added to stop. There is a hard ceiling behind that measurement: one class is one GitHub org, and that org's Bottleneck content limiter refreshes 40 per 60s, so no release can drain faster than 40 msg/min however much worker capacity is added. If throughput has genuinely risen, re-measure the drain and move this bound WITH the number -- charts/pawtograder/tests/promrules-unit.sh has a scenario at the ceiling that will go red if you move it without doing so." $drainRaw) -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+THE MSG_ID THRESHOLDS HAVE A RANGE AND AN ORDER.
+
+These two are the easiest numbers in this file to get wrong in a way that still
+renders, because the obvious way to pick them -- a fraction of the 2^53 ceiling
+-- is the wrong reasoning. Nothing organic approaches that ceiling: the busiest
+prod sequence was at 137,603 on 2026-09-13 moving ~7 msg/h, which is order 10^11
+years from it. The alerts exist for a sequence that was SET (a restore, a
+migration, a backfill, a manual RESTART WITH), so the thresholds have to sit in
+the band no traffic can reach and every accident lands in.
+
+Both bounds are the alert losing its meaning, in opposite directions, and
+neither is visible from the rendered rule.
+*/ -}}
+{{- $msgIdCliff := 9007199254740992.0 -}}
+{{- $msgWarnRaw := "" -}}
+{{- if hasKey $pr "queueMsgIdWarning" -}}{{- $msgWarnRaw = $pr.queueMsgIdWarning | toString -}}{{- end -}}
+{{- if ne $msgWarnRaw "" -}}
+{{- $msgWarn := $msgWarnRaw | float64 -}}
+{{- if lt $msgWarn 1000000000.0 -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdWarning=%v is below 1e9, which turns a corruption alarm into a capacity threshold. The busiest pgmq sequence on prod was at 137,603 on 2026-09-13 and advances ~7 messages/hour, so 1e9 is already ~7,000x the largest value the platform has ever held and thousands of years of the measured rate. Set it lower and normal enqueueing eventually crosses it, at which point the alert reports growth -- which is harmless, since 2^53 is ~9,000x further on -- and gets silenced or raised, leaving nothing watching for the thing it was built for: a sequence SET past the cliff by a restore, a migration, a backfill or a manual ALTER SEQUENCE ... RESTART WITH. The threshold must be unreachable by traffic and reachable only by accident." $msgWarnRaw) -}}
+{{- end -}}
+{{- if ge $msgWarn $msgIdCliff -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdWarning=%v is at or above 2^53 (9007199254740992), so it can only fire AFTER msg_ids have stopped round-tripping. PostgREST emits msg_id exactly, but JSON.parse in the workers rounds anything above 2^53 -- 9007199254740993 becomes ...992 -- and they then archive or delete a different message than the one they processed. A warning with no lead time on the damage it describes is not a warning. Keep it well below the cliff; the shipped 1e12 sits ~9,000x under it." $msgWarnRaw) -}}
+{{- end -}}
+{{- end -}}
+{{- $msgCritRaw := "" -}}
+{{- if hasKey $pr "queueMsgIdCritical" -}}{{- $msgCritRaw = $pr.queueMsgIdCritical | toString -}}{{- end -}}
+{{- if ne $msgCritRaw "" -}}
+{{- $msgCrit := $msgCritRaw | float64 -}}
+{{- if gt $msgCrit $msgIdCliff -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdCritical=%v is above 2^53 (9007199254740992). Past that value the workers are already archiving and deleting msg_ids they never read, so a critical placed there pages about a loss that has happened rather than one that is about to. The shipped 2^52 (4503599627370496) is the last doubling before the cliff." $msgCritRaw) -}}
+{{- end -}}
+{{- if and (ne $msgWarnRaw "") (le $msgCrit ($msgWarnRaw | float64)) -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdCritical=%v is not above queueMsgIdWarning=%v, so the warning tier cannot exist on its own: every value that trips the warning also pages. The two tiers are severity ROUTING -- a ticket at a value only an accident can produce, a page at a value one more accident puts past the 2^53 cliff -- and collapsing them discards the ticket." $msgCritRaw $msgWarnRaw) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

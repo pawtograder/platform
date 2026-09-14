@@ -1512,6 +1512,526 @@ assert_env_value "kong pins large_client_header_buffers above the 8k default" \
   templates/kong.yaml KONG_NGINX_HTTP_LARGE_CLIENT_HEADER_BUFFERS "4 16k"
 
 echo
+
+echo "== per-org leaseholders must ship OFF and refuse incoherent budgets =="
+# This is a SECOND scaling axis to drainConcurrency: that one sizes a single
+# leaseholder's batch inside one 256MiB isolate, these size how many
+# leaseholders exist (one isolate, one GitHub org each). The knobs are only
+# meaningful together, and every rule below has a way of failing SILENTLY in
+# production if the chart does not catch it here.
+#
+# Shipping OFF is the load-bearing default: globalCap 0 selects the
+# single-leaseholder path that ran before 2026-09-13, so upgrading the chart
+# changes nothing until an operator opts in — exactly the property
+# drainConcurrency's own defaults were chosen for.
+assert_env_value "per-org leaseholders ship disabled" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP 0
+assert_env_value "orgSlotMaxPerOrg defaults to 1" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_ORG 1
+assert_env_value "orgSlotLeaseTtlSeconds defaults to 60" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_LEASE_TTL_SECONDS 60
+
+# The recommended prod pair must actually render, or the documentation in
+# values.yaml is advice that cannot be taken.
+assert_env_value "recommended prod cap renders" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP 8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2
+
+# maxPerOrg x drainConcurrency is in-flight work against ONE org's content
+# limiter (40 concurrent / 40 per minute, shared with org invitations and
+# handout syncs). Past 8 the 40/min reservoir is the binding constraint, and
+# the symptom is students' org invitations convoying behind repo creations —
+# nothing about it looks like a queue problem.
+assert_refused "refuses more than 8 in flight for one org" \
+  "in flight for a SINGLE org" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2 \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960 \
+  --set edgeFunctions.worker.timeoutMs=960000 \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=1000 \
+  --set edgeFunctions.terminationGracePeriodSeconds=1030
+
+# A per-org ceiling above the fleet-wide cap can never be reached, so the value
+# claims a concurrency the deploy cannot deliver.
+assert_refused "refuses maxPerOrg above globalCap" \
+  "exceeds orgSlotGlobalCap=1" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=1 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2
+
+# The lease must not outlive the messages it holds: pgmq would re-serve the
+# batch while this leaseholder still believes it owns the org's slot.
+assert_refused "refuses a lease TTL above the visibility timeout" \
+  "exceeds visibilityTimeoutSeconds" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=290 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=280 \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=2
+
+# Coherence is checked ONLY when the feature is on. A disabled deployment
+# carrying leftover values must still render, or every install that ever
+# experimented with this is wedged at upgrade time by numbers with no effect.
+assert_renders "disabled deployment ignores incoherent org-slot values" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=0 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2
+
+echo
+
+echo "== queue alerts must not page on a healthy bulk release =="
+
+# ---------------------------------------------------------------------------
+# Queue drain-rate guard (PawtograderQueueOldestMessageAging,
+# PawtograderAsyncQueueStuck).
+#
+# Both alerts fire on a level -- oldest-message age, queue depth -- and both
+# were paging on healthy assignment releases, because a bulk enqueue of N
+# messages draining at rate R drives age to N/R and holds depth above the
+# threshold for N/R minutes no matter how healthy the workers are. The fix
+# subtracts the case "the queue is demonstrably draining" using the labelled
+# pawtograder_queue_depth gauge.
+#
+# The property these tests protect is the JOIN OPERATOR. `unless` and `and`
+# render almost identically and a reviewer reading a diff will not feel the
+# difference, but they fail in opposite directions when the right-hand side is
+# missing -- which it IS, every time, in the window between the chart upgrade
+# and the edge-function rollout that first emits pawtograder_queue_depth:
+#
+#   `and`    -> empty right side makes the whole expression empty, the critical
+#               alert SILENTLY STOPS FIRING, and nothing reports that it has.
+#   `unless` -> empty right side subtracts nothing and the alert behaves exactly
+#               as it did before the guard existed: noisy, but loud.
+#
+# Nothing else in the repository would notice the swap, so it is asserted here.
+
+# assert_alert_uses_unless "<label>" "<alertname>" <extra --set args...>
+# Renders prometheus-rules.yaml, extracts just the expr block of one alert (from
+# its `- alert:` line to the following `for:`), and asserts the block joins its
+# two halves with `unless` and contains no `and` operator at all. Scoped to the
+# expr block on purpose: `and` is an ordinary English word and the surrounding
+# comments and annotations are full of it.
+assert_alert_uses_unless() {
+  local label="$1" alert="$2"; shift 2
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+      "$@" --show-only templates/prometheus-rules.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local expr
+  expr="$(awk -v want="$alert" '
+    $0 ~ ("- alert: " want "$") { inblk = 1; next }
+    inblk && /^[[:space:]]*for:/ { inblk = 0 }
+    inblk { print }
+  ' "$OUTFILE")"
+  if [ -z "$expr" ]; then
+    echo "FAIL [$label]: no expr block found for alert $alert"
+    FAILED=1
+  elif ! printf '%s\n' "$expr" | grep -Eq '^[[:space:]]*unless[[:space:]]*$'; then
+    echo "FAIL [$label]: $alert does not join its halves with \`unless\`"
+    FAILED=1
+  elif printf '%s\n' "$expr" | grep -Ewq 'and'; then
+    echo "FAIL [$label]: $alert uses the \`and\` operator — an absent"
+    echo "       pawtograder_queue_depth would then silence the alert instead of"
+    echo "       degrading to its pre-guard behaviour. It must be \`unless\`."
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+assert_alert_uses_unless "aging alert subtracts the draining case with unless" \
+  PawtograderQueueOldestMessageAging
+assert_alert_uses_unless "stuck alert subtracts the draining case with unless" \
+  PawtograderAsyncQueueStuck
+
+# The guard is only a guard if it reads the labelled depth gauge. The per-queue
+# depth gauges (pawtograder_async_queue_size and friends) are separate metric
+# NAMES with no `queue` label and cannot be joined to the age series at all, so
+# a "simplification" back to one of those names would render, parse, and never
+# match anything.
+assert_rendered_contains "aging guard reads the labelled depth gauge" \
+  templates/prometheus-rules.yaml \
+  'deriv(pawtograder_queue_depth{namespace="default", queue!~".*_dlq|async_calls_low_priority"}[15m])' \
+  --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+assert_rendered_contains "stuck guard reads the labelled depth gauge" \
+  templates/prometheus-rules.yaml \
+  'deriv(pawtograder_queue_depth{namespace="default", queue="async_calls"}[15m])' \
+  --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# deriv() returns a PER-SECOND rate and draining is a FALLING gauge, so the
+# comparison has to be scaled by 60 and negative. Drop the minus sign and the
+# guard suppresses every queue that is filling instead of every queue that is
+# emptying — the exact inversion of the intended behaviour, and still valid
+# PromQL.
+assert_rendered_contains "drain floor is negative and scaled to per-minute" \
+  templates/prometheus-rules.yaml '[15m])) * 60 < -2' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# The floor is a value, not a literal, so an operator whose real stalls drift
+# faster than 2 msg/min can raise it without editing the template.
+assert_rendered_contains "drain floor is configurable" \
+  templates/prometheus-rules.yaml '[15m])) * 60 < -5' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=5
+
+# The DLQ and low-priority exclusions predate the drain guard and must survive
+# it on BOTH halves of the expression. A DLQ is never drained on a schedule and
+# async_calls_low_priority is starved by design, so either one included here
+# produces a permanent critical that gets silenced — taking the live queues with
+# it. The right-hand side carries the same matcher so the two sides produce the
+# same label set; `unless` joins on the full label set and silently subtracts
+# nothing if they diverge.
+assert_rendered_contains "aging alert still excludes DLQs and low-priority on both sides" \
+  templates/prometheus-rules.yaml \
+  'pawtograder_queue_depth{namespace="default", queue!~".*_dlq|async_calls_low_priority"}' \
+  --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# The `queue` label values in metrics/index.ts must be IDENTICAL between the two
+# arrays that feed pawtograder_queue_oldest_message_seconds and
+# pawtograder_queue_depth. `unless` matches on the full label set, so one
+# renamed string does not error, does not warn, and does not break a dashboard —
+# it just quietly stops suppressing, and the release pages come back. Nothing
+# else in the build compares these two lists.
+assert_queue_label_parity() {
+  local label="$1"
+  local src="$CHART/../../supabase/functions/metrics/index.ts"
+  if [ ! -f "$src" ]; then
+    echo "FAIL [$label]: cannot find $src"
+    FAILED=1
+    return
+  fi
+  # Slice each array literal, then pull its queue names. Entries are not all on
+  # one line — prettier wraps the longer ones — so this reads the block, not the
+  # line.
+  queue_names_in() {
+    awk -v decl="$1" '
+      index($0, "const " decl) { inblk = 1 }
+      inblk && /^[[:space:]]*\];/ { inblk = 0 }
+      inblk && /queue:[[:space:]]*"/ { print }
+    ' "$src" | grep -oE 'queue:[[:space:]]*"[a-z_]+"' | grep -oE '"[a-z_]+"' | sort
+  }
+  local ages depths
+  ages="$(queue_names_in queueOldestSeconds)"
+  depths="$(queue_names_in queueDepths)"
+  if [ -z "$ages" ] || [ -z "$depths" ]; then
+    echo "FAIL [$label]: could not extract both queue label lists from metrics/index.ts"
+    FAILED=1
+  elif [ "$ages" != "$depths" ]; then
+    echo "FAIL [$label]: queue label sets differ between the age and depth gauges"
+    diff <(printf '%s\n' "$ages") <(printf '%s\n' "$depths") | sed 's/^/       /'
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+assert_queue_label_parity "queue labels match between the age and depth gauges"
+
+# PawtograderAsyncQueueBacklog (> 1000 for 5m) shares the blind spot and was
+# left unguarded on purpose: at a depth of 1000 even a healthy ~8 msg/min drain
+# needs over two hours, which is a capacity signal worth paging on regardless of
+# worker health, and no scheduled release comes close to the threshold. That
+# decision only survives if the argument for it does — helm renders YAML
+# comments through to the manifest, so the note is assertable.
+assert_rendered_contains "backlog alert documents why it has no drain guard" \
+  templates/prometheus-rules.yaml \
+  "SAME structural blind spot as PawtograderAsyncQueueStuck" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# The behavioural half of this lives in promrules-unit.sh, which evaluates the
+# rendered PromQL against series shaped like the 2026-09-13 release and the
+# 2026-09-07 stall. The assertions above pin the rule's TEXT; only that suite
+# pins what it DOES. Assert it is present and runnable, because a text-only
+# guard that silently lost its behavioural counterpart is the weaker half.
+assert_promrules_suite_present() {
+  local label="$1"
+  if [ ! -x "$CHART/tests/promrules-unit.sh" ]; then
+    echo "FAIL [$label]: charts/pawtograder/tests/promrules-unit.sh is missing or not executable"
+    FAILED=1
+  elif [ ! -f "$CHART/tests/promrules-unit.yaml" ]; then
+    echo "FAIL [$label]: charts/pawtograder/tests/promrules-unit.yaml is missing"
+    FAILED=1
+  elif [ ! -f "$CHART/tests/promrules-unit-extreme.yaml" ]; then
+    echo "FAIL [$label]: charts/pawtograder/tests/promrules-unit-extreme.yaml is missing"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+# The drain-floor CEILING lives in two places: validations.yaml refuses anything
+# above it, and promrules-unit.sh renders a scenario AT it to prove the last
+# permitted value still discriminates. Raise the bound and forget the suite, and
+# the suite keeps evaluating the old value — passing, while the range it claims
+# to cover has grown past the measurement behind it. The two numbers have to
+# move together, so they are compared here.
+assert_drain_ceiling_agreement() {
+  local label="$1"
+  local bound runner
+  bound="$(grep -oE 'is outside 1-[0-9]+ messages/minute' "$CHART/templates/validations.yaml" \
+    | grep -oE '[0-9]+ messages' | grep -oE '^[0-9]+')"
+  runner="$(grep -oE '^EXTREME_FLOOR=[0-9]+' "$CHART/tests/promrules-unit.sh" | grep -oE '[0-9]+$')"
+  if [ -z "$bound" ] || [ -z "$runner" ]; then
+    echo "FAIL [$label]: could not read the ceiling from validations.yaml ($bound)"
+    echo "       or EXTREME_FLOOR from promrules-unit.sh ($runner)"
+    FAILED=1
+  elif [ "$bound" != "$runner" ]; then
+    echo "FAIL [$label]: validations.yaml permits up to $bound msg/min but"
+    echo "       promrules-unit.sh only evaluates $runner. The ceiling grew past"
+    echo "       the value the behavioural suite proves still works — re-measure"
+    echo "       the drain and move EXTREME_FLOOR with the bound."
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
+assert_drain_ceiling_agreement "the drain-floor ceiling and its proof are the same number"
+
+assert_promrules_suite_present "the promtool behaviour suite is present and runnable"
+
+# A threshold that cannot page is worse than no threshold. Every
+# monitoring.prometheusRules number is interpolated verbatim into PromQL or into
+# a `for:` duration, and nothing between values.yaml and Prometheus type-checks
+# it: the chart renders, the CRD accepts it, `kubectl apply` succeeds, and
+# Prometheus refuses the RULE GROUP — taking every alert in it off duty with the
+# only evidence in the operator's log. That is the same silent-loss shape the
+# `unless` operator above was chosen to avoid, reached through the values file.
+assert_refused "refuses a non-numeric drain floor" \
+  "must be a plain non-negative number" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=fast
+assert_refused "refuses a negative drain floor" \
+  "must be a plain non-negative number" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=-2
+
+# Both bounds are the guard losing its discrimination, in opposite directions.
+# At 0 the floor suppresses every queue that is moving at all, the 0.66 msg/min
+# 2026-09-07 stall included. Above 7 it is above the slowest healthy window ever
+# measured (7.27 msg/min, 2026-09-13), so it matches nothing and silently
+# restores the release pages — which is exactly what promrules-unit.sh's third
+# negative control demonstrates by mutating the floor to a value no drain can
+# reach.
+assert_refused "refuses a drain floor of zero" \
+  "is outside 1-7" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=0
+assert_refused "refuses a drain floor above every measured healthy drain" \
+  "is outside 1-7" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=20
+
+# The band is narrow (0.66 stall to 7.27 healthy), so fractional floors have to
+# work or the only tuning available is a 1-in-7 step.
+assert_renders "permits a fractional drain floor" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=1.5
+
+# The same class of typo on the DURATION thresholds. An unquoted 10m in YAML is
+# the string the rule needs; an unquoted 10 is an integer, and a bare integer is
+# not a valid Prometheus duration — `for: 5` is refused by the operator.
+assert_refused "refuses a bare integer where a duration is required" \
+  "must be a Prometheus duration" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.postgresUnavailableFor=5
+
+# ...and on a pre-existing numeric threshold, to prove the guard covers the
+# class rather than only the value this change added.
+assert_refused "refuses a non-numeric value on a pre-existing threshold" \
+  "must be a plain non-negative number" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueOldestSeconds=twenty
+
+# Gated on the rules actually rendering. A deployment that emits no
+# PrometheusRule must not fail an upgrade over numbers with no effect — the same
+# rule the org-slot coherence checks follow, and the reason an install that once
+# experimented with a value is not wedged by it forever.
+assert_renders "a monitoring-disabled deployment ignores a garbage threshold" \
+  --set monitoring.enabled=false \
+  --set monitoring.prometheusRules.queueDrainMessagesPerMinute=fast
+
+# Helm parses YAML numbers as float64, so the shipped replicationLagBytesWarning
+# (104857600) stringifies as 1.048576e+08. PromQL accepts that literal and the
+# rule casts with int64 anyway, but the shape check has to allow what PromQL
+# allows rather than what looks tidy in values.yaml — the default values file
+# must render, and it did not on the first attempt at this guard.
+assert_renders "the shipped defaults pass their own threshold validation" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+echo
+
+echo "== the pgmq msg_id cliff guard =="
+
+# ---------------------------------------------------------------------------
+# pgmq msg_id vs the 2^53 client-side cliff.
+#
+# msg_id is a bigint and PostgREST emits it exactly -- a preview round-trip
+# returned 9007199254740993 (2^53+1) byte-for-byte -- but JSON.parse in the
+# workers rounds anything above 2^53, so pgmq_public.archive /
+# pgmq_public.delete get an id one off from the message that was processed:
+# silent work loss, or infinite redelivery.
+#
+# Nothing organic goes there (the busiest prod sequence was at 137,603 on
+# 2026-09-13, moving ~7 msg/h -- order 10^11 years from the cliff), so the
+# alerts watch for a sequence that was SET: a restore, a migration, a backfill,
+# a manual ALTER SEQUENCE ... RESTART WITH. That is why the thresholds are not
+# a fraction of the ceiling, and why the bounds below exist.
+# ---------------------------------------------------------------------------
+
+# The metric name and its label. Block key + column name TOGETHER are the metric
+# name the alert expr queries; `queue` must be a LABEL or there is nothing to
+# join to the depth/age series and nothing to name the queue in the page.
+assert_exporter_metric pawtograder_queue_msg_id last_value queue
+
+# assert_msgid_query_shape
+# Three properties of the SQL itself. Scoped to the `query: |` text of the
+# pawtograder_queue_msg_id block rather than the whole rendered file, because
+# helm passes YAML comments through and the block's own comment names the
+# rewrite it is warning against -- a file-wide grep would match the warning and
+# report the bug it exists to prevent.
+#
+#   ANCHORED STRIP. The label value must be the sequence name with `q_` and
+#   `_msg_id_seq` removed by an anchored regexp. The obvious rewrite, an
+#   unanchored replace() of `q_`, renders, runs, and returns garbage for exactly
+#   the DLQ queues: `q_` occurs a second time inside every `..._dlq_msg_id_seq`,
+#   so q_async_calls_dlq_msg_id_seq comes out as `async_calls_dlmsg_id_seq`.
+#   That label matches no pawtograder_queue_depth series and no alert selector,
+#   and nothing else in the build would notice.
+#
+#   ZERO-FILL. pg_sequences.last_value is NULL for a sequence nextval() has
+#   never touched, and two prod queues are in that state
+#   (async_calls_low_priority, gradebook_row_recalculate_dlq, both confirmed
+#   NULL on 2026-09-13). Without COALESCE those series vanish rather than
+#   reading 0, and an absent series is indistinguishable from a healthy one.
+#
+#   ONE ROW PER LABEL SET. A duplicate `queue` label does not mis-rank a panel;
+#   it makes the exporter's registry return HTTP 500 for the whole /metrics
+#   endpoint. The GROUP BY is what keeps that impossible if the schema filter is
+#   ever widened.
+assert_msgid_query_shape() {
+  local label="msg_id query shape"
+  if ! helm template t "$CHART" "${BASE[@]}" \
+      --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+      --show-only templates/postgres-exporter-queries.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  # The `query: |` literal of this block only: from the block key to the next
+  # 6-space key (master:/metrics:) that closes it.
+  local q
+  q="$(awk '
+    $0 == "    pawtograder_queue_msg_id:" { inb = 1; next }
+    inb && $0 == "      query: |" { inq = 1; next }
+    inq && /^      [^ ]/ { exit }
+    inq { print }
+  ' "$OUTFILE")"
+  if [ -z "$q" ]; then
+    echo "FAIL [$label]: no query text found for block pawtograder_queue_msg_id"
+    FAILED=1
+    return
+  fi
+  local bad=0
+  if ! printf '%s\n' "$q" | grep -qF '^q_(.*)_msg_id_seq$'; then
+    echo "FAIL [$label]: the queue label is not stripped by the anchored regexp"
+    echo "       an unanchored replace() of 'q_' mangles every *_dlq queue name"
+    bad=1
+  fi
+  if printf '%s\n' "$q" | grep -qE '[^_]replace\(sequencename'; then
+    echo "FAIL [$label]: the queue label uses an unanchored replace(sequencename, ...)"
+    echo "       q_async_calls_dlq_msg_id_seq becomes 'async_calls_dlmsg_id_seq',"
+    echo "       which joins to no pawtograder_queue_depth series"
+    bad=1
+  fi
+  if ! printf '%s\n' "$q" | grep -qF 'COALESCE(last_value, 0)'; then
+    echo "FAIL [$label]: last_value is not zero-filled — a never-used sequence is"
+    echo "       NULL, and its series would be absent rather than 0"
+    bad=1
+  fi
+  if ! printf '%s\n' "$q" | grep -qE '^\s*GROUP BY'; then
+    echo "FAIL [$label]: the query does not GROUP BY the queue label — two rows with"
+    echo "       the same label set 500 the entire /metrics endpoint"
+    bad=1
+  fi
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label]"; fi
+}
+
+assert_msgid_query_shape
+
+# Both rules render against the metric the exporter actually emits. A typo here
+# is a rule that parses, loads, and never matches anything.
+assert_rendered_contains "msg_id warning alert reads the exporter's sequence gauge" \
+  templates/prometheus-rules.yaml \
+  'max by (namespace, queue) (pawtograder_queue_msg_id_last_value{namespace="default"}) > 1e+12' \
+  --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+assert_rendered_contains "msg_id critical alert sits one doubling below 2^53" \
+  templates/prometheus-rules.yaml \
+  'max by (namespace, queue) (pawtograder_queue_msg_id_last_value{namespace="default"}) > 4.503599627370496e+15' \
+  --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# Both thresholds are values, not literals.
+assert_rendered_contains "msg_id warning threshold is configurable" \
+  templates/prometheus-rules.yaml '> 2000000000000' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdWarning=2000000000000
+assert_rendered_contains "msg_id critical threshold is configurable" \
+  templates/prometheus-rules.yaml '> 5000000000000000' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdCritical=5000000000000000
+
+# The durable fix is a note, not code, and a note only survives if something
+# asserts it. Same precedent as the backlog alert's no-drain-guard rationale
+# above: helm renders YAML comments through to the manifest, so it is assertable.
+assert_rendered_contains "msg_id alert records the durable fix it is not doing" \
+  templates/prometheus-rules.yaml \
+  "Returning it as TEXT from" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# Shape, same class as the drain floor.
+assert_refused "refuses a non-numeric msg_id threshold" \
+  "must be a plain non-negative number" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdWarning=huge
+
+# BELOW the band: at 1000 this is a capacity threshold on a number that grows,
+# so it fires on ordinary enqueueing, gets silenced or raised, and stops watching
+# for the set it was built to catch.
+assert_refused "refuses a msg_id warning inside the range traffic can reach" \
+  "is below 1e9" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdWarning=1000
+
+# AT the cliff: a warning that only fires once ids have already stopped
+# round-tripping has no lead time on the damage it describes.
+assert_refused "refuses a msg_id warning at the 2^53 cliff itself" \
+  "is at or above 2^53" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdWarning=9007199254740992
+
+# PAST the cliff: a critical there pages about a loss that has already happened.
+assert_refused "refuses a msg_id critical past the 2^53 cliff" \
+  "is above 2^53" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdCritical=90071992547409920
+
+# Collapsed tiers: if critical is not above warning, every warning is also a page
+# and the ticket tier does not exist.
+assert_refused "refuses a msg_id critical at or below the warning" \
+  "is not above queueMsgIdWarning" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdCritical=1000000000
+
+# A value inside the band must still be accepted -- the bounds are a band, not a
+# pin, and an operator who wants more lead time has to be able to take it.
+assert_renders "permits a msg_id warning inside the band" \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
+  --set monitoring.prometheusRules.queueMsgIdWarning=2000000000000
+
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"
   exit 1

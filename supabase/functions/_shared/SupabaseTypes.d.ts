@@ -13,6 +13,26 @@ export type Database = {
         Args: { message_id: number; queue_name: string };
         Returns: boolean;
       };
+      claim_org_slot_and_read: {
+        Args: {
+          global_cap: number;
+          holder: string;
+          lease_ttl_seconds: number;
+          max_per_org: number;
+          n: number;
+          queue_name: string;
+          sleep_seconds: number;
+        };
+        Returns: {
+          enqueued_at: string | null;
+          message: Json | null;
+          msg_id: number | null;
+          org: string | null;
+          read_ct: number | null;
+          status: string | null;
+          vt: string | null;
+        }[];
+      };
       delete: {
         Args: { message_id: number; queue_name: string };
         Returns: boolean;
@@ -36,6 +56,14 @@ export type Database = {
           isOneToOne: false;
           isSetofReturn: true;
         };
+      };
+      release_org_slot: {
+        Args: { holder: string; queue_name: string };
+        Returns: undefined;
+      };
+      renew_org_slot: {
+        Args: { holder: string; lease_ttl_seconds: number; queue_name: string };
+        Returns: boolean;
       };
       send: {
         Args: { message: Json; queue_name: string; sleep_seconds?: number };

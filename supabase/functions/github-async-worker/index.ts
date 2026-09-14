@@ -26,6 +26,7 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
+import { beginOrgLeaseRun, type OrgSlotRow, type OrgSlotRpc } from "../_shared/orgLeaseRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -2763,6 +2764,21 @@ export async function processEnvelope(
  */
 let cachedTuning: ReturnType<typeof resolveAsyncWorkerTuning> | null = null;
 
+/**
+ * Tag which drain path this isolate is on, and with what caps.
+ *
+ * Unconditional, for the same reason the drain tags are: `org_slots_enabled=false` is the
+ * interesting case during a rollout, because "this pod is still on the old path" is otherwise
+ * indistinguishable from "this pod has not reported yet".
+ */
+function tagOrgSlots(scope: Sentry.Scope, orgSlots: ReturnType<typeof resolveAsyncWorkerTuning>["orgSlots"]) {
+  scope.setTag("org_slots_enabled", String(orgSlots.enabled));
+  if (!orgSlots.enabled) return;
+  scope.setTag("org_slot_global_cap", String(orgSlots.globalCap));
+  scope.setTag("org_slot_max_per_org", String(orgSlots.maxPerOrg));
+  scope.setTag("org_slot_lease_ttl_seconds", String(orgSlots.leaseTtlSeconds));
+}
+
 function getTuning(scope: Sentry.Scope) {
   // TAGGING IS PER SCOPE, MEMOIZATION IS PER ISOLATE, and the two must not be
   // conflated. runBatchHandler() builds a FRESH Sentry.Scope for every run, and
@@ -2776,6 +2792,7 @@ function getTuning(scope: Sentry.Scope) {
   if (cachedTuning) {
     scope.setTag("drain_concurrency", String(cachedTuning.drainConcurrency));
     scope.setTag("visibility_timeout_seconds", String(cachedTuning.visibilityTimeoutSeconds));
+    tagOrgSlots(scope, cachedTuning.orgSlots);
     return cachedTuning;
   }
   const tuning = resolveAsyncWorkerTuning(Deno.env);
@@ -2783,6 +2800,7 @@ function getTuning(scope: Sentry.Scope) {
 
   scope.setTag("drain_concurrency", String(tuning.drainConcurrency));
   scope.setTag("visibility_timeout_seconds", String(tuning.visibilityTimeoutSeconds));
+  tagOrgSlots(scope, tuning.orgSlots);
 
   for (const issue of tuning.issues) {
     console.warn(`[pgmq] worker: ${issue.message}`);
@@ -2877,6 +2895,27 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
 
   if (messages.length === 0) return false;
 
+  await processQueueMessages(adminSupabase, messages, queueName, scope);
+  return true;
+}
+
+/**
+ * Run one batch of messages: handler, archive, and the Sentry bookkeeping around both.
+ *
+ * Extracted from processBatch so the per-org lease path (runOrgLeasedHandler) runs the IDENTICAL
+ * per-message logic. Everything that makes a message safe lives here — the archive-failure report,
+ * the poison-pill accounting inside processEnvelope (PGMQ_MAX_READ_CT), the per-message scope — and
+ * a second copy of it in the org path is how one of those would quietly diverge.
+ */
+async function processQueueMessages(
+  adminSupabase: SupabaseClient<Database>,
+  // `org` is present only on the per-org lease path, where `claim_org_slot_and_read` returns it
+  // alongside the pgmq columns. Tagged from the ROW rather than only from the claim so that if the
+  // SQL ever returned a mixed batch, a message would still be attributed to its own org.
+  messages: (QueueMessage<GitHubAsyncEnvelope> & { org?: string })[],
+  queueName: "async_calls" | "async_calls_low_priority",
+  scope: Sentry.Scope
+) {
   await Promise.allSettled(
     messages.map(async (msg) => {
       // ONE SCOPE PER MESSAGE, because `n` of these run CONCURRENTLY and
@@ -2903,6 +2942,7 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
       const msgScope = scope.clone();
       msgScope.setTag("msg_id", String(msg.msg_id));
       msgScope.setTag("queue_name", queueName);
+      if (msg.org) msgScope.setTag("github_org", msg.org);
 
       const ok = await processEnvelope(
         adminSupabase,
@@ -2932,7 +2972,121 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
       }
     })
   );
-  return true;
+}
+
+/**
+ * The pgmq queues this worker drains, in priority order. Shared by both drain paths so the
+ * low-priority fallback cannot be added to one and forgotten in the other.
+ *
+ * EVERY QUEUE IN THIS LIST NEEDS A SEEDED SLOT POOL. `async_worker_slots` is seeded per queue and
+ * `claim_org_slot_and_read` picks its free slot with `where s.queue_name = ...`, so a queue with no
+ * pool can never be claimed. That used to surface as zero rows forever — indistinguishable here
+ * from an empty queue, with every liveness signal green — which is why the SQL now RAISES on an
+ * unseeded pool instead, and why `claimOnce` treats that as fatal on the first occurrence. Adding a
+ * queue here without seeding its pool in a migration is therefore a loud, immediate failure rather
+ * than a silent one. Both queues in this list are seeded today (64 and 16 slots).
+ */
+const ASYNC_QUEUE_NAMES = ["async_calls", "async_calls_low_priority"] as const;
+
+/**
+ * Adapter from the pinned SQL contract to the RPC interface orgLeaseRun.ts wants.
+ *
+ * It lives here rather than in _shared/orgLeaseRun.ts so that module stays free of the generated
+ * `Database` type and testable under `deno test` with no client — the same split asyncWorkerTuning.ts
+ * uses with its `EnvReader`. Everything still goes through PostgREST: there is no direct pg
+ * connection anywhere in this worker, which is also why the lease is a server-side table and not an
+ * advisory lock.
+ */
+function orgSlotRpc(adminSupabase: SupabaseClient<Database>): OrgSlotRpc {
+  const pgmq = adminSupabase.schema("pgmq_public");
+  return {
+    claim: async (args) => {
+      // Rows come back either as messages (`status = 'claimed'`) or as a single status row saying
+      // why nothing was claimed. orgLeaseRun.ts does the discrimination; this only forwards.
+      const { data, error } = await pgmq.rpc("claim_org_slot_and_read", args);
+      return { data: (data ?? []) as OrgSlotRow<GitHubAsyncEnvelope>[], error };
+    },
+    // `queue_name` leads on all three. Renewal and release are scoped to ONE pool: a run that
+    // rotates queues can hold a lease in each for a moment, and renewing the pool it is draining
+    // must not extend the one it walked away from — that lease is meant to lapse at its TTL.
+    renew: async (args) => {
+      const { data, error } = await pgmq.rpc("renew_org_slot", args);
+      return { data: data as boolean | null, error };
+    },
+    release: async (args) => {
+      const { data, error } = await pgmq.rpc("release_org_slot", args);
+      return { data, error };
+    }
+  };
+}
+
+/**
+ * Drain as a PER-ORG leaseholder.
+ *
+ * The difference from the single-leaseholder path below is entirely in WHO this isolate competes
+ * with. There, one Redis lease per deployment picked one drainer and every other poke went idle, so
+ * several classes in different GitHub orgs releasing at once queued behind one FIFO drain while the
+ * per-org GitHub content limiter (40 concurrent / 40 per minute PER ORG) sat mostly idle for all but
+ * one of them. Here each isolate claims a slot for ONE org and drains only that org's messages, so
+ * the orgs proceed in parallel and each one's limiter is the only thing bounding it.
+ *
+ * `tuning.drainConcurrency` and `tuning.visibilityTimeoutSeconds` are UNCHANGED by this path and
+ * deliberately so: both ceilings in asyncWorkerTuning.ts are per-leaseholder, each leaseholder is
+ * its own isolate, and concurrency here comes from more isolates rather than a bigger batch. See the
+ * 2026-09-13 update in that file.
+ */
+async function runOrgLeasedHandler(
+  adminSupabase: SupabaseClient<Database>,
+  scope: Sentry.Scope,
+  tuning: ReturnType<typeof resolveAsyncWorkerTuning>
+) {
+  const run = beginOrgLeaseRun({
+    name: "github_async_worker",
+    scope,
+    rpc: orgSlotRpc(adminSupabase),
+    queueNames: ASYNC_QUEUE_NAMES,
+    drainConcurrency: tuning.drainConcurrency,
+    visibilityTimeoutSeconds: tuning.visibilityTimeoutSeconds,
+    maxPerOrg: tuning.orgSlots.maxPerOrg,
+    globalCap: tuning.orgSlots.globalCap,
+    leaseTtlMs: tuning.orgSlots.leaseTtlSeconds * 1000,
+    idleSleepMs: 15000,
+    errorSleepMs: 5000
+  });
+  scope.setTag("worker_run_mode", run.mode);
+
+  try {
+    while (run.shouldContinue()) {
+      await run.heartbeat();
+      if (!run.shouldContinue()) break;
+      try {
+        const claimed = await run.claim();
+        if (!claimed) {
+          if (!(await run.onIdle())) break;
+          continue;
+        }
+        // A CLONE PER CLAIM, for the same reason processBatch clones per message: the run-level
+        // scope is a mutable bag shared with the lease's own tagging, and `github_org` changes from
+        // one claim to the next. Writing it onto the shared scope would leave a stale org on events
+        // captured after this batch, which is exactly the kind of misattribution the per-message
+        // clone comment below warns about.
+        const claimScope = scope.clone();
+        claimScope.setTag("github_org", claimed.org);
+        claimScope.setTag("queue_name", claimed.queueName);
+        await processQueueMessages(
+          adminSupabase,
+          claimed.messages as (QueueMessage<GitHubAsyncEnvelope> & { org: string })[],
+          claimed.queueName as "async_calls" | "async_calls_low_priority",
+          claimScope
+        );
+      } catch (e) {
+        Sentry.captureException(e, scope);
+        await run.onError();
+      }
+    }
+  } finally {
+    await run.release();
+  }
 }
 
 export async function runBatchHandler() {
@@ -2943,6 +3097,20 @@ export async function runBatchHandler() {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+
+  // WHICH DRAIN PATH, and why the default is the old one.
+  //
+  // `orgSlots.enabled` is false unless GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP is set to something
+  // above 0, which is the same inertness property the drain tuning already has: deploying this
+  // changes nothing until an operator opts in. The two paths are mutually exclusive on purpose --
+  // per-org mode does NOT take the Redis lease, because the slot table is already the mutual
+  // exclusion AND the concurrency cap, and holding both would mean one Redis leaseholder per
+  // deployment claiming org slots one at a time, i.e. the FIFO drain this change exists to remove.
+  const tuning = getTuning(scope);
+  if (tuning.orgSlots.enabled) {
+    await runOrgLeasedHandler(adminSupabase, scope, tuning);
+    return;
+  }
 
   // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts for why the old
   // module-level `started` flag could not work under `edgeFunctions.policy: per_request`.

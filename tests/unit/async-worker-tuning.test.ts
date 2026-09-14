@@ -22,7 +22,16 @@ import {
   MAX_VISIBILITY_TIMEOUT_SECONDS,
   PER_MESSAGE_VT_BUDGET_SECONDS,
   ISOLATE_LIFETIME_ENV,
-  DEFAULT_ISOLATE_LIFETIME_SECONDS
+  DEFAULT_ISOLATE_LIFETIME_SECONDS,
+  ORG_SLOT_GLOBAL_CAP_ENV,
+  ORG_SLOT_MAX_PER_ORG_ENV,
+  ORG_SLOT_LEASE_TTL_ENV,
+  DEFAULT_ORG_SLOT_GLOBAL_CAP,
+  MAX_ORG_SLOT_GLOBAL_CAP,
+  MIN_ORG_SLOT_MAX_PER_ORG,
+  MAX_ORG_SLOT_MAX_PER_ORG,
+  MIN_ORG_SLOT_LEASE_TTL_SECONDS,
+  MAX_ORG_SLOT_LEASE_TTL_SECONDS
 } from "@/supabase/functions/_shared/asyncWorkerTuning";
 
 function env(vars: Record<string, string | undefined>) {
@@ -439,8 +448,235 @@ describe("the second ceiling: isolate lifetime vs concurrency (config coherence)
 
   it("never treats the lifetime as a knob it can change", () => {
     const t = resolveAsyncWorkerTuning(env({ [ISOLATE_LIFETIME_ENV]: "1000" }));
-    expect(Object.keys(t)).toEqual(["drainConcurrency", "visibilityTimeoutSeconds", "issues"]);
+    // The lifetime belongs to the demuxer and must never appear in the output. Pinning the exact
+    // key list is what makes that assertion durable, so a new knob has to be added here on purpose.
+    expect(Object.keys(t)).toEqual(["drainConcurrency", "visibilityTimeoutSeconds", "orgSlots", "issues"]);
     expect(t.drainConcurrency).toBe(4);
     expect(t.visibilityTimeoutSeconds).toBe(300);
+  });
+});
+
+/**
+ * The per-org slot knobs (2026-09-13).
+ *
+ * Same two properties as the drain knobs above, because they are the same kind of thing: the
+ * defaults must reproduce the pre-change behaviour EXACTLY — here that means per-org leasing off
+ * and the single-leaseholder path still in force — and no configured value may put more work on one
+ * GitHub org's rate limit than the limiter is budgeted for.
+ */
+describe("per-org slot tuning defaults", () => {
+  it("is inert until configured: nothing set means per-org leasing is off", () => {
+    const t = resolveAsyncWorkerTuning(env({}));
+    expect(t.orgSlots.enabled).toBe(false);
+    expect(t.orgSlots.globalCap).toBe(0);
+    expect(DEFAULT_ORG_SLOT_GLOBAL_CAP).toBe(0);
+  });
+
+  it("adds no issues of its own to the shipped defaults", () => {
+    // The defaults already carry two invariant reports (the legacy 4/300 pair). The per-org knobs
+    // must not add a third, or every deployment would page on a feature nobody turned on.
+    const t = resolveAsyncWorkerTuning(env({}));
+    expect(t.issues.filter((i) => i.env.includes("ORG_SLOT"))).toHaveLength(0);
+    expect(t.issues.filter((i) => i.kind === "invariant")).toHaveLength(2);
+  });
+
+  it("turns on with only the global cap set, at the most conservative per-org setting", () => {
+    // Enabling should buy CROSS-org parallelism without changing how hard any single org is hit.
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "4" }));
+    expect(t.orgSlots).toEqual({ enabled: true, globalCap: 4, maxPerOrg: 1, leaseTtlSeconds: 60 });
+    expect(t.issues.filter((i) => i.env.includes("ORG_SLOT"))).toHaveLength(0);
+  });
+
+  it("does not change the drain knobs, which are per leaseholder", () => {
+    // The point of the design: concurrency comes from more isolates, so `n` and the visibility
+    // timeout are untouched by enabling this.
+    const off = resolveAsyncWorkerTuning(env({}));
+    const on = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8" }));
+    expect(on.drainConcurrency).toBe(off.drainConcurrency);
+    expect(on.visibilityTimeoutSeconds).toBe(off.visibilityTimeoutSeconds);
+  });
+
+  it("treats an explicit 0 as a supported value, not as a typo", () => {
+    // Unlike `n: 0`, `globalCap: 0` selects a complete, shipped, draining worker — the old path.
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "0" }));
+    expect(t.orgSlots.enabled).toBe(false);
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_GLOBAL_CAP_ENV)).toHaveLength(0);
+  });
+});
+
+describe("per-org slot tuning: parsing and bounds", () => {
+  it("falls back and reports, rather than sending garbage to the RPC", () => {
+    // claim_org_slot_and_read RAISES on a null or sub-1 lease_ttl_seconds, so a NaN here would take
+    // the drain down for a typo it could have ridden out.
+    for (const raw of ["four", "1.5", "8kB", "-1"]) {
+      const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: raw }));
+      expect(t.orgSlots.globalCap).toBe(DEFAULT_ORG_SLOT_GLOBAL_CAP);
+      const rejected = t.issues.filter((i) => i.kind === "rejected" && i.env === ORG_SLOT_GLOBAL_CAP_ENV);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].effective).toBe(DEFAULT_ORG_SLOT_GLOBAL_CAP);
+    }
+  });
+
+  it("clamps an over-large global cap to maxParallelism and says so", () => {
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "64" }));
+    expect(t.orgSlots.globalCap).toBe(MAX_ORG_SLOT_GLOBAL_CAP);
+    const clamped = t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_GLOBAL_CAP_ENV);
+    expect(clamped).toHaveLength(1);
+    expect(clamped[0].effective).toBe(8);
+  });
+
+  it("clamps the per-org allowance to its measured ceiling", () => {
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_MAX_PER_ORG_ENV]: "10" }));
+    expect(t.orgSlots.maxPerOrg).toBe(MAX_ORG_SLOT_MAX_PER_ORG);
+    expect(t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_MAX_PER_ORG_ENV)).toHaveLength(1);
+  });
+
+  it("clamps the lease TTL to its range", () => {
+    const low = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "4", [ORG_SLOT_LEASE_TTL_ENV]: "5" }));
+    expect(low.orgSlots.leaseTtlSeconds).toBe(MIN_ORG_SLOT_LEASE_TTL_SECONDS);
+
+    const high = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "4", [ORG_SLOT_LEASE_TTL_ENV]: "9000" }));
+    expect(high.orgSlots.leaseTtlSeconds).toBe(MAX_ORG_SLOT_LEASE_TTL_SECONDS);
+  });
+
+  it("keeps the TTL floor above the longest measured single message", () => {
+    // 32.2s was the MAX create_repo on 2026-09-13. A TTL at or below that reaps slots from
+    // leaseholders that are working, and two holders on one org duplicate work against one limit.
+    expect(MIN_ORG_SLOT_LEASE_TTL_SECONDS).toBeGreaterThan(32.2);
+  });
+});
+
+describe("per-org slot tuning: coherence with the per-org rate limit", () => {
+  it("holds maxPerOrg x n at or below the content limiter's budget", () => {
+    // 8 concurrent creations against one org is the 20%-of-pool occupancy MAX_DRAIN_CONCURRENCY
+    // already argues for. At n=8 there is room for exactly one leaseholder per org.
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "960",
+        [ISOLATE_LIFETIME_ENV]: "960000",
+        [ORG_SLOT_GLOBAL_CAP_ENV]: "8",
+        [ORG_SLOT_MAX_PER_ORG_ENV]: "2"
+      })
+    );
+    expect(t.drainConcurrency).toBe(8);
+    expect(t.orgSlots.maxPerOrg).toBe(1);
+    expect(t.orgSlots.maxPerOrg * t.drainConcurrency).toBeLessThanOrEqual(MAX_DRAIN_CONCURRENCY);
+
+    const clamped = t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_MAX_PER_ORG_ENV);
+    expect(clamped).toHaveLength(1);
+    // The operator asked for more throughput; tell them where it actually comes from.
+    expect(clamped[0].message).toContain(ORG_SLOT_GLOBAL_CAP_ENV);
+  });
+
+  it("allows the full per-org allowance at the shipped n", () => {
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_MAX_PER_ORG_ENV]: "2" }));
+    expect(t.drainConcurrency).toBe(4);
+    expect(t.orgSlots.maxPerOrg).toBe(2);
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_MAX_PER_ORG_ENV)).toHaveLength(0);
+  });
+
+  it("checks against the EFFECTIVE n, not the configured one", () => {
+    // n=8 with the timeouts left alone is degraded to 2 by the enforcement above, so an org can
+    // safely take the full per-org allowance — checking the configured 8 would restrict a
+    // leaseholder that is never going to run that wide.
+    const t = resolveAsyncWorkerTuning(
+      env({ [DRAIN_CONCURRENCY_ENV]: "8", [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_MAX_PER_ORG_ENV]: "2" })
+    );
+    expect(t.drainConcurrency).toBe(2);
+    expect(t.orgSlots.maxPerOrg).toBe(2);
+  });
+
+  it("never lets a per-org allowance exceed the fleet-wide cap", () => {
+    const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "1", [ORG_SLOT_MAX_PER_ORG_ENV]: "2" }));
+    expect(t.orgSlots.maxPerOrg).toBe(1);
+    const clamped = t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_MAX_PER_ORG_ENV);
+    expect(clamped).toHaveLength(1);
+    expect(clamped[0].message).toContain("can never be reached");
+  });
+
+  it("never returns a maxPerOrg of 0, whatever the arithmetic says", () => {
+    // Same failure MIN_DRAIN_CONCURRENCY exists for: 0 would mean no org can ever be drained while
+    // every liveness signal stays green.
+    for (const n of ["1", "2", "3", "4", "5", "6", "7", "8"]) {
+      const t = resolveAsyncWorkerTuning(
+        env({
+          [DRAIN_CONCURRENCY_ENV]: n,
+          [VISIBILITY_TIMEOUT_ENV]: "1800",
+          [ISOLATE_LIFETIME_ENV]: "1800000",
+          [ORG_SLOT_GLOBAL_CAP_ENV]: "8",
+          [ORG_SLOT_MAX_PER_ORG_ENV]: "2"
+        })
+      );
+      expect(t.orgSlots.maxPerOrg).toBeGreaterThanOrEqual(MIN_ORG_SLOT_MAX_PER_ORG);
+    }
+  });
+
+  it("keeps the constants themselves coherent at the shipped defaults", () => {
+    expect(MAX_ORG_SLOT_MAX_PER_ORG * DEFAULT_DRAIN_CONCURRENCY).toBeLessThanOrEqual(MAX_DRAIN_CONCURRENCY);
+  });
+});
+
+describe("per-org slot tuning: coherence with the timeouts", () => {
+  it("never lets the TTL outlive the visibility timeout", () => {
+    // A dead holder's slot must not stay pinned past the point where its own messages are
+    // redeliverable: the queue would be drainable and the slot would say otherwise.
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "2",
+        [VISIBILITY_TIMEOUT_ENV]: "240",
+        [ORG_SLOT_GLOBAL_CAP_ENV]: "4",
+        [ORG_SLOT_LEASE_TTL_ENV]: "300"
+      })
+    );
+    expect(t.visibilityTimeoutSeconds).toBe(240);
+    expect(t.orgSlots.leaseTtlSeconds).toBe(240);
+    const clamped = t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_LEASE_TTL_ENV);
+    expect(clamped).toHaveLength(1);
+    expect(clamped[0].message).toContain(VISIBILITY_TIMEOUT_ENV);
+  });
+
+  it("never lets the TTL outlive the isolate that holds it", () => {
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "1",
+        [VISIBILITY_TIMEOUT_ENV]: "600",
+        [ISOLATE_LIFETIME_ENV]: "120000",
+        [ORG_SLOT_GLOBAL_CAP_ENV]: "4",
+        [ORG_SLOT_LEASE_TTL_ENV]: "300"
+      })
+    );
+    expect(t.orgSlots.leaseTtlSeconds).toBe(120);
+    expect(t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_LEASE_TTL_ENV)[0].message).toContain(
+      ISOLATE_LIFETIME_ENV
+    );
+  });
+
+  it("reports rather than clamps when the floor and the ceiling cross", () => {
+    // A 30s isolate lifetime puts the ceiling below the 45s floor. Clamping to 30s would reap
+    // working leaseholders, so the floor wins and the mismatch is reported as unfixable here.
+    const t = resolveAsyncWorkerTuning(
+      env({ [ISOLATE_LIFETIME_ENV]: "30000", [ORG_SLOT_GLOBAL_CAP_ENV]: "4", [ORG_SLOT_LEASE_TTL_ENV]: "300" })
+    );
+    expect(t.orgSlots.leaseTtlSeconds).toBe(MIN_ORG_SLOT_LEASE_TTL_SECONDS);
+    const unfixable = t.issues.filter((i) => i.kind === "invariant" && i.env === ORG_SLOT_LEASE_TTL_ENV);
+    expect(unfixable).toHaveLength(1);
+    expect(unfixable[0].message).toContain("still working");
+  });
+
+  it("does not emit coherence noise about knobs that are switched off", () => {
+    // maxPerOrg=2 against n=8 is incoherent, but with the feature off it is also inert, and a
+    // Sentry warning about a number with no effect is noise on every deployment.
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [DRAIN_CONCURRENCY_ENV]: "8",
+        [VISIBILITY_TIMEOUT_ENV]: "960",
+        [ISOLATE_LIFETIME_ENV]: "960000",
+        [ORG_SLOT_MAX_PER_ORG_ENV]: "2",
+        [ORG_SLOT_LEASE_TTL_ENV]: "300"
+      })
+    );
+    expect(t.orgSlots.enabled).toBe(false);
+    expect(t.issues.filter((i) => i.env.includes("ORG_SLOT"))).toHaveLength(0);
   });
 });

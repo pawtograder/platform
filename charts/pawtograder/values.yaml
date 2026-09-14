@@ -1452,9 +1452,62 @@ edgeFunctions:
   # and the render-time rules make all of that impossible in the first place. Note these are rendered as explicit `env` entries, and
   # an `env` entry beats `envFrom`, so edgeFunctions.envFromSecrets CANNOT be
   # used to override them: set them here.
+  # ---------------------------------------------------------------------------
+  # PER-ORG LEASEHOLDERS (orgSlot*) — a SECOND, independent scaling axis
+  # ---------------------------------------------------------------------------
+  # drainConcurrency above buys concurrency by making ONE leaseholder's batch
+  # bigger, and it is capped at 8 because all of those handlers share a single
+  # 256MiB isolate and one visibility-timeout budget. These three knobs buy it
+  # by running MORE leaseholders, each its own isolate, each claiming a slot for
+  # ONE GitHub org. So the memory cap and the `n x 120` ceiling apply PER
+  # LEASEHOLDER and stop binding the aggregate — which is why enabling this
+  # needs no change to drainConcurrency, visibilityTimeoutSeconds or
+  # worker.timeoutMs.
+  #
+  # WHY IT EXISTS. The Bottleneck content limiter is per ORG (reservoir 40 /
+  # maxConcurrent 40 / refresh 40 per 60s, keyed create_content:<org>:<app id>),
+  # but the worker's concurrency was GLOBAL. Measured on Khoury prod 2026-09-13:
+  # CS 2000 released Project 1 at 04:00:00 UTC, 242 create_repo messages in one
+  # transaction, drained 04:00:00 -> 04:30:51 at ~8 msg/min. With four classes
+  # in four DIFFERENT orgs releasing at once there are 4 x 40 = 160 concurrent
+  # GitHub slots available and the worker would use 4 — ~2.5% — while all four
+  # classes queue behind one FIFO drain.
+  #
+  # Peak simultaneous activity observed over 7 days was 8 distinct orgs in one
+  # hour (2026-09-11, 377 messages), against 15 distinct github_org values in
+  # public.classes total.
+  #
+  # DEFAULTS ARE OFF, deliberately, exactly like drainConcurrency's defaults
+  # reproduce the old hardcoded pair: globalCap 0 selects the single-leaseholder
+  # path that shipped before this, so upgrading the chart changes nothing until
+  # an operator opts in. RECOMMENDED once you do: globalCap 8, maxPerOrg 2.
+  #
+  #   orgSlotGlobalCap: 8        # fleet-wide leaseholders; 8 = edgeFunctions.maxParallelism
+  #   orgSlotMaxPerOrg: 2        # 2 x drainConcurrency 4 = 8 in flight per org
+  #
+  # maxPerOrg 2 is bounded by the RESERVOIR, not the concurrency pool: at the
+  # post-permission-sync-fix create_repo p50 of 23.1s (2026-09-13, 242 messages)
+  # 8 in flight is ~21 starts/min against a 40/min refresh, and 16 would be
+  # ~42/min — over budget. It is also the already-argued 20% of the 40-slot
+  # pool, so org invitations and handout syncs keep their headroom.
+  #
+  # Slot pools are seeded by migration (async_calls 64, async_calls_low_priority
+  # 16), so globalCap can be raised as config but the POOL needs a migration.
+  # claim_org_slot_and_read RAISES on a queue with no pool rather than returning
+  # zero rows, because "no pool" and "empty queue" are otherwise indistinguish-
+  # able — the same silence this whole design exists to avoid.
   githubAsyncWorker:
     drainConcurrency: 4
     visibilityTimeoutSeconds: 300
+    # 0 disables per-org leaseholders entirely (the pre-2026-09-13 path). 1-8 to enable.
+    orgSlotGlobalCap: 0
+    # In-flight per org is orgSlotMaxPerOrg x drainConcurrency; must be <= 8 and <= orgSlotGlobalCap.
+    orgSlotMaxPerOrg: 1
+    # Slot-recovery latency for a leaseholder that dies. Must not outlive the
+    # messages (visibilityTimeoutSeconds) or the isolate (worker.timeoutMs), and
+    # must exceed the longest single message (32.2s max, 2026-09-13) or the
+    # renewal timer can reap a slot from a leaseholder that is still working.
+    orgSlotLeaseTtlSeconds: 60
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)
@@ -2110,8 +2163,27 @@ monitoring:
     # Notification email queue depth (messages) above which PawtograderNotificationEmailBacklog fires.
     notificationEmailBacklog: 500
     # Oldest-message age (seconds) above which PawtograderQueueOldestMessageAging fires, for any
-    # queue. Scale-free, unlike the depth thresholds above, so it needs no per-term retuning.
+    # queue. Independent of enrollment, unlike the depth thresholds above, so it needs no per-term
+    # retuning — but it is NOT independent of batch size, which is what the floor below corrects.
     queueOldestSeconds: 1200
+    # Drain rate (messages/minute) at or below which a queue counts as stalled. Both
+    # PawtograderQueueOldestMessageAging and PawtograderAsyncQueueStuck are suppressed while a queue
+    # is emptying faster than this, because a bulk enqueue (an assignment release) drives depth and
+    # oldest-message age past any threshold on a completely healthy system: 242 create_repo messages
+    # released in one transaction on 2026-09-13 took 30m51s to drain at ~8 msg/min and paged, with
+    # 242/242 repos created and an empty DLQ. The genuine stall on 2026-09-07 drained at
+    # ~0.66 msg/min. 2 msg/min sits 4x above that stall and 4x below a healthy release.
+    #
+    # Checked against the real series rather than against the average: per-minute depth was
+    # reconstructed from pgmq.a_async_calls for the 2026-09-13 burst and every rolling 15m slope
+    # computed. The worst genuine drain window was 7.27 msg/min (04:11-04:26), 3.6x above this floor,
+    # and the drain was near-linear — there is no flat stretch inside a release for the guard to miss.
+    # The only negative slope is at 04:00:00, where depth goes 0 to 128 as the burst lands, and the
+    # age alert is not eligible there because the oldest message is still far under queueOldestSeconds.
+    #
+    # Raise it only if a real stall is drifting faster than 2 msg/min; lowering it re-admits the
+    # release pages. charts/pawtograder/tests/promrules-unit.sh fails if the change inverts the guard.
+    queueDrainMessagesPerMinute: 2
     # Growth in the Discord DLQ over an hour above which PawtograderDiscordDLQGrowing fires.
     # A rate, not a level: a poison message sits in the DLQ forever, so a level alert would fire
     # permanently and get silenced.
@@ -2121,6 +2193,32 @@ monitoring:
     # only lands here after eight backed-off recovery attempts, and each one is a gradebook row whose
     # stored score is stale with nothing left to recompute it.
     gradebookRecalcDlqGrowthPerHour: 5
+    # pgmq msg_id sequence position (per queue) above which the two
+    # PawtograderQueueMsgId* alerts fire. These are NOT capacity headroom, and sizing
+    # them as a fraction of the ceiling would be the wrong reasoning even where it
+    # happens to land on a workable number.
+    #
+    # The ceiling is real: msg_id is a bigint, PostgREST emits it exactly (a preview
+    # round-trip returned 9007199254740993 = 2^53+1 byte-for-byte), and V8's JSON.parse
+    # then rounds it to ...992 -- after which a worker archives or deletes a msg_id that
+    # is not the one it processed. Silent work loss, or infinite redelivery.
+    #
+    # But nothing organic goes there. Measured on prod 2026-09-13: the busiest sequence
+    # (q_discord_async_calls) is at 137,603 and advances ~7 messages/hour, steady over 14
+    # hours. Reaching 2^53 at that rate takes order 10^11 years. What CAN happen is a
+    # sequence being SET: a restore replaying a foreign setval, a migration or backfill
+    # seeding ids, a hand-run ALTER SEQUENCE ... RESTART WITH. That is a jump, not a
+    # climb, so both thresholds are placed where organic traffic cannot reach them and
+    # only a jump can.
+    #
+    # 1e12 is ~7 million times the largest value prod has ever held and still ~9,000x
+    # below 2^53, so it cannot false-positive from growth and it fires with enormous
+    # lead time. 2^52 (4503599627370496) is the critical: within a factor of two of the
+    # point where ids stop round-tripping, i.e. one more mistake of the same kind lands
+    # past the cliff. Both usually fire together on a bad restore -- the tiering buys
+    # severity routing (ticket vs page), not lead time.
+    queueMsgIdWarning: 1000000000000
+    queueMsgIdCritical: 4503599627370496
     # How long a Discord per-guild circuit breaker may stay open before
     # PawtograderDiscordCircuitBreakerOpen fires. Must stay comfortably BELOW the breaker's shortest
     # window, which is the 30-minute permission_storm base in open_discord_circuit(): the gauge is
