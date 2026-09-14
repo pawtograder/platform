@@ -13,7 +13,7 @@ import { useColorMode } from "@/components/ui/color-mode";
 import { useState, useEffect } from "react";
 import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
-import { DefaultDark, DefaultLight } from "survey-core/themes";
+import { AccessibleDark, AccessibleLight } from "@/components/survey/surveyThemes";
 import "survey-core/survey-core.min.css";
 
 interface PollPreviewModalProps {
@@ -43,9 +43,9 @@ export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModal
 
       // Apply theme based on color mode
       if (colorMode === "dark") {
-        model.applyTheme(DefaultDark);
+        model.applyTheme(AccessibleDark);
       } else {
-        model.applyTheme(DefaultLight);
+        model.applyTheme(AccessibleLight);
       }
 
       setSurveyModel(model);
@@ -61,9 +61,9 @@ export function PollPreviewModal({ isOpen, onClose, pollJson }: PollPreviewModal
   useEffect(() => {
     if (surveyModel) {
       if (colorMode === "dark") {
-        surveyModel.applyTheme(DefaultDark);
+        surveyModel.applyTheme(AccessibleDark);
       } else {
-        surveyModel.applyTheme(DefaultLight);
+        surveyModel.applyTheme(AccessibleLight);
       }
     }
   }, [colorMode, surveyModel]);

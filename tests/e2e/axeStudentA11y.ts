@@ -303,25 +303,35 @@ export async function assertStudentPageAccessible(
 }
 
 /**
- * Asserts the page exposes the standard landmark structure the app ships:
- * one `<main>` (or role="main"), at least one `<nav>` (or role="navigation")
- * with an accessible name, and a non-empty `<title>`. These are WCAG 1.3.1
- * / 2.4.1 / 2.4.2 smoke checks that complement the full axe scan.
+ * WCAG 2.4.2 — the page is titled, and the title carries the product name.
+ *
+ * Split out of `assertPageHasLandmarks` so the coverage sweep can baseline it
+ * under its own key: these parts span three success criteria, and a single
+ * shared key would let one recorded defect mask the other two forever.
  */
-export async function assertPageHasLandmarks(page: Page, contextLabel?: string): Promise<void> {
+export async function assertPageTitle(page: Page, contextLabel?: string): Promise<void> {
   const prefix = contextLabel ? `[${contextLabel}] ` : "";
 
   const title = await page.title();
   expect(title.trim(), `${prefix}page has a non-empty <title>`).not.toBe("");
 
-  // WCAG 2.4.2: the title template appends the product name on every route
-  // (app/layout.tsx + course layout). Mirrors lib/branding.ts name resolution
-  // so re-branded deployments can still run the suite.
+  // The title template appends the product name on every route (app/layout.tsx
+  // + course layout). Mirrors lib/branding.ts name resolution so re-branded
+  // deployments can still run the suite.
   const brandName = process.env.BRAND_NAME?.trim() || "Pawtograder";
   expect(title, `${prefix}<title> includes the product name ("${brandName}")`).toContain(brandName);
+}
 
+/** WCAG 3.1.1 — the document declares its language. */
+export async function assertHtmlLang(page: Page, contextLabel?: string): Promise<void> {
+  const prefix = contextLabel ? `[${contextLabel}] ` : "";
   const lang = await page.locator("html").getAttribute("lang");
   expect(lang, `${prefix}html element has a lang attribute`).toBeTruthy();
+}
+
+/** WCAG 1.3.1 — exactly one main landmark, exposed to the a11y tree. */
+export async function assertMainLandmark(page: Page, contextLabel?: string): Promise<void> {
+  const prefix = contextLabel ? `[${contextLabel}] ` : "";
 
   // Use getByRole so we count what's *exposed to the accessibility tree* —
   // i.e. screen readers see — not raw DOM nodes. This skips siblings hidden
@@ -331,6 +341,11 @@ export async function assertPageHasLandmarks(page: Page, contextLabel?: string):
   await expect(page.getByRole("main").first(), `${prefix}main landmark renders`).toBeVisible({ timeout: 15000 });
   const mainCount = await page.getByRole("main").count();
   expect(mainCount, `${prefix}page has exactly one main landmark`).toBe(1);
+}
+
+/** WCAG 1.3.1 — navigation landmarks exist and are individually named. */
+export async function assertNavLandmarks(page: Page, contextLabel?: string): Promise<void> {
+  const prefix = contextLabel ? `[${contextLabel}] ` : "";
 
   const navs = page.getByRole("navigation");
   const navCount = await navs.count();
@@ -343,6 +358,21 @@ export async function assertPageHasLandmarks(page: Page, contextLabel?: string):
     const nav = navs.nth(i);
     await expect(nav, `${prefix}nav landmark #${i} has an accessible name`).toHaveAccessibleName(/\S/);
   }
+}
+
+/**
+ * Asserts the page exposes the standard landmark structure the app ships: one
+ * `<main>` (or role="main"), at least one `<nav>` (or role="navigation") with an
+ * accessible name, and a non-empty `<title>` (WCAG 1.3.1 / 2.4.1 / 2.4.2).
+ *
+ * Composite kept for the existing per-feature call sites, whose behavior is
+ * unchanged: same assertions, same order, same messages.
+ */
+export async function assertPageHasLandmarks(page: Page, contextLabel?: string): Promise<void> {
+  await assertPageTitle(page, contextLabel);
+  await assertHtmlLang(page, contextLabel);
+  await assertMainLandmark(page, contextLabel);
+  await assertNavLandmarks(page, contextLabel);
 }
 
 /**

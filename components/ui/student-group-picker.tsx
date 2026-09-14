@@ -3,6 +3,7 @@ import { useAllStudentProfiles } from "@/hooks/useCourseController";
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Select } from "chakra-react-select";
 import { useMemo } from "react";
+import { accessibleSelectComponents } from "./select-a11y";
 import { toaster } from "./toaster";
 
 type StudentOption = {
@@ -111,6 +112,9 @@ export default function StudentGroupPicker({
   const fieldContent = (
     <Select<StudentOption, true>
       isMulti={true}
+      // Each selected student renders a chip whose stock remove control splits
+      // the button role and the accessible name across two spans (#909).
+      components={accessibleSelectComponents<StudentOption, true>()}
       isClearable={isClearable && !isAtMinimum}
       isDisabled={disabled}
       placeholder={isMaxReached ? `Maximum ${maxSelections} members selected` : placeholder}

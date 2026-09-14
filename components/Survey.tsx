@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { Model, ValueChangedEvent } from "survey-core";
 import { Survey, PopupSurvey } from "survey-react-ui";
 import { useColorMode } from "@/components/ui/color-mode";
-import { DefaultDark, DefaultLight } from "survey-core/themes";
+import { AccessibleDark, AccessibleLight } from "@/components/survey/surveyThemes";
 import "survey-core/survey-core.css";
 import { Json } from "@/utils/supabase/SupabaseTypes";
 
@@ -72,9 +72,9 @@ export default function SurveyComponent({
 
   useEffect(() => {
     if (colorMode === "dark") {
-      survey.applyTheme(DefaultDark);
+      survey.applyTheme(AccessibleDark);
     } else {
-      survey.applyTheme(DefaultLight);
+      survey.applyTheme(AccessibleLight);
     }
   }, [colorMode, survey]);
 

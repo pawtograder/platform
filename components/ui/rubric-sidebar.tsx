@@ -96,6 +96,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -799,6 +800,11 @@ export function RubricCheckGlobal({
       ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0].points)
       : undefined;
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | undefined>(_selectedOptionIndex);
+  // Names the RadioGroup in the options branch. The check name cannot be a
+  // Field.Label: inside a Field.Root every Field.Label takes the *field's*
+  // label id, so a second one duplicates it and the aria-labelledby on each
+  // control resolves to whichever node the AT reaches first.
+  const optionsLabelId = useId();
   useEffect(() => {
     if (_selectedOptionIndex !== undefined) {
       setSelectedOptionIndex(_selectedOptionIndex);
@@ -901,9 +907,9 @@ export function RubricCheckGlobal({
                 wordBreak="break-word"
               >
                 <HStack justify="space-between" w="100%">
-                  <Field.Label>
-                    <Text fontSize="sm">{check.name}</Text>
-                  </Field.Label>
+                  <Text fontSize="sm" fontWeight="medium" id={optionsLabelId}>
+                    {check.name}
+                  </Text>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
                 <RubricDescription text={check.description} />
@@ -934,6 +940,7 @@ export function RubricCheckGlobal({
                 )}
                 <RadioGroup.Root
                   w="100%"
+                  aria-labelledby={optionsLabelId}
                   value={selectedOptionIndex?.toString()}
                   onValueChange={(value) => {
                     if (isRubricCheckDataWithOptions(check.data) && value.value !== null) {
@@ -985,11 +992,9 @@ export function RubricCheckGlobal({
                       setCheckboxIsChecked(newState.checked ? true : false);
                     }}
                   >
-                    <Field.Label>
-                      <Text>
-                        {points} {check.name}
-                      </Text>
-                    </Field.Label>
+                    <Text fontWeight="medium">
+                      {points} {check.name}
+                    </Text>
                     <RubricDescription text={check.description} />
                   </Checkbox>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
@@ -1029,11 +1034,9 @@ export function RubricCheckGlobal({
                     value={check.id.toString()}
                     disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
                   >
-                    <Field.Label>
-                      <Text>
-                        {points} {check.name}
-                      </Text>
-                    </Field.Label>
+                    <Text fontWeight="medium">
+                      {points} {check.name}
+                    </Text>
                     <RubricDescription text={check.description} />
                   </Radio>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
@@ -1378,6 +1381,13 @@ export function RubricCriteria({
                 setSelectedCheck(rubricChecks?.find((check) => check.id.toString() === value.value));
               }}
             >
+              {/* RadioGroup.Root always points aria-labelledby at its Label part, so leaving the
+                  part out both dangles the reference and leaves the group unnamed. The visible
+                  "Checks" heading above sits outside the Root, and a page shows one group per
+                  criteria, so name it after the criteria rather than repeating "Checks". The
+                  options group in RubricCheckGlobal solves the same problem the other way, with an
+                  explicit aria-labelledby onto its visible check name. */}
+              <RadioGroup.Label srOnly>{criteria.name} checks</RadioGroup.Label>
               {rubricChecks?.map((check, index) => (
                 <RubricCheck
                   key={`check-${check.id}-${index}`}
