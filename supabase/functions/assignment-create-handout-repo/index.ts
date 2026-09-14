@@ -113,13 +113,56 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // copy the source assignment's template_repo + latest_template_sha onto
     // this assignment so the handout-history UI and template-SHA-driven sync
     // continue to work.
-    await adminSupabase
-      .from("assignments")
-      .update({
-        template_repo: sourceAssignment!.template_repo,
-        latest_template_sha: sourceAssignment!.latest_template_sha ?? null
-      })
-      .eq("id", assignment_id);
+    // One conditional transition, because this write has to agree with TWO rows: the target still
+    // being configured the way this request resolved it, and the SOURCE still holding the values
+    // this request read. They cannot be conditioned together over PostgREST.
+    //
+    // The target half alone is not enough, and the write used to have neither. This function is
+    // invoked unattended by the reconciler and the repair script, and the reads it decides from are
+    // separated from this write by the source lookup and the strategy resolution. An instructor
+    // changing the target's mode, source, pointer or autograder flag in that window had the old
+    // configuration's handout restored over their newer one; an instructor repointing the SOURCE's
+    // handout left this copying a repository the source no longer uses — and hashing its workflow
+    // just below. Either way the caller went on to publish a solution pointer, which takes the
+    // assignment out of every repair scan, so nothing revisited it.
+    //
+    // Declining rather than copying the source's current values: everything after this line was
+    // resolved from the snapshot, starting with the repository whose workflow gets hashed. Writing
+    // values this request did not plan around would move the inconsistency rather than remove it.
+    const { data: inherited, error: inheritError } = await adminSupabase.rpc("inherit_handout_from_source", {
+      p_assignment_id: assignment_id,
+      p_source_assignment_id: sourceAssignment!.id,
+      p_source_template_repo: sourceAssignment!.template_repo,
+      p_source_latest_template_sha: sourceAssignment!.latest_template_sha ?? null,
+      p_expected_repo_mode: assignment.repo_mode,
+      p_expected_has_autograder: assignment.has_autograder,
+      // Decides whether the RPC also sets upstream_repo, and is therefore part of its predicate —
+      // the same reasoning as the create branch's pointer write.
+      p_expected_submission_mode: assignment.submission_mode,
+      p_expected_template_repo: assignment.template_repo ?? null
+    });
+    if (inheritError) {
+      // Returning 200 over a failed write here is not harmless. The caller treats success as "the
+      // handout is in place" and proceeds to create the solution repo, which publishes grader_repo
+      // — and the repo reconciler's scan requires that pointer to be NULL, so the assignment leaves
+      // it permanently, holding a solution pointer and no inherited handout, with neither a repair
+      // nor an alert ever reaching it again. Same reasoning as the template_repo pointer write in
+      // the create branch below, which has always been checked.
+      Sentry.captureException(inheritError, scope);
+      throw inheritError;
+    }
+    if (inherited !== true) {
+      // Their edit is explicit and this is derived from a configuration that no longer holds, so
+      // theirs wins. Nothing was written, so the assignment is left exactly as they configured it
+      // and a retry runs against the new state.
+      scope.setTag("handout_pointer", "config_changed");
+      throw new UserVisibleError(
+        `This assignment's repository configuration, or that of the assignment it forks from, changed while ` +
+          `its handout was being inherited from "${sourceAssignment!.template_repo}", so nothing was attached. ` +
+          `Re-save to apply the new configuration.`,
+        409
+      );
+    }
     // Populate this assignment's autograder.workflow_sha from the inherited
     // handout's grade.yml. Without this the auto-created autograder row keeps
     // workflow_sha = NULL and every student submission is rejected with a
@@ -134,7 +177,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // handout — it belongs to the source assignment, which may well have an
     // autograder of its own.
     if (sourceAssignment!.template_repo && assignment.has_autograder !== false) {
-      await updateAutograderWorkflowHash(sourceAssignment!.template_repo);
+      // Hashed AT the revision just copied, not at the repository's current head. This branch pins
+      // latest_template_sha to the source's recorded value, and updateAutograderWorkflowHash's own
+      // contract says to pass a sha whenever the caller does that — hashing the unqualified head
+      // while advertising a different revision records the NEW workflow's hash against the OLD tree
+      // students receive, so their Actions submissions fail the hash check. Reachable here whenever
+      // the source's own handout webhook is delayed or failed: the pointer says S1 while GitHub is
+      // already at S2. Undefined when the source has no recorded sha, which is the previous
+      // behaviour and the only thing available then.
+      await updateAutograderWorkflowHash(
+        sourceAssignment!.template_repo,
+        sourceAssignment!.latest_template_sha ?? undefined
+      );
     }
     return {
       repo_name: sourceAssignment!.template_repo?.split("/")[1] ?? null,
@@ -146,6 +200,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
 
   // action.kind === "create"
+  // Snapshot the handout pointer before any GitHub work. createRepo and syncRepoPermissions take
+  // seconds to minutes, and an instructor can select a custom handout from the edit page while they
+  // run — the final write below rebuilds the DERIVED name and would erase that choice. `assignment`
+  // was read at the top of this function, before any of it.
+  const observedTemplateRepo = assignment.template_repo ?? null;
   const handoutRepoName = `${assignment.classes.slug}-handout-${assignment.slug}`;
   scope.setTag("handout_repo_name", handoutRepoName);
   scope.setTag("handout_repo_org", handoutRepoOrg!);
@@ -276,7 +335,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // autograder-create-submission then rejects as a "workflow sha mismatch" on the
   // first real student run, and which the has_autograder backfill reads as "the
   // autograder was never wired up".
-  const { error: pointerError } = await adminSupabase
+  // Compare-and-set against the pointer observed before the GitHub work. Without it, an instructor
+  // selecting a custom handout while createRepo ran would have it silently replaced by the derived
+  // name here — and the automated repair paths call this function precisely to fill in a missing
+  // workflow_sha, so the overwrite would happen unattended.
+  let pointerWrite = adminSupabase
     .from("assignments")
     .update({
       template_repo: handoutFullName,
@@ -284,12 +347,95 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       ...(assignment.submission_mode === "pr" ? { upstream_repo: handoutFullName } : {})
     })
     .eq("id", assignment_id);
+  pointerWrite =
+    observedTemplateRepo === null
+      ? pointerWrite.is("template_repo", null)
+      : pointerWrite.eq("template_repo", observedTemplateRepo);
+  // repo_mode is on the SAME table as the pointer, so it belongs in the same predicate rather than
+  // in a re-read that could go stale between the check and the write. An instructor switching the
+  // assignment to none/no_submission while createRepo ran has the edit flow clear template_repo to
+  // NULL — which still MATCHES the observed value on a first creation, so without this the derived
+  // handout would be attached after the opt-out. The solution call then rejects the new mode and
+  // the reconciler excludes no-repo modes, so nothing would ever clean it up.
+  // The ORIGINALLY OBSERVED mode, not merely "still some repo-backed mode". Every repo-backed mode
+  // implies different work: switching to fork_from_prior_assignment means the handout should be
+  // INHERITED from a source rather than derived, and template_with_student_forks wants a different
+  // template and student-team permission than template_only_staff. A repository built under the old
+  // strategy is the wrong artifact for the new mode, so attaching it is not a smaller error than
+  // attaching one after an opt-out.
+  pointerWrite = pointerWrite.eq("repo_mode", assignment.repo_mode);
+  // And the autograder flag, on the same table again. Disabling the autograder is not just a flag
+  // write: the edit flow deletes grade.yml from the handout and records the resulting NEWER
+  // latest_template_sha. This write would then stamp the PRE-DISABLE revision back over it, and the
+  // handout-hash seeding below would hash grade.yml at that older revision — leaving a disabled
+  // assignment advertising the enabled handout state, from which a student-repo sync can reinstall
+  // the workflow the instructor just removed. Enabling has the mirror problem. Both are decided by
+  // `assignment.has_autograder`, read before the GitHub work, so the value it was decided from is
+  // what the write requires to still be true.
+  pointerWrite = pointerWrite.eq("has_autograder", assignment.has_autograder);
+  // And submission_mode, which decides whether this write also sets `upstream_repo`. Switching
+  // push -> PR while the GitHub work ran changes nothing else in this predicate, so a stale
+  // push-mode request would attach the handout with `upstream_repo` left NULL — and the PR
+  // ingestion in github-repo-webhook matches an incoming PR against `upstream_repo`, so every
+  // student PR on that assignment would go unrecognized. The edit flow clears `upstream_repo` on
+  // that switch precisely because the handout is not yet in place, which is the state this would
+  // then quietly finish wrong.
+  pointerWrite = pointerWrite.eq("submission_mode", assignment.submission_mode);
+  // And the slug, which is half of handoutFullName. None of the predicates above mentions the
+  // naming inputs, so an instructor renaming the assignment during createRepo or the permission
+  // sync had the repository named for the OLD slug attached afterwards — and every later
+  // reconciliation derives the expected handout from the NEW slug, reads the attached repository as
+  // a custom choice, and declines to repair a missing workflow hash for the rest of its life.
+  // `.is` when it is NULL, like the template_repo branch above: the column is nullable, and a null
+  // slug is an existing (broken-naming) state rather than something to start rejecting here.
+  pointerWrite = assignment.slug === null ? pointerWrite.is("slug", null) : pointerWrite.eq("slug", assignment.slug);
+  // The class-level naming inputs live on `classes`, so they cannot join this predicate. Re-read
+  // and compared immediately before the write instead.
+  //
+  // This NARROWS the window rather than closing it, and that is a deliberate stopping point: making
+  // it atomic means moving the pointer write into an RPC that locks the class row, and a class
+  // re-slug or org move invalidates the derived handout name of EVERY assignment in the course at
+  // once. That is a course-wide event this endpoint cannot resolve on its own — refusing one
+  // creation while the rest of the course is equally stale is not a fix, it is a smaller symptom.
+  // What this does buy is that the common case (an admin edits the class while one assignment is
+  // being provisioned) stops attaching a repository nothing will ever recognise.
+  const { data: classNow, error: classNowError } = await adminSupabase
+    .from("classes")
+    .select("slug, github_org")
+    .eq("id", assignment.class_id)
+    .maybeSingle();
+  if (classNowError) {
+    // Not permission to proceed: this decides whether the name about to be persisted is still the
+    // one this class derives.
+    Sentry.captureException(classNowError, scope);
+    throw classNowError;
+  }
+  if (classNow?.slug !== assignment.classes.slug || classNow?.github_org !== assignment.classes.github_org) {
+    scope.setTag("handout_pointer", "class_naming_changed");
+    throw new UserVisibleError(
+      `This class's GitHub organization or slug changed while ${handoutFullName} was being created, so it was not ` +
+        `attached. The repository exists — re-save to provision under the new naming.`,
+      409
+    );
+  }
+  const { data: pointerRows, error: pointerError } = await pointerWrite.select("id");
   if (pointerError) {
     // Reporting success here would leave the handout repo created but unreferenced:
     // nothing points at it, and a retry cannot recover latest_template_sha because
     // grade.yml is already gone (deleteFileFromRepo then reports nothing deleted).
     Sentry.captureException(pointerError, scope);
     throw pointerError;
+  }
+  if ((pointerRows?.length ?? 0) === 0) {
+    // Somebody set template_repo while we worked. Their choice is explicit and ours is derived from
+    // a naming convention, so theirs wins; the repository we created is left in place rather than
+    // being attached over the top.
+    scope.setTag("template_repo_pointer", "superseded");
+    throw new UserVisibleError(
+      `This assignment's handout repository or repository configuration changed while ${handoutFullName} was being created, so it was not attached. ` +
+        `The repository exists — re-save if you intended to use it.`,
+      409
+    );
   }
 
   // updateAutograderWorkflowHash is skipped for a repo-only assignment: it reads

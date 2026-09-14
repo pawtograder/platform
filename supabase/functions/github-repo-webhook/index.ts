@@ -29,6 +29,7 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
+import { calculateTotalAutograderPoints } from "../_shared/pawtograderYmlHelpers.ts";
 import {
   computeHandoutFileHashesForCommit,
   describeHandoutSeedResult,
@@ -37,7 +38,7 @@ import {
   type HandoutHashCaches
 } from "../_shared/handoutFileHashes.ts";
 import { buildTooLargeErrorName } from "../_shared/tooLargeErrorName.ts";
-import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
+import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
 import { prStateFromPullRequest } from "../_shared/PrState.ts";
 import {
@@ -2374,29 +2375,23 @@ async function handlePushToGraderSolution(
       if (!parsedYml.gradedParts) {
         parsedYml.gradedParts = [];
       }
-      const totalAutograderPoints = parsedYml.gradedParts.reduce(
-        (acc, part) =>
-          acc +
-          part.gradedUnits.reduce(
-            (unitAcc, unit) =>
-              unitAcc +
-              (isMutationTestUnit(unit)
-                ? (unit.linearScoring?.points ?? unit.breakPoints?.[0]?.pointsToAward ?? 0)
-                : isRegularTestUnit(unit)
-                  ? unit.points
-                  : 0),
-            0
-          ),
-        0
-      );
+      // _shared/pawtograderYmlHelpers.ts has always exported this; the copy that used to live here
+      // was the only implementation in use. assignment-create-solution-repo now needs the same
+      // number, so the two callers share one definition rather than drifting.
+      const totalAutograderPoints = calculateTotalAutograderPoints(parsedYml);
       scope?.setTag("total_autograder_points", totalAutograderPoints.toString());
+      // autograder_points lives on `assignments`, which has no grader_repo to condition on the way
+      // the two `autograder` writes below can. An earlier revision re-resolved the pointer with a
+      // separate SELECT and then wrote, which is check-then-act: provisioning that swapped the
+      // repository between the two left the replacement paired with the OLD repository's scoring
+      // allocation, silently — the config and sha writes correctly fail their own predicates, so
+      // nothing else reports or repairs it. The RPC does the check and the write in one transaction.
       for (const autograder of autograders) {
-        const { error: updateError } = await adminSupabase
-          .from("assignments")
-          .update({
-            autograder_points: totalAutograderPoints
-          })
-          .eq("id", autograder.id);
+        const { data: pointsApplied, error: updateError } = await adminSupabase.rpc("set_autograder_points_for_repo", {
+          p_assignment_id: autograder.id,
+          p_expected_grader_repo: repoName,
+          p_points: totalAutograderPoints
+        });
         if (updateError) {
           // Clears the flag too. The pointer guard below is only as good as the set of failures
           // that reach it, and a write that returns a PostgREST error (statement timeout, pool
@@ -2406,6 +2401,13 @@ async function handlePushToGraderSolution(
           configReconcileOk = false;
           Sentry.captureException(updateError, scope);
           console.error(updateError);
+        } else if (pointsApplied !== true) {
+          // Not a failure: the assignment's grader_repo no longer names this repository, so this
+          // delivery has been overtaken and has nothing to say about its scoring.
+          scope?.setTag("grader_repo_pointer_moved", "true");
+          console.log(
+            `Skipping autograder_points for assignment ${autograder.id}: grader_repo no longer names ${repoName}`
+          );
         }
       }
       await Promise.all(
@@ -2416,6 +2418,14 @@ async function handlePushToGraderSolution(
               config: parsedYml as unknown as Json
             })
             .eq("id", autograder.id)
+            // Still pointing at the repository THIS delivery came from. `autograders` was resolved
+            // by grader_repo at the top of the request, and everything after that writes by id — so
+            // a delivery already in flight when assignment-create-solution-repo retires an old
+            // grader repo and attaches a replacement would land the OLD repository's config, points
+            // and SHA on the NEW pointer, and drive grading from them until the replacement is
+            // pushed to again. Same exact predicate the selection used, so a row that matched then
+            // matches now unless the pointer actually moved.
+            .eq("grader_repo", repoName)
             .single();
           if (error) {
             configReconcileOk = false;
@@ -2524,6 +2534,9 @@ async function handlePushToGraderSolution(
             latest_autograder_sha: newAutograderSha
           })
           .eq("id", autograder.id)
+          // Same fence as the config write above, and the one that matters most: this is the value
+          // that announces "this revision is live".
+          .eq("grader_repo", repoName)
           .single();
         if (error) {
           Sentry.captureException(error, scope);
@@ -4175,16 +4188,6 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
     throw prIngestError;
   }
 });
-
-// Type guard to check if a unit is a mutation test unit
-export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
-  return "locations" in unit;
-}
-
-// Type guard to check if a unit is a regular test unit
-export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
-  return "tests" in unit && "testCount" in unit;
-}
 
 serveWithSentryFlush(async (req) => {
   console.log("[ENTRY] Received webhook request");
