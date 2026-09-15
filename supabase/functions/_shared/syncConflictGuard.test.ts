@@ -205,6 +205,17 @@ Deno.test("an ancestor of the student's own making blocks when the handout never
   assertEquals(findBlockingAncestor("config/settings.ts", student), "config");
 });
 
+// `pathsNeedingBlobLookup` is what decides which paths a truncated listing has to be asked
+// about one at a time. The handout side needs the ANCESTORS too, not just the changed paths,
+// because `findBlockingAncestor` now asks whether the handout itself put the blocking entry
+// there -- and an ancestor missing from a truncated handout listing reads as "the handout has
+// nothing there", which blames the student for the handout's own file.
+Deno.test("a truncated listing is asked about ancestors, not just the changed paths", () => {
+  const entries = new Map<string, TreeEntry>([["config/settings.ts", blob(BLOB_A)]]);
+  const wanted = ["config/settings.ts", ...ancestorPaths("config/settings.ts")];
+  assertEquals(pathsNeedingBlobLookup(entries, true, wanted), ["config"]);
+});
+
 // A submodule the handout pinned is not the student's either, but the KINDS have to agree: a
 // submodule of theirs where the handout had a file is still a collision.
 Deno.test("a submodule ancestor is compared by kind as well as sha", () => {

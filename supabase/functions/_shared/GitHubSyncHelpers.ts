@@ -82,6 +82,16 @@ export interface FileChange {
 }
 
 /**
+ * How to read the difference between two handout revisions.
+ *
+ * "descendant" is GitHub's three-dot compare, which is the whole story whenever the target
+ * descends from the revision the repository is on -- every ordinary sync. "rewritten" compares
+ * the two TREES, which is the only thing that can describe a force-pushed or rebased handout:
+ * see the branch in `getChangedFiles` for what three-dot leaves out there.
+ */
+export type HandoutDiffStrategy = "descendant" | "rewritten";
+
+/**
  * Maximum total bytes of file content we'll buffer while syncing a single repo.
  * Belt-and-suspenders cap on cumulative bytes processed within one sync (each file
  * goes in/out of memory sequentially, so peak memory ≈ one file at a time, but this
@@ -542,6 +552,21 @@ async function fetchTreeEntryAtRef(
     if (!meta.sha) return { sha: unreadableBlobSha(), type: "blob" };
     if (meta.type === "dir") return { sha: meta.sha, type: "tree" };
     if (meta.type === "submodule") return { sha: meta.sha, type: "commit" };
+    // The Contents API reports no git mode, with ONE exception: it names a symlink as its own
+    // type, so that mode is knowable here and worth recording. It is also the mode whose loss
+    // does the most damage -- writing a regular file over a symlink replaces a pointer with
+    // content -- and the one `classifyStudentFile` can therefore still catch on a repository
+    // whose recursive listing GitHub truncated.
+    //
+    // The executable bit is NOT knowable from this endpoint: "file" covers both 100644 and
+    // 100755. So a path resolved here keeps `mode` undefined, `classifyStudentFile` falls back
+    // to comparing shas alone, and a student's +x on a path omitted from a truncated listing
+    // can still be written back as 100644. That residual is recorded rather than papered over:
+    // the alternatives are to skip every per-path-resolved file (which would stop large
+    // repositories receiving updates at all) or to walk the tree API directory by directory
+    // for a mode, which means rewriting the fallback that decides whether a file is the
+    // student's -- the one piece of this module whose failure is silent data loss.
+    if (meta.type === "symlink") return { sha: meta.sha, type: "blob", mode: "120000" };
     return { sha: meta.sha, type: "blob" };
   } catch (error) {
     if (isGitHubNotFound(error)) return undefined;
@@ -694,6 +719,10 @@ export async function resolveSyncBaselineSha(
  * When no baseline can be resolved at all, every path is reported as the student's. That is
  * the only honest answer for a repository we cannot see, and the failure direction is a
  * blocked sync rather than a silent overwrite.
+ *
+ * `removedPaths` are the paths the handout is DELETING. They are exempt from the structural
+ * ancestor check, because a deletion asks for no directory to exist: a path the student has
+ * already removed, or buried under a file of their own, needs nothing done to it.
  */
 export async function findStudentModifiedFiles(
   repoFullName: string,
@@ -701,7 +730,8 @@ export async function findStudentModifiedFiles(
   templateRepo: string,
   fromSha: string | null,
   paths: readonly string[],
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  removedPaths: ReadonlySet<string> = new Set()
 ): Promise<Map<string, UnresolvedReason>> {
   const modified = new Map<string, UnresolvedReason>();
   if (paths.length === 0) return modified;
@@ -729,14 +759,23 @@ export async function findStudentModifiedFiles(
   // A truncated tree cannot answer for a path it omitted, and the ancestors matter as much
   // as the paths themselves: a file standing where a directory has to go is the inverse of
   // the directory collision, and is just as invisible to a map that never listed it.
-  const studentPathsOfInterest = student.truncated
-    ? Array.from(new Set(paths.flatMap((path) => [path, ...ancestorPaths(path)])))
-    : paths;
+  const withAncestors = (of: readonly string[]) =>
+    Array.from(new Set(of.flatMap((path) => [path, ...ancestorPaths(path)])));
+  const studentPathsOfInterest = student.truncated ? withAncestors(paths) : paths;
 
   const studentLookups = pathsNeedingBlobLookup(studentEntries, student.truncated, studentPathsOfInterest);
+  // The handout side needs the ancestors for the same reason, and for a while it did not get
+  // them. `findBlockingAncestor` now asks whether the handout ITSELF put the blocking entry
+  // there, and an ancestor missing from a truncated handout listing reads as "the handout has
+  // nothing there" -- so the handout's own unchanged file at `config` was blamed on the
+  // student and `config/settings.ts` was skipped. The two sides have to be able to answer the
+  // same question.
+  //
   // Nothing to look up on a handout side that has no revision: the empty tree above is not a
   // truncated listing, it is the whole answer.
-  const handoutLookups = fromSha ? pathsNeedingBlobLookup(handoutEntries, handout.truncated, paths) : [];
+  const handoutLookups = fromSha
+    ? pathsNeedingBlobLookup(handoutEntries, handout.truncated, handout.truncated ? withAncestors(paths) : paths)
+    : [];
   assertLookupBudget(studentLookups.length + handoutLookups.length, repoFullName, templateRepo, scope);
 
   // Both sides at once, and several paths at a time within each. These are reads of two
@@ -772,6 +811,14 @@ export async function findStudentModifiedFiles(
     // The path itself is clear. It can still be unreachable, when a file of the student's
     // stands where one of its parent directories has to go -- unless the handout is what put
     // that file there, which the handout tree is passed in to answer.
+    //
+    // A DELETION is never unreachable. The handout removing `foo/bar.ts` from a repository
+    // where the student replaced `foo` with a file of their own asks for nothing: the path is
+    // already gone. Running the ancestor check on it reported a blocker for a deletion that
+    // was already satisfied -- and the target-state recheck, which is handed the same paths,
+    // reported it again, so a whole update could read as blocked over files nobody had to do
+    // anything about.
+    if (removedPaths.has(path)) continue;
     if (findBlockingAncestor(path, studentEntries, handoutEntries)) {
       modified.set(path, "path_blocked_in_your_repo");
     }
@@ -792,13 +839,17 @@ export async function getChangedFiles(
   templateRepo: string,
   fromSha: string | null,
   toSha: string,
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  diffStrategy: HandoutDiffStrategy = "descendant"
 ): Promise<FileChange[]> {
   // Try to get from cache first
   // v2: entries carry `mode`. A v1 value would decode without one, and the sync would write
   // every file as 100644 -- which is what it did before modes were carried, so nothing breaks,
   // but it would do it silently for the 12 hours a stale entry lives. A new key is one string.
-  const cacheKey = `github:changed-files:v2:${templateRepo}/${fromSha || "initial"}/${toSha}`;
+  //
+  // The strategy is part of the key because the two produce different answers for the same
+  // pair of shas, which is the whole reason the rewritten one exists.
+  const cacheKey = `github:changed-files:v2:${diffStrategy}:${templateRepo}/${fromSha || "initial"}/${toSha}`;
   const redis = getRedisClient();
 
   if (redis) {
@@ -872,6 +923,68 @@ export async function getChangedFiles(
         });
       }
     }
+  } else if (diffStrategy === "rewritten") {
+    // THE HANDOUT'S HISTORY WAS REWRITTEN, so the compare endpoint cannot answer this.
+    //
+    // `GET /compare/{base}...{head}` is a THREE-DOT comparison: it reports what changed on the
+    // head side since the two revisions' merge base. When the head descends from the base that
+    // is the whole diff, which is every ordinary sync. When the history has been force-pushed
+    // it is not: anything that existed only on the OLD side is invisible to it. A file the
+    // instructor dropped in the rewrite is never reported as removed, and a change they
+    // reverted is never reported at all -- so the sync finds nothing to do, reports
+    // `no_changes`, and the worker records the revision as delivered while every student
+    // repository keeps the obsolete file.
+    //
+    // Two trees, compared by path and content address, answer exactly the question a rewritten
+    // history poses: what does this repository have to look like now. Both listings are
+    // Redis-cached on immutable shas, so this is usually no extra request at all.
+    //
+    // There are no patches here, so nothing is merged INTO a student's copy on this path:
+    // every entry is a wholesale write, and the guard skips the ones that are theirs and
+    // reports them, exactly as it does for a binary file. That is the right shape for a
+    // rewrite -- make the untouched files match the new head, leave their work alone and say
+    // so -- and it is the same shape the initial sync already produces.
+    const [fromTree, toTree] = await Promise.all([
+      getRepoTree(templateRepo, fromSha, scope),
+      getRepoTree(templateRepo, toSha, scope)
+    ]);
+    // A truncated listing on either side is a partial answer to "what does this handout
+    // contain", and acting on it would record a revision as delivered having written some of
+    // it. Same reasoning, and the same terminal error, as the initial sync.
+    if (fromTree.truncated || toTree.truncated) {
+      throw new HandoutListingTruncatedError(templateRepo, toTree.truncated ? toSha : fromSha);
+    }
+
+    for (const [path, entry] of toTree.entries) {
+      if (entry.type !== "blob" || !entry.sha) continue;
+      const before = fromTree.entries.get(path);
+      if (before?.type === "blob" && before.sha === entry.sha && before.mode === entry.mode) continue;
+      fileChanges.push({
+        path,
+        sha: entry.sha,
+        isBinary: isBinaryPath(path),
+        // "added" rather than "modified" because there is no patch to apply: this entry is
+        // written wholesale from the handout's blob, which is what `createBranchAndCommit`
+        // does for an added file and what `isRepoAlreadyInSync` compares by sha.
+        status: "added",
+        size: entry.size,
+        mode: entry.mode
+      });
+    }
+    for (const [path, entry] of fromTree.entries) {
+      if (entry.type !== "blob") continue;
+      const after = toTree.entries.get(path);
+      if (after?.type === "blob") continue;
+      fileChanges.push({ path, status: "removed" });
+    }
+    scope?.setTag("handout_diff_strategy", "rewritten");
+    scope?.addBreadcrumb({
+      message:
+        `Diffed ${templateRepo} ${fromSha.substring(0, 7)} against ${toSha.substring(0, 7)} tree-to-tree ` +
+        `(${fileChanges.length} change(s)): its history no longer contains the revision the repository is on`,
+      category: "sync",
+      level: "info"
+    });
   } else {
     // Compare commits — return metadata + patches only. Binary content is fetched
     // lazily during `createBranchAndCommit` to keep peak memory low.
@@ -1400,12 +1513,14 @@ export class SyncTreeTooLargeError extends TerminalSyncError {
 }
 
 /**
- * Thrown when GitHub truncates the handout's own file listing on an initial sync.
+ * Thrown when GitHub truncates a handout listing that is being read as the definition of what
+ * the handout contains.
  *
- * Only the initial sync reads that listing as the definition of what the handout contains; an
- * ordinary update gets its file list from a compare, and reads the tree for sizes and modes
- * alone, which degrade without breaking. Terminal because the next attempt asks GitHub the
- * same question about the same commit and gets the same truncated answer.
+ * Two paths do that: the initial sync, which has no earlier revision to compare against, and a
+ * rewritten history, which is diffed tree-to-tree. An ordinary update gets its file list from
+ * a compare and reads the tree for sizes and modes alone, which degrade without breaking.
+ * Terminal because the next attempt asks GitHub the same question about the same commit and
+ * gets the same truncated answer.
  */
 export class HandoutListingTruncatedError extends TerminalSyncError {
   constructor(
@@ -1413,10 +1528,10 @@ export class HandoutListingTruncatedError extends TerminalSyncError {
     readonly toSha: string
   ) {
     super(
-      `Cannot perform a first sync from ${templateRepo} at ${toSha.substring(0, 7)}: GitHub truncated its file ` +
-        `listing, so the set of files this handout contains cannot be read in full, and syncing part of it would ` +
-        `record the revision as delivered. Handouts this large need the generated or vendored directories removed ` +
-        `from the repository before it can be synced.`,
+      `Cannot read the file listing of ${templateRepo} at ${toSha.substring(0, 7)} in full: GitHub truncated it, ` +
+        `so the set of files this handout contains is only partly known, and syncing part of it would record the ` +
+        `revision as delivered. Handouts this large need the generated or vendored directories removed from the ` +
+        `repository before it can be synced.`,
       "handout_listing_truncated"
     );
     this.name = "HandoutListingTruncatedError";
@@ -1757,11 +1872,12 @@ export async function createBranchAndCommit(
    * as a regular file, and the pull request auto-merged with nothing to show that the bit had
    * been dropped. Same shape for a symlink.
    *
-   * The rule is that the mode already at the path wins, and the handout's mode is used only
-   * where the student does not have the path yet. That errs toward leaving their repository as
-   * they have it -- a handout that changes only a mode will not propagate, which is worth
-   * saying out loud -- and it is the direction this whole module leans: their state stands
-   * unless we know it is ours.
+   * WHOSE mode wins follows whose FILE it is, which is the same question the rest of this
+   * module asks. A file the student has not touched is the handout's to define, mode included:
+   * a handout that marks a script executable has to be able to deliver that, and preferring
+   * the base mode there left the change undelivered with the sync reporting success. A file
+   * they HAVE touched is theirs, and the only thing being written is the instructor's patch
+   * merged into their copy, so the mode they set stands.
    *
    * Free in practice: the same listing was read by `findStudentModifiedFiles` moments ago, so
    * this is a Redis hit or an in-flight promise, and a failure to read it degrades to the
@@ -1777,11 +1893,17 @@ export async function createBranchAndCommit(
       level: "warning"
     });
   }
-  /** The mode to write at a path: the student's if they have one, else the handout's. */
-  const modeFor = (path: string, handoutMode?: string): BlobMode => {
+  /**
+   * The mode to write at a path: the handout's, unless the file is the student's own, in which
+   * case theirs stands. Falls back to whichever is known, and to a regular file when neither
+   * is -- see `fetchTreeEntryAtRef` for the one case where a mode cannot be read at all.
+   */
+  const modeFor = (path: string, handoutMode?: string, isTheStudents?: boolean): BlobMode => {
     const existing = baseTreeModes.get(path);
-    if (existing?.type === "blob" && isBlobMode(existing.mode)) return existing.mode;
-    return isBlobMode(handoutMode) ? handoutMode : "100644";
+    const studentMode = existing?.type === "blob" && isBlobMode(existing.mode) ? existing.mode : undefined;
+    if (isTheStudents && studentMode) return studentMode;
+    if (isBlobMode(handoutMode)) return handoutMode;
+    return studentMode ?? "100644";
   };
 
   const treeItems: { path: string; mode: BlobMode; type: "blob"; sha: string | null }[] = [];
@@ -1816,7 +1938,7 @@ export async function createBranchAndCommit(
         path: file.path,
         // A deletion carries no content, but GitHub still wants a well-formed entry, and the
         // mode it should name is the one the path actually has.
-        mode: modeFor(file.path, file.mode),
+        mode: modeFor(file.path, file.mode, !!modifiedReason),
         type: "blob" as const,
         sha: null
       });
@@ -1898,7 +2020,7 @@ export async function createBranchAndCommit(
           });
           treeItems.push({
             path: file.path,
-            mode: modeFor(file.path, file.mode),
+            mode: modeFor(file.path, file.mode, !!modifiedReason),
             type: "blob" as const,
             sha: blob.sha
           });
@@ -1911,7 +2033,7 @@ export async function createBranchAndCommit(
             });
             treeItems.push({
               path: file.path,
-              mode: modeFor(file.path, file.mode),
+              mode: modeFor(file.path, file.mode, !!modifiedReason),
               type: "blob" as const,
               sha: null
             });
@@ -2016,7 +2138,7 @@ export async function createBranchAndCommit(
               });
               treeItems.push({
                 path: file.path,
-                mode: modeFor(file.path, file.mode),
+                mode: modeFor(file.path, file.mode, !!modifiedReason),
                 type: "blob" as const,
                 sha: null
               });
@@ -2057,7 +2179,7 @@ export async function createBranchAndCommit(
 
       treeItems.push({
         path: file.path,
-        mode: modeFor(file.path, file.mode),
+        mode: modeFor(file.path, file.mode, !!modifiedReason),
         type: "blob" as const,
         sha: blob.sha
       });
@@ -2093,7 +2215,7 @@ export async function createBranchAndCommit(
 
       treeItems.push({
         path: file.path,
-        mode: modeFor(file.path, file.mode),
+        mode: modeFor(file.path, file.mode, !!modifiedReason),
         type: "blob" as const,
         sha: blobSha
       });
@@ -2602,6 +2724,12 @@ export async function syncRepositoryToHandout(params: {
   autoMerge?: boolean;
   waitBeforeMerge?: number; // milliseconds to wait before attempting merge
   scope?: Sentry.Scope;
+  /**
+   * How to read the difference between the two revisions. The caller decides, because only it
+   * knows whether the handout still contains the revision this repository is on: see
+   * `classifyHandoutDirection` in github-async-worker.
+   */
+  diffStrategy?: HandoutDiffStrategy;
 }): Promise<SyncResult> {
   const org = params.repositoryFullName.split("/")[0];
   const limiter = getSyncLimiter(org);
@@ -2621,7 +2749,8 @@ export async function syncRepositoryToHandout(params: {
         syncedRepoSha,
         autoMerge = true,
         waitBeforeMerge = 2000,
-        scope
+        scope,
+        diffStrategy = "descendant"
       } = params;
       scope?.setTag("repository", repositoryFullName);
       scope?.setTag("template_repo", templateRepo);
@@ -2640,7 +2769,7 @@ export async function syncRepositoryToHandout(params: {
 
       try {
         // Get changed files (with caching)
-        const changedFiles = await getChangedFiles(templateRepo, fromSha, toSha, scope);
+        const changedFiles = await getChangedFiles(templateRepo, fromSha, toSha, scope, diffStrategy);
 
         if (changedFiles.length === 0) {
           return {
@@ -2672,13 +2801,17 @@ export async function syncRepositoryToHandout(params: {
         // file, and a file we are not going to touch must not be able to do that: the
         // guard skips it without reading a byte, so its size is irrelevant. Doing it here
         // also means the answer is computed once and passed down, rather than twice.
+        // The paths this update DELETES, which the structural check has to be told about: a
+        // deletion needs no parent directory, so nothing of the student's can stand in its way.
+        const removedPaths = new Set(changedFiles.filter((f) => f.status === "removed").map((f) => f.path));
         const studentModified = await findStudentModifiedFiles(
           repositoryFullName,
           baselineSha,
           templateRepo,
           fromSha,
           changedFiles.map((f) => f.path),
-          scope
+          scope,
+          removedPaths
         );
 
         // The files the sync will actually read and write. NOT simply "the ones the student
@@ -2716,7 +2849,17 @@ export async function syncRepositoryToHandout(params: {
           // opinion, so the update is reported blocked, which is the conservative direction.
           const headSha = await github.getDefaultBranchHeadSha(repositoryFullName, scope);
           const stillDiffering = headSha
-            ? await findStudentModifiedFiles(repositoryFullName, headSha, templateRepo, toSha, unresolvedPaths, scope)
+            ? await findStudentModifiedFiles(
+                repositoryFullName,
+                headSha,
+                templateRepo,
+                toSha,
+                unresolvedPaths,
+                scope,
+                // Same exemption as the classification above: a deletion the repository has
+                // already satisfied is not a path that still differs.
+                removedPaths
+              )
             : new Map(unresolvedPaths.map((path) => [path, "content_differs" as UnresolvedReason]));
           if (stillDiffering.size === 0) {
             scope?.setTag("blocked_paths_already_current", "true");

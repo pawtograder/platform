@@ -371,6 +371,13 @@ async function main() {
         );
       } else {
         console.log("⚠ Pull request created but requires manual merge due to conflicts or checks");
+        const partial = result.unresolved_paths ?? [];
+        if (partial.length > 0) {
+          console.log(`  ${partial.length} file(s) were left to the student and are NOT in this PR:`);
+          for (const path of partial) {
+            console.log(`    - ${path}`);
+          }
+        }
         const { error } = await adminSupabase
           .from("repositories")
           .update({
@@ -385,7 +392,14 @@ async function main() {
               pr_url: result.pr_url,
               pr_state: "open",
               branch_name: `sync-to-${repo.assignments.latest_template_sha.substring(0, 7)}`,
-              last_sync_attempt: new Date().toISOString()
+              last_sync_attempt: new Date().toISOString(),
+              // Files this sync left to the student even though it opened a pull request for
+              // the rest. Recorded here for the same reason the worker records them: they are
+              // the only structured account of handout changes that did not arrive, and the
+              // merge webhook can only carry them forward if they are in the object it finds.
+              // Omitting them meant merging a partial PR created by this script advanced the
+              // revision and lost that account for good.
+              unresolved_paths: result.unresolved_paths
             }
           })
           .eq("id", repo.id);

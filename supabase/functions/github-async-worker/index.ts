@@ -365,13 +365,24 @@ function computeBackoffSeconds(baseSeconds: number | undefined, retryCount: numb
   return backoff + jitter;
 }
 
+/**
+ * Send a delayed copy of this envelope, and say whether it actually went.
+ *
+ * The boolean is load-bearing. Every caller archives the original message after requeueing,
+ * which is only correct if a replacement exists: this used to report the send error to Sentry
+ * and return normally, so a failed `pgmq_public.send` left the caller archiving the one copy
+ * of the work and reporting the message complete. The job was gone -- no retry, no dead
+ * letter, nothing on the row to say so. Leaving the original UNARCHIVED instead costs one
+ * redelivery after the visibility timeout, which is what the queue is for, and `read_ct`'s
+ * poison limit still bounds it.
+ */
 async function requeueWithDelay(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
   delaySeconds: number,
   scope: Sentry.Scope,
   queueName: string = "async_calls"
-) {
+): Promise<boolean> {
   const newEnvelope: GitHubAsyncEnvelope = {
     ...envelope,
     retry_count: (envelope.retry_count ?? 0) + 1
@@ -383,8 +394,11 @@ async function requeueWithDelay(
   });
   if (result.error) {
     scope.setContext("requeue_error", { error_message: result.error.message, delay_seconds: delaySeconds });
+    scope.setTag("requeue_failed", "true");
     Sentry.captureException(result.error, scope);
+    return false;
   }
+  return true;
 }
 
 async function sendToDeadLetterQueue(
@@ -817,8 +831,12 @@ export async function processEnvelope(
           const delaySeconds = 180; // minimum enforced delay while circuit open
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org");
-          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName);
-          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          // Archived only if the replacement really went: see requeueWithDelay. An
+          // unarchived original redelivers after the visibility timeout, which is the
+          // safe outcome; archiving one that was never replaced loses the job.
+          if (await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName)) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
           return false;
         }
       }
@@ -855,8 +873,12 @@ export async function processEnvelope(
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org_method");
           scope.setTag("circuit_method", envelope.method);
-          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName);
-          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          // Archived only if the replacement really went: see requeueWithDelay. An
+          // unarchived original redelivers after the visibility timeout, which is the
+          // safe outcome; archiving one that was never replaced loses the job.
+          if (await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName)) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
           return false;
         }
       }
@@ -1506,13 +1528,31 @@ export async function processEnvelope(
           level: "info"
         });
 
+        /**
+         * The guarded writer, reachable from the catch below.
+         *
+         * `applyRepositoryUpdate` is built inside the try, after the row read that gives it its
+         * predicates, so the catch cannot see it -- and the catch writes too. That write used to
+         * be unguarded: a job that threw after losing the race replaced a live revision's
+         * sync_data with its own error, so a repository reading "Sync Blocked" with a list of
+         * files became "Sync Error" about a failure in a job whose conclusions had already been
+         * discarded. Assigned as soon as the predicates exist; undefined before that, which
+         * only a failure in the row read itself can reach, and that one still has to be
+         * recorded somehow.
+         */
+        let applyGuardedRepositoryUpdate:
+          | ((update: Database["public"]["Tables"]["repositories"]["Update"]) => Promise<boolean>)
+          | undefined;
+
         try {
           // Check to see if the repo is already up to date. Use full-SHA equality
           // (NOT a 6-char prefix — short prefixes can collide and have caused
           // truncated-SHA false-positives in the past, see FixStuckSyncs `[truncated SHA]`).
           const { data: currentRepo } = await adminSupabase
             .from("repositories")
-            .select("synced_handout_sha, synced_repo_sha, sync_data, assignments(latest_template_sha)")
+            .select(
+              "synced_handout_sha, synced_repo_sha, desired_handout_sha, sync_data, assignments(latest_template_sha)"
+            )
             .eq("id", repository_id)
             .maybeSingle();
           // The handout revision this repo is actually on, read in the SAME row as
@@ -1523,6 +1563,11 @@ export async function processEnvelope(
           // student's work, so the second sync skips its own machine-written content and
           // can block on it. Both sides of the comparison have to come from one moment.
           const currentSyncedHandoutSha = currentRepo?.synced_handout_sha ?? from_sha;
+          // The revision the row is WAITING for, read in the same breath. It is the only
+          // ordering between two revisions available anywhere in this handler -- shas do not
+          // compare -- and queueing sets it to the revision it queues, so a job whose to_sha is
+          // not this value has been superseded.
+          const currentDesiredHandoutSha = currentRepo?.desired_handout_sha ?? null;
 
           if (currentRepo?.synced_handout_sha === to_sha) {
             Sentry.addBreadcrumb({
@@ -1573,6 +1618,34 @@ export async function processEnvelope(
             return true;
           }
 
+          // The pull request an EARLIER revision opened, read from the row that was already
+          // fetched above so it costs no extra query. Both outcomes that end without one of
+          // their own carry it forward: a blocked revision and a terminal failure. That PR is
+          // still open on GitHub and is still the thing the student has to merge, so writing
+          // sync_data without it would delete the instructor's only link to it and move the
+          // row out of the "PR Open" status into one that says there is nothing to act on.
+          //
+          // Read BEFORE the in_progress marker is written, and written INTO it, because the
+          // marker replaces sync_data wholesale. A job killed after planting the marker leaves
+          // the row holding only the marker, so a redelivery read the PR fields out of an
+          // object that no longer had them and the link was gone for good -- carried by nothing
+          // into the blocked or terminal result that followed.
+          const priorSyncData = (currentRepo?.sync_data ?? {}) as {
+            pr_number?: number;
+            pr_url?: string;
+            pr_state?: string;
+            branch_name?: string;
+          };
+          const carriedPr =
+            priorSyncData.pr_state === "open" && priorSyncData.pr_number
+              ? {
+                  pr_number: priorSyncData.pr_number,
+                  pr_url: priorSyncData.pr_url,
+                  pr_state: priorSyncData.pr_state,
+                  branch_name: priorSyncData.branch_name
+                }
+              : {};
+
           // WHAT THIS JOB SAW WHEN IT STARTED, and the price of writing anything after the
           // long GitHub work without checking it is still true.
           //
@@ -1618,6 +1691,16 @@ export async function processEnvelope(
               currentSyncedHandoutSha === null
                 ? guarded.is("synced_handout_sha", null)
                 : guarded.eq("synced_handout_sha", currentSyncedHandoutSha);
+            // And the revision the row was waiting for. Without it, an OLDER job could plant
+            // its marker after desired_handout_sha had already advanced to a newer one, finish,
+            // write desired back to its own target -- and the newer job, finding the row now
+            // waiting for the older revision, would retire itself as superseded. The newest
+            // update lost, and every predicate satisfied. Ordering the contenders at CLAIM time
+            // is what stops it, which is why this predicate is on the marker write too.
+            guarded =
+              currentDesiredHandoutSha === null
+                ? guarded.is("desired_handout_sha", null)
+                : guarded.eq("desired_handout_sha", currentDesiredHandoutSha);
             if (requireOwnMarker) {
               // A JSON-subfield filter, which PostgREST supports directly (`data->>type` is
               // used the same way in github-repo-webhook). The marker writes msg_id as a
@@ -1630,6 +1713,7 @@ export async function processEnvelope(
             if (!applied) scope.setTag("sync_write_lost_race", "true");
             return applied;
           };
+          applyGuardedRepositoryUpdate = (update) => applyRepositoryUpdate(update, { requireOwnMarker: true });
 
           /**
            * What to do with a job whose write found the row already moved on.
@@ -1654,10 +1738,11 @@ export async function processEnvelope(
            * again against the state that is actually there, which is the only way its
            * classification can be correct.
            *
-           * Returns true in every case, because the message itself is done: a requeued copy is
-           * a new message. `retry_count` bounds the requeues at the same 5 the circuit breaker
-           * uses, and pgmq's read_ct bounds it again if this path is ever reached without
-           * requeueing.
+           * Returns true when the message itself is done, because a requeued copy is a new
+           * message -- and false when a requeue was needed but its send failed, which leaves
+           * the original unarchived so pgmq redelivers it rather than losing the work.
+           * `retry_count` bounds the requeues at the same 5 the circuit breaker uses, and
+           * pgmq's read_ct bounds it again if this path is ever reached without requeueing.
            */
           const retireStaleSync = async (): Promise<boolean> => {
             const { data: fresh } = await adminSupabase
@@ -1713,8 +1798,11 @@ export async function processEnvelope(
                 `${(freshSha ?? "none").substring(0, 7)}; requeueing rather than writing a stale conclusion`,
               level: "warning"
             });
-            await requeueWithDelay(adminSupabase, envelope, 30, scope, queueName);
-            return true;
+            // False, not true, when the send failed. Returning true archives this message, and
+            // archiving the only copy of a job whose replacement never went loses the revision
+            // outright -- the row stays on the competing job's state with nothing scheduled to
+            // fix it. Unarchived, pgmq redelivers after the visibility timeout.
+            return await requeueWithDelay(adminSupabase, envelope, 30, scope, queueName);
           };
 
           // Persist an "in_progress" marker BEFORE the long work. This gives us
@@ -1734,6 +1822,8 @@ export async function processEnvelope(
             !(await applyRepositoryUpdate(
               {
                 sync_data: {
+                  // Carried through the marker so a redelivery can still find it.
+                  ...carriedPr,
                   status: "in_progress",
                   started_at: new Date().toISOString(),
                   // The token every write after this one is matched against. pgmq gives each
@@ -1839,30 +1929,13 @@ export async function processEnvelope(
             autoMerge: true,
             waitBeforeMerge: 2000,
             adminSupabase,
-            scope
+            scope,
+            // A rewritten handout cannot be read with a three-dot compare: it reports only what
+            // changed on the new side since the merge base, so a file the rewrite DROPPED, or a
+            // change it reverted, is invisible and the sync finds nothing to do. Tree-to-tree
+            // is the only diff that describes the state the repository now has to be in.
+            diffStrategy: direction === "rewritten" ? "rewritten" : "descendant"
           });
-
-          // The pull request an EARLIER revision opened, read from the row that was already
-          // fetched above so it costs no extra query. Both outcomes that end without one of
-          // their own carry it forward: a blocked revision and a terminal failure. That PR is
-          // still open on GitHub and is still the thing the student has to merge, so writing
-          // sync_data without it would delete the instructor's only link to it and move the
-          // row out of the "PR Open" status into one that says there is nothing to act on.
-          const priorSyncData = (currentRepo?.sync_data ?? {}) as {
-            pr_number?: number;
-            pr_url?: string;
-            pr_state?: string;
-            branch_name?: string;
-          };
-          const carriedPr =
-            priorSyncData.pr_state === "open" && priorSyncData.pr_number
-              ? {
-                  pr_number: priorSyncData.pr_number,
-                  pr_url: priorSyncData.pr_url,
-                  pr_state: priorSyncData.pr_state,
-                  branch_name: priorSyncData.branch_name
-                }
-              : {};
 
           if (!result.success) {
             // A TERMINAL failure is about this one repository and fails the same way on every
@@ -2064,18 +2137,38 @@ export async function processEnvelope(
           return true;
         } catch (error) {
           console.trace(error);
-          // Update repository with error status
-          const { error: updateError } = await adminSupabase
-            .from("repositories")
-            .update({
-              sync_data: {
-                last_sync_attempt: new Date().toISOString(),
-                last_sync_error: error instanceof Error ? error.message : String(error),
-                status: "error"
+          // Update repository with error status -- guarded, so a job that has already lost the
+          // race does not replace a live revision's state with its own failure. A zero-row
+          // result is that case and is not an error to report: this job's account of the
+          // repository is simply not the one that counts any more.
+          const errorSyncData = {
+            sync_data: {
+              last_sync_attempt: new Date().toISOString(),
+              last_sync_error: error instanceof Error ? error.message : String(error),
+              status: "error"
+            }
+          };
+          try {
+            if (applyGuardedRepositoryUpdate) {
+              const applied = await applyGuardedRepositoryUpdate(errorSyncData);
+              if (!applied) {
+                scope.setTag("error_write_lost_race", "true");
+                Sentry.addBreadcrumb({
+                  message:
+                    `Not recording this job's failure on ${repository_full_name}: another job has written to the ` +
+                    `repository since this one began, so this error describes a state that is no longer there`,
+                  level: "info"
+                });
               }
-            })
-            .eq("id", repository_id);
-          if (updateError) {
+            } else {
+              // Only reachable when the read that builds the predicates is itself what failed.
+              const { error: updateError } = await adminSupabase
+                .from("repositories")
+                .update(errorSyncData)
+                .eq("id", repository_id);
+              if (updateError) throw updateError;
+            }
+          } catch (updateError) {
             console.error("Failed to update repository with error status:", updateError);
             Sentry.captureException(updateError, scope);
           }
@@ -2202,8 +2295,16 @@ export async function processEnvelope(
               console.log(
                 `[repo-analytics] Rate limit below budget: remaining=${remaining}, limit=${limit}, budget=${rateLimitBudget}. Requeuing in ${RATE_LIMIT_REQUEUE_DELAY_SECONDS}s. Core reset at ${resetAt.toISOString()}`
               );
-              await requeueWithDelay(adminSupabase, envelope, RATE_LIMIT_REQUEUE_DELAY_SECONDS, scope, queueName);
-              const archived = await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+              const requeued = await requeueWithDelay(
+                adminSupabase,
+                envelope,
+                RATE_LIMIT_REQUEUE_DELAY_SECONDS,
+                scope,
+                queueName
+              );
+              // See requeueWithDelay: archiving an original whose replacement never went would
+              // drop the work entirely. Leaving it unarchived costs one redelivery.
+              const archived = requeued ? await archiveMessage(adminSupabase, meta.msg_id, scope, queueName) : false;
               if (!archived) {
                 console.error(
                   `[repo-analytics] requeued delayed copy but failed to archive original msg_id=${meta.msg_id} queue=${queueName}`
@@ -3143,14 +3244,23 @@ export async function processEnvelope(
           : false;
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
-          await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName); // 8 hours
-          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          // Archived only if the replacement really went: see requeueWithDelay. An
+          // unarchived original redelivers after the visibility timeout, which is the
+          // safe outcome; archiving one that was never replaced loses the job.
+          if (await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName)) {
+            // 8 hours
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
           return false;
         }
 
         // Requeue with computed backoff delay for rate limit
-        await requeueWithDelay(adminSupabase, envelope, delay, scope, queueName);
-        await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        // Archived only if the replacement really went: see requeueWithDelay. An
+        // unarchived original redelivers after the visibility timeout, which is the
+        // safe outcome; archiving one that was never replaced loses the job.
+        if (await requeueWithDelay(adminSupabase, envelope, delay, scope, queueName)) {
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        }
         return false;
       }
 
@@ -3207,14 +3317,24 @@ export async function processEnvelope(
         const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope);
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
-          await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName); // 8 hours
-          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          // Archived only if the replacement really went: see requeueWithDelay. An
+          // unarchived original redelivers after the visibility timeout, which is the
+          // safe outcome; archiving one that was never replaced loses the job.
+          if (await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName)) {
+            // 8 hours
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
           return false;
         }
 
         // For immediate circuit breaker, requeue with 30-second delay
-        await requeueWithDelay(adminSupabase, envelope, 30, scope, queueName); // 30 seconds
-        await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        // Archived only if the replacement really went: see requeueWithDelay. An
+        // unarchived original redelivers after the visibility timeout, which is the
+        // safe outcome; archiving one that was never replaced loses the job.
+        if (await requeueWithDelay(adminSupabase, envelope, 30, scope, queueName)) {
+          // 30 seconds
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        }
         return false;
       }
 
@@ -3267,8 +3387,13 @@ export async function processEnvelope(
       Sentry.captureException(error, scope);
 
       // Requeue with 2-minute delay and archive the current message
-      await requeueWithDelay(adminSupabase, envelope, 120, scope, queueName); // 2 minutes
-      await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+      // Archived only if the replacement really went: see requeueWithDelay. An
+      // unarchived original redelivers after the visibility timeout, which is the
+      // safe outcome; archiving one that was never replaced loses the job.
+      if (await requeueWithDelay(adminSupabase, envelope, 120, scope, queueName)) {
+        // 2 minutes
+        await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+      }
       return false;
     } catch (e) {
       console.error("error", e);
