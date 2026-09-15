@@ -795,12 +795,34 @@ export const MAX_ORG_SLOT_LEASE_TTL_SECONDS = 300;
  *
  * WHY AN INTEGER AND NOT A "true"/"false" STRING. `Boolean("false") === true`.
  * A string-valued boolean turns a typo — `"False"`, `"no"`, `"off"`, a trailing
- * space — into silent truthiness, and for a KILL SWITCH that means the switch
- * does not work at the one moment anyone reaches for it. Going through
- * `readBounded` instead inherits the rules every other knob here follows:
- * unparseable falls back and is REPORTED, out of range is CLAMPED and REPORTED.
- * `orgSlotContinuousRefill: 2` becomes 1 with a Sentry-visible issue rather
- * than quietly meaning something.
+ * space — into SILENT truthiness. Going through `readBounded` instead makes the
+ * same input loud: it is REPORTED as rejected, with a Sentry-visible issue.
+ *
+ * BUT LOUD IS NOT THE SAME AS SAFE, AND THE FIRST VERSION OF THIS KNOB GOT THAT
+ * WRONG. Reported or not, `readBounded`'s ordinary rules resolved a rejected
+ * value to `fallback` (1) and an out-of-range value by clamping toward the
+ * bound (also 1) — so `GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL=false`
+ * produced `continuousRefill === true`. THE KILL SWITCH FAILED OPEN ON EXACTLY
+ * THE MALFORMED VALUE AN OPERATOR IS MOST LIKELY TO TYPE WHEN REACHING FOR IT,
+ * which is the failure the integer was chosen to avoid, reintroduced one layer
+ * down. Caught in review on PR #982; this paragraph is kept rather than
+ * rewritten because the mistake is the reason the rule below exists.
+ *
+ * THE RULE THAT MAKES IT ACTUALLY FAIL SAFE is `failSafeValue` on the `Bounds`
+ * passed in `resolveOrgSlotTuning`: PRESENT BUT UNUSABLE resolves to 0 (off),
+ * ABSENT still resolves to 1 (on). Absence means an older chart or a pre-flag
+ * image and is not an edit; a malformed value means somebody edited this
+ * variable and got it wrong, and the only reason to edit it is to turn refill
+ * off. `"false"`, `"off"`, `"no"`, `"2"` therefore all resolve to OFF, reported.
+ *
+ * THIS KNOB IS THE ONLY ONE IN THIS FILE THAT NEEDS THAT, and the signature is
+ * checkable: it is the only knob whose fallback equals its range MAXIMUM.
+ * `globalCap` falls back to 0 (its minimum, feature off), `maxPerOrg` to 1 (its
+ * minimum), and `drainConcurrency` / `visibilityTimeout` / `leaseTtl` to a value
+ * strictly inside their ranges. For all of those, "fall back to the default" and
+ * "fail safe" point the same way, so they deliberately do NOT set the option.
+ * A unit test pins that asymmetry so the next permissive-default knob is
+ * noticed rather than inherited.
  */
 export const DEFAULT_ORG_SLOT_CONTINUOUS_REFILL = 1;
 /** 0 = off. The whole point of the knob, so it must be reachable. */
@@ -864,7 +886,35 @@ export type AsyncWorkerTuning = {
   issues: TuningIssue[];
 };
 
-type Bounds = { env: string; min: number; max: number; fallback: number };
+type Bounds = {
+  env: string;
+  min: number;
+  max: number;
+  fallback: number;
+  /**
+   * WHAT TO USE WHEN A VALUE IS PRESENT BUT CANNOT BE HONOURED AS WRITTEN —
+   * unparseable, or outside [min, max]. Opt-in, and ONE knob sets it.
+   *
+   * WHEN THIS IS CORRECT, WHICH IS NARROW. `fallback` is right for an ABSENT
+   * value, because absence means "nobody has an opinion" and today's shipped
+   * behaviour is the right answer. A value that is PRESENT but unusable means
+   * the opposite: somebody had an opinion and expressed it badly. For most
+   * knobs those two land in the same place anyway, because their `fallback`
+   * sits at or toward the CONSERVATIVE end of their range — falling back is
+   * already the safe direction, and clamping preserves a legible intent
+   * ("they asked for more").
+   *
+   * SET THIS ONLY FOR A KNOB WHOSE `fallback` IS THE PERMISSIVE END OF ITS OWN
+   * RANGE, where those two directions come apart and the default is the one you
+   * do NOT want a typo to select. The signature to look for is
+   * `fallback === max`. Exactly one knob in this file has it — see
+   * DEFAULT_ORG_SLOT_CONTINUOUS_REFILL — and it is a kill switch, where
+   * defaulting a malformed value to "on" means the switch does not switch.
+   *
+   * Leaving it unset preserves the three-behaviour contract below EXACTLY.
+   */
+  failSafeValue?: number;
+};
 
 /**
  * Parse one bounded integer knob.
@@ -879,6 +929,17 @@ type Bounds = { env: string; min: number; max: number; fallback: number };
  *  * out of range   -> CLAMPED to the bound, REPORTED. Clamping rather than
  *                      falling back keeps the operator's INTENT (they asked for
  *                      "more"), while the bound keeps the pod alive.
+ *
+ * ...and one OPT-IN fourth, which only applies when `failSafeValue` is set:
+ *
+ *  * present but unusable (either of the two cases above)
+ *                   -> `failSafeValue`, REPORTED with that as `effective`.
+ *                      For a knob whose default is the PERMISSIVE end of its
+ *                      range, the two rules above both resolve a typo to the
+ *                      permissive answer, which is exactly backwards. See the
+ *                      field's own comment on `Bounds` for when that is the
+ *                      case; unset, this function behaves exactly as the three
+ *                      rules describe.
  */
 function readBounded(env: EnvReader, b: Bounds): { value: number; issue?: TuningIssue } {
   const raw = env.get(b.env);
@@ -889,38 +950,49 @@ function readBounded(env: EnvReader, b: Bounds): { value: number; issue?: Tuning
   const trimmed = raw.trim();
   const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed)) {
+    // A PRESENT-BUT-UNUSABLE VALUE IS NOT THE SAME AS AN ABSENT ONE, and for a
+    // knob with `failSafeValue` set the difference is the whole point: somebody
+    // edited this variable and got it wrong, so resolving to the default — which
+    // for such a knob is the permissive end — would silently ignore the edit in
+    // the one direction that matters.
+    const resolved = b.failSafeValue ?? b.fallback;
     return {
-      value: b.fallback,
+      value: resolved,
       issue: {
         env: b.env,
         raw,
-        effective: b.fallback,
+        effective: resolved,
         kind: "rejected",
-        message: `${b.env}=${JSON.stringify(raw)} is not a non-negative integer; falling back to ${b.fallback}`
+        message:
+          b.failSafeValue === undefined
+            ? `${b.env}=${JSON.stringify(raw)} is not a non-negative integer; falling back to ${b.fallback}`
+            : `${b.env}=${JSON.stringify(raw)} is not a non-negative integer. Using the FAIL-SAFE value ` +
+              `${resolved} rather than the default ${b.fallback}: this knob's default is the permissive end ` +
+              `of its range, so resolving a malformed value to it would ignore the edit in exactly the ` +
+              `direction that matters. Set ${b.env} to an integer in [${b.min}, ${b.max}].`
       }
     };
   }
-  if (parsed < b.min) {
+  if (parsed < b.min || parsed > b.max) {
+    const bound = parsed < b.min ? b.min : b.max;
+    const which = parsed < b.min ? `below the minimum ${b.min}` : `above the maximum ${b.max}`;
+    // Clamping keeps a legible intent for a RANGE knob ("they asked for more").
+    // For a fail-safe knob there is no "more" to ask for — the range is binary —
+    // so an out-of-range value is just as unusable as an unparseable one.
+    const resolved = b.failSafeValue ?? bound;
     return {
-      value: b.min,
+      value: resolved,
       issue: {
         env: b.env,
         raw,
-        effective: b.min,
+        effective: resolved,
         kind: "clamped",
-        message: `${b.env}=${trimmed} is below the minimum ${b.min}; clamped to ${b.min}`
-      }
-    };
-  }
-  if (parsed > b.max) {
-    return {
-      value: b.max,
-      issue: {
-        env: b.env,
-        raw,
-        effective: b.max,
-        kind: "clamped",
-        message: `${b.env}=${trimmed} is above the maximum ${b.max}; clamped to ${b.max}`
+        message:
+          b.failSafeValue === undefined
+            ? `${b.env}=${trimmed} is ${which}; clamped to ${bound}`
+            : `${b.env}=${trimmed} is ${which}. Using the FAIL-SAFE value ${resolved} rather than clamping ` +
+              `to ${bound}: this knob's range is binary, so an out-of-range value expresses no intent to ` +
+              `preserve, and clamping it toward the default would resolve a typo to the permissive answer.`
       }
     };
   }
@@ -1203,16 +1275,30 @@ function resolveOrgSlotTuning(
   if (ttl.issue) issues.push(ttl.issue);
 
   // The refill kill switch. Parsed through the same bounded-integer path as the
-  // other three so a typo is reported rather than silently becoming truthy —
-  // `Boolean("false")` is `true`, and a kill switch that fails open is worse
-  // than no kill switch. No coherence rule of its own: it changes WHEN a claim
-  // happens, not how many messages or slots are in play, so it cannot conflict
-  // with any of the ceilings below.
+  // other three, PLUS the only `failSafeValue` in this file.
+  //
+  // WHY IT NEEDS THE EXTRA RULE AND ITS NEIGHBOURS DO NOT. Every other knob here
+  // has a fallback at or toward the conservative end of its own range —
+  // `globalCap` falls back to 0 (feature off), `maxPerOrg` to 1 (its minimum),
+  // `drainConcurrency`/`visibilityTimeout`/`leaseTtl` to the shipped middle. This
+  // one is the ONLY knob whose fallback is its range MAXIMUM, and its maximum is
+  // "the new drain shape is on". So the ordinary rules — reject to the default,
+  // clamp toward the bound — both resolve a malformed value to ON, which is the
+  // one answer a kill switch must never give: an operator reaching for this
+  // variable is trying to turn refill OFF, and `false` / `off` / `no` are what
+  // they are most likely to type. Failing safe means going to 0.
+  //
+  // ABSENT STILL MEANS ON. An older chart or a pre-flag image supplies nothing,
+  // and that is not an edit — it must keep today's shipped behaviour.
+  //
+  // No coherence rule of its own: it changes WHEN a claim happens, not how many
+  // messages or slots are in play, so it cannot conflict with any ceiling below.
   const refill = readBounded(env, {
     env: ORG_SLOT_CONTINUOUS_REFILL_ENV,
     min: MIN_ORG_SLOT_CONTINUOUS_REFILL,
     max: MAX_ORG_SLOT_CONTINUOUS_REFILL,
-    fallback: DEFAULT_ORG_SLOT_CONTINUOUS_REFILL
+    fallback: DEFAULT_ORG_SLOT_CONTINUOUS_REFILL,
+    failSafeValue: MIN_ORG_SLOT_CONTINUOUS_REFILL
   });
   if (refill.issue) issues.push(refill.issue);
 

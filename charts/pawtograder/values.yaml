@@ -1554,6 +1554,17 @@ edgeFunctions:
     # change is a rollback, not a fix.
     #
     # Ignored when orgSlotGlobalCap is 0 (there is no org-leased drain to shape).
+    #
+    # MUST BE 0 OR 1, NOT true/false. The render-time rule below refuses a
+    # non-integer here, so a chart user cannot get this wrong. On the Helm-bypass
+    # paths the chart cannot see (a hand-edited Deployment, `kubectl set env`, a
+    # local `supabase functions serve`) the runtime FAILS SAFE instead: a value
+    # that is present but unusable resolves to 0 (off), while an ABSENT value
+    # still resolves to 1. That asymmetry is deliberate — absence is an older
+    # chart, a malformed value is an edit that went wrong, and the only reason to
+    # edit this knob is to turn refill off. It is the one knob in
+    # asyncWorkerTuning.ts with that rule, because it is the only one whose
+    # default sits at the permissive end of its range.
     orgSlotContinuousRefill: 1
   worker:
     memoryLimitMb: 256

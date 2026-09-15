@@ -280,7 +280,7 @@ reason resolveAsyncWorkerTuning only records these issues when the feature is on
 {{- end -}}
 {{- $refillRaw := $gaw.orgSlotContinuousRefill | toString -}}
 {{- if not (regexMatch "^[0-9]+$" $refillRaw) -}}
-{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill must be the integer 0 or 1 (got %q). It is deliberately an INTEGER and not a true/false string: Boolean(\"false\") is true in JS, so a string-valued kill switch turns a typo into silent truthiness and fails OPEN at the one moment anyone reaches for it." $refillRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill must be the integer 0 or 1 (got %q). It is deliberately an INTEGER and not a true/false string: Boolean(\"false\") is true in JS, so a string-valued kill switch turns a typo into silent truthiness. This rule refuses the render so a chart user never reaches that; on the Helm-bypass paths this rule cannot see, resolveAsyncWorkerTuning FAILS SAFE to 0 (off) for a value that is present but unusable, while an ABSENT value still resolves to 1 (on)." $refillRaw) -}}
 {{- end -}}
 {{- $refill := int $refillRaw -}}
 {{- if or (lt $refill 0) (gt $refill 1) -}}

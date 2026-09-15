@@ -34,8 +34,10 @@ import {
   DEFAULT_ORG_SLOT_MAX_PER_ORG,
   MIN_ORG_SLOT_LEASE_TTL_SECONDS,
   MAX_ORG_SLOT_LEASE_TTL_SECONDS,
+  DEFAULT_ORG_SLOT_LEASE_TTL_SECONDS,
   ORG_SLOT_CONTINUOUS_REFILL_ENV,
   DEFAULT_ORG_SLOT_CONTINUOUS_REFILL,
+  MIN_ORG_SLOT_CONTINUOUS_REFILL,
   MAX_ORG_SLOT_CONTINUOUS_REFILL
 } from "@/supabase/functions/_shared/asyncWorkerTuning";
 
@@ -753,28 +755,89 @@ describe("continuous refill kill switch", () => {
     expect(t.orgSlots.maxPerOrg).toBe(1);
   });
 
-  it("does not fail OPEN on a string boolean, which is why it is an integer", () => {
-    // `Boolean("false") === true`. If this knob parsed strings, "false" / "no" / "off" would all
-    // mean ON and the kill switch would not switch at the one moment anyone reaches for it.
-    // Through readBounded they are REJECTED and reported, and the fallback is visible.
-    for (const raw of ["false", "no", "off", "true"]) {
+  it("FAILS SAFE on a malformed value instead of failing open", () => {
+    // The bug CodeRabbit caught on PR #982. These were all REJECTED and REPORTED, and then resolved
+    // to the fallback of 1 — so the kill switch read ON for exactly the values an operator reaching
+    // for it is most likely to type. Being loud about a typo is not the same as being safe about it.
+    for (const raw of ["false", "False", "no", "off", "true", "1.0", "yes"]) {
       const t = resolveAsyncWorkerTuning(
         env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: raw })
       );
+      expect(t.orgSlots.continuousRefill).toBe(false);
       const rejected = t.issues.filter((i) => i.kind === "rejected" && i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV);
       expect(rejected).toHaveLength(1);
-      // It falls back to the default rather than to "whatever the string coerced to".
-      expect(t.orgSlots.continuousRefill).toBe(true);
-      expect(rejected[0].effective).toBe(DEFAULT_ORG_SLOT_CONTINUOUS_REFILL);
+      // The report must name the value actually in force, or Sentry says 1 while the worker runs 0.
+      expect(rejected[0].effective).toBe(MIN_ORG_SLOT_CONTINUOUS_REFILL);
+      expect(rejected[0].effective).not.toBe(DEFAULT_ORG_SLOT_CONTINUOUS_REFILL);
     }
   });
 
-  it("clamps an out-of-range value instead of treating it as extra-on", () => {
+  it("treats an out-of-range value as unusable, not as extra-on", () => {
+    // The range is binary, so "2" expresses no intent to preserve. Clamping it to the max would
+    // resolve a typo to the permissive answer, which is the same failure by another route.
     const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: "2" }));
-    expect(t.orgSlots.continuousRefill).toBe(true);
+    expect(t.orgSlots.continuousRefill).toBe(false);
     const clamped = t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV);
     expect(clamped).toHaveLength(1);
-    expect(clamped[0].effective).toBe(MAX_ORG_SLOT_CONTINUOUS_REFILL);
+    expect(clamped[0].effective).toBe(MIN_ORG_SLOT_CONTINUOUS_REFILL);
+  });
+
+  it("still treats whitespace around a good value as a good value", () => {
+    // Trimming happens before parsing, so these are ordinary 0s, not fail-safe 0s: no issue at all.
+    for (const raw of ["0 ", " 0", " 0 "]) {
+      const t = resolveAsyncWorkerTuning(
+        env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: raw })
+      );
+      expect(t.orgSlots.continuousRefill).toBe(false);
+      expect(t.issues.filter((i) => i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV)).toHaveLength(0);
+    }
+  });
+
+  it("distinguishes ABSENT from PRESENT-BUT-UNUSABLE, which is the whole rule", () => {
+    // Absence is an older chart or a pre-flag image — not an edit — so it keeps shipped behaviour.
+    // A malformed value is an edit that went wrong, and the only reason to edit this is to turn
+    // refill off. These two must NOT resolve the same way.
+    const absent = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8" }));
+    const empty = resolveAsyncWorkerTuning(
+      env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: "   " })
+    );
+    const malformed = resolveAsyncWorkerTuning(
+      env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: "false" })
+    );
+    expect(absent.orgSlots.continuousRefill).toBe(true);
+    expect(empty.orgSlots.continuousRefill).toBe(true);
+    expect(malformed.orgSlots.continuousRefill).toBe(false);
+    expect(absent.issues.filter((i) => i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV)).toHaveLength(0);
+  });
+
+  it("is the ONLY knob whose fallback is the permissive end of its range", () => {
+    // This is WHY it needs failSafeValue and its neighbours do not, expressed as the checkable
+    // signature rather than as a claim: fallback === max means "a typo resolves to the most
+    // permissive answer". If a future knob acquires that shape, this test is where it gets noticed.
+    const knobs = [
+      { knob: "drainConcurrency", max: MAX_DRAIN_CONCURRENCY, fb: DEFAULT_DRAIN_CONCURRENCY },
+      { knob: "visibilityTimeout", max: MAX_VISIBILITY_TIMEOUT_SECONDS, fb: DEFAULT_VISIBILITY_TIMEOUT_SECONDS },
+      { knob: "orgSlotGlobalCap", max: MAX_ORG_SLOT_GLOBAL_CAP, fb: DEFAULT_ORG_SLOT_GLOBAL_CAP },
+      { knob: "orgSlotMaxPerOrg", max: MAX_ORG_SLOT_MAX_PER_ORG, fb: DEFAULT_ORG_SLOT_MAX_PER_ORG },
+      { knob: "orgSlotLeaseTtl", max: MAX_ORG_SLOT_LEASE_TTL_SECONDS, fb: DEFAULT_ORG_SLOT_LEASE_TTL_SECONDS }
+    ];
+    for (const k of knobs) {
+      expect({ knob: k.knob, fallbackIsMax: k.fb === k.max }).toEqual({ knob: k.knob, fallbackIsMax: false });
+    }
+    expect(DEFAULT_ORG_SLOT_CONTINUOUS_REFILL).toBe(MAX_ORG_SLOT_CONTINUOUS_REFILL);
+  });
+
+  it("leaves the other knobs' reject-and-clamp behaviour exactly as it was", () => {
+    // failSafeValue is opt-in and only this knob sets it. A knob that does not set it must still
+    // fall back on a rejected value and CLAMP on an out-of-range one, preserving intent.
+    expect(resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "eight" })).orgSlots.globalCap).toBe(
+      DEFAULT_ORG_SLOT_GLOBAL_CAP
+    );
+    expect(resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "64" })).orgSlots.globalCap).toBe(
+      MAX_ORG_SLOT_GLOBAL_CAP
+    );
+    const low = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "4", [ORG_SLOT_LEASE_TTL_ENV]: "5" }));
+    expect(low.orgSlots.leaseTtlSeconds).toBe(MIN_ORG_SLOT_LEASE_TTL_SECONDS);
   });
 
   it("is reported as CONFIGURED even when per-org leasing is off", () => {
