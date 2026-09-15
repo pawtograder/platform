@@ -4147,11 +4147,14 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
         blocked_handout_sha?: string;
         unresolved_paths?: string[];
       };
-      const blockedRevision =
-        priorSyncData.status === "blocked_by_student_changes" ? priorSyncData.blocked_handout_sha : undefined;
+      const wasBlocked = priorSyncData.status === "blocked_by_student_changes";
+      const blockedRevision = wasBlocked ? priorSyncData.blocked_handout_sha : undefined;
       // Only a block on a DIFFERENT revision survives. When the merged PR is the blocked
-      // revision's own, merging it is what unblocked the repository.
-      const stillBlockedOnNewerRevision = !!blockedRevision && !blockedRevision.startsWith(shortSha);
+      // revision's own, merging it is what unblocked the repository. A block whose revision
+      // was not recorded is preserved: an unreadable marker is not a cleared one, and the
+      // failure direction has to be a repository that stays visibly stuck rather than one
+      // that reports itself finished.
+      const stillBlockedOnNewerRevision = wasBlocked && !blockedRevision?.startsWith(shortSha);
       scope.setTag("sync_pr_merge_preserves_block", String(stillBlockedOnNewerRevision));
 
       // For "Rebase and merge" PRs, merge_commit_sha is null, so fall back to head SHA

@@ -738,11 +738,15 @@ export async function findStudentModifiedFiles(
       (path) => fetchTreeEntryAtRef(repoFullName, path, baselineSha, scope),
       (path, entry) => studentEntries.set(path, entry)
     ),
-    resolvePathsInParallel(
-      handoutLookups,
-      (path) => fetchTreeEntryAtRef(templateRepo, path, fromSha ?? "", scope),
-      (path, entry) => handoutEntries.set(path, entry)
-    )
+    // Conditional on `fromSha` rather than on the (already empty) lookup list, so there is no
+    // branch here that could ask GitHub for a path at no ref at all.
+    fromSha
+      ? resolvePathsInParallel(
+          handoutLookups,
+          (path) => fetchTreeEntryAtRef(templateRepo, path, fromSha, scope),
+          (path, entry) => handoutEntries.set(path, entry)
+        )
+      : Promise.resolve()
   ]);
 
   for (const path of paths) {
