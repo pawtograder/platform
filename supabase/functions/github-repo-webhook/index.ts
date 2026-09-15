@@ -4146,14 +4146,25 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
         status?: string;
         blocked_handout_sha?: string;
         unresolved_paths?: string[];
+        last_sync_error?: string;
+        terminal_reason?: string;
+        branch_name?: string;
       };
-      const wasBlocked = priorSyncData.status === "blocked_by_student_changes";
+      // The durable COLUMN, not a display status, is what says a person is still needed. Two
+      // outcomes set it and both carry an earlier revision's pull request: the blocked one
+      // ("every changed file is the student's own work") and a terminal failure
+      // (sync_branch_not_ours, sync_branch_moved, sync_tree_too_large). Recognizing only the
+      // first meant merging that older PR cleared the marker and overwrote a terminal
+      // failure's state -- and because desired_handout_sha already equalled the newer
+      // revision, non-forced queueing then skipped the repository as up to date while it sat
+      // on the older one.
+      const wasBlocked = repo.sync_blocked_at !== null;
       const blockedRevision = wasBlocked ? priorSyncData.blocked_handout_sha : undefined;
-      // Only a block on a DIFFERENT revision survives. When the merged PR is the blocked
-      // revision's own, merging it is what unblocked the repository. A block whose revision
-      // was not recorded is preserved: an unreadable marker is not a cleared one, and the
-      // failure direction has to be a repository that stays visibly stuck rather than one
-      // that reports itself finished.
+      // Only a blocker on a DIFFERENT revision survives. When the merged PR is the blocked
+      // revision's own, merging it is what resolved it. A blocker whose revision was not
+      // recorded is preserved: an unreadable marker is not a cleared one, and the failure
+      // direction has to be a repository that stays visibly stuck rather than one that
+      // reports itself finished.
       const stillBlockedOnNewerRevision = wasBlocked && !blockedRevision?.startsWith(shortSha);
       scope.setTag("sync_pr_merge_preserves_block", String(stillBlockedOnNewerRevision));
 
@@ -4175,15 +4186,28 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
           // record has to outlive an older pull request being merged.
           ...(stillBlockedOnNewerRevision ? {} : { sync_blocked_at: null, sync_block_reason: null }),
           sync_data: {
-            // The newer revision's blocked state, kept ahead of this PR's bookkeeping so a
-            // merge of an older pull request cannot report the repository as finished.
+            // The newer revision's blocker, kept ahead of this PR's bookkeeping so a merge of
+            // an older pull request cannot report the repository as finished. Its own status
+            // is carried rather than assumed, because the two shapes are not interchangeable:
+            // one names the files the student has to apply, the other names the error class a
+            // person has to act on.
             ...(stillBlockedOnNewerRevision
               ? {
-                  status: "blocked_by_student_changes",
+                  status: priorSyncData.status,
                   blocked_handout_sha: blockedRevision,
-                  unresolved_paths: priorSyncData.unresolved_paths
+                  unresolved_paths: priorSyncData.unresolved_paths,
+                  last_sync_error: priorSyncData.last_sync_error,
+                  terminal_reason: priorSyncData.terminal_reason
                 }
-              : {}),
+              : // Nothing newer is blocked, so this merge IS the outcome -- but a sync can
+                // write some files and still leave others to the student, and those paths are
+                // recorded alongside the open pull request. They are the only record that
+                // those handout changes never arrived, and they do not stop being absent
+                // because the PR carrying the rest was merged. Carried when this merge is the
+                // pull request they were recorded with.
+                priorSyncData.branch_name === branchName && priorSyncData.unresolved_paths?.length
+                ? { unresolved_paths: priorSyncData.unresolved_paths }
+                : {}),
             pr_number: payload.pull_request.number,
             pr_url: payload.pull_request.html_url,
             pr_state: "merged",

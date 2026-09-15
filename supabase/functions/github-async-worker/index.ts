@@ -1586,22 +1586,44 @@ export async function processEnvelope(
           // desired_handout_sha to its own to_sha, and an older blocked job replaces a live
           // revision's blocked status and unresolved paths with its own.
           //
-          // So every terminal write goes through here, and carries the revision this job
-          // classified against as a predicate. Postgres decides: the update matches no row if
-          // the revision moved, and a zero-row result means this job's conclusions describe a
-          // repository that no longer exists in that state. They are then discarded rather
-          // than applied -- see `retireStaleSync` for what happens to the job.
+          // So every terminal write goes through here, and carries TWO predicates.
+          //
+          // The revision is the first, and on its own it is not enough: the blocked outcome
+          // and the terminal-failure outcome deliberately leave synced_handout_sha where it
+          // is, so after the first of two overlapping jobs finishes with either of them the
+          // column still holds the value BOTH jobs classified against -- and the older job's
+          // write matches, and replaces a live revision's blocker with its own. The same holds
+          // for two jobs that each end with an open pull request: neither advances the column,
+          // and the older one orphans the newer one's PR.
+          //
+          // The second predicate is the job's own in_progress marker. Each job writes one
+          // before it starts the long work, carrying the pgmq message id that only it has, and
+          // every write that follows -- by the worker, by this function, by the webhook
+          // recording a merge -- replaces sync_data wholesale. So "the marker is still mine"
+          // is exactly the question "has anything else touched this repository since I began",
+          // which is the question the revision alone could not answer.
+          //
+          // Postgres decides both. A zero-row result means this job's conclusions describe a
+          // repository that no longer exists in that state; they are discarded rather than
+          // applied -- see `retireStaleSync` for what happens to the job.
           const applyRepositoryUpdate = async (
-            update: Database["public"]["Tables"]["repositories"]["Update"]
+            update: Database["public"]["Tables"]["repositories"]["Update"],
+            { requireOwnMarker }: { requireOwnMarker: boolean }
           ): Promise<boolean> => {
-            const base = adminSupabase.from("repositories").update(update).eq("id", repository_id);
+            let guarded = adminSupabase.from("repositories").update(update).eq("id", repository_id);
             // `.eq` on a null value matches nothing in SQL, so a row that records no revision
             // needs `.is`. Getting this wrong would make every first sync of a repository look
             // stale and discard its own result.
-            const guarded =
+            guarded =
               currentSyncedHandoutSha === null
-                ? base.is("synced_handout_sha", null)
-                : base.eq("synced_handout_sha", currentSyncedHandoutSha);
+                ? guarded.is("synced_handout_sha", null)
+                : guarded.eq("synced_handout_sha", currentSyncedHandoutSha);
+            if (requireOwnMarker) {
+              // A JSON-subfield filter, which PostgREST supports directly (`data->>type` is
+              // used the same way in github-repo-webhook). The marker writes msg_id as a
+              // number, so the text form of it is what `->>` compares.
+              guarded = guarded.eq("sync_data->>msg_id", String(meta.msg_id));
+            }
             const { data, error } = await guarded.select("id");
             if (error) throw error;
             const applied = (data?.length ?? 0) > 0;
@@ -1680,17 +1702,26 @@ export async function processEnvelope(
           // Guarded like every other write: a job that has already lost the race writes an
           // in_progress marker over a live revision's status and then does minutes of GitHub
           // work whose result is thrown away. Failing here costs nothing and skips all of it.
+          //
+          // This write is the one that PLANTS the marker, so it cannot require it: only the
+          // revision is checked here.
           if (
-            !(await applyRepositoryUpdate({
-              sync_data: {
-                status: "in_progress",
-                started_at: new Date().toISOString(),
-                msg_id: meta.msg_id,
-                from_sha,
-                to_sha,
-                sync_strategy: sync_strategy ?? "template_pr"
-              }
-            }))
+            !(await applyRepositoryUpdate(
+              {
+                sync_data: {
+                  status: "in_progress",
+                  started_at: new Date().toISOString(),
+                  // The token every write after this one is matched against. pgmq gives each
+                  // message its own id, so this is what makes the marker this job's and not
+                  // another's.
+                  msg_id: meta.msg_id,
+                  from_sha,
+                  to_sha,
+                  sync_strategy: sync_strategy ?? "template_pr"
+                }
+              },
+              { requireOwnMarker: false }
+            ))
           ) {
             return await retireStaleSync();
           }
@@ -1708,22 +1739,25 @@ export async function processEnvelope(
               scope
             );
             if (merge.kind === "synced" || merge.kind === "already_up_to_date") {
-              const applied = await applyRepositoryUpdate({
-                synced_handout_sha: to_sha,
-                synced_repo_sha: merge.mergedSha,
-                desired_handout_sha: to_sha,
-                // GitHub merged the upstream itself, so anything that blocked a template_pr
-                // attempt on an earlier revision is delivered now.
-                sync_blocked_at: null,
-                sync_block_reason: null,
-                sync_data: {
-                  last_sync_attempt: new Date().toISOString(),
-                  status: merge.kind === "synced" ? "merged_via_fork_sync" : "no_changes_needed",
-                  sync_strategy: "fork_merge_upstream",
-                  upstream_repo_full_name: upstream_repo_full_name ?? null,
-                  merge_sha: merge.mergedSha
-                }
-              });
+              const applied = await applyRepositoryUpdate(
+                {
+                  synced_handout_sha: to_sha,
+                  synced_repo_sha: merge.mergedSha,
+                  desired_handout_sha: to_sha,
+                  // GitHub merged the upstream itself, so anything that blocked a template_pr
+                  // attempt on an earlier revision is delivered now.
+                  sync_blocked_at: null,
+                  sync_block_reason: null,
+                  sync_data: {
+                    last_sync_attempt: new Date().toISOString(),
+                    status: merge.kind === "synced" ? "merged_via_fork_sync" : "no_changes_needed",
+                    sync_strategy: "fork_merge_upstream",
+                    upstream_repo_full_name: upstream_repo_full_name ?? null,
+                    merge_sha: merge.mergedSha
+                  }
+                },
+                { requireOwnMarker: true }
+              );
               if (!applied) return await retireStaleSync();
               recordMetric(
                 adminSupabase,
@@ -1837,27 +1871,38 @@ export async function processEnvelope(
               // producer of sync_repo_to_handout jobs, and it opens with an auth.uid() check, so
               // every job exists because a person asked for one. A repository that keeps failing
               // this way costs one job per press, which is exactly what pressing Sync means.
-              const applied = await applyRepositoryUpdate({
-                sync_blocked_at: new Date().toISOString(),
-                // The code names the case; the message the error class carries names what the
-                // person has to do about it: merge or close the pull request, wait for the
-                // branch to settle, split the handout change. Taking that message as-is keeps
-                // the two from drifting apart.
-                sync_block_reason: `${terminalReason}: ${result.error ?? "no further detail was recorded"}`,
-                sync_data: {
-                  // The pull request an earlier revision opened, for the same reason the
-                  // blocked outcome carries it: it is still open on GitHub, it is still the
-                  // thing the student has to merge, and replacing sync_data wholesale would
-                  // delete the instructor's only link to it and drop the row from "PR Open"
-                  // into "Sync Error" -- reporting a repository as having nothing to act on
-                  // when what it has is a pull request waiting.
-                  ...carriedPr,
-                  last_sync_attempt: new Date().toISOString(),
-                  last_sync_error: result.error ?? terminalReason,
-                  status: "error",
-                  terminal_reason: terminalReason
-                }
-              });
+              const applied = await applyRepositoryUpdate(
+                {
+                  sync_blocked_at: new Date().toISOString(),
+                  // The code names the case; the message the error class carries names what the
+                  // person has to do about it: merge or close the pull request, wait for the
+                  // branch to settle, split the handout change. Taking that message as-is keeps
+                  // the two from drifting apart.
+                  sync_block_reason: `${terminalReason}: ${result.error ?? "no further detail was recorded"}`,
+                  sync_data: {
+                    // The pull request an earlier revision opened, for the same reason the
+                    // blocked outcome carries it: it is still open on GitHub, it is still the
+                    // thing the student has to merge, and replacing sync_data wholesale would
+                    // delete the instructor's only link to it and drop the row from "PR Open"
+                    // into "Sync Error" -- reporting a repository as having nothing to act on
+                    // when what it has is a pull request waiting.
+                    ...carriedPr,
+                    last_sync_attempt: new Date().toISOString(),
+                    last_sync_error: result.error ?? terminalReason,
+                    status: "error",
+                    terminal_reason: terminalReason,
+                    // WHICH revision failed, recorded for the same reason the blocked outcome
+                    // records it. sync_blocked_at says a person is needed and says nothing
+                    // about what for; when the older pull request carried above is merged, the
+                    // webhook has to decide whether that merge resolved this failure or is
+                    // unrelated to it, and without the revision it cannot tell -- it cleared
+                    // the marker and overwrote this state, leaving a repository stuck on the
+                    // older revision that non-forced queueing then skipped as up to date.
+                    blocked_handout_sha: to_sha
+                  }
+                },
+                { requireOwnMarker: true }
+              );
               if (!applied) return await retireStaleSync();
               Sentry.addBreadcrumb({
                 message: `Sync of ${repository_full_name} stopped terminally (${terminalReason}); a human has to act on it`,
@@ -1891,21 +1936,24 @@ export async function processEnvelope(
             // built for why dropping it would cost the instructor their only link to it.
             const blockingPaths = result.unresolved_paths ?? [];
             const namedPaths = blockingPaths.slice(0, 3).join(", ");
-            const applied = await applyRepositoryUpdate({
-              sync_blocked_at: new Date().toISOString(),
-              sync_block_reason:
-                `${blockingPaths.length} file(s) changed in the handout are the student's own work` +
-                (namedPaths
-                  ? `: ${namedPaths}${blockingPaths.length > 3 ? ` and ${blockingPaths.length - 3} more` : ""}`
-                  : ""),
-              sync_data: {
-                ...carriedPr,
-                last_sync_attempt: new Date().toISOString(),
-                status: "blocked_by_student_changes",
-                blocked_handout_sha: to_sha,
-                unresolved_paths: blockingPaths
-              }
-            });
+            const applied = await applyRepositoryUpdate(
+              {
+                sync_blocked_at: new Date().toISOString(),
+                sync_block_reason:
+                  `${blockingPaths.length} file(s) changed in the handout are the student's own work` +
+                  (namedPaths
+                    ? `: ${namedPaths}${blockingPaths.length > 3 ? ` and ${blockingPaths.length - 3} more` : ""}`
+                    : ""),
+                sync_data: {
+                  ...carriedPr,
+                  last_sync_attempt: new Date().toISOString(),
+                  status: "blocked_by_student_changes",
+                  blocked_handout_sha: to_sha,
+                  unresolved_paths: blockingPaths
+                }
+              },
+              { requireOwnMarker: true }
+            );
             if (!applied) return await retireStaleSync();
             Sentry.addBreadcrumb({
               message:
@@ -1928,45 +1976,51 @@ export async function processEnvelope(
             // this guard exists to prevent. So when the helper reports no head, the baseline
             // stays where it is: their work keeps reading as theirs.
             const helperRepoHead = result.repo_head_sha;
-            const applied = await applyRepositoryUpdate({
-              synced_handout_sha: to_sha,
-              ...(helperRepoHead ? { synced_repo_sha: helperRepoHead } : {}),
-              desired_handout_sha: to_sha,
-              // This sync delivered everything the handout held, so whatever blocked an
-              // earlier revision no longer does.
-              sync_blocked_at: null,
-              sync_block_reason: null,
-              sync_data: {
-                last_sync_attempt: new Date().toISOString(),
-                status: "no_changes_needed"
-              }
-            });
+            const applied = await applyRepositoryUpdate(
+              {
+                synced_handout_sha: to_sha,
+                ...(helperRepoHead ? { synced_repo_sha: helperRepoHead } : {}),
+                desired_handout_sha: to_sha,
+                // This sync delivered everything the handout held, so whatever blocked an
+                // earlier revision no longer does.
+                sync_blocked_at: null,
+                sync_block_reason: null,
+                sync_data: {
+                  last_sync_attempt: new Date().toISOString(),
+                  status: "no_changes_needed"
+                }
+              },
+              { requireOwnMarker: true }
+            );
             if (!applied) return await retireStaleSync();
           } else {
-            const applied = await applyRepositoryUpdate({
-              // Not the envelope's from_sha: writing that back would move
-              // synced_handout_sha BACKWARDS when a newer sync has already advanced it.
-              synced_handout_sha: result.merged ? to_sha : currentSyncedHandoutSha,
-              synced_repo_sha: result.merged ? result.merge_sha : undefined,
-              desired_handout_sha: to_sha,
-              // Cleared on both shapes. A merge delivered the update; an open pull request is
-              // the thing the student has to act on, and the instructor has a link to click.
-              // Neither is a repo the Sync button should have to force its way past.
-              sync_blocked_at: null,
-              sync_block_reason: null,
-              sync_data: {
-                pr_number: result.pr_number,
-                pr_url: result.pr_url,
-                pr_state: result.merged ? "merged" : "open",
-                branch_name: `sync-to-${to_sha.substring(0, 7)}`,
-                last_sync_attempt: new Date().toISOString(),
-                merge_sha: result.merge_sha,
-                // Files the sync left to the student even though a PR was opened for the
-                // rest. Recorded so the instructor can name them after the PR is merged
-                // and the row goes back to reading "Synced"; absent on a clean sync.
-                unresolved_paths: result.unresolved_paths
-              }
-            });
+            const applied = await applyRepositoryUpdate(
+              {
+                // Not the envelope's from_sha: writing that back would move
+                // synced_handout_sha BACKWARDS when a newer sync has already advanced it.
+                synced_handout_sha: result.merged ? to_sha : currentSyncedHandoutSha,
+                synced_repo_sha: result.merged ? result.merge_sha : undefined,
+                desired_handout_sha: to_sha,
+                // Cleared on both shapes. A merge delivered the update; an open pull request is
+                // the thing the student has to act on, and the instructor has a link to click.
+                // Neither is a repo the Sync button should have to force its way past.
+                sync_blocked_at: null,
+                sync_block_reason: null,
+                sync_data: {
+                  pr_number: result.pr_number,
+                  pr_url: result.pr_url,
+                  pr_state: result.merged ? "merged" : "open",
+                  branch_name: `sync-to-${to_sha.substring(0, 7)}`,
+                  last_sync_attempt: new Date().toISOString(),
+                  merge_sha: result.merge_sha,
+                  // Files the sync left to the student even though a PR was opened for the
+                  // rest. Recorded so the instructor can name them after the PR is merged
+                  // and the row goes back to reading "Synced"; absent on a clean sync.
+                  unresolved_paths: result.unresolved_paths
+                }
+              },
+              { requireOwnMarker: true }
+            );
             if (!applied) return await retireStaleSync();
           }
 

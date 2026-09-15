@@ -22,43 +22,50 @@
 -- the branch churn in the student's repository. The fix belongs where the duplicate is
 -- created.
 --
--- WHAT A CLAIM IS HERE. The row is marked as queued in the SAME transaction as the send, so
--- there is no window between deciding and recording. A call that finds a fresh claim already
--- there does not queue, and says so: skipped_in_flight_count is reported separately from
--- skipped_count, because "a sync is already running" and "this repository is already up to
--- date" are different answers and only one of them means the instructor has nothing to wait
--- for.
+-- WHAT A CLAIM IS HERE. The queue message IS the claim, and the test is the exact question:
+-- is there an unarchived sync_repo_to_handout message for this repository at this revision?
+-- `repo_ids_with_queued_create` (20260816120000) asks the same thing for repository creation and
+-- for the same reason, so this follows it: scan pgmq's own queue table, invisible messages
+-- included, because a message being worked on right now is exactly the one that must not be
+-- queued twice.
 --
--- A claim names the REVISION it is for, and only suppresses a job for that same revision. The
--- sync branch is `sync-to-<sha7>`, so it is jobs sharing a revision that fight over one branch
--- and one pull request; jobs for different revisions are not in each other's way, and
--- suppressing a newer one would leave the autograder toggle unable to deliver grade.yml to a
--- repository whose in-flight sync was already heading somewhere older.
+-- Reading the queue rather than mirroring its state into a column is what makes the claim
+-- correct for the whole life of the job and not just the part we guessed at. A first attempt
+-- wrote a timestamp into sync_data and treated it as live for fifteen minutes, which is shorter
+-- than this queue's own worst case: the visibility timeout can be configured up to 1800s, a
+-- message can wait behind a backlog, and pgmq redelivers up to ten times before the worker
+-- dead-letters it. Any window long enough to cover that would park a repository for hours after
+-- an isolate died; any window short enough not to would let a duplicate through. The message
+-- row has neither problem. It appears the instant the claim is made -- in this transaction,
+-- alongside the send -- and it disappears the instant the worker archives it, which happens
+-- after the terminal write. There is nothing to expire, and nothing to renew.
 --
--- WHY sync_data AND NOT A NEW COLUMN. The claim has to be released by the worker, and the
--- worker already replaces sync_data wholesale at every outcome it has -- in_progress before
--- the long work, then merged, blocked, no_changes_needed or error. So 'queued' is released by
--- the machinery that already exists, with nothing to remember to clear and no outcome that can
--- forget. A column would need every one of those writes to reset it, and the one that got
--- missed would park the repository. That is the opposite trade from sync_blocked_at, which
--- needed a column precisely BECAUSE the worker overwrites sync_data: a durable record has to
--- survive those writes, and a claim has to die with them.
+-- A claim is per REVISION, because that is where the damage is: the sync branch is named
+-- `sync-to-<sha7>`, so two jobs for one revision reset and commit to the same branch and open,
+-- close and reset each other's pull request, while jobs for different revisions use different
+-- branches and are not in each other's way. Matching on the message's own `to_sha` gets this
+-- for free. It also keeps the case that made the first attempt wrong:
+-- assignment-sync-autograder-workflow edits grade.yml in the handout and then queues every
+-- repository in the assignment, and nothing else ever queues them, so a repository whose
+-- in-flight sync was already heading somewhere older has to be queued, not counted as busy.
 --
--- WHY IT EXPIRES. An isolate killed mid-handler leaves 'in_progress' behind forever, and a
--- claim with no expiry would then make the repository permanently unqueueable -- the exact
--- failure 20260911030000 and 20260913120000 were written to close, re-entered through the
--- front door. So a claim only counts while it is fresh. Fifteen minutes is longer than a sync
--- takes (a batch's whole visibility timeout is 300s by default, 1800s at its configured
--- maximum) and short enough that a dead attempt costs one wait, not an instructor's afternoon.
--- Past that the repository queues again whatever sync_data says.
+-- skipped_in_flight_count is reported separately from skipped_count, because "a sync is already
+-- running" and "this repository is already up to date" are different answers and only one of
+-- them means the instructor has nothing to wait for.
+--
+-- AN UNREADABLE QUEUE MUST NOT STOP AN INSTRUCTOR. The scan is wrapped in its own exception
+-- block: if pgmq's table cannot be read, the answer is "nothing is pending", which is the
+-- behavior this function had before the check existed. A duplicate job wastes GitHub calls and
+-- has its write discarded by the worker's revision guard; a queueing path that raises instead
+-- leaves an instructor unable to sync at all.
 --
 -- WHY p_force DOES NOT SKIP IT. p_force exists so a press always queues a repository whose
 -- recorded state we got wrong; it is not a reason to run two syncs of one repository at once,
 -- which is the thing that damages the branch. A forced call still ignores desired_handout_sha
 -- and sync_blocked_at -- everything it was added for -- and still declines to pile a second job
--- for the same revision onto a live one. The press is not lost: the answer names the reason,
--- the claim it waited on expires, and a press made after the handout moves is a different
--- revision and queues immediately.
+-- for the same revision onto one that is already queued or running. The press is not lost: the
+-- answer names the reason, the message it waited on is one the worker is already going to run,
+-- and a press made after the handout moves is a different revision and queues immediately.
 
 create or replace function public.queue_repository_syncs(
     p_repository_ids bigint[],
@@ -79,10 +86,7 @@ declare
     v_errors jsonb[] := '{}';
     v_sync_strategy text;
     v_upstream_repo_full_name text;
-    v_claim_window interval := interval '15 minutes';
-    v_claim_started timestamptz;
-    v_claim_target text;
-    v_claim_is_live boolean;
+    v_sync_already_queued boolean;
     v_claimed_id bigint;
 begin
     if auth.uid() is null then
@@ -178,70 +182,68 @@ begin
                 v_sync_strategy := 'template_pr';
             end if;
 
-            -- Is a job for this repository already in flight? Only the two statuses that mean
-            -- one is: 'queued', written by this function, and 'in_progress', written by the
-            -- worker before the long work. Every other status is an outcome, which means
-            -- whatever was queued has reported back. The timestamp is read from whichever
-            -- field the status that set it writes.
-            v_claim_started := case v_repo_record.sync_data ->> 'status'
-                when 'queued' then (v_repo_record.sync_data ->> 'sync_queued_at')::timestamptz
-                when 'in_progress' then (v_repo_record.sync_data ->> 'started_at')::timestamptz
-                else null
-            end;
-            -- WHICH REVISION that in-flight job is carrying, which is the difference between a
-            -- duplicate and a second, necessary sync.
+            -- Is a sync for this repository at this revision already queued or running?
             --
-            -- A claim only suppresses a job for the SAME revision. That is where the damage is:
-            -- the sync branch is named `sync-to-<sha7>`, so two jobs for one revision reset and
-            -- commit to the same branch and open, close and reset each other's pull request.
-            -- Two jobs for DIFFERENT revisions use different branches and are not in each
-            -- other's way, and suppressing the newer one would be the worse bug: the autograder
-            -- toggle queues every repository in an assignment after editing grade.yml in the
-            -- handout, and a repository whose in-flight sync was already heading somewhere
-            -- older would have been skipped, never queued again by anything, and left without
-            -- the workflow the toggle exists to deliver.
+            -- Asked of pgmq's own queue table, and of every message in it whether the worker can
+            -- currently see it or not: a message whose visibility timeout has it hidden is a
+            -- message being worked on right now, which is precisely the one a second job must
+            -- not join. The row appears in this transaction when the claim is made and is gone
+            -- when the worker archives it, which happens after the terminal write -- so the
+            -- claim covers the job's whole life without a timestamp to expire or renew.
             --
-            -- The worker writes `to_sha` into the in_progress marker; this function writes
-            -- `sync_queued_to` when it claims. A target we cannot read does not match, so the
-            -- repository is queued: a job whose write is discarded by the worker's own
-            -- revision guard costs one wasted attempt, and an undelivered revision costs an
-            -- instructor an assignment they think has propagated.
-            v_claim_target := case v_repo_record.sync_data ->> 'status'
-                when 'queued' then v_repo_record.sync_data ->> 'sync_queued_to'
-                when 'in_progress' then v_repo_record.sync_data ->> 'to_sha'
-                else null
+            -- Both queues, matching `repo_ids_with_queued_create`. Syncs are only ever sent to
+            -- async_calls today, and a routing change should not be able to silently turn the
+            -- claim off.
+            --
+            -- One scan per repository this call is considering, deliberately not one scan
+            -- hoisted out of the loop: the answer has to be read AFTER `for update of r` has
+            -- been granted, or a concurrent caller that started before this one committed would
+            -- read a snapshot with no message in it and queue a duplicate -- the exact race the
+            -- lock is here to stop. The table holds only unarchived messages, so each scan is
+            -- over a live queue rather than a history.
+            v_sync_already_queued := false;
+            begin
+                select exists (
+                    select 1
+                    from (
+                        select q.message
+                        from pgmq.q_async_calls q
+                        where q.message ->> 'method' = 'sync_repo_to_handout'
+                        union all
+                        select q.message
+                        from pgmq.q_async_calls_low_priority q
+                        where q.message ->> 'method' = 'sync_repo_to_handout'
+                    ) m
+                    where m.message -> 'args' ->> 'repository_id' = v_repo_record.id::text
+                      and m.message -> 'args' ->> 'to_sha' = v_repo_record.latest_template_sha
+                ) into v_sync_already_queued;
+            exception when others then
+                -- See the header: an unreadable queue answers "nothing pending" rather than
+                -- failing the repository, because a duplicate costs GitHub calls and a raise
+                -- costs the instructor the ability to sync at all.
+                v_sync_already_queued := false;
             end;
-            v_claim_is_live := v_claim_started is not null
-                and v_claim_started > now() - v_claim_window
-                and v_claim_target is not null
-                and v_claim_target = v_repo_record.latest_template_sha;
 
-            if v_claim_is_live then
+            if v_sync_already_queued then
                 v_skipped_in_flight_count := v_skipped_in_flight_count + 1;
             elsif p_force or
                v_repo_record.desired_handout_sha is null or
                v_repo_record.desired_handout_sha <> v_repo_record.latest_template_sha or
                v_repo_record.sync_blocked_at is not null then
 
-                -- The claim and the message are one statement apart in one transaction, so a
-                -- send that fails rolls the claim back and the repository stays queueable.
-                -- sync_data is MERGED rather than replaced: unresolved_paths and the pull
-                -- request an earlier revision opened are what the page shows while this job
-                -- runs, and a claim is no reason to erase them.
+                -- sync_data is deliberately NOT written here. The message is the claim, so
+                -- there is nothing to record, and writing a 'queued' status into it would
+                -- replace the one the page is reading -- dropping a repository out of the
+                -- "Sync Blocked" badge, and out of the list of files that explains it, at the
+                -- exact moment an instructor pressed Sync to deal with them.
+                --
                 -- Reset explicitly rather than trusting an UPDATE that matches nothing to
                 -- clear it: this runs once per repository in the loop, and a value left over
                 -- from the previous one would read as a successful claim.
                 v_claimed_id := null;
 
                 update public.repositories
-                set desired_handout_sha = v_repo_record.latest_template_sha,
-                    sync_data = coalesce(sync_data, '{}'::jsonb) || jsonb_build_object(
-                        'status', 'queued',
-                        'sync_queued_at', to_jsonb(now()),
-                        -- The revision this claim is for. Without it the claim cannot tell a
-                        -- duplicate from a sync of a newer handout; see the note above.
-                        'sync_queued_to', v_repo_record.latest_template_sha
-                    )
+                set desired_handout_sha = v_repo_record.latest_template_sha
                 where id = v_repo_record.id
                 returning id into v_claimed_id;
 
@@ -298,4 +300,4 @@ $$;
 grant execute on function public.queue_repository_syncs(bigint[], boolean) to authenticated;
 
 comment on function public.queue_repository_syncs is
-    'Queue handout syncs for the given repositories. Instructors and admins only. Claims each repository in the same transaction as the message it sends, so a repository with a sync already queued or running is reported under skipped_in_flight_count rather than queued a second time; the claim lives in sync_data and expires after 15 minutes so an attempt that dies mid-flight cannot park the repository. Pass p_force => true for a press the user made explicitly, which queues the repo whatever its recorded revision or block state says; the default also skips repos already at the assignment''s latest template sha.';
+    'Queue handout syncs for the given repositories. Instructors and admins only. Locks each repository row and checks pgmq for an unarchived sync_repo_to_handout message at the same revision, so a repository whose sync is already queued or running is reported under skipped_in_flight_count rather than queued a second time -- the message itself is the claim, so it needs no expiry and cannot park a repository. Pass p_force => true for a press the user made explicitly, which queues the repo whatever its recorded revision or block state says; the default also skips repos already at the assignment''s latest template sha.';

@@ -16,12 +16,15 @@ import {
   encodeRepoTree,
   findBlockingAncestor,
   GRADE_WORKFLOW_PATH as GUARD_GRADE_WORKFLOW_PATH,
+  isBlobMode,
+  isHandoutOwnedPath,
   isOurSyncCommit,
   isSyncBranchSafeToReset,
   pathsNeedingBlobLookup,
   renderUnresolvedSection,
   REPO_TREE_CACHE_VERSION,
   resolveAutoMerge,
+  type BlobMode,
   type ChangedFileShape,
   type RepoTree,
   type RepoTreeEntry,
@@ -69,6 +72,13 @@ export interface FileChange {
   previous_filename?: string; // For renamed files
   /** Approximate size in bytes from the GitHub API; used by the size guard. */
   size?: number;
+  /**
+   * The handout's git file mode for this path, from the recursive tree at `toSha`. Used only
+   * for a path the student does not already have: where they do, the mode already in their
+   * repository wins, because changing it is changing their file. Undefined when the tree
+   * listing could not answer, which falls back to a regular file.
+   */
+  mode?: string;
 }
 
 /**
@@ -412,6 +422,10 @@ async function fetchRepoTree(
       entries.set(item.path, {
         sha: item.sha ?? "",
         type: item.type,
+        // The mode travels with the entry because it is part of what the file is: 100755 runs
+        // and 100644 does not, 120000 is a symlink. `classifyStudentFile` compares it, and
+        // `createBranchAndCommit` writes it.
+        mode: typeof item.mode === "string" ? item.mode : undefined,
         size: typeof item.size === "number" ? item.size : undefined
       });
     }
@@ -756,8 +770,9 @@ export async function findStudentModifiedFiles(
       continue;
     }
     // The path itself is clear. It can still be unreachable, when a file of the student's
-    // stands where one of its parent directories has to go.
-    if (findBlockingAncestor(path, studentEntries)) {
+    // stands where one of its parent directories has to go -- unless the handout is what put
+    // that file there, which the handout tree is passed in to answer.
+    if (findBlockingAncestor(path, studentEntries, handoutEntries)) {
       modified.set(path, "path_blocked_in_your_repo");
     }
   }
@@ -780,7 +795,10 @@ export async function getChangedFiles(
   scope?: Sentry.Scope
 ): Promise<FileChange[]> {
   // Try to get from cache first
-  const cacheKey = `github:changed-files:${templateRepo}/${fromSha || "initial"}/${toSha}`;
+  // v2: entries carry `mode`. A v1 value would decode without one, and the sync would write
+  // every file as 100644 -- which is what it did before modes were carried, so nothing breaks,
+  // but it would do it silently for the 12 hours a stale entry lives. A new key is one string.
+  const cacheKey = `github:changed-files:v2:${templateRepo}/${fromSha || "initial"}/${toSha}`;
   const redis = getRedisClient();
 
   if (redis) {
@@ -836,7 +854,8 @@ export async function getChangedFiles(
           sha: entry.sha,
           isBinary: isBinaryPath(path),
           status: "added",
-          size: entry.size
+          size: entry.size,
+          mode: entry.mode
         });
       }
     }
@@ -886,7 +905,12 @@ export async function getChangedFiles(
       }
 
       const isBinary = !file.patch || isBinaryPath(file.filename);
-      const sizeAtToSha = treeAtToSha?.entries.get(file.filename)?.size;
+      const entryAtToSha = treeAtToSha?.entries.get(file.filename);
+      const sizeAtToSha = entryAtToSha?.size;
+      // The mode the handout has for this file, from the same listing the sizes come from. It
+      // is what a file the student does not have yet should be written with: delivering an
+      // executable script as 100644 is delivering something that will not run.
+      const modeAtToSha = entryAtToSha?.mode;
 
       if (isBinary) {
         if (!file.sha) {
@@ -897,7 +921,8 @@ export async function getChangedFiles(
           sha: file.sha,
           isBinary: true,
           status: file.status,
-          size: sizeAtToSha
+          size: sizeAtToSha,
+          mode: modeAtToSha
         });
       } else {
         fileChanges.push({
@@ -907,7 +932,8 @@ export async function getChangedFiles(
           isBinary: false,
           status: file.status,
           previous_filename: file.previous_filename,
-          size: sizeAtToSha
+          size: sizeAtToSha,
+          mode: modeAtToSha
         });
       }
     }
@@ -1676,7 +1702,43 @@ export async function createBranchAndCommit(
     console.log(`[sync] leaving ${repoFullName} ${path} untouched (${reason})`);
   };
 
-  const treeItems: { path: string; mode: "100644"; type: "blob"; sha: string | null }[] = [];
+  /**
+   * The tree the branch is being built on top of, read for its MODES.
+   *
+   * Every tree entry this function emits carries a mode, and it used to emit "100644" for all
+   * of them. That silently un-executed a student's script: a tracked file they had made
+   * executable, changed by a later handout revision, was patched successfully and written back
+   * as a regular file, and the pull request auto-merged with nothing to show that the bit had
+   * been dropped. Same shape for a symlink.
+   *
+   * The rule is that the mode already at the path wins, and the handout's mode is used only
+   * where the student does not have the path yet. That errs toward leaving their repository as
+   * they have it -- a handout that changes only a mode will not propagate, which is worth
+   * saying out loud -- and it is the direction this whole module leans: their state stands
+   * unless we know it is ours.
+   *
+   * Free in practice: the same listing was read by `findStudentModifiedFiles` moments ago, so
+   * this is a Redis hit or an in-flight promise, and a failure to read it degrades to the
+   * modes the compare gave us rather than failing the sync.
+   */
+  let baseTreeModes = new Map<string, RepoTreeEntry>();
+  try {
+    baseTreeModes = (await getRepoTree(repoFullName, baseSha, scope)).entries;
+  } catch (treeError) {
+    scope?.addBreadcrumb({
+      message: `Could not read the base tree of ${repoFullName}@${baseSha} for file modes: ${treeError}`,
+      category: "sync",
+      level: "warning"
+    });
+  }
+  /** The mode to write at a path: the student's if they have one, else the handout's. */
+  const modeFor = (path: string, handoutMode?: string): BlobMode => {
+    const existing = baseTreeModes.get(path);
+    if (existing?.type === "blob" && isBlobMode(existing.mode)) return existing.mode;
+    return isBlobMode(handoutMode) ? handoutMode : "100644";
+  };
+
+  const treeItems: { path: string; mode: BlobMode; type: "blob"; sha: string | null }[] = [];
   for (const file of files) {
     // Not every path below is destructive. A patch that applies to the student's own
     // content merges the instructor's change INTO their work, which is the outcome worth
@@ -1706,7 +1768,9 @@ export async function createBranchAndCommit(
     if (file.status === "removed") {
       treeItems.push({
         path: file.path,
-        mode: "100644" as const,
+        // A deletion carries no content, but GitHub still wants a well-formed entry, and the
+        // mode it should name is the one the path actually has.
+        mode: modeFor(file.path, file.mode),
         type: "blob" as const,
         sha: null
       });
@@ -1716,6 +1780,49 @@ export async function createBranchAndCommit(
     // Pre-flight size check using metadata from getChangedFiles, when available.
     if (typeof file.size === "number") {
       enforceSizeBudget(file.size, file.path);
+    }
+
+    // A HANDOUT-OWNED PATH IS REPLACED, NOT MERGED.
+    //
+    // `decideFileAction` returns "write" for one path -- the grading workflow -- because it is
+    // the instructor's switch for whether submissions get graded at all, not the student's
+    // work. Falling through to the patch handling below did not deliver that: the patch is
+    // applied to the STUDENT's copy, so their unrelated edits survive into the merged result,
+    // and if the patch conflicts the `if (modifiedReason) skipFile` branch leaves their
+    // version in place entirely. Either way a student-controlled grading workflow stays live,
+    // which is the exact outcome HANDOUT_OWNED_PATHS exists to prevent, and the reason the
+    // toggle's OFF direction was fixed while its ON direction was not.
+    //
+    // So the handout's blob at `toSha` is copied wholesale. Deletions never reach here: a
+    // "removed" status returns above and a delete-only patch is handled as a deletion, so what
+    // is left is a file the handout has and means to install.
+    if (isHandoutOwnedPath(file.path)) {
+      if (!templateRepo || !templateSha) {
+        throw new Error(`Handout-owned ${file.path} cannot be written without a template repo/sha`);
+      }
+      const owned = file.sha
+        ? await fetchTextBlobFromRepo(templateRepo, file.sha, file.path, scope)
+        : await fetchTextFileAtRef(templateRepo, file.path, templateSha, scope);
+      const { data: ownedBlob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
+        owner,
+        repo,
+        content: owned.encode(owned.text),
+        encoding: "base64"
+      });
+      scope?.addBreadcrumb({
+        message: `Writing handout-owned ${file.path} wholesale rather than merging it`,
+        category: "sync",
+        level: "info"
+      });
+      treeItems.push({
+        path: file.path,
+        // The handout owns the content AND the mode here. A workflow file the student made
+        // executable is still a workflow file the handout decides.
+        mode: isBlobMode(file.mode) ? file.mode : "100644",
+        type: "blob" as const,
+        sha: ownedBlob.sha
+      });
+      continue;
     }
 
     // Handle files with patches (text files that need to be merged)
@@ -1745,7 +1852,7 @@ export async function createBranchAndCommit(
           });
           treeItems.push({
             path: file.path,
-            mode: "100644" as const,
+            mode: modeFor(file.path, file.mode),
             type: "blob" as const,
             sha: blob.sha
           });
@@ -1758,7 +1865,7 @@ export async function createBranchAndCommit(
             });
             treeItems.push({
               path: file.path,
-              mode: "100644" as const,
+              mode: modeFor(file.path, file.mode),
               type: "blob" as const,
               sha: null
             });
@@ -1863,7 +1970,7 @@ export async function createBranchAndCommit(
               });
               treeItems.push({
                 path: file.path,
-                mode: "100644" as const,
+                mode: modeFor(file.path, file.mode),
                 type: "blob" as const,
                 sha: null
               });
@@ -1904,7 +2011,7 @@ export async function createBranchAndCommit(
 
       treeItems.push({
         path: file.path,
-        mode: "100644" as const,
+        mode: modeFor(file.path, file.mode),
         type: "blob" as const,
         sha: blob.sha
       });
@@ -1940,7 +2047,7 @@ export async function createBranchAndCommit(
 
       treeItems.push({
         path: file.path,
-        mode: "100644" as const,
+        mode: modeFor(file.path, file.mode),
         type: "blob" as const,
         sha: blobSha
       });

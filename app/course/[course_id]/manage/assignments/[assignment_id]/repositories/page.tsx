@@ -210,7 +210,24 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
   if (status === "Sync Error") {
     return (
       <VStack gap={2} alignItems="flex-start" width="full">
-        <Badge colorPalette="red">Sync Error</Badge>
+        <HStack gap={2}>
+          <Badge colorPalette="red">Sync Error</Badge>
+          {/*
+           * The pull request an EARLIER revision opened, which the worker carries into a
+           * terminal failure's sync_data because it is still open and still the thing the
+           * student has to merge. computeSyncStatus reports the error ahead of "PR Open" so
+           * the failure cannot hide behind it, which makes this link the only place the
+           * instructor still sees the PR.
+           */}
+          {syncData?.pr_number && syncData?.pr_url && (
+            <Link href={syncData.pr_url} target="_blank">
+              <HStack gap={1} fontSize="sm" color="blue.600">
+                <Icon as={GitPullRequest} boxSize={3} />
+                <Text>PR#{syncData.pr_number}</Text>
+              </HStack>
+            </Link>
+          )}
+        </HStack>
         <Box
           borderWidth="1px"
           borderColor="red.500"

@@ -306,10 +306,20 @@ async function main() {
       if (error) throw error;
     } else if (result.no_changes) {
       console.log("\n✓ No changes needed - repository already up to date");
+      // The repo-side commit the helper reached this decision AT, when it had one. Advancing
+      // the handout sha without it leaves the two halves of the baseline pair describing
+      // different moments: the next guarded sync then classifies content someone applied by
+      // hand against a tree that predates it and calls the student's files their own work.
+      // The worker records this; a script that rehearses the worker has to record it too.
+      const helperRepoHead = result.repo_head_sha;
+      if (helperRepoHead) {
+        console.log(`  Recording repo baseline at ${helperRepoHead}`);
+      }
       const { error } = await adminSupabase
         .from("repositories")
         .update({
           synced_handout_sha: repo.assignments.latest_template_sha,
+          ...(helperRepoHead ? { synced_repo_sha: helperRepoHead } : {}),
           desired_handout_sha: repo.assignments.latest_template_sha,
           // Cleared on every outcome that delivered something, the same three the worker
           // clears it on. A marker left behind by an earlier blocked attempt is durable by

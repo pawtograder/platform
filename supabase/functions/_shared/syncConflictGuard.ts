@@ -173,10 +173,40 @@ export function countsTowardSyncSize(file: ChangedFileShape, reason: UnresolvedR
 /** Git object kinds a recursive tree listing can return for a path. */
 export type TreeEntryType = "blob" | "tree" | "commit";
 
-/** One path in a repo at one commit. `commit` is a submodule. */
+/**
+ * Git file modes, as the tree API reports them. A blob arrives as one of the first three.
+ *
+ * The mode is part of what a file IS, not decoration on it: 100755 is an executable script and
+ * 100644 is the same bytes that will not run, and 120000 is a symlink whose "content" is the
+ * path it points at. Two entries with equal blob shas and different modes are NOT the same
+ * file, which is why `classifyStudentFile` compares them.
+ */
+export type BlobMode = "100644" | "100755" | "120000";
+export const BLOB_MODES: readonly BlobMode[] = ["100644", "100755", "120000"];
+
+/**
+ * Whether a mode is one a blob tree entry may carry, narrowing it when it is.
+ *
+ * A type guard rather than a boolean because the tree-write API takes the mode as a union of
+ * literals, and the whole point of carrying modes is that the one written is the one read: a
+ * cast in between would let a "040000" out of a tree listing be handed to a blob entry.
+ */
+export function isBlobMode(mode: string | undefined): mode is BlobMode {
+  return !!mode && (BLOB_MODES as readonly string[]).includes(mode);
+}
+
+/**
+ * One path in a repo at one commit. `commit` is a submodule.
+ *
+ * `mode` is undefined when the source could not report one: the Contents API, which the
+ * truncated-tree fallback uses, returns no mode at all. Undefined means "unknown", never
+ * "100644" -- see `classifyStudentFile` for why a comparison against an unknown mode is not
+ * allowed to claim the two sides differ OR agree.
+ */
 export type TreeEntry = {
   sha: string;
   type: TreeEntryType;
+  mode?: string;
 };
 
 /**
@@ -203,19 +233,43 @@ export type RepoTree = {
 const TREE_TYPE_CODES: Record<TreeEntryType, number> = { blob: 0, tree: 1, commit: 2 };
 const TREE_TYPES_BY_CODE: TreeEntryType[] = ["blob", "tree", "commit"];
 
-/** One cached entry: path, type code, content address, and -- for blobs -- size. */
-type CachedTreeRow = [string, number] | [string, number, string] | [string, number, string, number];
+/**
+ * Modes as one character rather than six, for the same reason the type is a code: this value
+ * is repeated once per file in a repository, and a 20k-file tree pays for every character of
+ * it. `MODE_UNKNOWN` is a real value, not a default -- it is what a mode the source could not
+ * report round-trips as.
+ */
+const MODE_UNKNOWN = 9;
+const TREE_MODE_CODES: Record<string, number> = {
+  "100644": 0,
+  "100755": 1,
+  "120000": 2,
+  "040000": 3,
+  "160000": 4
+};
+const TREE_MODES_BY_CODE: Record<number, string> = {
+  0: "100644",
+  1: "100755",
+  2: "120000",
+  3: "040000",
+  4: "160000"
+};
+
+/** One cached entry: path, type code, content address, mode code, and -- for blobs -- size. */
+type CachedTreeRow = [string, number, string, number] | [string, number, string, number, number];
 
 /**
  * The cache format version, which is part of the Redis key (see `getRepoTree`).
  *
- * Bumped to 2 when non-blob entries started carrying their sha. A v1 entry recorded a tree
- * or submodule as its type alone, so reading one back today would hand `classifyStudentFile`
- * two empty shas that compare equal and read as "unmodified" -- the answer that permits the
- * overwrite. Changing the key rather than the payload alone means no v1 value is ever
- * decoded: the old keys are simply never read again, and they expire on their own.
+ * Bumped to 2 when non-blob entries started carrying their sha, and to 3 when every entry
+ * started carrying its mode. Both are fields `classifyStudentFile` compares, and both have the
+ * same failure shape if a value written by an older version is read by a newer one: two
+ * absent fields compare equal, the path reads as "unmodified", and the overwrite this module
+ * exists to prevent is permitted. The version is part of the KEY, not just the payload, so an
+ * older value is never read at all -- and this Redis is shared across previews, staging and
+ * production, so an old shape really can be sitting in it. The old keys expire on their own.
  */
-export const REPO_TREE_CACHE_VERSION = 2;
+export const REPO_TREE_CACHE_VERSION = 3;
 
 /**
  * Pack a tree into the smallest honest JSON.
@@ -234,10 +288,11 @@ export function encodeRepoTree(tree: RepoTree): string {
   const rows: CachedTreeRow[] = [];
   for (const [path, entry] of tree.entries) {
     const code = TREE_TYPE_CODES[entry.type];
+    const modeCode = entry.mode !== undefined ? (TREE_MODE_CODES[entry.mode] ?? MODE_UNKNOWN) : MODE_UNKNOWN;
     if (typeof entry.size === "number") {
-      rows.push([path, code, entry.sha, entry.size]);
+      rows.push([path, code, entry.sha, modeCode, entry.size]);
     } else {
-      rows.push([path, code, entry.sha]);
+      rows.push([path, code, entry.sha, modeCode]);
     }
   }
   return JSON.stringify({ v: REPO_TREE_CACHE_VERSION, t: tree.truncated ? 1 : 0, e: rows });
@@ -258,14 +313,18 @@ export function decodeRepoTree(cached: unknown): RepoTree | undefined {
 
   const entries = new Map<string, RepoTreeEntry>();
   for (const row of parsed.e) {
-    const [path, code, sha, size] = row as [string, number, string?, number?];
+    const [path, code, sha, modeCode, size] = row as [string, number, string?, number?, number?];
     const type = TREE_TYPES_BY_CODE[code];
     if (typeof path !== "string" || !type) return undefined;
     // A blob with no sha would be two content addresses that compare equal to each other and
     // to nothing real, which reads as "unmodified" and permits the overwrite. Only a tree or
     // a submodule may arrive without one, matching what a per-path lookup returns.
     if (type === "blob" && !sha) return undefined;
-    entries.set(path, { sha: sha ?? "", type, size });
+    // A row that stopped before its mode is a value from a shape this version does not write.
+    // Reading it as "mode unknown" would be inventing agreement out of a missing field, so it
+    // is a cache miss instead.
+    if (typeof modeCode !== "number") return undefined;
+    entries.set(path, { sha: sha ?? "", type, mode: TREE_MODES_BY_CODE[modeCode], size });
   }
   return { entries, truncated: parsed.t === 1 };
 }
@@ -324,7 +383,21 @@ export function classifyStudentFile(
   }
   if (student === undefined) return "deleted_in_your_repo";
   if (handout === undefined) return "only_in_your_repo";
-  return student.sha === handout.sha ? "unmodified" : "content_differs";
+  if (student.sha !== handout.sha) return "content_differs";
+  // Same bytes, and still possibly not the same file. A student who made a tracked script
+  // executable changed its MODE and nothing else, so the blob shas match while their 100755
+  // differs from the handout's 100644 -- and the sync writes a tree entry, which carries a
+  // mode, so calling that "unmodified" hands back the change as a clean auto-merge that
+  // quietly un-executes their script. A symlink against a regular file with the same bytes is
+  // the same trap with worse consequences.
+  //
+  // Only when BOTH modes are known. The Contents API, which the truncated-tree fallback reads,
+  // reports no mode at all, and an unknown mode must not be read as agreement (that is the
+  // overwrite) or as difference (that would report every path in a large repository as the
+  // student's work). Unknown means the sha comparison stands on its own, which is where this
+  // module was before modes were carried at all.
+  if (student.mode && handout.mode && student.mode !== handout.mode) return "content_differs";
+  return "unmodified";
 }
 
 /** Every proper ancestor of a path, shortest first. Never the path itself. */
@@ -350,13 +423,33 @@ export function ancestorPaths(path: string): string[] {
  * what an ancestor is would look up one set and test another, and the failure direction is
  * a missed block, which is an overwrite of the student's file.
  */
-export function findBlockingAncestor(path: string, student: Map<string, TreeEntry>): string | undefined {
+export function findBlockingAncestor(
+  path: string,
+  student: Map<string, TreeEntry>,
+  handout?: Map<string, TreeEntry>
+): string | undefined {
   // Anything that is not a directory blocks, not just a file. A submodule at `vendor`
   // is a `commit` entry, and writing vendor/config.ts through it replaces the gitlink,
   // which loses the student's pinned revision as surely as overwriting a file.
+  //
+  // Unless the handout put it there. This is the mirror of the directory case in
+  // `classifyStudentFile`: a handout that replaces a FILE at `config` with a directory
+  // containing `config/settings.ts` leaves an untouched repository holding the old handout's
+  // own `config` blob, and blaming the student for it skipped the new file while the removal
+  // of `config` went through -- an incomplete structural update that cannot auto-merge, and a
+  // file reported as theirs that they never touched. An exact match with real shas on both
+  // sides is what makes the rest coherent: the entry standing in the way is exactly the one
+  // the handout diff removes, so the tree this sync builds deletes it and writes the
+  // directory in its place. `handout` is optional because two callers ask this question and
+  // only one of them has a handout tree to compare against; without one, every non-tree
+  // ancestor blocks, as it did before.
   return ancestorPaths(path).find((ancestor) => {
     const entry = student.get(ancestor);
-    return !!entry && entry.type !== "tree";
+    if (!entry || entry.type === "tree") return false;
+    const handoutEntry = handout?.get(ancestor);
+    const handoutPutItThere =
+      !!handoutEntry && handoutEntry.type === entry.type && !!entry.sha && entry.sha === handoutEntry.sha;
+    return !handoutPutItThere;
   });
 }
 

@@ -143,6 +143,79 @@ Deno.test("a directory standing where the handout had a file is still theirs", (
   assertEquals(classifyStudentFile({ sha: TREE_A, type: "tree" }, blob(TREE_A)), "directory_in_your_repo");
 });
 
+// Same bytes, different file. A student who ran `chmod +x` changed the mode and nothing else,
+// and the sync writes a tree entry, which carries one: reading this as unmodified handed back
+// their change as a clean auto-merge that un-executed their script.
+Deno.test("a file the student made executable is theirs, even with the same bytes", () => {
+  assertEquals(
+    classifyStudentFile({ sha: BLOB_A, type: "blob", mode: "100755" }, { sha: BLOB_A, type: "blob", mode: "100644" }),
+    "content_differs"
+  );
+});
+
+Deno.test("a symlink where the handout has a regular file is theirs", () => {
+  assertEquals(
+    classifyStudentFile({ sha: BLOB_A, type: "blob", mode: "120000" }, { sha: BLOB_A, type: "blob", mode: "100644" }),
+    "content_differs"
+  );
+});
+
+Deno.test("matching bytes and matching mode is still unmodified", () => {
+  assertEquals(
+    classifyStudentFile({ sha: BLOB_A, type: "blob", mode: "100755" }, { sha: BLOB_A, type: "blob", mode: "100755" }),
+    "unmodified"
+  );
+});
+
+// The Contents API reports no mode, so the truncated-tree fallback cannot answer for one.
+// Unknown must not be read as difference either -- that would report paths as the student's
+// work on exactly the large repositories where the fallback runs.
+Deno.test("an unknown mode leaves the sha comparison standing on its own", () => {
+  assertEquals(
+    classifyStudentFile({ sha: BLOB_A, type: "blob" }, { sha: BLOB_A, type: "blob", mode: "100755" }),
+    "unmodified"
+  );
+  assertEquals(
+    classifyStudentFile({ sha: BLOB_A, type: "blob", mode: "100755" }, { sha: BLOB_A, type: "blob" }),
+    "unmodified"
+  );
+  assertEquals(classifyStudentFile({ sha: BLOB_A, type: "blob" }, { sha: BLOB_B, type: "blob" }), "content_differs");
+});
+
+// The mirror of the directory case: the handout replaces a FILE at `config` with a directory
+// containing `config/settings.ts`. An untouched repository holds the old handout's own blob at
+// `config`, so blaming the student skipped the new file while the removal of `config` went
+// through -- an incomplete structural update nothing can auto-merge.
+Deno.test("an ancestor the handout itself put there does not block the path", () => {
+  const student = new Map<string, TreeEntry>([["config", blob(BLOB_A)]]);
+  const handout = new Map<string, TreeEntry>([["config", blob(BLOB_A)]]);
+  assertEquals(findBlockingAncestor("config/settings.ts", student, handout), undefined);
+});
+
+Deno.test("an ancestor the student changed still blocks, even where the handout had one", () => {
+  const student = new Map<string, TreeEntry>([["config", blob(BLOB_B)]]);
+  const handout = new Map<string, TreeEntry>([["config", blob(BLOB_A)]]);
+  assertEquals(findBlockingAncestor("config/settings.ts", student, handout), "config");
+});
+
+Deno.test("an ancestor of the student's own making blocks when the handout never had one", () => {
+  const student = new Map<string, TreeEntry>([["config", blob(BLOB_A)]]);
+  assertEquals(findBlockingAncestor("config/settings.ts", student, new Map()), "config");
+  // And with no handout tree to ask, every non-tree ancestor blocks, as before.
+  assertEquals(findBlockingAncestor("config/settings.ts", student), "config");
+});
+
+// A submodule the handout pinned is not the student's either, but the KINDS have to agree: a
+// submodule of theirs where the handout had a file is still a collision.
+Deno.test("a submodule ancestor is compared by kind as well as sha", () => {
+  const student = new Map<string, TreeEntry>([["vendor", { sha: COMMIT_A, type: "commit" }]]);
+  assertEquals(
+    findBlockingAncestor("vendor/config.ts", student, new Map([["vendor", { sha: COMMIT_A, type: "commit" }]])),
+    undefined
+  );
+  assertEquals(findBlockingAncestor("vendor/config.ts", student, new Map([["vendor", blob(COMMIT_A)]])), "vendor");
+});
+
 // The inverse: the handout adds foo/bar.ts and the student has a FILE called foo, so the
 // new path cannot exist without replacing it.
 Deno.test("a file standing where a parent directory has to go blocks the path", () => {
@@ -511,19 +584,36 @@ Deno.test("a submodule standing where a parent directory has to go blocks the pa
 Deno.test("a tree survives the trip through the cache unchanged", () => {
   const tree: RepoTree = {
     entries: new Map<string, RepoTreeEntry>([
-      ["src/main.ts", { sha: BLOB_A, type: "blob", size: 1234 }],
-      ["src/no-size.ts", { sha: BLOB_B, type: "blob" }],
-      ["src", { sha: "", type: "tree" }],
-      ["vendor/lib", { sha: "", type: "commit" }]
+      ["src/main.ts", { sha: BLOB_A, type: "blob", mode: "100644", size: 1234 }],
+      ["src/no-size.ts", { sha: BLOB_B, type: "blob", mode: "100644" }],
+      ["run.sh", { sha: BLOB_B, type: "blob", mode: "100755", size: 10 }],
+      ["link", { sha: BLOB_A, type: "blob", mode: "120000" }],
+      ["src", { sha: TREE_A, type: "tree", mode: "040000" }],
+      ["vendor/lib", { sha: COMMIT_A, type: "commit", mode: "160000" }]
     ]),
     truncated: false
   };
   const decoded = decodeRepoTree(encodeRepoTree(tree));
   assertEquals(decoded?.truncated, false);
-  assertEquals(decoded?.entries.get("src/main.ts"), { sha: BLOB_A, type: "blob", size: 1234 });
-  assertEquals(decoded?.entries.get("src/no-size.ts"), { sha: BLOB_B, type: "blob", size: undefined });
+  assertEquals(decoded?.entries.get("src/main.ts"), { sha: BLOB_A, type: "blob", mode: "100644", size: 1234 });
+  assertEquals(decoded?.entries.get("src/no-size.ts"), { sha: BLOB_B, type: "blob", mode: "100644", size: undefined });
+  // The mode is the reason the executable bit is not silently dropped, so it has to survive
+  // the cache as exactly as the sha does.
+  assertEquals(decoded?.entries.get("run.sh")?.mode, "100755");
+  assertEquals(decoded?.entries.get("link")?.mode, "120000");
   assertEquals(decoded?.entries.get("src")?.type, "tree");
   assertEquals(decoded?.entries.get("vendor/lib")?.type, "commit");
+});
+
+// A mode the source could not report has to come back unknown, not as a plausible default:
+// "100644" invented here is a claim that the student's file is a regular file, and it is the
+// claim that lets an executable script be written back as one.
+Deno.test("an unknown mode round-trips as unknown, not as a regular file", () => {
+  const tree: RepoTree = {
+    entries: new Map<string, RepoTreeEntry>([["mystery", { sha: BLOB_A, type: "blob" }]]),
+    truncated: false
+  };
+  assertEquals(decodeRepoTree(encodeRepoTree(tree))?.entries.get("mystery")?.mode, undefined);
 });
 
 // Losing this flag is the dangerous case: a truncated tree that reads as complete stops the
@@ -562,8 +652,13 @@ Deno.test("a directory keeps its sha through the cache, because the guard compar
     truncated: false
   };
   const decoded = decodeRepoTree(encodeRepoTree(tree));
-  assertEquals(decoded?.entries.get("src"), { sha: TREE_A, type: "tree", size: undefined });
-  assertEquals(decoded?.entries.get("vendor/lib"), { sha: COMMIT_A, type: "commit", size: undefined });
+  assertEquals(decoded?.entries.get("src"), { sha: TREE_A, type: "tree", mode: undefined, size: undefined });
+  assertEquals(decoded?.entries.get("vendor/lib"), {
+    sha: COMMIT_A,
+    type: "commit",
+    mode: undefined,
+    size: undefined
+  });
 });
 
 // Anything we cannot read has to mean "fetch it again". Inventing an empty tree from a
