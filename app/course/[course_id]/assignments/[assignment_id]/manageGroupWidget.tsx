@@ -867,7 +867,11 @@ function GroupDetails({
 function RepositoryLabel({ repository }: { repository: Repository }) {
   const { role } = useClassProfiles();
   if (!role.github_org_confirmed) {
-    return <Text as="span">{repository.repository} (requires GitHub authorization to access)</Text>;
+    return (
+      <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
+        {repository.repository} (requires GitHub authorization to access)
+      </Text>
+    );
   }
   return (
     <Link
@@ -880,7 +884,7 @@ function RepositoryLabel({ repository }: { repository: Repository }) {
   );
 }
 
-function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
+export function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (!repositories) {
     return <Skeleton height="100px" />;
   }
