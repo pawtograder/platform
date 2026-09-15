@@ -1566,6 +1566,47 @@ edgeFunctions:
     # asyncWorkerTuning.ts with that rule, because it is the only one whose
     # default sits at the permissive end of its range.
     orgSlotContinuousRefill: 1
+    # WALL-CLOCK RUN BUDGET for one org-leased drain, in seconds. EMPTY (the
+    # shipped default) means "let the worker derive it from the isolate
+    # lifetime", which is what it does:
+    #
+    #   ceiling = worker.timeoutMs / 1000 - 120 - 30
+    #
+    # i.e. 250s against the 400000 below, 330s on a deployment running 480000.
+    # Set an integer here ONLY to make a leaseholder stop claiming EARLIER than
+    # that; there is nothing above the ceiling to ask for.
+    #
+    # WHAT THE BUDGET IS. It is the point at which a leaseholder stops claiming
+    # new messages and lets the ones already in flight finish, so that
+    # EDGE_WORKER_TIMEOUT_MS does not kill the isolate mid-message and hand the
+    # work back to pgmq as a redelivery. The 120s subtracted is the drain-out
+    # reserve one in-flight message is modelled at, the 30s is slack before the
+    # runtime's kill; both are constants in asyncWorkerTuning.ts, not knobs.
+    #
+    # THE RANGE MOVES WITH worker.timeoutMs — it is 120 .. 250 at the lifetime
+    # below, and 120 .. 330 at 480000 — so the render-time rule refuses the
+    # COMBINATION rather than the field, the same way drainConcurrency's two
+    # ceilings are enforced against the timeouts rather than on their own. A
+    # longer budget is a coupled change: raise worker.timeoutMs (and with it
+    # gracefulExitTimeoutSeconds / terminationGracePeriodSeconds) and the
+    # accepted range moves up on its own.
+    #
+    # ONLY DOWN IS USEFUL, and an unusable value is NOT clamped up to the
+    # nearest bound the way orgSlotMaxPerOrg is. On the Helm-bypass paths this
+    # chart cannot see (a hand-edited Deployment, `kubectl set env`, a local
+    # `supabase functions serve`), a value that is present but unusable
+    # resolves DOWN to the 120s floor: stopping earlier is always safe, while
+    # stopping later is the defect this budget exists to prevent. It is the
+    # opposite direction from orgSlotContinuousRefill's fail-safe above only in
+    # form — both mean "an edit that went wrong must not buy more".
+    #
+    # THAT IS ALSO WHY EMPTY RENDERS NO ENV ENTRY AT ALL. A rendered "" is an
+    # edit, not an absence, and the worker would fail it safe to 120s on every
+    # pod — a drain that stops claiming after two minutes on a deployment that
+    # never touched this knob. Leave it empty to get the derived default.
+    #
+    # Ignored when orgSlotGlobalCap is 0 (there is no org-leased drain to bound).
+    orgSlotRunBudgetSeconds: ""
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)

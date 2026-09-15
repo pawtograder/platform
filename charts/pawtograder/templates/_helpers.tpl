@@ -448,3 +448,50 @@ strategy:
      the rollout converges seconds later. Per-component overridable. */}}
 progressDeadlineSeconds: {{ .component.progressDeadlineSeconds | default 1200 }}
 {{- end -}}
+
+{{/*
+github-async-worker org-leased WALL-CLOCK RUN BUDGET (env
+GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS, values
+edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds).
+
+Two helpers, defined once and used by BOTH _edge-functions-workload.tpl (which
+renders the env entry) and validations.yaml (which refuses an incoherent
+combination), so the value that is checked is literally the string that is
+rendered. A separate copy of this arithmetic in each file is how a chart starts
+validating one number and shipping another.
+
+runBudgetRaw — the configured value as a trimmed STRING, "" when unset.
+"" is the shipped default and means "let the worker derive it". `null` (an
+explicit --set x=null, or a values file that blanks the key) is also "", because
+a null IS an absence. 0 is NOT: it is returned as "0" so the validation below can
+refuse it by name instead of it disappearing into the unset case — which is what
+`default ""` would have done, 0 being falsey in a template.
+*/}}
+{{- define "pawtograder.asyncWorker.runBudgetRaw" -}}
+{{- $v := .Values.edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds -}}
+{{- if kindIs "invalid" $v -}}{{- else -}}{{- $v | toString | trim -}}{{- end -}}
+{{- end -}}
+
+{{/*
+runBudgetCeiling — the budget's ceiling AND the worker's default for it, in
+seconds, DERIVED from the isolate lifetime:
+
+  max(120, worker.timeoutMs/1000 - 120 - 30)
+
+which is 250 at the shipped 400000 and 330 at the 480000 production runs. It
+mirrors orgSlotRunBudgetCeilingSeconds() in
+supabase/functions/_shared/asyncWorkerTuning.ts, including the integer
+truncation of the millisecond value (`Math.floor(ms / 1000)` there, `div` here).
+The two terms are constants in that file and not knobs of their own:
+PER_MESSAGE_VT_BUDGET_SECONDS (120) is the drain-out reserve one in-flight
+message is modelled at, ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS (30) is slack before
+the runtime's kill. The Math.max floor is why a too-short isolate yields 120 and
+not a negative number; the worker reports that degenerate case as an invariant.
+
+Because the ceiling moves with worker.timeoutMs, a validation that hardcoded 330
+(or 250) would be wrong for every deployment that is not the one it was written
+on — production and the chart default already disagree.
+*/}}
+{{- define "pawtograder.asyncWorker.runBudgetCeiling" -}}
+{{- max 120 (sub (div (.Values.edgeFunctions.worker.timeoutMs | int) 1000) 150) -}}
+{{- end -}}

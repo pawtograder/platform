@@ -309,6 +309,20 @@ spec:
             # which would also give up per-org leaseholders.
             - name: GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL
               value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill | quote }}
+            # Wall-clock run budget for one org-leased drain: when a leaseholder
+            # stops claiming and lets the in-flight messages finish, so
+            # EDGE_WORKER_TIMEOUT_MS above cannot kill the isolate mid-message.
+            # Default and ceiling are the same number and both are DERIVED from
+            # worker.timeoutMs, so only DOWN is useful and the chart leaves the
+            # default to the worker: RENDERED ONLY WHEN SET, because a present-
+            # but-empty variable is read as a botched edit and fails safe to the
+            # 120s floor. validations.yaml refuses anything outside
+            # 120..ceiling(worker.timeoutMs) before it reaches this line.
+            {{- $runBudget := include "pawtograder.asyncWorker.runBudgetRaw" $ctx }}
+            {{- if ne $runBudget "" }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS
+              value: {{ $runBudget | quote }}
+            {{- end }}
             # Latency histogram bounds in seconds. The top finite bucket must be
             # >= worker.timeoutMs/1000 or every request that hits the worker
             # timeout lands in +Inf and the upper quantiles become an

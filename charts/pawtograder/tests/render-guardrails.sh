@@ -202,6 +202,33 @@ assert_env_value() {
   fi
 }
 
+# assert_env_absent "<label>" "<template>" "<ENV_NAME>" <extra --set args...>
+# The inverse of assert_env_value: asserts the render SUCCEEDS and does not emit
+# the named env var at all.
+#
+# Absence is a real assertion for exactly one knob in this chart. The org-leased
+# run budget defaults to EMPTY and is rendered conditionally, because
+# asyncWorkerTuning.ts reads a present-but-empty variable as a botched edit and
+# fails it safe to the 120s floor — so `value: ""` for an untouched deployment
+# would cut every drain to two minutes, and assert_env_value cannot tell "not
+# rendered" from "rendered empty" (it fails on both).
+assert_env_absent() {
+  local label="$1" template="$2" envname="$3"; shift 3
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  if grep -qE "^[[:space:]]*- name: ${envname}\$" "$OUTFILE"; then
+    echo "FAIL [$label]: $envname is rendered in $template but should be absent"
+    echo "       got: $(grep -A1 -E "^[[:space:]]*- name: ${envname}\$" "$OUTFILE" | tr '\n' ' ')"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
 # assert_hpa_utilization "<label>" "<memory|cpu>" "<expected>" <extra --set args...>
 # Pins one HPA resource metric's averageUtilization, keyed on the RESOURCE NAME.
 #
@@ -2151,6 +2178,125 @@ assert_refused "refuses a string boolean, which would fail OPEN at runtime" \
 assert_refused "refuses a value outside the binary range" \
   "is outside 0-1" \
   --set edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill=2
+
+echo
+
+echo "== the org-leased run budget is settable, and its range MOVES with the isolate lifetime =="
+# GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS is when a leaseholder stops
+# claiming new messages and lets the ones in flight finish, so that
+# EDGE_WORKER_TIMEOUT_MS cannot kill the isolate mid-message and hand the work
+# back to pgmq as a redelivery.
+#
+# Two properties are guarded here, and the second is the one that needs a render
+# test rather than a reading of the template:
+#
+#   1. The knob is REACHABLE through the chart at all. It shipped without a
+#      values entry, which meant every Helm-managed deployment was pinned to the
+#      derived default and the only way to shorten the budget was to hand-edit
+#      the Deployment — i.e. off the supported path entirely.
+#   2. The accepted range is DERIVED from edgeFunctions.worker.timeoutMs
+#      (120 .. lifetime-150), not a constant. The A/B below renders the same 330
+#      against two lifetimes and gets opposite answers; a rule that hardcoded
+#      either endpoint would pass one of those cases wrongly.
+
+# Unset is the shipped default, and unset must render NO entry. A rendered ""
+# is not an absence: the worker reads it as a botched edit and fails it safe to
+# the 120s floor, so an untouched deployment would silently stop claiming after
+# two minutes.
+assert_env_absent "the run budget ships unset, so the worker derives it" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS
+assert_env_absent "an explicitly emptied value is still an absence, not a rendered empty string" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS \
+  --set-string edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=
+assert_env_absent "an explicit null is an absence too" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=null
+
+# An in-range value has to reach the CONTAINER, not merely survive validation:
+# a knob that renders nothing is the defect this whole section exists for.
+assert_env_value "a shortened budget reaches the pod" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS 180 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=180
+# ...including with the feature actually on, which is the only configuration
+# where the budget does anything.
+assert_env_value "a shortened budget reaches the pod with per-org leaseholders enabled" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS 200 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=200
+# The ceiling is inclusive and is the same number the worker would have derived
+# for itself, so spelling out the default explicitly must be accepted.
+assert_env_value "the derived default may be written out explicitly (400s lifetime)" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS 250 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=250
+
+# One second past the ceiling is a budget that intends to still be claiming when
+# the runtime kills the isolate — the defect — so it is REFUSED rather than
+# clamped. Clamping would be worse than useless here: the ceiling IS the
+# default, so an operator who typed 600 would get exactly what not setting the
+# variable gives them, reported and inert.
+assert_refused "one second past the derived ceiling is refused" \
+  "exceeds the 250s ceiling derived from edgeFunctions.worker.timeoutMs=400000" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=251
+# The refusal must name the OTHER value, because the number alone is not wrong —
+# the pairing is. Same contract as the drainConcurrency/timeoutMs rules above.
+assert_refused "the refusal names the coupled remedy, not just the bound" \
+  "raise edgeFunctions.worker.timeoutMs to >= 401000" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=251
+
+# THE A/B THAT PINS THE DERIVATION. 330 is production's budget (it runs
+# EDGE_WORKER_TIMEOUT_MS=480000). Against the chart's 400s lifetime the same
+# number is 80s too long, and the rule has to say so.
+assert_refused "production's 330s budget is refused against the chart's 400s lifetime" \
+  "orgSlotRunBudgetSeconds=330 exceeds the 250s ceiling" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=330
+LIFETIME480=(
+  --set edgeFunctions.worker.timeoutMs=480000
+  --set edgeFunctions.gracefulExitTimeoutSeconds=490
+  --set edgeFunctions.terminationGracePeriodSeconds=510
+)
+assert_env_value "the same 330s budget renders once the isolate lives 480s" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS 330 \
+  "${LIFETIME480[@]}" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=330
+assert_refused "the ceiling still binds at the raised lifetime, one second higher" \
+  "exceeds the 330s ceiling derived from edgeFunctions.worker.timeoutMs=480000" \
+  "${LIFETIME480[@]}" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=331
+# And the floor of the derivation: max(120, lifetime-150) never goes negative,
+# so a very short isolate collapses the range to the single value 120 rather
+# than producing a nonsense bound.
+assert_env_value "a short isolate collapses the range to the 120s floor" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS 120 \
+  --set edgeFunctions.worker.timeoutMs=200000 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=120
+assert_refused "a short isolate refuses anything above that floor" \
+  "exceeds the 120s ceiling derived from edgeFunctions.worker.timeoutMs=200000" \
+  --set edgeFunctions.worker.timeoutMs=200000 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=121
+
+# Below the floor is the silent-stall failure: a leaseholder past its deadline
+# before it has claimed anything drains nothing while every liveness signal
+# stays green.
+assert_refused "a budget below one message's modelled cost is refused" \
+  "orgSlotRunBudgetSeconds=119 is below the 120s floor" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=119
+# 0 must be refused BY NAME and not swallowed as "unset". 0 is falsey in a
+# template, so a `default ""` normalisation would have made an operator's 0
+# render as the derived 250 with no complaint.
+assert_refused "zero is refused as a value, not silently read as unset" \
+  "orgSlotRunBudgetSeconds=0 is below the 120s floor" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=0
+# Non-integers: the runtime would fail these safe to 120s, which is a real
+# behaviour change the operator did not ask for. Refuse at render time instead.
+assert_refused "a non-numeric budget is refused" \
+  "must be an integer number of seconds or empty" \
+  --set-string edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=off
+assert_refused "a fractional budget is refused" \
+  "must be an integer number of seconds or empty" \
+  --set-string edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=180.5
+
+echo
 
 echo
 

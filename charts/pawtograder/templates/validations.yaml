@@ -286,6 +286,54 @@ reason resolveAsyncWorkerTuning only records these issues when the feature is on
 {{- if or (lt $refill 0) (gt $refill 1) -}}
 {{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill=%d is outside 0-1. 1 (the default) keeps drainConcurrency messages in flight and claims the shortfall as each settles; 0 restores the batch-and-re-claim shape, which measured 5.20 effective concurrency of a possible 8 on the 2026-09-13 burst because every batch waits on its straggler. This is a KILL SWITCH, so the range is binary on purpose — there is no low-water-mark parameter in drainWithContinuousRefill for an intermediate value to mean, and a number a values file renders but nothing reads is worse than no knob." $refill) -}}
 {{- end -}}
+{{- /*
+The org-leased WALL-CLOCK RUN BUDGET, and the one rule in this block whose
+ACCEPTED RANGE IS NOT A PAIR OF CONSTANTS.
+
+GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS is when a leaseholder stops
+claiming new messages and lets the ones in flight finish, so that the isolate is
+not killed mid-message by EDGE_WORKER_TIMEOUT_MS and the work handed back to
+pgmq as a redelivery. Its ceiling AND its default are the same derived number:
+
+  max(120, worker.timeoutMs/1000 - 120 - 30)
+
+250s at the chart default and 330s at the 480000 production runs, which is
+exactly why this is checked as a COMBINATION and not as a field. A rule spelling
+`0-330` would pass a 330s budget into a 400s isolate — 70s of drain-out for a
+message modelled at 120s — and would have to be rewritten the day anybody moves
+the lifetime. Same shape as the drainConcurrency/worker.timeoutMs rule further
+down: the value is not wrong, the pairing is, and the remedy names both.
+
+THIS RULE IS NOT GATED ON orgSlotGlobalCap > 0, unlike the coherence rules
+below, and it does not need to be. Those are gated because their values are
+always present — a disabled deployment would fail a render over an
+orgSlotMaxPerOrg it is not using. This one ships EMPTY, so no untouched
+deployment can trip it; any value here is a deliberate act and is worth checking
+whether or not the feature is on, which is also how resolveOrgSlotTuning treats
+it (the budget is resolved and reported before the `enabled` early return).
+
+REFUSED AND NOT CLAMPED, for the usual reason plus one specific to this knob:
+the ceiling IS the default, so clamping a too-large value to it would leave an
+operator who typed 600 with precisely the behaviour they get by not setting the
+variable at all — an edit that is reported and inert. On the Helm-bypass paths
+this rule cannot see, asyncWorkerTuning.ts resolves an unusable value DOWN to
+the 120s floor instead. Down is safe here; up is the defect.
+*/ -}}
+{{- $runBudgetRaw := include "pawtograder.asyncWorker.runBudgetRaw" . -}}
+{{- if ne $runBudgetRaw "" -}}
+{{- if not (regexMatch "^[0-9]+$" $runBudgetRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds must be an integer number of seconds or empty (got %q). Empty is the shipped default and means the worker derives the budget from edgeFunctions.worker.timeoutMs; it is rendered as NO env entry at all, because GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS set but empty is read as a botched edit and fails safe to the 120s floor, which would cut every org-leased drain to two minutes on a deployment that never touched this knob." $runBudgetRaw) -}}
+{{- end -}}
+{{- $runBudget := int $runBudgetRaw -}}
+{{- $runBudgetCeiling := int (include "pawtograder.asyncWorker.runBudgetCeiling" .) -}}
+{{- $runBudgetLifeS := div (.Values.edgeFunctions.worker.timeoutMs | int) 1000 -}}
+{{- if lt $runBudget 120 -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=%d is below the 120s floor. 120s is PER_MESSAGE_VT_BUDGET_SECONDS, the cost one create_repo is modelled at, and a budget under it is a leaseholder that can be past its deadline before it has claimed anything: the queue stops draining while the lease, the heartbeats and the error count all stay green. That is the same silent-stall failure the drainConcurrency floor exists for, arriving through the clock instead of through n. Leave this empty to get the derived default (%ds at edgeFunctions.worker.timeoutMs=%d), or set an integer in 120-%d." $runBudget $runBudgetCeiling (.Values.edgeFunctions.worker.timeoutMs | int) $runBudgetCeiling) -}}
+{{- end -}}
+{{- if gt $runBudget $runBudgetCeiling -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=%d exceeds the %ds ceiling derived from edgeFunctions.worker.timeoutMs=%d (%ds): %ds of isolate, minus 120s of drain-out reserve for the messages still in flight when claiming stops, minus 30s of margin before the runtime kills the isolate. The budget is NOT a constant range and this pairing is what is wrong, not the number on its own — a budget that intends to still be claiming when EDGE_WORKER_TIMEOUT_MS fires is the defect it was added to prevent: Promise.allSettled never reaches the archive calls, so repos that were created successfully are provisioned again on redelivery. Either lower it to <= %d, or raise edgeFunctions.worker.timeoutMs to >= %d (%ds) and carry gracefulExitTimeoutSeconds / terminationGracePeriodSeconds up with it — the accepted range then moves on its own. Note this ceiling is also the DEFAULT you get by leaving the value empty, so there is nothing above it to ask for." $runBudget $runBudgetCeiling (.Values.edgeFunctions.worker.timeoutMs | int) $runBudgetLifeS $runBudgetLifeS $runBudgetCeiling (mul (add $runBudget 150) 1000) (add $runBudget 150)) -}}
+{{- end -}}
+{{- end -}}
 {{- $cap := int $capRaw -}}
 {{- $mpo := int $mpoRaw -}}
 {{- $ttl := int $ttlRaw -}}
