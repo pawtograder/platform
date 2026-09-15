@@ -38,7 +38,11 @@ import {
   ORG_SLOT_CONTINUOUS_REFILL_ENV,
   DEFAULT_ORG_SLOT_CONTINUOUS_REFILL,
   MIN_ORG_SLOT_CONTINUOUS_REFILL,
-  MAX_ORG_SLOT_CONTINUOUS_REFILL
+  MAX_ORG_SLOT_CONTINUOUS_REFILL,
+  ORG_SLOT_RUN_BUDGET_ENV,
+  ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS,
+  MIN_ORG_SLOT_RUN_BUDGET_SECONDS,
+  orgSlotRunBudgetCeilingSeconds
 } from "@/supabase/functions/_shared/asyncWorkerTuning";
 
 function env(vars: Record<string, string | undefined>) {
@@ -495,7 +499,11 @@ describe("per-org slot tuning defaults", () => {
       globalCap: 4,
       maxPerOrg: 1,
       leaseTtlSeconds: 60,
-      continuousRefill: true
+      continuousRefill: true,
+      // Derived from the ASSUMED 400s lifetime (nothing set EDGE_WORKER_TIMEOUT_MS here), so
+      // 400 - 120 - 30. Spelled out rather than computed, so a change to the reserve or the margin
+      // has to be typed here too.
+      runBudgetSeconds: 250
     });
     expect(t.issues.filter((i) => i.env.includes("ORG_SLOT"))).toHaveLength(0);
   });
@@ -845,10 +853,28 @@ describe("continuous refill kill switch", () => {
     expect(t.issues.filter((i) => blanked.includes(i.env))).toHaveLength(0);
   });
 
-  it("is the ONLY knob whose fallback is the permissive end of its range", () => {
-    // This is WHY it needs failSafeValue and its neighbours do not, expressed as the checkable
-    // signature rather than as a claim: fallback === max means "a typo resolves to the most
-    // permissive answer". If a future knob acquires that shape, this test is where it gets noticed.
+  it("shares the permissive-default signature with exactly one other knob, and no more", () => {
+    // This is WHY those two need failSafeValue and their neighbours do not, expressed as the
+    // checkable signature rather than as a claim: fallback === max means "a typo resolves to the
+    // most permissive answer". If a THIRD knob acquires that shape, this test is where it gets
+    // noticed — the assertion is about the shape, not about a count that goes stale.
+    //
+    // The second one arrived on 2026-09-15: the wall-clock run budget defaults to its own ceiling,
+    // because the ceiling is the largest value that is coherent with the isolate lifetime. Same
+    // signature, different reason, same rule.
+    const lifetime = 480;
+    expect(orgSlotRunBudgetCeilingSeconds(lifetime)).toBe(
+      lifetime - PER_MESSAGE_VT_BUDGET_SECONDS - ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS
+    );
+    const budgetTypo = resolveAsyncWorkerTuning(
+      env({
+        [ORG_SLOT_GLOBAL_CAP_ENV]: "8",
+        [ISOLATE_LIFETIME_ENV]: "480000",
+        [ORG_SLOT_RUN_BUDGET_ENV]: "later"
+      })
+    );
+    expect(budgetTypo.orgSlots.runBudgetSeconds).toBe(MIN_ORG_SLOT_RUN_BUDGET_SECONDS);
+    expect(budgetTypo.orgSlots.runBudgetSeconds).not.toBe(orgSlotRunBudgetCeilingSeconds(480));
     const knobs = [
       { knob: "drainConcurrency", max: MAX_DRAIN_CONCURRENCY, fb: DEFAULT_DRAIN_CONCURRENCY },
       { knob: "visibilityTimeout", max: MAX_VISIBILITY_TIMEOUT_SECONDS, fb: DEFAULT_VISIBILITY_TIMEOUT_SECONDS },
@@ -967,5 +993,152 @@ describe("per-org slot tuning: coherence with the timeouts", () => {
     );
     expect(t.orgSlots.enabled).toBe(false);
     expect(t.issues.filter((i) => i.env.includes("ORG_SLOT"))).toHaveLength(0);
+  });
+});
+
+describe("the wall-clock run budget", () => {
+  // Added 2026-09-15, from a live defect: nothing bounded a BUSY org-leased run, so a leaseholder
+  // that kept finding work drained until the runtime killed the isolate at EDGE_WORKER_TIMEOUT_MS,
+  // and everything it had read and not archived stayed invisible for a whole visibility timeout —
+  // which in production is the same 480s. sync_repo_permissions redelivery reached 35.4%.
+  //
+  // The knob's whole job is to be the number that is strictly less than the isolate lifetime, by at
+  // least one modelled message. Every test here is a way of asking whether it still is.
+  const onWithLifetime = (lifetimeMs: string, budget?: string) =>
+    resolveAsyncWorkerTuning(
+      env({
+        [ORG_SLOT_GLOBAL_CAP_ENV]: "8",
+        [ISOLATE_LIFETIME_ENV]: lifetimeMs,
+        ...(budget === undefined ? {} : { [ORG_SLOT_RUN_BUDGET_ENV]: budget })
+      })
+    );
+
+  it("derives its default from the isolate lifetime rather than from a constant", () => {
+    // The two deployments that matter disagree about the lifetime and are both correct: production
+    // runs 480000 and the chart default is 400000. A fixed default would be wrong for one of them,
+    // and a fixed default that got CLAMPED for one of them would page every deployment that never
+    // touched the knob.
+    expect(onWithLifetime("480000").orgSlots.runBudgetSeconds).toBe(330);
+    expect(onWithLifetime("400000").orgSlots.runBudgetSeconds).toBe(250);
+    expect(onWithLifetime("960000").orgSlots.runBudgetSeconds).toBe(810);
+    // Absent EDGE_WORKER_TIMEOUT_MS is not "unknown", it is the 400s main.ts falls back to.
+    expect(resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8" })).orgSlots.runBudgetSeconds).toBe(
+      DEFAULT_ISOLATE_LIFETIME_SECONDS - PER_MESSAGE_VT_BUDGET_SECONDS - ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS
+    );
+  });
+
+  it("always leaves a whole modelled message behind it, on every lifetime that can hold one", () => {
+    // THE INVARIANT THE DEFECT IS ABOUT, as a property rather than an example. The budget exists so
+    // that when claiming stops there is still time for what is in flight to finish; a budget that
+    // reached the lifetime would be the unbounded run with extra steps.
+    for (const lifetime of [270, 300, 400, 480, 600, 900, 1200]) {
+      const t = onWithLifetime(String(lifetime * 1000));
+      expect({
+        lifetime,
+        fits: t.orgSlots.runBudgetSeconds + PER_MESSAGE_VT_BUDGET_SECONDS <= lifetime
+      }).toEqual({ lifetime, fits: true });
+      expect(t.orgSlots.runBudgetSeconds).toBeGreaterThanOrEqual(MIN_ORG_SLOT_RUN_BUDGET_SECONDS);
+    }
+  });
+
+  it("adds no issues to the shipped defaults", () => {
+    // A knob nobody has touched must not page, which is the same property the other org-slot knobs
+    // hold and the reason the default is derived rather than clamped into place.
+    const t = onWithLifetime("480000");
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_RUN_BUDGET_ENV)).toHaveLength(0);
+  });
+
+  it("honours a value inside the range, because shortening it is the whole point of the knob", () => {
+    const t = onWithLifetime("480000", "200");
+    expect(t.orgSlots.runBudgetSeconds).toBe(200);
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_RUN_BUDGET_ENV)).toHaveLength(0);
+  });
+
+  it("resolves a malformed value DOWN to the floor, not up to the default", () => {
+    // THE FAIL-SAFE DIRECTION, and it is the opposite of continuousRefill's for the same underlying
+    // reason. An operator only ever reaches for this knob to make a run stop EARLIER; stopping
+    // earlier is always safe. So a value that cannot be honoured must not resolve to the default,
+    // because the default is the most permissive value this deployment can have.
+    for (const raw of ["false", "later", "5m", "", "   ", "330s"]) {
+      const t = onWithLifetime("480000", raw);
+      expect(t.orgSlots.runBudgetSeconds).toBe(MIN_ORG_SLOT_RUN_BUDGET_SECONDS);
+      expect(t.orgSlots.runBudgetSeconds).not.toBe(330);
+      const reported = t.issues.filter((i) => i.env === ORG_SLOT_RUN_BUDGET_ENV);
+      expect(reported).toHaveLength(1);
+      expect(reported[0].kind).toBe("rejected");
+      // The report must name the value actually in force, or Sentry says 330 while the worker runs 120.
+      expect(reported[0].effective).toBe(MIN_ORG_SLOT_RUN_BUDGET_SECONDS);
+    }
+  });
+
+  it("does not clamp an above-ceiling value up to the bound, which is the default", () => {
+    // This is where copying `maxPerOrg` would have been wrong. Clamping preserves intent ("they
+    // asked for more") for a range knob whose bound is not its default — but here the ceiling IS
+    // the default, so clamping would hand an operator who typed 600 exactly the behaviour they get
+    // by not setting the variable at all: their edit reported and inert. And "more" here is not
+    // more throughput, it is a run that intends to still be claiming when the runtime kills it.
+    const t = onWithLifetime("480000", "600");
+    expect(t.orgSlots.runBudgetSeconds).toBe(MIN_ORG_SLOT_RUN_BUDGET_SECONDS);
+    expect(t.orgSlots.runBudgetSeconds).not.toBe(orgSlotRunBudgetCeilingSeconds(480));
+    const reported = t.issues.filter((i) => i.env === ORG_SLOT_RUN_BUDGET_ENV);
+    expect(reported).toHaveLength(1);
+    expect(reported[0].kind).toBe("rejected");
+
+    // Contrast, so the asymmetry is pinned rather than described: maxPerOrg still clamps.
+    const clamping = resolveAsyncWorkerTuning(
+      env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_MAX_PER_ORG_ENV]: "99" })
+    );
+    expect(clamping.orgSlots.maxPerOrg).toBe(MAX_ORG_SLOT_MAX_PER_ORG);
+  });
+
+  it("never goes below one modelled message, whatever is configured", () => {
+    // A budget under one message's cost is an isolate that can be past its deadline before it has
+    // claimed anything: the queue stops draining while the lease, the heartbeats and the error
+    // count all stay green. That is the failure MIN_DRAIN_CONCURRENCY exists for, arriving through
+    // the clock instead of through `n`, and it is worse than the strand it would be preventing.
+    const t = onWithLifetime("480000", "30");
+    expect(t.orgSlots.runBudgetSeconds).toBe(MIN_ORG_SLOT_RUN_BUDGET_SECONDS);
+    expect(MIN_ORG_SLOT_RUN_BUDGET_SECONDS).toBe(PER_MESSAGE_VT_BUDGET_SECONDS);
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_RUN_BUDGET_ENV)).toHaveLength(1);
+  });
+
+  it("says out loud when the isolate is too short to hold a budget AND a drain-out", () => {
+    // The one ceiling this module cannot fix by clamping: below 270s there is no value that leaves
+    // both a claiming window and a whole message behind it. The floor wins, and the mismatch is
+    // reported as an invariant rather than silently resolved — the same treatment the lease TTL's
+    // floor-vs-ceiling crossing already gets.
+    const t = onWithLifetime("200000");
+    expect(t.orgSlots.runBudgetSeconds).toBe(MIN_ORG_SLOT_RUN_BUDGET_SECONDS);
+    const invariant = t.issues.filter((i) => i.env === ORG_SLOT_RUN_BUDGET_ENV && i.kind === "invariant");
+    expect(invariant).toHaveLength(1);
+    expect(invariant[0].message).toContain("still in flight when claiming stops");
+  });
+
+  it("does not emit that invariant on a deployment where per-org leasing is off", () => {
+    // Coherence noise about a number no leaseholder will ever use is the thing this file's other
+    // ceilings go out of their way not to produce.
+    const t = resolveAsyncWorkerTuning(env({ [ISOLATE_LIFETIME_ENV]: "200000" }));
+    expect(t.orgSlots.enabled).toBe(false);
+    expect(t.issues.filter((i) => i.env === ORG_SLOT_RUN_BUDGET_ENV)).toHaveLength(0);
+    // ...but it is still REPORTED as configured, exactly as continuousRefill is, because "an
+    // operator shortened the budget" and "per-org leasing is not on" need different responses.
+    expect(t.orgSlots.runBudgetSeconds).toBe(MIN_ORG_SLOT_RUN_BUDGET_SECONDS);
+  });
+
+  it("is strictly below the visibility timeout regime that made the defect expensive", () => {
+    // Not a rule this module enforces — the VT is deliberately untouched by this change — but the
+    // relationship is the reason the budget is worth anything, so it is worth failing on. With
+    // VT == lifetime (the production pair on 2026-09-15) a message caught by the wall clock is
+    // invisible for a further 480s; the budget's job is to make sure there is no such message.
+    const t = resolveAsyncWorkerTuning(
+      env({
+        [ORG_SLOT_GLOBAL_CAP_ENV]: "8",
+        [ISOLATE_LIFETIME_ENV]: "480000",
+        [VISIBILITY_TIMEOUT_ENV]: "480"
+      })
+    );
+    expect(t.visibilityTimeoutSeconds).toBe(480);
+    expect(t.orgSlots.runBudgetSeconds).toBe(330);
+    expect(480 - t.orgSlots.runBudgetSeconds).toBeGreaterThanOrEqual(PER_MESSAGE_VT_BUDGET_SECONDS);
   });
 });

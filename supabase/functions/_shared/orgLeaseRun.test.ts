@@ -8,12 +8,13 @@
  * pinned by contract and verified separately.
  */
 
-import { assertEquals, assertNotEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@^1";
-import { resolveAsyncWorkerTuning } from "./asyncWorkerTuning.ts";
+import { assertEquals, assertNotEquals, assertRejects, assertStringIncludes, assertThrows } from "jsr:@std/assert@^1";
+import { PER_MESSAGE_VT_BUDGET_SECONDS, resolveAsyncWorkerTuning } from "./asyncWorkerTuning.ts";
 import {
   beginOrgLeaseRun,
   drainOrgLease,
   drainWithContinuousRefill,
+  isolateStartedAtMs,
   OrgClaimError,
   type OrgQueueMessage,
   type OrgSlotRow,
@@ -2148,4 +2149,343 @@ Deno.test("a non-finite message count resolves to the ceiling instead of a null 
   await run.claim(Number.NaN);
   assertEquals(f.claimArgs[0].n, 4);
   assertEquals(Number.isFinite(f.claimArgs[0].n), true, "never NaN, which crosses the wire as null");
+});
+
+// ── The wall-clock run budget ──────────────────────────────────────────────────
+//
+// The defect these lock down was live on 2026-09-15: nothing bounded a BUSY org-leased run, so a
+// leaseholder that kept finding work drained until the runtime killed the isolate at
+// EDGE_WORKER_TIMEOUT_MS ("wall clock duration reached", 664 times in 75 minutes across 27 pods),
+// and everything it had read but not archived stayed invisible for a full visibility timeout —
+// which in production is the same 480s. `sync_repo_permissions` redelivery reached 35.4%.
+//
+// Two things have to be true of the fix and each of them can be true without the other, which is
+// why they are asserted separately everywhere below: the run must STOP CLAIMING at the deadline,
+// and the work it had already started must STILL COMPLETE. A change that only did the first would
+// be the same strand, self-inflicted.
+
+/** The prod shape the defect was measured on: a 480s isolate and a 480s visibility timeout. */
+const PROD_LIFETIME_MS = 480_000;
+
+/**
+ * Message spans, so a test can ask the question the incident asks: at the instant the runtime would
+ * have killed this isolate, how many messages had been read and not yet archived? That count IS the
+ * stranded set — each one invisible for the rest of its VT.
+ */
+type Span = { start: number; end: number };
+const inFlightAt = (spans: Span[], t: number) => spans.filter((s) => s.start <= t && t < s.end).length;
+
+/**
+ * One org-leased drain against an endless-enough queue, on virtual time.
+ *
+ * `budgetMs === null` is the PRE-CHANGE behaviour and is what the negative control runs.
+ */
+async function drainWithBudget(budgetMs: number | null) {
+  const clock = virtualClock();
+  const claimTimes: number[] = [];
+  const spans: Span[] = [];
+  // STARTS counted separately from COMPLETIONS, because "stopped claiming" and "let what it had
+  // finish" are different claims and a span list alone can only ever evidence the first. A driver
+  // that returned while messages were still running would simply record fewer spans, and every
+  // assertion written over `spans` would stay true of the smaller set.
+  let startedCount = 0;
+  // Bounded, or an unbudgeted run would never return and the negative control could not be written.
+  // 200 x 30s at 4-way concurrency is 1500s of virtual time, comfortably past the 480s wall clock.
+  const ready: number[] = [];
+  for (let i = 1; i <= 200; i++) ready.push(i);
+
+  const rpc: OrgSlotRpc = {
+    claim: async (args) => {
+      claimTimes.push(clock.now());
+      await clock.sleep(CLAIM_LATENCY_MS);
+      if (args.queue_name !== "async_calls") return { data: statusRow("no_demand"), error: null };
+      const take = ready.splice(0, args.n);
+      if (take.length === 0) return { data: statusRow("no_demand"), error: null };
+      return { data: take.map((id) => row(id, "acme")), error: null };
+    },
+    renew: () => Promise.resolve({ data: true, error: null }),
+    release: () => Promise.resolve({ data: null, error: null })
+  };
+
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({
+    ...simBase(clock),
+    rpc,
+    inFlightCount: () => inFlight.size,
+    // The clock is injected, so the anchor must be too — `beginOrgLeaseRun` refuses the pair
+    // otherwise. 0 is this isolate's birth on the virtual clock.
+    ...(budgetMs === null ? {} : { runBudgetMs: budgetMs, isolateStartedAt: 0 })
+  });
+
+  await runOnVirtualTime(
+    clock,
+    drainWithContinuousRefill({
+      run,
+      inFlight,
+      maxInFlight: SIM_CONCURRENCY,
+      process: async (message) => {
+        startedCount++;
+        const start = clock.now();
+        // STAGGERED, not a constant. With identical durations every message settles in lockstep and
+        // the in-flight set empties completely between refills, so the deadline can only ever land
+        // on an EMPTY set — and "the work in flight at the deadline still finishes" becomes a claim
+        // about nothing. These are the measured spread's shape (tens of seconds, no two alike).
+        await clock.sleep((17 + ((message.msg_id * 7) % 23)) * 1000);
+        spans.push({ start, end: clock.now() });
+      }
+    })
+  );
+  await run.release();
+
+  return {
+    claimTimes,
+    spans,
+    endedAt: clock.now(),
+    startedCount,
+    completedCount: spans.length,
+    stillTracked: inFlight.size,
+    left: ready.length,
+    run
+  };
+}
+
+// THE CORE PROPERTY, BOTH HALVES. Claiming stops at the deadline; everything already claimed still
+// runs to completion; and at the instant the runtime would have killed this isolate there is
+// nothing left unarchived, which is the whole of the 2026-09-15 defect.
+Deno.test(
+  "a run past its wall-clock budget stops claiming, and the work it already started still finishes",
+  async () => {
+    const budget = 330_000;
+    const d = await drainWithBudget(budget);
+
+    const after = d.claimTimes.filter((t) => t >= budget);
+    assertEquals(after, [], "no claim may be issued once the budget is spent");
+    // Not vacuous: it really did keep claiming right up to the deadline rather than stopping early for
+    // some unrelated reason, which is the way this test could pass while the budget did nothing.
+    assertEquals(
+      d.claimTimes.some((t) => t > budget - 60_000),
+      true,
+      "and it claimed right up to the deadline, so the stop is the budget and not an empty queue"
+    );
+
+    // THE OTHER HALF, AND IT IS COUNTED RATHER THAN INFERRED. Every message this run STARTED also
+    // COMPLETED. A budget that stopped claiming and then dropped its in-flight set on the floor would
+    // satisfy every assertion above and fail here — which is the exact bug this change could have
+    // introduced, so it gets a count and not a property over the survivors.
+    assertEquals(d.startedCount > 0, true, "the run did real work before the deadline");
+    assertEquals(
+      d.completedCount,
+      d.startedCount,
+      "every message the run started also finished; none was abandoned at the deadline"
+    );
+    assertEquals(d.stillTracked, 0, "and the driver did not return with work still tracked");
+    assertEquals(
+      d.spans.every((s) => s.end <= d.endedAt),
+      true,
+      "the driver did not return while a message it claimed was still running"
+    );
+    // THE INTERLEAVING THAT MAKES THE ASSERTION MEAN SOMETHING: messages were genuinely RUNNING at
+    // the instant claiming stopped, and they ended after it. A budget that dropped its in-flight set
+    // on the floor would satisfy "stops claiming" and fail here.
+    assertEquals(
+      inFlightAt(d.spans, budget) > 0,
+      true,
+      "the deadline landed mid-stream, with messages actually running"
+    );
+    assertEquals(
+      d.spans.some((s) => s.start < budget && s.end > budget),
+      true,
+      "and work that was in flight AT the deadline was allowed to finish past it, not dropped"
+    );
+    assertEquals(d.run.shouldContinue(), false, "the run is over");
+
+    // The point of the whole change: at the wall clock, nothing of ours is unarchived.
+    assertEquals(inFlightAt(d.spans, PROD_LIFETIME_MS), 0, "nothing is stranded when the runtime kills the isolate");
+    assertEquals(d.endedAt < PROD_LIFETIME_MS, true, "the isolate returned on its own terms, before the kill");
+  }
+);
+
+// NEGATIVE CONTROL. The same drain with no budget is the pre-change worker, and it does exactly what
+// the incident says: still claiming long past the horizon, with a full in-flight set at the kill.
+Deno.test("an unbudgeted run claims past the deadline and is still holding messages at the wall clock", async () => {
+  const d = await drainWithBudget(null);
+
+  assertEquals(
+    d.claimTimes.some((t) => t >= 330_000),
+    true,
+    "an unbudgeted run keeps claiming past where the budget would have stopped it"
+  );
+  assertEquals(
+    d.claimTimes.some((t) => t >= PROD_LIFETIME_MS),
+    true,
+    "and past the wall clock itself, on an isolate the runtime has already killed"
+  );
+  assertEquals(
+    inFlightAt(d.spans, PROD_LIFETIME_MS),
+    SIM_CONCURRENCY,
+    "with a full in-flight set stranded at the kill — read, unarchived, invisible for a whole VT"
+  );
+});
+
+// THE PRIMARY ACCEPTANCE CRITERION, and the one case an injected clock cannot reach.
+//
+// `github-async-worker/index.ts` resets its `started` guard in a `.finally()`, the cron pokes twice
+// a minute, and an idle run returns after its 50s idle budget — so ONE ISOLATE HOSTS A SEQUENCE OF
+// RUNS. A run-scoped deadline passes every other test in this section and changes nothing in
+// production, because the dangerous run is a YOUNG run that starts LATE in the isolate's life: it
+// would be handed a fresh full allowance and killed minutes short of it.
+//
+// So this one injects NOTHING — not the clock, not the anchor. It uses the real `Date.now` and the
+// real module-level capture in orgLeaseRun.ts, which is the only way to tell "the budget is module
+// state that runs draw down" apart from "the budget is per run".
+Deno.test("the budget is module state: a second run in the same isolate inherits what the first spent", async () => {
+  const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  // `base` deliberately does NOT set `now`, so these runs read the real clock and the real
+  // module-level anchor. That is the whole design of this test.
+  const live = base;
+
+  // A budget that expires 300ms from NOW, expressed the only way it can be — as an allowance from
+  // the ISOLATE's start, which is what the worker passes and what every run in this isolate shares.
+  const budgetMs = Date.now() - isolateStartedAtMs() + 300;
+
+  const first = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+  const runA = beginOrgLeaseRun({ ...live, rpc: first.rpc, runBudgetMs: budgetMs });
+  assertNotEquals(await runA.claim(), null, "the first run is inside the budget and claims normally");
+
+  // The isolate ages past the shared deadline. The RUN is brand new; the ISOLATE is not.
+  await realSleep(400);
+
+  const second = fakeRpc({ claim: () => ({ data: [row(2, "acme")], error: null }) });
+  const runB = beginOrgLeaseRun({ ...live, rpc: second.rpc, runBudgetMs: budgetMs });
+  assertEquals(await runB.claim(), null, "the second run inherits the remainder, which is gone");
+  assertEquals(second.claimArgs.length, 0, "and it never reached the RPC at all");
+  assertEquals(runB.shouldContinue(), false, "so it ends rather than holding an admission slot");
+
+  // THE CONTROL THAT MAKES THE ASSERTION ABOVE MEAN SOMETHING. Give a third run exactly what a
+  // RUN-ANCHORED implementation would have given the second — an allowance measured from ITS OWN
+  // start — and it claims happily. The difference between these two runs is the anchor and nothing
+  // else, which is the whole point.
+  const third = fakeRpc({ claim: () => ({ data: [row(3, "acme")], error: null }) });
+  const runC = beginOrgLeaseRun({
+    ...live,
+    rpc: third.rpc,
+    runBudgetMs: Date.now() - isolateStartedAtMs() + 300
+  });
+  assertNotEquals(await runC.claim(), null, "a run-start anchor would have let the late run claim — that is the bug");
+});
+
+// The deterministic sibling of the test above: same claim, injected clock, so the arithmetic is
+// exact rather than timing-dependent. Both are kept — this one pins the SEMANTICS (an absolute
+// deadline shared across runs), that one pins the WIRING (the module capture is really what
+// production uses).
+Deno.test("sequential runs share one deadline, and a late run gets no allowance at all", async () => {
+  let t = 0;
+  const isolateStartedAt = 0;
+  const budgetMs = 330_000;
+  const live = { ...base, now: () => t, isolateStartedAt };
+
+  const a = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+  const runA = beginOrgLeaseRun({ ...live, rpc: a.rpc, runBudgetMs: budgetMs });
+  assertNotEquals(await runA.claim(), null);
+
+  // Run A idles out at its idle budget and returns; the isolate stays alive and takes the next poke.
+  t = 200_000;
+  const b = fakeRpc({ claim: () => ({ data: [row(2, "acme")], error: null }) });
+  const runB = beginOrgLeaseRun({ ...live, rpc: b.rpc, runBudgetMs: budgetMs });
+  assertNotEquals(await runB.claim(), null, "130s of the isolate's budget is left, so this run may use it");
+
+  // ...and the next one after that is past the shared deadline, even though it is seconds old.
+  t = 340_000;
+  const c = fakeRpc({ claim: () => ({ data: [row(3, "acme")], error: null }) });
+  const runC = beginOrgLeaseRun({ ...live, rpc: c.rpc, runBudgetMs: budgetMs });
+  assertEquals(await runC.claim(), null, "a fresh run late in the isolate's life inherits no allowance");
+  assertEquals(c.claimArgs.length, 0);
+  assertEquals(runC.shouldContinue(), false);
+});
+
+// Same rule the deferred-release paths already hold, reached a fourth way. A budget that gave the
+// slot back while `n-1` handlers were still spending this org's GitHub quota would let a second
+// leaseholder in on top of them — the per-org cap this whole feature exists to hold.
+Deno.test("a spent budget does not hand back a slot that still has work under it", async () => {
+  const timers = fakeTimers();
+  const f = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+  let inFlight = 0;
+  let t = 0;
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    leaseTtlMs: 30_000,
+    now: () => t,
+    isolateStartedAt: 0,
+    runBudgetMs: 330_000,
+    inFlightCount: () => inFlight,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+
+  await run.claim();
+  inFlight = 3;
+  t = 330_001;
+
+  assertEquals(await run.claim(), null, "the budget is spent, so nothing more is claimed");
+  assertEquals(run.shouldContinue(), false);
+  assertEquals(f.releaseCalls, 0, "but the slot stays ours while its messages are still running");
+  assertEquals(run.heldOrg(), "acme");
+
+  // And the lease keeps being renewed past the end of the run, or it lapses mid-drain.
+  t = 340_002;
+  timers.fireAll();
+  await flush();
+  assertEquals(f.renewCalls, 1, "a finished-but-draining run must keep its lease alive");
+
+  inFlight = 0;
+  await run.release();
+  assertEquals(f.releaseCalls, 1, "the drain finishing is what finally gives the slot back");
+});
+
+// The failure direction that is worse than the one the budget fixes. A zero or a NaN arriving from
+// a caller's arithmetic must not mean "already past the deadline": that is an isolate that never
+// claims, i.e. a queue that stops draining while the lease, the heartbeats and the error count all
+// stay green. Unbounded is a known and survivable failure; never claiming is not.
+Deno.test("a budget that is not a usable number leaves the run unbounded rather than instantly over", async () => {
+  for (const runBudgetMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const f = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+    // `now` far past any plausible deadline, which is exactly what would trip a mis-parsed budget.
+    const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, now: () => 10_000_000, runBudgetMs });
+    assertNotEquals(await run.claim(), null, `runBudgetMs=${runBudgetMs} must not stop the worker claiming`);
+    assertEquals(run.shouldContinue(), true);
+  }
+});
+
+// The wiring mistake the types cannot catch, and the one that would make every test above vacuous:
+// the module anchor is in Date.now()'s epoch, so a deadline built from it and compared against an
+// injected clock starting at 0 sits ~1.7e12 ms in the future and can never be reached.
+Deno.test("an armed budget with an injected clock and no anchor is refused rather than silently inert", () => {
+  const f = fakeRpc();
+  const e = assertThrows(() => beginOrgLeaseRun({ ...base, rpc: f.rpc, now: () => 0, runBudgetMs: 1000 }), Error);
+  assertStringIncludes(e.message, "isolateStartedAt");
+  // And the two legitimate shapes are both still allowed.
+  beginOrgLeaseRun({ ...base, rpc: f.rpc, now: () => 0, isolateStartedAt: 0, runBudgetMs: 1000 });
+  beginOrgLeaseRun({ ...base, rpc: f.rpc, now: () => 0 });
+});
+
+// END TO END THROUGH THE TUNING, because the budget is only worth anything at the number production
+// actually resolves. SIM_ENV is the prod shape — a 480s isolate and a 480s visibility timeout, which
+// is the pair that made a mid-batch kill cost a full VT of invisibility.
+Deno.test("the production tuning resolves a 330s budget, and a drain at it returns before the wall clock", async () => {
+  const tuning = simTuning({ GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP: "8" });
+  assertEquals(tuning.orgSlots.runBudgetSeconds, 330, "480s lifetime - 120s drain-out reserve - 30s margin");
+  assertEquals(
+    tuning.orgSlots.runBudgetSeconds * 1000 + PER_MESSAGE_VT_BUDGET_SECONDS * 1000 < PROD_LIFETIME_MS,
+    true,
+    "and it leaves a whole modelled message behind it, which is what the reserve is for"
+  );
+
+  const d = await drainWithBudget(tuning.orgSlots.runBudgetSeconds * 1000);
+  assertEquals(
+    d.claimTimes.filter((t) => t >= 330_000),
+    [],
+    "nothing is claimed past the resolved budget"
+  );
+  assertEquals(inFlightAt(d.spans, PROD_LIFETIME_MS), 0, "and nothing is stranded at the wall clock");
 });

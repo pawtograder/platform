@@ -94,6 +94,51 @@ import { type EnvReader } from "./SentryContext.ts";
  *     occupancy; and the event it would be waiting for is a whole batch completing, which outlasts
  *     the idle budget anyway. Waiting is not useful, it is just a held admission slot.
  *
+ * ## Why a BUSY run does not stay resident either (2026-09-15)
+ *
+ * The section above bounds an IDLE run and says nothing about a working one, and for a year that
+ * gap was the design: residency is earned by work, so a run that keeps finding work keeps going.
+ * `shouldContinue()` is `!finished`, and `finished` is set only by a lost slot, a spent idle
+ * budget, the stall guard, or a dead RPC — none of which a healthy busy run ever reaches. So it
+ * drained until the RUNTIME ended it, and that is not an ending this module gets to design:
+ * EdgeRuntime kills the isolate at `EDGE_WORKER_TIMEOUT_MS` mid-batch, mid-archive, mid-anything.
+ *
+ * THAT COST WAS MEASURED ON 2026-09-15 AND IT IS NOT SMALL. 664 "wall clock duration reached"
+ * kills in 75 minutes across 27 pods; every message the killed isolate had read and not archived
+ * stayed invisible for the rest of its visibility timeout, which in production EQUALS the isolate
+ * lifetime (480s both). In `pgmq.a_async_calls` that reads as groups sharing one `enqueued_at`
+ * second with `read_ct = 2` and `archived_at - enqueued_at` at 482-507s for work that took 1-13s.
+ * `sync_repo_permissions` redelivery reached 35.4%, whole-queue 14.5%, and
+ * PawtograderQueueOldestMessageAging fired on a queue whose depth never exceeded 27.
+ *
+ * SO A BUSY RUN NOW HAS A WALL-CLOCK BUDGET TOO, and the three decisions in it are the whole
+ * design:
+ *
+ *   * IT GATES THE CLAIM, NOT THE WORK. Past the deadline `claim()` stops claiming and ends the
+ *     run; the messages already in flight run to completion, the lease keeps being renewed while
+ *     they do, and the slot is not handed back until they finish. Every one of those behaviours
+ *     already existed for `no_capacity` — this is a fourth way to reach the same state, not a new
+ *     state. Cutting the in-flight work off at the deadline would BE the strand, self-inflicted.
+ *   * IT IS ANCHORED TO THE ISOLATE, NOT TO THE RUN, and that is the difference between a fix and
+ *     a fix-shaped no-op. `github-async-worker/index.ts` resets its `started` guard in a
+ *     `.finally()` when `runBatchHandler` exits, so ONE ISOLATE HOSTS A SEQUENCE OF RUNS: the cron
+ *     is `* * * * *` and pokes twice per tick, while an idle run returns after a 50s idle budget,
+ *     so an isolate spends its 480s life taking poke after poke. That is the steady state, not an
+ *     edge case, and it is what makes the anchor load-bearing rather than merely tidy.
+ *
+ *     THE DANGEROUS RUN IS A YOUNG RUN THAT STARTS LATE IN THE ISOLATE'S LIFE. A run-scoped
+ *     deadline hands it a fresh full allowance, it claims happily, and the runtime kills the
+ *     isolate minutes before that allowance runs out — i.e. exactly today's defect, now with a
+ *     budget in front of it. A run-scoped budget also PASSES every plausible injected-clock unit
+ *     test, which is why the budget is MODULE STATE that each run inherits and draws down, and why
+ *     the test that matters is the one that builds two runs against one module instance without
+ *     injecting the anchor at all.
+ *   * IT ENDS THE RUN RATHER THAN SLEEPING. Same argument as `no_capacity`: re-entry is
+ *     rate-limited by pg_cron, so a fresh isolate with a fresh budget arrives within ~30s and
+ *     nothing here has to loop. The cost is that tail-end idleness — see the sizing note on
+ *     ORG_SLOT_RUN_BUDGET_ENV in asyncWorkerTuning.ts, which is where the number lives and where
+ *     the honest limits of it are written down.
+ *
  * Once `globalCap` is reached this is the STEADY STATE, not an edge case — the cron spawns 2
  * isolates a minute regardless, so several will hit `no_capacity` every minute for the length of a
  * release. That is precisely why it must not sleep-and-retry: re-entry has to stay rate-limited by
@@ -279,15 +324,22 @@ export interface OrgLeaseRun {
   heldOrg(): string | null;
   /** Which queue's pool the held slot is in, or null when this run holds none. */
   heldQueue(): string | null;
-  /** False once the slot is lost, the idle budget is spent, or the run gave up on the RPC. */
+  /**
+   * False once the slot is lost, either wall-clock budget is spent, or the run gave up on the RPC.
+   *
+   * "Stop" here means STOP CLAIMING. It never means abandon work: the driver's `finally` waits for
+   * everything in flight, and the lease goes on being renewed until it has.
+   */
   shouldContinue(): boolean;
   /**
    * Claim a slot and read that org's messages.
    *
-   * `null` means nothing was claimed, and the two reasons are NOT equivalent any more — check
-   * `shouldContinue()` afterwards. `no_demand` on every queue leaves the run alive and idling;
-   * `no_capacity` ENDS it, because the fleet is already at its configured concurrency and this
-   * isolate cannot add throughput, only occupancy. Throws when the RPC itself failed.
+   * `null` means nothing was claimed, and the reasons are NOT equivalent — check `shouldContinue()`
+   * afterwards. `no_demand` on every queue leaves the run alive and idling; `no_capacity` ENDS it,
+   * because the fleet is already at its configured concurrency and this isolate cannot add
+   * throughput, only occupancy; and a spent `runBudgetMs` ends it WITHOUT calling the RPC at all,
+   * because this isolate is close enough to its wall-clock death that anything it read now would
+   * likely be killed unarchived. Throws when the RPC itself failed.
    *
    * `maxMessages` is how continuous refill asks for the SHORTFALL rather than a whole batch. It is
    * clamped into `[1, drainConcurrency]`: `drainConcurrency` is still this leaseholder's ceiling and
@@ -334,6 +386,36 @@ export interface BeginOrgLeaseRunOptions {
   maxStallMs?: number;
   /** Wall-clock budget for idling without a slot before the run returns. */
   idleBudgetMs?: number;
+  /**
+   * Wall-clock budget for CLAIMING, measured from ISOLATE START — not from the start of this run.
+   *
+   * Past it `claim()` claims nothing more and ends the run, the messages already in flight run to
+   * completion, and the caller's `release()` gives the slot back afterwards. `tuning.orgSlots
+   * .runBudgetSeconds * 1000` is the value the worker passes; asyncWorkerTuning.ts owns the number
+   * and the argument for it.
+   *
+   * OMITTED LEAVES A RUN UNBOUNDED, which is today's behaviour, and so does a value that is not a
+   * finite number above zero. That is the opposite of the fail-safe direction the TUNING layer
+   * uses for the same quantity, and the two are guarding different mistakes. There, the input is an
+   * operator who edited an env var, the only reason to edit it is to stop earlier, and a value that
+   * cannot be honoured resolves DOWN. Here, the input is a caller's arithmetic, and a zero or a NaN
+   * arriving from a bad calculation would mean an isolate that is past its deadline before it has
+   * claimed anything — a queue that stops draining while the lease, the heartbeats and the error
+   * count all stay green, which this module treats as the worst outcome available (see
+   * MIN_DRAIN_CONCURRENCY). Unbounded is a known, survivable failure; never claiming is not.
+   */
+  runBudgetMs?: number;
+  /**
+   * When this isolate started, in the same clock as `now`. TEST SEAM ONLY — production leaves it
+   * out and gets the module-level capture, which is the whole point of the budget.
+   *
+   * REQUIRED WHENEVER `now` IS INJECTED AND A BUDGET IS ARMED, and `beginOrgLeaseRun` throws if it
+   * is missing, because the alternative is a test that proves nothing. The module capture is in
+   * `Date.now()`'s epoch and an injected clock usually starts at 0, so mixing them puts the
+   * deadline ~1.7e12 ms in a fake future: the budget silently never fires, and a test written to
+   * exercise it passes for the reason it was supposed to rule out.
+   */
+  isolateStartedAt?: number;
   /** Consecutive claim-RPC failures tolerated before the run ends. */
   maxConsecutiveClaimErrors?: number;
   /**
@@ -400,6 +482,36 @@ const PGRST_UNDEFINED_FUNCTION = "PGRST202";
  */
 const PG_RAISE_EXCEPTION = "P0001";
 
+/**
+ * WHEN THIS ISOLATE STARTED, captured once when the module is evaluated.
+ *
+ * Module state, deliberately, and it is the single most important line of the wall-clock budget.
+ * The runtime kills on the ISOLATE's wall clock, and one isolate hosts a sequence of runs (see the
+ * header), so a deadline anchored anywhere else is a deadline for a quantity nothing measures. Each
+ * run inherits this same instant and therefore draws down the SAME budget: the fifth run of an
+ * isolate gets whatever the first four left it, which is the behaviour the runtime imposes whether
+ * or not this file models it.
+ *
+ * MODULE EVALUATION IS SLIGHTLY AFTER THE TRUE START — the runtime has already loaded the eszip and
+ * evaluated this module's imports — so this anchor is a little LATE and the budget it produces is a
+ * little LONG. That is the one direction that needs covering rather than ignoring, and
+ * ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS in asyncWorkerTuning.ts is what covers it.
+ *
+ * Not `performance.now()`: that is relative to its own origin and would need the same anchor
+ * anyway, and `Date.now()` is the clock every other deadline in this module and in workerRun.ts
+ * already uses.
+ */
+const ISOLATE_STARTED_AT = Date.now();
+
+/**
+ * The isolate anchor, exported so a caller can log how much of the isolate's life is gone — and so
+ * a test can build two runs against ONE module instance and prove that the second inherits what the
+ * first spent. A run-scoped deadline passes every test that injects a clock; it fails this one.
+ */
+export function isolateStartedAtMs(): number {
+  return ISOLATE_STARTED_AT;
+}
+
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Thrown by `claim()` so the caller's existing catch/`onError` path handles an RPC failure. */
@@ -417,8 +529,14 @@ export class OrgClaimError extends Error {
  * Build a per-org leaseholder run.
  *
  * Synchronous, unlike `beginWorkerRun`, because there is genuinely nothing to do here: the claim is
- * fused with the first read, so this function performs no I/O and cannot fail. Making it `async`
- * for symmetry would imply a begin-time acquire that does not exist.
+ * fused with the first read, so this function performs no I/O. Making it `async` for symmetry would
+ * imply a begin-time acquire that does not exist.
+ *
+ * It throws in exactly one case, and that case is a test harness rather than a deployment: an armed
+ * `runBudgetMs` with an injected `now` and no `isolateStartedAt`. See that option — the two clocks
+ * would not share an epoch, the budget would silently never fire, and the test would pass for the
+ * one reason it exists to rule out. Same argument as `drainWithContinuousRefill`'s refusal to run
+ * against a lease that cannot see the in-flight set: refuse the wiring mistake the types cannot.
  */
 export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
   const now = opts.now ?? Date.now;
@@ -429,6 +547,25 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
   const idleBudget = opts.idleBudgetMs ?? DEFAULT_IDLE_BUDGET_MS;
   const maxClaimErrors = opts.maxConsecutiveClaimErrors ?? DEFAULT_MAX_CONSECUTIVE_CLAIM_ERRORS;
   const inFlightCount = opts.inFlightCount ?? (() => 0);
+
+  // THE WALL-CLOCK CLAIM DEADLINE, as an ABSOLUTE instant rather than a duration, which is what
+  // makes it inherited rather than refreshed: every run built in this isolate from the same budget
+  // resolves to the same instant, so the second run gets the remainder the first left and the fifth
+  // may well get none. A duration held per run would silently reset on every poke.
+  //
+  // An unusable number leaves the run UNBOUNDED rather than instantly over — see `runBudgetMs`.
+  const budgetMs = opts.runBudgetMs;
+  const budgetArmed = typeof budgetMs === "number" && Number.isFinite(budgetMs) && budgetMs > 0;
+  if (budgetArmed && opts.now !== undefined && opts.isolateStartedAt === undefined) {
+    throw new Error(
+      "beginOrgLeaseRun: `runBudgetMs` is armed and `now` is injected, but `isolateStartedAt` is " +
+        "not. The module-level isolate anchor is in Date.now()'s epoch, so a deadline built from " +
+        "it and compared against an injected clock can never be reached: the budget would be inert " +
+        "and any test of it would pass vacuously. Pass `isolateStartedAt` in the same clock as " +
+        "`now` — or, to prove the budget is module state rather than run state, inject neither."
+    );
+  }
+  const claimDeadline = budgetArmed ? (opts.isolateStartedAt ?? ISOLATE_STARTED_AT) + budgetMs : null;
 
   // The uuid is what makes this unique, and uniqueness is the only property the SQL needs: the
   // holder string is the row identity, so two isolates must never share one. The scope and name
@@ -452,7 +589,11 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
   opts.scope?.setTag("worker_lease_scope", leaseScope);
   opts.scope?.setTag("org_slot_holder", holder);
 
-  /** The run is over. Set by a lost slot, a spent idle budget, a stall, or a dead RPC. */
+  /**
+   * The run is over — meaning nothing more will be CLAIMED. Set by a lost slot, a spent idle
+   * budget, a spent wall-clock run budget, a stall, or a dead RPC. Messages already in flight are
+   * unaffected by every one of those.
+   */
   let finished = false;
   /** We believe the server has a slot row for us. Only ever set from a claim that returned rows. */
   let held = false;
@@ -877,6 +1018,37 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
       if (finished) return null;
       markProgress();
 
+      // THE WALL-CLOCK BUDGET, CHECKED BEFORE ANYTHING ELSE IN THE CLAIM PATH.
+      //
+      // Here rather than in `shouldContinue()` because the thing being bounded is the CLAIM, and a
+      // predicate the driver also consults between settles would be answering a different question
+      // with the same word. Everything this run has already read is unaffected: the messages run
+      // on, `renew` keeps the lease alive past `finished` while they do, and
+      // `releaseSlotUnlessDraining` holds the slot until the last of them lands. Reading the clock
+      // here and nowhere else also means the budget cannot cut a message off half way, which is the
+      // failure it exists to prevent — inflicting it on purpose would be no better.
+      //
+      // ONE NO-OP CALL PER RUN AT MOST, not a poll: the driver breaks on `!shouldContinue()`
+      // immediately after a null claim, and `onIdle` returns false without sleeping. The claim path
+      // is also the only one the driver cannot skip for long — when the in-flight set is full it
+      // waits on a completion, and a completion is exactly what produces the shortfall that brings
+      // it back here.
+      if (claimDeadline !== null && now() >= claimDeadline) {
+        const overBy = now() - claimDeadline;
+        opts.scope?.setTag("org_slot", "run_budget_spent");
+        console.log(
+          `[orgLeaseRun] ${opts.name}: wall-clock run budget spent ${overBy}ms ago ` +
+            `(${budgetMs}ms from isolate start); not claiming again. ${inFlightCount()} message(s) ` +
+            `still in flight will finish before the slot is released, and the next cron poke gets a ` +
+            `fresh isolate with a fresh budget.`
+        );
+        // Same shape as `no_capacity`: give the slot back if nothing of ours is running under it,
+        // and defer to the drain if something is. The run is over either way.
+        if (held) await releaseSlotUnlessDraining("run_budget_spent");
+        finished = true;
+        return null;
+      }
+
       // `drainConcurrency` REMAINS THE CEILING. A refill caller asks for the shortfall, and asking
       // for more than the ceiling — or for zero, which can only come back `no_demand` — is a caller
       // bug that should not reach the RPC. Clamping rather than throwing because this is a hot path
@@ -1256,19 +1428,49 @@ export interface ContinuousRefillOptions<T = unknown> {
  *
  * ## What it deliberately does not do
  *
- * NO GRACEFUL DRAIN AHEAD OF ISOLATE RETIREMENT. `beforeUnload.wallClockRatio: 50` retires the
- * isolate at about half `EDGE_WORKER_TIMEOUT_MS`, and under refill that lands mid-stream with `n`
- * messages in flight, which are redelivered when their visibility timeout expires. Refill does make
- * the ABSOLUTE number worse — mean in-flight goes from the measured 5.2 to 8 — but it does not make
- * the RATE worse, and the rate is what costs anything. By Little's law the messages orphaned per
- * retirement are `throughput x mean duration` and the messages COMPLETED per isolate lifetime are
- * `throughput x lifetime`, so their ratio is `mean duration / lifetime` — 48.4/240 either way, with
- * throughput cancelling. Draining ahead of retirement would fix the absolute number and cost more
- * than it saves: stopping claims one worst-case message (94.8s) before the horizon idles the tail of
- * every isolate and gives back about 20% of capacity, against roughly 10% of work wasted by letting
- * the orphans be redelivered (`n x` half a mean duration out of `n x` the lifetime). The cheap
- * improvement is not here at all — it is a visibility timeout that reflects a per-message claim, so
- * an orphan waits ~120s rather than ~480s to be re-served. That file has another owner.
+ * NO GRACEFUL DRAIN AHEAD OF ISOLATE RETIREMENT — RETRACTED 2026-09-15, AND THE RETRACTION IS THE
+ * POINT. This paragraph used to argue that stopping claims before the horizon costs more than it
+ * saves, and the budget in `beginOrgLeaseRun` now does precisely the thing it argued against. The
+ * old argument is kept here because being wrong in a legible way is how the next person checks the
+ * new one.
+ *
+ * WHAT IT SAID. Refill makes the ABSOLUTE orphan count worse (mean in-flight 5.2 -> 8) but not the
+ * RATE: by Little's law the messages orphaned per retirement are `throughput x mean duration` and
+ * those completed per isolate lifetime are `throughput x lifetime`, so the ratio is
+ * `mean duration / lifetime` — 48.4/240 either way, throughput cancelling — against which stopping
+ * one worst-case message (94.8s) early would idle the tail of every isolate for ~20% of capacity to
+ * save ~10% of work.
+ *
+ * WHAT FALSIFIED IT. That ratio predicts UNDER 1% redelivery for the methods that actually dominate
+ * traffic (`sync_repo_permissions` p50 1.4s, `sync_student_team` p50 1.0s, together ~78% of
+ * messages). Measured on 2026-09-15: 35.4% for `sync_repo_permissions`, 14.5% whole-queue, with the
+ * `read_ct = 2` / `archived_at - enqueued_at` 482-507s signature that says plainly what happened.
+ * Two orders of magnitude is not a calibration error, it is a wrong model, and two of its
+ * assumptions are visible in hindsight: it was calibrated on the create_repo burst, whose 48.4s mean
+ * is not what the queue carries; and it assumed retirements fall on draining and idle isolates
+ * alike, when an idle run RETURNS at its 50s idle budget and only a busy one stays resident to be
+ * killed. The isolates that reach the wall clock are disproportionately the ones holding messages.
+ * A corrected closed form is not offered here — the honest state is that the measurement stands and
+ * the model does not.
+ *
+ * AND THE COST SIDE WAS OVERSTATED TOO. "Idles the tail of every isolate" assumed the isolate then
+ * SITS there. It does not: the run stops claiming, drains, and RETURNS, freeing its admission slot
+ * for the next of the two pokes a minute the cron delivers. What is actually forgone is the drain-out
+ * tail of one leaseholder's org slot — a couple of seconds for the fast methods that dominate, tens
+ * of seconds for create_repo — not the whole reserve.
+ *
+ * WHAT SURVIVES UNCHANGED. The cheap improvement is still not in this file: a visibility timeout
+ * that reflects a per-MESSAGE claim would make an orphan wait ~120s instead of ~480s, which shrinks
+ * every remaining case rather than the ones this budget catches. That file still has another owner
+ * and this change deliberately does not touch it.
+ *
+ * WHAT THE BUDGET STILL COSTS, SAID PLAINLY. It is sized for the WORST message (see
+ * ORG_SLOT_RUN_BUDGET_ENV), so it also declines claims that would have been perfectly safe: a
+ * 1.4s `sync_repo_permissions` claimed 80s before the wall clock finishes with 78s to spare, and
+ * this budget refuses it anyway, because nothing tells the claim which method it is about to get
+ * until after it has got it. On a policy where one isolate keeps taking pokes after its budget is
+ * spent, those pokes become no-ops until the runtime retires it. The trade is a wasted poke against
+ * a 480s strand, and it is taken knowingly.
  */
 export async function drainWithContinuousRefill<T = unknown>(opts: ContinuousRefillOptions<T>): Promise<void> {
   const { run, inFlight, process } = opts;

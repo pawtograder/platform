@@ -827,14 +827,19 @@ export const MAX_ORG_SLOT_LEASE_TTL_SECONDS = 300;
  * variable and got it wrong, and the only reason to edit it is to turn refill
  * off. `"false"`, `"off"`, `"no"`, `"2"` therefore all resolve to OFF, reported.
  *
- * THIS KNOB IS THE ONLY ONE IN THIS FILE THAT NEEDS THAT, and the signature is
- * checkable: it is the only knob whose fallback equals its range MAXIMUM.
- * `globalCap` falls back to 0 (its minimum, feature off), `maxPerOrg` to 1 (its
- * minimum), and `drainConcurrency` / `visibilityTimeout` / `leaseTtl` to a value
- * strictly inside their ranges. For all of those, "fall back to the default" and
- * "fail safe" point the same way, so they deliberately do NOT set the option.
- * A unit test pins that asymmetry so the next permissive-default knob is
- * noticed rather than inherited.
+ * THE SIGNATURE IS CHECKABLE: a knob needs that rule exactly when its fallback
+ * equals its range MAXIMUM. `globalCap` falls back to 0 (its minimum, feature
+ * off), `maxPerOrg` to 1 (its minimum), and `drainConcurrency` /
+ * `visibilityTimeout` / `leaseTtl` to a value strictly inside their ranges. For
+ * all of those, "fall back to the default" and "fail safe" point the same way,
+ * so they deliberately do NOT set the option. A unit test pins that asymmetry so
+ * the next permissive-default knob is noticed rather than inherited.
+ *
+ * THIS WAS THE ONLY SUCH KNOB UNTIL 2026-09-15, and the second one arriving is
+ * why that test checks the SHAPE rather than the count: ORG_SLOT_RUN_BUDGET_ENV
+ * defaults to its own ceiling, so it has the same signature for a different
+ * reason, and it sets the same option in the same direction (a value that
+ * cannot be honoured resolves to the SAFE end, not the default one).
  */
 export const DEFAULT_ORG_SLOT_CONTINUOUS_REFILL = 1;
 /** 0 = off. The whole point of the knob, so it must be reachable. */
@@ -844,6 +849,155 @@ export const MIN_ORG_SLOT_CONTINUOUS_REFILL = 0;
  * see DEFAULT_ORG_SLOT_CONTINUOUS_REFILL for why the range stops here today.
  */
 export const MAX_ORG_SLOT_CONTINUOUS_REFILL = 1;
+
+/**
+ * ───────────────────────────────────────────────────────────────────────────
+ * THE WALL-CLOCK RUN BUDGET (2026-09-15) — how long an isolate may keep
+ * CLAIMING before it stops, lets what it has finish, and returns.
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ * THE DEFECT THIS CLOSES, WHICH WAS LIVE AND NOT HYPOTHETICAL. In production
+ * `EDGE_WORKER_TIMEOUT_MS` and `GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS`
+ * are the SAME NUMBER (480000ms / 480s), and nothing bounded a BUSY org-leased
+ * run. `beginOrgLeaseRun` bounds IDLE time only (`DEFAULT_IDLE_BUDGET_MS`, 50s);
+ * a run that keeps finding work has `shouldContinue() === !finished`, and
+ * `finished` is set only by a lost slot, a spent idle budget, the 15-minute
+ * stall guard, or a dead RPC. A leaseholder that is genuinely working therefore
+ * drained until the RUNTIME killed the isolate mid-batch — "wall clock duration
+ * reached", 664 times in 75 minutes across 27 pods on 2026-09-15. Whatever that
+ * isolate had read and not archived stayed INVISIBLE for the remainder of its
+ * visibility timeout, and because the VT equals the isolate lifetime that is
+ * essentially a full 480s.
+ *
+ * The signature in `pgmq.a_async_calls` is specific enough to be conclusive:
+ * groups of messages sharing one `enqueued_at` second, `read_ct = 2`, and
+ * `archived_at - enqueued_at` clustered at 482-507s while the work itself took
+ * 1-13s. `sync_repo_permissions` redelivery went 20.8% (09-13) -> 26.0% (09-14,
+ * the day per-org leases went live) -> 35.4% (09-15); whole-queue 4.0% -> 14.5%.
+ * It fired PawtograderQueueOldestMessageAging at ~18:21 UTC on a queue whose
+ * DEPTH never exceeded 27 — the alert was about redelivery, not backlog, which
+ * is why nothing about concurrency or `n` would have answered it.
+ *
+ * NOTE THAT CONTINUOUS REFILL DOES NOT CAUSE THIS AND DOES NOT FIX IT. Refill
+ * keeps `n` in flight instead of a batch, so the kill lands on the same set;
+ * the orgLeaseRun.ts header argues by Little's law that the orphan RATE is
+ * unchanged. What refill did was make the residency longer and the stranded set
+ * fuller more of the time. The unbounded BUSY run is the defect, and it predates
+ * both refill and per-org leases.
+ *
+ * WHAT THE BUDGET GATES, AND WHAT IT MUST NOT. It gates the CLAIM, never the
+ * work. Past the deadline a run stops claiming, lets its outstanding messages
+ * run to completion (the lease keeps being renewed and the slot is not handed
+ * back until they finish — see `releaseSlotUnlessDraining` in orgLeaseRun.ts),
+ * releases, and returns; pg_cron re-pokes a fresh isolate within ~30s. Cutting
+ * in-flight work off at the deadline instead would reproduce the exact strand
+ * this exists to remove, self-inflicted and on a schedule.
+ *
+ * SIZING: lifetime - ONE drain-out reserve - a margin.
+ *
+ *     budget = lifetime - PER_MESSAGE_VT_BUDGET_SECONDS - 30
+ *            = 480 - 120 - 30 = 330s in production
+ *            = 400 - 120 - 30 = 250s at the chart default
+ *
+ * ONE reserve and not `n` of them, which is the single place this arithmetic
+ * departs from `requiredVisibilityTimeoutSeconds`. That function sizes a VT for
+ * a batch that is still being ADDED to, so it charges `n x 120`. Nothing is
+ * added after the deadline: from there the in-flight set only drains, and it
+ * drains CONCURRENTLY, so what has to fit inside the reserve is the LONGEST
+ * remaining message, not the sum of them.
+ *
+ * WHAT THE RESERVE ACTUALLY COVERS — STATED HONESTLY, BECAUSE IT IS NOT "ALL OF
+ * IT". Across the 2,337 messages measured on the VT=480 regime (2026-09-11
+ * onward; the per-method table is on MIN_ORG_SLOT_LEASE_TTL_SECONDS) the worst
+ * single message of ANY method was 97.7s — create_repo, 489 samples, p99 93.8s
+ * — so a 120s reserve covers every message in that dataset. It does NOT cover
+ * the 2026-09-07 regime, where create_repo measured a p50 of 279.5s against a
+ * ~20k-member org; MAX_DRAIN_CONCURRENCY calls that an outlier rather than the
+ * norm, but explicitly declines to call it impossible. A message of that length
+ * CANNOT be guaranteed to drain out by any budget worth having: reserving 280s
+ * of a 480s lifetime leaves a 170s claiming window, i.e. ~65% of every isolate
+ * deliberately idle, and at the 400s chart default it leaves none at all. Do
+ * not answer that by growing the reserve.
+ *
+ * So the win is worth stating as exactly what it is. The budget ELIMINATES the
+ * strand for the methods that dominate volume — `sync_repo_permissions` was 522
+ * of the 1,336 messages on 2026-09-15 and maxes at 21.1s, `sync_student_team`
+ * at 30.3s, and together they are ~78% of all traffic — and SHRINKS it for the
+ * rest, because a message claimed one millisecond before the deadline still
+ * gets the whole reserve to finish in, instead of whatever the wall clock
+ * happened to leave it. What remains is at most ONE worst-case message stranded
+ * per isolate retirement where today it is up to `n`. Closing that remainder is
+ * a different lever — a visibility timeout that reflects a per-MESSAGE claim
+ * rather than the isolate lifetime, so an orphan waits ~120s instead of ~480s —
+ * and it is deliberately not in this change.
+ *
+ * WHY 30s OF MARGIN. Three things the deadline cannot see: the isolate
+ * bootstrap that happens BEFORE this module is evaluated (the anchor is module
+ * evaluation, and the runtime's wall clock started earlier), a claim RPC that
+ * may already be in flight when the deadline passes, and the tail after the
+ * last handler — archive calls, `release_org_slot`, and the Sentry flush in
+ * `waitUntilWithSentryFlush`. None of them is close to 30s alone; the sum is
+ * bounded by a few network round trips and the number is round on purpose.
+ *
+ * WHY THE HARD WALL CLOCK AND NOT `beforeUnload.wallClockRatio`. The chart
+ * dispatches `beforeunload` at 50% of the lifetime, and two comments in this
+ * file describe that as the isolate being "retired at ~200s" — which, taken
+ * literally, would make a 330s budget dead code. It is not. `beforeunload` is
+ * an EVENT: no function under supabase/functions registers a listener for it
+ * (checked, 2026-09-15), and the demuxer only stops ROUTING NEW REQUESTS to a
+ * retiring worker. A drain held open by `waitUntil` runs on to the hard
+ * `EDGE_WORKER_TIMEOUT_MS`, which is precisely what those 664 "wall clock
+ * duration reached" lines are. The ~3.5-minute recycling cadence cited in this
+ * file's 2026-09-07 note is per POD across several concurrent isolates, not the
+ * life of one isolate, and is consistent with the same reading.
+ */
+export const ORG_SLOT_RUN_BUDGET_ENV = "GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS";
+
+/**
+ * Slack between the end of the drain-out reserve and the runtime's kill. See
+ * "WHY 30s OF MARGIN" above; it is not a tuning parameter and is not a knob.
+ */
+export const ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS = 30;
+
+/**
+ * The floor, expressed as PER_MESSAGE_VT_BUDGET_SECONDS rather than as a number
+ * of its own so that the floor and the reserve cannot drift apart.
+ *
+ * WHAT IT PROTECTS. A budget below one message's modelled cost is a worker that
+ * can be past its deadline before it has claimed anything, on every isolate —
+ * the queue stops draining while the lease, the heartbeats and the error count
+ * all stay green. That is the same "drains nothing and looks healthy" failure
+ * MIN_DRAIN_CONCURRENCY exists for, arriving through the clock instead of
+ * through `n`, and it is strictly worse than the strand it would be trying to
+ * prevent. Tying the floor to the reserve also means the honest degenerate case
+ * — an isolate lifetime too short to hold both — is REPORTED as an invariant
+ * rather than silently resolved (see `resolveOrgSlotTuning`).
+ */
+export const MIN_ORG_SLOT_RUN_BUDGET_SECONDS = PER_MESSAGE_VT_BUDGET_SECONDS;
+
+/**
+ * The budget's ceiling AND its default, which is deliberate and is the reason
+ * this knob sets `failSafeValue`.
+ *
+ * DERIVED FROM THE LIFETIME RATHER THAN A CONSTANT, because the number that
+ * matters differs between deployments that are both correct: production runs
+ * `EDGE_WORKER_TIMEOUT_MS=480000` and the chart default is 400000. A fixed
+ * default would be wrong for one of them, and a fixed default that got CLAMPED
+ * for one of them would emit a Sentry-visible issue on every deployment that
+ * never touched the knob — which this file's other coherence rules go out of
+ * their way not to do.
+ *
+ * A CEILING AND NOT A CLAMPING RANGE. Anything above this re-creates the defect
+ * — it is a run that intends to still be claiming when the runtime kills it —
+ * so there is no "they asked for more" to preserve. The only direction this
+ * knob can usefully be moved is DOWN.
+ */
+export function orgSlotRunBudgetCeilingSeconds(isolateLifetimeSeconds: number): number {
+  return Math.max(
+    MIN_ORG_SLOT_RUN_BUDGET_SECONDS,
+    isolateLifetimeSeconds - PER_MESSAGE_VT_BUDGET_SECONDS - ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS
+  );
+}
 
 /** Minimal shape of `Deno.env` this module needs, so it is testable off-Deno. */
 export type EnvReader = { get(name: string): string | undefined };
@@ -885,6 +1039,19 @@ export type OrgSlotTuning = {
    * different responses. It only takes effect on the org-leased path.
    */
   continuousRefill: boolean;
+  /**
+   * How long an ISOLATE may keep CLAIMING, in seconds, measured from isolate
+   * start and not from the start of any one run. Past it the org-leased drain
+   * stops claiming, finishes what it already holds, releases and returns. See
+   * ORG_SLOT_RUN_BUDGET_ENV for the defect and the sizing, and
+   * `beginOrgLeaseRun` for why the anchor is the isolate.
+   *
+   * ALWAYS A USABLE NUMBER, never 0 and never "off": there is no configuration
+   * in which an unbounded busy run is the right answer, so unlike `globalCap`
+   * this one has no disabled state to express. Reported as configured even when
+   * `enabled` is false, for the same reason `continuousRefill` is.
+   */
+  runBudgetSeconds: number;
 };
 
 export type AsyncWorkerTuning = {
@@ -919,9 +1086,21 @@ type Bounds = {
    * SET THIS ONLY FOR A KNOB WHOSE `fallback` IS THE PERMISSIVE END OF ITS OWN
    * RANGE, where those two directions come apart and the default is the one you
    * do NOT want a typo to select. The signature to look for is
-   * `fallback === max`. Exactly one knob in this file has it — see
-   * DEFAULT_ORG_SLOT_CONTINUOUS_REFILL — and it is a kill switch, where
-   * defaulting a malformed value to "on" means the switch does not switch.
+   * `fallback === max`. TWO knobs in this file have it, for opposite-looking
+   * reasons that are the same reason:
+   *
+   *   * DEFAULT_ORG_SLOT_CONTINUOUS_REFILL — a kill switch, where defaulting a
+   *     malformed value to "on" means the switch does not switch.
+   *   * ORG_SLOT_RUN_BUDGET_ENV — a wall-clock budget whose default IS its
+   *     coherent maximum, so clamping a too-large value to the bound would
+   *     produce exactly what not setting the variable produces. An operator
+   *     only ever reaches for that knob to make a run stop EARLIER, and
+   *     "stop earlier" is always safe, so a value that cannot be honoured
+   *     resolves DOWN to the floor rather than up to the default.
+   *
+   * Note that the second one is a genuine range, not a binary, and it is still
+   * right for it: the test is not "is the range binary", it is whether an
+   * unusable value would otherwise resolve to the permissive end.
    *
    * Leaving it unset preserves the three-behavior contract below EXACTLY.
    */
@@ -1357,6 +1536,35 @@ function resolveOrgSlotTuning(
   if (refill.issue) issues.push(refill.issue);
 
   const enabled = cap.value > 0;
+
+  // THE WALL-CLOCK RUN BUDGET. Read LAST so the issue list keeps reading as "the
+  // order the knobs were resolved in", and read against the ALREADY-RESOLVED
+  // isolate lifetime for the same reason the other ceilings are: the lifetime is
+  // itself an env var, and a budget derived from the constant would be wrong on
+  // the deployment that actually has the defect (prod runs 480000, the chart
+  // default is 400000).
+  //
+  // ITS CEILING AND ITS DEFAULT ARE THE SAME NUMBER, which is what makes this
+  // the file's second `failSafeValue` knob. Above the ceiling is not "more
+  // throughput", it is a run that intends to still be claiming when the runtime
+  // kills the isolate — the defect. And because the ceiling IS the default,
+  // clamping a too-large value to it would leave an operator who typed 600 with
+  // precisely the behaviour they get by not setting the variable at all: their
+  // edit would be reported and inert. So an unusable value — unparseable,
+  // blanked, above the ceiling, or below the floor — resolves DOWN to
+  // MIN_ORG_SLOT_RUN_BUDGET_SECONDS. Stopping earlier is always safe; that is
+  // the whole asymmetry, and it is the opposite of the direction `maxPerOrg`
+  // clamps.
+  const runBudgetCeiling = orgSlotRunBudgetCeilingSeconds(isolateLifetimeSeconds);
+  const runBudget = readBounded(env, {
+    env: ORG_SLOT_RUN_BUDGET_ENV,
+    min: MIN_ORG_SLOT_RUN_BUDGET_SECONDS,
+    max: runBudgetCeiling,
+    fallback: runBudgetCeiling,
+    failSafeValue: MIN_ORG_SLOT_RUN_BUDGET_SECONDS
+  });
+  if (runBudget.issue) issues.push(runBudget.issue);
+  const runBudgetSeconds = runBudget.value;
   // `> 0`, not `=== 1`, because DEFAULT_ORG_SLOT_CONTINUOUS_REFILL documents this var as widening
   // "from 0-1 to 0-n WITHOUT changing type or name, and 0 keeps meaning off" if a low-water mark is
   // ever added. An equality test silently breaks that promise: the day MAX becomes 2, a configured 2
@@ -1367,7 +1575,35 @@ function resolveOrgSlotTuning(
   let leaseTtlSeconds = ttl.value;
 
   if (!enabled) {
-    return { enabled, maxPerOrg, globalCap: cap.value, leaseTtlSeconds, continuousRefill };
+    return { enabled, maxPerOrg, globalCap: cap.value, leaseTtlSeconds, continuousRefill, runBudgetSeconds };
+  }
+
+  // CEILING 0 — the only one this module genuinely cannot satisfy, so it is
+  // reported rather than resolved. `orgSlotRunBudgetCeilingSeconds` floors at
+  // MIN_ORG_SLOT_RUN_BUDGET_SECONDS, so an isolate shorter than
+  // floor + reserve + margin (270s) gets a budget that does NOT leave a whole
+  // message's drain-out behind it. The floor wins on purpose — the alternative
+  // is a budget under one message's modelled cost, which is an isolate that can
+  // be past its deadline before it claims anything — and the mismatch is said
+  // out loud, exactly as the TTL's floor-vs-ceiling crossing is below. Checked
+  // against the RESOLVED budget rather than the ceiling so a configured value
+  // that is somehow still too large for this isolate is caught too.
+  if (runBudgetSeconds + PER_MESSAGE_VT_BUDGET_SECONDS + ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS > isolateLifetimeSeconds) {
+    issues.push({
+      env: ORG_SLOT_RUN_BUDGET_ENV,
+      effective: runBudgetSeconds,
+      kind: "invariant",
+      message:
+        `org-leased run budget ${runBudgetSeconds}s leaves only ` +
+        `${isolateLifetimeSeconds - runBudgetSeconds}s of ${ISOLATE_LIFETIME_ENV}=${isolateLifetimeSeconds}s for ` +
+        `the messages still in flight when claiming stops, below the ${PER_MESSAGE_VT_BUDGET_SECONDS}s one ` +
+        `message is modelled at. The budget cannot go lower — ${MIN_ORG_SLOT_RUN_BUDGET_SECONDS}s is the floor, ` +
+        `and a budget under one message's cost is an isolate that can be past its deadline before it claims ` +
+        `anything — so a message caught by the wall clock can still be stranded for a whole visibility ` +
+        `timeout. Raise edgeFunctions.worker.timeoutMs to >= ` +
+        `${(MIN_ORG_SLOT_RUN_BUDGET_SECONDS + PER_MESSAGE_VT_BUDGET_SECONDS + ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS) * 1000}` +
+        ` (keeping gracefulExitTimeoutSeconds / terminationGracePeriodSeconds above it).`
+    });
   }
 
   // CEILING 1 — the per-org content limiter. `maxPerOrg * n` handlers hit ONE
@@ -1462,5 +1698,5 @@ function resolveOrgSlotTuning(
     leaseTtlSeconds = reduced;
   }
 
-  return { enabled, maxPerOrg, globalCap: cap.value, leaseTtlSeconds, continuousRefill };
+  return { enabled, maxPerOrg, globalCap: cap.value, leaseTtlSeconds, continuousRefill, runBudgetSeconds };
 }

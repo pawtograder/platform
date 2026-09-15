@@ -26,7 +26,13 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
-import { beginOrgLeaseRun, drainOrgLease, type OrgSlotRow, type OrgSlotRpc } from "../_shared/orgLeaseRun.ts";
+import {
+  beginOrgLeaseRun,
+  drainOrgLease,
+  isolateStartedAtMs,
+  type OrgSlotRow,
+  type OrgSlotRpc
+} from "../_shared/orgLeaseRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -3051,6 +3057,14 @@ function orgSlotRpc(adminSupabase: SupabaseClient<Database>): OrgSlotRpc {
  * one of them. Here each isolate claims a slot for ONE org and drains only that org's messages, so
  * the orgs proceed in parallel and each one's limiter is the only thing bounding it.
  *
+ * WHY THIS PATH HAS A WALL-CLOCK BUDGET AND THE REDIS-LEASED ONE BELOW DOES NOT. `beginWorkerRun`'s
+ * bounded mode already returns on a wall-clock budget, and its LEASED mode keeps exactly ONE
+ * resident drainer per deployment, so a retirement there costs one isolate's in-flight batch per
+ * deployment. This path runs `globalCap` leaseholders at once, all of them resident for as long as
+ * they keep finding work, so the same retirement costs `globalCap x n` messages — which is what the
+ * 2026-09-15 redelivery numbers are. Same defect in kind, two orders of magnitude apart in scale,
+ * and this is the path where it was measured.
+ *
  * `tuning.drainConcurrency` and `tuning.visibilityTimeoutSeconds` are UNCHANGED by this path and
  * deliberately so: both ceilings in asyncWorkerTuning.ts are per-leaseholder, each leaseholder is
  * its own isolate, and concurrency here comes from more isolates rather than a bigger batch. See the
@@ -3091,10 +3105,22 @@ async function runOrgLeasedHandler(
     leaseTtlMs: tuning.orgSlots.leaseTtlSeconds * 1000,
     idleSleepMs: 15000,
     errorSleepMs: 5000,
+    // THE WALL-CLOCK CLAIM BUDGET, and note there is no `isolateStartedAt` alongside it: the anchor
+    // is orgLeaseRun.ts's module-level capture, so this isolate's SECOND and THIRD runs inherit what
+    // the first one spent. That matters here specifically — `started` is reset in the `.finally()`
+    // below, the cron pokes twice a minute, and an idle run returns after 50s, so an isolate really
+    // does take poke after poke across its life. Passing a per-run anchor would give each of those a
+    // fresh allowance while the wall clock the runtime kills on kept running down.
+    runBudgetMs: tuning.orgSlots.runBudgetSeconds * 1000,
     inFlightCount: () => inFlight.size
   });
   scope.setTag("worker_run_mode", run.mode);
   scope.setTag("org_slot_drain", tuning.orgSlots.continuousRefill ? "continuous_refill" : "batch");
+  scope.setTag("org_slot_run_budget_seconds", String(tuning.orgSlots.runBudgetSeconds));
+  // How much of THIS ISOLATE was already gone when this run started. The tag a triage needs is not
+  // the budget (which is the same on every event) but the remainder, because a run that claims
+  // nothing and returns in milliseconds is indistinguishable from a broken one without it.
+  scope.setTag("isolate_age_ms_at_run_start", String(Date.now() - isolateStartedAtMs()));
 
   try {
     await drainOrgLease<GitHubAsyncEnvelope>({
