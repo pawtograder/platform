@@ -29,6 +29,12 @@
 -- date" are different answers and only one of them means the instructor has nothing to wait
 -- for.
 --
+-- A claim names the REVISION it is for, and only suppresses a job for that same revision. The
+-- sync branch is `sync-to-<sha7>`, so it is jobs sharing a revision that fight over one branch
+-- and one pull request; jobs for different revisions are not in each other's way, and
+-- suppressing a newer one would leave the autograder toggle unable to deliver grade.yml to a
+-- repository whose in-flight sync was already heading somewhere older.
+--
 -- WHY sync_data AND NOT A NEW COLUMN. The claim has to be released by the worker, and the
 -- worker already replaces sync_data wholesale at every outcome it has -- in_progress before
 -- the long work, then merged, blocked, no_changes_needed or error. So 'queued' is released by
@@ -50,8 +56,9 @@
 -- recorded state we got wrong; it is not a reason to run two syncs of one repository at once,
 -- which is the thing that damages the branch. A forced call still ignores desired_handout_sha
 -- and sync_blocked_at -- everything it was added for -- and still declines to pile a second job
--- onto a live one. The press is not lost: the answer names the reason, and the claim it waited
--- on expires.
+-- for the same revision onto a live one. The press is not lost: the answer names the reason,
+-- the claim it waited on expires, and a press made after the handout moves is a different
+-- revision and queues immediately.
 
 create or replace function public.queue_repository_syncs(
     p_repository_ids bigint[],
@@ -74,6 +81,7 @@ declare
     v_upstream_repo_full_name text;
     v_claim_window interval := interval '15 minutes';
     v_claim_started timestamptz;
+    v_claim_target text;
     v_claim_is_live boolean;
     v_claimed_id bigint;
 begin
@@ -180,7 +188,33 @@ begin
                 when 'in_progress' then (v_repo_record.sync_data ->> 'started_at')::timestamptz
                 else null
             end;
-            v_claim_is_live := v_claim_started is not null and v_claim_started > now() - v_claim_window;
+            -- WHICH REVISION that in-flight job is carrying, which is the difference between a
+            -- duplicate and a second, necessary sync.
+            --
+            -- A claim only suppresses a job for the SAME revision. That is where the damage is:
+            -- the sync branch is named `sync-to-<sha7>`, so two jobs for one revision reset and
+            -- commit to the same branch and open, close and reset each other's pull request.
+            -- Two jobs for DIFFERENT revisions use different branches and are not in each
+            -- other's way, and suppressing the newer one would be the worse bug: the autograder
+            -- toggle queues every repository in an assignment after editing grade.yml in the
+            -- handout, and a repository whose in-flight sync was already heading somewhere
+            -- older would have been skipped, never queued again by anything, and left without
+            -- the workflow the toggle exists to deliver.
+            --
+            -- The worker writes `to_sha` into the in_progress marker; this function writes
+            -- `sync_queued_to` when it claims. A target we cannot read does not match, so the
+            -- repository is queued: a job whose write is discarded by the worker's own
+            -- revision guard costs one wasted attempt, and an undelivered revision costs an
+            -- instructor an assignment they think has propagated.
+            v_claim_target := case v_repo_record.sync_data ->> 'status'
+                when 'queued' then v_repo_record.sync_data ->> 'sync_queued_to'
+                when 'in_progress' then v_repo_record.sync_data ->> 'to_sha'
+                else null
+            end;
+            v_claim_is_live := v_claim_started is not null
+                and v_claim_started > now() - v_claim_window
+                and v_claim_target is not null
+                and v_claim_target = v_repo_record.latest_template_sha;
 
             if v_claim_is_live then
                 v_skipped_in_flight_count := v_skipped_in_flight_count + 1;
@@ -203,7 +237,10 @@ begin
                 set desired_handout_sha = v_repo_record.latest_template_sha,
                     sync_data = coalesce(sync_data, '{}'::jsonb) || jsonb_build_object(
                         'status', 'queued',
-                        'sync_queued_at', to_jsonb(now())
+                        'sync_queued_at', to_jsonb(now()),
+                        -- The revision this claim is for. Without it the claim cannot tell a
+                        -- duplicate from a sync of a newer handout; see the note above.
+                        'sync_queued_to', v_repo_record.latest_template_sha
                     )
                 where id = v_repo_record.id
                 returning id into v_claimed_id;
