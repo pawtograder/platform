@@ -440,12 +440,25 @@ returns trigger
 language plpgsql
 as $$
 begin
-  if old.submission_id is not null
-     and (new.matched_profile_id is distinct from old.matched_profile_id
-          or new.match_status is distinct from old.match_status) then
-    raise exception
-      'Scanned submission % already has submission %; its match can no longer be changed (the submission would belong to a different student than the review row)',
-      old.id, old.submission_id;
+  if (new.matched_profile_id is distinct from old.matched_profile_id
+      or new.match_status is distinct from old.match_status) then
+    if old.submission_id is not null then
+      raise exception
+        'Scanned submission % already has submission %; its match can no longer be changed (the submission would belong to a different student than the review row)',
+        old.id, old.submission_id;
+    end if;
+    -- Also frozen while the batch is FINALIZING, before exam_create_submission has set
+    -- submission_id. finalize reads matched_profile_id, then the RPC re-reads the row -- so a
+    -- change landing in that window creates one student's submission and records it against
+    -- another's review row. Keying only on submission_id left exactly that gap open.
+    if exists (
+      select 1 from public.exam_scan_batches b
+      where b.id = old.batch_id and b.status in ('finalizing', 'completed')
+    ) then
+      raise exception
+        'Batch for scanned submission % is already finalizing; its match can no longer be changed',
+        old.id;
+    end if;
   end if;
   return new;
 end;
@@ -639,6 +652,96 @@ begin
     raise exception 'Rubric % does not belong to assignment %', p_rubric_id, v_assignment_id;
   end if;
 
+  -- RECONCILE FIRST, then build. All of this used to run after the loop below, which was an
+  -- ordering bug: the loop computes each rubric_criteria.total_points by summing the checks that
+  -- exist at that moment, so a stale point value, an orphan, or a check that should have been
+  -- deleted was still counted -- e.g. changing a draft question from 5 to 10 left the criterion
+  -- total at 5 while the check itself became 10, and grading then capped the 10-point check at
+  -- the criterion's 5. Reconciling up front means the totals are derived from the correct set.
+  -- Refresh generated check points from the question while the assignment is still a DRAFT.
+  -- Checks are INSERT-ONLY so a grader's edits survive a re-sync, but that also meant changing a
+  -- draft question's points never reached rubric_checks.points: the criterion total summed stale
+  -- checks, so manual grading used the old maximum while quiz autograding used the new value.
+  -- Gating on "no submissions yet" keeps both properties -- a draft stays consistent, and once
+  -- grading can have happened the grader's numbers are left alone. Only rows carrying
+  -- data.exam_question_id are touched, so user-authored checks are never rewritten.
+  if not exists (select 1 from public.submissions where assignment_id = v_assignment_id) then
+    update public.rubric_checks c
+      set points = coalesce(q.points, 0)
+      from public.exam_questions q
+      where c.rubric_id = p_rubric_id
+        and c.data ? 'exam_question_id'
+        and q.id = (c.data->>'exam_question_id')::bigint
+        and q.exam_id = p_exam_id
+        and c.points is distinct from coalesce(q.points, 0);
+  end if;
+
+  -- Drop generated LEAF rows for questions that have since GAINED children. The leaf branches
+  -- above simply stop treating such a question as a leaf; the criterion/check generated for it
+  -- while it WAS a leaf survived, because reconciliation only removes rows whose question no
+  -- longer exists. Its old hidden points were then awardable alongside the new child checks.
+  delete from public.rubric_checks c
+  using public.exam_questions q
+  where c.rubric_id = p_rubric_id
+    and c.data ? 'exam_question_id'
+    and q.id = (c.data->>'exam_question_id')::bigint
+    and q.exam_id = p_exam_id
+    and exists (select 1 from public.exam_questions ch where ch.parent_id = q.id);
+  delete from public.rubric_criteria cr
+  using public.exam_questions q
+  where cr.rubric_id = p_rubric_id
+    and cr.data ? 'exam_question_id'
+    and q.id = (cr.data->>'exam_question_id')::bigint
+    and q.exam_id = p_exam_id
+    and q.level = 1
+    and exists (select 1 from public.exam_questions ch where ch.parent_id = q.id);
+
+  -- Drop generated checks whose question has BECOME auto-scored. The skip-on-insert predicates
+  -- above only stop a NEW manual check being created; a free-text leaf that was synced once and
+  -- later given an objective type plus an answer key kept its existing check, and the
+  -- reconciliation below retains it because the question still exists -- so the recompute could
+  -- sum that manual check on top of quiz_autograde's score for the same question.
+  if v_in_app then
+    delete from public.rubric_checks c
+    using public.exam_questions q
+    where c.rubric_id = p_rubric_id
+      and c.data ? 'exam_question_id'
+      and q.id = (c.data->>'exam_question_id')::bigint
+      and q.exam_id = p_exam_id
+      and q.answer_type in ('multiple_choice','true_false','numeric')
+      and q.correct_answer is not null;
+  end if;
+
+  -- Reconcile: drop generated rows whose question no longer exists. exam_upsert_questions_and_
+  -- regions prunes deleted questions, but this sync only ever iterated the SURVIVING ones, so a
+  -- question deleted while the quiz was still a draft left its part/criterion/check behind --
+  -- and _submission_review_recompute_scores kept counting that orphaned criterion for every
+  -- future submission. Only rows carrying a data.exam_question_id are touched, so genuinely
+  -- user-authored parts/criteria/checks are never removed. Safe to delete rather than merely
+  -- hide, because the write RPC now refuses any question change once a submission exists: an
+  -- orphan can only have been created while the assignment was still ungraded.
+  delete from public.rubric_checks c
+  where c.rubric_id = p_rubric_id
+    and c.data ? 'exam_question_id'
+    and not exists (
+      select 1 from public.exam_questions q
+      where q.exam_id = p_exam_id and q.id = (c.data->>'exam_question_id')::bigint
+    );
+  delete from public.rubric_criteria cr
+  where cr.rubric_id = p_rubric_id
+    and cr.data ? 'exam_question_id'
+    and not exists (
+      select 1 from public.exam_questions q
+      where q.exam_id = p_exam_id and q.id = (cr.data->>'exam_question_id')::bigint
+    );
+  delete from public.rubric_parts pt
+  where pt.rubric_id = p_rubric_id
+    and pt.data ? 'exam_question_id'
+    and not exists (
+      select 1 from public.exam_questions q
+      where q.exam_id = p_exam_id and q.id = (pt.data->>'exam_question_id')::bigint
+    );
+
   -- level 1 -> rubric_parts
   for r1 in select * from public.exam_questions where exam_id = p_exam_id and level = 1 order by ordinal loop
     select id into v_part_id from public.rubric_parts
@@ -768,89 +871,6 @@ begin
     end loop;
   end loop;
 
-  -- Refresh generated check points from the question while the assignment is still a DRAFT.
-  -- Checks are INSERT-ONLY so a grader's edits survive a re-sync, but that also meant changing a
-  -- draft question's points never reached rubric_checks.points: the criterion total summed stale
-  -- checks, so manual grading used the old maximum while quiz autograding used the new value.
-  -- Gating on "no submissions yet" keeps both properties -- a draft stays consistent, and once
-  -- grading can have happened the grader's numbers are left alone. Only rows carrying
-  -- data.exam_question_id are touched, so user-authored checks are never rewritten.
-  if not exists (select 1 from public.submissions where assignment_id = v_assignment_id) then
-    update public.rubric_checks c
-      set points = coalesce(q.points, 0)
-      from public.exam_questions q
-      where c.rubric_id = p_rubric_id
-        and c.data ? 'exam_question_id'
-        and q.id = (c.data->>'exam_question_id')::bigint
-        and q.exam_id = p_exam_id
-        and c.points is distinct from coalesce(q.points, 0);
-  end if;
-
-  -- Drop generated LEAF rows for questions that have since GAINED children. The leaf branches
-  -- above simply stop treating such a question as a leaf; the criterion/check generated for it
-  -- while it WAS a leaf survived, because reconciliation only removes rows whose question no
-  -- longer exists. Its old hidden points were then awardable alongside the new child checks.
-  delete from public.rubric_checks c
-  using public.exam_questions q
-  where c.rubric_id = p_rubric_id
-    and c.data ? 'exam_question_id'
-    and q.id = (c.data->>'exam_question_id')::bigint
-    and q.exam_id = p_exam_id
-    and exists (select 1 from public.exam_questions ch where ch.parent_id = q.id);
-  delete from public.rubric_criteria cr
-  using public.exam_questions q
-  where cr.rubric_id = p_rubric_id
-    and cr.data ? 'exam_question_id'
-    and q.id = (cr.data->>'exam_question_id')::bigint
-    and q.exam_id = p_exam_id
-    and q.level = 1
-    and exists (select 1 from public.exam_questions ch where ch.parent_id = q.id);
-
-  -- Drop generated checks whose question has BECOME auto-scored. The skip-on-insert predicates
-  -- above only stop a NEW manual check being created; a free-text leaf that was synced once and
-  -- later given an objective type plus an answer key kept its existing check, and the
-  -- reconciliation below retains it because the question still exists -- so the recompute could
-  -- sum that manual check on top of quiz_autograde's score for the same question.
-  if v_in_app then
-    delete from public.rubric_checks c
-    using public.exam_questions q
-    where c.rubric_id = p_rubric_id
-      and c.data ? 'exam_question_id'
-      and q.id = (c.data->>'exam_question_id')::bigint
-      and q.exam_id = p_exam_id
-      and q.answer_type in ('multiple_choice','true_false','numeric')
-      and q.correct_answer is not null;
-  end if;
-
-  -- Reconcile: drop generated rows whose question no longer exists. exam_upsert_questions_and_
-  -- regions prunes deleted questions, but this sync only ever iterated the SURVIVING ones, so a
-  -- question deleted while the quiz was still a draft left its part/criterion/check behind --
-  -- and _submission_review_recompute_scores kept counting that orphaned criterion for every
-  -- future submission. Only rows carrying a data.exam_question_id are touched, so genuinely
-  -- user-authored parts/criteria/checks are never removed. Safe to delete rather than merely
-  -- hide, because the write RPC now refuses any question change once a submission exists: an
-  -- orphan can only have been created while the assignment was still ungraded.
-  delete from public.rubric_checks c
-  where c.rubric_id = p_rubric_id
-    and c.data ? 'exam_question_id'
-    and not exists (
-      select 1 from public.exam_questions q
-      where q.exam_id = p_exam_id and q.id = (c.data->>'exam_question_id')::bigint
-    );
-  delete from public.rubric_criteria cr
-  where cr.rubric_id = p_rubric_id
-    and cr.data ? 'exam_question_id'
-    and not exists (
-      select 1 from public.exam_questions q
-      where q.exam_id = p_exam_id and q.id = (cr.data->>'exam_question_id')::bigint
-    );
-  delete from public.rubric_parts pt
-  where pt.rubric_id = p_rubric_id
-    and pt.data ? 'exam_question_id'
-    and not exists (
-      select 1 from public.exam_questions q
-      where q.exam_id = p_exam_id and q.id = (pt.data->>'exam_question_id')::bigint
-    );
 end;
 $$;
 revoke all on function public.exam_sync_rubric_from_questions(bigint, bigint) from public;

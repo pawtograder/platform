@@ -56,6 +56,14 @@ alter table public.exams
 --   free_text / short_answer : left NULL -> routed to manual rubric grading
 alter table public.exam_questions add column if not exists correct_answer jsonb;
 alter table public.exam_questions add column if not exists grading_tolerance numeric;
+-- Non-negative: quiz_autograde tests abs(student - answer) <= tolerance, so a negative value
+-- makes even an exact answer wrong. The editor clamps it, but the question-upsert RPC is granted
+-- to authenticated callers, so the clamp alone protects nothing. Stated here rather than in
+-- 20260902000000 because that is where the column is added.
+alter table public.exam_questions drop constraint if exists exam_questions_tolerance_non_negative;
+alter table public.exam_questions
+  add constraint exam_questions_tolerance_non_negative
+  check (grading_tolerance is null or grading_tolerance >= 0);
 
 -- ---------------------------------------------------------------------------
 -- 4) exam_create: accept delivery_mode (default 'paper' keeps existing callers working)
