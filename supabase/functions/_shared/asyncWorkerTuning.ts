@@ -128,7 +128,7 @@
  * decision stays an explicit, reviewable operator action rather than a side
  * effect of a chart upgrade. That exact pair DOES violate both ceilings under
  * the model, and it is the ONE combination that is reported without being
- * enforced — re-coherencing the status quo would change production behaviour on
+ * enforced — re-coherencing the status quo would change production behavior on
  * deploy, which is precisely what this change promises not to do.
  *
  * ───────────────────────────────────────────────────────────────────────────
@@ -136,9 +136,15 @@
  * ───────────────────────────────────────────────────────────────────────────
  *
  * THE 279.5s p50 QUOTED ABOVE IS NO LONGER REPRESENTATIVE. Re-measured on prod
- * 2026-09-13 over 242 `create_repo` messages: p50 23.1s, MAX 32.2s. That is a
+ * 2026-09-13 over 242 `create_repo` messages: p50 23.1s, max 32.2s. That is a
  * ~12x improvement on the median and it is not noise — two things differ from
  * the 2026-09-07 sample:
+ *
+ * (THAT 32.2s MAX IS ONE ORG ON ONE DAY, and it was wrongly reused elsewhere in
+ * this file as a PLATFORM maximum. Across all methods on the VT=480 regime,
+ * 2026-09-11 onward, 2,337 messages, the real max is 97.7s and `create_repo` p99
+ * is 93.8s over 489 samples. See MIN_ORG_SLOT_LEASE_TTL_SECONDS for the table,
+ * and for why that does NOT move the lease-TTL floor.)
  *
  *   * the permission-sync fix landed in between, which removed the dominant
  *     uninstrumented stretch inside `createRepo`; and
@@ -151,7 +157,8 @@
  * render-time rules, and "a big org on a bad day still costs minutes" remains
  * the case the timeouts have to survive. Read every "279.5s" / "~4.7 minutes" /
  * "~280s" in this file as: the 2026-09-07 CS 4530 worst case, since improved to
- * p50 23.1s / max 32.2s for ordinary orgs.
+ * p50 27.8s / p99 93.8s / max 97.7s across 489 `create_repo` messages on the
+ * VT=480 regime (2026-09-11 onward).
  *
  * WHAT ACTUALLY CHANGED STRUCTURALLY, which matters more than the number.
  * There is no longer ONE leaseholder per deployment. `beginOrgLeaseRun`
@@ -198,7 +205,7 @@
  * silently ignored and the pod keeps the chart-rendered numbers. An earlier
  * version of this file claimed that secret path worked and used it to justify
  * the runtime validation; the claim was wrong and is withdrawn. The validation
- * stands on its own merits (defence in depth against a hand-edited Deployment,
+ * stands on its own merits (defense in depth against a hand-edited Deployment,
  * `kubectl set env`, or a local `supabase functions serve`), and it is also the
  * only thing standing between a malformed value and pgmq.
  */
@@ -251,8 +258,11 @@ export const MIN_DRAIN_CONCURRENCY = 1;
  *    HOLDS ONE OF THE 40 CONCURRENCY SLOTS AND ONE RESERVOIR TOKEN FOR ~4.7
  *    MINUTES.
  *
- *    RE-MEASURED 2026-09-13 (242 messages): p50 23.1s, max 32.2s. A slot is now
- *    held for ~23s, not ~280s, which flips WHICH HALF OF THE LIMITER BINDS. At
+ *    RE-MEASURED 2026-09-13 (242 messages, neu-cs2000): p50 23.1s, max 32.2s.
+ *    Platform-wide over 489 `create_repo` messages from 2026-09-11: p50 27.8s,
+ *    p99 93.8s, max 97.7s. The MEDIAN is what this argument turns on and it is
+ *    unchanged in kind: a slot is held for ~23-28s, not ~280s, which flips WHICH
+ *    HALF OF THE LIMITER BINDS. At
  *    ~280s the 40-way CONCURRENCY was the scarce half; at 23.1s the 40/minute
  *    RESERVOIR is, because 8 concurrent creations at 23.1s each start
  *    8 / 23.1 * 60 ~= 21 repos/minute, i.e. ~52% of the reservoir. That
@@ -276,7 +286,13 @@ export const MIN_DRAIN_CONCURRENCY = 1;
  *    than only a hazard: `MAX_ORG_SLOT_MAX_PER_ORG` is how many leaseholders may
  *    hold a slot for ONE org at the same time, so the per-org in-flight ceiling
  *    is `maxPerOrg * n`, and `resolveAsyncWorkerTuning` holds that product at or
- *    below this same 8 by degrading `maxPerOrg`.
+ *    below MAX_ORG_SLOT_IN_FLIGHT_PER_ORG by degrading `maxPerOrg`.
+ *
+ *    THAT PRODUCT CEILING IS NO LONGER THIS SAME 8 (changed 2026-09-14). It was,
+ *    and reusing this constant for it was a conflation: this 8 is about ONE
+ *    ISOLATE (heap, and the n x 120 VT model), the product is about ONE ORG's
+ *    share of a fleet-wide GitHub limiter. The product ceiling is now its own
+ *    constant at 16; this one is unchanged at 8 and its argument is untouched.
  *
  *    8 is 20% of the pool: even with every slot held for the full ~280s there
  *    are 32 left for invitations and syncs, and it stays far from the regime
@@ -322,7 +338,7 @@ export const MIN_DRAIN_CONCURRENCY = 1;
  *    extra parallelism converts into queueing (or secondary-rate-limit errors),
  *    not throughput. 8 is a doubling of the measured configuration, which is the
  *    largest step worth taking without re-measuring isolate memory,
- *    content-pool occupancy and secondary-limit behaviour under a real burst.
+ *    content-pool occupancy and secondary-limit behavior under a real burst.
  *
  * Note what 8 does NOT do: at ~1.2 msg/min it is ~8 hours for a 585-message
  * burst. Getting materially past that needs more than one concurrent
@@ -373,12 +389,60 @@ export function requiredVisibilityTimeoutSeconds(drainConcurrency: number): numb
   return drainConcurrency * PER_MESSAGE_VT_BUDGET_SECONDS;
 }
 
+/**
+ * ───────────────────────────────────────────────────────────────────────────
+ * OPEN QUESTION (recorded 2026-09-14, DELIBERATELY NOT ACTED ON)
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ * THE ISOLATE-LIFETIME CAP HAS STOPPED MEANING WHAT IT SAYS ON THE ORG-LEASED
+ * PATH. `resolveAsyncWorkerTuning` degrades `n` to
+ * `floor(lifetime / PER_MESSAGE_VT_BUDGET_SECONDS)` on the argument that a
+ * whole batch runs inside ONE isolate and must fit inside that isolate's life.
+ * That argument is about a BATCH: a bounded unit of work with a start and an
+ * end, which either fits or does not.
+ *
+ * Continuous refill does not have batches. `drainWithContinuousRefill` keeps `n`
+ * in flight and tops up the shortfall as each message settles, so the drain is a
+ * STREAM that is deliberately never finished — it is cut off mid-flight when
+ * `beforeUnload.wallClockRatio: 50` retires the isolate at ~half the lifetime,
+ * and the orphaned messages are redelivered at their visibility timeout. "Does
+ * the work fit inside the lifetime" has no answer for a stream, because the
+ * stream is designed not to fit. So the cap is still computed, still applied,
+ * and its stated justification no longer describes the thing it is capping.
+ *
+ * IT IS LEFT EXACTLY AS IT IS, and not because nobody noticed:
+ *
+ *   * IT IS STILL CORRECT FOR THE NON-REFILL PATHS. The single-leaseholder
+ *     drain (`globalCap: 0`, still the shipped default) and the batch-at-a-time
+ *     shape reachable through the kill switch above are both genuinely
+ *     batched, and for them the original argument holds unaltered.
+ *   * THE DIRECTION IT ERRS IN IS SAFE. It only ever REDUCES `n`. On the refill
+ *     path that costs throughput and nothing else; the failure it was written to
+ *     prevent — an isolate dying before `Promise.allSettled` reaches the archive
+ *     calls — is a real failure on the refill path too, just no longer bounded
+ *     by this arithmetic.
+ *   * CHANGING IT IS A LOCKSTEP CHART CHANGE. templates/validations.yaml encodes
+ *     the same rule at render time, so any edit here is a coupled edit there,
+ *     and neither should happen on an argument this file cannot yet finish.
+ *
+ * WHAT WOULD SETTLE IT: a measurement of what a refill stream actually loses per
+ * isolate retirement, against what capping `n` actually buys it. orgLeaseRun.ts
+ * already argues by Little's law that the orphan RATE is `mean duration /
+ * lifetime` and is unchanged by refill (48.4/240 either way), which suggests the
+ * cap buys the refill path nothing at all — but that is an argument, not a
+ * measurement, and it points at the visibility timeout rather than at `n`.
+ *
+ * DO NOT "TIDY" THIS BY DELETING THE CAP OR BY SPECIAL-CASING THE REFILL PATH
+ * without that measurement. The point of writing it down is that the next person
+ * decides it deliberately instead of inheriting it.
+ */
+
 // ───────────────────────────────────────────────────────────────────────────────
 // PER-ORG LEASE SLOTS (2026-09-13)
 //
 // THE PARSING RULES ARE THE SAME AS FOR THE TWO KNOBS ABOVE: bounded integers,
 // an unparseable value falls back and is REPORTED, an out-of-range value is
-// CLAMPED and reported, and the defaults reproduce today's behaviour exactly —
+// CLAMPED and reported, and the defaults reproduce today's behavior exactly —
 // here that means `globalCap: 0`, i.e. per-org leasing OFF and the
 // single-leaseholder `pgmq_public.read` path still in force. Deploying this
 // changes nothing until someone sets GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP.
@@ -389,7 +453,7 @@ export function requiredVisibilityTimeoutSeconds(drainConcurrency: number): numb
 // `.orgSlotLeaseTtlSeconds`), and an `env` entry BEATS anything supplied by
 // `envFrom` — so setting them through `edgeFunctions.envFromSecrets` is silently
 // ignored, exactly as it is for the two knobs above. The validation below is
-// therefore defence in depth against the Helm-bypass paths (a hand-edited
+// therefore defense in depth against the Helm-bypass paths (a hand-edited
 // Deployment, `kubectl set env`, a local `supabase functions serve`), plus the
 // only thing standing between a malformed value and the RPC — which is why it
 // clamps rather than refuses.
@@ -411,6 +475,11 @@ export const ORG_SLOT_MAX_PER_ORG_ENV = "GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_OR
  * (chart: edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds).
  */
 export const ORG_SLOT_LEASE_TTL_ENV = "GITHUB_ASYNC_WORKER_ORG_SLOT_LEASE_TTL_SECONDS";
+/**
+ * Env var for the continuous-refill KILL SWITCH, 1 = on (the default), 0 = off
+ * (chart: edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill).
+ */
+export const ORG_SLOT_CONTINUOUS_REFILL_ENV = "GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL";
 
 /**
  * 0 — PER-ORG LEASING OFF. This is the inert default, and it is the one place in
@@ -455,44 +524,106 @@ export const MAX_ORG_SLOT_GLOBAL_CAP = 8;
  * the default `n`, and starting at 1 means enabling the feature (setting only
  * globalCap) buys cross-org parallelism without changing anything about how hard
  * any single org is hit — the smallest step that is still the whole point.
+ *
+ * THIS DID NOT MOVE WHEN THE CEILING DID (2026-09-14, MAX_ORG_SLOT_MAX_PER_ORG
+ * 2 -> 4). Raising the ceiling makes higher values EXPRESSIBLE for deployments
+ * whose `create_repo` is slow; it does not make them advisable, because this
+ * knob has no per-org dimension and the measured spread in `create_repo` p50
+ * between orgs on one platform is 2x (23.1s to 46.0s — see
+ * MAX_ORG_SLOT_IN_FLIGHT_PER_ORG). Turning it up stays an operator decision
+ * taken against a measurement of THEIR orgs, not a chart default.
  */
 export const DEFAULT_ORG_SLOT_MAX_PER_ORG = 1;
 /** 0 would mean no org can ever be drained, which is the hung-queue failure again. */
 export const MIN_ORG_SLOT_MAX_PER_ORG = 1;
 /**
- * 2, and the arithmetic is the reason — this is the bound most likely to be
- * raised by someone who has not done it.
+ * 16 in flight for ONE org. This is the ceiling the product `maxPerOrg * n` is
+ * held under, and it is a SEPARATE CONSTANT FROM MAX_DRAIN_CONCURRENCY ON
+ * PURPOSE.
  *
- * The per-org in-flight ceiling is `maxPerOrg * n`, because each of the
- * `maxPerOrg` leaseholders runs `n` handlers against the SAME per-org content
- * limiter (40 concurrent / 40 per minute, fleet-wide, keyed
- * `create_content:<org>:<GITHUB_APP_ID>`). Two independent constraints bound the
- * product, and at the re-measured 23.1s p50 the RESERVOIR is the binding one:
+ * REUSING MAX_DRAIN_CONCURRENCY FOR THIS WAS THE MISTAKE THIS CONSTANT FIXES.
+ * That one bounds ONE ISOLATE'S BATCH — 256MiB of heap, and the `n x 120`
+ * visibility-timeout model. This one bounds ONE ORG'S SHARE of a fleet-wide
+ * GitHub limiter. They are different quantities about different resources that
+ * happened to agree on the number 8, and while they shared a constant neither
+ * could move without dragging the other. Only the product moved here; `n` is
+ * still capped at 8 and the VT model is untouched.
  *
- *   * CONCURRENCY: `maxPerOrg * n <= MAX_DRAIN_CONCURRENCY` (8), which is the
- *     20%-of-pool occupancy MAX_DRAIN_CONCURRENCY already argues for, leaving 32
- *     slots for the org invitations and handout syncs that draw on the same
- *     pool. At the default n=4 that gives maxPerOrg <= 2.
+ * WHY 16 AND NOT 8. 8 was never wrong. It is ~50% of the reservoir at the FAST
+ * end (see the table), it is 20% of the 40-slot concurrency pool, and it is the
+ * only number in this file that was ever derived from a measurement rather than
+ * chosen. What 2026-09-14 changed is that 8 was not expressible as a RANGE: it
+ * was simultaneously the ceiling and, at the recommended `maxPerOrg: 2`, the
+ * recommended value, so a deployment whose `create_repo` is slow had no way to
+ * ask for more. 16 is the ceiling. It is NOT the recommendation, and nothing
+ * moves to it on its own — see DEFAULT_ORG_SLOT_MAX_PER_ORG.
  *
- *   * RESERVOIR (40 starts/minute/org), which is what actually bites now. A
- *     creation holding a slot for 23.1s means `c` concurrent creations start
- *     `c / 23.1 * 60` per minute:
+ * THE ARITHMETIC, AND IT CUTS BOTH WAYS. The per-org content limiter has TWO
+ * constraints — `maxConcurrent: 40` AND a reservoir of 40 STARTS PER 60s — and
+ * the reservoir is the one that binds at today's durations. With `c` creations
+ * in flight at `d` seconds each, starts per minute is `60c/d`. Measured p50
+ * `create_repo` on Khoury prod over the 3 days to 2026-09-14 (`pgmq.a_async_calls`,
+ * duration = `archived_at - (vt - 480s)`, prod VT 480):
  *
- *        c =  8  ->  ~21/min   (~52% of the reservoir)   maxPerOrg 2 at n=4
- *        c = 12  ->  ~31/min   (~78%)                    maxPerOrg 3 at n=4
- *        c = 16  ->  ~42/min   (OVER the 40/min refresh) maxPerOrg 4 at n=4
+ *     org              d        c = 8                    c = 16
+ *     ------------------------------------------------------------------------
+ *     neu-cs2000       23.1s    20.8/min   (52%)         41.6/min  OVER 40/min
+ *     Khoury-CS3650    46.0s    10.4/min   (26%)         20.9/min  (52%)
+ *     neu-cs5004       25.7s    18.7/min   (47%)         37.4/min  (93%)
+ *     neu-cs4530       30.4s    15.8/min   (39%)         31.6/min  (79%)
  *
- *     So 4 is past the reservoir and 3 is close enough that a single slow org
- *     (the 2026-09-07 CS 4530 case was 279.5s p50 against a ~20k-member org)
- *     converts the margin into queueing inside Bottleneck, where it is invisible
- *     to this worker and shows up as students waiting on org invitations.
+ * READ THAT AS: 16 IN FLIGHT IS SAFE FOR A SLOW ORG AND SATURATES A FAST ONE.
+ * There is a 2x spread in `d` between orgs on ONE platform, and
+ * `orgSlotMaxPerOrg` IS A SINGLE GLOBAL KNOB WITH NO PER-ORG DIMENSION. An
+ * operator who raises it because Khoury-CS3650 is slow raises it for
+ * neu-cs2000 too, where the same setting starts creations faster than the
+ * reservoir refills them. The overflow does not surface here: it queues inside
+ * Bottleneck, and what it delays is everything else drawing on the same pool —
+ * `reinviteToOrgTeam`'s org invitations and `sync_repo_to_handout`. That is
+ * students unable to join the org while repos are created, which is the exact
+ * failure the original "20% of the 40-slot pool" rule was written to prevent
+ * and a worse symptom than a slow queue.
  *
- * 2 is the largest value both constraints allow at the shipped `n`, so it is the
- * ceiling. MORE THROUGHPUT FOR ONE ORG IS NOT WHAT THIS FEATURE OFFERS — the
- * rate limit is per org, so a single org's ceiling is unchanged by design.
- * Throughput comes from draining DIFFERENT orgs at once (globalCap).
+ * SAMPLE SIZES, WHICH THE TABLE DOES NOT CARRY: n = 241, 187, 12 and 4
+ * respectively (read_ct = 1). The bottom two rows are illustrative, not
+ * measurements. The fastest org in the same window, `neu-cs4535` at p50 5.8s,
+ * would be ~165/min at c=16 — FOUR TIMES the reservoir — on TWO samples. Two
+ * samples is not evidence, but it is the direction the error runs, and a knob
+ * with no per-org dimension has to be sized for the org that is worst for it.
+ *
+ * WHAT WOULD JUSTIFY MOVING THE DEFAULT UP: a per-org dimension on this knob,
+ * so the ceiling can follow the measured `d` of the org it applies to. Until
+ * that exists, the honest position is a wide ceiling and a conservative
+ * default, and an operator who raises it has to have measured THEIR org.
  */
-export const MAX_ORG_SLOT_MAX_PER_ORG = 2;
+export const MAX_ORG_SLOT_IN_FLIGHT_PER_ORG = 16;
+
+/**
+ * 4 — which is MAX_ORG_SLOT_IN_FLIGHT_PER_ORG (16) at the shipped `n` of 4.
+ * Raised from 2 on 2026-09-14.
+ *
+ * THIS IS A BOUND ON WHAT IS EXPRESSIBLE, NOT A RECOMMENDATION. What ships is
+ * DEFAULT_ORG_SLOT_MAX_PER_ORG = 1; the recommended prod value in values.yaml
+ * is 2 (8 in flight at n=4), which is the measured figure and has not moved.
+ * The reservoir arithmetic for why 4 is safe on a slow org and over budget on a
+ * fast one is on MAX_ORG_SLOT_IN_FLIGHT_PER_ORG above — read it before typing
+ * 4 into a values file.
+ *
+ * The two ceilings `resolveOrgSlotTuning` enforces are unchanged in kind:
+ *   * `maxPerOrg * n <= MAX_ORG_SLOT_IN_FLIGHT_PER_ORG`, so 4 is only reachable
+ *     at `n <= 4`. At the maximum `n` of 8 the effective ceiling is 2, and at
+ *     n=16 it would be 1 — except `n` cannot exceed 8, which is the point of
+ *     keeping the two constants apart.
+ *   * `maxPerOrg <= globalCap`, because a per-org allowance above the number of
+ *     leaseholders that may exist at all can never be reached.
+ *
+ * MORE THROUGHPUT FOR ONE ORG IS STILL NOT WHAT THIS FEATURE OFFERS. The rate
+ * limit is per org and this knob does not move it — raising it spends the
+ * limiter's headroom, taking it from org invitations and handout syncs.
+ * Throughput across CLASSES comes from globalCap, which is a different knob
+ * with a different bound.
+ */
+export const MAX_ORG_SLOT_MAX_PER_ORG = 4;
 
 /**
  * 60s, matching `DEFAULT_LEASE_TTL_MS` in workerRun.ts so the two lease
@@ -501,13 +632,99 @@ export const MAX_ORG_SLOT_MAX_PER_ORG = 2;
  */
 export const DEFAULT_ORG_SLOT_LEASE_TTL_SECONDS = 60;
 /**
- * 45s floor, from the 2026-09-13 measurement: the MAX observed `create_repo` was
- * 32.2s. The renewal timer runs on the same event loop as the handlers, so a
- * busy isolate can delay it; a TTL at or below the longest single unit of work
- * means a leaseholder that is genuinely working can have its slot reaped
- * mid-message, another leaseholder claims that org, and the two then duplicate
- * GitHub work against one rate limit. 45s keeps a full renewal interval (15s) of
- * margin above the 32.2s worst message.
+ * 45s floor. THE NUMBER IS UNCHANGED; THE ARGUMENT FOR IT IS NOT, AND THE OLD
+ * ARGUMENT WAS WRONG (corrected 2026-09-14).
+ *
+ * WHAT THIS FILE USED TO SAY: "the MAX observed `create_repo` was 32.2s; the
+ * renewal timer runs on the same event loop as the handlers, so a busy isolate
+ * can delay it; a TTL at or below the longest single unit of work means a
+ * leaseholder that is genuinely working can have its slot reaped mid-message."
+ * Both halves of that are wrong, and they were wrong in opposite directions,
+ * which is the only reason the conclusion survived.
+ *
+ * THE MEASUREMENT WAS WRONG. 32.2s was never a platform maximum — it was the max
+ * `create_repo` for ONE org (neu-cs2000) on ONE day. Re-measured across ALL
+ * methods on the VT=480 regime (2026-09-11 onward, 2,337 messages, `read_ct=1`,
+ * duration = `archived_at - (vt - 480s)`):
+ *
+ *     method                   n     p50     p95     p99     MAX
+ *     create_repo            489   27.8s   69.9s   93.8s   97.7s
+ *     sync_student_team     1168    1.0s   10.6s   16.8s   30.3s
+ *     sync_repo_permissions  653    1.4s   14.6s   19.8s   21.1s
+ *     sync_repo_to_handout     1   15.7s       -       -   15.7s
+ *     rerun_autograder         8   11.1s       -       -   12.5s
+ *     sync_staff_team         18    0.9s    7.1s    7.8s    8.0s
+ *
+ * The real longest unit of work is 97.7s — 3x the cited figure — and 36 of the
+ * 2,337 messages (1.5%) run longer than the shipped 60s TTL. Note also that
+ * `create_repo` is the worst method and `sync_repo_permissions` is nearly the
+ * best: the intuition that permission sync against a ~20k-member org would
+ * dominate does not survive the data.
+ *
+ * (METHOD NOTE, because this is easy to get wrong twice: the prod visibility
+ * timeout changed from 300s to 480s on 2026-09-10, and `vt` in the archive
+ * table is the read-time vt. Subtracting a flat 480 across the boundary inflates
+ * every pre-09-10 duration by exactly 180s and manufactures ~480s maxima out of
+ * ~300s messages. Restrict to one VT regime, or derive the VT per row.)
+ *
+ * THE MECHANISM WAS ALSO WRONG, AND THAT IS WHY 97.7s > 60s IS NOT A BUG.
+ * Renewal is NOT coupled to the handlers. `beginOrgLeaseRun` schedules it as
+ * `setInterval(renew, ttlMs / HEARTBEAT_DIVISOR)` (orgLeaseRun.ts ~line 443) —
+ * a macrotask timer that fires on its own — and that independence is deliberate:
+ * the generation-counter comment in `renew` rejects a lock around claim-and-renew
+ * precisely because "blocking renewal behind that is exactly what the independent
+ * timer exists to prevent: a long batch would let the lease lapse." The handlers
+ * are await-driven I/O (137 `await`s in github-async-worker/index.ts; no
+ * `readFileSync`, no synchronous (de)compression, no unbounded synchronous
+ * loops), and every Octokit call and every `Bottleneck.schedule()` is awaited.
+ * A 97.7s `create_repo` is 97.7s of AWAITING, during which the loop is free and
+ * the timer fires ~5 times at a 60s TTL.
+ *
+ * THEREFORE THE QUANTITY THIS FLOOR MUST EXCEED IS NOT MESSAGE DURATION. It is
+ * THE LONGEST THE EVENT LOOP CAN GO UNYIELDING. A lease lapses only if NO
+ * renewal succeeds for a whole TTL, and at `TTL/3` that needs THREE consecutive
+ * missed firings — a ~TTL-long unyielding stall, not a long message.
+ *
+ * WHY 45s IS STILL RIGHT UNDER THE CORRECTED ARGUMENT:
+ *   * it tolerates a 45s unyielding stall of the isolate's event loop. Nothing
+ *     in the worker blocks for anything near that; the candidates would be a
+ *     huge synchronous `JSON.parse` or a file-content encoding step, and those
+ *     are sub-second at realistic sizes.
+ *   * it gives a 15s renewal interval against a renewal that is ONE Postgres
+ *     round trip — milliseconds. That is ~3 orders of magnitude of margin, and
+ *     two consecutive failures still leave a third attempt inside the TTL.
+ *   * a renewal that genuinely cannot reach the database is not a silent lapse:
+ *     `renew` treats an RPC error as fatal, ends the run and gives the slot up,
+ *     on the argument that the lease and the queue are the same database.
+ *
+ * SO THE FLOOR WAS NOT RAISED TO CLEAR 97.7s, AND SHOULD NOT BE. Tying it to
+ * message duration would mean re-raising it whenever a slower org appears, and
+ * it would re-encode a coupling between the renewal timer and the handlers that
+ * does not exist. If a future handler ever DOES block the loop — a synchronous
+ * crypto or compression step, a megabyte-scale parse in a tight loop — that is
+ * what moves this number, and the measurement to take then is EVENT-LOOP DELAY,
+ * not time-in-queue.
+ *
+ * WHERE THE 97.7s FIGURE IS GENUINELY LOAD-BEARING is the RELEASE path, not this
+ * floor: a run that drops its slot while handlers are still in flight leaves up
+ * to 97.7s of GitHub work running with no slot, and a second leaseholder can
+ * enter that org. That is `releaseSlotUnlessDraining` and the "keep renewing
+ * while draining" rule in orgLeaseRun.ts, which already cites 94.8s.
+ *
+ * THAT FILE REACHED THE SAME CONCLUSION FROM THE OTHER DIRECTION, INDEPENDENTLY.
+ * Continuous refill made it possible for a run to finish with `n-1` messages
+ * still going for up to a worst-case message against a 60s TTL, and the fix
+ * chosen there was to KEEP RENEWING WHILE DRAINING — not to raise the TTL. If
+ * duration-vs-TTL were the binding relation that fix would be impossible, so
+ * two independent lines of reasoning now agree that renewal is decoupled from
+ * message duration.
+ *
+ * EMPIRICALLY, ~17h after per-org leaseholders went live at
+ * `orgSlotLeaseTtlSeconds: 60` and including a 190-repo burst: no cap breach, no
+ * org-lease errors, `create_repo` redelivery 1.9%, and `public.async_worker_slots`
+ * shows 0 lapsed rows and no org holding more than `max_per_org`. That is what
+ * the corrected mechanism predicts. The OLD mechanism predicts a reaped slot on
+ * each of the 36 over-60s messages, and none of those happened.
  */
 export const MIN_ORG_SLOT_LEASE_TTL_SECONDS = 45;
 /**
@@ -529,6 +746,259 @@ export const MIN_ORG_SLOT_LEASE_TTL_SECONDS = 45;
  */
 export const MAX_ORG_SLOT_LEASE_TTL_SECONDS = 300;
 
+/**
+ * CONTINUOUS REFILL: ON by default, and this knob exists ONLY so it can be
+ * turned off without a code deploy.
+ *
+ * WHAT IT SWITCHES. `drainWithContinuousRefill` (orgLeaseRun.ts) keeps `n`
+ * messages in flight and claims the SHORTFALL as each one settles, instead of
+ * draining a whole batch and then re-claiming. Batch-at-a-time wastes the tail
+ * of every batch waiting on its straggler: measured on the 2026-09-13 burst,
+ * 47 batches of exactly 4, mean message 48.4s against mean batch 68.4s, so ~27%
+ * of every slot-second was a claimed slot waiting on its batch-mates, and
+ * effective concurrency was 5.20 of a possible 8.
+ *
+ * WHY IT SHIPS ON. It is the point of the change and the utilization argument is
+ * arithmetic, not a guess. But it IS a real behavioral change to the drain
+ * shape, and until yesterday the only way to undo it was `orgSlotGlobalCap: 0`
+ * — which also switches off per-org leaseholders entirely and gives back the
+ * cross-org throughput that is already working in production. THAT IS WHAT THIS
+ * KNOB IS FOR: rolling back the drain shape while keeping the feature. It is an
+ * ops affordance, not a tuning parameter, and the expected number of
+ * deployments that ever set it to 0 is zero.
+ *
+ * WHY A BOOLEAN, WHICH WAS A REAL CHOICE AND NOT A DEFAULT. The obvious
+ * alternative is a LOW-WATER MARK — "top up when in flight drops to `k`" —
+ * which reduces to this switch at its endpoints (`k = n-1` is continuous
+ * refill, `k = 0` is batch-at-a-time) and expresses the middle. There is
+ * even a genuine axis underneath it: every claim takes a GLOBAL
+ * `pg_advisory_xact_lock`, so refill raises claim traffic from one RPC per
+ * batch to one per message, and a low-water mark would trade that against
+ * utilization. It was rejected on three grounds, and the third is dispositive:
+ *
+ *   1. THE AXIS HAS MARGIN, BUT FAR LESS THAN THE FIRST VERSION OF THIS NOTE
+ *      CLAIMED. It cited ~0.66 claims/s fleet-wide against a ~288/s ceiling and
+ *      called that a 400x margin. Both ends were measured on the wrong case. The
+ *      0.66/s is `globalCap` 8 x `n` 4 in flight over the create_repo burst's
+ *      48.4s mean, and create_repo is not the traffic: about 78% of messages are
+ *      sync_student_team (p50 1.0s) and sync_repo_permissions (p50 1.4s), and
+ *      `public.fix_assignment_repo_permissions` enqueues one
+ *      sync_repo_permissions per repository in a loop, so a deep burst is
+ *      precisely the fast-method case. The same 32 in flight at a 1.0-1.4s p50
+ *      is 23-32 claims/s. The 288/s was an EMPTY-queue ceiling measured
+ *      single-threaded; claim cost rises with queue depth, and the harness storm
+ *      (48 concurrent sessions, 2400 messages) measures 114-120 claim calls/s in
+ *      aggregate. So the margin on the shape that actually produces deep bursts
+ *      is closer to 4x. That is still margin and still not worth a knob nothing
+ *      reads, but it is a number to re-measure rather than a settled one.
+ *   2. NOBODY HAS MEASURED THE MIDDLE. The endpoints are both measured; no
+ *      value of `k` between them has ever been run, so the range would ship
+ *      with only its two ends justified.
+ *   3. `drainWithContinuousRefill` HAS NO SUCH PARAMETER. Its contract is "one
+ *      claim per wake-up, top up the shortfall" — there is no `k` to honor.
+ *      Rendering a low-water mark into the pod env would put a number in a
+ *      values file that nothing reads, which is the exact failure CEILING 2
+ *      below refuses for `maxPerOrg`: an unreachable number in a config file is
+ *      a number someone will later believe.
+ *
+ * So the choice really is binary today, and a boolean is the honest shape. If
+ * someone later implements a low-water mark, this env var widens from 0-1 to
+ * 0-n WITHOUT changing type or name, and 0 keeps meaning "off".
+ *
+ * WHY AN INTEGER AND NOT A "true"/"false" STRING. `Boolean("false") === true`.
+ * A string-valued boolean turns a typo — `"False"`, `"no"`, `"off"`, a trailing
+ * space — into SILENT truthiness. Going through `readBounded` instead makes the
+ * same input loud: it is REPORTED as rejected, with a Sentry-visible issue.
+ *
+ * BUT LOUD IS NOT THE SAME AS SAFE, AND THE FIRST VERSION OF THIS KNOB GOT THAT
+ * WRONG. Reported or not, `readBounded`'s ordinary rules resolved a rejected
+ * value to `fallback` (1) and an out-of-range value by clamping toward the
+ * bound (also 1) — so `GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL=false`
+ * produced `continuousRefill === true`. THE KILL SWITCH FAILED OPEN ON EXACTLY
+ * THE MALFORMED VALUE AN OPERATOR IS MOST LIKELY TO TYPE WHEN REACHING FOR IT,
+ * which is the failure the integer was chosen to avoid, reintroduced one layer
+ * down. Caught in review on PR #982; this paragraph is kept rather than
+ * rewritten because the mistake is the reason the rule below exists.
+ *
+ * THE RULE THAT MAKES IT ACTUALLY FAIL SAFE is `failSafeValue` on the `Bounds`
+ * passed in `resolveOrgSlotTuning`: PRESENT BUT UNUSABLE resolves to 0 (off),
+ * ABSENT still resolves to 1 (on). Absence means an older chart or a pre-flag
+ * image and is not an edit; a malformed value means somebody edited this
+ * variable and got it wrong, and the only reason to edit it is to turn refill
+ * off. `"false"`, `"off"`, `"no"`, `"2"` therefore all resolve to OFF, reported.
+ *
+ * THE SIGNATURE IS CHECKABLE: a knob needs that rule exactly when its fallback
+ * equals its range MAXIMUM. `globalCap` falls back to 0 (its minimum, feature
+ * off), `maxPerOrg` to 1 (its minimum), and `drainConcurrency` /
+ * `visibilityTimeout` / `leaseTtl` to a value strictly inside their ranges. For
+ * all of those, "fall back to the default" and "fail safe" point the same way,
+ * so they deliberately do NOT set the option. A unit test pins that asymmetry so
+ * the next permissive-default knob is noticed rather than inherited.
+ *
+ * THIS WAS THE ONLY SUCH KNOB UNTIL 2026-09-15, and the second one arriving is
+ * why that test checks the SHAPE rather than the count: ORG_SLOT_RUN_BUDGET_ENV
+ * defaults to its own ceiling, so it has the same signature for a different
+ * reason, and it sets the same option in the same direction (a value that
+ * cannot be honoured resolves to the SAFE end, not the default one).
+ */
+export const DEFAULT_ORG_SLOT_CONTINUOUS_REFILL = 1;
+/** 0 = off. The whole point of the knob, so it must be reachable. */
+export const MIN_ORG_SLOT_CONTINUOUS_REFILL = 0;
+/**
+ * 1 = on. Widen this, not the type, if a low-water mark is ever implemented —
+ * see DEFAULT_ORG_SLOT_CONTINUOUS_REFILL for why the range stops here today.
+ */
+export const MAX_ORG_SLOT_CONTINUOUS_REFILL = 1;
+
+/**
+ * ───────────────────────────────────────────────────────────────────────────
+ * THE WALL-CLOCK RUN BUDGET (2026-09-15) — how long an isolate may keep
+ * CLAIMING before it stops, lets what it has finish, and returns.
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ * THE DEFECT THIS CLOSES, WHICH WAS LIVE AND NOT HYPOTHETICAL. In production
+ * `EDGE_WORKER_TIMEOUT_MS` and `GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS`
+ * are the SAME NUMBER (480000ms / 480s), and nothing bounded a BUSY org-leased
+ * run. `beginOrgLeaseRun` bounds IDLE time only (`DEFAULT_IDLE_BUDGET_MS`, 50s);
+ * a run that keeps finding work has `shouldContinue() === !finished`, and
+ * `finished` is set only by a lost slot, a spent idle budget, the 15-minute
+ * stall guard, or a dead RPC. A leaseholder that is genuinely working therefore
+ * drained until the RUNTIME killed the isolate mid-batch — "wall clock duration
+ * reached", 664 times in 75 minutes across 27 pods on 2026-09-15. Whatever that
+ * isolate had read and not archived stayed INVISIBLE for the remainder of its
+ * visibility timeout, and because the VT equals the isolate lifetime that is
+ * essentially a full 480s.
+ *
+ * The signature in `pgmq.a_async_calls` is specific enough to be conclusive:
+ * groups of messages sharing one `enqueued_at` second, `read_ct = 2`, and
+ * `archived_at - enqueued_at` clustered at 482-507s while the work itself took
+ * 1-13s. `sync_repo_permissions` redelivery went 20.8% (09-13) -> 26.0% (09-14,
+ * the day per-org leases went live) -> 35.4% (09-15); whole-queue 4.0% -> 14.5%.
+ * It fired PawtograderQueueOldestMessageAging at ~18:21 UTC on a queue whose
+ * DEPTH never exceeded 27 — the alert was about redelivery, not backlog, which
+ * is why nothing about concurrency or `n` would have answered it.
+ *
+ * NOTE THAT CONTINUOUS REFILL DOES NOT CAUSE THIS AND DOES NOT FIX IT. Refill
+ * keeps `n` in flight instead of a batch, so the kill lands on the same set;
+ * the orgLeaseRun.ts header argues by Little's law that the orphan RATE is
+ * unchanged. What refill did was make the residency longer and the stranded set
+ * fuller more of the time. The unbounded BUSY run is the defect, and it predates
+ * both refill and per-org leases.
+ *
+ * WHAT THE BUDGET GATES, AND WHAT IT MUST NOT. It gates the CLAIM, never the
+ * work. Past the deadline a run stops claiming, lets its outstanding messages
+ * run to completion (the lease keeps being renewed and the slot is not handed
+ * back until they finish — see `releaseSlotUnlessDraining` in orgLeaseRun.ts),
+ * releases, and returns; pg_cron re-pokes a fresh isolate within ~30s. Cutting
+ * in-flight work off at the deadline instead would reproduce the exact strand
+ * this exists to remove, self-inflicted and on a schedule.
+ *
+ * SIZING: lifetime - ONE drain-out reserve - a margin.
+ *
+ *     budget = lifetime - PER_MESSAGE_VT_BUDGET_SECONDS - 30
+ *            = 480 - 120 - 30 = 330s in production
+ *            = 400 - 120 - 30 = 250s at the chart default
+ *
+ * ONE reserve and not `n` of them, which is the single place this arithmetic
+ * departs from `requiredVisibilityTimeoutSeconds`. That function sizes a VT for
+ * a batch that is still being ADDED to, so it charges `n x 120`. Nothing is
+ * added after the deadline: from there the in-flight set only drains, and it
+ * drains CONCURRENTLY, so what has to fit inside the reserve is the LONGEST
+ * remaining message, not the sum of them.
+ *
+ * WHAT THE RESERVE ACTUALLY COVERS — STATED HONESTLY, BECAUSE IT IS NOT "ALL OF
+ * IT". Across the 2,337 messages measured on the VT=480 regime (2026-09-11
+ * onward; the per-method table is on MIN_ORG_SLOT_LEASE_TTL_SECONDS) the worst
+ * single message of ANY method was 97.7s — create_repo, 489 samples, p99 93.8s
+ * — so a 120s reserve covers every message in that dataset. It does NOT cover
+ * the 2026-09-07 regime, where create_repo measured a p50 of 279.5s against a
+ * ~20k-member org; MAX_DRAIN_CONCURRENCY calls that an outlier rather than the
+ * norm, but explicitly declines to call it impossible. A message of that length
+ * CANNOT be guaranteed to drain out by any budget worth having: reserving 280s
+ * of a 480s lifetime leaves a 170s claiming window, i.e. ~65% of every isolate
+ * deliberately idle, and at the 400s chart default it leaves none at all. Do
+ * not answer that by growing the reserve.
+ *
+ * So the win is worth stating as exactly what it is. The budget ELIMINATES the
+ * strand for the methods that dominate volume — `sync_repo_permissions` was 522
+ * of the 1,336 messages on 2026-09-15 and maxes at 21.1s, `sync_student_team`
+ * at 30.3s, and together they are ~78% of all traffic — and SHRINKS it for the
+ * rest, because a message claimed one millisecond before the deadline still
+ * gets the whole reserve to finish in, instead of whatever the wall clock
+ * happened to leave it. What remains is at most ONE worst-case message stranded
+ * per isolate retirement where today it is up to `n`. Closing that remainder is
+ * a different lever — a visibility timeout that reflects a per-MESSAGE claim
+ * rather than the isolate lifetime, so an orphan waits ~120s instead of ~480s —
+ * and it is deliberately not in this change.
+ *
+ * WHY 30s OF MARGIN. Three things the deadline cannot see: the isolate
+ * bootstrap that happens BEFORE this module is evaluated (the anchor is module
+ * evaluation, and the runtime's wall clock started earlier), a claim RPC that
+ * may already be in flight when the deadline passes, and the tail after the
+ * last handler — archive calls, `release_org_slot`, and the Sentry flush in
+ * `waitUntilWithSentryFlush`. None of them is close to 30s alone; the sum is
+ * bounded by a few network round trips and the number is round on purpose.
+ *
+ * WHY THE HARD WALL CLOCK AND NOT `beforeUnload.wallClockRatio`. The chart
+ * dispatches `beforeunload` at 50% of the lifetime, and two comments in this
+ * file describe that as the isolate being "retired at ~200s" — which, taken
+ * literally, would make a 330s budget dead code. It is not. `beforeunload` is
+ * an EVENT: no function under supabase/functions registers a listener for it
+ * (checked, 2026-09-15), and the demuxer only stops ROUTING NEW REQUESTS to a
+ * retiring worker. A drain held open by `waitUntil` runs on to the hard
+ * `EDGE_WORKER_TIMEOUT_MS`, which is precisely what those 664 "wall clock
+ * duration reached" lines are. The ~3.5-minute recycling cadence cited in this
+ * file's 2026-09-07 note is per POD across several concurrent isolates, not the
+ * life of one isolate, and is consistent with the same reading.
+ */
+export const ORG_SLOT_RUN_BUDGET_ENV = "GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS";
+
+/**
+ * Slack between the end of the drain-out reserve and the runtime's kill. See
+ * "WHY 30s OF MARGIN" above; it is not a tuning parameter and is not a knob.
+ */
+export const ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS = 30;
+
+/**
+ * The floor, expressed as PER_MESSAGE_VT_BUDGET_SECONDS rather than as a number
+ * of its own so that the floor and the reserve cannot drift apart.
+ *
+ * WHAT IT PROTECTS. A budget below one message's modelled cost is a worker that
+ * can be past its deadline before it has claimed anything, on every isolate —
+ * the queue stops draining while the lease, the heartbeats and the error count
+ * all stay green. That is the same "drains nothing and looks healthy" failure
+ * MIN_DRAIN_CONCURRENCY exists for, arriving through the clock instead of
+ * through `n`, and it is strictly worse than the strand it would be trying to
+ * prevent. Tying the floor to the reserve also means the honest degenerate case
+ * — an isolate lifetime too short to hold both — is REPORTED as an invariant
+ * rather than silently resolved (see `resolveOrgSlotTuning`).
+ */
+export const MIN_ORG_SLOT_RUN_BUDGET_SECONDS = PER_MESSAGE_VT_BUDGET_SECONDS;
+
+/**
+ * The budget's ceiling AND its default, which is deliberate and is the reason
+ * this knob sets `failSafeValue`.
+ *
+ * DERIVED FROM THE LIFETIME RATHER THAN A CONSTANT, because the number that
+ * matters differs between deployments that are both correct: production runs
+ * `EDGE_WORKER_TIMEOUT_MS=480000` and the chart default is 400000. A fixed
+ * default would be wrong for one of them, and a fixed default that got CLAMPED
+ * for one of them would emit a Sentry-visible issue on every deployment that
+ * never touched the knob — which this file's other coherence rules go out of
+ * their way not to do.
+ *
+ * A CEILING AND NOT A CLAMPING RANGE. Anything above this re-creates the defect
+ * — it is a run that intends to still be claiming when the runtime kills it —
+ * so there is no "they asked for more" to preserve. The only direction this
+ * knob can usefully be moved is DOWN.
+ */
+export function orgSlotRunBudgetCeilingSeconds(isolateLifetimeSeconds: number): number {
+  return Math.max(
+    MIN_ORG_SLOT_RUN_BUDGET_SECONDS,
+    isolateLifetimeSeconds - PER_MESSAGE_VT_BUDGET_SECONDS - ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS
+  );
+}
+
 /** Minimal shape of `Deno.env` this module needs, so it is testable off-Deno. */
 export type EnvReader = { get(name: string): string | undefined };
 
@@ -548,7 +1018,7 @@ export type OrgSlotTuning = {
   /**
    * Whether the worker should take the per-org lease path at all. False is the
    * default and means the existing single-leaseholder drain stays in force;
-   * when it is false the other three fields are parsed but not in force.
+   * when it is false the other FOUR fields are parsed but not in force.
    */
   enabled: boolean;
   /** `max_per_org` for claim_org_slot_and_read. */
@@ -557,6 +1027,31 @@ export type OrgSlotTuning = {
   globalCap: number;
   /** `lease_ttl_seconds` for claim_org_slot_and_read / renew_org_slot. */
   leaseTtlSeconds: number;
+  /**
+   * Whether to drain with `drainWithContinuousRefill` (true, the default) or
+   * with the batch-and-re-claim shape (false). See
+   * DEFAULT_ORG_SLOT_CONTINUOUS_REFILL: this is a kill switch, not a tuning
+   * parameter.
+   *
+   * REPORTED AS CONFIGURED EVEN WHEN `enabled` IS FALSE, deliberately. Forcing
+   * it to false with per-org leasing off would conflate "an operator rolled the
+   * drain shape back" with "per-org leasing is not on", and those need
+   * different responses. It only takes effect on the org-leased path.
+   */
+  continuousRefill: boolean;
+  /**
+   * How long an ISOLATE may keep CLAIMING, in seconds, measured from isolate
+   * start and not from the start of any one run. Past it the org-leased drain
+   * stops claiming, finishes what it already holds, releases and returns. See
+   * ORG_SLOT_RUN_BUDGET_ENV for the defect and the sizing, and
+   * `beginOrgLeaseRun` for why the anchor is the isolate.
+   *
+   * ALWAYS A USABLE NUMBER, never 0 and never "off": there is no configuration
+   * in which an unbounded busy run is the right answer, so unlike `globalCap`
+   * this one has no disabled state to express. Reported as configured even when
+   * `enabled` is false, for the same reason `continuousRefill` is.
+   */
+  runBudgetSeconds: number;
 };
 
 export type AsyncWorkerTuning = {
@@ -570,63 +1065,167 @@ export type AsyncWorkerTuning = {
   issues: TuningIssue[];
 };
 
-type Bounds = { env: string; min: number; max: number; fallback: number };
+type Bounds = {
+  env: string;
+  min: number;
+  max: number;
+  fallback: number;
+  /**
+   * WHAT TO USE WHEN A VALUE IS PRESENT BUT CANNOT BE HONOURED AS WRITTEN —
+   * unparseable, or outside [min, max]. Opt-in, and ONE knob sets it.
+   *
+   * WHEN THIS IS CORRECT, WHICH IS NARROW. `fallback` is right for an ABSENT
+   * value, because absence means "nobody has an opinion" and today's shipped
+   * behavior is the right answer. A value that is PRESENT but unusable means
+   * the opposite: somebody had an opinion and expressed it badly. For most
+   * knobs those two land in the same place anyway, because their `fallback`
+   * sits at or toward the CONSERVATIVE end of their range — falling back is
+   * already the safe direction, and clamping preserves a legible intent
+   * ("they asked for more").
+   *
+   * SET THIS ONLY FOR A KNOB WHOSE `fallback` IS THE PERMISSIVE END OF ITS OWN
+   * RANGE, where those two directions come apart and the default is the one you
+   * do NOT want a typo to select. The signature to look for is
+   * `fallback === max`. TWO knobs in this file have it, for opposite-looking
+   * reasons that are the same reason:
+   *
+   *   * DEFAULT_ORG_SLOT_CONTINUOUS_REFILL — a kill switch, where defaulting a
+   *     malformed value to "on" means the switch does not switch.
+   *   * ORG_SLOT_RUN_BUDGET_ENV — a wall-clock budget whose default IS its
+   *     coherent maximum, so clamping a too-large value to the bound would
+   *     produce exactly what not setting the variable produces. An operator
+   *     only ever reaches for that knob to make a run stop EARLIER, and
+   *     "stop earlier" is always safe, so a value that cannot be honoured
+   *     resolves DOWN to the floor rather than up to the default.
+   *
+   * Note that the second one is a genuine range, not a binary, and it is still
+   * right for it: the test is not "is the range binary", it is whether an
+   * unusable value would otherwise resolve to the permissive end.
+   *
+   * Leaving it unset preserves the three-behavior contract below EXACTLY.
+   */
+  failSafeValue?: number;
+};
 
 /**
  * Parse one bounded integer knob.
  *
- * Three separate behaviours, each chosen because the alternative is an outage:
- *  * unset / empty  -> default, silently. This is the normal case.
- *  * unparseable    -> default, REPORTED. A typo (`"four"`, `"4 "`, `"1e3"`,
- *                      `""` after a bad chart render) must not become 0 or NaN;
+ * Three separate behaviors, each chosen because the alternative is an outage:
+ *  * unset          -> default, silently. This is the normal case.
+ *  * unparseable    -> default, REPORTED. A typo (`"four"`, `"4 "`, `"1e3"`)
+ *                      must not become 0 or NaN;
  *                      `n: 0` drains nothing and `sleep_seconds: NaN` is
  *                      rejected by pgmq, taking the worker down for a
  *                      misconfiguration it could have ridden out.
+ *  * set but empty  -> default, silently, for a knob with no `failSafeValue`;
+ *                      `failSafeValue`, REPORTED, for one that has it. An empty
+ *                      string is PRESENT, so for a fail-safe knob it is an edit
+ *                      and not an absence — see the guard in the body.
  *  * out of range   -> CLAMPED to the bound, REPORTED. Clamping rather than
  *                      falling back keeps the operator's INTENT (they asked for
  *                      "more"), while the bound keeps the pod alive.
+ *
+ * ...and one OPT-IN fourth, which only applies when `failSafeValue` is set:
+ *
+ *  * present but unusable (either of the two cases above)
+ *                   -> `failSafeValue`, REPORTED with that as `effective`.
+ *                      For a knob whose default is the PERMISSIVE end of its
+ *                      range, the two rules above both resolve a typo to the
+ *                      permissive answer, which is exactly backwards. See the
+ *                      field's own comment on `Bounds` for when that is the
+ *                      case; unset, this function behaves exactly as the three
+ *                      rules describe.
  */
 function readBounded(env: EnvReader, b: Bounds): { value: number; issue?: TuningIssue } {
   const raw = env.get(b.env);
-  if (raw === undefined || raw.trim() === "") return { value: b.fallback };
+  if (raw === undefined) return { value: b.fallback };
+
+  // AN EMPTY VALUE IS PRESENT, NOT ABSENT, AND FOR A FAIL-SAFE KNOB THE DIFFERENCE IS THE WHOLE
+  // RULE. This line used to fold `""` in with `undefined` and return `fallback` SILENTLY, before
+  // `failSafeValue` was ever consulted — so `GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL=`
+  // resolved the kill switch to ON with no issue reported at all. `kubectl set env NAME=` is the
+  // ordinary way to blank a variable and a hand-edited Deployment spells it `value: ""`, which are
+  // exactly the Helm-bypass paths the chart's render-time refusal cannot see and the only paths
+  // `failSafeValue` exists for. It is the same failure this option was added to close, surviving in
+  // the one input that never reached the new code.
+  //
+  // This function's own contract already named it: the `unparseable -> default, REPORTED` line
+  // above lists `""` ("after a bad chart render") as a case that must be REPORTED, and the early
+  // return reported nothing.
+  //
+  // Absent still means absent. For a knob with no `failSafeValue` nothing changes either — empty
+  // still resolves to `fallback` — because for those two the safe direction and the default are the
+  // same direction, which is the condition the option documents.
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    if (b.failSafeValue === undefined) return { value: b.fallback };
+    return {
+      value: b.failSafeValue,
+      issue: {
+        env: b.env,
+        raw,
+        effective: b.failSafeValue,
+        kind: "rejected",
+        message:
+          `${b.env} is set but EMPTY. That is an edit, not an absence, so it resolves to the ` +
+          `FAIL-SAFE value ${b.failSafeValue} rather than the default ${b.fallback}: this knob's ` +
+          `default is the permissive end of its range, and a blanked variable must not turn it on. ` +
+          `Unset it entirely to get ${b.fallback}, or set it to an integer in [${b.min}, ${b.max}].`
+      }
+    };
+  }
 
   // Number.parseInt would happily accept "4kB" and "1.9"; require a clean
   // non-negative integer so a unit suffix or a float is reported, not truncated.
-  const trimmed = raw.trim();
   const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed)) {
+    // A PRESENT-BUT-UNUSABLE VALUE IS NOT THE SAME AS AN ABSENT ONE, and for a
+    // knob with `failSafeValue` set the difference is the whole point: somebody
+    // edited this variable and got it wrong, so resolving to the default — which
+    // for such a knob is the permissive end — would silently ignore the edit in
+    // the one direction that matters.
+    const resolved = b.failSafeValue ?? b.fallback;
     return {
-      value: b.fallback,
+      value: resolved,
       issue: {
         env: b.env,
         raw,
-        effective: b.fallback,
+        effective: resolved,
         kind: "rejected",
-        message: `${b.env}=${JSON.stringify(raw)} is not a non-negative integer; falling back to ${b.fallback}`
+        message:
+          b.failSafeValue === undefined
+            ? `${b.env}=${JSON.stringify(raw)} is not a non-negative integer; falling back to ${b.fallback}`
+            : `${b.env}=${JSON.stringify(raw)} is not a non-negative integer. Using the FAIL-SAFE value ` +
+              `${resolved} rather than the default ${b.fallback}: this knob's default is the permissive end ` +
+              `of its range, so resolving a malformed value to it would ignore the edit in exactly the ` +
+              `direction that matters. Set ${b.env} to an integer in [${b.min}, ${b.max}].`
       }
     };
   }
-  if (parsed < b.min) {
+  if (parsed < b.min || parsed > b.max) {
+    const bound = parsed < b.min ? b.min : b.max;
+    const which = parsed < b.min ? `below the minimum ${b.min}` : `above the maximum ${b.max}`;
+    // Clamping keeps a legible intent for a RANGE knob ("they asked for more").
+    // For a fail-safe knob there is no "more" to ask for — the range is binary —
+    // so an out-of-range value is just as unusable as an unparseable one.
+    const resolved = b.failSafeValue ?? bound;
     return {
-      value: b.min,
+      value: resolved,
       issue: {
         env: b.env,
         raw,
-        effective: b.min,
-        kind: "clamped",
-        message: `${b.env}=${trimmed} is below the minimum ${b.min}; clamped to ${b.min}`
-      }
-    };
-  }
-  if (parsed > b.max) {
-    return {
-      value: b.max,
-      issue: {
-        env: b.env,
-        raw,
-        effective: b.max,
-        kind: "clamped",
-        message: `${b.env}=${trimmed} is above the maximum ${b.max}; clamped to ${b.max}`
+        effective: resolved,
+        // "clamped" only when something was actually clamped. On the fail-safe path the value was
+        // REJECTED and replaced with a number at the other end of the range, and labelling that
+        // "clamped" tells an operator triaging the issue that their intent was preserved when it
+        // was deliberately discarded.
+        kind: b.failSafeValue === undefined ? "clamped" : "rejected",
+        message:
+          b.failSafeValue === undefined
+            ? `${b.env}=${trimmed} is ${which}; clamped to ${bound}`
+            : `${b.env}=${trimmed} is ${which}. Using the FAIL-SAFE value ${resolved} rather than clamping ` +
+              `to ${bound}: this knob's range is binary, so an out-of-range value expresses no intent to ` +
+              `preserve, and clamping it toward the default would resolve a typo to the permissive answer.`
       }
     };
   }
@@ -701,7 +1300,7 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
   // THE EXACT LEGACY PAIR IS REPORTED, NOT ENFORCED. (4, 300) is what was
   // hardcoded in processBatch() before any of this was configurable, so it is
   // what every deployment is already running; "re-coherencing" it here would
-  // change production behaviour on deploy, which is the one thing this change
+  // change production behavior on deploy, which is the one thing this change
   // promises not to do. It genuinely violates both ceilings under the n x 120
   // model, so it is reported loudly and left alone. Everything else is a
   // deliberate act by whoever set the env var, and gets ENFORCED below.
@@ -754,7 +1353,7 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
   // batch modelled at 960s going visible at 300s, i.e. duplicated in-flight
   // GitHub work and legitimate provisioning messages walking toward the
   // poison-pill DLQ. A check that observes a fault it could have prevented is
-  // not defence in depth.
+  // not defense in depth.
   //
   // We DEGRADE CONCURRENCY rather than inflate the timeout:
   //
@@ -812,7 +1411,7 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
   //
   // Raising the VT here is legitimate in a way that raising it to chase `n`
   // never was: the worker passes `sleep_seconds` on every pgmq_public.read, so
-  // it OWNS that value and needs no chart change to honour it, and this is the
+  // it OWNS that value and needs no chart change to honor it, and this is the
   // one case where there is no concurrency left to give up. It is only reachable
   // when the configured VT cannot cover a single message.
   let effectiveVt = vt.value;
@@ -908,21 +1507,117 @@ function resolveOrgSlotTuning(
   });
   if (ttl.issue) issues.push(ttl.issue);
 
+  // The refill kill switch. Parsed through the same bounded-integer path as the
+  // other three, PLUS the only `failSafeValue` in this file.
+  //
+  // WHY IT NEEDS THE EXTRA RULE AND ITS NEIGHBOURS DO NOT. Every other knob here
+  // has a fallback at or toward the conservative end of its own range —
+  // `globalCap` falls back to 0 (feature off), `maxPerOrg` to 1 (its minimum),
+  // `drainConcurrency`/`visibilityTimeout`/`leaseTtl` to the shipped middle. This
+  // one is the ONLY knob whose fallback is its range MAXIMUM, and its maximum is
+  // "the new drain shape is on". So the ordinary rules — reject to the default,
+  // clamp toward the bound — both resolve a malformed value to ON, which is the
+  // one answer a kill switch must never give: an operator reaching for this
+  // variable is trying to turn refill OFF, and `false` / `off` / `no` are what
+  // they are most likely to type. Failing safe means going to 0.
+  //
+  // ABSENT STILL MEANS ON. An older chart or a pre-flag image supplies nothing,
+  // and that is not an edit — it must keep today's shipped behavior.
+  //
+  // No coherence rule of its own: it changes WHEN a claim happens, not how many
+  // messages or slots are in play, so it cannot conflict with any ceiling below.
+  const refill = readBounded(env, {
+    env: ORG_SLOT_CONTINUOUS_REFILL_ENV,
+    min: MIN_ORG_SLOT_CONTINUOUS_REFILL,
+    max: MAX_ORG_SLOT_CONTINUOUS_REFILL,
+    fallback: DEFAULT_ORG_SLOT_CONTINUOUS_REFILL,
+    failSafeValue: MIN_ORG_SLOT_CONTINUOUS_REFILL
+  });
+  if (refill.issue) issues.push(refill.issue);
+
   const enabled = cap.value > 0;
+
+  // THE WALL-CLOCK RUN BUDGET. Read LAST so the issue list keeps reading as "the
+  // order the knobs were resolved in", and read against the ALREADY-RESOLVED
+  // isolate lifetime for the same reason the other ceilings are: the lifetime is
+  // itself an env var, and a budget derived from the constant would be wrong on
+  // the deployment that actually has the defect (prod runs 480000, the chart
+  // default is 400000).
+  //
+  // ITS CEILING AND ITS DEFAULT ARE THE SAME NUMBER, which is what makes this
+  // the file's second `failSafeValue` knob. Above the ceiling is not "more
+  // throughput", it is a run that intends to still be claiming when the runtime
+  // kills the isolate — the defect. And because the ceiling IS the default,
+  // clamping a too-large value to it would leave an operator who typed 600 with
+  // precisely the behaviour they get by not setting the variable at all: their
+  // edit would be reported and inert. So an unusable value — unparseable,
+  // blanked, above the ceiling, or below the floor — resolves DOWN to
+  // MIN_ORG_SLOT_RUN_BUDGET_SECONDS. Stopping earlier is always safe; that is
+  // the whole asymmetry, and it is the opposite of the direction `maxPerOrg`
+  // clamps.
+  const runBudgetCeiling = orgSlotRunBudgetCeilingSeconds(isolateLifetimeSeconds);
+  const runBudget = readBounded(env, {
+    env: ORG_SLOT_RUN_BUDGET_ENV,
+    min: MIN_ORG_SLOT_RUN_BUDGET_SECONDS,
+    max: runBudgetCeiling,
+    fallback: runBudgetCeiling,
+    failSafeValue: MIN_ORG_SLOT_RUN_BUDGET_SECONDS
+  });
+  if (runBudget.issue) issues.push(runBudget.issue);
+  const runBudgetSeconds = runBudget.value;
+  // `> 0`, not `=== 1`, because DEFAULT_ORG_SLOT_CONTINUOUS_REFILL documents this var as widening
+  // "from 0-1 to 0-n WITHOUT changing type or name, and 0 keeps meaning off" if a low-water mark is
+  // ever added. An equality test silently breaks that promise: the day MAX becomes 2, a configured 2
+  // would mean OFF — the most permissive value selecting the disabled path, which is the same class
+  // of inversion `failSafeValue` exists to prevent. `> 0` is the contract as written.
+  const continuousRefill = refill.value > 0;
   let maxPerOrg = perOrg.value;
   let leaseTtlSeconds = ttl.value;
 
   if (!enabled) {
-    return { enabled, maxPerOrg, globalCap: cap.value, leaseTtlSeconds };
+    return { enabled, maxPerOrg, globalCap: cap.value, leaseTtlSeconds, continuousRefill, runBudgetSeconds };
+  }
+
+  // CEILING 0 — the only one this module genuinely cannot satisfy, so it is
+  // reported rather than resolved. `orgSlotRunBudgetCeilingSeconds` floors at
+  // MIN_ORG_SLOT_RUN_BUDGET_SECONDS, so an isolate shorter than
+  // floor + reserve + margin (270s) gets a budget that does NOT leave a whole
+  // message's drain-out behind it. The floor wins on purpose — the alternative
+  // is a budget under one message's modelled cost, which is an isolate that can
+  // be past its deadline before it claims anything — and the mismatch is said
+  // out loud, exactly as the TTL's floor-vs-ceiling crossing is below. Checked
+  // against the RESOLVED budget rather than the ceiling so a configured value
+  // that is somehow still too large for this isolate is caught too.
+  if (runBudgetSeconds + PER_MESSAGE_VT_BUDGET_SECONDS + ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS > isolateLifetimeSeconds) {
+    issues.push({
+      env: ORG_SLOT_RUN_BUDGET_ENV,
+      effective: runBudgetSeconds,
+      kind: "invariant",
+      message:
+        `org-leased run budget ${runBudgetSeconds}s leaves only ` +
+        `${isolateLifetimeSeconds - runBudgetSeconds}s of ${ISOLATE_LIFETIME_ENV}=${isolateLifetimeSeconds}s for ` +
+        `the messages still in flight when claiming stops, below the ${PER_MESSAGE_VT_BUDGET_SECONDS}s one ` +
+        `message is modelled at. The budget cannot go lower — ${MIN_ORG_SLOT_RUN_BUDGET_SECONDS}s is the floor, ` +
+        `and a budget under one message's cost is an isolate that can be past its deadline before it claims ` +
+        `anything — so a message caught by the wall clock can still be stranded for a whole visibility ` +
+        `timeout. Raise edgeFunctions.worker.timeoutMs to >= ` +
+        `${(MIN_ORG_SLOT_RUN_BUDGET_SECONDS + PER_MESSAGE_VT_BUDGET_SECONDS + ORG_SLOT_RUN_BUDGET_MARGIN_SECONDS) * 1000}` +
+        ` (keeping gracefulExitTimeoutSeconds / terminationGracePeriodSeconds above it).`
+    });
   }
 
   // CEILING 1 — the per-org content limiter. `maxPerOrg * n` handlers hit ONE
-  // org's 40-concurrent / 40-per-minute pool, and MAX_DRAIN_CONCURRENCY is the
-  // argued 20%-of-pool occupancy for that org. Degrade `maxPerOrg`, never `n`:
-  // `n` is already the one value that has been made coherent with the visibility
+  // org's 40-concurrent / 40-per-minute pool, and MAX_ORG_SLOT_IN_FLIGHT_PER_ORG
+  // is what that pool is budgeted for. NOT MAX_DRAIN_CONCURRENCY: that bounds one
+  // isolate's batch (memory, and the n x 120 VT model), which is a different
+  // resource that used to share this number. Degrade `maxPerOrg`, never `n`: `n`
+  // is already the one value that has been made coherent with the visibility
   // timeout and the isolate lifetime above, and lowering it here would break
   // neither ceiling but would silently undo that resolution for no reason.
-  const perOrgCeiling = Math.max(MIN_ORG_SLOT_MAX_PER_ORG, Math.floor(MAX_DRAIN_CONCURRENCY / drainConcurrency));
+  const perOrgCeiling = Math.max(
+    MIN_ORG_SLOT_MAX_PER_ORG,
+    Math.floor(MAX_ORG_SLOT_IN_FLIGHT_PER_ORG / drainConcurrency)
+  );
   if (maxPerOrg > perOrgCeiling) {
     issues.push({
       env: ORG_SLOT_MAX_PER_ORG_ENV,
@@ -932,11 +1627,14 @@ function resolveOrgSlotTuning(
       message:
         `org slot maxPerOrg reduced from ${maxPerOrg} to ${perOrgCeiling}: ${maxPerOrg} leaseholders x ` +
         `${DRAIN_CONCURRENCY_ENV}=${drainConcurrency} would put ${maxPerOrg * drainConcurrency} handlers ` +
-        `in flight against ONE org's content limiter, above the ${MAX_DRAIN_CONCURRENCY} that limiter is ` +
-        `budgeted for (40 concurrent / 40 per minute per org, shared with org invitations and handout ` +
-        `syncs). The per-org rate limit does not move, so extra leaseholders on one org convert into ` +
-        `Bottleneck queueing, not throughput — raise ${ORG_SLOT_GLOBAL_CAP_ENV} to drain more ORGS at ` +
-        `once instead.`
+        `in flight against ONE org's content limiter, above the ${MAX_ORG_SLOT_IN_FLIGHT_PER_ORG} that ` +
+        `limiter is budgeted for (40 concurrent / 40 per minute per org, shared with org invitations and ` +
+        `handout syncs). The 40-per-MINUTE reservoir is the binding half: at a create_repo p50 of 23.1s ` +
+        `(neu-cs2000, 2026-09-14) ${maxPerOrg * drainConcurrency} in flight start ` +
+        `${Math.round((60 * maxPerOrg * drainConcurrency) / 23.1)} creations/min against a 40/min refresh. ` +
+        `The per-org rate limit does not move, so extra leaseholders on one org convert into Bottleneck ` +
+        `queueing — and what queues behind them is org invitations — not throughput. Raise ` +
+        `${ORG_SLOT_GLOBAL_CAP_ENV} to drain more ORGS at once instead.`
     });
     maxPerOrg = perOrgCeiling;
   }
@@ -965,9 +1663,13 @@ function resolveOrgSlotTuning(
   // the real check is against the effective ones.
   const ttlCeiling = Math.min(visibilityTimeoutSeconds, isolateLifetimeSeconds);
   if (leaseTtlSeconds > ttlCeiling) {
-    // Never below the floor: a TTL under the longest observed single message
-    // (32.2s, 2026-09-13) reaps slots from leaseholders that are working, which
-    // duplicates GitHub work against the very rate limit this feature is about.
+    // Never below the floor: see MIN_ORG_SLOT_LEASE_TTL_SECONDS. The floor bounds
+    // how long the EVENT LOOP may go unyielding between renewals, NOT how long a
+    // message takes — renewal is an independent setInterval at TTL/3 and the
+    // handlers await, so the real 97.7s worst message (2026-09-14) renews through
+    // fine. A TTL below the floor risks a lapse on a stalled loop, after which a
+    // second leaseholder enters the org and the two duplicate GitHub work against
+    // the very rate limit this feature is about.
     // If the floor and the ceiling cross, the floor wins and the mismatch is
     // reported as an invariant this module cannot fix by clamping.
     const reduced = Math.max(MIN_ORG_SLOT_LEASE_TTL_SECONDS, ttlCeiling);
@@ -988,11 +1690,13 @@ function resolveOrgSlotTuning(
         (reduced === ttlCeiling
           ? "."
           : ` — the ${MIN_ORG_SLOT_LEASE_TTL_SECONDS}s floor, which is ABOVE that ceiling: a shorter TTL ` +
-            `would reap slots from leaseholders that are still working (max observed create_repo 32.2s, ` +
-            `2026-09-13). Raise ${VISIBILITY_TIMEOUT_ENV} / edgeFunctions.worker.timeoutMs instead.`)
+            `risks the lease lapsing on an EVENT-LOOP STALL while the leaseholder is still working ` +
+            `(not on a long message: renewal is an independent timer at TTL/3 and the handlers await, ` +
+            `so the 97.7s worst message renews through). Raise ${VISIBILITY_TIMEOUT_ENV} / ` +
+            `edgeFunctions.worker.timeoutMs instead.`)
     });
     leaseTtlSeconds = reduced;
   }
 
-  return { enabled, maxPerOrg, globalCap: cap.value, leaseTtlSeconds };
+  return { enabled, maxPerOrg, globalCap: cap.value, leaseTtlSeconds, continuousRefill, runBudgetSeconds };
 }
