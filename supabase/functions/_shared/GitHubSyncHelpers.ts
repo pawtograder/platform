@@ -845,7 +845,20 @@ export async function getChangedFiles(
     // compare path reads for its sizes and the student-work guard reads for its blob shas,
     // so sharing it means one fetch, one cache entry, and a truncation warning this path
     // used to skip.
-    const { entries } = await getRepoTree(templateRepo, toSha, scope);
+    const { entries, truncated } = await getRepoTree(templateRepo, toSha, scope);
+
+    // A truncated listing is not the handout, it is part of the handout, and this is the one
+    // path where that difference is silent. Everywhere else truncation is recovered from:
+    // `findStudentModifiedFiles` resolves the omitted paths one at a time and gives up loudly
+    // when that would cost too much. Here the omitted entries are simply not in `fileChanges`,
+    // so the sync delivers part of the handout, reports success, and the worker records
+    // synced_handout_sha = to_sha -- the revision marked delivered, permanently, with files
+    // that were never written and nothing to say so. There is no per-path recovery available
+    // either, because the question is "what files does this handout have", and the answer we
+    // were given is incomplete.
+    if (truncated) {
+      throw new HandoutListingTruncatedError(templateRepo, toSha);
+    }
 
     for (const [path, entry] of entries) {
       if (entry.type === "blob" && entry.sha) {
@@ -1239,26 +1252,35 @@ async function assertBranchStillAt(
 const repositoryNodeIds = new Map<string, string>();
 
 /**
- * Point a branch at `newSha`, but only while it still points at `expectedSha`.
+ * The oid that means "no object". Git's own convention, and what GitHub's `updateRefs` takes
+ * as `afterOid` to DELETE a ref and as `beforeOid` to assert one does not exist yet.
+ */
+export const GIT_NULL_OID = "0".repeat(40);
+
+/**
+ * Point a branch at `newSha`, but only while it still points at `expectedSha`. `newSha` may be
+ * `GIT_NULL_OID`, which deletes it -- still only while it is where the caller last saw it.
  *
- * This is the compare-and-swap the REST ref update does not have. `PATCH /git/refs` takes no
- * expected head, so the sync could only read the branch, decide the reset was safe, and write
- * -- with a window in between where a student's push is accepted and then discarded. GraphQL's
- * `updateRefs` takes `beforeOid`, which GitHub checks server-side and rejects on mismatch, so
- * the decision and the write become one operation and the window closes.
+ * This is the compare-and-swap the REST ref endpoints do not have. Neither `PATCH /git/refs`
+ * nor `DELETE /git/refs` takes an expected head, so the sync could only read the branch, decide
+ * the write was safe, and make it -- with a window in between where a student's push is
+ * accepted and then discarded. GraphQL's `updateRefs` takes `beforeOid`, which GitHub checks
+ * server-side and rejects on mismatch, so the decision and the write become one operation and
+ * the window closes.
  *
  * Returns false, rather than throwing, for EVERY failure: the mutation being unavailable on
- * this deployment, a transport error, and a rejected `beforeOid` alike. The caller's fallback
- * is the REST path, which opens with `assertBranchStillAt(expectedSha)` and refuses the write
- * if the branch moved. So a rejection reaches the same refusal by a different route, and an
- * unavailable mutation reaches exactly the behavior this repository had before this function
- * existed. That is what makes it safe to add an untested mutation to a destructive path:
- * there is no error this classifier can get wrong, because it does not classify.
+ * this deployment, a transport error, and a rejected `beforeOid` alike. There is no error this
+ * function can misclassify, because it does not classify -- and that is what makes it safe to
+ * put an untested mutation on a destructive path. What each caller does with false is its own
+ * decision, and they differ: the reset falls back to REST, which re-reads the ref and refuses
+ * the write if it moved, so a rejection reaches the same refusal by another route; the empty-
+ * branch cleanup keeps the branch instead, because an unprotected delete of a ref in a
+ * student's repository is not a fallback worth having for a piece of tidying.
  *
  * `GraphQL-Features: update_refs` is sent because the mutation has shipped behind that opt-in;
  * GitHub ignores the header where it is no longer needed.
  */
-export async function resetRefWithExpectedHead(
+export async function updateRefWithExpectedHead(
   octokit: NonNullable<Awaited<ReturnType<typeof github.getOctoKit>>>,
   repoFullName: string,
   branchName: string,
@@ -1374,6 +1396,30 @@ export class SyncTreeTooLargeError extends TerminalSyncError {
       "sync_tree_too_large"
     );
     this.name = "SyncTreeTooLargeError";
+  }
+}
+
+/**
+ * Thrown when GitHub truncates the handout's own file listing on an initial sync.
+ *
+ * Only the initial sync reads that listing as the definition of what the handout contains; an
+ * ordinary update gets its file list from a compare, and reads the tree for sizes and modes
+ * alone, which degrade without breaking. Terminal because the next attempt asks GitHub the
+ * same question about the same commit and gets the same truncated answer.
+ */
+export class HandoutListingTruncatedError extends TerminalSyncError {
+  constructor(
+    readonly templateRepo: string,
+    readonly toSha: string
+  ) {
+    super(
+      `Cannot perform a first sync from ${templateRepo} at ${toSha.substring(0, 7)}: GitHub truncated its file ` +
+        `listing, so the set of files this handout contains cannot be read in full, and syncing part of it would ` +
+        `record the revision as delivered. Handouts this large need the generated or vendored directories removed ` +
+        `from the repository before it can be synced.`,
+      "handout_listing_truncated"
+    );
+    this.name = "HandoutListingTruncatedError";
   }
 }
 
@@ -1598,7 +1644,7 @@ export async function createBranchAndCommit(
       if (validatedHead === baseSha) {
         scope?.setTag("sync_branch_reset_mode", "already_at_base");
         newRef = { ref: `refs/heads/${branchName}` };
-      } else if (await resetRefWithExpectedHead(octokit, repoFullName, branchName, validatedHead, baseSha, scope)) {
+      } else if (await updateRefWithExpectedHead(octokit, repoFullName, branchName, validatedHead, baseSha, scope)) {
         // The reset was a compare-and-swap against the head the check above authorized, so a
         // push that landed in between was rejected by GitHub rather than discarded by us.
         newRef = { ref: `refs/heads/${branchName}` };
@@ -2073,17 +2119,26 @@ export async function createBranchAndCommit(
   if (treeItems.length === 0) {
     scope?.setTag("sync_commit_empty", "true");
     console.log(`[sync] ${repoFullName}: nothing left to write after ${unresolved.length} skip(s); no commit made`);
-    try {
-      await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
-        owner,
-        repo,
-        ref: `heads/${branchName}`
-      });
-    } catch (cleanupError) {
-      // Best effort. A branch we could not remove is untidy; failing the sync over it would
-      // turn a clean "nothing to deliver" into an error the instructor has to chase.
+    // The branch is deleted only while it is still the empty one this function just made.
+    //
+    // It was created or reset to `baseSha` at the top, before any file was examined, and
+    // everything since has been reads. So `baseSha` is where it must still be, and a head
+    // anywhere else means a student pushed to it in between -- which the rest of this function
+    // takes seriously enough to refuse a reset over, while this cleanup used to delete the ref
+    // and their commit with it, unconditionally, as tidying.
+    //
+    // A compare-and-swap to the null oid is an atomic delete-if-unchanged. When it is not
+    // available the branch is KEPT rather than deleted on a check-then-delete, because there is
+    // nothing here worth risking a student's commit for: the branch points at a commit already
+    // in their history, and the next attempt reads it as safe to reset (no commits ahead of the
+    // base) and, since it is already AT the base, leaves it alone entirely.
+    const deleted = await updateRefWithExpectedHead(octokit, repoFullName, branchName, baseSha, GIT_NULL_OID, scope);
+    if (!deleted) {
+      scope?.setTag("sync_empty_branch_retained", "true");
       scope?.addBreadcrumb({
-        message: `Could not delete empty sync branch ${branchName}: ${cleanupError}`,
+        message:
+          `Left the empty sync branch ${branchName} on ${repoFullName} in place: it could not be deleted ` +
+          `atomically at ${baseSha.substring(0, 7)}, and an unguarded delete could take a push with it`,
         category: "git",
         level: "warning"
       });
