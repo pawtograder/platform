@@ -75,9 +75,20 @@ shifts. The peak is therefore bounded by
 ```
 peak = 1 x old_request                       # the last un-replaced incumbent
      + N_live x new_request                   # N_live = live replicas at upgrade time
-     + (old_request + new_request) x channels # each channel surges by one pod
+     + SUM over channels of                   # see below: NOT one pod per channel
+         (1 x old_request + R_c x new_request) #   R_c = that channel's replicas
      + workerTier_replicas x workerTier_request
 ```
+
+The channel term is a sum over channels rather than a per-channel constant
+because `channels[].edgeFunctions.replicas` is supported above 1. A channel
+rolls under the same `maxUnavailable: 0` / `maxSurge: 1` strategy, so it holds
+at most ONE un-replaced incumbent, but by the end of the roll all `R_c` of its
+replacements are up — the peak for that channel is `1 x old + R_c x new`, not
+`1 x old + 1 x new`. Charging one new pod per channel undercounts by
+`(R_c - 1) x new_request` each, which is the wrong direction: it under-provisions
+the very node capacity this calculation exists to protect, and the result is a
+`Pending` pod and a stalled rollout (see the diagnostic trap below).
 
 For a fleet shaped like `values-staging.yaml`, which sat at its old
 `maxReplicas: 20` with a 512Mi request and one canary channel:
@@ -100,11 +111,19 @@ it.** Lower the HPA's ceiling *before* the upgrade and let the fleet shrink at t
 old, small request:
 
 ```bash
+# BOTH bounds, in one patch. The HPA API rejects maxReplicas < minReplicas, and
+# the pre-upgrade HPA on staging has minReplicas: 12 — so patching maxReplicas
+# alone is refused, the fleet stays at up to 20, and the mitigation silently
+# does not happen. (It fails loudly, but only if you read the patch output.)
 kubectl patch hpa <release>-functions -n <ns> \
-  -p '{"spec":{"maxReplicas":5}}'
+  -p '{"spec":{"minReplicas":2,"maxReplicas":5}}'
 kubectl get deploy <release>-functions -n <ns> -w   # wait for it to settle at <= 5
 helm upgrade ...                                    # now rolls 5 pods, not 20
 ```
+
+No manual restore step: the chart owns `minReplicas`/`maxReplicas`, so the
+`helm upgrade` above puts both back to whatever the values file says. The patch
+is deliberately transient.
 
 **The diagnostic trap.** With `maxUnavailable: 0` an unschedulable pod goes
 `Pending` and *stalls* — nothing fails, so a node-capacity shortfall presents as a

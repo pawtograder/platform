@@ -247,6 +247,18 @@ auditPartitions:
 # infra in the chart.
 monitoring:
   enabled: true
+  # REQUIRED here, not optional tuning. Previews use secrets.autogenerate, and
+  # secrets-bootstrap-script.yaml does not create a METRICS_TOKEN key -- so with
+  # auth on, the edge ServiceMonitor references a key that does not exist. The
+  # Prometheus Operator resolves that credential while SELECTING the object and
+  # rejects the WHOLE ServiceMonitor (`optional: true` is not honoured there), so
+  # there is no scrape pool and no "down" target: every pawtograder_*_queue_size
+  # series and the pawtograder.app alert group that reads them simply vanish from
+  # a preview, with nothing to notice it by. The monitoring.yaml comment already
+  # documented that previews hit this via the missing KEY; this is the overlay
+  # actually acting on it. The edge runtime serves /metrics openly when
+  # METRICS_TOKEN is unset, so nothing is exposed that was not already.
+  edgeFunctionsMetricsAuth: false
 
 # Seed the demo class so previews come up with content to play with.
 # Idempotent — run-seed skips if any non-archived class already exists,

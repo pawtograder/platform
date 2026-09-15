@@ -1308,6 +1308,29 @@ assert_refused "an empty map override is refused" \
   "is empty" "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {nodeSelector: {}}}'
 assert_refused "an empty string override is refused" \
   "is empty" "${WT[@]}" -f /dev/stdin <<<'edgeFunctions: {workerTier: {priorityClassName: ""}}'
+# A misspelled SUB-key is the same silent-inherit bug one level down, and the
+# empty-leaf check cannot see it: the enclosing map is allowlisted, mergeOverwrite
+# merges it, the inherited value for the key you MEANT survives, and the render
+# succeeds while the setting you wrote does nothing. For beforeUnload that means a
+# memory-recycling mitigation that looks applied and is not.
+assert_refused "a misspelled beforeUnload sub-key is refused" \
+  "is not a recognized setting" \
+  "${WT[@]}" --set edgeFunctions.workerTier.beforeUnload.memoryRato=50
+assert_refused "a misspelled worker sub-key is refused" \
+  "is not a recognized setting" \
+  "${WT[@]}" --set edgeFunctions.workerTier.worker.cpuSofttMs=2000
+assert_refused "a misspelled resources leaf is refused" \
+  "is not a recognized setting" \
+  "${WT[@]}" --set edgeFunctions.workerTier.resources.limits.memmory=3Gi
+assert_refused "a misspelled updateStrategy leaf is refused" \
+  "is not a recognized setting" \
+  "${WT[@]}" --set edgeFunctions.workerTier.updateStrategy.rollingUpdate.maxSrge=1
+# The other direction matters as much: correct spellings must still render, and
+# the arbitrary-key maps must NOT be schema-checked or valid config is rejected.
+assert_renders "a correctly spelled beforeUnload sub-key renders" \
+  "${WT[@]}" --set edgeFunctions.workerTier.beforeUnload.memoryRatio=40
+assert_renders "an arbitrary nodeSelector label renders (no schema for it)" \
+  "${WT[@]}" --set 'edgeFunctions.workerTier.nodeSelector.some\.vendor/pool=edge'
 # A channel renders the Kong service functions-v1-<channel>; a routed worker
 # renders functions-v1-worker-<fn>. A channel named worker-<fn> produces the SAME
 # Kong entity name, and Kong rejects duplicate names outright -- so Kong fails to

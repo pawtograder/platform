@@ -438,6 +438,37 @@ isolation `tolerations` is on the allowlist to provide.
 {{- end -}}
 {{- end -}}
 
+{{/*
+Refuse an UNKNOWN sub-key inside a structured tier override.
+
+The top-level allowlist accepts `beforeUnload` as a whole map, and
+assertNoEmptyLeaves only checks that leaves are non-empty -- so
+`workerTier.beforeUnload.memoryRato` (typo) passed both: mergeOverwrite merged
+the map, kept the inherited `memoryRatio`, and the render succeeded while the
+operator's recycling threshold silently did not apply. A mitigation that looks
+applied and is not is the worst outcome this file has, so the structured keys
+get their sub-keys checked against a schema.
+
+Only keys with a FIXED shape are in the schema. `nodeSelector` and `affinity`
+are deliberately absent: their keys are arbitrary (node labels, the whole k8s
+affinity grammar), so validating them would reject valid config. Absence from
+the schema means "do not descend", not "anything goes at this level" -- the
+parent still had to pass the top-level allowlist to get here.
+*/}}
+{{- define "pawtograder.edgeFunctions.assertKnownSubkeys" -}}
+{{- $schema := .schema -}}
+{{- $node := .node -}}
+{{- if and (hasKey $schema $node) (kindIs "map" .value) -}}
+{{- $ok := index $schema $node -}}
+{{- range $k, $v := .value -}}
+{{- if not (has $k $ok) -}}
+{{- fail (printf "edgeFunctions.%s.%s is not a recognized setting. Valid keys here: %s. This is checked because the enclosing map IS overridable, so a typo in a sub-key renders cleanly: mergeOverwrite merges the map, keeps the inherited value for the key you meant, and the setting you wrote silently does not apply -- a memory or recycling mitigation that looks applied and is not." $.label $k (join ", " (sortAlpha $ok))) -}}
+{{- end -}}
+{{- include "pawtograder.edgeFunctions.assertKnownSubkeys" (dict "schema" $schema "node" (printf "%s.%s" $node $k) "label" (printf "%s.%s" $.label $k) "value" $v) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.edgeFunctions.assertTierOverrides" -}}
 {{- $tier := .tier -}}
 {{/* `service` is deliberately NOT here either, and unlike the booleans the reason
@@ -464,6 +495,17 @@ isolation `tolerations` is on the allowlist to provide.
       "envFromSecrets" "gracefulExitTimeoutSeconds" "preStopSleepSeconds"
       "terminationGracePeriodSeconds" "nodeSelector" "tolerations" "affinity"
       "priorityClassName" "updateStrategy" -}}
+{{/* Sub-key schema for the structured overrides above. Keys absent from this
+     dict are not descended into -- see assertKnownSubkeys for why nodeSelector
+     and affinity must stay out. */}}
+{{- $subkeys := dict
+      "beforeUnload" (list "memoryRatio" "cpuRatio" "wallClockRatio")
+      "worker" (list "memoryLimitMb" "timeoutMs" "cpuSoftMs" "cpuHardMs" "lowMemoryMultiplier")
+      "resources" (list "requests" "limits")
+      "resources.requests" (list "cpu" "memory")
+      "resources.limits" (list "cpu" "memory")
+      "updateStrategy" (list "type" "rollingUpdate")
+      "updateStrategy.rollingUpdate" (list "maxUnavailable" "maxSurge") -}}
 {{/* An EMPTY allowlisted value is the same bug as a disallowed key, just harder
      to see: mergeOverwrite skips empty source values, so `envFromSecrets: []`,
      `tolerations: []`, `nodeSelector: {}` or `priorityClassName: ""` on a tier
@@ -481,6 +523,7 @@ isolation `tolerations` is on the allowlist to provide.
 {{- end -}}
 {{- if not (has $k (list "enabled" "replicas" "functions")) -}}
 {{- include "pawtograder.edgeFunctions.assertNoEmptyLeaves" (dict "value" $v "path" (printf "edgeFunctions.%s.%s" $tier $k)) -}}
+{{- include "pawtograder.edgeFunctions.assertKnownSubkeys" (dict "schema" $subkeys "node" $k "label" (printf "%s.%s" $tier $k) "value" $v) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
