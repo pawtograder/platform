@@ -367,9 +367,13 @@ async function llmHintHandler(request: NextRequest) {
     }
 
     // Use service role client for the update since users might not have update permissions
-    const serviceSupabase = createServiceClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
-      auth: SERVICE_CLIENT_AUTH_OPTIONS
-    });
+    const serviceSupabase = createServiceClient<Database>(
+      process.env.SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      {
+        auth: SERVICE_CLIENT_AUTH_OPTIONS
+      }
+    );
 
     // Check rate limiting if configured
     if (extraData.llm.rate_limit) {
