@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { SERVICE_CLIENT_AUTH_OPTIONS } from "@/utils/supabase/serviceClientOptions";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { generateICS, ICSEvent } from "@/lib/ics-generator";
 import { TZDate } from "@date-fns/tz";
@@ -189,7 +190,8 @@ async function getHandler(request: NextRequest, { params }: { params: Promise<{ 
     // Create service role client for public access (bypasses RLS)
     const supabase = createClient<Database>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: SERVICE_CLIENT_AUTH_OPTIONS }
     );
 
     // Fetch course to get timezone and dates

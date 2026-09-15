@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { createClient as createServiceClient, SupabaseClient } from "@supabase/supabase-js";
+import { SERVICE_CLIENT_AUTH_OPTIONS } from "@/utils/supabase/serviceClientOptions";
 import { AzureChatOpenAI, ChatOpenAI } from "@langchain/openai";
 import { OpenAI as OpenAISDK } from "openai";
 import { ChatAnthropic } from "@langchain/anthropic";
@@ -366,7 +367,9 @@ async function llmHintHandler(request: NextRequest) {
     }
 
     // Use service role client for the update since users might not have update permissions
-    const serviceSupabase = createServiceClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const serviceSupabase = createServiceClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+      auth: SERVICE_CLIENT_AUTH_OPTIONS
+    });
 
     // Check rate limiting if configured
     if (extraData.llm.rate_limit) {
