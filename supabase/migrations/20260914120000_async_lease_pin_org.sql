@@ -4,13 +4,20 @@
 -- messages, running all of them to completion and claiming again, it keeps n in flight and tops up
 -- the shortfall as each one settles.
 --
--- THE 99.1 PERCENT HEADLINE IS A SIMULATION, AND AN UPPER BOUND RATHER THAN A FORECAST. Replaying
+-- THE 97.2 PERCENT HEADLINE IS A SIMULATION, AND AN UPPER BOUND RATHER THAN A FORECAST. Replaying
 -- production's measured duration distribution through the real lease code takes per-leaseholder
--- utilization from 69.5 percent to 99.1 percent (orgLeaseRun.test.ts, "the continuous-refill switch
+-- utilization from 69.5 percent to 97.2 percent (orgLeaseRun.test.ts, "the continuous-refill switch
 -- picks the drain shape"). That harness runs ONE leaseholder against ONE org, charges every claim a
 -- flat 20 ms, and has neither lock contention nor a competing claimer, so the only loss it can
 -- express is the ramp-down as the burst runs out. Quote it with those assumptions attached. The
 -- loss refill removes was measured rather than simulated; orgLeaseRun.ts carries that arithmetic.
+--
+-- The figure INCLUDES the stream quantum's cost. Refill on its own reaches 99.1 percent on this
+-- fixture; forcing a periodic unpinned reconsideration so a waiting org cannot be starved behind a
+-- pinned one costs 1.9 points of it, and would cost 5.4 without the quantum's backoff (99.1 to 93.7
+-- flat, against 97.2 with the backoff -- orgLeaseRun.ts carries that arithmetic too). A single-org
+-- fixture is the shape where the quantum is ALL cost and no benefit, since there is never another
+-- org for a reconsideration to find, so treat 1.9 points as the worst case rather than the price.
 --
 -- WHAT THAT BROKE, AND IT IS IN THIS FILE RATHER THAN THAT ONE. claim_org_slot_and_read re-picks
 -- the neediest org on every call and re-points the caller's slot row at whatever it picked. Under
@@ -159,6 +166,45 @@
 create index if not exists classes_id_text_idx on public.classes ((id::text));
 
 drop function if exists pgmq_public.claim_org_slot_and_read(text, integer, integer, text, integer, integer, integer);
+-- The 8-argument signature too, because the return type below changes from an inline
+-- `returns table(...)` to this named composite and `create or replace` cannot change a return type.
+-- Both drops are `if exists` so the migration applies to a database that has neither.
+drop function if exists pgmq_public.claim_org_slot_and_read(text, integer, integer, text, integer, integer, integer, text);
+drop type if exists pgmq_public.org_slot_row;
+
+-- THE RETURN TYPE IS A NAMED COMPOSITE RATHER THAN AN INLINE `returns table(...)`, AND THE REASON IS
+-- THE GENERATED TYPESCRIPT, NOT THE SQL. Both spellings behave identically in Postgres and on the
+-- wire: PostgREST serializes either as an array of objects with these seven keys.
+--
+-- What differs is what `supabase gen types` can say about them. An inline `returns table(...)` is
+-- OUT parameters, and a parameter carries a type but no nullability, so the generator has no choice
+-- but to emit every column as non-null -- `org: string; msg_id: number; message: Json`. That is a
+-- lie on the two status paths: `no_demand` and `no_capacity` return exactly one row with NULL in
+-- every field except `status`, so a caller reading `.org.toLowerCase()` off a typed rpc() result
+-- type-checks and then throws at runtime. The worker only escapes it by casting the response to its
+-- own hand-written `OrgSlotRow`, whose fields are all nullable, in `orgSlotRpc`.
+--
+-- A named composite's attributes ARE nullable -- `create type` accepts no NOT NULL -- so the
+-- generator emits it under `CompositeTypes` with `| null` on every field, and the rpc's `Returns`
+-- becomes a reference to it. That is the same shape as `OrgSlotRow`, arrived at from the database
+-- rather than by hand, and it survives `npm run client-local` because nothing post-processes it.
+-- Fixing this in scripts/PostprocessSupabaseTypes.ts instead would mean a rewrite rule keyed on this
+-- one function's name, re-applied to output nobody checks, and it would still leave the database's
+-- own declaration saying the opposite.
+create type pgmq_public.org_slot_row as (
+  status text,
+  org text,
+  msg_id bigint,
+  read_ct integer,
+  enqueued_at timestamptz,
+  vt timestamptz,
+  message jsonb
+);
+
+comment on type pgmq_public.org_slot_row is
+  'Return type of pgmq_public.claim_org_slot_and_read. A named composite rather than an inline '
+  'returns table(...) so that generated clients see every field as nullable: the no_demand and '
+  'no_capacity answers are one row carrying a status and NULL everywhere else.';
 
 create or replace function pgmq_public.claim_org_slot_and_read(
   queue_name text,
@@ -170,7 +216,7 @@ create or replace function pgmq_public.claim_org_slot_and_read(
   global_cap integer,
   pin_org text default null
 )
-returns table(status text, org text, msg_id bigint, read_ct integer, enqueued_at timestamptz, vt timestamptz, message jsonb)
+returns setof pgmq_public.org_slot_row
 language plpgsql
 set search_path to ''
 as $function$
@@ -230,6 +276,23 @@ declare
   --    indexed on exactly that expression above) instead of on every queued message. Because it
   --    sits inside the coalesce it runs only when every envelope arm came back null -- that same
   --    one row in seven -- rather than once per scanned row.
+  --
+  --    IT IS WRAPPED IN nullif(..., '') FOR THE SAME REASON THE THREE ENVELOPE ARMS ARE, and the
+  --    consequence of leaving it unwrapped is worse here than a mis-labelled bucket. classes.github_org
+  --    is nullable with no check constraint, and '' is a state this schema already expects: five other
+  --    migrations guard it by hand (`c.github_org is not null and c.github_org <> ''` in
+  --    20250908133405, 20251004115504 and 20260909170000, `nullif(trim(c.github_org), '') is not null`
+  --    in 20260315200001 and 20260322000001). An unwrapped fallback answers `org = ''` for every message
+  --    of such a class, and coalesce stops there, so the '(unresolved)' sentinel below is never
+  --    reached. The claim then returns org = '' and _shared/orgLeaseRun.ts refuses to pin on it
+  --    (`if (!held || heldQueueName === null || !heldOrgValue) return null`), so continuous refill
+  --    quiesces on every top-up and the run silently degrades to the batch-at-a-time behaviour this
+  --    whole branch exists to remove -- while every liveness signal stays green. With the nullif the
+  --    class falls through to '(unresolved)', which is a non-empty org string like any other: it
+  --    pins, it drains, and it is already documented in the function comment as a bucket a claim can
+  --    come back holding. Whitespace-only is deliberately NOT trimmed here: ' ' resolves to a
+  --    non-empty bucket that pins and drains correctly, so it does not exhibit this defect, and
+  --    trimming it would silently re-bucket padded org names as an unrelated change.
   -- 3. A METHOD THIS LIST DOES NOT KNOW gets its own bucket rather than the class fallback. A method
   --    whose name we do not recognize is a method whose org field we may not recognize either, so
   --    falling back to the class would be the same silent mis-budgeting this whole expression exists
@@ -250,9 +313,9 @@ declare
                     nullif(q.message->'args'->>'org', ''),
                     nullif(split_part(q.message->'args'->>'repository', '/', 1), ''),
                     nullif(split_part(q.message->'args'->>'repository_full_name', '/', 1), ''),
-                    (select c.github_org
-                       from public.classes c
-                      where c.id::text = q.message->>'class_id'),
+                    nullif((select c.github_org
+                              from public.classes c
+                             where c.id::text = q.message->>'class_id'), ''),
                     '(unresolved)'))
              else '(unknown-method)'
         end

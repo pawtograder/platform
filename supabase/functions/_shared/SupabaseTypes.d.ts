@@ -24,15 +24,13 @@ export type Database = {
           queue_name: string;
           sleep_seconds: number;
         };
-        Returns: {
-          enqueued_at: string;
-          message: Json;
-          msg_id: number;
-          org: string;
-          read_ct: number;
-          status: string;
-          vt: string;
-        }[];
+        Returns: Database["pgmq_public"]["CompositeTypes"]["org_slot_row"][];
+        SetofOptions: {
+          from: "*";
+          to: "org_slot_row";
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
       };
       delete: {
         Args: { message_id: number; queue_name: string };
@@ -79,7 +77,15 @@ export type Database = {
       [_ in never]: never;
     };
     CompositeTypes: {
-      [_ in never]: never;
+      org_slot_row: {
+        status: string | null;
+        org: string | null;
+        msg_id: number | null;
+        read_ct: number | null;
+        enqueued_at: string | null;
+        vt: string | null;
+        message: Json | null;
+      };
     };
   };
   public: {
