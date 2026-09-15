@@ -867,11 +867,7 @@ function GroupDetails({
 function RepositoryLabel({ repository }: { repository: Repository }) {
   const { role } = useClassProfiles();
   if (!role.github_org_confirmed) {
-    return (
-      <Text as="span">
-        {repository.repository} (requires GitHub authorization to access)
-      </Text>
-    );
+    return <Text as="span">{repository.repository} (requires GitHub authorization to access)</Text>;
   }
   return (
     <Link
