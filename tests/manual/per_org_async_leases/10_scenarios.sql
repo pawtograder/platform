@@ -1118,8 +1118,13 @@ begin
   perform harness.expect('20 pin_org', 'rows in the pool bearing the pinned holder', '1',
     (select count(*)::text from public.async_worker_slots
       where queue_name = 'async_calls' and holder = 'pin-h1'));
+  -- string_agg rather than a bare scalar subquery, for the reason 43_race_assert.sql gives: the
+  -- regression this file is meant to catch puts the holder on TWO rows, and a scalar subquery then
+  -- raises "more than one row returned by a subquery used as an expression". That aborts psql, so
+  -- the run ends at exit 3 with no results table and scenario 18 never executes -- which is to say
+  -- the documented non-vacuity experiment could not reach the scenario it was documented for.
   perform harness.expect('20 pin_org', 'and that row still points at the pinned org', 'org-bravo',
-    (select org from public.async_worker_slots
+    (select string_agg(distinct org, ',' order by org) from public.async_worker_slots
       where queue_name = 'async_calls' and holder = 'pin-h1'));
 
   -- Case folding. A caller that rebuilds the org string from classes.github_org rather than echoing
@@ -1165,7 +1170,7 @@ begin
   -- It must NOT have quietly taken org-alpha's work, and it must not have given up the lease: the
   -- caller still has org-bravo messages running and needs to keep counting against that org.
   perform harness.expect('20 pin_org', 'and the slot still points at the pinned org', 'org-bravo',
-    (select org from public.async_worker_slots
+    (select string_agg(distinct org, ',' order by org) from public.async_worker_slots
       where queue_name = 'async_calls' and holder = 'pin-h1'));
   perform harness.expect('20 pin_org', 'and the lease was left alone', 'true',
     (select (expires_at = v_before)::text from public.async_worker_slots
