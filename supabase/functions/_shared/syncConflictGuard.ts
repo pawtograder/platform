@@ -203,32 +203,44 @@ export type RepoTree = {
 const TREE_TYPE_CODES: Record<TreeEntryType, number> = { blob: 0, tree: 1, commit: 2 };
 const TREE_TYPES_BY_CODE: TreeEntryType[] = ["blob", "tree", "commit"];
 
-/** One cached entry: path, type code, and -- for blobs only -- sha and size. */
+/** One cached entry: path, type code, content address, and -- for blobs -- size. */
 type CachedTreeRow = [string, number] | [string, number, string] | [string, number, string, number];
+
+/**
+ * The cache format version, which is part of the Redis key (see `getRepoTree`).
+ *
+ * Bumped to 2 when non-blob entries started carrying their sha. A v1 entry recorded a tree
+ * or submodule as its type alone, so reading one back today would hand `classifyStudentFile`
+ * two empty shas that compare equal and read as "unmodified" -- the answer that permits the
+ * overwrite. Changing the key rather than the payload alone means no v1 value is ever
+ * decoded: the old keys are simply never read again, and they expire on their own.
+ */
+export const REPO_TREE_CACHE_VERSION = 2;
 
 /**
  * Pack a tree into the smallest honest JSON.
  *
  * The obvious encoding -- an array of `[path, {sha, type}]` pairs -- spends about 24 characters
  * per entry on repeated key names, which on a 20k-file repo is half a megabyte of the word
- * "sha". Positional rows drop that, and a tree or submodule row stops after its type code,
- * because a non-blob entry is read for its type alone: `classifyStudentFile` answers
- * "directory_in_your_repo" before it ever compares a sha, and `findBlockingAncestor` only
- * asks whether the entry is a tree.
+ * "sha". Positional rows drop that. A row stops after the sha unless the entry has a size,
+ * which only blobs do.
+ *
+ * The sha is kept for a tree and a submodule too, and that is not symmetry for its own sake:
+ * `classifyStudentFile` compares them. A directory the student has exactly as the handout had
+ * it is a matching tree sha, and dropping the sha made that case indistinguishable from a
+ * directory full of their own work.
  */
 export function encodeRepoTree(tree: RepoTree): string {
   const rows: CachedTreeRow[] = [];
   for (const [path, entry] of tree.entries) {
     const code = TREE_TYPE_CODES[entry.type];
-    if (entry.type !== "blob") {
-      rows.push([path, code]);
-    } else if (typeof entry.size === "number") {
+    if (typeof entry.size === "number") {
       rows.push([path, code, entry.sha, entry.size]);
     } else {
       rows.push([path, code, entry.sha]);
     }
   }
-  return JSON.stringify({ v: 1, t: tree.truncated ? 1 : 0, e: rows });
+  return JSON.stringify({ v: REPO_TREE_CACHE_VERSION, t: tree.truncated ? 1 : 0, e: rows });
 }
 
 /**
@@ -242,7 +254,7 @@ export function decodeRepoTree(cached: unknown): RepoTree | undefined {
   const parsed = (typeof cached === "string" ? safeJsonParse(cached) : cached) as
     | { v?: number; t?: number; e?: CachedTreeRow[] }
     | undefined;
-  if (!parsed || parsed.v !== 1 || !Array.isArray(parsed.e)) return undefined;
+  if (!parsed || parsed.v !== REPO_TREE_CACHE_VERSION || !Array.isArray(parsed.e)) return undefined;
 
   const entries = new Map<string, RepoTreeEntry>();
   for (const row of parsed.e) {
@@ -284,7 +296,26 @@ export function classifyStudentFile(
   // module. Writing a blob at that path replaces the tree, which deletes every file the
   // student has underneath it, and a blob-only view of the tree cannot see it coming: both
   // sides look absent and the path reads as a new file nobody owns.
-  if (student && student.type !== "blob") return "directory_in_your_repo";
+  //
+  // Unless the handout had the same thing there. A handout that replaces a directory with a
+  // file at the same path shows up here as a tree on the student's side, and on an untouched
+  // repository that tree is the handout's own, sha for sha. Blaming the student for it
+  // reported a file as theirs that they had never opened AND left the update half-applied:
+  // the new file was skipped while the removals beneath the old directory went through, which
+  // is a state no auto-merge can complete.
+  //
+  // Only an exact match, and only with real shas on both sides. A matching tree sha means the
+  // subtree is byte-identical, which is what makes the rest of the update coherent: the files
+  // the handout diff removes under that path are exactly the files standing there, so the tree
+  // this sync builds empties the directory and writes the blob in its place. A per-path lookup
+  // on a truncated tree answers a directory with an empty sha (`fetchTreeEntryAtRef`), and two
+  // empty shas comparing equal would be the overwrite again, so an absent sha never matches.
+  if (student && student.type !== "blob") {
+    const handoutHasTheSameThing =
+      !!handout && handout.type === student.type && !!student.sha && student.sha === handout.sha;
+    if (!handoutHasTheSameThing) return "directory_in_your_repo";
+    return "unmodified";
+  }
 
   if (student === undefined && handout === undefined) {
     // Neither side has the path. The handout is adding a genuinely new file and there is

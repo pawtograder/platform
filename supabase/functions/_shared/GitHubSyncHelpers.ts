@@ -20,6 +20,7 @@ import {
   isSyncBranchSafeToReset,
   pathsNeedingBlobLookup,
   renderUnresolvedSection,
+  REPO_TREE_CACHE_VERSION,
   resolveAutoMerge,
   type ChangedFileShape,
   type RepoTree,
@@ -335,7 +336,7 @@ const inFlightTrees = new Map<string, Promise<RepoTree>>();
  * sync.
  */
 export async function getRepoTree(repoFullName: string, sha: string, scope?: Sentry.Scope): Promise<RepoTree> {
-  const cacheKey = `github:tree:v1:${repoFullName}/${sha}`;
+  const cacheKey = `github:tree:v${REPO_TREE_CACHE_VERSION}:${repoFullName}/${sha}`;
   const inFlight = inFlightTrees.get(cacheKey);
   if (inFlight) return await inFlight;
 
@@ -648,9 +649,20 @@ export async function resolveSyncBaselineSha(
  * recursive tree each, and falls back to per-file lookups only for paths a truncated tree
  * left unanswered.
  *
- * `fromSha` null means there is no previous sync. The branch base is then the repo's
- * pristine starting state, nothing in it can be the student's own work yet, and the map is
- * empty.
+ * `fromSha` null means there is no handout revision to compare against. That is NOT the same
+ * as "nothing here is the student's", which is what returning an empty map used to say. Every
+ * creation path records `synced_handout_sha` at insert, so a null one belongs to a legacy,
+ * adopted or hand-made row -- a repository that may be full of a student's work with no record
+ * of where it came from. Classifying nothing there let the sync branch from their head, write
+ * the handout's copy over every colliding path, and auto-merge it with no conflict, which is
+ * the exact failure this module exists to prevent, reached through the one row shape that
+ * carries no history to recover from.
+ *
+ * So the handout side is read as EMPTY rather than skipped: a path that exists in the
+ * repository is `only_in_your_repo` (the handout is adding a file where they already have
+ * one) and is left alone, while a path that exists in neither is a genuinely new file and is
+ * written. A first sync into a repository that really is pristine is unaffected, because
+ * there is nothing at those paths to protect.
  *
  * `syncedRepoSha` null means the row records no baseline. There is then no such thing as
  * "what the last sync left behind", so the question changes from "has this file moved since
@@ -678,7 +690,7 @@ export async function findStudentModifiedFiles(
   scope?: Sentry.Scope
 ): Promise<Map<string, UnresolvedReason>> {
   const modified = new Map<string, UnresolvedReason>();
-  if (!fromSha || paths.length === 0) return modified;
+  if (paths.length === 0) return modified;
 
   const baselineSha = await resolveSyncBaselineSha(repoFullName, syncedRepoSha, scope);
   if (!baselineSha) {
@@ -686,10 +698,16 @@ export async function findStudentModifiedFiles(
     return new Map(paths.map((path) => [path, "content_differs" as UnresolvedReason]));
   }
 
+  // With no previous handout revision there is no handout tree to read, and an empty one is
+  // the honest stand-in: it claims nothing at any path, so every path the repository already
+  // holds classifies as the student's. See the note above on why that is not an empty map.
   const [student, handout] = await Promise.all([
     getRepoTree(repoFullName, baselineSha, scope),
-    getRepoTree(templateRepo, fromSha, scope)
+    fromSha
+      ? getRepoTree(templateRepo, fromSha, scope)
+      : Promise.resolve<RepoTree>({ entries: new Map(), truncated: false })
   ]);
+  if (!fromSha) scope?.setTag("sync_without_handout_history", "true");
 
   const studentEntries = new Map<string, TreeEntry>(student.entries);
   const handoutEntries = new Map<string, TreeEntry>(handout.entries);
@@ -702,7 +720,9 @@ export async function findStudentModifiedFiles(
     : paths;
 
   const studentLookups = pathsNeedingBlobLookup(studentEntries, student.truncated, studentPathsOfInterest);
-  const handoutLookups = pathsNeedingBlobLookup(handoutEntries, handout.truncated, paths);
+  // Nothing to look up on a handout side that has no revision: the empty tree above is not a
+  // truncated listing, it is the whole answer.
+  const handoutLookups = fromSha ? pathsNeedingBlobLookup(handoutEntries, handout.truncated, paths) : [];
   assertLookupBudget(studentLookups.length + handoutLookups.length, repoFullName, templateRepo, scope);
 
   // Both sides at once, and several paths at a time within each. These are reads of two
@@ -720,7 +740,7 @@ export async function findStudentModifiedFiles(
     ),
     resolvePathsInParallel(
       handoutLookups,
-      (path) => fetchTreeEntryAtRef(templateRepo, path, fromSha, scope),
+      (path) => fetchTreeEntryAtRef(templateRepo, path, fromSha ?? "", scope),
       (path, entry) => handoutEntries.set(path, entry)
     )
   ]);
@@ -1182,6 +1202,82 @@ async function assertBranchStillAt(
 }
 
 /**
+ * GitHub's node ID for a repository, which the GraphQL mutation below needs and REST does not
+ * carry. Stable for the life of the repository, so one lookup per isolate is enough; a rename
+ * keeps the ID, and a deleted-and-recreated repository is a different row in our database.
+ */
+const repositoryNodeIds = new Map<string, string>();
+
+/**
+ * Point a branch at `newSha`, but only while it still points at `expectedSha`.
+ *
+ * This is the compare-and-swap the REST ref update does not have. `PATCH /git/refs` takes no
+ * expected head, so the sync could only read the branch, decide the reset was safe, and write
+ * -- with a window in between where a student's push is accepted and then discarded. GraphQL's
+ * `updateRefs` takes `beforeOid`, which GitHub checks server-side and rejects on mismatch, so
+ * the decision and the write become one operation and the window closes.
+ *
+ * Returns false, rather than throwing, for EVERY failure: the mutation being unavailable on
+ * this deployment, a transport error, and a rejected `beforeOid` alike. The caller's fallback
+ * is the REST path, which opens with `assertBranchStillAt(expectedSha)` and refuses the write
+ * if the branch moved. So a rejection reaches the same refusal by a different route, and an
+ * unavailable mutation reaches exactly the behavior this repository had before this function
+ * existed. That is what makes it safe to add an untested mutation to a destructive path:
+ * there is no error this classifier can get wrong, because it does not classify.
+ *
+ * `GraphQL-Features: update_refs` is sent because the mutation has shipped behind that opt-in;
+ * GitHub ignores the header where it is no longer needed.
+ */
+export async function resetRefWithExpectedHead(
+  octokit: NonNullable<Awaited<ReturnType<typeof github.getOctoKit>>>,
+  repoFullName: string,
+  branchName: string,
+  expectedSha: string,
+  newSha: string,
+  scope?: Sentry.Scope
+): Promise<boolean> {
+  const [owner, name] = repoFullName.split("/");
+  try {
+    let repositoryId = repositoryNodeIds.get(repoFullName);
+    if (!repositoryId) {
+      const lookup = await octokit.graphql<{ repository?: { id?: string } }>(
+        `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { id } }`,
+        { owner, name }
+      );
+      repositoryId = lookup?.repository?.id;
+      if (!repositoryId) return false;
+      repositoryNodeIds.set(repoFullName, repositoryId);
+    }
+    await octokit.graphql(`mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }`, {
+      input: {
+        repositoryId,
+        refUpdates: [
+          {
+            name: `refs/heads/${branchName}`,
+            afterOid: newSha,
+            beforeOid: expectedSha,
+            force: true
+          }
+        ]
+      },
+      headers: { "GraphQL-Features": "update_refs" }
+    });
+    scope?.setTag("sync_branch_reset_mode", "compare_and_swap");
+    return true;
+  } catch (error) {
+    scope?.setTag("sync_branch_reset_mode", "rest_fallback");
+    scope?.addBreadcrumb({
+      message:
+        `Compare-and-swap reset of ${repoFullName} ${branchName} to ${newSha.substring(0, 7)} ` +
+        `(expecting ${expectedSha.substring(0, 7)}) did not go through: ${error}`,
+      category: "git",
+      level: "info"
+    });
+    return false;
+  }
+}
+
+/**
  * The fields of a FileChange the merge decision branches on, in the shape
  * `decideFileAction` takes. Built in one place so the size gate and the commit path cannot
  * describe the same file differently.
@@ -1460,15 +1556,6 @@ export async function createBranchAndCommit(
       // ours, and is the student's conflict resolution being deleted as soon as it is not,
       // so check who wrote the commits ahead of the base before touching it.
       const validatedHead = await assertSyncBranchSafeToReset(repoFullName, branchName, baseSha, scope);
-      // ...and confirm the branch is still where it was when that answer was computed. A
-      // push between the two invalidates it, and this is a destructive write.
-      //
-      // This NARROWS the window, it does not close it: a push arriving between this check and
-      // the ref update below is still lost. REST has no expected-head parameter on a ref update,
-      // so closing it properly means GraphQL updateRefs with beforeOid, which is a compare
-      // and swap. That is the right fix and it is not free, so it is recorded here rather
-      // than implied to be done.
-      await assertBranchStillAt(repoFullName, branchName, validatedHead, scope);
 
       scope?.addBreadcrumb({
         message: `Branch ${branchName} already exists, force-updating to ${baseSha}`,
@@ -1476,48 +1563,69 @@ export async function createBranchAndCommit(
         level: "info"
       });
 
-      try {
-        const updateResult = await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
-          owner,
-          repo,
-          ref: `heads/${branchName}`,
-          sha: baseSha,
-          force: true // Force update even if not a fast-forward
-        });
-        newRef = updateResult.data;
-      } catch (updateError: unknown) {
-        // If force update fails, try delete then create
-        const updateErrorMsg = updateError instanceof Error ? updateError.message : String(updateError);
-        scope?.addBreadcrumb({
-          message: `Force update failed: ${updateErrorMsg}, trying delete+create`,
-          category: "git",
-          level: "warning"
-        });
-
-        // Deleting the ref is more destructive than the update that just failed, and one
-        // reason that update fails is the branch having moved. Re-check before deleting
-        // rather than treating the failed update as permission to try something more
-        // destructive.
+      // Already there. A previous attempt got this far and died after writing the ref, so
+      // there is nothing to reset and no reason to make a destructive write at all.
+      if (validatedHead === baseSha) {
+        scope?.setTag("sync_branch_reset_mode", "already_at_base");
+        newRef = { ref: `refs/heads/${branchName}` };
+      } else if (await resetRefWithExpectedHead(octokit, repoFullName, branchName, validatedHead, baseSha, scope)) {
+        // The reset was a compare-and-swap against the head the check above authorized, so a
+        // push that landed in between was rejected by GitHub rather than discarded by us.
+        newRef = { ref: `refs/heads/${branchName}` };
+      } else {
+        // No compare-and-swap available, so fall back to re-reading the branch and writing:
+        // confirm it is still where it was when the authorization was computed. A push between
+        // the two invalidates it, and this is a destructive write.
+        //
+        // This NARROWS the window, it does not close it: a push arriving between this check and
+        // the ref update below is still lost. REST has no expected-head parameter on a ref
+        // update, which is why the compare-and-swap above is tried first. This path is what
+        // runs when GitHub will not do it for us.
         await assertBranchStillAt(repoFullName, branchName, validatedHead, scope);
 
         try {
-          await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+          const updateResult = await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
             owner,
             repo,
-            ref: `heads/${branchName}`
+            ref: `heads/${branchName}`,
+            sha: baseSha,
+            force: true // Force update even if not a fast-forward
           });
-        } catch {
-          // Ignore delete errors - branch might not exist or might be protected
-        }
+          newRef = updateResult.data;
+        } catch (updateError: unknown) {
+          // If force update fails, try delete then create
+          const updateErrorMsg = updateError instanceof Error ? updateError.message : String(updateError);
+          scope?.addBreadcrumb({
+            message: `Force update failed: ${updateErrorMsg}, trying delete+create`,
+            category: "git",
+            level: "warning"
+          });
 
-        // Try create again
-        const retryResult = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-          owner,
-          repo,
-          ref: `refs/heads/${branchName}`,
-          sha: baseSha
-        });
-        newRef = retryResult.data;
+          // Deleting the ref is more destructive than the update that just failed, and one
+          // reason that update fails is the branch having moved. Re-check before deleting
+          // rather than treating the failed update as permission to try something more
+          // destructive.
+          await assertBranchStillAt(repoFullName, branchName, validatedHead, scope);
+
+          try {
+            await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+              owner,
+              repo,
+              ref: `heads/${branchName}`
+            });
+          } catch {
+            // Ignore delete errors - branch might not exist or might be protected
+          }
+
+          // Try create again
+          const retryResult = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+            owner,
+            repo,
+            ref: `refs/heads/${branchName}`,
+            sha: baseSha
+          });
+          newRef = retryResult.data;
+        }
       }
     } else {
       // Some other error - rethrow
@@ -1961,6 +2069,15 @@ export async function createPullRequest(
  * - For text files with patches: check if applying the patch results in no change
  *   (meaning the patch is already applied)
  *
+ * `studentRef` is the commit to read the student's repository at, and a caller that is going
+ * to RECORD this answer must pass a sha rather than accept the default branch name. Every
+ * file below is a separate request, so "main" is a different commit for each one as soon as a
+ * push lands mid-check, and the verdict then describes no state that ever existed. Worse, the
+ * caller records `synced_handout_sha = toSha` on a true answer while `synced_repo_sha` stays
+ * at the old commit, so the next sync classifies hand-applied content against a tree that
+ * predates it and calls the student's files their own work. One pinned sha makes the pair the
+ * caller writes describe one moment.
+ *
  * @returns true if all handout changes are already applied (no diff needed), false otherwise
  */
 export async function isRepoAlreadyInSync(
@@ -1968,7 +2085,8 @@ export async function isRepoAlreadyInSync(
   templateRepo: string,
   changedFiles: FileChange[],
   templateToSha: string,
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  studentRef: string = "main"
 ): Promise<boolean> {
   const studentOctokit = await github.getOctoKit(studentRepoFullName, scope);
   const templateOctokit = await github.getOctoKit(templateRepo, scope);
@@ -1995,7 +2113,7 @@ export async function isRepoAlreadyInSync(
             owner: studentOwner,
             repo: studentRepo,
             path: file.path,
-            ref: "main"
+            ref: studentRef
           });
           // File still exists - not in sync
           scope?.addBreadcrumb({
@@ -2034,7 +2152,7 @@ export async function isRepoAlreadyInSync(
             owner: studentOwner,
             repo: studentRepo,
             path: file.path,
-            ref: "main"
+            ref: studentRef
           });
           const studentSha =
             studentMeta && typeof studentMeta === "object" && "sha" in studentMeta
@@ -2068,7 +2186,7 @@ export async function isRepoAlreadyInSync(
         ({ text: studentContent, sha: studentBlobSha } = await fetchTextFileAtRef(
           studentRepoFullName,
           file.path,
-          "main",
+          studentRef,
           scope
         ));
       } catch (error: unknown) {
@@ -2455,22 +2573,29 @@ export async function syncRepositoryToHandout(params: {
             };
           }
 
+          // The paths that still differ, not every path the update touched. A path someone
+          // applied by hand since the last sync is in `unresolvedPaths` -- that is what the
+          // recheck above just established -- and naming it would record a file as blocking
+          // that already holds the handout's content, and ask the instructor to chase a
+          // student about work they have already done. The count in the messages below is the
+          // narrowed one for the same reason.
+          const blockingPaths = Array.from(stillDiffering.keys());
           scope?.setTag("sync_blocked_by_student_changes", "true");
           scope?.addBreadcrumb({
             message:
               `Every file in this update is the student's own work in ${repositoryFullName} ` +
-              `(${unresolvedPaths.join(", ")}); nothing can be merged and nothing was written`,
+              `(${blockingPaths.join(", ")}); nothing can be merged and nothing was written`,
             category: "sync",
             level: "warning"
           });
           console.warn(
             `[sync] ${repositoryFullName}: handout update ${toSha.substring(0, 7)} not delivered, ` +
-              `all ${unresolvedPaths.length} changed file(s) are the student's own work`
+              `all ${blockingPaths.length} changed file(s) are the student's own work`
           );
           return {
             success: true,
             blocked_by_student_changes: true,
-            unresolved_paths: unresolvedPaths
+            unresolved_paths: blockingPaths
           };
         };
 
@@ -2535,8 +2660,27 @@ export async function syncRepositoryToHandout(params: {
         const existingPR = await findExistingSyncPR(repositoryFullName, branchName, scope);
 
         // RESILIENCE CHECK 2: Check if student repo is already in sync with template
-        // This handles cases where a previous PR was merged but our database wasn't updated
-        const alreadyInSync = await isRepoAlreadyInSync(repositoryFullName, templateRepo, changedFiles, toSha, scope);
+        // This handles cases where a previous PR was merged but our database wasn't updated.
+        //
+        // Pinned to one commit, read once. The check makes a request per file, so reading
+        // "main" each time lets a push land mid-check and produces a verdict about no single
+        // state; and the caller of THIS function records the answer, advancing
+        // synced_handout_sha while synced_repo_sha stays behind. Both halves of that pair have
+        // to describe the same commit or the next sync classifies against a tree that predates
+        // the content it is looking at. `getDefaultBranchHeadSha` answers undefined under the
+        // E2E stub and for the suffixed E2E repo names, and then there is nothing to pin and
+        // nothing to record: the check falls back to the branch name and the caller leaves the
+        // baseline where it is.
+        const pinnedRepoHead = await github.getDefaultBranchHeadSha(repositoryFullName, scope);
+        scope?.setTag("already_in_sync_ref", pinnedRepoHead ?? "main");
+        const alreadyInSync = await isRepoAlreadyInSync(
+          repositoryFullName,
+          templateRepo,
+          changedFiles,
+          toSha,
+          scope,
+          pinnedRepoHead ?? "main"
+        );
 
         if (alreadyInSync) {
           scope?.addBreadcrumb({
@@ -2586,7 +2730,12 @@ export async function syncRepositoryToHandout(params: {
 
           return {
             success: true,
-            no_changes: true
+            no_changes: true,
+            // The commit the check was made against, so the caller advances BOTH halves of the
+            // baseline pair together. Undefined when the head could not be pinned, which the
+            // caller reads as "leave the baseline alone" rather than re-reading a head this
+            // decision was never made from.
+            repo_head_sha: pinnedRepoHead
           };
         }
 

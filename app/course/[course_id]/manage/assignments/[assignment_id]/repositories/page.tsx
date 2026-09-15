@@ -190,9 +190,17 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
           width="full"
         >
           <Text fontSize="sm" color="orange.700" _dark={{ color: "orange.300" }} wordBreak="break-word">
+            {/*
+             * Deliberately says what the sync DID, not why. An unresolved path is not always a
+             * file the student edited: the guard also leaves a file they deleted, a binary it
+             * cannot merge, a path where they have a folder, a path blocked by a file of
+             * theirs standing where a folder has to go, and a text patch that would not apply.
+             * Naming the student's edits as the cause sent instructors to ask about work that
+             * in several of those cases does not exist.
+             */}
             {blockedPaths.length > 0
-              ? `The student has edited every file this update changes, so nothing was written: ${blockedPaths.join(", ")}. Ask them to apply the changes, then sync again.`
-              : "Every file this update changes is the student's own work, so nothing was written. Ask them to apply the changes, then sync again."}
+              ? `This update could not be applied safely to these paths, so nothing was written: ${blockedPaths.join(", ")}. Check them against the handout, resolve what is different, then sync again.`
+              : "This update could not be applied safely to any of the paths it changes, so nothing was written. Check the repository against the handout, resolve what is different, then sync again."}
           </Text>
         </Box>
       </VStack>
@@ -250,7 +258,12 @@ function SyncButton({
 
       if (error) throw error;
 
-      const result = data as { queued_count: number; skipped_count: number; error_count: number };
+      const result = data as {
+        queued_count: number;
+        skipped_count: number;
+        skipped_in_flight_count?: number;
+        error_count: number;
+      };
 
       if (result.queued_count > 0) {
         toaster.success({
@@ -258,6 +271,17 @@ function SyncButton({
           description: "Repository sync has been queued. This page will automatically update."
         });
         // Invalidate the row to refetch its updated state
+        await tableController?.invalidate(repoId);
+      } else if ((result.skipped_in_flight_count ?? 0) > 0) {
+        // A forced press still declines to queue a SECOND job for a repository whose sync is
+        // already running, because two syncs of one repository fight over the same branch and
+        // pull request. Reporting that as "already up to date" told the instructor the
+        // opposite of what is true, about the repository they had just asked to be fixed.
+        toaster.info({
+          title: "Sync Already Running",
+          description:
+            "A sync for this repository is already queued or in progress. This page will update when it finishes."
+        });
         await tableController?.invalidate(repoId);
       } else if (result.skipped_count > 0) {
         toaster.info({
@@ -941,11 +965,22 @@ export default function RepositoriesPage() {
 
       if (error) throw error;
 
-      const syncResult = result as { queued_count: number; skipped_count: number; error_count: number };
+      const syncResult = result as {
+        queued_count: number;
+        skipped_count: number;
+        skipped_in_flight_count?: number;
+        error_count: number;
+      };
 
+      const alreadyRunning = syncResult.skipped_in_flight_count ?? 0;
       toaster.success({
         title: "Sync Queued",
-        description: `${syncResult.queued_count} repositories queued for sync. ${syncResult.skipped_count} skipped (already up to date).`
+        description:
+          `${syncResult.queued_count} repositories queued for sync. ` +
+          `${syncResult.skipped_count} skipped (already up to date).` +
+          // Counted apart from the others because it is not a repository with nothing to do:
+          // it is one whose sync is still running, and it will not be queued twice.
+          (alreadyRunning > 0 ? ` ${alreadyRunning} already syncing.` : "")
       });
 
       toggleAllRowsSelected(false);

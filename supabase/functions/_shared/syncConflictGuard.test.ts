@@ -24,6 +24,7 @@ import {
   isSyncBranchSafeToReset,
   pathsNeedingBlobLookup,
   renderUnresolvedSection,
+  REPO_TREE_CACHE_VERSION,
   resolveAutoMerge,
   type ChangedFileShape,
   type RepoTree,
@@ -35,6 +36,9 @@ import {
 
 const BLOB_A = "a".repeat(40);
 const BLOB_B = "b".repeat(40);
+const TREE_A = "c".repeat(40);
+const TREE_B = "d".repeat(40);
+const COMMIT_A = "e".repeat(40);
 const blob = (sha: string): TreeEntry => ({ sha, type: "blob" });
 /**
  * A commit GitHub built on our behalf: the merge API, the Contents API, the web editor.
@@ -100,6 +104,43 @@ Deno.test("a directory where the handout wants a file is never overwritten", () 
 
 Deno.test("a submodule is treated the same as a directory", () => {
   assertEquals(classifyStudentFile({ sha: BLOB_A, type: "commit" }, blob(BLOB_B)), "directory_in_your_repo");
+});
+
+// A handout that replaces a directory with a file at the same path. The student has not
+// touched anything: their tree at that path IS the old handout's tree, sha for sha. Blaming
+// them named a file as theirs that they had never opened, and left the update half-applied --
+// the removals under the old directory went through while the new file was skipped, which no
+// auto-merge can finish. A matching tree sha also guarantees the rest is coherent: the files
+// the handout diff removes under that path are exactly the files standing there.
+Deno.test("a directory the student has exactly as the handout had it is not theirs", () => {
+  assertEquals(classifyStudentFile({ sha: TREE_A, type: "tree" }, { sha: TREE_A, type: "tree" }), "unmodified");
+});
+
+Deno.test("a submodule pinned where the handout pinned it is not theirs either", () => {
+  assertEquals(classifyStudentFile({ sha: COMMIT_A, type: "commit" }, { sha: COMMIT_A, type: "commit" }), "unmodified");
+});
+
+// One file added under it and the tree sha moves, which is the whole point of comparing them.
+Deno.test("a directory with anything of the student's in it is still theirs", () => {
+  assertEquals(
+    classifyStudentFile({ sha: TREE_A, type: "tree" }, { sha: TREE_B, type: "tree" }),
+    "directory_in_your_repo"
+  );
+});
+
+// A per-path lookup on a truncated tree answers a directory with an EMPTY sha
+// (`fetchTreeEntryAtRef` cannot get one from the Contents API). Two empty shas comparing
+// equal would read as unmodified, which is the overwrite this module exists to prevent.
+Deno.test("an absent sha never matches, on either side", () => {
+  assertEquals(classifyStudentFile({ sha: "", type: "tree" }, { sha: "", type: "tree" }), "directory_in_your_repo");
+  assertEquals(classifyStudentFile({ sha: "", type: "tree" }, { sha: TREE_A, type: "tree" }), "directory_in_your_repo");
+  assertEquals(classifyStudentFile({ sha: TREE_A, type: "tree" }, { sha: "", type: "tree" }), "directory_in_your_repo");
+});
+
+// A directory of the student's where the handout had a FILE is still the collision case: the
+// kinds have to agree before the shas are worth comparing.
+Deno.test("a directory standing where the handout had a file is still theirs", () => {
+  assertEquals(classifyStudentFile({ sha: TREE_A, type: "tree" }, blob(TREE_A)), "directory_in_your_repo");
 });
 
 // The inverse: the handout adds foo/bar.ts and the student has a FILE called foo, so the
@@ -496,19 +537,33 @@ Deno.test("the truncation flag survives the cache", () => {
 // Repeating "sha" and "type" 20,000 times is how the cached value grew past what Upstash
 // accepts in one request, at which point writing it fails on every sync and the cache is
 // silently dead. Positional rows are what keep it under the limit.
-Deno.test("the encoding names no keys per entry, and stops early for a non-blob", () => {
+Deno.test("the encoding names no keys per entry", () => {
   const tree: RepoTree = {
     entries: new Map<string, RepoTreeEntry>([
       ["src/main.ts", { sha: BLOB_A, type: "blob", size: 10 }],
-      ["src", { sha: "irrelevant", type: "tree" }]
+      ["src", { sha: TREE_A, type: "tree" }]
     ]),
     truncated: false
   };
   const encoded = encodeRepoTree(tree);
   assertEquals(encoded.includes('"sha"'), false);
   assertEquals(encoded.includes('"type"'), false);
-  // A directory is read for its type alone, so its sha is not worth the 40 characters.
-  assertEquals(encoded.includes("irrelevant"), false);
+});
+
+// The sha of a directory decides whether the student's folder is the handout's own folder,
+// so dropping it to save 40 characters made a matching directory indistinguishable from one
+// full of the student's work.
+Deno.test("a directory keeps its sha through the cache, because the guard compares it", () => {
+  const tree: RepoTree = {
+    entries: new Map<string, RepoTreeEntry>([
+      ["src", { sha: TREE_A, type: "tree" }],
+      ["vendor/lib", { sha: COMMIT_A, type: "commit" }]
+    ]),
+    truncated: false
+  };
+  const decoded = decodeRepoTree(encodeRepoTree(tree));
+  assertEquals(decoded?.entries.get("src"), { sha: TREE_A, type: "tree", size: undefined });
+  assertEquals(decoded?.entries.get("vendor/lib"), { sha: COMMIT_A, type: "commit", size: undefined });
 });
 
 // Anything we cannot read has to mean "fetch it again". Inventing an empty tree from a
@@ -516,12 +571,19 @@ Deno.test("the encoding names no keys per entry, and stops early for a non-blob"
 // permits the overwrite.
 Deno.test("an unreadable cache value is a miss, never an empty tree", () => {
   assertEquals(decodeRepoTree("not json at all"), undefined);
-  assertEquals(decodeRepoTree(JSON.stringify({ v: 2, t: 0, e: [] })), undefined);
-  assertEquals(decodeRepoTree(JSON.stringify({ v: 1, t: 0 })), undefined);
-  assertEquals(decodeRepoTree(JSON.stringify({ v: 1, t: 0, e: [["a.ts", 9]] })), undefined);
+  assertEquals(decodeRepoTree(JSON.stringify({ v: REPO_TREE_CACHE_VERSION, t: 0 })), undefined);
+  assertEquals(decodeRepoTree(JSON.stringify({ v: REPO_TREE_CACHE_VERSION, t: 0, e: [["a.ts", 9]] })), undefined);
   // A blob with no sha: two of those compare equal to each other, which reads as unmodified.
-  assertEquals(decodeRepoTree(JSON.stringify({ v: 1, t: 0, e: [["a.ts", 0]] })), undefined);
+  assertEquals(decodeRepoTree(JSON.stringify({ v: REPO_TREE_CACHE_VERSION, t: 0, e: [["a.ts", 0]] })), undefined);
   assertEquals(decodeRepoTree(undefined), undefined);
+  // A version we do not write, in either direction. v1 recorded a directory as its type
+  // alone, so decoding one would hand `classifyStudentFile` two empty shas that compare
+  // equal, which is the answer that permits the overwrite.
+  assertEquals(decodeRepoTree(JSON.stringify({ v: 1, t: 0, e: [["src", 1]] })), undefined);
+  assertEquals(
+    decodeRepoTree(JSON.stringify({ v: REPO_TREE_CACHE_VERSION + 1, t: 0, e: [["a.ts", 0, BLOB_A]] })),
+    undefined
+  );
 });
 
 Deno.test("nothing unresolved renders no section, so the caller can concatenate it blind", () => {

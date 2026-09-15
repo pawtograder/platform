@@ -100,15 +100,32 @@ async function getAssignmentTemplateSha(
  * unreachable, a sha stopped resolving because its history was rewritten, the E2E stub answered
  * in a shape with no status in it. Those repositories sync as they did before this check
  * existed. A guard for a rare ordering fault that can park every repository in a course when it
- * misreads its own input is worse than the fault, so only the two answers that MEAN the handout
- * moved the other way stop a sync.
+ * misreads its own input is worse than the fault, so only an answer that MEANS the handout
+ * moved the other way stops a sync.
+ *
+ * Which is why "diverged" is not one of them by itself. An instructor who force-pushes or
+ * rebases the handout's default branch leaves every repository's recorded revision on a
+ * history the new head does not descend from, and GitHub answers "diverged" for a target that
+ * is not stale at all but the very revision the assignment is advertising. Reading that as
+ * stale archived the job without touching the repository, and every retry reached the same
+ * answer: the repository stayed permanently behind, quietly, for as long as the handout kept
+ * that history. So a divergent target is checked against `advertisedSha`, the assignment's
+ * `latest_template_sha`. If they are the same commit, the handout's history was rewritten and
+ * this job carries the current revision; syncing it is the only way the repository ever
+ * catches up.
+ *
+ * That sync is safe to attempt because `getChangedFiles` compares with `...`, the three-dot
+ * form, which diffs from the MERGE BASE of the two revisions. Rewritten history changes which
+ * commit that is; it does not make the diff a revert of anything the student has, and paths
+ * untouched since the merge base are not in it.
  */
 async function classifyHandoutDirection(
   templateRepo: string,
   fromSha: string | null,
   toSha: string,
+  advertisedSha: string | null,
   scope: Sentry.Scope
-): Promise<"forward" | "identical" | "stale" | "unknown"> {
+): Promise<"forward" | "identical" | "stale" | "rewritten" | "unknown"> {
   // No recorded revision: the repository has never been synced, so every revision is forward.
   if (!fromSha) return "forward";
   if (fromSha === toSha) return "identical";
@@ -125,10 +142,13 @@ async function classifyHandoutDirection(
       repo,
       basehead: `${fromSha}...${toSha}`
     });
-    // `status` is relative to the base. "behind" and "diverged" are the two answers that say the
-    // handout does not contain this job's revision as a descendant, which is the case worth
-    // stopping for; everything else, including a status GitHub adds later, syncs.
-    if (data.status === "behind" || data.status === "diverged") return "stale";
+    // `status` is relative to the base. "behind" is the one answer that establishes this job's
+    // revision is OLDER than the one the repository reached; everything else, including a
+    // status GitHub adds later, syncs.
+    if (data.status === "behind") return "stale";
+    // Neither contains the other. Stale only if this is not the revision the assignment is
+    // advertising -- see the note above on a force-pushed handout.
+    if (data.status === "diverged") return advertisedSha && toSha === advertisedSha ? "rewritten" : "stale";
     if (data.status === "identical") return "identical";
     return "forward";
   } catch (error) {
@@ -1492,7 +1512,7 @@ export async function processEnvelope(
           // truncated-SHA false-positives in the past, see FixStuckSyncs `[truncated SHA]`).
           const { data: currentRepo } = await adminSupabase
             .from("repositories")
-            .select("synced_handout_sha, synced_repo_sha, sync_data")
+            .select("synced_handout_sha, synced_repo_sha, sync_data, assignments(latest_template_sha)")
             .eq("id", repository_id)
             .maybeSingle();
           // The handout revision this repo is actually on, read in the SAME row as
@@ -1522,8 +1542,27 @@ export async function processEnvelope(
           // changed files and records the revision: the early return above covers the case
           // where the row already holds to_sha, so what is left is a row holding no revision at
           // all, and skipping that one would leave it holding none.
-          const direction = await classifyHandoutDirection(template_repo, currentSyncedHandoutSha, to_sha, scope);
+          // The revision the assignment is advertising right now, which is what tells a
+          // force-pushed handout apart from a job the handout has moved past. Read from the
+          // same row as everything else above, so it costs no extra query.
+          const advertisedHandoutSha = currentRepo?.assignments?.latest_template_sha ?? null;
+          const direction = await classifyHandoutDirection(
+            template_repo,
+            currentSyncedHandoutSha,
+            to_sha,
+            advertisedHandoutSha,
+            scope
+          );
           scope.setTag("handout_direction", direction);
+          if (direction === "rewritten") {
+            Sentry.addBreadcrumb({
+              message:
+                `Handout ${template_repo} no longer contains ${(currentSyncedHandoutSha ?? "").substring(0, 7)}, ` +
+                `but ${to_sha.substring(0, 7)} is the revision the assignment advertises: its history was ` +
+                `rewritten, so ${repository_full_name} syncs from the merge base`,
+              level: "warning"
+            });
+          }
           if (direction === "stale") {
             Sentry.addBreadcrumb({
               message:
@@ -1534,15 +1573,115 @@ export async function processEnvelope(
             return true;
           }
 
+          // WHAT THIS JOB SAW WHEN IT STARTED, and the price of writing anything after the
+          // long GitHub work without checking it is still true.
+          //
+          // `processBatch` runs a batch of messages concurrently and `queue_repository_syncs`
+          // serializes nothing per repository, so two jobs for the same repository -- H2 and
+          // H3, or one message and its redelivery after the visibility timeout -- can both
+          // read the row at H1 and both classify as forward. The direction check above cannot
+          // see that: it runs before the work, and the overlap happens after. Whichever
+          // FINISHES second then writes its own outcome over the other's, and the outcomes are
+          // not interchangeable: an older merged job regresses synced_handout_sha and
+          // desired_handout_sha to its own to_sha, and an older blocked job replaces a live
+          // revision's blocked status and unresolved paths with its own.
+          //
+          // So every terminal write goes through here, and carries the revision this job
+          // classified against as a predicate. Postgres decides: the update matches no row if
+          // the revision moved, and a zero-row result means this job's conclusions describe a
+          // repository that no longer exists in that state. They are then discarded rather
+          // than applied -- see `retireStaleSync` for what happens to the job.
+          const applyRepositoryUpdate = async (
+            update: Database["public"]["Tables"]["repositories"]["Update"]
+          ): Promise<boolean> => {
+            const base = adminSupabase.from("repositories").update(update).eq("id", repository_id);
+            // `.eq` on a null value matches nothing in SQL, so a row that records no revision
+            // needs `.is`. Getting this wrong would make every first sync of a repository look
+            // stale and discard its own result.
+            const guarded =
+              currentSyncedHandoutSha === null
+                ? base.is("synced_handout_sha", null)
+                : base.eq("synced_handout_sha", currentSyncedHandoutSha);
+            const { data, error } = await guarded.select("id");
+            if (error) throw error;
+            const applied = (data?.length ?? 0) > 0;
+            if (!applied) scope.setTag("sync_write_lost_race", "true");
+            return applied;
+          };
+
+          /**
+           * What to do with a job whose write found the row already moved on.
+           *
+           * Not simply "drop it": the job that won the race may be the OLDER revision, in
+           * which case this one carries the update the instructor is waiting for and dropping
+           * it leaves the repository behind with nothing queued. So the row is re-read. If it
+           * now records this job's own target, the work is accounted for and the message is
+           * finished. Otherwise the job is requeued so it runs again against the state that is
+           * actually there, which is the only way its classification can be correct.
+           *
+           * Returns true either way, because the message itself is done: the requeued copy is
+           * a new message. `retry_count` bounds it at the same 5 the circuit breaker uses, and
+           * pgmq's read_ct bounds it again if this path is ever reached without requeueing.
+           */
+          const retireStaleSync = async (): Promise<boolean> => {
+            const { data: fresh } = await adminSupabase
+              .from("repositories")
+              .select("synced_handout_sha")
+              .eq("id", repository_id)
+              .maybeSingle();
+            if (!fresh) {
+              // The repository row is gone -- the assignment was deleted while this ran. There
+              // is nothing to write to and nothing a retry could find, so the job is finished.
+              scope.setTag("stale_sync_row_missing", "true");
+              Sentry.addBreadcrumb({
+                message: `Repository ${repository_id} (${repository_full_name}) no longer exists; dropping its sync job`,
+                level: "info"
+              });
+              return true;
+            }
+            const freshSha = fresh.synced_handout_sha ?? null;
+            scope.setTag("stale_sync_row_sha", (freshSha ?? "none").substring(0, 7));
+            if (freshSha === to_sha) {
+              Sentry.addBreadcrumb({
+                message:
+                  `Sync of ${repository_full_name} to ${to_sha.substring(0, 7)} finished after another job ` +
+                  `already recorded that revision; discarding this job's duplicate bookkeeping`,
+                level: "info"
+              });
+              return true;
+            }
+            const currentRetryCount = envelope.retry_count ?? 0;
+            if (currentRetryCount >= 5) {
+              Sentry.captureMessage(
+                `Sync of ${repository_full_name} to ${to_sha.substring(0, 7)} lost the write race ` +
+                  `${currentRetryCount} times; giving up and leaving the row as the winning job left it`,
+                scope
+              );
+              return true;
+            }
+            Sentry.addBreadcrumb({
+              message:
+                `Sync of ${repository_full_name} to ${to_sha.substring(0, 7)} was classified against ` +
+                `${(currentSyncedHandoutSha ?? "none").substring(0, 7)} but the row now reads ` +
+                `${(freshSha ?? "none").substring(0, 7)}; requeueing rather than writing a stale conclusion`,
+              level: "warning"
+            });
+            await requeueWithDelay(adminSupabase, envelope, 30, scope, queueName);
+            return true;
+          };
+
           // Persist an "in_progress" marker BEFORE the long work. This gives us
           // (a) durable evidence of the attempt even if the Edge Function isolate
           // is killed mid-handler (e.g. memory limit exceeded) — without this,
           // sync_data stays at the default `{}` and the repo looks like it was
           // never even tried, and (b) operational visibility (we can spot stuck
           // rows immediately in SQL without scraping pgmq).
-          await adminSupabase
-            .from("repositories")
-            .update({
+          //
+          // Guarded like every other write: a job that has already lost the race writes an
+          // in_progress marker over a live revision's status and then does minutes of GitHub
+          // work whose result is thrown away. Failing here costs nothing and skips all of it.
+          if (
+            !(await applyRepositoryUpdate({
               sync_data: {
                 status: "in_progress",
                 started_at: new Date().toISOString(),
@@ -1551,8 +1690,10 @@ export async function processEnvelope(
                 to_sha,
                 sync_strategy: sync_strategy ?? "template_pr"
               }
-            })
-            .eq("id", repository_id);
+            }))
+          ) {
+            return await retireStaleSync();
+          }
 
           // For fork-based assignments (mode 2 / mode 3) GitHub already knows the
           // upstream — one call to POST /repos/{owner}/{repo}/merge-upstream
@@ -1567,26 +1708,23 @@ export async function processEnvelope(
               scope
             );
             if (merge.kind === "synced" || merge.kind === "already_up_to_date") {
-              const { error: updateError } = await adminSupabase
-                .from("repositories")
-                .update({
-                  synced_handout_sha: to_sha,
-                  synced_repo_sha: merge.mergedSha,
-                  desired_handout_sha: to_sha,
-                  // GitHub merged the upstream itself, so anything that blocked a template_pr
-                  // attempt on an earlier revision is delivered now.
-                  sync_blocked_at: null,
-                  sync_block_reason: null,
-                  sync_data: {
-                    last_sync_attempt: new Date().toISOString(),
-                    status: merge.kind === "synced" ? "merged_via_fork_sync" : "no_changes_needed",
-                    sync_strategy: "fork_merge_upstream",
-                    upstream_repo_full_name: upstream_repo_full_name ?? null,
-                    merge_sha: merge.mergedSha
-                  }
-                })
-                .eq("id", repository_id);
-              if (updateError) throw updateError;
+              const applied = await applyRepositoryUpdate({
+                synced_handout_sha: to_sha,
+                synced_repo_sha: merge.mergedSha,
+                desired_handout_sha: to_sha,
+                // GitHub merged the upstream itself, so anything that blocked a template_pr
+                // attempt on an earlier revision is delivered now.
+                sync_blocked_at: null,
+                sync_block_reason: null,
+                sync_data: {
+                  last_sync_attempt: new Date().toISOString(),
+                  status: merge.kind === "synced" ? "merged_via_fork_sync" : "no_changes_needed",
+                  sync_strategy: "fork_merge_upstream",
+                  upstream_repo_full_name: upstream_repo_full_name ?? null,
+                  merge_sha: merge.mergedSha
+                }
+              });
+              if (!applied) return await retireStaleSync();
               recordMetric(
                 adminSupabase,
                 {
@@ -1645,6 +1783,28 @@ export async function processEnvelope(
             scope
           });
 
+          // The pull request an EARLIER revision opened, read from the row that was already
+          // fetched above so it costs no extra query. Both outcomes that end without one of
+          // their own carry it forward: a blocked revision and a terminal failure. That PR is
+          // still open on GitHub and is still the thing the student has to merge, so writing
+          // sync_data without it would delete the instructor's only link to it and move the
+          // row out of the "PR Open" status into one that says there is nothing to act on.
+          const priorSyncData = (currentRepo?.sync_data ?? {}) as {
+            pr_number?: number;
+            pr_url?: string;
+            pr_state?: string;
+            branch_name?: string;
+          };
+          const carriedPr =
+            priorSyncData.pr_state === "open" && priorSyncData.pr_number
+              ? {
+                  pr_number: priorSyncData.pr_number,
+                  pr_url: priorSyncData.pr_url,
+                  pr_state: priorSyncData.pr_state,
+                  branch_name: priorSyncData.branch_name
+                }
+              : {};
+
           if (!result.success) {
             // A TERMINAL failure is about this one repository and fails the same way on every
             // attempt: a student pushed their own commits onto the sync branch, the branch moved
@@ -1677,24 +1837,28 @@ export async function processEnvelope(
               // producer of sync_repo_to_handout jobs, and it opens with an auth.uid() check, so
               // every job exists because a person asked for one. A repository that keeps failing
               // this way costs one job per press, which is exactly what pressing Sync means.
-              const { error: updateError } = await adminSupabase
-                .from("repositories")
-                .update({
-                  sync_blocked_at: new Date().toISOString(),
-                  // The code names the case; the message the error class carries names what the
-                  // person has to do about it: merge or close the pull request, wait for the
-                  // branch to settle, split the handout change. Taking that message as-is keeps
-                  // the two from drifting apart.
-                  sync_block_reason: `${terminalReason}: ${result.error ?? "no further detail was recorded"}`,
-                  sync_data: {
-                    last_sync_attempt: new Date().toISOString(),
-                    last_sync_error: result.error ?? terminalReason,
-                    status: "error",
-                    terminal_reason: terminalReason
-                  }
-                })
-                .eq("id", repository_id);
-              if (updateError) throw updateError;
+              const applied = await applyRepositoryUpdate({
+                sync_blocked_at: new Date().toISOString(),
+                // The code names the case; the message the error class carries names what the
+                // person has to do about it: merge or close the pull request, wait for the
+                // branch to settle, split the handout change. Taking that message as-is keeps
+                // the two from drifting apart.
+                sync_block_reason: `${terminalReason}: ${result.error ?? "no further detail was recorded"}`,
+                sync_data: {
+                  // The pull request an earlier revision opened, for the same reason the
+                  // blocked outcome carries it: it is still open on GitHub, it is still the
+                  // thing the student has to merge, and replacing sync_data wholesale would
+                  // delete the instructor's only link to it and drop the row from "PR Open"
+                  // into "Sync Error" -- reporting a repository as having nothing to act on
+                  // when what it has is a pull request waiting.
+                  ...carriedPr,
+                  last_sync_attempt: new Date().toISOString(),
+                  last_sync_error: result.error ?? terminalReason,
+                  status: "error",
+                  terminal_reason: terminalReason
+                }
+              });
+              if (!applied) return await retireStaleSync();
               Sentry.addBreadcrumb({
                 message: `Sync of ${repository_full_name} stopped terminally (${terminalReason}); a human has to act on it`,
                 level: "warning"
@@ -1723,47 +1887,26 @@ export async function processEnvelope(
             // Re-running a blocked sync re-classifies, re-blocks, and overwrites this same
             // object, so repeated attempts accumulate nothing.
             //
-            // The pull request an EARLIER revision opened is carried across rather than
-            // dropped. That PR is still open on GitHub and is still the thing the student
-            // has to merge, so replacing sync_data wholesale would delete the instructor's
-            // only link to it and drop the row out of the "PR Open" status. Read from the
-            // row that was already fetched above, so this costs no extra query.
-            const priorSyncData = (currentRepo?.sync_data ?? {}) as {
-              pr_number?: number;
-              pr_url?: string;
-              pr_state?: string;
-              branch_name?: string;
-            };
-            const carriedPr =
-              priorSyncData.pr_state === "open" && priorSyncData.pr_number
-                ? {
-                    pr_number: priorSyncData.pr_number,
-                    pr_url: priorSyncData.pr_url,
-                    pr_state: priorSyncData.pr_state,
-                    branch_name: priorSyncData.branch_name
-                  }
-                : {};
+            // `carriedPr` keeps the pull request an EARLIER revision opened; see where it is
+            // built for why dropping it would cost the instructor their only link to it.
             const blockingPaths = result.unresolved_paths ?? [];
             const namedPaths = blockingPaths.slice(0, 3).join(", ");
-            const { error: updateError } = await adminSupabase
-              .from("repositories")
-              .update({
-                sync_blocked_at: new Date().toISOString(),
-                sync_block_reason:
-                  `${blockingPaths.length} file(s) changed in the handout are the student's own work` +
-                  (namedPaths
-                    ? `: ${namedPaths}${blockingPaths.length > 3 ? ` and ${blockingPaths.length - 3} more` : ""}`
-                    : ""),
-                sync_data: {
-                  ...carriedPr,
-                  last_sync_attempt: new Date().toISOString(),
-                  status: "blocked_by_student_changes",
-                  blocked_handout_sha: to_sha,
-                  unresolved_paths: blockingPaths
-                }
-              })
-              .eq("id", repository_id);
-            if (updateError) throw updateError;
+            const applied = await applyRepositoryUpdate({
+              sync_blocked_at: new Date().toISOString(),
+              sync_block_reason:
+                `${blockingPaths.length} file(s) changed in the handout are the student's own work` +
+                (namedPaths
+                  ? `: ${namedPaths}${blockingPaths.length > 3 ? ` and ${blockingPaths.length - 3} more` : ""}`
+                  : ""),
+              sync_data: {
+                ...carriedPr,
+                last_sync_attempt: new Date().toISOString(),
+                status: "blocked_by_student_changes",
+                blocked_handout_sha: to_sha,
+                unresolved_paths: blockingPaths
+              }
+            });
+            if (!applied) return await retireStaleSync();
             Sentry.addBreadcrumb({
               message:
                 `Handout ${to_sha.substring(0, 7)} not delivered to ${repository_full_name}: ` +
@@ -1785,52 +1928,46 @@ export async function processEnvelope(
             // this guard exists to prevent. So when the helper reports no head, the baseline
             // stays where it is: their work keeps reading as theirs.
             const helperRepoHead = result.repo_head_sha;
-            const { error: updateError } = await adminSupabase
-              .from("repositories")
-              .update({
-                synced_handout_sha: to_sha,
-                ...(helperRepoHead ? { synced_repo_sha: helperRepoHead } : {}),
-                desired_handout_sha: to_sha,
-                // This sync delivered everything the handout held, so whatever blocked an
-                // earlier revision no longer does.
-                sync_blocked_at: null,
-                sync_block_reason: null,
-                sync_data: {
-                  last_sync_attempt: new Date().toISOString(),
-                  status: "no_changes_needed"
-                }
-              })
-              .eq("id", repository_id);
-            if (updateError) throw updateError;
+            const applied = await applyRepositoryUpdate({
+              synced_handout_sha: to_sha,
+              ...(helperRepoHead ? { synced_repo_sha: helperRepoHead } : {}),
+              desired_handout_sha: to_sha,
+              // This sync delivered everything the handout held, so whatever blocked an
+              // earlier revision no longer does.
+              sync_blocked_at: null,
+              sync_block_reason: null,
+              sync_data: {
+                last_sync_attempt: new Date().toISOString(),
+                status: "no_changes_needed"
+              }
+            });
+            if (!applied) return await retireStaleSync();
           } else {
-            const { error: updateError } = await adminSupabase
-              .from("repositories")
-              .update({
-                // Not the envelope's from_sha: writing that back would move
-                // synced_handout_sha BACKWARDS when a newer sync has already advanced it.
-                synced_handout_sha: result.merged ? to_sha : currentSyncedHandoutSha,
-                synced_repo_sha: result.merged ? result.merge_sha : undefined,
-                desired_handout_sha: to_sha,
-                // Cleared on both shapes. A merge delivered the update; an open pull request is
-                // the thing the student has to act on, and the instructor has a link to click.
-                // Neither is a repo the Sync button should have to force its way past.
-                sync_blocked_at: null,
-                sync_block_reason: null,
-                sync_data: {
-                  pr_number: result.pr_number,
-                  pr_url: result.pr_url,
-                  pr_state: result.merged ? "merged" : "open",
-                  branch_name: `sync-to-${to_sha.substring(0, 7)}`,
-                  last_sync_attempt: new Date().toISOString(),
-                  merge_sha: result.merge_sha,
-                  // Files the sync left to the student even though a PR was opened for the
-                  // rest. Recorded so the instructor can name them after the PR is merged
-                  // and the row goes back to reading "Synced"; absent on a clean sync.
-                  unresolved_paths: result.unresolved_paths
-                }
-              })
-              .eq("id", repository_id);
-            if (updateError) throw updateError;
+            const applied = await applyRepositoryUpdate({
+              // Not the envelope's from_sha: writing that back would move
+              // synced_handout_sha BACKWARDS when a newer sync has already advanced it.
+              synced_handout_sha: result.merged ? to_sha : currentSyncedHandoutSha,
+              synced_repo_sha: result.merged ? result.merge_sha : undefined,
+              desired_handout_sha: to_sha,
+              // Cleared on both shapes. A merge delivered the update; an open pull request is
+              // the thing the student has to act on, and the instructor has a link to click.
+              // Neither is a repo the Sync button should have to force its way past.
+              sync_blocked_at: null,
+              sync_block_reason: null,
+              sync_data: {
+                pr_number: result.pr_number,
+                pr_url: result.pr_url,
+                pr_state: result.merged ? "merged" : "open",
+                branch_name: `sync-to-${to_sha.substring(0, 7)}`,
+                last_sync_attempt: new Date().toISOString(),
+                merge_sha: result.merge_sha,
+                // Files the sync left to the student even though a PR was opened for the
+                // rest. Recorded so the instructor can name them after the PR is merged
+                // and the row goes back to reading "Synced"; absent on a clean sync.
+                unresolved_paths: result.unresolved_paths
+              }
+            });
+            if (!applied) return await retireStaleSync();
           }
 
           recordMetric(

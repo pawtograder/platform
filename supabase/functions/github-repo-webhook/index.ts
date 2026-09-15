@@ -4100,7 +4100,7 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
       // Find the repository in our database
       const { data: repo, error: repoError } = await adminSupabase
         .from("repositories")
-        .select("id, synced_handout_sha, desired_handout_sha")
+        .select("id, synced_handout_sha, desired_handout_sha, sync_data, sync_blocked_at")
         .eq("repository", repoFullName)
         .maybeSingle();
 
@@ -4120,8 +4120,39 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
       const shortSha = branchName.replace("sync-to-", "");
 
       // Use the full SHA from desired_handout_sha if it matches the short SHA prefix,
-      // otherwise fall back to the short SHA (handles edge cases)
-      const syncedSha = repo.desired_handout_sha?.startsWith(shortSha) ? repo.desired_handout_sha : shortSha;
+      // otherwise fall back to the short SHA (handles edge cases). synced_handout_sha is tried
+      // too: when a LATER revision has already raised desired_handout_sha, it is the row's
+      // other recorded sha that this branch can still name in full.
+      const syncedSha = repo.desired_handout_sha?.startsWith(shortSha)
+        ? repo.desired_handout_sha
+        : repo.synced_handout_sha?.startsWith(shortSha)
+          ? repo.synced_handout_sha
+          : shortSha;
+
+      // WHICH REVISION THIS PULL REQUEST IS FOR, and why the answer decides what survives.
+      //
+      // A sync that could not be delivered records `blocked_by_student_changes` along with the
+      // revision it was blocked at and the paths that blocked it, and it carries forward the
+      // pull request an EARLIER revision opened, because that PR is still open and still the
+      // thing the student has to merge. When they merge it, this handler runs -- for the older
+      // revision. Replacing sync_data wholesale then deleted a live revision's status and its
+      // unresolved paths, while sync_blocked_at stayed set: the row read "Sync Finalizing",
+      // the instructor lost the only record of what was actually blocking, and the durable
+      // marker sat there with nothing to explain it.
+      //
+      // The branch name carries the revision as its 7-character prefix, which is what makes
+      // the two cases distinguishable at all.
+      const priorSyncData = (repo.sync_data ?? {}) as {
+        status?: string;
+        blocked_handout_sha?: string;
+        unresolved_paths?: string[];
+      };
+      const blockedRevision =
+        priorSyncData.status === "blocked_by_student_changes" ? priorSyncData.blocked_handout_sha : undefined;
+      // Only a block on a DIFFERENT revision survives. When the merged PR is the blocked
+      // revision's own, merging it is what unblocked the repository.
+      const stillBlockedOnNewerRevision = !!blockedRevision && !blockedRevision.startsWith(shortSha);
+      scope.setTag("sync_pr_merge_preserves_block", String(stillBlockedOnNewerRevision));
 
       // For "Rebase and merge" PRs, merge_commit_sha is null, so fall back to head SHA
       const effectiveMergeSha = payload.pull_request.merge_commit_sha || payload.pull_request.head.sha;
@@ -4136,7 +4167,20 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
         .update({
           synced_handout_sha: syncedSha,
           synced_repo_sha: effectiveMergeSha,
+          // The marker is cleared by a merge of the revision it was set for, and only that.
+          // A newer revision is still undelivered and still needs a person, so its retry
+          // record has to outlive an older pull request being merged.
+          ...(stillBlockedOnNewerRevision ? {} : { sync_blocked_at: null, sync_block_reason: null }),
           sync_data: {
+            // The newer revision's blocked state, kept ahead of this PR's bookkeeping so a
+            // merge of an older pull request cannot report the repository as finished.
+            ...(stillBlockedOnNewerRevision
+              ? {
+                  status: "blocked_by_student_changes",
+                  blocked_handout_sha: blockedRevision,
+                  unresolved_paths: priorSyncData.unresolved_paths
+                }
+              : {}),
             pr_number: payload.pull_request.number,
             pr_url: payload.pull_request.html_url,
             pr_state: "merged",

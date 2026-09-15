@@ -281,6 +281,20 @@ async function main() {
           // before it ever reaches the blocked branch, so the badge and the list of
           // blocking files never appear, and the only record is this script's stdout.
           desired_handout_sha: repo.assignments.latest_template_sha,
+          // And the durable half of the same problem. Raising desired_handout_sha to the
+          // latest sha is exactly the state `queue_repository_syncs` reads as "nothing
+          // pending", so without this timestamp the only clause that could ever queue this
+          // repository again is p_force -- reachable from the Sync button, invisible to the
+          // autograder toggle, which would report an assignment fully propagated while this
+          // repository still holds the wrong workflow. 20260913120000 added the column for
+          // this outcome; recording it in the worker and not here left the script's blocked
+          // repositories in the trap the column exists to close.
+          sync_blocked_at: new Date().toISOString(),
+          sync_block_reason:
+            `${paths.length} file(s) changed in the handout are the student's own work` +
+            (paths.length > 0
+              ? `: ${paths.slice(0, 3).join(", ")}${paths.length > 3 ? ` and ${paths.length - 3} more` : ""}`
+              : ""),
           sync_data: {
             last_sync_attempt: new Date().toISOString(),
             status: "blocked_by_student_changes",
@@ -297,6 +311,12 @@ async function main() {
         .update({
           synced_handout_sha: repo.assignments.latest_template_sha,
           desired_handout_sha: repo.assignments.latest_template_sha,
+          // Cleared on every outcome that delivered something, the same three the worker
+          // clears it on. A marker left behind by an earlier blocked attempt is durable by
+          // design, so nothing but a delivery may remove it -- and if nothing did, this
+          // repository would keep being queued forever after it was already fixed.
+          sync_blocked_at: null,
+          sync_block_reason: null,
           sync_data: {
             last_sync_attempt: new Date().toISOString(),
             status: "no_changes_needed"
@@ -320,6 +340,8 @@ async function main() {
             synced_handout_sha: repo.assignments.latest_template_sha,
             synced_repo_sha: result.merge_sha,
             desired_handout_sha: repo.assignments.latest_template_sha,
+            sync_blocked_at: null,
+            sync_block_reason: null,
             sync_data: {
               pr_number: result.pr_number,
               pr_url: result.pr_url,
@@ -343,6 +365,11 @@ async function main() {
           .from("repositories")
           .update({
             desired_handout_sha: repo.assignments.latest_template_sha,
+            // An open pull request is a delivery: it is on GitHub and it is the thing the
+            // student has to merge, so it is not a repository the Sync button should have to
+            // force its way past.
+            sync_blocked_at: null,
+            sync_block_reason: null,
             sync_data: {
               pr_number: result.pr_number,
               pr_url: result.pr_url,
