@@ -866,13 +866,12 @@ function GroupDetails({
 
 function RepositoryLabel({ repository }: { repository: Repository }) {
   const { role } = useClassProfiles();
-  const label = (
-    <>
-      {repository.repository} {repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
-    </>
-  );
   if (!role.github_org_confirmed) {
-    return <Text as="span">{label}</Text>;
+    return (
+      <Text as="span">
+        {repository.repository} (requires GitHub authorization to access)
+      </Text>
+    );
   }
   return (
     <Link
@@ -880,7 +879,7 @@ function RepositoryLabel({ repository }: { repository: Repository }) {
       data-visual-test="transparent"
       data-visual-placeholder="repository"
     >
-      {label}
+      {repository.repository} {repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
     </Link>
   );
 }
