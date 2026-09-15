@@ -2,17 +2,25 @@
 --
 -- WHAT CHANGED UPSTREAM. _shared/orgLeaseRun.ts now refills continuously: rather than claiming n
 -- messages, running all of them to completion and claiming again, it keeps n in flight and tops up
--- the shortfall as each one settles. Simulated against production's duration distribution that
--- lifts per-leaseholder utilization from 69.5 percent to 99.1 percent.
+-- the shortfall as each one settles.
+--
+-- THE 99.1 PERCENT HEADLINE IS A SIMULATION, AND AN UPPER BOUND RATHER THAN A FORECAST. Replaying
+-- production's measured duration distribution through the real lease code takes per-leaseholder
+-- utilization from 69.5 percent to 99.1 percent (orgLeaseRun.test.ts, "the continuous-refill switch
+-- picks the drain shape"). That harness runs ONE leaseholder against ONE org, charges every claim a
+-- flat 20 ms, and has neither lock contention nor a competing claimer, so the only loss it can
+-- express is the ramp-down as the burst runs out. Quote it with those assumptions attached. The
+-- loss refill removes was measured rather than simulated; orgLeaseRun.ts carries that arithmetic.
 --
 -- WHAT THAT BROKE, AND IT IS IN THIS FILE RATHER THAN THAT ONE. claim_org_slot_and_read re-picks
 -- the neediest org on every call and re-points the caller's slot row at whatever it picked. Under
--- batch-and-wait that was safe by construction: a rotation could only land BETWEEN batches, when
--- the holder had nothing running. Under refill a top-up can come back with a different org while up
--- to n-1 messages of the previous org are still executing. The slot table then attributes the
--- holder to the new org, and the old org's stragglers become concurrency the allocator no longer
--- counts against it. Its effective in-flight can reach max_per_org * n + (n - 1), which is 11 at
--- the shipped values rather than 8.
+-- batch-at-a-time that was safe by construction: a rotation could only land BETWEEN batches, when
+-- the leaseholder had nothing running. Under refill a top-up can come back with a different org
+-- while up to n-1 messages of the previous org are still executing. The slot table then attributes
+-- the leaseholder to the new org, and the old org's stragglers become concurrency the allocator no
+-- longer counts against it. Its effective in-flight can reach max_per_org * n + (n - 1): 11 against
+-- a budgeted 8 at the recommended max_per_org 2 with n 4, and 7 against 4 at the chart default
+-- max_per_org of 1.
 --
 -- The overrun is small, it is bounded by one message's duration, and it cannot happen during a
 -- single-org burst because there is nothing to rotate to. It is still the same defect class this
@@ -37,23 +45,118 @@
 -- already has rather than acquiring more.
 --
 -- AND WHY A PINNED TOP-UP IS NOT SENSITIVE TO n, which is worth stating because the refill driver
--- passes the SHORTFALL as n rather than the leaseholder's configured concurrency. The target is
--- least(ceil(ready / n) + a_all, max_per_org), so a smaller n inflates ceil(ready / n) and the
--- ceil term stops throttling; max_per_org becomes the only binding constraint. For a caller that
--- ALREADY HOLDS A SLOT on the org it is pinning, that does not matter at all, because such a caller
--- is admitted regardless of n:
+-- passes the SHORTFALL as n rather than the leaseholder's configured concurrency. NOTHING IS
+-- SENSITIVE TO n, AND THAT IS A BIGGER STATEMENT THAN IT SOUNDS, so it is written out here rather
+-- than left as a per-caller argument: the ceil(ready / n) term in the admission test cannot change
+-- the outcome for ANY caller, pinned or not. The test is
 --
---   a_all counts live slots for the org INCLUDING this holder, a_others EXCLUDES it, so
---   a_others = a_all - 1. Admission needs a_others < target. Either the cap binds, and
---   target = max_per_org >= a_all > a_all - 1 = a_others; or it does not, and
---   target = ceil(ready / n) + a_all >= 1 + a_all > a_others. Both hold for every n >= 1.
+--     a_others < least(ceil(ready / n) + a_all, max_per_org)
 --
--- So the n sensitivity applies only to NEW admissions, which under refill are the unpinned calls the
--- driver makes when nothing is in flight, and those pass the full concurrency. It is still a real
--- edge for any future caller that claims fresh capacity with a small n: max_per_org and global_cap
--- are unaffected and breadth-first ordering is unaffected, but ceil(ready / n) stops keeping an org
--- with two ready messages from occupying several slots. Pass the leaseholder's concurrency as n on
--- an unpinned claim.
+-- and `demand` only contains orgs with ready >= 1 while n >= 1 is validated above, so
+-- ceil(ready / n) >= 1. a_others counts a subset of what a_all counts, so a_others <= a_all. Hence
+--
+--     ceil(ready / n) + a_all >= 1 + a_all > a_all >= a_others
+--
+-- is a tautology, the ceil arm of the least() can never be the binding one, and the whole predicate
+-- reduces to
+--
+--     a_others < max_per_org
+--
+-- for every reachable value of ready, n, a_all and a_others. (Checked exhaustively over
+-- a_all 0..8 x a_others 0..a_all x ready 1..60 x n 1..8 x max_per_org 1..8: zero divergences.)
+--
+-- THIS IS NOT THE SAME CLAIM THE 2026-09-12 MIGRATION MADE, and the difference is why it is spelled
+-- out. That file added `+ a_all` to stop an org being throttled by its OWN progress -- ready counts
+-- only visible messages, so each claim hid n of them and an org with 8 ready and max_per_org 2
+-- computed a target of 1 after its first claim. The fix works, and it over-corrects: adding back one
+-- unit per HELD SLOT is always at least as large as the number of competitors being compared
+-- against, so it does not merely restore the org's own headroom, it removes the ceil throttle
+-- entirely. The prose in that file still describes a throttle that has not been in force since; it
+-- is an applied migration, so it is left as the record of what was believed then. The function
+-- comment at the bottom of THIS file has been corrected to match the proof above.
+--
+-- NOTHING HERE DEPENDS ON THAT, which is the reason this migration states it rather than changes it.
+-- Pinning, the own-row reuse and the per-org cap are all arguments about max_per_org, global_cap and
+-- breadth-first ordering, and all three are untouched. But two live consequences follow and should
+-- be decided deliberately rather than inherited:
+--
+--   * An org with ONE ready message is admitted to as many slots as max_per_org allows. The ceil
+--     term was what used to stop that.
+--   * The ORDER BY's second key, least(...) - a_others, is the "unmet demand descending" tiebreak.
+--     Once least() saturates at max_per_org for every competing org, that key is constant among
+--     ties and the winner is decided by the THIRD key, d.org asc. Saturation is immediate at the
+--     chart default max_per_org of 1, since ceil(ready / n) >= 1 always; at the recommended 2 it
+--     takes ready > n for an org holding no slot, and is again immediate for one that holds any.
+--     Among orgs holding equally many slots the next one served is therefore alphabetical, not
+--     neediest-first.
+--
+-- Breadth before depth still holds regardless: it is the FIRST key, a_others asc, and it is
+-- unaffected by any of this.
+
+-- THE CLASS FALLBACK IS A PER-ROW LOOKUP NOW, NOT A JOIN, AND THIS IS THE INDEX THAT PAYS FOR IT.
+--
+-- The org resolver below reaches classes.github_org through a correlated scalar subquery rather
+-- than through a left join. Two things follow, and only the first was the goal:
+--
+-- 1. THE RESOLVER BECOMES AN EXPRESSION OVER ONE QUEUE ROW, with no join obligation on whoever
+--    uses it. That is what lets the same expression drive a scan that reads the whole backlog and
+--    a scan that reads four rows and stops. A join has to be set up before anything can be
+--    filtered, so the four-row scan was not available while the resolver needed one.
+--
+-- 2. THE PLANNER PRICES IT PER ROW, and that is what makes the four-row scan get CHOSEN rather
+--    than merely be possible. `picked` asks for the n lowest ready msg_ids of one org; the planner
+--    cannot estimate how selective an org predicate is, so it has to choose between reading the
+--    primary key in order and stopping early, and reading everything and sorting. A correlated
+--    subquery is costed per call, so both plans carry N times that cost while only the ordered one
+--    gets to divide its total by the LIMIT fraction -- and the deeper the queue, the more
+--    decisively the ordered plan wins. Replacing the subquery with something the planner thinks is
+--    free (a jsonb map of the whole classes table, built once) flips `picked` back to
+--    scan-and-sort: 1.8 ms per pinned claim becomes 10.9 ms at a 5000-message backlog. Measured,
+--    not assumed. The corollary is that the early stop is a PLAN choice and not a structural
+--    guarantee, so it is stable only while the resolver stays expensive enough to earn the
+--    LIMIT-fraction discount.
+--
+-- WHAT IT BOUGHT. Per-claim milliseconds, before this rewrite and after, min of 3 runs of 20
+-- claims against a 6000-message fixture over 4 orgs (70/10/10/10) and a 414-row public.classes:
+--
+--     queue depth   unpinned, fresh claim   pinned top-up    unpinned top-up
+--               0       3.13 -> 2.87          3.08 -> 2.89     3.02 -> 2.92
+--            2000       8.55 -> 6.86         10.55 -> 1.79    10.45 -> 6.59
+--            5000      16.96 -> 12.64        22.80 -> 1.78    23.02 -> 12.05
+--
+-- The pinned top-up is the claim refill issues on every settled message, and it is now FLAT in
+-- queue depth. EXPLAIN at depth 5000 says where that came from: 10,964 shared buffer hits and
+-- 24.5-26.6 ms of execution become 111 hits and 0.96-1.30 ms. An unpinned claim still has to see
+-- every org, so the same measurement gives 10,964 hits and 26.8-30.2 ms before against 2,799 and
+-- 14.0-17.9 ms after.
+--
+-- WHAT IT COSTS, because it is not free. A left join reads classes once per statement; this reads
+-- it once per message whose envelope carried no org, which production measures at about one in
+-- seven. Without an index that is a sequential scan per row and it is ruinous -- 100 ms per call
+-- on a 5000-message backlog against a few-hundred-row classes. With the index below it is 12 ms.
+--
+-- AND THERE IS A REGRESSION, ON THE UNPINNED PATH. That path scans the whole backlog either way, so
+-- it gains nothing from the early stop while still paying a class lookup per fallback row. On the
+-- 2400-message, six-org, one-in-three-fallback shape the concurrency scenario uses, an unpinned
+-- claim goes from 8.01 ms to 10.07 ms and the storm's aggregate throughput from 143-147 to 114-120
+-- claim calls per second. Production should see a milder version: its fallback rate is one in seven
+-- rather than one in three, and globalCap 8 bounds the claimers to a sixth of the storm's 48
+-- concurrent sessions. Milder is not absent, and this is the number to watch if unpinned claims
+-- ever become the common ones.
+--
+-- THE BOUND IS NOT QUEUE DEPTH, IT IS THE OFFSET OF THE PINNED ORG'S FIRST READY MESSAGE, which is
+-- the other thing the shape of the queue decides. `picked` walks msg_id ascending and stops at the
+-- nth match, so a pinned claim is flat only while its org's work is reachable early. Laid out as
+-- four contiguous 1250-message blocks, one org each, a pinned claim on the FRONT block goes
+-- 16.12 -> 1.71 ms and one on the BACK block 16.34 -> 10.89 ms. The interleaved fixture above is
+-- the realistic shape for a platform whose orgs release independently; one org's bulk enqueue
+-- sitting entirely behind another's is not, and it is where the flatness stops.
+--
+-- Indexed on the SAME id::text the resolver compares, because the resolver deliberately casts the
+-- class id rather than the envelope (a malformed class_id must not raise) and an index on plain
+-- `id` cannot serve that comparison. classes is a few hundred rows written a few times a term, so
+-- the maintenance cost is nil.
+create index if not exists classes_id_text_idx on public.classes ((id::text));
 
 drop function if exists pgmq_public.claim_org_slot_and_read(text, integer, integer, text, integer, integer, integer);
 
@@ -86,6 +189,74 @@ declare
   -- from classes.github_org or from an envelope would otherwise fail to match its own org and read
   -- back 'no_demand' forever.
   v_pin text := lower(pin_org);
+  -- THE PARTITION KEY, DEFINED ONCE. Both `demand` and `picked` below are handed THIS string by
+  -- format(), because the two of them disagreeing about which org a message belongs to would mean
+  -- claiming a slot for one org and then reading another org's work. It used to be written out once
+  -- inside a `ready` CTE that `picked` then semijoined to on msg_id; carrying it as one interpolated
+  -- expression is the same guarantee -- one definition, one place to edit -- without forcing every
+  -- consumer to materialize the whole backlog first.
+  --
+  -- It is an expression over ONE QUEUE ROW and nothing else. `q` is the only alias it mentions, so
+  -- any scan of a queue table can apply it directly, including one that stops after four rows. See
+  -- the note above the classes index for why that matters and what it costs.
+  --
+  -- This MIRRORS the worker's own org resolver, the one guarding the circuit breaker in
+  -- github-async-worker/index.ts (the `if (envelope.method === ...)` chain that ends in
+  -- `throw new Error("Unknown method...")`). It has to: the budget must be charged to the org the
+  -- handler is going to call, and that resolver is what decides which org that is.
+  --
+  --   create_repo, sync_student_team, sync_staff_team, sync_repo_permissions,
+  --   archive_repo_and_lock, fetch_repo_analytics        -> args.org
+  --   rerun_autograder                                   -> owner of args.repository
+  --   sync_repo_to_handout                               -> owner of args.repository_full_name
+  --
+  -- The set is CLOSED, not open-ended: those eight are exactly the `case` labels in processEnvelope,
+  -- whose `default` arm throws `Unknown async method`, so a ninth method fails on every delivery and
+  -- ends up in the DLQ. Note the order, because it is the opposite of what "before it can reach
+  -- here" would suggest: the claim runs FIRST, so an unknown method reaches this expression before
+  -- any worker sees it, which is what the '(unknown-method)' bucket in decision 3 is for. The
+  -- circuit-breaker resolver throws too, but that one is caught and reported to Sentry rather than
+  -- failing the message. The three envelope fields are mutually exclusive by method, so the coalesce
+  -- order among them does not matter. Four decisions:
+  --
+  -- 1. THE ENVELOPE FIRST. The handler calls GitHub against the owner baked into the envelope, not
+  --    against whatever classes.github_org says today. If an instructor repoints a class at a new
+  --    org while jobs are queued, attributing that in-flight work to the new org charges the budget
+  --    to an org no handler is going to touch, and lets the old one exceed max_per_org.
+  --    split_part(x, '/', 1) is the SQL spelling of the resolver's repo.split("/")[0].
+  -- 2. classes.github_org as the FALLBACK, and it carries real traffic: args.org is missing from
+  --    about one envelope in seven, and those are not a random seventh. The lookup compares c.id::text rather than casting the envelope to bigint, which
+  --    cannot raise on a malformed class_id, and it puts the cast on `classes` (a few hundred rows,
+  --    indexed on exactly that expression above) instead of on every queued message. Because it
+  --    sits inside the coalesce it runs only when every envelope arm came back null -- that same
+  --    one row in seven -- rather than once per scanned row.
+  -- 3. A METHOD THIS LIST DOES NOT KNOW gets its own bucket rather than the class fallback. A method
+  --    whose name we do not recognize is a method whose org field we may not recognize either, so
+  --    falling back to the class would be the same silent mis-budgeting this whole expression exists
+  --    to stop. The bucket still drains like any other org, so nothing is stranded. Because the
+  --    worker's switch throws on every method outside the eight, a non-empty '(unknown-method)'
+  --    bucket in async_worker_slots.org means the two lists have drifted, and the messages in it are
+  --    on their way to the DLQ.
+  -- 4. lower() over the whole thing. GitHub org names are case-insensitive and one class in prod
+  --    already stores a mixed-case github_org, so 'Khoury-CS' and 'khoury-cs' are one org sharing
+  --    one rate-limit bucket. Without the fold they would each draw a full max_per_org allowance
+  --    against that single bucket.
+  v_org_expr constant text := $ORG$
+        case when q.message->>'method' in (
+                  'create_repo', 'sync_student_team', 'sync_staff_team',
+                  'sync_repo_permissions', 'archive_repo_and_lock', 'fetch_repo_analytics',
+                  'rerun_autograder', 'sync_repo_to_handout')
+             then lower(coalesce(
+                    nullif(q.message->'args'->>'org', ''),
+                    nullif(split_part(q.message->'args'->>'repository', '/', 1), ''),
+                    nullif(split_part(q.message->'args'->>'repository_full_name', '/', 1), ''),
+                    (select c.github_org
+                       from public.classes c
+                      where c.id::text = q.message->>'class_id'),
+                    '(unresolved)'))
+             else '(unknown-method)'
+        end
+  $ORG$;
   v_sql text;
 begin
   if holder is null or holder = '' then
@@ -102,7 +273,7 @@ begin
   end if;
   -- Empty string is a caller error rather than a way to spell "no pin", which is what the NULL
   -- default is for. Rejecting it matches how holder = '' is treated: a malformed argument arrives
-  -- as an exception the worker reports, not as a silent change of behaviour.
+  -- as an exception the worker reports, not as a silent change of behavior.
   if pin_org is not null and pin_org = '' then
     raise exception 'claim_org_slot_and_read: pin_org must be a non-empty org, or null for no pin';
   end if;
@@ -145,8 +316,8 @@ begin
   -- row lock at that instant, the preferred row is skipped and the claim takes a DIFFERENT free row
   -- instead. The holder then owns two rows in one pool, renew_org_slot refreshes both forever
   -- (it matches on queue and holder, not on slot), and the extra one occupies global_cap and
-  -- max_per_org while no isolate is doing its work. The global advisory lock does not help, because
-  -- it serializes allocators against each other and renew_org_slot never takes it.
+  -- max_per_org while no leaseholder is doing its work. The global advisory lock does not help,
+  -- because it serializes allocators against each other and renew_org_slot never takes it.
   --
   -- So the caller's own row is resolved in its own statement, with a plain blocking FOR UPDATE, and
   -- the claim below is then restricted to that one row. A row already locked by the CURRENT
@@ -190,69 +361,56 @@ begin
   end if;
 
   v_sql := format($QUERY$
-    with ready as (
-        -- The partition key, defined ONCE. Everything downstream reads it from here rather than
-        -- recomputing it, because `demand` and `picked` disagreeing about which org a message
-        -- belongs to would mean claiming a slot for one org and then reading another org's work.
+    with demand as (
+        -- HOW MANY READY MESSAGES EACH ORG HAS, except that the count is deliberately CAPPED and
+        -- the scan is deliberately allowed to stop early when the caller pinned an org.
         --
-        -- This MIRRORS the worker's own org resolver, the one guarding the circuit breaker in
-        -- github-async-worker/index.ts (the `if (envelope.method === ...)` chain that ends in
-        -- `throw new Error("Unknown method...")`). It has to: the budget must be charged to the org
-        -- the handler is going to call, and that resolver is what decides which org that is.
+        -- The org expression below is v_org_expr, the partition key declared once above, dropped
+        -- in by format() at the sixth argument. Note that a literal percent sign cannot appear
+        -- anywhere in this template -- including in these comments, which format() rewrites just
+        -- like the SQL around them -- although it can appear inside an interpolated argument.
         --
-        --   create_repo, sync_student_team, sync_staff_team, sync_repo_permissions,
-        --   archive_repo_and_lock, fetch_repo_analytics        -> args.org
-        --   rerun_autograder                                   -> owner of args.repository
-        --   sync_repo_to_handout                               -> owner of args.repository_full_name
+        -- THE PIN FILTER IS HERE as well as in `winner` and in the status arm below, where it is
+        -- now redundant. It is here because it is the only place it can stop the scan: a pinned
+        -- caller has exactly one candidate org, so every row belonging to any other org is work
+        -- this call will not use. The two redundant copies are left alone because they are where
+        -- the pin's MEANING is argued, and re-testing an equality against the handful of rows
+        -- `demand` returns costs nothing.
         --
-        -- The set is CLOSED, not open-ended: those eight are exactly the `case` labels in
-        -- processEnvelope, and the resolver throws on anything else, so a ninth method fails loudly
-        -- in the worker before it can reach here. The three envelope fields are mutually exclusive
-        -- by method, so the coalesce order among them does not matter. Four decisions:
+        -- THE CAP, WHICH IS THE PART THAT NEEDS AN ARGUMENT. `ready` escapes this CTE through
+        -- exactly one shape, least(ceil(ready / n) + a_all, max_per_org), which appears in the
+        -- winner's admission test and in its second ORDER BY key; the status arm below needs only
+        -- whether the org appears at all. That expression saturates: once ready >= n * max_per_org,
+        -- ceil(ready / n) >= max_per_org, so least() returns max_per_org whatever a_all is, and
+        -- below that the cap is not reached and the count is exact. A count clamped at
+        -- n * max_per_org is therefore indistinguishable from the true count in every consumer.
         --
-        -- 1. THE ENVELOPE FIRST. The handler calls GitHub against the owner baked into the
-        --    envelope, not against whatever classes.github_org says today. If an instructor
-        --    repoints a class at a new org while jobs are queued, attributing that in-flight work
-        --    to the new org charges the budget to an org no handler is going to touch, and lets the
-        --    old one exceed max_per_org. split_part(x, '/', 1) is the SQL spelling of the
-        --    resolver's repo.split("/")[0].
-        -- 2. classes.github_org as the FALLBACK, and it carries real traffic: args.org is missing
-        --    from about one envelope in seven (see the header for the measurement), and those are
-        --    not a random seventh. Joining on c.id::text rather than casting the envelope to bigint
-        --    cannot raise on a malformed class_id, and it puts the cast on `classes` (a few hundred
-        --    rows) instead of on every queued message.
-        -- 3. A METHOD THIS LIST DOES NOT KNOW gets its own bucket rather than the class fallback.
-        --    A method whose name we do not recognize is a method whose org field we may not
-        --    recognize either, so falling back to the class would be the same silent mis-budgeting
-        --    this whole expression exists to stop. The bucket still drains like any other org, so
-        --    nothing is stranded. Because the worker throws on exactly these methods, a non-empty
-        --    '(unknown-method)' bucket in async_worker_slots.org means the two lists have drifted.
-        -- 4. lower() over the whole thing. GitHub org names are case-insensitive and one class in
-        --    prod already stores a mixed-case github_org, so 'Khoury-CS' and 'khoury-cs' are one
-        --    org sharing one rate-limit bucket. Without the fold they would each draw a full
-        --    max_per_org allowance against that single bucket.
+        -- The clamp holds a fortiori under what is actually in force, since the header proves the
+        -- ceil arm cannot bind at all: the only thing this count decides today is whether the org
+        -- appears. The saturation argument is written out anyway so the clamp stays justified if
+        -- the admission test is ever repaired.
         --
-        -- Note that a literal percent sign cannot appear anywhere in this string, because the whole
-        -- block is a format() template.
-        select q.msg_id,
-               case when q.message->>'method' in (
-                         'create_repo', 'sync_student_team', 'sync_staff_team',
-                         'sync_repo_permissions', 'archive_repo_and_lock', 'fetch_repo_analytics',
-                         'rerun_autograder', 'sync_repo_to_handout')
-                    then lower(coalesce(
-                           nullif(q.message->'args'->>'org', ''),
-                           nullif(split_part(q.message->'args'->>'repository', '/', 1), ''),
-                           nullif(split_part(q.message->'args'->>'repository_full_name', '/', 1), ''),
-                           c.github_org,
-                           '(unresolved)'))
-                    else '(unknown-method)'
-               end as org
-          from pgmq.%1$I q
-          left join public.classes c on c.id::text = q.message->>'class_id'
-         where q.vt <= clock_timestamp()
-    ),
-    demand as (
-        select r.org, count(*)::int as ready from ready r group by 1
+        -- The clamp is applied ONLY on the pinned path, and that is not an accident. Clamping
+        -- unpinned would need a per-org limit, which needs the orgs enumerated, which needs the
+        -- whole scan -- there is nothing to save. It also keeps the clamp away from the one
+        -- consumer whose value is not provably inert: the ORDER BY tiebreak. A pinned call has at
+        -- most one candidate row, so it never orders anything.
+        --
+        -- LIMIT NULL is Postgres for "no limit", which is what the unpinned path gets: the same
+        -- exact per-org counts over the same full scan as before.
+        select r.org, count(*)::int as ready
+          from (
+                select r0.org
+                  from (
+                        select %6$s as org
+                          from pgmq.%1$I q
+                         where q.vt <= clock_timestamp()
+                       ) r0
+                 where $7 is null or r0.org = $7
+                 limit case when $7 is null then null::bigint
+                            else $2::bigint * $3::bigint end
+               ) r
+         group by 1
     ),
     live as (
         -- EVERY POOL, not just this queue's. Slot ROWS belong to a queue; the BUDGETS do not.
@@ -285,7 +443,11 @@ begin
          -- most one row can survive this filter.
          where ($7 is null or d.org = $7)
            and (select count(*) from live l2 where l2.holder is distinct from $1) < $4
-           -- target = ceil(ready/n) + slots already held, capped at max_per_org.
+           -- target = ceil(ready/n) + slots already held, capped at max_per_org. In force today
+           -- the ceil arm can never be the binding one, so this predicate is exactly
+           -- a_others < max_per_org; the header proves that and says why the term is still here.
+           -- Read the paragraph below as the record of why `+ a_all` was added, not as a live
+           -- throttle.
            --
            -- The `+ a_all` term is what stops an org being throttled by its own progress. `ready`
            -- counts only visible messages, so each claim hides n of them: an org with 8 ready and
@@ -333,19 +495,47 @@ begin
         returning s.org
     ),
     picked as (
-        -- pgmq.read's CTE with one extra predicate. Same ORDER BY msg_id, same LIMIT, same
-        -- FOR UPDATE SKIP LOCKED, but `OF q` rather than bare: the semijoin below means the org
-        -- expression is evaluated once in `ready` instead of again here, and locking is restricted
-        -- to the queue table either way.
+        -- pgmq.read's CTE with one extra predicate: the same ORDER BY msg_id, the same LIMIT, the
+        -- same FOR UPDATE SKIP LOCKED, and `OF q` rather than bare so locking stays on the queue
+        -- table.
+        --
+        -- THE PREDICATE IS THE RESOLVER ITSELF, applied to the row in front of us, rather than a
+        -- semijoin against a precomputed set of msg_ids. It is the same v_org_expr at the same
+        -- format argument as in `demand`, so the two cannot disagree. The semijoin form had to
+        -- materialize every ready row of the winning org and probe the queue's primary key once
+        -- per row before the LIMIT could discard all but n of them, and at a 5000-message backlog a
+        -- whole pinned claim cost 10,964 shared buffer hits to return four msg_ids. Written this
+        -- way the LIMIT is what bounds the scan -- walk msg_id ascending, resolve, stop at the nth
+        -- match -- and the same claim costs 111.
+        --
+        -- STOPPING EARLY IS A PLAN CHOICE, NOT A STRUCTURAL GUARANTEE, and the difference is what
+        -- the note above the classes index is about: the correlated resolver is costed per row, so
+        -- the LIMIT-fraction discount favors the ordered scan, and more decisively the deeper the
+        -- queue. Make the resolver cheap and the planner goes back to scan-and-sort. The same note
+        -- records what the bound actually is, which is the offset of the winning org's first ready
+        -- message rather than the depth of the queue.
+        --
+        -- The SKIP LOCKED semantics are unchanged by that, and this is the reason the limit is NOT
+        -- pushed into a subquery instead. LockRows sits under the Limit, so a row another reader
+        -- holds is skipped and the scan CONTINUES to the next candidate. Picking four msg_ids
+        -- first and locking them afterwards would return three messages whenever one of the four
+        -- was busy, which is a different function.
         --
         -- If `claimed` produced no row the scalar subquery is NULL, every comparison is NULL, and
         -- nothing is picked. That is the "no org qualified or no slot free" path, and it claims
         -- nothing.
+        --
+        -- The `exists` says the same thing a second time, and it is not redundant. It is an
+        -- uncorrelated subquery, so it is evaluated once and gates the scan as a one-time filter --
+        -- the same idiom `free_slot` uses above. Without it the NULL comparison is a per-row filter
+        -- that nothing can satisfy, and the scan still walks the entire queue in msg_id order
+        -- before returning nothing. Every 'no_demand' and 'no_capacity' call takes that path, which
+        -- is most of them once a burst is drained.
         select q.msg_id
           from pgmq.%3$I q
          where q.vt <= clock_timestamp()
-           and q.msg_id in (select r.msg_id from ready r
-                             where r.org = (select k.org from claimed k))
+           and exists (select 1 from claimed)
+           and %6$s = (select k.org from claimed k)
          order by q.msg_id asc
          limit $2
          for update of q skip locked
@@ -371,6 +561,10 @@ begin
     -- pinned has nothing ready", because that is the answer it acts on: it stops topping up and lets
     -- its in-flight work finish before it considers rotating. Reporting 'no_capacity' just because
     -- some OTHER org still has work would make a drained org look like a busy one forever.
+    -- Note which way round the two answers are asymmetric for a caller deciding whether to release:
+    -- 'no_demand' proves `claimed` never ran, whereas 'no_capacity' does NOT, because `claimed` can
+    -- commit a live lease and `picked` still return nothing when every candidate row is locked. See
+    -- the function comment below.
     select case when exists (select 1 from demand d where $7 is null or d.org = $7)
                 then 'no_capacity' else 'no_demand' end,
            null::text, null::bigint, null::integer, null::timestamptz, null::timestamptz, null::jsonb
@@ -380,7 +574,8 @@ begin
     make_interval(secs => lease_ttl_seconds),
     v_qtable,
     v_qtable,
-    make_interval(secs => sleep_seconds)
+    make_interval(secs => sleep_seconds),
+    v_org_expr
   );
 
   return query execute v_sql using holder, n, max_per_org, global_cap, v_queue, v_own_slot, v_pin;
@@ -390,17 +585,25 @@ $function$;
 comment on function pgmq_public.claim_org_slot_and_read(text, integer, integer, text, integer, integer, integer, text) is
   'Atomically claim one drain lease for the neediest eligible GitHub org on `queue_name` and return '
   'up to n of that org''s ready messages, with vt and read_ct updated exactly as pgmq.read would. '
-  'target(org) = least(ceil(ready/n), max_per_org); orgs are ordered by slots-held ascending FIRST '
-  '(breadth before depth) then by unmet demand descending; global_cap bounds the whole queue. '
-  'Messages whose class_id does not resolve to a classes.github_org are bucketed under the '
-  '(unresolved) sentinel so they still drain. Returns zero rows and claims nothing when no org '
-  'qualifies or no slot is free, exactly one row is returned with status no_demand (the queue has '
-  'no visible work) or no_capacity (work is waiting but the caps are full), so a caller can tell '
-  'the two apart before moving to a lower-priority queue. Serialized by one global advisory '
-  'transaction lock, because the caps are counted across every queue''s pool. pin_org restricts the '
-  'choice to one org, folded to lower case like every other org string here: with it set, no_demand '
-  'means that org is drained and no_capacity means its caps are full, and the allocator never falls '
-  'back to a different org.';
+  'An org is admitted while it holds fewer than max_per_org slots: the expression in the winner CTE '
+  'is least(ceil(ready/n) + slots_held, max_per_org), whose ceil arm provably cannot bind, so '
+  'max_per_org is the only per-org constraint -- see the header. Orgs are ordered by slots-held '
+  'ascending FIRST (breadth before depth), then by remaining headroom descending, then by org name; '
+  'the second key is constant once headroom saturates, so ties break alphabetically. global_cap '
+  'bounds the whole fleet across every queue''s pool. Messages whose class_id does not resolve to a '
+  'classes.github_org are bucketed under the (unresolved) sentinel, and messages whose method this '
+  'function does not know under (unknown-method), so both still drain and both can come back as the '
+  'org of a claim. Exactly one row is returned with status no_demand (the queue, or the pinned org, '
+  'has no visible work) or no_capacity (work is waiting but the caps are full, OR a slot was taken '
+  'and every candidate message was locked by a concurrent reader) when no messages are returned, '
+  'so a caller can tell the two apart before moving to a lower-priority queue. NOTE that '
+  'no_capacity does NOT imply nothing was written: the slot UPDATE is a data-modifying CTE that '
+  'commits whenever an org qualifies and a slot is free, even when the subsequent SKIP LOCKED read '
+  'returns nothing, so a caller that gets no_capacity must still release. Serialized by one global '
+  'advisory transaction lock, because the caps are counted across every queue''s pool. pin_org '
+  'restricts the choice to one org, folded to lower case like every other org string here: with it '
+  'set, no_demand means that org is drained and no_capacity means its caps are full, and the '
+  'allocator never falls back to a different org.';
 
 
 revoke all on function pgmq_public.claim_org_slot_and_read(text, integer, integer, text, integer, integer, integer, text)
