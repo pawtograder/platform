@@ -196,6 +196,74 @@ import { type EnvReader } from "./SentryContext.ts";
  *      rotating is free. Preemption is bought back by streaming ONLY the highest-priority queue;
  *      see `claim()`.
  *
+ * ## Why a pinned stream has a QUANTUM (2026-09-15)
+ *
+ * Point 4 closed a cap breach and opened a fairness hole. It makes that argument for QUEUES, calls
+ * the loss of upward preemption "a regression against batch-at-a-time, which re-probed at every
+ * boundary", and buys it back by streaming only the highest-priority queue. The identical property
+ * for ORGS is neither mentioned there nor bought back anywhere.
+ *
+ * WHAT IT COSTS. An unpinned claim is the only moment the allocator may move this holder's row onto
+ * a different org, and `claim()` issues one only with nothing in flight. A deep stream under refill
+ * never has nothing in flight; that is what refill IS. So a holder that took its slot while one org
+ * was backed up keeps that org until the backlog runs dry, `runBudgetMs` is spent, or the runtime
+ * retires the isolate, while every fresh cron invocation is answered `no_capacity`. A new holder is
+ * counted against `global_cap`; an existing one re-pointing its own row is not, because `a_others`
+ * and the cap test both exclude the caller. At the recommended `globalCap` 8 and `maxPerOrg` 2, four
+ * releasing orgs take the whole fleet and a fifth class gets zero throughput. Batch-at-a-time did
+ * not have this defect: every batch boundary issued an unpinned claim, `order by a_others asc`
+ * prefers the org holding fewest OTHER holders' slots, and that moved a holder off a saturated org
+ * onto a starved one inside one boundary, 68.4s on the measured burst.
+ *
+ * SO A STREAM KEEPS ITS PIN FOR A BOUNDED NUMBER OF MESSAGES AND THEN HAS TO WIN IT AGAIN. Past the
+ * quantum a top-up is SKIPPED rather than unpinned: the in-flight set drains to empty, and the claim
+ * that follows is unpinned by the rule that was already there. Reaching the reconsideration by
+ * WAITING rather than by relaxing the pin is the whole of it, and it is what makes the answer to
+ * "without violating the in-flight accounting" a proof rather than a bound. The hazard point 4
+ * describes is specifically an unpinned claim issued with this org's messages still running, and
+ * after a drain-out there are none. The reachable per-org concurrency stays `max_per_org x n` at
+ * every quantum, including a quantum of one, because no quantum can cause an unpinned claim while
+ * anything is in flight. This is `quiesced_for_priority` on a counter instead of on a queue name,
+ * and it is strictly the cheaper of the two: that path pays a drain-out per BATCH.
+ *
+ * WHY THE QUANTUM IS COUNTED IN MESSAGES AND NOT IN SECONDS. A drain-out costs exactly one tail. The
+ * set stops being topped up, so the leaseholder idles from the first completion to the last, which
+ * is `E[max of n] - E[X]` per slot and is a MESSAGE-shaped quantity: 68.4 - 48.4 = 20.0s on the
+ * create_repo burst, and near a second for `sync_repo_permissions` (p50 1.4s) and
+ * `sync_student_team` (p50 1.0s), which are ~78% of real traffic. One wall-clock number would
+ * therefore cost two orders of magnitude more on one of those workloads than on the other, which is
+ * not a quantity anyone can size. Counting messages holds the FRACTION steady instead, at about
+ * `(E[max of n] - E[X]) / (k x E[X])` for a quantum of `k` refills, and lets the wall-clock cadence
+ * fall out of the workload: ~11s between reconsiderations on the fast mix, ~244s on the create_repo
+ * burst (measured, k=8). The slow end is the honest limit of this change and is stated rather than
+ * papered over. On a burst of 48s messages the quantum barely improves on `runBudgetMs`, which
+ * already ends the run at 330s and frees the slot for the next poke's unpinned claim, and buying
+ * more there means paying the 20s tail more often.
+ *
+ * WHY EIGHT REFILLS. The fraction above predicts 0.41/8.41 = 4.9% at `k` 8, and the simulation
+ * measures 5.4 points of leaseholder utilization on the 190-message fixture: 99.1% to 93.7% with the
+ * backoff disabled, which is the cost a CONTENDED stream actually pays. Refill recovered about 27
+ * points, so the quantum spends a fifth of that win on the fairness property batch-at-a-time had.
+ * Halving it doubles the bill (k=4 measures 90.1%) to beat a cadence `runBudgetMs` mostly caps
+ * anyway; doubling it (k=16 measures 96.5%) pushes the create_repo cadence past `runBudgetMs`, where
+ * the quantum stops being reachable within a run at all. The number is a COST BUDGET rather than a
+ * latency target, and STREAM_QUANTUM_BACKOFF_CAP is what stops it being paid where it buys nothing.
+ *
+ * AND THE RECONSIDERATION IS NOT FREE ON THE ALLOCATOR EITHER, which is the other reason it is
+ * rationed. The allocator rewrite made a PINNED claim flat in queue depth (22.80ms to 1.78ms at
+ * depth 5000) and left an UNPINNED one scanning the whole backlog with a per-row class lookup:
+ * 8.01ms to 10.07ms on a six-org storm, and storm throughput 143-147 down to 114-120 claim calls per
+ * second. Every claim takes the one global `pg_advisory_xact_lock`, so this is a shared cost, not a
+ * private one. At `k` 8 a streaming holder issues one unpinned claim per ~32 pinned ones, so ~3% of
+ * its claim traffic moves onto the expensive path. The drain-out is the expensive half of a
+ * reconsideration by a wide margin; the RPC is rounding.
+ *
+ * WHAT IT DOES NOT DO. It bounds ONE holder's pin. Whether the fleet is fair also depends on what
+ * the allocator picks when the quantum hands it the choice, and that is the migration's business:
+ * `a_others asc` serves a starved org first, but once that key ties the winner is alphabetical, so a
+ * reconsideration can legitimately re-pick the org it just left while another org waits. The backoff
+ * treats that answer as evidence and the cap keeps the resulting stretch bounded.
+ *
  * What does NOT change: the status contract (`claimed` rows, or exactly one `no_demand` /
  * `no_capacity` row), advancing to the fallback queue only on `no_demand`, `no_capacity` ending the
  * run, the generation counter guarding stale renewals, `touchedQueues` release-on-exit, the stall
@@ -429,6 +497,22 @@ export interface BeginOrgLeaseRunOptions {
    * flight when one of those decisions was taken.
    */
   inFlightCount?: () => number;
+  /**
+   * How many times a pinned stream may refill its in-flight set before it has to let that set drain
+   * and claim UNPINNED again. The quantum in messages is this times `drainConcurrency`.
+   *
+   * See "Why a pinned stream has a quantum" in the header for the number and for the measurement it
+   * comes from. Exposed as an option so the tests can drive the quantum from both sides; there is no
+   * env var behind it yet, and asyncWorkerTuning.ts is where one would go.
+   *
+   * AN UNUSABLE VALUE LEAVES THE STREAM UNBOUNDED, matching `runBudgetMs` rather than the tuning
+   * layer's fail-down. Both directions here are survivable but they are not equally survivable: an
+   * unbounded stream is the behaviour that shipped, and it costs a waiting org some latency, whereas
+   * a quantum that resolved to "quiesce constantly" would drain the in-flight set on every top-up
+   * and hand back the whole 27% continuous refill was written to recover, on every leaseholder, with
+   * nothing in the logs to say why throughput halved.
+   */
+  streamQuantumRefills?: number;
   scope?: Sentry.Scope;
   /** Reads deployment identity for the holder string. Injectable so tests need no process env. */
   readEnv?: EnvReader;
@@ -467,6 +551,33 @@ const DEFAULT_IDLE_BUDGET_MS = 50_000;
  * a single PostgREST blip does not churn the isolate.
  */
 const DEFAULT_MAX_CONSECUTIVE_CLAIM_ERRORS = 3;
+/**
+ * A pinned stream may refill its in-flight set eight times before it has to drain out and claim
+ * unpinned again, so the quantum is `8 x drainConcurrency` messages: 32 at the shipped `n` of 4.
+ *
+ * The derivation, the measurements and the honest limits are in "Why a pinned stream has a quantum"
+ * in the header. In one line: a drain-out costs one tail, `(E[max of n] - E[X]) / (k x E[X])` is the
+ * fraction of a leaseholder that buys, k=8 measures 5.4 points against refill's ~27, and that is the
+ * most of refill's win this is willing to spend on the fairness batch-at-a-time had for free.
+ */
+export const DEFAULT_STREAM_QUANTUM_REFILLS = 8;
+/**
+ * How far the quantum may stretch when reconsidering keeps finding nobody else to serve.
+ *
+ * A quiesce that rotates the holder onto a waiting org bought exactly what it cost. A quiesce whose
+ * unpinned claim comes back with the ORG WE WERE ALREADY ON bought nothing: no other org qualified,
+ * so the drain-out was pure loss. That case is not hypothetical, it is the 190-message single-org
+ * burst this module is calibrated on, where the quantum costs 5.4 points of utilization (99.1% to
+ * 93.7%, measured) for zero fairness because there is nothing to be fair to. So the quantum doubles
+ * after a reconsideration that changed nothing and snaps back to its base the moment one rotates.
+ *
+ * FOUR, WHICH IS A BOUND AND NOT A GROWTH POLICY. The allocator's tiebreak is alphabetical once
+ * `a_others` ties, so a reconsideration CAN re-pick our org while another org waits (see the
+ * `order by` in the pin_org migration), and an unbounded backoff would let that one unlucky answer
+ * stretch the stream indefinitely. At the cap the stream is bounded by 32 refills, and on the slow
+ * mix that is already longer than `runBudgetMs`, so the run ends and releases before it matters.
+ */
+export const STREAM_QUANTUM_BACKOFF_CAP = 4;
 /**
  * PostgREST's "no such function" code. This is the deploy-skew signature: the worker image can
  * reach a database whose migration has not been applied yet, and no amount of retrying fixes that,
@@ -567,6 +678,17 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
   }
   const claimDeadline = budgetArmed ? (opts.isolateStartedAt ?? ISOLATE_STARTED_AT) + budgetMs : null;
 
+  // THE STREAM QUANTUM, IN MESSAGES, or null for "this stream is unbounded". Expressed as a
+  // multiple of `drainConcurrency` rather than as a message count of its own, because what the
+  // number has to hold steady is the FRACTION of a leaseholder's time the quiesce costs, and that
+  // fraction is one drain-out per quantum against `drainConcurrency` messages per refill. A flat
+  // count would mean a different cost at every `n`. See the header for how the multiple was chosen.
+  const quantumRefills = opts.streamQuantumRefills ?? DEFAULT_STREAM_QUANTUM_REFILLS;
+  const streamQuantum =
+    Number.isFinite(quantumRefills) && quantumRefills >= 1
+      ? Math.max(1, Math.floor(quantumRefills * opts.drainConcurrency))
+      : null;
+
   // The uuid is what makes this unique, and uniqueness is the only property the SQL needs: the
   // holder string is the row identity, so two isolates must never share one. The scope and name
   // prefixes are purely so a human reading the slot table can tell which deployment and which
@@ -628,6 +750,23 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
    * run and nothing else. See the PGRST202 handling in `claimOnce`.
    */
   let pinUnsupported = false;
+  /**
+   * Messages claimed since the last claim this run issued with nothing in flight, which is the same
+   * thing as "messages claimed under the current pin" plus the unpinned batch that opened it.
+   *
+   * Counted in MESSAGES rather than in claims because a top-up asks for the shortfall, so claims and
+   * messages are different quantities and only the second one measures how long an org has had this
+   * holder. Reset on every unpinned claim ATTEMPT, not only on a successful one: an attempt made
+   * with nothing in flight is a reconsideration whatever it returns, and a run that keeps finding
+   * nothing has no stream to bound.
+   */
+  let claimedUnderPin = 0;
+  /**
+   * What the base quantum is multiplied by, in `[1, STREAM_QUANTUM_BACKOFF_CAP]`. Doubles after a
+   * quantum-driven reconsideration that re-picked the org it had just left, and returns to 1 as soon
+   * as one rotates. See STREAM_QUANTUM_BACKOFF_CAP for why the loss it avoids is worth a variable.
+   */
+  let quantumFactor = 1;
 
   const markProgress = () => {
     lastProgressAt = now();
@@ -1093,6 +1232,11 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
       const draining = inFlightCount() > 0;
       let pinOrg: string | undefined;
       let probeQueues: readonly string[] = opts.queueNames;
+      // Whether THIS claim is the unpinned reconsideration a spent quantum arranged for, as opposed
+      // to one the stream reached on its own by running out of work. Only the first kind has paid a
+      // drain-out, so only the first kind may stretch the quantum when it comes back empty-handed.
+      // Readable here because `claimedUnderPin` is not reset until a few lines below.
+      let afterQuantum = false;
       // Set on EVERY claim rather than only on the two paths that opt out. The run scope is cloned
       // onto every message event, so a tag that is only ever written when something goes wrong
       // latches: one quiesced top-up early in a run marks every later event as quiesced, including
@@ -1116,8 +1260,28 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
           opts.scope?.setTag("org_slot_refill", "pin_unsupported");
           return null;
         }
+        // THE QUANTUM IS SPENT, so stop topping this stream up and let it drain out. Nothing else
+        // happens here, and that is deliberate: the unpinned claim this is arranging for is issued
+        // by the ordinary path a few settles from now, once `inFlightCount()` reaches zero and
+        // `draining` is false. Reaching an unpinned claim by WAITING rather than by relaxing the pin
+        // is what keeps the accounting exact, because the hazard the pin closes is specifically an
+        // unpinned claim with this org's messages still running.
+        //
+        // The same shape as `quiesced_for_priority` above, on a timer instead of on a queue. That
+        // path already pays one drain-out per batch so a low-priority stream cannot outlive a
+        // main-queue backlog; this pays one per quantum so a main-queue stream cannot outlive
+        // another org's wait. One is strictly cheaper than the other and neither is new machinery.
+        if (streamQuantum !== null && claimedUnderPin >= streamQuantum * quantumFactor) {
+          opts.scope?.setTag("org_slot_refill", "quiesced_for_fairness");
+          return null;
+        }
         probeQueues = [heldQueueName];
         pinOrg = heldOrgValue;
+      } else {
+        // This claim is the reconsideration, so the count it bounds starts again from here whatever
+        // the claim turns out to return.
+        afterQuantum = streamQuantum !== null && claimedUnderPin >= streamQuantum * quantumFactor;
+        claimedUnderPin = 0;
       }
 
       // THE PROBE ORDER IS THE PRIORITY ORDER, ALWAYS. `async_calls_low_priority` is read only
@@ -1193,6 +1357,7 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
 
         const rows = outcome.messages;
         const previousQueue = heldQueueName;
+        const previousOrg = heldOrgValue;
         consecutiveClaimErrors = 0;
         idleDeadline = null;
         held = true;
@@ -1262,6 +1427,22 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
           Sentry.captureMessage("orgLeaseRun: claim_org_slot_and_read ignored pin_org", s);
         }
         heldOrgValue = rows[0].org;
+        // What the quantum counts. The opening batch of a stream is included, because it is part of
+        // the time this org has held this leaseholder and because leaving it out would make the
+        // quantum mean something slightly different at every `n`.
+        claimedUnderPin += rows.length;
+        // AND WHAT THE RECONSIDERATION WAS WORTH. An unpinned claim that lands on a different org is
+        // the quantum doing its job, so the next stream gets the base quantum again. One that comes
+        // back with the org we just drained out of found nobody else to serve, and paid a drain-out
+        // to find that out, so the next probe is further away. Only claims that followed a spent
+        // quantum are judged: a stream that ended because its org ran out of work cost nothing, and
+        // must not be able to stretch the bound it never tested.
+        if (pinOrg === undefined) {
+          quantumFactor =
+            afterQuantum && previousOrg !== null && previousOrg === heldOrgValue
+              ? Math.min(quantumFactor * 2, STREAM_QUANTUM_BACKOFF_CAP)
+              : 1;
+        }
         opts.scope?.setTag("github_org", heldOrgValue);
         opts.scope?.setTag("org_slot_queue", queueName);
         armRenewTimer();
@@ -1375,7 +1556,9 @@ export interface ContinuousRefillOptions<T = unknown> {
   inFlight: Set<Promise<void>>;
   /**
    * Messages to keep in flight. MUST be the same number the run was built with as
-   * `drainConcurrency`; `drainOrgLease` clamps it to that and says so if they differ.
+   * `drainConcurrency`. `drainOrgLease` normalizes it to that and says so in the log if they differ,
+   * and `drainWithContinuousRefill` then REFUSES anything else, so the requirement is enforced at
+   * the exported boundary as well as at the one production uses.
    *
    * `claim()` caps ONE claim at `drainConcurrency`, which is not the same thing as capping the
    * in-flight SET at it, and an earlier comment here asserted that it was ("a larger in-flight
@@ -1496,11 +1679,40 @@ export async function drainWithContinuousRefill<T = unknown>(opts: ContinuousRef
         "`inFlightCount: () => inFlight.size` to beginOrgLeaseRun with the SAME Set."
     );
   }
-  // `Math.max(1, NaN)` is NaN, not 1 — so the clamp has to reject a non-finite value rather than
-  // pass it through. A NaN here becomes a NaN `n` on the wire, which PostgREST serializes as `null`,
-  // which `claim_org_slot_and_read` answers with a P0001 — and P0001 is fatal on the FIRST failure
-  // by design, so a single bad number ends the run with a deployment error rather than draining.
-  const maxInFlight = Number.isFinite(opts.maxInFlight) ? Math.max(1, Math.floor(opts.maxInFlight)) : 1;
+  // AND IT MUST BE THE RUN'S OWN `n`, WHICH THIS ENTRY POINT NOW ENFORCES FOR ITSELF.
+  //
+  // `drainOrgLease` normalizes this and warns, so production cannot reach the line below. That made
+  // the fix look complete and it was not: `drainWithContinuousRefill` is exported, the loop computes
+  // its shortfall from `maxInFlight` while `claim()` clamps only each INDIVIDUAL claim to
+  // `drainConcurrency`, and the gap between those two is reachable by accumulation. A caller asking
+  // for 8 against a run built for 4 gets 4, then 4 more: eight handlers under a slot the allocator
+  // budgeted four for, spent against the per-org GitHub limiter this feature exists to respect, with
+  // nothing in the slot table to show it. Four against a run built for 8 strands half the allowance
+  // instead. Neither is a number anybody chose.
+  //
+  // THROWN RATHER THAN COERCED, which is the same answer `tracksInFlight` gets ten lines up and for
+  // the same reason. Both are wiring mistakes between two options on two separate calls that the
+  // types cannot relate, and coercing one of them would mean this function quietly did something
+  // other than what its caller asked while `drainOrgLease` -- the caller that actually ships --
+  // announces the identical correction in the log. A contract that is enforced in one place and
+  // silently rewritten in another is not a contract. Production is unaffected either way: the
+  // normalization in `drainOrgLease` runs first and cannot produce a value this rejects.
+  //
+  // A non-finite value is refused by the same test, so the old NaN note keeps its point: `Math.max(
+  // 1, NaN)` is NaN, and a NaN in flight target becomes a NaN `n` on the wire, which PostgREST
+  // serializes as `null`, which `claim_org_slot_and_read` answers with a P0001 -- fatal on the FIRST
+  // failure by design. That is a deployment error raised for something that is not one.
+  if (!Number.isFinite(opts.maxInFlight) || Math.floor(opts.maxInFlight) !== run.drainConcurrency) {
+    throw new Error(
+      `drainWithContinuousRefill: maxInFlight=${opts.maxInFlight} is not the run's own ` +
+        `drainConcurrency=${run.drainConcurrency}. The allocator budgets an org at ` +
+        `max_per_org x drainConcurrency handlers, and refill reaches a larger target by ` +
+        `accumulation even though one claim is capped, so a mismatch is either unaccounted ` +
+        `concurrency or a stranded allowance. Pass the same number to both calls, or use ` +
+        `drainOrgLease, which normalizes it.`
+    );
+  }
+  const maxInFlight = Math.floor(opts.maxInFlight);
 
   /** Never let a reporter's own failure become the thing that takes the isolate down. */
   const report = (e: unknown) => {
@@ -1609,7 +1821,8 @@ export async function drainWithContinuousRefill<T = unknown>(opts: ContinuousRef
  * what makes the switch trustworthy: this loop never puts anything in `inFlight`, so `inFlightCount()`
  * is identically 0 for the whole run. Every behavior continuous refill added to the lease is keyed
  * on that count being positive — the deferred releases, the renewal that outlives `finished`, the
- * withheld idle budget, the pinned and truncated probe set — so all of them go inert together and
+ * withheld idle budget, the pinned and truncated probe set, and the stream quantum that bounds the
+ * pin — so all of them go inert together and
  * what is left is the pre-refill state machine exactly as it was. There is no third configuration in
  * between for someone to land on.
  *

@@ -12,9 +12,11 @@ import { assertEquals, assertNotEquals, assertRejects, assertStringIncludes, ass
 import { PER_MESSAGE_VT_BUDGET_SECONDS, resolveAsyncWorkerTuning } from "./asyncWorkerTuning.ts";
 import {
   beginOrgLeaseRun,
+  DEFAULT_STREAM_QUANTUM_REFILLS,
   drainOrgLease,
   drainWithContinuousRefill,
   isolateStartedAtMs,
+  STREAM_QUANTUM_BACKOFF_CAP,
   OrgClaimError,
   type OrgQueueMessage,
   type OrgSlotRow,
@@ -2488,4 +2490,452 @@ Deno.test("the production tuning resolves a 330s budget, and a drain at it retur
     "nothing is claimed past the resolved budget"
   );
   assertEquals(inFlightAt(d.spans, PROD_LIFETIME_MS), 0, "and nothing is stranded at the wall clock");
+});
+
+// ── The stream quantum ─────────────────────────────────────────────────────────
+//
+// The pin keeps the per-org cap honest and, on its own, lets one org hold a leaseholder for as long
+// as it has work: an unpinned claim is the only thing that can move the slot, `claim()` issues one
+// only with nothing in flight, and a deep stream under refill never has nothing in flight.
+// Batch-at-a-time re-probed at every boundary and did not have that property. These tests are about
+// getting it back without ever issuing an unpinned claim while something of ours is running, which
+// is the thing the pin exists to prevent.
+
+/** Base quantum at the `n` these tests use: DEFAULT_STREAM_QUANTUM_REFILLS x drainConcurrency. */
+const QUANTUM_MESSAGES = DEFAULT_STREAM_QUANTUM_REFILLS * SIM_CONCURRENCY;
+
+/**
+ * A stand-in for the ALLOCATOR ON A SATURATED FLEET, which is the shape neither helper above can
+ * express: other holders exist, they occupy `global_cap`, and the winner is chosen by slots held
+ * rather than by backlog depth. Three predicates, all transcribed from the migration rather than
+ * invented, and every one of them load-bearing for what these tests claim:
+ *
+ *   - `a_others` AND THE GLOBAL CAP BOTH EXCLUDE THE CALLER. An existing holder re-pointing its own
+ *     row is therefore never refused by `global_cap` and never counted as its own competitor. That
+ *     asymmetry is the whole reason a starved org can be served while the fleet is full, and a fake
+ *     that counted us would let these tests pass for a reason production does not have.
+ *   - THE WINNER IS `a_others asc`, then org name. Breadth before depth: an org nobody else is
+ *     serving beats one with a deeper backlog.
+ *   - A PIN IS THE ONLY CANDIDATE, with no fall-through to re-picking, as `fakeOrgAllocator` has it.
+ *
+ * `no_capacity` versus `no_demand` follows the SQL too: work exists but nothing qualified is the
+ * first, nothing ready anywhere is the second.
+ */
+function fakeFleetAllocator(init: {
+  clock: VirtualClock;
+  ready: Record<string, number>;
+  /** One entry per live slot row held by ANOTHER holder, naming the org that row is serving. */
+  foreign: string[];
+  maxPerOrg: number;
+  globalCap: number;
+  /** Runs before every claim, so a test can enqueue a new class's work part way through a stream. */
+  beforeClaim?: (servedSoFar: number, ready: Record<string, number>) => void;
+  /** Reads the driver's in-flight set, so a pinned-versus-unpinned claim can be judged against it. */
+  inFlightCount?: () => number;
+}) {
+  const ready: Record<string, number> = { ...init.ready };
+  const served: { org: string; readyLeft: Record<string, number> }[] = [];
+  const claims: { pin: string | undefined; inFlight: number; servedSoFar: number }[] = [];
+  let nextMsgId = 1;
+
+  const aOthers = (org: string) => init.foreign.filter((o) => o === org).length;
+
+  const rpc: OrgSlotRpc = {
+    claim: async (args) => {
+      init.beforeClaim?.(served.length, ready);
+      claims.push({ pin: args.pin_org, inFlight: init.inFlightCount?.() ?? 0, servedSoFar: served.length });
+      await init.clock.sleep(CLAIM_LATENCY_MS);
+      if (args.queue_name !== "async_calls") return { data: statusRow("no_demand"), error: null };
+
+      const demand = Object.keys(ready).filter(
+        (o) => ready[o] > 0 && (args.pin_org === undefined || o === args.pin_org)
+      );
+      if (demand.length === 0) return { data: statusRow("no_demand"), error: null };
+      const admitted = demand
+        .filter((o) => aOthers(o) < init.maxPerOrg && init.foreign.length < init.globalCap)
+        .sort((a, b) => aOthers(a) - aOthers(b) || a.localeCompare(b));
+      if (admitted.length === 0) return { data: statusRow("no_capacity"), error: null };
+
+      const org = admitted[0];
+      const take = Math.min(args.n, ready[org]);
+      ready[org] -= take;
+      const rows: OrgSlotRow[] = [];
+      for (let i = 0; i < take; i++) {
+        rows.push(row(nextMsgId++, org));
+        served.push({ org, readyLeft: { ...ready } });
+      }
+      return { data: rows, error: null };
+    },
+    renew: () => Promise.resolve({ data: true, error: null }),
+    release: () => Promise.resolve({ data: null, error: null })
+  };
+
+  return {
+    rpc,
+    served,
+    claims,
+    /** Index of the first message served for `org`, or -1. This is the latency the quantum bounds. */
+    firstIndexOf: (org: string) => served.findIndex((s) => s.org === org),
+    countFor: (org: string) => served.filter((s) => s.org === org).length
+  };
+}
+
+/**
+ * One leaseholder against a saturated fleet, on virtual time.
+ *
+ * `hog` is the class that won a slot while it was the only one backed up, and it has more work than
+ * a run can drain. `starved` is a class that enqueues afterwards: `alpha`, `bravo` and `charlie` are
+ * at `maxPerOrg` under other holders, so nothing else in the fleet can pick it up, and a fresh
+ * isolate is answered `no_capacity` because it would be counted against `global_cap`. Only this
+ * holder's own unpinned claim can move a slot onto it.
+ */
+const FLEET_HOG_BACKLOG = 240;
+const FLEET_STARVED_BACKLOG = 40;
+/** How many messages of `hog` are drained before the new class shows up. */
+const FLEET_STARVED_APPEARS_AT = 8;
+
+async function drainSaturatedFleet(streamQuantumRefills?: number) {
+  const clock = virtualClock();
+  const inFlight = new Set<Promise<void>>();
+  let starvedAppearedAt = -1;
+  const q = fakeFleetAllocator({
+    clock,
+    ready: { hog: FLEET_HOG_BACKLOG, alpha: 100, bravo: 100, charlie: 100, starved: 0 },
+    // Seven live rows under other holders. `hog` has one, so it is still admissible; the other three
+    // classes are at `maxPerOrg` and cannot take another slot however deep their backlog is.
+    foreign: ["hog", "alpha", "alpha", "bravo", "bravo", "charlie", "charlie"],
+    maxPerOrg: 2,
+    globalCap: 8,
+    inFlightCount: () => inFlight.size,
+    beforeClaim: (servedSoFar, ready) => {
+      if (servedSoFar >= FLEET_STARVED_APPEARS_AT && ready.starved === 0 && starvedAppearedAt < 0) {
+        ready.starved = FLEET_STARVED_BACKLOG;
+        starvedAppearedAt = servedSoFar;
+      }
+    }
+  });
+
+  const run = beginOrgLeaseRun({
+    ...simBase(clock),
+    maxPerOrg: 2,
+    globalCap: 8,
+    rpc: q.rpc,
+    inFlightCount: () => inFlight.size,
+    ...(streamQuantumRefills === undefined ? {} : { streamQuantumRefills })
+  });
+
+  await runOnVirtualTime(
+    clock,
+    (async () => {
+      try {
+        await drainWithContinuousRefill({
+          run,
+          inFlight,
+          maxInFlight: SIM_CONCURRENCY,
+          // A deterministic spread, so a drain-out is a real tail rather than a lockstep finish.
+          process: (message) => clock.sleep((10 + (message.msg_id % 7)) * 1000)
+        });
+      } finally {
+        await run.release();
+      }
+    })()
+  );
+
+  return { ...q, starvedAppearedAt, endedAt: clock.now() };
+}
+
+// THE PROPERTY THE REVIEW ASKED FOR, AND IT IS ASSERTED AS A SLOT ACQUIRED RATHER THAN AS A PROBE
+// ISSUED. "An unpinned claim happened" would pass on a change that probes and throws the answer
+// away; what has to be true is that the waiting class's messages are being WORKED, and that this
+// happened while the class holding the fleet still had a deep backlog, so it is the quantum doing it
+// and not the backlog running out.
+Deno.test(
+  "a starved class gets a slot within one quantum, while the class holding the fleet is still deep",
+  async () => {
+    const d = await drainSaturatedFleet();
+
+    const first = d.firstIndexOf("starved");
+    assertNotEquals(first, -1, "the waiting class must actually be served, not merely probed for");
+    assertEquals(
+      d.starvedAppearedAt >= 0 && first - d.starvedAppearedAt <= QUANTUM_MESSAGES,
+      true,
+      `the waiting class appeared at message ${d.starvedAppearedAt} and was first served at ${first}: ` +
+        `${first - d.starvedAppearedAt} messages, which must be inside the ${QUANTUM_MESSAGES}-message quantum`
+    );
+    // NOT BECAUSE THE BACKLOG DRAINED. If `hog` had simply run out, an unpinned claim would have been
+    // reached the way it always was and this test would be measuring nothing.
+    assertEquals(
+      d.served[first].readyLeft.hog > FLEET_HOG_BACKLOG / 2,
+      true,
+      `hog still had ${d.served[first].readyLeft.hog} of ${FLEET_HOG_BACKLOG} ready when the slot moved`
+    );
+    assertEquals(d.countFor("starved"), FLEET_STARVED_BACKLOG, "and the class is then drained, not sampled");
+  }
+);
+
+// NEGATIVE CONTROL. The same fleet with the quantum switched off is the shipped behaviour, and the
+// waiting class gets NOTHING until the whole backlog in front of it is gone.
+Deno.test("without the quantum the starved class waits out the entire backlog", async () => {
+  const d = await drainSaturatedFleet(Number.POSITIVE_INFINITY);
+
+  const first = d.firstIndexOf("starved");
+  assertEquals(first, FLEET_HOG_BACKLOG, "not one message of the waiting class is served before the backlog ends");
+  assertEquals(
+    d.served[first - 1].readyLeft.hog,
+    0,
+    "the slot moves only when the org holding it has nothing left, which is the defect"
+  );
+  assertEquals(
+    first - d.starvedAppearedAt > QUANTUM_MESSAGES * 5,
+    true,
+    `${first - d.starvedAppearedAt} messages of waiting, against a quantum of ${QUANTUM_MESSAGES}`
+  );
+});
+
+// THE ACCOUNTING, WHICH IS THE PART THAT COULD HAVE BEEN GOT WRONG. The cheap way to reach an
+// unpinned claim mid-stream is to stop sending the pin, and that is exactly the mid-stream rotation
+// the pin_org migration exists to close: the allocator re-points our row while `n-1` of the previous
+// org's messages are still running, and that org reaches `max_per_org x n + (n-1)`. The quantum
+// reaches the same claim by WAITING, so this is checkable rather than merely argued.
+Deno.test("the quantum reaches its unpinned claim by draining out, never by unpinning mid-stream", async () => {
+  const d = await drainSaturatedFleet();
+
+  const unpinned = d.claims.filter((c) => c.pin === undefined);
+  assertEquals(
+    unpinned.every((c) => c.inFlight === 0),
+    true,
+    `unpinned claims were issued with ${[...new Set(unpinned.map((c) => c.inFlight))].join(", ")} in flight; ` +
+      `every one must be zero or the per-org cap stops being counted`
+  );
+  // And not vacuously: there really were reconsiderations part way through a stream, which is what
+  // distinguishes this from the run that simply never quiesces.
+  assertEquals(
+    unpinned.filter((c) => c.servedSoFar > 0 && c.servedSoFar < FLEET_HOG_BACKLOG).length >= 1,
+    true,
+    "at least one unpinned claim landed mid-backlog, so the property above is about the quantum"
+  );
+  assertEquals(
+    d.claims.some((c) => c.pin !== undefined && c.inFlight > 0),
+    true,
+    "and the pinned top-ups are still the ones that carry a stream"
+  );
+});
+
+/** One leaseholder, one class, nothing else in the fleet: the case where a quiesce buys nothing. */
+async function drainSoloBurst(backlog: number) {
+  const clock = virtualClock();
+  const inFlight = new Set<Promise<void>>();
+  const q = fakeFleetAllocator({
+    clock,
+    ready: { solo: backlog },
+    foreign: [],
+    maxPerOrg: 2,
+    globalCap: 8,
+    inFlightCount: () => inFlight.size
+  });
+  const run = beginOrgLeaseRun({
+    ...simBase(clock),
+    maxPerOrg: 2,
+    globalCap: 8,
+    rpc: q.rpc,
+    inFlightCount: () => inFlight.size
+  });
+  await runOnVirtualTime(
+    clock,
+    (async () => {
+      try {
+        await drainWithContinuousRefill({
+          run,
+          inFlight,
+          maxInFlight: SIM_CONCURRENCY,
+          process: (message) => clock.sleep((10 + (message.msg_id % 7)) * 1000)
+        });
+      } finally {
+        await run.release();
+      }
+    })()
+  );
+  // Where in the stream each reconsideration fell. The first is the claim that opens the run.
+  return q.claims.filter((c) => c.pin === undefined).map((c) => c.servedSoFar);
+}
+
+// THE BACKOFF, AND WHY IT IS NOT JUST A TUNING KNOB IN DISGUISE. A reconsideration that comes back
+// with the org it just left paid a whole drain-out to learn that nobody else qualified. On the
+// 190-message single-org fixture that is the entire cost of the quantum and none of its benefit:
+// 99.1% utilization to 93.7% at a flat quantum, against 97.2% with this backoff. So the quantum
+// doubles after an answer that changed nothing, and the cap bounds how far that can go.
+Deno.test("a quantum that finds nobody waiting backs off, instead of paying for the same answer again", async () => {
+  const at = await drainSoloBurst(300);
+
+  assertEquals(at[0], 0, "the first unpinned claim is the one that opens the run");
+  const gaps = at.slice(1).map((v, i) => v - at[i]);
+  assertEquals(gaps.length >= 3, true, `only ${gaps.length} reconsiderations in 300 messages: ${at.join(", ")}`);
+  // Base, then 2x, then the cap at 4x. Asserted as ranges because a top-up claims the SHORTFALL, so
+  // the counter crosses the quantum somewhere inside the last refill rather than exactly on it.
+  assertEquals(
+    gaps[0] >= QUANTUM_MESSAGES && gaps[0] < QUANTUM_MESSAGES + SIM_CONCURRENCY,
+    true,
+    `first gap ${gaps[0]}, expected the base quantum of ${QUANTUM_MESSAGES}`
+  );
+  assertEquals(
+    gaps[1] >= QUANTUM_MESSAGES * 2 && gaps[1] < QUANTUM_MESSAGES * 2 + SIM_CONCURRENCY,
+    true,
+    `second gap ${gaps[1]}, expected the quantum to have doubled to ${QUANTUM_MESSAGES * 2}`
+  );
+  assertEquals(
+    gaps[2] >= QUANTUM_MESSAGES * STREAM_QUANTUM_BACKOFF_CAP,
+    true,
+    `third gap ${gaps[2]}, expected the cap at ${QUANTUM_MESSAGES * STREAM_QUANTUM_BACKOFF_CAP}`
+  );
+});
+
+// THE OTHER HALF OF THE BACKOFF: a reconsideration that PAYS keeps the base quantum, so a contended
+// fleet is not slowly relaxed into the behaviour the quantum exists to fix. Without this the first
+// two stretches would be inherited by the stream that rotated, and the waiting class after that one
+// would wait twice as long for no reason.
+Deno.test("a reconsideration that rotates snaps the quantum back to its base", async () => {
+  const d = await drainSaturatedFleet();
+  const unpinned = d.claims.filter((c) => c.pin === undefined).map((c) => c.servedSoFar);
+  const rotatedAt = d.firstIndexOf("starved");
+
+  const after = unpinned.filter((v) => v > rotatedAt);
+  assertEquals(
+    after.length >= 1,
+    true,
+    `no reconsideration after the rotation at ${rotatedAt}: ${unpinned.join(", ")}`
+  );
+  assertEquals(
+    after[0] - rotatedAt <= QUANTUM_MESSAGES + SIM_CONCURRENCY,
+    true,
+    `the stream that won the rotation ran ${after[0] - rotatedAt} messages before reconsidering; the ` +
+      `base quantum is ${QUANTUM_MESSAGES}, so a backoff carried across the rotation would show here`
+  );
+});
+
+// The quantum must not be able to put a run back in business after its wall-clock deadline, and it
+// must not sit on a slot the budget was about to give back. The deadline gate runs FIRST in
+// `claim()` for exactly this reason: a quiesce returns null too, so a quantum checked ahead of it
+// would swallow the one call per run that ends the run and releases.
+Deno.test("a spent quantum cannot outlive the wall-clock budget, and does not defeat its release", async () => {
+  let t = 0;
+  let inFlight = 0;
+  const f = fakeRpc({
+    claim: () => ({ data: [row(1, "acme"), row(2, "acme"), row(3, "acme"), row(4, "acme")], error: null })
+  });
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    drainConcurrency: 4,
+    now: () => t,
+    isolateStartedAt: 0,
+    runBudgetMs: 100_000,
+    // One refill, so the quantum is spent by the opening batch and the next top-up quiesces.
+    streamQuantumRefills: 1,
+    inFlightCount: () => inFlight
+  });
+
+  assertNotEquals(await run.claim(), null, "the opening batch is claimed normally");
+  assertEquals(f.claimArgs.length, 1);
+
+  inFlight = 3;
+  assertEquals(await run.claim(1), null, "the quantum is spent, so the top-up is skipped");
+  assertEquals(f.claimArgs.length, 1, "and skipped without an RPC, so quiescing cannot spin on the allocator");
+  assertEquals(run.shouldContinue(), true, "quiescing is not the end of the run");
+
+  // The deadline passes while the run is draining out towards its reconsideration.
+  t = 100_001;
+  assertEquals(await run.claim(1), null);
+  assertEquals(run.shouldContinue(), false, "the budget ends the run even though the quantum wanted a drain-out");
+  assertEquals(f.claimArgs.length, 1, "and nothing was claimed past the deadline");
+  assertEquals(f.releaseCalls, 0, "the slot is held while its messages run, exactly as before");
+
+  inFlight = 0;
+  assertEquals(await run.claim(), null, "a drained-out run past its deadline still claims nothing");
+  assertEquals(f.claimArgs.length, 1, "and still reaches no RPC");
+  // The deferral is honoured by the caller's exit release, which is where it was always honoured:
+  // a finished run returns from `claim()` before the deadline gate, so nothing else can pick it up.
+  await run.release();
+  assertEquals(f.releaseCalls, 1, "and the slot the budget deferred comes back once the drain is done");
+});
+
+// Same fail-safe direction as `runBudgetMs`, and for a sharper reason. An unbounded stream is what
+// shipped and costs a waiting class some latency; a quantum that resolved to zero would drain the
+// in-flight set on every single top-up, which is batch-at-a-time with extra steps, on every
+// leaseholder, with nothing in the logs to say why throughput halved.
+Deno.test("an unusable quantum leaves the stream unbounded rather than quiescing on every top-up", async () => {
+  for (const streamQuantumRefills of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    let inFlight = 0;
+    const f = fakeRpc({ claim: () => ({ data: [row(1, "acme"), row(2, "acme")], error: null }) });
+    const run = beginOrgLeaseRun({
+      ...base,
+      rpc: f.rpc,
+      drainConcurrency: 2,
+      streamQuantumRefills,
+      inFlightCount: () => inFlight
+    });
+
+    await run.claim();
+    inFlight = 1;
+    for (let i = 0; i < 50; i++)
+      assertNotEquals(await run.claim(1), null, `refills=${streamQuantumRefills} must keep streaming`);
+    assertEquals(
+      f.claimArgs.slice(1).every((a) => a.pin_org === "acme"),
+      true,
+      `refills=${streamQuantumRefills}: every top-up must still be pinned and still be issued`
+    );
+  }
+});
+
+// ── Review fix: the exported driver enforces its own contract ─────────────────
+//
+// `drainOrgLease` normalizes `maxInFlight` and warns, so production cannot reach this. That made the
+// earlier fix look complete and it was not: `drainWithContinuousRefill` is exported, its loop
+// computes the shortfall from `maxInFlight` while `claim()` clamps only each INDIVIDUAL claim to
+// `drainConcurrency`, and refill closes that gap by accumulation. Thrown rather than coerced, to
+// match `tracksInFlight` ten lines above it: both are wiring mistakes between options on two
+// separate calls, and enforcing one while silently rewriting the other is not a contract.
+Deno.test("the refill driver refuses an in-flight target that is not the run's own concurrency", async () => {
+  for (const maxInFlight of [8, 2, Number.NaN, Number.POSITIVE_INFINITY]) {
+    // One batch and then an empty queue, so a driver that ACCEPTED the mismatch would return
+    // normally and this would fail on the missing rejection rather than by hanging.
+    const f = fakeRpc({
+      claim: (_a, i) =>
+        i === 1 ? { data: [row(1, "acme")], error: null } : { data: statusRow("no_demand"), error: null }
+    });
+    const inFlight = new Set<Promise<void>>();
+    const run = beginOrgLeaseRun({
+      ...base,
+      rpc: f.rpc,
+      drainConcurrency: 4,
+      idleBudgetMs: 0,
+      inFlightCount: () => inFlight.size
+    });
+
+    const e = await assertRejects(
+      () => drainWithContinuousRefill({ run, inFlight, maxInFlight, process: () => Promise.resolve() }),
+      Error
+    );
+    assertStringIncludes(e.message, "drainConcurrency=4");
+    assertEquals(f.claimArgs.length, 0, `maxInFlight=${maxInFlight} must be refused before anything is claimed`);
+  }
+});
+
+// And the matching number is still accepted, or the test above would pass on a driver that refused
+// everything.
+Deno.test("the refill driver accepts the run's own concurrency", async () => {
+  const f = fakeRpc({
+    claim: (_a, i) =>
+      i === 1 ? { data: [row(1, "acme")], error: null } : { data: statusRow("no_demand"), error: null }
+  });
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    drainConcurrency: 4,
+    idleBudgetMs: 0,
+    inFlightCount: () => inFlight.size
+  });
+
+  await drainWithContinuousRefill({ run, inFlight, maxInFlight: 4, process: () => Promise.resolve() });
+  assertEquals(f.claimArgs[0].n, 4);
 });
