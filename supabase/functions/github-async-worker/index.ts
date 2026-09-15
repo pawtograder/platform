@@ -686,6 +686,12 @@ export async function processEnvelope(
   }
   // Circuit breaker: check both org-level and method-specific circuits
   try {
+    // THE ALLOCATOR MIRRORS THIS RESOLVER, so the two lists have to stay in step. `v_org_expr` in
+    // supabase/migrations/20260914120000_async_lease_pin_org.sql resolves the same eight methods to
+    // the same org, because the per-org slot budget has to be charged to the org the handler below
+    // is going to call. Adding a method here, or changing where one of them reads its org from,
+    // means editing that expression in a migration too; drift shows up as an '(unknown-method)'
+    // bucket in public.async_worker_slots.org.
     const org = ((): string | undefined => {
       if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
       if (envelope.method === "sync_student_team" || envelope.method === "sync_staff_team")
@@ -3053,10 +3059,10 @@ function orgSlotRpc(adminSupabase: SupabaseClient<Database>): OrgSlotRpc {
  * WHAT `drainConcurrency` MEANS ON THIS PATH depends on the kill switch. With continuous refill on
  * (the default) it is messages IN FLIGHT: `drainOrgLease` tops the in-flight set back up to `n` as
  * each message settles rather than re-reading a whole batch once all `n` have. The ceiling is
- * identical either way — no claim may ever ask for more than `n` — but the measured 2026-09-14 burst
- * spent ~27% of every claimed slot-second waiting on the slowest message of its batch, and that is
- * what refill recovers. With the switch off it is messages per read, and the loop is the pre-refill
- * one. The Redis-leased path (`processBatch`, below) is untouched by all of this and always
+ * identical either way (no claim may ever ask for more than `n`), but the 2026-09-13 burst spent
+ * ~27% of every claimed slot-second waiting on the slowest message of its batch, and that is what
+ * refill recovers. With the switch off it is messages per read, and the loop is the pre-refill one.
+ * The Redis-leased path (`processBatch`, below) is untouched by all of this and always
  * batch-at-a-time.
  */
 async function runOrgLeasedHandler(
@@ -3099,9 +3105,12 @@ async function runOrgLeasedHandler(
       // a typo is reported instead of silently becoming truthy, and a second reading of the same env
       // var in this file is how the two would eventually disagree about what "0" means.
       continuousRefill: tuning.orgSlots.continuousRefill,
-      // The same `n` the claim is capped at. Keeping one number for both is what makes "shortfall"
-      // meaningful: a larger in-flight target than the claim ceiling could never be reached, and a
-      // smaller one would leave part of the leaseholder's allowance permanently unused.
+      // The same `n` the run was built with, and `drainOrgLease` now REFUSES any other value rather
+      // than trusting these two call sites to stay in step. Both directions are wrong and only one
+      // of them is obvious: a smaller target strands part of the leaseholder's allowance, and a
+      // larger one is reachable by accumulation even though a single claim is capped — four, then
+      // four more — putting handlers in flight that the allocator's `max_per_org x drainConcurrency`
+      // budget never counted, against the per-org GitHub limiter this feature exists to respect.
       maxInFlight: tuning.drainConcurrency,
       // No per-claim scope clone any more, because there is no longer a per-claim batch to attribute
       // — `processOneQueueMessage` clones per message and tags `github_org` from the message's own

@@ -775,11 +775,17 @@ describe("continuous refill kill switch", () => {
   it("treats an out-of-range value as unusable, not as extra-on", () => {
     // The range is binary, so "2" expresses no intent to preserve. Clamping it to the max would
     // resolve a typo to the permissive answer, which is the same failure by another route.
+    //
+    // Reported as "rejected" rather than "clamped", because nothing was clamped: the value was
+    // discarded and replaced with the value at the OTHER end of the range. Calling that "clamped"
+    // tells whoever triages the Sentry issue that their intent was preserved when it was
+    // deliberately thrown away.
     const t = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: "2" }));
     expect(t.orgSlots.continuousRefill).toBe(false);
-    const clamped = t.issues.filter((i) => i.kind === "clamped" && i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV);
-    expect(clamped).toHaveLength(1);
-    expect(clamped[0].effective).toBe(MIN_ORG_SLOT_CONTINUOUS_REFILL);
+    const reported = t.issues.filter((i) => i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV);
+    expect(reported).toHaveLength(1);
+    expect(reported[0].kind).toBe("rejected");
+    expect(reported[0].effective).toBe(MIN_ORG_SLOT_CONTINUOUS_REFILL);
   });
 
   it("still treats whitespace around a good value as a good value", () => {
@@ -798,16 +804,45 @@ describe("continuous refill kill switch", () => {
     // A malformed value is an edit that went wrong, and the only reason to edit this is to turn
     // refill off. These two must NOT resolve the same way.
     const absent = resolveAsyncWorkerTuning(env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8" }));
-    const empty = resolveAsyncWorkerTuning(
-      env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: "   " })
-    );
     const malformed = resolveAsyncWorkerTuning(
       env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: "false" })
     );
     expect(absent.orgSlots.continuousRefill).toBe(true);
-    expect(empty.orgSlots.continuousRefill).toBe(true);
     expect(malformed.orgSlots.continuousRefill).toBe(false);
     expect(absent.issues.filter((i) => i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV)).toHaveLength(0);
+  });
+
+  it("treats a BLANKED variable as an edit, not as an absence", () => {
+    // The hole the first fail-safe pass left. `readBounded` folded "" in with `undefined` and
+    // returned the fallback SILENTLY, before failSafeValue was consulted — so `kubectl set env
+    // GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL=` (the ordinary way to blank a variable) and a
+    // hand-edited `value: ""` both resolved the kill switch to ON with nothing reported. Those are
+    // precisely the Helm-bypass paths this option exists for, since the chart refuses "" at render.
+    for (const raw of ["", " ", "   "]) {
+      const t = resolveAsyncWorkerTuning(
+        env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "8", [ORG_SLOT_CONTINUOUS_REFILL_ENV]: raw })
+      );
+      expect(t.orgSlots.continuousRefill).toBe(false);
+      const reported = t.issues.filter((i) => i.env === ORG_SLOT_CONTINUOUS_REFILL_ENV);
+      expect(reported).toHaveLength(1);
+      expect(reported[0].effective).toBe(MIN_ORG_SLOT_CONTINUOUS_REFILL);
+    }
+  });
+
+  it("leaves an empty value alone for every knob that is not fail-safe", () => {
+    // The new rule is opt-in in both directions. A knob without failSafeValue must still treat ""
+    // as "nobody has an opinion" and stay silent, or every deployment that renders an empty
+    // optional would start paging.
+    const t = resolveAsyncWorkerTuning(
+      env({ [ORG_SLOT_GLOBAL_CAP_ENV]: "", [ORG_SLOT_MAX_PER_ORG_ENV]: "  ", [DRAIN_CONCURRENCY_ENV]: "" })
+    );
+    expect(t.orgSlots.globalCap).toBe(DEFAULT_ORG_SLOT_GLOBAL_CAP);
+    expect(t.orgSlots.maxPerOrg).toBe(DEFAULT_ORG_SLOT_MAX_PER_ORG);
+    expect(t.drainConcurrency).toBe(DEFAULT_DRAIN_CONCURRENCY);
+    // Scoped to the three knobs under test: the shipped legacy pair (4/300) always emits its two
+    // `invariant` issues, and those are deliberate.
+    const blanked = [DRAIN_CONCURRENCY_ENV, ORG_SLOT_GLOBAL_CAP_ENV, ORG_SLOT_MAX_PER_ORG_ENV];
+    expect(t.issues.filter((i) => blanked.includes(i.env))).toHaveLength(0);
   });
 
   it("is the ONLY knob whose fallback is the permissive end of its range", () => {

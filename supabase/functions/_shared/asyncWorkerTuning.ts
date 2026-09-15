@@ -128,7 +128,7 @@
  * decision stays an explicit, reviewable operator action rather than a side
  * effect of a chart upgrade. That exact pair DOES violate both ceilings under
  * the model, and it is the ONE combination that is reported without being
- * enforced — re-coherencing the status quo would change production behaviour on
+ * enforced — re-coherencing the status quo would change production behavior on
  * deploy, which is precisely what this change promises not to do.
  *
  * ───────────────────────────────────────────────────────────────────────────
@@ -205,7 +205,7 @@
  * silently ignored and the pod keeps the chart-rendered numbers. An earlier
  * version of this file claimed that secret path worked and used it to justify
  * the runtime validation; the claim was wrong and is withdrawn. The validation
- * stands on its own merits (defence in depth against a hand-edited Deployment,
+ * stands on its own merits (defense in depth against a hand-edited Deployment,
  * `kubectl set env`, or a local `supabase functions serve`), and it is also the
  * only thing standing between a malformed value and pgmq.
  */
@@ -338,7 +338,7 @@ export const MIN_DRAIN_CONCURRENCY = 1;
  *    extra parallelism converts into queueing (or secondary-rate-limit errors),
  *    not throughput. 8 is a doubling of the measured configuration, which is the
  *    largest step worth taking without re-measuring isolate memory,
- *    content-pool occupancy and secondary-limit behaviour under a real burst.
+ *    content-pool occupancy and secondary-limit behavior under a real burst.
  *
  * Note what 8 does NOT do: at ~1.2 msg/min it is ~8 hours for a 585-message
  * burst. Getting materially past that needs more than one concurrent
@@ -413,9 +413,9 @@ export function requiredVisibilityTimeoutSeconds(drainConcurrency: number): numb
  * IT IS LEFT EXACTLY AS IT IS, and not because nobody noticed:
  *
  *   * IT IS STILL CORRECT FOR THE NON-REFILL PATHS. The single-leaseholder
- *     drain (`globalCap: 0`, still the shipped default) and the batch shape
- *     reachable through the kill switch above are both genuinely batched, and
- *     for them the original argument holds unaltered.
+ *     drain (`globalCap: 0`, still the shipped default) and the batch-at-a-time
+ *     shape reachable through the kill switch above are both genuinely
+ *     batched, and for them the original argument holds unaltered.
  *   * THE DIRECTION IT ERRS IN IS SAFE. It only ever REDUCES `n`. On the refill
  *     path that costs throughput and nothing else; the failure it was written to
  *     prevent — an isolate dying before `Promise.allSettled` reaches the archive
@@ -442,7 +442,7 @@ export function requiredVisibilityTimeoutSeconds(drainConcurrency: number): numb
 //
 // THE PARSING RULES ARE THE SAME AS FOR THE TWO KNOBS ABOVE: bounded integers,
 // an unparseable value falls back and is REPORTED, an out-of-range value is
-// CLAMPED and reported, and the defaults reproduce today's behaviour exactly —
+// CLAMPED and reported, and the defaults reproduce today's behavior exactly —
 // here that means `globalCap: 0`, i.e. per-org leasing OFF and the
 // single-leaseholder `pgmq_public.read` path still in force. Deploying this
 // changes nothing until someone sets GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP.
@@ -453,7 +453,7 @@ export function requiredVisibilityTimeoutSeconds(drainConcurrency: number): numb
 // `.orgSlotLeaseTtlSeconds`), and an `env` entry BEATS anything supplied by
 // `envFrom` — so setting them through `edgeFunctions.envFromSecrets` is silently
 // ignored, exactly as it is for the two knobs above. The validation below is
-// therefore defence in depth against the Helm-bypass paths (a hand-edited
+// therefore defense in depth against the Helm-bypass paths (a hand-edited
 // Deployment, `kubectl set env`, a local `supabase functions serve`), plus the
 // only thing standing between a malformed value and the RPC — which is why it
 // clamps rather than refuses.
@@ -752,14 +752,14 @@ export const MAX_ORG_SLOT_LEASE_TTL_SECONDS = 300;
  *
  * WHAT IT SWITCHES. `drainWithContinuousRefill` (orgLeaseRun.ts) keeps `n`
  * messages in flight and claims the SHORTFALL as each one settles, instead of
- * draining a whole batch and then re-claiming. The batch shape wastes the tail
+ * draining a whole batch and then re-claiming. Batch-at-a-time wastes the tail
  * of every batch waiting on its straggler: measured on the 2026-09-13 burst,
  * 47 batches of exactly 4, mean message 48.4s against mean batch 68.4s, so ~27%
  * of every slot-second was a claimed slot waiting on its batch-mates, and
  * effective concurrency was 5.20 of a possible 8.
  *
- * WHY IT SHIPS ON. It is the point of the change and the utilisation argument is
- * arithmetic, not a guess. But it IS a real behavioural change to the drain
+ * WHY IT SHIPS ON. It is the point of the change and the utilization argument is
+ * arithmetic, not a guess. But it IS a real behavioral change to the drain
  * shape, and until yesterday the only way to undo it was `orgSlotGlobalCap: 0`
  * — which also switches off per-org leaseholders entirely and gives back the
  * cross-org throughput that is already working in production. THAT IS WHAT THIS
@@ -770,20 +770,32 @@ export const MAX_ORG_SLOT_LEASE_TTL_SECONDS = 300;
  * WHY A BOOLEAN, WHICH WAS A REAL CHOICE AND NOT A DEFAULT. The obvious
  * alternative is a LOW-WATER MARK — "top up when in flight drops to `k`" —
  * which reduces to this switch at its endpoints (`k = n-1` is continuous
- * refill, `k = 0` is the old batch shape) and expresses the middle. There is
+ * refill, `k = 0` is batch-at-a-time) and expresses the middle. There is
  * even a genuine axis underneath it: every claim takes a GLOBAL
  * `pg_advisory_xact_lock`, so refill raises claim traffic from one RPC per
  * batch to one per message, and a low-water mark would trade that against
- * utilisation. It was rejected on three grounds, and the third is dispositive:
+ * utilization. It was rejected on three grounds, and the third is dispositive:
  *
- *   1. THE AXIS IS NOT UNDER PRESSURE. Measured claim rate under refill is
- *      ~0.66/s fleet-wide at `globalCap: 8` against a measured ceiling around
- *      288/s. Tuning a resource with a 400x margin is inventing a decision.
+ *   1. THE AXIS HAS MARGIN, BUT FAR LESS THAN THE FIRST VERSION OF THIS NOTE
+ *      CLAIMED. It cited ~0.66 claims/s fleet-wide against a ~288/s ceiling and
+ *      called that a 400x margin. Both ends were measured on the wrong case. The
+ *      0.66/s is `globalCap` 8 x `n` 4 in flight over the create_repo burst's
+ *      48.4s mean, and create_repo is not the traffic: about 78% of messages are
+ *      sync_student_team (p50 1.0s) and sync_repo_permissions (p50 1.4s), and
+ *      `public.fix_assignment_repo_permissions` enqueues one
+ *      sync_repo_permissions per repository in a loop, so a deep burst is
+ *      precisely the fast-method case. The same 32 in flight at a 1.0-1.4s p50
+ *      is 23-32 claims/s. The 288/s was an EMPTY-queue ceiling measured
+ *      single-threaded; claim cost rises with queue depth, and the harness storm
+ *      (48 concurrent sessions, 2400 messages) measures 114-120 claim calls/s in
+ *      aggregate. So the margin on the shape that actually produces deep bursts
+ *      is closer to 4x. That is still margin and still not worth a knob nothing
+ *      reads, but it is a number to re-measure rather than a settled one.
  *   2. NOBODY HAS MEASURED THE MIDDLE. The endpoints are both measured; no
  *      value of `k` between them has ever been run, so the range would ship
  *      with only its two ends justified.
  *   3. `drainWithContinuousRefill` HAS NO SUCH PARAMETER. Its contract is "one
- *      claim per wake-up, top up the shortfall" — there is no `k` to honour.
+ *      claim per wake-up, top up the shortfall" — there is no `k` to honor.
  *      Rendering a low-water mark into the pod env would put a number in a
  *      values file that nothing reads, which is the exact failure CEILING 2
  *      below refuses for `maxPerOrg`: an unreachable number in a config file is
@@ -897,7 +909,7 @@ type Bounds = {
    *
    * WHEN THIS IS CORRECT, WHICH IS NARROW. `fallback` is right for an ABSENT
    * value, because absence means "nobody has an opinion" and today's shipped
-   * behaviour is the right answer. A value that is PRESENT but unusable means
+   * behavior is the right answer. A value that is PRESENT but unusable means
    * the opposite: somebody had an opinion and expressed it badly. For most
    * knobs those two land in the same place anyway, because their `fallback`
    * sits at or toward the CONSERVATIVE end of their range — falling back is
@@ -911,7 +923,7 @@ type Bounds = {
    * DEFAULT_ORG_SLOT_CONTINUOUS_REFILL — and it is a kill switch, where
    * defaulting a malformed value to "on" means the switch does not switch.
    *
-   * Leaving it unset preserves the three-behaviour contract below EXACTLY.
+   * Leaving it unset preserves the three-behavior contract below EXACTLY.
    */
   failSafeValue?: number;
 };
@@ -919,13 +931,17 @@ type Bounds = {
 /**
  * Parse one bounded integer knob.
  *
- * Three separate behaviours, each chosen because the alternative is an outage:
- *  * unset / empty  -> default, silently. This is the normal case.
- *  * unparseable    -> default, REPORTED. A typo (`"four"`, `"4 "`, `"1e3"`,
- *                      `""` after a bad chart render) must not become 0 or NaN;
+ * Three separate behaviors, each chosen because the alternative is an outage:
+ *  * unset          -> default, silently. This is the normal case.
+ *  * unparseable    -> default, REPORTED. A typo (`"four"`, `"4 "`, `"1e3"`)
+ *                      must not become 0 or NaN;
  *                      `n: 0` drains nothing and `sleep_seconds: NaN` is
  *                      rejected by pgmq, taking the worker down for a
  *                      misconfiguration it could have ridden out.
+ *  * set but empty  -> default, silently, for a knob with no `failSafeValue`;
+ *                      `failSafeValue`, REPORTED, for one that has it. An empty
+ *                      string is PRESENT, so for a fail-safe knob it is an edit
+ *                      and not an absence — see the guard in the body.
  *  * out of range   -> CLAMPED to the bound, REPORTED. Clamping rather than
  *                      falling back keeps the operator's INTENT (they asked for
  *                      "more"), while the bound keeps the pod alive.
@@ -943,11 +959,45 @@ type Bounds = {
  */
 function readBounded(env: EnvReader, b: Bounds): { value: number; issue?: TuningIssue } {
   const raw = env.get(b.env);
-  if (raw === undefined || raw.trim() === "") return { value: b.fallback };
+  if (raw === undefined) return { value: b.fallback };
+
+  // AN EMPTY VALUE IS PRESENT, NOT ABSENT, AND FOR A FAIL-SAFE KNOB THE DIFFERENCE IS THE WHOLE
+  // RULE. This line used to fold `""` in with `undefined` and return `fallback` SILENTLY, before
+  // `failSafeValue` was ever consulted — so `GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL=`
+  // resolved the kill switch to ON with no issue reported at all. `kubectl set env NAME=` is the
+  // ordinary way to blank a variable and a hand-edited Deployment spells it `value: ""`, which are
+  // exactly the Helm-bypass paths the chart's render-time refusal cannot see and the only paths
+  // `failSafeValue` exists for. It is the same failure this option was added to close, surviving in
+  // the one input that never reached the new code.
+  //
+  // This function's own contract already named it: the `unparseable -> default, REPORTED` line
+  // above lists `""` ("after a bad chart render") as a case that must be REPORTED, and the early
+  // return reported nothing.
+  //
+  // Absent still means absent. For a knob with no `failSafeValue` nothing changes either — empty
+  // still resolves to `fallback` — because for those two the safe direction and the default are the
+  // same direction, which is the condition the option documents.
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    if (b.failSafeValue === undefined) return { value: b.fallback };
+    return {
+      value: b.failSafeValue,
+      issue: {
+        env: b.env,
+        raw,
+        effective: b.failSafeValue,
+        kind: "rejected",
+        message:
+          `${b.env} is set but EMPTY. That is an edit, not an absence, so it resolves to the ` +
+          `FAIL-SAFE value ${b.failSafeValue} rather than the default ${b.fallback}: this knob's ` +
+          `default is the permissive end of its range, and a blanked variable must not turn it on. ` +
+          `Unset it entirely to get ${b.fallback}, or set it to an integer in [${b.min}, ${b.max}].`
+      }
+    };
+  }
 
   // Number.parseInt would happily accept "4kB" and "1.9"; require a clean
   // non-negative integer so a unit suffix or a float is reported, not truncated.
-  const trimmed = raw.trim();
   const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed)) {
     // A PRESENT-BUT-UNUSABLE VALUE IS NOT THE SAME AS AN ABSENT ONE, and for a
@@ -986,7 +1036,11 @@ function readBounded(env: EnvReader, b: Bounds): { value: number; issue?: Tuning
         env: b.env,
         raw,
         effective: resolved,
-        kind: "clamped",
+        // "clamped" only when something was actually clamped. On the fail-safe path the value was
+        // REJECTED and replaced with a number at the other end of the range, and labelling that
+        // "clamped" tells an operator triaging the issue that their intent was preserved when it
+        // was deliberately discarded.
+        kind: b.failSafeValue === undefined ? "clamped" : "rejected",
         message:
           b.failSafeValue === undefined
             ? `${b.env}=${trimmed} is ${which}; clamped to ${bound}`
@@ -1067,7 +1121,7 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
   // THE EXACT LEGACY PAIR IS REPORTED, NOT ENFORCED. (4, 300) is what was
   // hardcoded in processBatch() before any of this was configurable, so it is
   // what every deployment is already running; "re-coherencing" it here would
-  // change production behaviour on deploy, which is the one thing this change
+  // change production behavior on deploy, which is the one thing this change
   // promises not to do. It genuinely violates both ceilings under the n x 120
   // model, so it is reported loudly and left alone. Everything else is a
   // deliberate act by whoever set the env var, and gets ENFORCED below.
@@ -1120,7 +1174,7 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
   // batch modelled at 960s going visible at 300s, i.e. duplicated in-flight
   // GitHub work and legitimate provisioning messages walking toward the
   // poison-pill DLQ. A check that observes a fault it could have prevented is
-  // not defence in depth.
+  // not defense in depth.
   //
   // We DEGRADE CONCURRENCY rather than inflate the timeout:
   //
@@ -1178,7 +1232,7 @@ export function resolveAsyncWorkerTuning(env: EnvReader): AsyncWorkerTuning {
   //
   // Raising the VT here is legitimate in a way that raising it to chase `n`
   // never was: the worker passes `sleep_seconds` on every pgmq_public.read, so
-  // it OWNS that value and needs no chart change to honour it, and this is the
+  // it OWNS that value and needs no chart change to honor it, and this is the
   // one case where there is no concurrency left to give up. It is only reachable
   // when the configured VT cannot cover a single message.
   let effectiveVt = vt.value;
@@ -1289,7 +1343,7 @@ function resolveOrgSlotTuning(
   // they are most likely to type. Failing safe means going to 0.
   //
   // ABSENT STILL MEANS ON. An older chart or a pre-flag image supplies nothing,
-  // and that is not an edit — it must keep today's shipped behaviour.
+  // and that is not an edit — it must keep today's shipped behavior.
   //
   // No coherence rule of its own: it changes WHEN a claim happens, not how many
   // messages or slots are in play, so it cannot conflict with any ceiling below.
@@ -1303,7 +1357,12 @@ function resolveOrgSlotTuning(
   if (refill.issue) issues.push(refill.issue);
 
   const enabled = cap.value > 0;
-  const continuousRefill = refill.value === 1;
+  // `> 0`, not `=== 1`, because DEFAULT_ORG_SLOT_CONTINUOUS_REFILL documents this var as widening
+  // "from 0-1 to 0-n WITHOUT changing type or name, and 0 keeps meaning off" if a low-water mark is
+  // ever added. An equality test silently breaks that promise: the day MAX becomes 2, a configured 2
+  // would mean OFF — the most permissive value selecting the disabled path, which is the same class
+  // of inversion `failSafeValue` exists to prevent. `> 0` is the contract as written.
+  const continuousRefill = refill.value > 0;
   let maxPerOrg = perOrg.value;
   let leaseTtlSeconds = ttl.value;
 

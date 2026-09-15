@@ -60,7 +60,7 @@ function deferred() {
  * is the shape almost every interesting case takes. Returning an `Error` from a hook makes the RPC
  * REJECT; returning an `RpcResult` with `error` set makes it fail the PostgREST way. Both paths
  * matter and the module treats them differently in exactly one place (a rejection has no `code`, so
- * it can never be recognised as the missing-function case).
+ * it can never be recognized as the missing-function case).
  */
 function fakeRpc(
   init: {
@@ -701,7 +701,7 @@ Deno.test("rotating to the other queue releases the pool the run left", async ()
   mainHasWork = false;
   assertEquals((await run.claim())?.queueName, "async_calls_low_priority");
 
-  // The eager release is a LATENCY optimisation, not what makes this correct — but when it lands,
+  // The eager release is a LATENCY optimization, not what makes this correct — but when it lands,
   // the org that was left gets its headroom back immediately instead of one TTL later.
   assertEquals(t.rows.length, 1);
   assertEquals(t.rows[0].queue, "async_calls_low_priority");
@@ -723,7 +723,7 @@ Deno.test("rotating back and forth never accumulates slots", async () => {
   assertEquals(t.rows[0].queue, "async_calls_low_priority");
 });
 
-// THE PROPERTY THAT ACTUALLY MAKES ROTATION SAFE, with the optimisation switched off. A run that
+// THE PROPERTY THAT ACTUALLY MAKES ROTATION SAFE, with the optimization switched off. A run that
 // rotates without releasing holds one lease per pool, which is legal; renewal is scoped to the pool
 // it is draining, so the one it walked away from decays on its own TTL. Renewing across pools is
 // what would turn a forgotten lease from a one-TTL cost into a permanent one.
@@ -1204,7 +1204,7 @@ Deno.test("a renewal that resolves false after a same-queue re-claim cannot kill
 // batch loop this replaces processed every message too, at 73% of the concurrency it was claiming.
 // What follows is a deterministic simulation — a fake claim RPC, virtual time, and a duration
 // distribution fitted to production — that measures effective concurrency the same way the incident
-// was measured, and it is written to FAIL against batch-and-wait.
+// was measured, and it is written to FAIL against batch-at-a-time.
 
 /**
  * The 2026-09-14 `Khoury-CS3650` burst, as a distribution.
@@ -1213,7 +1213,7 @@ Deno.test("a renewal that resolves false after a same-queue re-claim cannot kill
  * 190 messages, mean duration 48.4s, mean slowest-of-four 68.4s, worst single message 94.8s. That
  * shape is bimodal rather than lognormal — most `create_repo` calls land near 38s and roughly one in
  * five stalls behind the per-org content limiter around 80s — and it is the GAP between those two
- * modes that batch-and-wait pays for, so a unimodal fixture would quietly understate the thing being
+ * modes that batch-at-a-time pays for, so a unimodal fixture would quietly understate the thing being
  * measured. Fitted to hit all three moments; `durationFixtureStats` asserts it still does.
  */
 function mulberry32(seed: number) {
@@ -1335,7 +1335,7 @@ function burstRpc(clock: VirtualClock, msgIds: number[], org: string) {
 
 /**
  * Effective concurrency by Little's law, which is how the 5.20 was measured on production: total
- * busy message-seconds over the wall clock they were spread across. Utilisation is that against the
+ * busy message-seconds over the wall clock they were spread across. Utilization is that against the
  * concurrency the leaseholder was configured for and was continuously claiming slot-time to hold.
  */
 function concurrencyMeter() {
@@ -1364,7 +1364,7 @@ function concurrencyMeter() {
       const effectiveConcurrency = busy / (last - first);
       return {
         effectiveConcurrency,
-        utilisation: effectiveConcurrency / configuredConcurrency,
+        utilization: effectiveConcurrency / configuredConcurrency,
         wallClockSeconds: (last - first) / 1000
       };
     }
@@ -1421,7 +1421,7 @@ function simTuning(overrides: Record<string, string | undefined> = {}) {
 /**
  * One drive, either shape, selected exactly as the worker selects it: `drainOrgLease` with the
  * boolean the resolver produced. Nothing here calls a driver directly, so a switch that was wired to
- * the wrong branch — or to nothing — would show up as the wrong utilisation rather than as a passing
+ * the wrong branch — or to nothing — would show up as the wrong utilization rather than as a passing
  * test.
  */
 async function simulateOrgLeaseDrain(durations: number[], tuning: ReturnType<typeof resolveAsyncWorkerTuning>) {
@@ -1517,11 +1517,11 @@ Deno.test("the continuous-refill switch picks the drain shape, and both shapes d
   const b = batch.meter.report(SIM_CONCURRENCY);
   const r = refill.meter.report(SIM_CONCURRENCY);
   console.log(
-    `\n  batch-and-wait : concurrency ${b.effectiveConcurrency.toFixed(2)}/${SIM_CONCURRENCY} ` +
-      `= ${(b.utilisation * 100).toFixed(1)}% utilisation, ${(b.wallClockSeconds / 60).toFixed(1)} min, ` +
+    `\n  batch-at-a-time  : concurrency ${b.effectiveConcurrency.toFixed(2)}/${SIM_CONCURRENCY} ` +
+      `= ${(b.utilization * 100).toFixed(1)}% utilization, ${(b.wallClockSeconds / 60).toFixed(1)} min, ` +
       `${batch.claims.length} claims\n` +
       `  continuous refill: concurrency ${r.effectiveConcurrency.toFixed(2)}/${SIM_CONCURRENCY} ` +
-      `= ${(r.utilisation * 100).toFixed(1)}% utilisation, ${(r.wallClockSeconds / 60).toFixed(1)} min, ` +
+      `= ${(r.utilization * 100).toFixed(1)}% utilization, ${(r.wallClockSeconds / 60).toFixed(1)} min, ` +
       `${refill.claims.length} claims\n`
   );
 
@@ -1530,14 +1530,14 @@ Deno.test("the continuous-refill switch picks the drain shape, and both shapes d
 
   // The number from the incident: mean 48.4s per message against a mean 68.4s batch.
   assertEquals(
-    b.utilisation > 0.66 && b.utilisation < 0.78,
+    b.utilization > 0.66 && b.utilization < 0.78,
     true,
-    `batch-and-wait utilisation ${b.utilisation.toFixed(3)} should reproduce the measured ~0.71`
+    `batch-at-a-time utilization ${b.utilization.toFixed(3)} should reproduce the measured ~0.71`
   );
   assertEquals(
-    r.utilisation > 0.95,
+    r.utilization > 0.95,
     true,
-    `continuous refill utilisation ${r.utilisation.toFixed(3)} should be ~1; the remainder is the ` +
+    `continuous refill utilization ${r.utilization.toFixed(3)} should be ~1; the remainder is the ` +
       `ramp-down as the burst runs out, plus one ${CLAIM_LATENCY_MS}ms claim per message`
   );
   assertEquals(
@@ -1548,7 +1548,7 @@ Deno.test("the continuous-refill switch picks the drain shape, and both shapes d
 
   // THE ROLLBACK IS TOTAL, and it is visible in the RPC traffic rather than only in the timing. The
   // batch shape never puts anything in the in-flight set, so it never asks for a shortfall and never
-  // pins — every lease behaviour continuous refill added is keyed on that set being non-empty, so
+  // pins — every lease behavior continuous refill added is keyed on that set being non-empty, so
   // switching the flag off reverts the state machine and not just the loop.
   assertEquals(
     batch.claims.every((n) => n === SIM_CONCURRENCY),
@@ -1573,7 +1573,7 @@ Deno.test("the continuous-refill switch picks the drain shape, and both shapes d
   );
 });
 
-// The ceiling is unchanged and that is the whole safety argument: refill buys utilisation of `n`,
+// The ceiling is unchanged and that is the whole safety argument: refill buys utilization of `n`,
 // never more than `n`. `maxPerOrg x n` is what bounds one org against its GitHub content quota.
 Deno.test("refill never exceeds the configured concurrency, and never asks for more than it can hold", async () => {
   const durations = productionDurationsSeconds(SIM_MESSAGES);
@@ -1840,7 +1840,7 @@ Deno.test("a pinned top-up that finds nothing does not fall back to another org 
 // an overload on the set of argument names, so that answers PGRST202 — which is the SAME code as the
 // genuine "this function does not exist" deploy skew, and that one is fatal on the first failure.
 // Confusing the two would take the whole org-leased path down during a deploy window.
-Deno.test("a database without pin_org degrades to batch-and-wait instead of ending the run", async () => {
+Deno.test("a database without pin_org degrades to batch-at-a-time instead of ending the run", async () => {
   const f = fakeRpc({
     claim: (args) =>
       args.pin_org === undefined
@@ -1986,4 +1986,166 @@ Deno.test("an empty claim waits for a completion rather than hammering the RPC",
   // The sleeps that DO happen are the ones after the drain, which is the existing idle budget doing
   // exactly what it always did.
   assertEquals(run.shouldContinue(), false, "the run ends on its idle budget once the drain is over");
+});
+
+// ── Review fixes: the four wiring faults the shipped shape could not report ────
+// Every one of these is a case where the WRONG behavior was silent. That is the property under
+// test as much as the behavior itself.
+
+// `no_capacity` and `no_demand` are not interchangeable evidence about what the server WROTE.
+// `no_demand` means `winner` was empty, so the slot UPDATE never ran. `no_capacity` also comes back
+// when an org DID qualify, a slot WAS committed by the data-modifying `claimed` CTE, and `picked`
+// then found every candidate row locked by a concurrent archive/delete/read under SKIP LOCKED.
+// Reproduced against a local database: the call answers `no_capacity` with no message rows while
+// `async_worker_slots` holds a live row for the caller. Dropping the queue from the release set on
+// that answer loses the lease for a whole TTL.
+Deno.test("a no_capacity answer still releases, because the server may have taken a slot", async () => {
+  const f = fakeRpc({ claim: () => ({ data: statusRow("no_capacity"), error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc });
+
+  assertEquals(await run.claim(), null);
+  assertEquals(run.shouldContinue(), false, "no_capacity ends the run, as it always did");
+
+  await run.release();
+  assertEquals(f.releaseQueues, ["async_calls"], "the queue it may hold a slot in is still released");
+});
+
+// ...and the other half of the same rule: `no_demand` genuinely proves nothing was written, so it
+// must still narrow the set. Without this the fix above would degrade into "release everything
+// always", which is the behavior the touchedQueues bookkeeping exists to avoid.
+Deno.test("a no_demand answer still proves there is nothing to release", async () => {
+  const f = fakeRpc({ claim: () => ({ data: statusRow("no_demand"), error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc });
+
+  assertEquals(await run.claim(), null);
+  await run.release();
+  assertEquals(f.releaseCalls, 0, "nothing was claimed anywhere, so nothing is given back");
+});
+
+// `inFlightCount` is optional and defaults to `() => 0`, which is exactly right for the batch driver
+// and silently catastrophic for the refill one: unpinned top-ups, no deferred release, renewal
+// stopping at `finished`, the idle budget arming mid-stream — and the pin-violation backstop that
+// would report it is itself gated on the same count, so nothing fires.
+Deno.test("refill refuses to run against a lease that cannot see the in-flight set", async () => {
+  const f = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc }); // no inFlightCount
+  assertEquals(run.tracksInFlight, false);
+
+  await assertRejects(
+    () =>
+      drainWithContinuousRefill({
+        run,
+        inFlight: new Set<Promise<void>>(),
+        maxInFlight: 4,
+        process: () => Promise.resolve()
+      }),
+    Error,
+    "inFlightCount"
+  );
+  assertEquals(f.claimArgs.length, 0, "and it refuses before claiming anything");
+});
+
+// The in-flight target and the allocator's `n` are one number. `claim()` caps ONE claim at
+// `drainConcurrency`, which is not the same as capping the SET, because refill accumulates across
+// claims: 4, then 4 more. The surplus is concurrency `max_per_org x drainConcurrency` never counted.
+Deno.test("drainOrgLease refuses an in-flight target that is not the run's own concurrency", async () => {
+  const seen: number[] = [];
+  const f = fakeRpc({
+    claim: (args, i) => {
+      seen.push(args.n);
+      return i === 1 ? { data: [row(1, "acme")], error: null } : { data: statusRow("no_demand"), error: null };
+    }
+  });
+  const inFlight = new Set<Promise<void>>();
+  // idleBudgetMs 0: `sleep` is instant here, so the default 50s budget would be 50s of WALL CLOCK
+  // spent spinning on an empty queue. Nothing in this test is about idling.
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    drainConcurrency: 4,
+    idleBudgetMs: 0,
+    inFlightCount: () => inFlight.size
+  });
+
+  await drainOrgLease({
+    run,
+    inFlight,
+    maxInFlight: 8, // twice the run's `n`
+    continuousRefill: true,
+    process: () => Promise.resolve()
+  });
+
+  assertEquals(seen[0], 4, "the first claim asks for the run's concurrency, not the inflated target");
+  assertEquals(
+    seen.every((n) => n <= 4),
+    true,
+    "and no claim in the run ever asks for more"
+  );
+});
+
+// The batch shape must roll back the drain SHAPE and nothing else. Reading `maxInFlight` on one path
+// and ignoring it on the other would make the kill switch a concurrency change too.
+Deno.test("the kill switch changes the drain shape, not how much is in flight", async () => {
+  const asked: number[] = [];
+  const f = fakeRpc({
+    claim: (args, i) => {
+      asked.push(args.n);
+      return i === 1 ? { data: [row(1, "acme")], error: null } : { data: statusRow("no_demand"), error: null };
+    }
+  });
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    drainConcurrency: 3,
+    idleBudgetMs: 0,
+    inFlightCount: () => inFlight.size
+  });
+
+  await drainOrgLease({
+    run,
+    inFlight,
+    maxInFlight: 3,
+    continuousRefill: false,
+    process: () => Promise.resolve()
+  });
+
+  assertEquals(asked[0], 3, "the batch path reads the same number the refill path would");
+});
+
+// `start`'s catch exists to make the tracked promise non-rejecting. Calling the reporter directly
+// from it left that invariant resting on a callback this module does not own: a throw from `onError`
+// re-rejects the very promise the catch was there to settle, and between `start` and the next
+// `settleOne` nothing is attached to it — an unhandled rejection that takes the isolate down.
+Deno.test("a reporter that throws cannot take the isolate down with it", async () => {
+  const f = fakeRpc({
+    claim: (_a, i) =>
+      i === 1 ? { data: [row(1, "acme")], error: null } : { data: statusRow("no_demand"), error: null }
+  });
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, idleBudgetMs: 0, inFlightCount: () => inFlight.size });
+
+  await drainWithContinuousRefill({
+    run,
+    inFlight,
+    maxInFlight: 4,
+    process: () => Promise.reject(new Error("handler blew up")),
+    onError: () => {
+      throw new Error("and so did the reporter");
+    }
+  });
+
+  assertEquals(inFlight.size, 0, "the message still settled and left the in-flight set");
+});
+
+// `Math.max(1, NaN)` is NaN, so the clamp in `claim()` did not clamp. A NaN `n` is serialized by
+// PostgREST as `null`, which `claim_org_slot_and_read` answers with P0001 — fatal on the FIRST
+// failure, so one bad arithmetic result ends the run with a deployment error that is not one.
+Deno.test("a non-finite message count resolves to the ceiling instead of a null n", async () => {
+  const f = fakeRpc({ claim: () => ({ data: statusRow("no_demand"), error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, drainConcurrency: 4 });
+
+  await run.claim(Number.NaN);
+  assertEquals(f.claimArgs[0].n, 4);
+  assertEquals(Number.isFinite(f.claimArgs[0].n), true, "never NaN, which crosses the wire as null");
 });

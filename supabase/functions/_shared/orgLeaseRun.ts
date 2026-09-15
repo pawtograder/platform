@@ -32,7 +32,7 @@ import { type EnvReader } from "./SentryContext.ts";
  *     moves from `async_calls` to `async_calls_low_priority` may briefly hold a slot in each, and
  *     the one it stopped renewing lapses at its TTL — the same bound the design already accepts for
  *     an isolate that dies without releasing. The eager release on rotation below is a LATENCY
- *     optimisation on top of that, not the thing that makes it correct.
+ *     optimization on top of that, not the thing that makes it correct.
  *   * THERE IS NO SECOND MODE TO DEGRADE INTO. `beginWorkerRun` falls back to bounded when Redis is
  *     missing or broken. Falling back to an unleased drain here would be wrong — the whole point of
  *     the slot table is that it also enforces the per-org and fleet-wide caps, so a fallback that
@@ -105,20 +105,21 @@ import { type EnvReader } from "./SentryContext.ts";
  * once every one of them had settled. That costs the difference between the mean message and the
  * SLOWEST message in each group of `n`, and on 2026-09-14 that difference was measured rather than
  * guessed. A 190-repo burst for one org drained in 29.5 minutes at an effective concurrency of 5.20
- * against 8 configured, and the loss factorises exactly:
+ * against 8 configured, and the loss factorizes exactly:
  *
  *     configured (orgSlotMaxPerOrg 2 x drainConcurrency 4)   8.00
  *   x leaseholder residency (~1.8 of 2 slots resident)       7.20
- *   x within-batch utilisation                               5.26   <- measured 5.20
+ *   x within-batch utilization                               5.26   <- measured 5.20
  *
  * Reconstructed from `pgmq.a_async_calls` (`vt - 480s` is the read time, `archived_at` the finish):
- * 47 batches of exactly 4, mean message duration 48.4s, mean batch duration 68.4s. 48.4/68.4 = 0.71,
- * so roughly 27% of every slot-second was a claimed slot waiting on its batch-mates. Sampling
- * in-flight count every 30s showed the sawtooth this predicts: 8, then 1-2, then 8 again.
+ * 47 batches of exactly 4, mean message duration 48.4s, mean batch duration 68.4s, so 48.4/68.4 =
+ * 0.71 within a batch; across the burst, roughly 27% of every slot-second was a claimed slot waiting
+ * on its batch-mates. Sampling in-flight count every 30s showed the sawtooth this predicts: 8, then
+ * 1-2, then 8 again.
  *
  * `drainWithContinuousRefill` below keeps `n` messages in flight instead: as each message settles,
  * the SHORTFALL is claimed rather than the whole batch re-read. The sawtooth flattens, and the
- * 0.73 term goes to ~1.
+ * within-batch term goes to ~1.
  *
  * FOUR THINGS THAT CHANGE BECAUSE A CLAIM CAN NOW LAND WHILE WORK IS IN FLIGHT, all of them here
  * rather than in the driver, because they are statements about the LEASE:
@@ -142,12 +143,13 @@ import { type EnvReader } from "./SentryContext.ts";
  *      at all. Both halves of that are load-bearing and both are about the same count. The
  *      allocator re-points THIS HOLDER'S slot row at whichever org it picks, so an unpinned top-up
  *      hands our row to the neediest org while `n-1` messages are still running for the org we just
- *      left, and those stop being counted: that org reaches `max_per_org x n + (n-1)` = 11 against
- *      a configured 8. Landing on a different QUEUE loses the same count a level up, by releasing
- *      the pool the in-flight messages were claimed under. So a top-up carries `pin_org` and probes
- *      only the held queue; a claim issued with nothing in flight is unpinned and probes everything
- *      in priority order, because that is the moment when rotating is free. Preemption is bought
- *      back by streaming ONLY the highest-priority queue — see `claim()`.
+ *      left, and those stop being counted: that org reaches `max_per_org x n + (n-1)`, which at
+ *      `maxPerOrg` 2 and `n` 4 is 11 against a budgeted 8. Landing on a different QUEUE loses the
+ *      same count a level up, by releasing the pool the in-flight messages were claimed under. So a
+ *      top-up carries `pin_org` and probes only the held queue; a claim issued with nothing in
+ *      flight is unpinned and probes everything in priority order, because that is the moment when
+ *      rotating is free. Preemption is bought back by streaming ONLY the highest-priority queue;
+ *      see `claim()`.
  *
  * What does NOT change: the status contract (`claimed` rows, or exactly one `no_demand` /
  * `no_capacity` row), advancing to the fallback queue only on `no_demand`, `no_capacity` ending the
@@ -241,11 +243,11 @@ export interface OrgSlotRpc {
      * parameter answers `PGRST202`. Sending it on every claim would therefore make the whole
      * org-leased path fail closed during any window where the image is ahead of the migration;
      * sending it only on a top-up means the unpinned claims that start a run keep working, and
-     * `claimOnce` degrades the top-ups to batch-and-wait. `pin_org` has a server-side DEFAULT, so
+     * `claimOnce` degrades the top-ups to batch-at-a-time. `pin_org` has a server-side DEFAULT, so
      * the other skew direction (new database, old image) needs nothing.
      *
      * Case does not matter: the allocator's org expression is already `lower(...)` and the server
-     * normalises this the same way, so any `org` a previous claim returned can be passed back
+     * normalizes this the same way, so any `org` a previous claim returned can be passed back
      * verbatim — including the `(unresolved)` and `(unknown-method)` sentinels.
      */
     pin_org?: string;
@@ -262,6 +264,17 @@ export interface OrgLeaseRun {
   readonly mode: "org_leased";
   /** Stable identity of this leaseholder, as passed to every RPC. Logged, so make it readable. */
   readonly holder: string;
+  /**
+   * This leaseholder's `n`, exposed so a driver can check its own in-flight target against the
+   * number the allocator is budgeting for rather than trusting the two call sites to agree.
+   */
+  readonly drainConcurrency: number;
+  /**
+   * Whether this run was given an `inFlightCount`, i.e. whether it can actually see what the driver
+   * is running. False means every behavior keyed on "work in flight" is inert, which is correct
+   * for the batch driver and unsafe for the refill one — see `drainWithContinuousRefill`.
+   */
+  readonly tracksInFlight: boolean;
   /** The org whose slot is currently held, or null when this run holds none. */
   heldOrg(): string | null;
   /** Which queue's pool the held slot is in, or null when this run holds none. */
@@ -376,7 +389,7 @@ const DEFAULT_MAX_CONSECUTIVE_CLAIM_ERRORS = 3;
  * PostgREST's "no such function" code. This is the deploy-skew signature: the worker image can
  * reach a database whose migration has not been applied yet, and no amount of retrying fixes that,
  * so it ends the run immediately instead of spending `maxConsecutiveClaimErrors` isolates on it.
- * Recognising it is an optimisation, not a correctness requirement — if the code ever changes, the
+ * Recognizing it is an optimization, not a correctness requirement — if the code ever changes, the
  * consecutive-error cap still bounds the damage.
  */
 const PGRST_UNDEFINED_FUNCTION = "PGRST202";
@@ -564,6 +577,12 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
       opts.scope?.setTag("org_slot_release_deferred", reason);
       return;
     }
+    // CLEARED, not just set. This scope is the RUN scope, and the worker clones it per message, so
+    // a tag left on from an earlier deferral is copied onto every event captured afterwards — the
+    // same read-through that made `pgmq_archive_failed` stick to a whole batch (see
+    // processOneQueueMessage). A deferral that has since been honored must not keep claiming the
+    // slot is being held back.
+    opts.scope?.setTag("org_slot_release_deferred", "no");
     await releaseSlot(reason);
   };
 
@@ -751,8 +770,8 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
         // exists to close — the allocator would re-point this holder's slot at a needier org while
         // the previous org's messages are still running under it — so the answer is not "retry
         // unpinned", it is "stop topping up". `pinUnsupported` latches for the life of the run and
-        // every later top-up skips the RPC entirely, so an un-migrated database gets batch-and-wait
-        // behaviour at the cost of exactly one wasted round trip per run, with no lost messages, no
+        // every later top-up skips the RPC entirely, so an un-migrated database gets batch-at-a-time
+        // behavior at the cost of exactly one wasted round trip per run, with no lost messages, no
         // isolate churn, and no breached cap.
         pinUnsupported = true;
         console.warn(
@@ -805,22 +824,50 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
       return { status: "claimed", messages };
     }
 
-    // Nothing was claimed here, and the server has told us so definitively — so unlike the
-    // lost-response case, we KNOW no row was committed for us on this call. Drop the queue from the
-    // release-on-exit set, but only if an EARLIER claim did not already take a slot here: that row
-    // is untouched by a claim that finds nothing, and it is still ours to give back.
-    if (!claimedQueues.has(queueName)) touchedQueues.delete(queueName);
-
     // An unrecognised or absent status resolves to `no_demand`, which is what zero rows meant before
     // the status column existed. That is the conservative reading: it advances to the next queue
     // exactly as the old code did, where reading it as `no_capacity` would stop a worker draining
     // against a database that simply has not been migrated yet.
-    return { status: rows[0]?.status === "no_capacity" ? "no_capacity" : "no_demand", messages: [] };
+    const status: OrgClaimStatus = rows[0]?.status === "no_capacity" ? "no_capacity" : "no_demand";
+
+    // ZERO MESSAGES DOES NOT MEAN ZERO SLOTS WERE WRITTEN, and only `no_demand` is safe to treat
+    // that way.
+    //
+    // `no_demand` is: `demand` was empty for this queue (or for the pinned org), so `winner` was
+    // empty, so `free_slot` was empty, so the `claimed` CTE never ran. Nothing was committed and
+    // there is genuinely nothing to give back.
+    //
+    // `no_capacity` is NOT that. The SQL reaches it by TWO routes and only one of them is empty-
+    // handed. `winner` can qualify, `free_slot` can take a row, and the data-modifying `claimed`
+    // CTE then commits a live lease — and `picked` can still come back empty, because it re-reads
+    // the queue under `FOR UPDATE OF q SKIP LOCKED` and every one of that org's ready rows may be
+    // locked by a concurrent archive, delete or `pgmq_public.read`. `drained` is then empty and the
+    // UNION ALL's status arm fires with `no_capacity`, because `demand` for the org is non-empty.
+    // Reproduced against a local database: the call returns `no_capacity` with no rows while
+    // `async_worker_slots` holds a live row for the caller.
+    //
+    // Dropping the queue here on that path is how the lease is LOST rather than released: `claim()`
+    // sees `held === false` on a first claim, skips its release, ends the run, and `release()` then
+    // walks an empty `touchedQueues` and issues no `release_org_slot`. The row stays live for a full
+    // TTL under an isolate that has already returned, occupying one `global_cap` and one
+    // `max_per_org` for an org nobody is draining — the exact leak shape this module keeps closing.
+    //
+    // Continuous refill makes it likelier in both directions: a top-up asks for the SHORTFALL, so a
+    // single locked row is enough where a batch claim needed all `n`, and there are ~`n` times as
+    // many claims per run. So the set is only narrowed on the answer that proves nothing was
+    // written, and `no_capacity` keeps the queue for exit to clean up. A release against a queue we
+    // hold nothing in is a no-op — `release_org_slot` is scoped to `(queue_name, holder)` — so the
+    // cost of being wrong in this direction is one RPC, against a pinned org for a whole TTL.
+    if (status === "no_demand" && !claimedQueues.has(queueName)) touchedQueues.delete(queueName);
+
+    return { status, messages: [] };
   };
 
   return {
     mode: "org_leased",
     holder,
+    drainConcurrency: opts.drainConcurrency,
+    tracksInFlight: opts.inFlightCount !== undefined,
     heldOrg: () => heldOrgValue,
     heldQueue: () => heldQueueName,
     lastOutcome: () => lastClaimOutcome,
@@ -834,7 +881,17 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
       // for more than the ceiling — or for zero, which can only come back `no_demand` — is a caller
       // bug that should not reach the RPC. Clamping rather than throwing because this is a hot path
       // and the safe value is obvious.
-      const n = Math.max(1, Math.min(opts.drainConcurrency, Math.floor(maxMessages ?? opts.drainConcurrency)));
+      //
+      // NaN IS NOT CLAMPED BY `Math.max`, which is what made this a real hole rather than a
+      // theoretical one: `Math.max(1, NaN)` is NaN, so a non-finite `maxMessages` sailed through the
+      // guard, was serialized by PostgREST as `n: null`, and came back as the P0001 that
+      // `claim_org_slot_and_read` raises for `n < 1`. P0001 is fatal on the FIRST failure, so one
+      // bad arithmetic result ends the run with a "deployment or configuration error" that is
+      // neither. Resolve it to the ceiling, which is what "no opinion" means here.
+      const requested = Math.floor(maxMessages ?? opts.drainConcurrency);
+      const n = Number.isFinite(requested)
+        ? Math.max(1, Math.min(opts.drainConcurrency, requested))
+        : opts.drainConcurrency;
 
       // A TOP-UP MAY ONLY EXTEND WHAT THIS RUN IS ALREADY DOING: same org, same queue, or no claim
       // at all. A claim issued with nothing in flight is unchanged — every queue in priority order,
@@ -844,9 +901,9 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
       // WHY THE PIN. `claim_org_slot_and_read` re-points THIS HOLDER'S slot row at whichever org it
       // picks, and an unpinned top-up picks the neediest org, not ours. Mid-stream that means the
       // slot table stops counting the `n-1` messages still running for the org we just left, so that
-      // org can reach `max_per_org x n + (n-1)` = 11 against a configured 8. The per-org cap is the
-      // invariant this entire feature exists to hold, so a top-up names its org and the allocator
-      // either serves it or says no.
+      // org can reach `max_per_org x n + (n-1)`, which at `maxPerOrg` 2 and `n` 4 is 11 against a
+      // budgeted 8. The per-org cap is the invariant this entire feature exists to hold, so a top-up
+      // names its org and the allocator either serves it or says no.
       //
       // WHY A TOP-UP NEVER PROBES ANOTHER QUEUE. Same argument one level up: landing on a different
       // queue mid-stream rotates the slot into the other pool and releases the one our in-flight
@@ -857,13 +914,18 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
       // HIGHEST-PRIORITY QUEUE IS STREAMED. On any lower-priority queue a run drains its batch and
       // lets the in-flight set empty before claiming again, which restores the full unpinned probe —
       // `async_calls` first — at exactly the cadence it happens today, one batch. Analytics work
-      // pays batch-and-wait's ~27%; urgent work does not, and a low-priority stream can no longer
+      // pays batch-at-a-time's ~27%; urgent work does not, and a low-priority stream can no longer
       // outlive a main-queue backlog. The alternative (probe `async_calls` unpinned mid-stream)
       // reopens the rotation hazard in the name of preempting sooner, which is the trade that was
       // just rejected.
       const draining = inFlightCount() > 0;
       let pinOrg: string | undefined;
       let probeQueues: readonly string[] = opts.queueNames;
+      // Set on EVERY claim rather than only on the two paths that opt out. The run scope is cloned
+      // onto every message event, so a tag that is only ever written when something goes wrong
+      // latches: one quiesced top-up early in a run marks every later event as quiesced, including
+      // the ones from the stream that resumed. A tag that always states the current answer cannot.
+      opts.scope?.setTag("org_slot_refill", draining ? "streaming" : "at_rest");
       if (draining) {
         // Work in flight but no lease to pin to: the stall guard released it, or the run is over.
         // There is nothing safe to top up with.
@@ -925,10 +987,15 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
         // GitHub capacity the backed-up queue needs — the precise inversion the status column was
         // added to make visible.
         if (outcome.status === "no_capacity") {
-          // Whatever slot we held is one this pass did not renew our claim on, and the org we were
-          // draining evidently has no more ready work; give it back rather than pin it — unless
-          // messages claimed under it are still running, in which case the run ends but the slot,
-          // and its renewals, stay ours until the driver has drained them.
+          // `no_capacity` does NOT say this org is out of work. It says work is waiting and the
+          // caps are full, and the run is about to end (see below), so a slot this isolate will not
+          // claim against again is headroom some other leaseholder could be using. Give it back,
+          // rather than hold it to the TTL. The exception is messages claimed under it that are
+          // still running: then the run ends but the slot, and its renewals, stay ours until the
+          // driver has drained them.
+          //
+          // It does not prove the server wrote nothing either, which is why `claimOnce` keeps this
+          // queue in `touchedQueues` on this answer. See the note there.
           if (held) await releaseSlotUnlessDraining("no_capacity");
           // AND END THE RUN, rather than sleeping and re-polling. Four reasons, and the last is the
           // one that makes this not a spin loop:
@@ -992,7 +1059,7 @@ export function beginOrgLeaseRun(opts: BeginOrgLeaseRunOptions): OrgLeaseRun {
         // that returned a mixed batch would mis-tag the run but could not mis-attribute a message.
         //
         // AN ASSERTION THAT SHOULD NEVER FIRE, kept rather than deleted because it is the last line
-        // of defence on the invariant this whole module exists for.
+        // of defense on the invariant this whole module exists for.
         //
         // Rotating onto another org is normal and desirable BETWEEN streams, and impossible DURING
         // one: every claim issued with work in flight carries `pin_org`, and the pinned contract
@@ -1134,10 +1201,27 @@ export interface ContinuousRefillOptions<T = unknown> {
    * behind a setter that could be forgotten.
    */
   inFlight: Set<Promise<void>>;
-  /** Messages to keep in flight. Normally the run's `drainConcurrency`, which caps claims anyway. */
+  /**
+   * Messages to keep in flight. MUST be the same number the run was built with as
+   * `drainConcurrency`; `drainOrgLease` clamps it to that and says so if they differ.
+   *
+   * `claim()` caps ONE claim at `drainConcurrency`, which is not the same thing as capping the
+   * in-flight SET at it, and an earlier comment here asserted that it was ("a larger in-flight
+   * target than the claim ceiling could never be reached"). Refill reaches it by accumulation: at
+   * `maxInFlight` 8 and `drainConcurrency` 4 the first claim takes 4, the next shortfall is 4, and
+   * the run holds 8 handlers under ONE slot. The allocator's per-org budget is
+   * `max_per_org * drainConcurrency`, so that org runs at twice its accounted concurrency against a
+   * GitHub content limiter this feature exists to respect — with nothing in the slot table to show
+   * it. Below the ceiling is just as wrong in the other direction: it strands part of the
+   * leaseholder's allowance permanently.
+   */
   maxInFlight: number;
   process: RefillProcessor<T>;
-  /** Reports a claim-RPC failure, or a `process` that rejected. Must not throw. */
+  /**
+   * Reports a claim-RPC failure, or a `process` that rejected.
+   *
+   * Should not throw, and is no longer TRUSTED not to: every call site wraps it. See `start`.
+   */
   onError?: (e: unknown) => void;
 }
 
@@ -1151,14 +1235,17 @@ export interface ContinuousRefillOptions<T = unknown> {
  * settling. That single rule is what gives the three properties this has to have:
  *
  *   * IT TOPS UP THE SHORTFALL RATHER THAN CLAIMING SINGLY. Every claim is an RPC that takes a
- *     GLOBAL `pg_advisory_xact_lock` — one key for all queues, see the migration — so claim traffic
+ *     GLOBAL `pg_advisory_xact_lock` (one key for all queues, see the migration), so claim traffic
  *     is a shared resource and not a private one. Refill raises it from one claim per BATCH to one
- *     per MESSAGE (~4x at n=4: the 190-message burst becomes ~190 claims over 29 minutes rather
- *     than 47, i.e. ~0.66/s fleet-wide at `globalCap: 8` against a measured ceiling around 288/s).
- *     Claiming one message at a time regardless of the shortfall would multiply that again for no
- *     throughput at all. Messages that settle together coalesce for free: each one removes itself
- *     from `inFlight` as it settles, so by the time the race below resumes, the shortfall already
- *     counts every message that finished in the same tick.
+ *     per MESSAGE: ~4x at n=4, and the 190-message burst becomes ~190 claims over 29 minutes rather
+ *     than 47. What that leaves in hand depends on the message mix and on how deep the queue is, and
+ *     both move it by more than an order of magnitude, so read the numbers off
+ *     DEFAULT_ORG_SLOT_CONTINUOUS_REFILL in asyncWorkerTuning.ts rather than assuming the
+ *     create_repo burst is the worst case. Claiming one message at a time regardless of the
+ *     shortfall would multiply the traffic again for no throughput at all. Messages that settle
+ *     together coalesce for free: each one removes itself from `inFlight` as it settles, so by the
+ *     time the race below resumes, the shortfall already counts every message that finished in the
+ *     same tick.
  *   * IT CANNOT SPIN. With nothing in flight, an empty claim goes to `run.onIdle()`, which sleeps
  *     and spends the idle budget exactly as it always did. With work in flight, an empty claim waits
  *     for a COMPLETION — never a sleep, never an immediate re-claim — so claim attempts are bounded
@@ -1185,7 +1272,43 @@ export interface ContinuousRefillOptions<T = unknown> {
  */
 export async function drainWithContinuousRefill<T = unknown>(opts: ContinuousRefillOptions<T>): Promise<void> {
   const { run, inFlight, process } = opts;
-  const maxInFlight = Math.max(1, Math.floor(opts.maxInFlight));
+  // THE LEASE MUST BE ABLE TO SEE THIS SET, and if it cannot, refill is not safe to run.
+  //
+  // `inFlightCount` is an OPTIONAL option on `beginOrgLeaseRun` that defaults to `() => 0`, and the
+  // default is exactly the pre-refill world — correct for `drainBatchAtATime`, silently wrong here.
+  // A caller that passes `inFlight` but forgets `inFlightCount` type-checks and runs, and then
+  // every single refill safety property is off at once: top-ups go out UNPINNED (the mid-stream
+  // rotation the migration exists to close), releases stop being deferred, renewal stops at
+  // `finished`, and the idle budget arms mid-stream. The loud backstop that would report it —
+  // `captureMessage("orgLeaseRun: claim_org_slot_and_read ignored pin_org")` — is itself gated on
+  // `inFlightCount() > 0`, so it cannot fire either. The whole failure is silent, and it presents as
+  // a per-org cap that quietly does not hold.
+  //
+  // So it is refused here rather than defaulted. This is the one wiring mistake the type system
+  // cannot catch, because the two halves are separate options on separate calls.
+  if (!run.tracksInFlight) {
+    throw new Error(
+      "drainWithContinuousRefill: the run was built without `inFlightCount`, so it cannot see the " +
+        "in-flight set and every refill safety property (pinned top-ups, deferred release, renewal " +
+        "past `finished`, the withheld idle budget) would be silently off. Pass " +
+        "`inFlightCount: () => inFlight.size` to beginOrgLeaseRun with the SAME Set."
+    );
+  }
+  // `Math.max(1, NaN)` is NaN, not 1 — so the clamp has to reject a non-finite value rather than
+  // pass it through. A NaN here becomes a NaN `n` on the wire, which PostgREST serializes as `null`,
+  // which `claim_org_slot_and_read` answers with a P0001 — and P0001 is fatal on the FIRST failure
+  // by design, so a single bad number ends the run with a deployment error rather than draining.
+  const maxInFlight = Number.isFinite(opts.maxInFlight) ? Math.max(1, Math.floor(opts.maxInFlight)) : 1;
+
+  /** Never let a reporter's own failure become the thing that takes the isolate down. */
+  const report = (e: unknown) => {
+    try {
+      opts.onError?.(e);
+    } catch {
+      // Deliberately swallowed. `onError` is Sentry reporting; if reporting is broken there is
+      // nowhere left to report that to, and the alternative is strictly worse — see `start`.
+    }
+  };
 
   const start = (message: OrgQueueMessage<T>, context: { queueName: string; org: string }) => {
     // THE TRACKED PROMISE MUST NEVER REJECT. It is handed to `Promise.race` and to
@@ -1193,11 +1316,16 @@ export async function drainWithContinuousRefill<T = unknown>(opts: ContinuousRef
     // unhandled rejection that takes the isolate down with it. `process` is expected to do its own
     // per-message error handling (the worker's `processEnvelope` requeues, DLQs and archives);
     // catching here is the backstop for the case where it does not.
+    //
+    // The backstop used to call `opts.onError` DIRECTLY from the catch, which left the invariant
+    // resting on a callback this module does not own: a throw from the reporter re-rejects the very
+    // promise the catch exists to make non-rejecting, and between `start` and the next `settleOne`
+    // nothing is attached to it. `report` closes that.
     const tracked: Promise<void> = (async () => {
       try {
         await process(message, context);
       } catch (e) {
-        opts.onError?.(e);
+        report(e);
       }
     })().finally(() => {
       inFlight.delete(tracked);
@@ -1226,7 +1354,7 @@ export async function drainWithContinuousRefill<T = unknown>(opts: ContinuousRef
         claimed = await run.claim(shortfall);
       } catch (e) {
         // The run has already decided whether this failure is fatal; `onError` just backs off.
-        opts.onError?.(e);
+        report(e);
         await run.onError();
         continue;
       }
@@ -1277,22 +1405,28 @@ export async function drainWithContinuousRefill<T = unknown>(opts: ContinuousRef
  *
  * THE ROLLBACK IS TOTAL, not just a different loop, and the mechanism is worth stating because it is
  * what makes the switch trustworthy: this loop never puts anything in `inFlight`, so `inFlightCount()`
- * is identically 0 for the whole run. Every behaviour continuous refill added to the lease is keyed
+ * is identically 0 for the whole run. Every behavior continuous refill added to the lease is keyed
  * on that count being positive — the deferred releases, the renewal that outlives `finished`, the
  * withheld idle budget, the pinned and truncated probe set — so all of them go inert together and
  * what is left is the pre-refill state machine exactly as it was. There is no third configuration in
  * between for someone to land on.
  *
  * `inFlight` is accepted and ignored so both shapes take the same options and the caller does not
- * have to know which one it is asking for.
+ * have to know which one it is asking for. `maxInFlight` is NOT ignored: it is a statement about how
+ * much of its slot this leaseholder may use, and a kill switch that also silently changed that
+ * number would not be a rollback of the drain SHAPE, it would be a rollback of the shape AND a
+ * config change nobody asked for. `claim()` clamps it to `drainConcurrency` anyway, so passing it
+ * here is exactly the pre-refill behavior whenever the two agree — which `drainOrgLease` now
+ * guarantees they do.
  */
 async function drainBatchAtATime<T = unknown>(opts: ContinuousRefillOptions<T>): Promise<void> {
   const { run, process } = opts;
+  const perBatch = Number.isFinite(opts.maxInFlight) ? Math.max(1, Math.floor(opts.maxInFlight)) : undefined;
   while (run.shouldContinue()) {
     await run.heartbeat();
     if (!run.shouldContinue()) break;
     try {
-      const claimed = await run.claim();
+      const claimed = await run.claim(perBatch);
       if (!claimed) {
         if (!(await run.onIdle())) break;
         continue;
@@ -1331,8 +1465,28 @@ export interface OrgLeaseDrainOptions<T = unknown> extends ContinuousRefillOptio
  * Drain a per-org lease in whichever shape the configuration selected.
  *
  * One entry point rather than two exported drivers and a branch at the call site, so that the choice
- * is made in the module that owns both loops and can be tested against both of them.
+ * is made in the module that owns both loops and can be tested against both of them — and so there
+ * is one place to hold the invariant BOTH shapes depend on and neither can check alone.
  */
 export async function drainOrgLease<T = unknown>(opts: OrgLeaseDrainOptions<T>): Promise<void> {
-  return opts.continuousRefill ? await drainWithContinuousRefill(opts) : await drainBatchAtATime(opts);
+  // THE IN-FLIGHT TARGET AND THE ALLOCATOR'S `n` ARE ONE NUMBER, and until here nothing enforced it.
+  // `maxInFlight` is passed to the driver while `drainConcurrency` is passed to `beginOrgLeaseRun`,
+  // two arguments on two calls, and the allocator budgets an org at `max_per_org * drainConcurrency`
+  // handlers. A larger `maxInFlight` is reachable by ACCUMULATION even though one claim is capped —
+  // four, then four more — and the surplus is concurrency the slot table does not know about, spent
+  // against the per-org GitHub limiter this whole feature exists to respect. A smaller one strands
+  // part of the allowance. Neither is a number anybody chose; both are a wiring slip, so clamp and
+  // say so rather than trusting the two call sites to stay in step.
+  const n = opts.run.drainConcurrency;
+  let maxInFlight = opts.maxInFlight;
+  if (!Number.isFinite(maxInFlight) || Math.floor(maxInFlight) !== n) {
+    console.warn(
+      `[orgLeaseRun] maxInFlight=${opts.maxInFlight} does not match the run's drainConcurrency=${n}; ` +
+        `using ${n}. The allocator budgets max_per_org x drainConcurrency handlers per org, so ` +
+        `these must be the same number.`
+    );
+    maxInFlight = n;
+  }
+  const coherent: OrgLeaseDrainOptions<T> = { ...opts, maxInFlight };
+  return coherent.continuousRefill ? await drainWithContinuousRefill(coherent) : await drainBatchAtATime(coherent);
 }
