@@ -270,6 +270,21 @@ declare
   --    org while jobs are queued, attributing that in-flight work to the new org charges the budget
   --    to an org no handler is going to touch, and lets the old one exceed max_per_org.
   --    split_part(x, '/', 1) is the SQL spelling of the resolver's repo.split("/")[0].
+  --
+  --    KNOWN EXCEPTION, AND IT IS NOT THEORETICAL. That paragraph is true of syncStudentTeam and
+  --    syncStaffTeam, which are called with args.org, but NOT of the invitation path in the same
+  --    two handlers: github-async-worker/index.ts calls reinviteToOrgTeam with
+  --    data.classes.github_org, the CURRENT value, a dozen lines above calling syncStudentTeam with
+  --    args.org. So a repointed class makes one handler talk to two orgs at once: the invitation
+  --    spends the NEW org's shared content limiter while the slot it is running under is charged to
+  --    the OLD org. Concurrent stale and fresh envelopes can therefore push the new org past the
+  --    occupancy this function exists to bound, and convoy invitations inside its limiter.
+  --
+  --    NOT FIXED HERE, because the two candidate fixes are product decisions rather than allocator
+  --    ones: reject or re-enqueue a team-sync envelope whose args.org no longer matches its class,
+  --    or make the invitation target args.org and accept that a repointed class stops inviting to
+  --    the org it actually moved to. Changing this expression cannot fix it -- whichever org the
+  --    allocator picks, the handler still calls two different ones. Raised by Codex on #982.
   -- 2. classes.github_org as the FALLBACK, and it carries real traffic: args.org is missing from
   --    about one envelope in seven, and those are not a random seventh. The lookup compares c.id::text rather than casting the envelope to bigint, which
   --    cannot raise on a malformed class_id, and it puts the cast on `classes` (a few hundred rows,
