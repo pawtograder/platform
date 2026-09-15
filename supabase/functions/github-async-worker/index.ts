@@ -1636,19 +1636,33 @@ export async function processEnvelope(
            *
            * Not simply "drop it": the job that won the race may be the OLDER revision, in
            * which case this one carries the update the instructor is waiting for and dropping
-           * it leaves the repository behind with nothing queued. So the row is re-read. If it
-           * now records this job's own target, the work is accounted for and the message is
-           * finished. Otherwise the job is requeued so it runs again against the state that is
-           * actually there, which is the only way its classification can be correct.
+           * it leaves the repository behind with nothing queued. So the row is re-read, and
+           * three answers come out of it.
            *
-           * Returns true either way, because the message itself is done: the requeued copy is
-           * a new message. `retry_count` bounds it at the same 5 the circuit breaker uses, and
-           * pgmq's read_ct bounds it again if this path is ever reached without requeueing.
+           * If the row already records this job's own target, the work is accounted for and
+           * the message is finished.
+           *
+           * If the row's desired_handout_sha is some OTHER revision, this job is not carrying
+           * the one anyone is waiting for -- queueing raises that column to the revision it
+           * queues -- so it is dropped. That is the answer that keeps two overlapping jobs
+           * from trading the repository back and forth: without it, each requeue re-ran the
+           * full sync and re-planted its own marker, knocking the other one out, five times
+           * each before retry_count stopped them. desired_handout_sha is the only ordering
+           * between two revisions available here, since shas do not compare.
+           *
+           * Otherwise this job IS carrying the wanted revision, and it is requeued to run
+           * again against the state that is actually there, which is the only way its
+           * classification can be correct.
+           *
+           * Returns true in every case, because the message itself is done: a requeued copy is
+           * a new message. `retry_count` bounds the requeues at the same 5 the circuit breaker
+           * uses, and pgmq's read_ct bounds it again if this path is ever reached without
+           * requeueing.
            */
           const retireStaleSync = async (): Promise<boolean> => {
             const { data: fresh } = await adminSupabase
               .from("repositories")
-              .select("synced_handout_sha")
+              .select("synced_handout_sha, desired_handout_sha")
               .eq("id", repository_id)
               .maybeSingle();
             if (!fresh) {
@@ -1668,6 +1682,17 @@ export async function processEnvelope(
                 message:
                   `Sync of ${repository_full_name} to ${to_sha.substring(0, 7)} finished after another job ` +
                   `already recorded that revision; discarding this job's duplicate bookkeeping`,
+                level: "info"
+              });
+              return true;
+            }
+            if (fresh.desired_handout_sha && fresh.desired_handout_sha !== to_sha) {
+              scope.setTag("stale_sync_superseded_by", fresh.desired_handout_sha.substring(0, 7));
+              Sentry.addBreadcrumb({
+                message:
+                  `Sync of ${repository_full_name} to ${to_sha.substring(0, 7)} lost the write race and the ` +
+                  `repository is now waiting for ${fresh.desired_handout_sha.substring(0, 7)}; dropping this job ` +
+                  `rather than requeueing a revision nobody is waiting for`,
                 level: "info"
               });
               return true;
