@@ -39,6 +39,7 @@ import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts"
 import { shouldSendOrgInvitation } from "../_shared/orgInviteWindow.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { planRepoNotReadyWait } from "../_shared/repoNotReadyPlan.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -1287,7 +1288,40 @@ export async function processEnvelope(
             }
             return true;
           }
-          console.log("repo is not ready", `${org}/${repoName}`);
+          // Still provisioning: wait for it, but wait on an EXPLICIT delay rather than by letting
+          // the visibility timeout expire. See REPO_NOT_READY_REQUEUE_BASE_SECONDS for why the
+          // difference matters and what it cost in production.
+          const notReadyRetryCount = envelope.retry_count ?? 0;
+          const notReadyPlan = planRepoNotReadyWait(notReadyRetryCount);
+          if (notReadyPlan.action === "dlq") {
+            // Same shape as the circuit-breaker ceiling above: DLQ, then archive only if the DLQ
+            // write landed, so a transient DLQ outage leaves the message to be retried rather than
+            // dropping the terminal record on the floor.
+            const exhausted = new Error(
+              `Repository ${org}/${repoName} was still not marked ready after ${notReadyRetryCount} requeues`
+            );
+            scope.setTag("permission_sync_skipped", "repo_never_ready");
+            const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, exhausted, scope);
+            if (dlqSuccess) {
+              await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+            } else {
+              console.error(`Failed to DLQ never-ready permission sync for ${org}/${repoName}, leaving unarchived`);
+              scope.setContext("dlq_archive_skipped", { msg_id: meta.msg_id, reason: "DLQ send failed" });
+              Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, { level: "error" });
+            }
+            return false;
+          }
+          console.log(
+            `repo is not ready ${org}/${repoName} — requeueing in ${notReadyPlan.delaySeconds}s ` +
+              `(attempt ${notReadyPlan.attempt}/${notReadyPlan.maxAttempts})`
+          );
+          scope.setTag("permission_sync_deferred", "repo_not_ready");
+          // No recordMetric here, matching the circuit-breaker requeue path: the new envelope keeps
+          // this one's log_id, so the api_gateway_calls row this job opened is closed by whichever
+          // attempt finally succeeds. Recording a status here would close it early and the eventual
+          // success would have nothing to write to.
+          await requeueWithDelay(adminSupabase, envelope, notReadyPlan.delaySeconds, scope, queueName);
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
