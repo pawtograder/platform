@@ -6,6 +6,7 @@ import { Database } from "./SupabaseTypes.d.ts";
 // code in this file, so the ~50 functions that rely on importing HandlerUtils to get Sentry keep
 // exactly the behavior they had when the init lived here.
 import "./SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "./requestScopedAuthOptions.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -91,6 +92,7 @@ export function isServiceRoleRequest(authHeader: string | null): boolean {
 
 export async function assertUserIsInstructor(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }
@@ -147,7 +149,8 @@ export async function assertUserIsInstructorOrServiceRole(courseId: number, auth
   if (isServiceRoleRequest(authHeader)) {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     return { supabase: adminSupabase, enrollment: null, isServiceRole: true };
   }
@@ -201,11 +204,13 @@ export async function assertUserIsAdmin(authHeader: string | null) {
   if (isServiceRoleRequest(authHeader)) {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     return { supabase: adminSupabase, isServiceRole: true as const };
   }
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }
@@ -234,6 +239,7 @@ export async function assertUserIsAdmin(authHeader: string | null) {
 }
 export async function assertUserIsInstructorOrGrader(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }
@@ -265,6 +271,7 @@ export async function assertUserIsInstructorOrGrader(courseId: number, authHeade
 }
 export async function assertUserIsInCourse(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }

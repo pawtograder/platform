@@ -6,6 +6,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 // without this Sentry.init never ran and every capture was a silent no-op.
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 /**
  * SCOPE: this handler serves only metrics that are cheap AND either per-pod or
@@ -98,7 +99,8 @@ async function generatePrometheusMetrics(): Promise<Response> {
     // Create admin client for accessing all data
     const supabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     // Query queue sizes and circuit breaker statuses using RPC functions

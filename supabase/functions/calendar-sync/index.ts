@@ -6,6 +6,7 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 // Types
 interface ICSEvent {
@@ -1283,7 +1284,7 @@ async function runSync(): Promise<void> {
     throw new Error("Missing required environment variables");
   }
 
-  const supabase = createClient<Database>(supabaseUrl, supabaseKey);
+  const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   // Get all classes with calendar URLs configured
   const { data: classes, error: classesError } = await supabase

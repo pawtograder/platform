@@ -31,6 +31,7 @@ import { freshMembershipHintAgeMs } from "../_shared/DiscordMembershipHint.ts";
 import { discordApiBase, isDiscordApiMocked } from "../_shared/DiscordApiBase.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -3361,7 +3362,7 @@ export async function runBatchHandler() {
   }
 
   console.log(`[runBatchHandler] Creating Supabase client with URL: ${supabaseUrl.substring(0, 30)}...`);
-  const adminSupabase = createClient<Database>(supabaseUrl, supabaseKey);
+  const adminSupabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts.
   const run = await beginWorkerRun({

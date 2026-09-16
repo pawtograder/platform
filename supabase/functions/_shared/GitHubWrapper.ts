@@ -123,6 +123,7 @@ import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
 import { attachSnapshotToScope, countStep, StepTimings, type StepTimingsSnapshot, timeStep } from "./stepTimings.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "./requestScopedAuthOptions.ts";
 
 const adminsThatShouldNotBeListedAsAdmins = ["smaran-teja", "jonathantarun", "ricksva", "jondenman", "tsrats"];
 /**
@@ -625,7 +626,8 @@ export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sent
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Check cache for existing signed URL (less than 55 minutes old)
@@ -802,7 +804,8 @@ export async function updateAutograderWorkflowHash(
   const hashStr = hash.digest("hex");
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   console.log("updating autograder workflow hash", hashStr, repoName);
   const { data: assignments } = await adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
@@ -1394,7 +1397,8 @@ async function recordE2eGithubCall(fn: string, args: unknown, scope?: Sentry.Sco
   try {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     // The Database type may not yet know about e2e_github_calls in older
     // generated bundles; cast through unknown so production/staging compiles
@@ -3458,7 +3462,8 @@ function readOrgPermissionSyncExemptions(org: string): Promise<string[]> {
   const pending = (async () => {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     const { data, error } = await adminSupabase
       .from("github_orgs")
@@ -3671,7 +3676,8 @@ async function reresolveMissingGitHubLogin(
 ): Promise<string> {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   // Prefer the caller's stable user id. Finding the row by login is inherently racy here: the login
   // we were handed is one GitHub says doesn't exist, and another invitation for the same person —
@@ -4166,7 +4172,8 @@ async function syncRepoPermissionsInstrumented(
   if (desiredUsersNotInCachedOrg.length > 0) {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     // Create a bottleneck limiter to run no more than 20 at once
@@ -4377,7 +4384,8 @@ async function markUserRoleOrgConfirmedForTeam({
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const { data: userData, error: userError } = await adminSupabase
@@ -4794,7 +4802,8 @@ export async function enqueueSyncRepoPermissions({
 }) {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data, error } = await adminSupabase.rpc("enqueue_github_sync_repo_permissions", {
     p_class_id: class_id,
@@ -4813,7 +4822,8 @@ export async function enqueueSyncRepoPermissions({
 export async function enqueueGithubArchiveRepo(class_id: number, org: string, repo: string, debug_id?: string) {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data, error } = await adminSupabase.rpc("enqueue_github_archive_repo", {
     p_class_id: class_id,
