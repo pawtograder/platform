@@ -247,6 +247,15 @@ function buildRedisBottleneck(
   });
 }
 
+/**
+ * Backstop for a settings key that goes missing under this limiter: rebuild it and move the cache
+ * entry over, dropping whatever was waiting on the dead one.
+ *
+ * Kept, but it should no longer fire. `installBottleneckLuaErrorNormalizer` (Redis.ts) now lets
+ * Bottleneck recognise SETTINGS_KEY_NOT_FOUND again, so the datastore re-inits and retries the
+ * script in place — no rotation, and nothing dropped. This runs only if that recovery is itself
+ * defeated, which is how it read before the reply prefix was understood.
+ */
 function withSettingsKeyRecovery(
   limiter: Bottleneck,
   id: string,
