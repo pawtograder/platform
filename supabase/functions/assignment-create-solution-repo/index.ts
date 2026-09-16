@@ -10,6 +10,7 @@ import { parse } from "jsr:@std/yaml";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { describeHandoutSeedResult, seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id } = (await req.json()) as AssignmentCreateSolutionRepoRequest;
@@ -22,7 +23,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const { data: assignment } = await adminSupabase

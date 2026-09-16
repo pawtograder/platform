@@ -4,6 +4,7 @@ import { ChimeSDKMeetings } from "npm:@aws-sdk/client-chime-sdk-meetings";
 import { assertUserIsInCourse, NotFoundError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import type { LiveMeetingEndRequest } from "../_shared/FunctionTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function handleRequest(req: Request) {
   const { courseId, helpRequestId } = (await req.json()) as LiveMeetingEndRequest;
@@ -16,7 +17,8 @@ async function handleRequest(req: Request) {
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const { data: helpRequest } = await adminSupabase.from("help_requests").select("*").eq("id", helpRequestId).single();

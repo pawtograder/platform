@@ -4,6 +4,7 @@
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../../_shared/requestScopedAuthOptions.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -12,5 +13,7 @@ export const corsHeaders = {
 };
 
 export function getAdminClient(): SupabaseClient<Database> {
-  return createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  return createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS
+  });
 }

@@ -3,9 +3,14 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { createAllRepos } from "./index.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 
-const adminSupabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+const adminSupabase = createClient<Database>(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  { auth: REQUEST_SCOPED_AUTH_OPTIONS }
+);
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));

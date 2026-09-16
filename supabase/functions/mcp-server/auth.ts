@@ -5,6 +5,7 @@
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { UserRole } from "./types.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 // OAuth configuration from environment variables
 const OAUTH_ENDPOINT = Deno.env.get("MCP_OAUTH_ENDPOINT") || Deno.env.get("SUPABASE_URL") + "/auth/v1";
@@ -91,10 +92,7 @@ export function createAuthenticatedClient(accessToken: string): SupabaseClient {
         Authorization: `Bearer ${accessToken}`
       }
     },
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false
-    }
+    auth: REQUEST_SCOPED_AUTH_OPTIONS
   });
 }
 

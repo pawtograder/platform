@@ -54,6 +54,7 @@ import { ExpectedRetryError, expectedRetryReport } from "../_shared/ExpectedRetr
 import { classifyUnreadyRepoPush } from "../_shared/unreadyRepoPush.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
@@ -2845,7 +2846,8 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       const repoName = payload.repository.full_name;
       const adminSupabase = createClient<Database>(
         Deno.env.get("SUPABASE_URL") || "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+        { auth: REQUEST_SCOPED_AUTH_OPTIONS }
       );
       console.log(`[PUSH] repo=${repoName}`);
       //Is it a student repo?
@@ -2930,7 +2932,8 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
         maybeCrash("check_run.before_db_lookup");
         const adminSupabase = createClient<Database>(
           Deno.env.get("SUPABASE_URL") || "",
-          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+          { auth: REQUEST_SCOPED_AUTH_OPTIONS }
         );
         const checkRun = await adminSupabase
           .from("repository_check_runs")
@@ -3062,7 +3065,9 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
   tagScopeWithGenericPayload(scope, "membership", payload);
 
   try {
-    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+      auth: REQUEST_SCOPED_AUTH_OPTIONS
+    });
 
     // Only process when a member is added to a team
     if (payload.action !== "added") {
@@ -3273,7 +3278,9 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
   }
 
   try {
-    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+      auth: REQUEST_SCOPED_AUTH_OPTIONS
+    });
 
     // A departure is the mirror of an invitation: it must un-confirm the enrollment, or the row
     // claims a membership that no longer exists and no repair path will ever look at it again.
@@ -3515,7 +3522,8 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   try {
@@ -3648,7 +3656,8 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   try {
@@ -3787,7 +3796,8 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Which assignments treat this repo as their upstream/class repo? (Could be
@@ -4091,7 +4101,8 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
 
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     try {

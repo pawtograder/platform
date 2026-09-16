@@ -26,6 +26,7 @@ import type {
   InstructorGitHubUnlinkRequest
 } from "../_shared/FunctionTypes.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 type InstructorGitHubRequest =
   | InstructorGitHubDiagnoseRequest
@@ -53,7 +54,9 @@ type TargetStudentEnrollment = {
 };
 
 function getAdminSupabase() {
-  return createClient<Database>(Deno.env.get("SUPABASE_URL") || "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "");
+  return createClient<Database>(Deno.env.get("SUPABASE_URL") || "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "", {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS
+  });
 }
 
 /**
@@ -83,7 +86,8 @@ type RepairKind =
 async function ensureStaffOrgMembership(userID: string, githubUsername: string, scope: Sentry.Scope) {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data: staffRoles, error: staffError } = await adminSupabase
     .from("user_roles")
@@ -950,7 +954,7 @@ async function unlinkGitHubIdentityForUser(userEmail: string, scope: Sentry.Scop
     throw new UserVisibleError("Missing Supabase URL or anon key");
   }
 
-  const userSupabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
+  const userSupabase = createClient<Database>(supabaseUrl, supabaseAnonKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
   const { data: sessionData, error: sessionError } = await userSupabase.auth.verifyOtp({
     token_hash: magicLinkData.properties.hashed_token,
     type: "magiclink"
@@ -1065,6 +1069,7 @@ async function handleStudentGitHubSync(req: Request, source: string, scope: Sent
     throw new SecurityError("Missing Authorization header");
   }
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }

@@ -15,6 +15,7 @@ import { parse } from "jsr:@std/yaml";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 import {
   describeHandoutSeedResult,
   seedHandoutFileHashes,
@@ -91,6 +92,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("watch_type", watch_type);
   //Validate that the user is an instructor
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: req.headers.get("Authorization")! }
     }
@@ -141,7 +143,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // student work, on exactly the assignments where every push is a submission.
     const adminForSeed = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     const { data: adoptedHandout } = await adminForSeed
       .from("assignments")
@@ -222,7 +225,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // an instructor edited submissionFiles, which is exactly when they need recomputing.
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     const { data: handoutTarget } = await supabase
       .from("assignments")
