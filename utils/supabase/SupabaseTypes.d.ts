@@ -6778,6 +6778,8 @@ export type Database = {
           profile_id: string | null;
           repository: string;
           rerun_queued_at: string | null;
+          sync_block_reason: string | null;
+          sync_blocked_at: string | null;
           sync_data: Json | null;
           synced_handout_sha: string | null;
           synced_repo_sha: string | null;
@@ -6797,6 +6799,8 @@ export type Database = {
           profile_id?: string | null;
           repository: string;
           rerun_queued_at?: string | null;
+          sync_block_reason?: string | null;
+          sync_blocked_at?: string | null;
           sync_data?: Json | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
@@ -6816,6 +6820,8 @@ export type Database = {
           profile_id?: string | null;
           repository?: string;
           rerun_queued_at?: string | null;
+          sync_block_reason?: string | null;
+          sync_blocked_at?: string | null;
           sync_data?: Json | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
@@ -13876,7 +13882,7 @@ export type Database = {
         Returns: Json;
       };
       queue_repository_syncs: {
-        Args: { p_repository_ids: number[] };
+        Args: { p_force?: boolean; p_repository_ids: number[] };
         Returns: Json;
       };
       recalculate_discussion_thread_children_counts: {
