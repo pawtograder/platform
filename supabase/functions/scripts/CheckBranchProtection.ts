@@ -36,6 +36,7 @@ import { RequestError } from "https://esm.sh/octokit?dts";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 interface AssignmentData {
   id: number;
@@ -324,7 +325,8 @@ async function main(): Promise<void> {
     // Initialize Supabase client
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     // Fetch assignment

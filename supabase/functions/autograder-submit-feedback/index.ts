@@ -28,6 +28,7 @@ import {
 import { hasGradeableContent, resolveGraderResultConflictVerdict } from "../_shared/graderResultVerdict.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { graderResultErrorsIndicateFailure } from "../_shared/graderResultStatus.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
 
@@ -429,7 +430,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   // Find the corresponding submission
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { repository, sha, run_id, run_attempt } = decoded;
   scope?.setTag("repository", repository);
