@@ -1061,6 +1061,177 @@ begin
 end $$;
 
 -- =============================================================================================
+\echo '### scenario 20: pin_org keeps a refilling leaseholder on the org it is still working'
+-- =============================================================================================
+-- Continuous refill tops up the shortfall while up to n-1 messages are still running, so an
+-- unpinned top-up could rotate the holder onto a needier org and leave the previous org's
+-- stragglers uncounted. Pinning is how a caller says "stay put, I still have this org's work in
+-- flight".
+-- The needier org is org-alpha on purpose. It has thirty times the backlog AND it sorts first, so it
+-- wins the unpinned choice under either arm of the ORDER BY: on unmet demand when max_per_org
+-- leaves the targets apart, and on the org-name tiebreak when the cap ties them. Pinning to the
+-- SMALLER org is therefore distinguishable from not pinning at all. The reverse arrangement is not:
+-- with the pin ignored, the allocator picks the small org anyway and the check passes against a
+-- no-op implementation.
+select harness.reset('async_calls');
+select harness.seed(101, 600);   -- org-alpha: much needier, and alphabetically first
+select harness.seed(102, 20);    -- org-bravo: the small backlog we pin to
+
+do $$
+declare
+  v_status text;
+  v_org text;
+  v_rows int;
+begin
+  -- EXACTLY ONE overload must exist. Adding a defaulted argument creates a second function rather
+  -- than replacing the first, and a seven-argument call would then match both: Postgres raises
+  -- "function is not unique" and PostgREST cannot resolve a body that omits pin_org either. Every
+  -- other scenario in this file calls the seven-argument form, so they are the proof that the
+  -- default works; this is the proof that there is nothing for it to collide with.
+  perform harness.expect('20 pin_org', 'claim_org_slot_and_read overloads defined', '1',
+    (select count(*)::text from pg_proc p
+       join pg_namespace ns on ns.oid = p.pronamespace
+      where ns.nspname = 'pgmq_public' and p.proname = 'claim_org_slot_and_read'));
+  perform harness.expect('20 pin_org', 'and it takes eight arguments, one of them defaulted', '8 1',
+    (select p.pronargs || ' ' || p.pronargdefaults from pg_proc p
+       join pg_namespace ns on ns.oid = p.pronamespace
+      where ns.nspname = 'pgmq_public' and p.proname = 'claim_org_slot_and_read'));
+
+  select t.org into v_org
+    from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'pin-h1', 300, 2, 8, 'org-bravo') t
+   where t.status = 'claimed' limit 1;
+  perform harness.expect('20 pin_org', 'pinned claim stays on its org', 'org-bravo', v_org);
+
+  -- CONTROL: the same call without a pin goes where the allocator wants.
+  select t.org into v_org
+    from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'pin-ctl', 300, 2, 8) t
+   where t.status = 'claimed' limit 1;
+  perform harness.expect('20 pin_org', 'unpinned claim still re-picks the neediest org', 'org-alpha', v_org);
+
+  -- A pinned top-up REUSES the holder's own row rather than competing for a second one. The
+  -- blocking FOR UPDATE that resolves it is keyed on (queue_name, holder) and never looked at orgs,
+  -- so pinning composes with it untouched.
+  select t.org into v_org
+    from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'pin-h1', 300, 2, 8, 'org-bravo') t
+   where t.status = 'claimed' limit 1;
+  perform harness.expect('20 pin_org', 'second pinned claim stays on the org', 'org-bravo', v_org);
+  perform harness.expect('20 pin_org', 'rows in the pool bearing the pinned holder', '1',
+    (select count(*)::text from public.async_worker_slots
+      where queue_name = 'async_calls' and holder = 'pin-h1'));
+  -- string_agg rather than a bare scalar subquery, for the reason 43_race_assert.sql gives: the
+  -- regression this file is meant to catch puts the holder on TWO rows, and a scalar subquery then
+  -- raises "more than one row returned by a subquery used as an expression". That aborts psql, so
+  -- the run ends at exit 3 with no results table and scenario 18 never executes -- which is to say
+  -- the documented non-vacuity experiment could not reach the scenario it was documented for.
+  perform harness.expect('20 pin_org', 'and that row still points at the pinned org', 'org-bravo',
+    (select string_agg(distinct org, ',' order by org) from public.async_worker_slots
+      where queue_name = 'async_calls' and holder = 'pin-h1'));
+
+  -- Case folding. A caller that rebuilds the org string from classes.github_org rather than echoing
+  -- what a previous claim returned must still match. The control's slot goes back first, so
+  -- org-alpha is once again the org an ignored pin would hand us.
+  perform pgmq_public.release_org_slot('async_calls', 'pin-ctl');
+  select t.org into v_org
+    from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'pin-h1', 300, 2, 8, 'ORG-Bravo') t
+   where t.status = 'claimed' limit 1;
+  perform harness.expect('20 pin_org', 'pinning is case-insensitive', 'org-bravo', v_org);
+
+  -- n = 1, which is what a refill top-up asks for once a single message settles. A holder that
+  -- already owns the slot is admitted for any n >= 1: a_others = a_all - 1 and the target is at
+  -- least a_all, so the comparison can never fail for it.
+  select count(*) into v_rows
+    from pgmq_public.claim_org_slot_and_read('async_calls', 300, 1, 'pin-h1', 300, 2, 8, 'org-bravo') t
+   where t.status = 'claimed';
+  perform harness.expect('20 pin_org', 'a top-up of one message is admitted at n=1', '1', v_rows::text);
+  perform harness.expect('20 pin_org', 'org-bravo never exceeded max_per_org', 'true',
+    (select (count(*) <= 2)::text from public.async_worker_slots
+      where expires_at > clock_timestamp() and org = 'org-bravo'));
+  perform harness.expect('20 pin_org', 'still one row for the pinned holder after the n=1 top-up', '1',
+    (select count(*)::text from public.async_worker_slots
+      where queue_name = 'async_calls' and holder = 'pin-h1'));
+end $$;
+
+-- A pinned org with nothing ready reports no_demand rather than rotating.
+do $$
+declare
+  v_status text;
+  v_before timestamptz;
+begin
+  -- Drain org-bravo completely, leaving org-alpha with hundreds of ready messages.
+  update pgmq.q_async_calls set vt = clock_timestamp() + interval '1 hour'
+   where message->>'class_id' = '102';
+  select expires_at into v_before from public.async_worker_slots
+   where queue_name = 'async_calls' and holder = 'pin-h1';
+
+  select t.status into v_status
+    from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'pin-h1', 300, 2, 8, 'org-bravo') t;
+  perform harness.expect('20 pin_org', 'pinned claim on a drained org', 'no_demand', v_status);
+
+  -- It must NOT have quietly taken org-alpha's work, and it must not have given up the lease: the
+  -- caller still has org-bravo messages running and needs to keep counting against that org.
+  perform harness.expect('20 pin_org', 'and the slot still points at the pinned org', 'org-bravo',
+    (select string_agg(distinct org, ',' order by org) from public.async_worker_slots
+      where queue_name = 'async_calls' and holder = 'pin-h1'));
+  perform harness.expect('20 pin_org', 'and the lease was left alone', 'true',
+    (select (expires_at = v_before)::text from public.async_worker_slots
+      where queue_name = 'async_calls' and holder = 'pin-h1'));
+
+  -- An org that has never existed is the same answer, not an error.
+  select t.status into v_status
+    from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'pin-h1', 300, 2, 8, 'no-such-org') t;
+  perform harness.expect('20 pin_org', 'pinning an org with no work at all', 'no_demand', v_status);
+end $$;
+
+-- A pinned org whose caps are full reports no_capacity.
+select harness.reset('async_calls');
+select harness.seed(101, 200);
+select harness.seed(102, 200);
+
+do $$
+declare
+  v_status text;
+begin
+  -- max_per_org = 1, and org-alpha's one slot goes to somebody else. The pinned caller holds no
+  -- slot of its own, so the always-admitted argument does not apply to it.
+  perform count(*) from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'cap-owner', 300, 1, 8, 'org-alpha');
+  perform harness.expect('20 pin_org', 'the org-alpha slot belongs to the other holder', 'cap-owner',
+    (select holder from public.async_worker_slots
+      where queue_name = 'async_calls' and org = 'org-alpha' and expires_at > clock_timestamp()));
+
+  select t.status into v_status
+    from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'cap-loser', 300, 1, 8, 'org-alpha') t;
+  perform harness.expect('20 pin_org', 'pinned claim whose org is at max_per_org', 'no_capacity', v_status);
+  perform harness.expect('20 pin_org', 'and it claimed nothing', '0',
+    (select count(*)::text from public.async_worker_slots
+      where queue_name = 'async_calls' and holder = 'cap-loser'));
+  -- Emphatically NOT rotated onto org-bravo, which has 200 ready messages and a free allowance.
+  perform harness.expect('20 pin_org', 'and it did not fall back to the other org', '1',
+    (select count(*)::text from public.async_worker_slots where expires_at > clock_timestamp()));
+
+  -- global_cap reports the same way for a pinned caller.
+  select t.status into v_status
+    from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'cap-global', 300, 4, 1, 'org-bravo') t;
+  perform harness.expect('20 pin_org', 'pinned claim blocked by global_cap', 'no_capacity', v_status);
+
+  -- The sentinel buckets are pinnable like any other org, since a holder can be draining them.
+  perform harness.seed_raw(jsonb_build_object('method', 'sync_repo_permissions', 'log_id', 9));
+  select t.org into v_status
+    from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'pin-sentinel', 300, 2, 8, '(unresolved)') t
+   where t.status = 'claimed' limit 1;
+  perform harness.expect('20 pin_org', 'the (unresolved) sentinel can be pinned', '(unresolved)', v_status);
+
+  -- An empty pin is a malformed argument, not a way to spell "no pin".
+  begin
+    perform * from pgmq_public.claim_org_slot_and_read('async_calls', 300, 4, 'pin-bad', 300, 2, 8, '');
+    v_status := '(no exception raised)';
+  exception when others then
+    get stacked diagnostics v_status = message_text;
+  end;
+  perform harness.expect('20 pin_org', 'an empty pin_org is rejected', 'true',
+    (v_status like '%pin_org must be a non-empty org%')::text);
+end $$;
+
+-- =============================================================================================
 \echo '### cost: the demand aggregate, at prod-incident scale and at 10x that'
 -- =============================================================================================
 -- The claim on the table is that the allocator's input -- "how many ready messages does each org
