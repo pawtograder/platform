@@ -39,6 +39,7 @@ import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts"
 import { shouldSendOrgInvitation } from "../_shared/orgInviteWindow.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { notReadyRequeuePatch, planRepoNotReadyWait } from "../_shared/repoNotReadyPlan.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -289,16 +290,103 @@ function computeBackoffSeconds(baseSeconds: number | undefined, retryCount: numb
   return backoff + jitter;
 }
 
+/**
+ * Options for a requeue that is not a failure retry.
+ *
+ * `incrementRetryCount` defaults to TRUE so every existing caller keeps its behaviour; only the
+ * readiness ladder passes false, because a deferral must not spend the failure budget the
+ * circuit-breaker and exception paths share. See `not_ready_count` on GitHubAsyncEnvelope.
+ */
+interface RequeueOptions {
+  incrementRetryCount?: boolean;
+  patch?: Partial<GitHubAsyncEnvelope>;
+}
+
+/**
+ * RETURNS WHETHER THE REPLACEMENT WAS ACTUALLY ENQUEUED, and callers must not archive the original
+ * until it says true.
+ *
+ * This used to resolve normally on a failed `send` — the error went to Sentry and nothing else — so
+ * a caller doing `await requeueWithDelay(...); await archiveMessage(...)` deleted the only copy of
+ * the job whenever the queue write failed. Silent, permanent work loss on a transient database
+ * error. Returning a boolean is what lets a caller leave the message unarchived instead, which falls
+ * back to plain visibility-timeout redelivery: slower, but the job still happens.
+ *
+ * NOTE for anyone touching the other call sites: they still ignore this return value and archive
+ * unconditionally, which is the same latent bug. Left alone here deliberately — each one needs its
+ * own decision about whether leaving the message unarchived is correct in that path — and tracked
+ * rather than half-fixed.
+ */
+/**
+ * Retire a message whose REPLACEMENT has already been enqueued: archive it, and if archiving is
+ * exhausted, delete it.
+ *
+ * WHY A FALLBACK AND NOT JUST `archiveMessage`. Once a replacement is on the queue, the original is a
+ * duplicate, and leaving it live FORKS THE JOB: it reappears at its visibility timeout carrying the
+ * OLD `not_ready_count`, sends a second replacement from that stale count, and now two chains
+ * advance independently — each able to fork again. `sync_repo_permissions` is a reconcile so the
+ * duplicate GitHub work is not corrupting, but the queue pressure and duplicate DLQ records
+ * compound, and the whole point of the ladder is to stop one message multiplying its own cost.
+ *
+ * `delete` is a genuinely different failure surface from `archive`, not a retry of it: archive INSERTS
+ * into the archive table and then removes from the queue, so it fails on anything wrong with that
+ * table — bloat, a partition problem, a permission change — while delete only removes. That makes it
+ * worth trying when archive has already spent its three attempts, and it is why this is a fallback
+ * rather than a fourth attempt at the same call.
+ *
+ * Losing the archive ROW is an acceptable price for not forking the job: the archive table is
+ * forensics, and pgmq.a_async_calls is where this whole investigation's measurements came from, so
+ * the loss is recorded loudly rather than swallowed.
+ *
+ * Returns false only if BOTH failed, in which case the fork is live and the report says so.
+ */
+async function retireReplacedMessage(
+  adminSupabase: SupabaseClient<Database>,
+  msgId: number,
+  scope: Sentry.Scope,
+  queueName: string
+): Promise<boolean> {
+  if (await archiveMessage(adminSupabase, msgId, scope, queueName)) return true;
+  const { error } = await adminSupabase.schema("pgmq_public").rpc("delete", {
+    queue_name: queueName,
+    message_id: msgId
+  });
+  if (!error) {
+    console.warn(
+      `[pgmq] archive exhausted for msg_id=${msgId} queue=${queueName}; DELETED instead to avoid forking the job (archive row lost)`
+    );
+    const s = scope.clone();
+    s.setLevel("warning");
+    s.setContext("archive_fallback_delete", { msg_id: msgId, queue_name: queueName });
+    Sentry.captureMessage("github-async-worker: archive exhausted, deleted the replaced message instead", s);
+    return true;
+  }
+  console.error(
+    `[pgmq] could NOT retire replaced msg_id=${msgId} queue=${queueName} (archive and delete both failed) — its replacement is already queued, so this job is now FORKED`
+  );
+  const s = scope.clone();
+  s.setLevel("error");
+  s.setContext("retire_failed_job_forked", {
+    msg_id: msgId,
+    queue_name: queueName,
+    delete_error: error.message
+  });
+  Sentry.captureMessage("github-async-worker: replaced message could not be retired; job is forked", s);
+  return false;
+}
+
 async function requeueWithDelay(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
   delaySeconds: number,
   scope: Sentry.Scope,
-  queueName: string = "async_calls"
-) {
+  queueName: string = "async_calls",
+  opts: RequeueOptions = {}
+): Promise<boolean> {
   const newEnvelope: GitHubAsyncEnvelope = {
     ...envelope,
-    retry_count: (envelope.retry_count ?? 0) + 1
+    ...(opts.patch ?? {}),
+    retry_count: (envelope.retry_count ?? 0) + (opts.incrementRetryCount === false ? 0 : 1)
   };
   const result = await adminSupabase.schema("pgmq_public").rpc("send", {
     queue_name: queueName,
@@ -308,7 +396,9 @@ async function requeueWithDelay(
   if (result.error) {
     scope.setContext("requeue_error", { error_message: result.error.message, delay_seconds: delaySeconds });
     Sentry.captureException(result.error, scope);
+    return false;
   }
+  return true;
 }
 
 async function sendToDeadLetterQueue(
@@ -1287,7 +1377,86 @@ export async function processEnvelope(
             }
             return true;
           }
-          console.log("repo is not ready", `${org}/${repoName}`);
+          // Still provisioning: wait for it, but wait on an EXPLICIT delay rather than by letting
+          // the visibility timeout expire. See _shared/repoNotReadyPlan.ts for why the difference
+          // matters and what it cost in production.
+          //
+          // The counter is `not_ready_count`, NOT `retry_count`. A deferral is not a failure, and retry_count is the
+          // failure budget the circuit-breaker (DLQ at >= 5) and exception paths share — spending it
+          // on waiting means a repo that needed five polls meets its first real GitHub error with
+          // the budget gone and gets DLQ'd instead of retried.
+          const notReadyDeferrals = envelope.not_ready_count ?? 0;
+          const notReadyPlan = planRepoNotReadyWait(notReadyDeferrals);
+          if (notReadyPlan.action === "dlq") {
+            // Same shape as the circuit-breaker ceiling above: DLQ, then archive only if the DLQ
+            // write landed, so a transient DLQ outage leaves the message to be retried rather than
+            // dropping the terminal record on the floor.
+            const exhausted = new Error(
+              `Repository ${org}/${repoName} was still not marked ready after ${notReadyDeferrals} deferrals`
+            );
+            scope.setTag("permission_sync_skipped", "repo_never_ready");
+            // Close the api_gateway_calls row this job opened. sendToDeadLetterQueue does not touch
+            // it and no replacement envelope survives this branch, so without this the row sits at
+            // its pending status_code = 0 forever. 422 rather than a new code, matching the parked
+            // terminal path a few lines up: same situation — well-formed job, no attempt left that
+            // can succeed — and a third status for a near-identical outcome would only make the
+            // metric harder to read.
+            recordMetric(
+              adminSupabase,
+              {
+                method: envelope.method,
+                status_code: 422,
+                class_id: envelope.class_id,
+                debug_id: envelope.debug_id,
+                enqueued_at: meta.enqueued_at,
+                log_id: envelope.log_id
+              },
+              scope
+            );
+            const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, exhausted, scope);
+            if (dlqSuccess) {
+              await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+            } else {
+              console.error(`Failed to DLQ never-ready permission sync for ${org}/${repoName}, leaving unarchived`);
+              scope.setContext("dlq_archive_skipped", { msg_id: meta.msg_id, reason: "DLQ send failed" });
+              Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, { level: "error" });
+            }
+            return false;
+          }
+          console.log(
+            `repo is not ready ${org}/${repoName} — requeueing in ${notReadyPlan.delaySeconds}s ` +
+              `(attempt ${notReadyPlan.attempt}/${notReadyPlan.maxAttempts})`
+          );
+          scope.setTag("permission_sync_deferred", "repo_not_ready");
+          // No recordMetric here, matching the circuit-breaker requeue path: the new envelope keeps
+          // this one's log_id, so the api_gateway_calls row this job opened is closed by whichever
+          // attempt finally succeeds. Recording a status here would close it early and the eventual
+          // success would have nothing to write to.
+          const requeued = await requeueWithDelay(
+            adminSupabase,
+            envelope,
+            notReadyPlan.delaySeconds,
+            scope,
+            queueName,
+            {
+              incrementRetryCount: false,
+              patch: notReadyRequeuePatch(envelope, meta.enqueued_at)
+            }
+          );
+          if (!requeued) {
+            // The replacement never made it onto the queue, so this message is the only copy left.
+            // Leave it UNARCHIVED: it falls back to visibility-timeout redelivery, which is the slow
+            // path this change exists to avoid but is still infinitely better than losing the sync.
+            // read_ct's poison limit continues to bound it.
+            console.error(
+              `Failed to requeue not-ready permission sync for ${org}/${repoName}; leaving unarchived for visibility-timeout redelivery`
+            );
+            scope.setTag("permission_sync_requeue_failed", "true");
+            return false;
+          }
+          // The replacement is live, so the original MUST NOT be: see retireReplacedMessage for what
+          // happens if both stay on the queue.
+          await retireReplacedMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
@@ -2977,7 +3146,25 @@ async function processOneQueueMessage(
   const ok = await processEnvelope(
     adminSupabase,
     msg.message,
-    { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, read_ct: msg.read_ct, queue_name: queueName },
+    {
+      msg_id: msg.msg_id,
+      // THE JOB'S ENQUEUE TIME, NOT THIS HOP'S. `meta.enqueued_at` has exactly one consumer —
+      // recordMetric's `latency_ms` (and the DLQ metadata built from it) — and the api_gateway_calls
+      // row it writes is keyed on `log_id`, so it is opened once for the whole job and overwritten by
+      // whichever delivery finishes it. A readiness deferral sends a NEW pgmq message, so taking this
+      // message's own timestamp would report only the final hop and under-report every job that ever
+      // waited: precisely the jobs whose latency the deferral ladder exists to shorten.
+      //
+      // Resolved HERE rather than at each recordMetric call because there are twenty of them across
+      // the handler and its DLQ helpers, and the terminal ones — parked repo, NonRetryableGitHubError,
+      // the generic catch — are exactly the paths a per-branch fix keeps missing (it missed them on
+      // the first pass of #999). One substitution at the single construction site makes the property
+      // hold everywhere and stay holding. `read_ct` deliberately stays per-message: it bounds THIS
+      // delivery, not the job.
+      enqueued_at: (msg.message as GitHubAsyncEnvelope | null)?.original_enqueued_at ?? msg.enqueued_at,
+      read_ct: msg.read_ct,
+      queue_name: queueName
+    },
     msgScope
   );
   if (ok) {
