@@ -2108,7 +2108,15 @@ function IndividualScoresDisplay({ individualScores }: { individualScores: Indiv
   );
 }
 
-function RubricView({ inGradingShell = false }: { inGradingShell?: boolean }) {
+function RubricView({
+  inGradingShell = false,
+  standalone = false
+}: {
+  inGradingShell?: boolean;
+  /** Rendered as the only pane (no sibling content column) — drop the sidebar chrome (left
+   *  border, sticky positioning, internal scroll) that only makes sense next to something. */
+  standalone?: boolean;
+}) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
@@ -2141,16 +2149,16 @@ function RubricView({ inGradingShell = false }: { inGradingShell?: boolean }) {
       // In the grading shell the aside is the SINGLE scroll container that exactly fills its
       // fixed-height panel (the panel wrapper does not scroll). Outside the shell it keeps the
       // original sticky, viewport-tall, self-scrolling behavior inside the long-scroll page.
-      position={inGradingShell ? "static" : { base: "static", lg: "sticky" }}
-      top={inGradingShell ? "auto" : { base: "auto", lg: "0" }}
-      borderTopWidth={{ base: "1px", lg: "0" }}
-      borderLeftWidth={{ base: "0", lg: "1px" }}
+      position={inGradingShell || standalone ? "static" : { base: "static", lg: "sticky" }}
+      top={inGradingShell || standalone ? "auto" : { base: "auto", lg: "0" }}
+      borderTopWidth={standalone ? "1px" : { base: "1px", lg: "0" }}
+      borderLeftWidth={standalone ? "0" : { base: "0", lg: "1px" }}
       borderColor="border.emphasized"
       padding="2"
-      pb={inGradingShell ? "4" : { base: "4", lg: "80px" }}
-      height={inGradingShell ? "100%" : { base: "auto", lg: "100vh" }}
+      pb={inGradingShell ? "4" : standalone ? "4" : { base: "4", lg: "80px" }}
+      height={inGradingShell ? "100%" : standalone ? "auto" : { base: "auto", lg: "100vh" }}
       overflowX="hidden"
-      overflowY={inGradingShell ? "auto" : { base: "visible", lg: "auto" }}
+      overflowY={inGradingShell ? "auto" : standalone ? "visible" : { base: "visible", lg: "auto" }}
       ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
@@ -2263,11 +2271,20 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const explicitSubPage = getSubmissionFilesOrResultsTab(pathname);
   const gradingReviewForDefault = useSubmissionReviewOrGradingReview(submission.grading_review_id ?? undefined);
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const { assignment } = useAssignmentController();
+  // No-submission assignments (graded manually, no artifact) have no files or autograder output,
+  // so those tabs don't exist. The Grade tab is the only relevant one and gets the full screen.
+  const isNoSubmissionAssignment = assignment.repo_mode === "no_submission";
   // Default tab: students land on the released grade summary if available; otherwise (and always
   // for graders/instructors, who grade from the rubric sidebar) autograder feedback if present,
   // else files.
-  const defaultSubPage =
-    !isGraderOrInstructor && gradingReviewForDefault?.released ? "grade" : hasGraderOutput ? "results" : "files";
+  const defaultSubPage = isNoSubmissionAssignment
+    ? "grade"
+    : !isGraderOrInstructor && gradingReviewForDefault?.released
+      ? "grade"
+      : hasGraderOutput
+        ? "results"
+        : "files";
   // repo-analytics / checks / deployments aren't returned by
   // getSubmissionFilesOrResultsTab; on those pages don't fall back to the default
   // core tab, or it would render a second highlighted tab alongside the real one.
@@ -2284,7 +2301,6 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     assignment_group_id: submission.assignment_group_id
   });
   const isInstructor = useIsInstructor();
-  const { assignment } = useAssignmentController();
   // Checks/Deployments are PR-mode surfaces — only relevant when this submission
   // came from a PR (has a pr_number/pr_state) or the assignment is configured in
   // PR submission mode. Keeps these tabs off the (majority) push-mode submissions
@@ -2510,24 +2526,31 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             Grade
           </NextLink>
         </Button>
-        <Button asChild variant={activeSubPage === "results" ? "solid" : "ghost"}>
-          <NextLink
-            href={linkToSubPage(pathname, "results", searchParams)}
-            aria-current={activeSubPage === "results" ? "page" : undefined}
-          >
-            <Icon as={FaRobot} />
-            Autograder Detail
-          </NextLink>
-        </Button>
-        <Button asChild variant={activeSubPage === "files" ? "solid" : "ghost"}>
-          <NextLink
-            href={linkToSubPage(pathname, "files", searchParams)}
-            aria-current={activeSubPage === "files" ? "page" : undefined}
-          >
-            <Icon as={FaFile} />
-            Files
-          </NextLink>
-        </Button>
+        {/* No-submission assignments (graded manually, no artifact) have no files or autograder
+            output, so these tabs would just be empty shells. Hide them and let Grade take the
+            full screen (see #944). */}
+        {!isNoSubmissionAssignment && (
+          <>
+            <Button asChild variant={activeSubPage === "results" ? "solid" : "ghost"}>
+              <NextLink
+                href={linkToSubPage(pathname, "results", searchParams)}
+                aria-current={activeSubPage === "results" ? "page" : undefined}
+              >
+                <Icon as={FaRobot} />
+                Autograder Detail
+              </NextLink>
+            </Button>
+            <Button asChild variant={activeSubPage === "files" ? "solid" : "ghost"}>
+              <NextLink
+                href={linkToSubPage(pathname, "files", searchParams)}
+                aria-current={activeSubPage === "files" ? "page" : undefined}
+              >
+                <Icon as={FaFile} />
+                Files
+              </NextLink>
+            </Button>
+          </>
+        )}
         {isPrSubmission && (
           <>
             <Button asChild variant={pathname.includes("/checks") ? "solid" : "ghost"}>
@@ -2553,7 +2576,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </Button>
         )}
       </Box>
-      {useGradingShell ? (
+      {isNoSubmissionAssignment ? (
+        // No-submission assignments have no files/autograder content worth rendering, and their
+        // only tab (Grade) points at a read-only ledger page, not the editable rubric. Show the
+        // real grading UI (RubricView) directly, full width, regardless of which sub-route the URL
+        // happens to be on (stale "next incomplete review" links etc. still point at /files) --
+        // that sub-route's own page component is never mounted here for this assignment type.
+        <Box w="100%">
+          <RubricView standalone />
+        </Box>
+      ) : useGradingShell ? (
         // Fixed-height, resizable content | rubric shell (Files tab, large screens). The editor column
         // (children -> FilesView) further splits into tree | code internally.
         <Box h="calc(100vh - 12rem)" minH="32rem">
