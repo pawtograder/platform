@@ -2290,6 +2290,15 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   // core tab, or it would render a second highlighted tab alongside the real one.
   const isNonCoreSubPage = /\/(repo-analytics|checks|deployments)(?:\/|$|\?|#)/.test(pathname);
   const activeSubPage = explicitSubPage ?? (isNonCoreSubPage ? null : defaultSubPage);
+  // No-submission assignments render the grading UI directly below (see isNoSubmissionAssignment
+  // further down) regardless of the sub-route, so none of files/results/checks/etc.'s own page
+  // components ever mount here to run their own redirect-to-default-tab effect. Canonicalize the
+  // URL to /grade ourselves so bookmarks, the back button, and stale links (e.g. "next incomplete
+  // review", which always points at /files) all settle on the one URL this assignment type supports.
+  useEffect(() => {
+    if (!isNoSubmissionAssignment || explicitSubPage === "grade") return;
+    router.replace(linkToSubPage(pathname, "grade", searchParams));
+  }, [isNoSubmissionAssignment, explicitSubPage, pathname, searchParams, router]);
   // On the Files tab on large screens, present the content + rubric as a resizable, fixed-height
   // IDE shell (panes scroll internally so the editor fills its column). Other tabs / small screens
   // keep the original long-scroll flex layout. `useStableDesktop` (not raw `useBreakpointValue`) so a

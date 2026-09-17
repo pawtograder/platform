@@ -2,7 +2,6 @@
 
 import { useSubmissionMaybe, useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useAssignmentController } from "@/hooks/useAssignment";
 import { submissionHasGraderOutput } from "@/lib/submissionHasGraderOutput";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
@@ -15,10 +14,7 @@ export default function SubmissionsView() {
   const hasGraderOutput = submissionHasGraderOutput(submission?.grader_results);
   const gradingReview = useSubmissionReviewOrGradingReview(submission?.grading_review_id ?? undefined);
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const { assignment } = useAssignmentController();
   const released = gradingReview?.released ?? false;
-  // No-submission assignments have no files/autograder output, so those tabs don't exist. Land on Grade.
-  const isNoSubmissionAssignment = assignment.repo_mode === "no_submission";
 
   useEffect(() => {
     if (!submission) {
@@ -27,14 +23,10 @@ export default function SubmissionsView() {
 
     // Default landing tab: students land on the released grade summary if available; graders and
     // instructors (who work from the rubric sidebar) keep landing on autograder feedback / files.
+    // No-submission assignments never mount this route at all (the layout renders the grading UI
+    // directly and redirects to /grade on its own), so this only needs to handle every other mode.
     const queryString = searchParams.toString();
-    const targetPage = isNoSubmissionAssignment
-      ? "grade"
-      : !isGraderOrInstructor && released
-        ? "grade"
-        : hasGraderOutput
-          ? "results"
-          : "files";
+    const targetPage = !isGraderOrInstructor && released ? "grade" : hasGraderOutput ? "results" : "files";
     const redirectUrl = `/course/${course_id}/assignments/${assignment_id}/submissions/${submissions_id}/${targetPage}${
       queryString ? `?${queryString}` : ""
     }`;
@@ -48,8 +40,7 @@ export default function SubmissionsView() {
     submission,
     hasGraderOutput,
     released,
-    isGraderOrInstructor,
-    isNoSubmissionAssignment
+    isGraderOrInstructor
   ]);
 
   return <div></div>;
