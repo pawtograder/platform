@@ -38,10 +38,22 @@ const config = defineConfig({
         // hit AA automatically. Also bump fg.muted (default gray.500 ≈ 4.43:1 on
         // white — a hair below 4.5 AA) to gray.600 (~7.4:1) so muted timestamps,
         // helper text, etc., pass without a per-call-site override.
+        //
+        // fg.warning joins them for the same reason: the default orange.600
+        // (#ea580c) is only 3.56:1 on white, so every warning line rendered on a
+        // page background failed 1.4.3. orange.700 (#c2410c) is 5.18:1 on white
+        // and still 4.9:1 on the orange.50 of bg.warning. The dark steps stay on
+        // the .300 family, which clears AA on the near-black canvas by a wide
+        // margin (orange.300 ≈ 11.8:1).
+        //
+        // fg.info is deliberately NOT remapped: blue.600 / blue.300 already
+        // measure 5.17:1 and 11.0:1, so call sites that were hand-rolling
+        // `blue.500` / `blue.700` just need to use the token.
         fg: {
           muted: { value: { base: "{colors.gray.600}", _dark: "{colors.gray.400}" } },
           success: { value: { base: "{colors.green.700}", _dark: "{colors.green.300}" } },
-          error: { value: { base: "{colors.red.700}", _dark: "{colors.red.300}" } }
+          error: { value: { base: "{colors.red.700}", _dark: "{colors.red.300}" } },
+          warning: { value: { base: "{colors.orange.700}", _dark: "{colors.orange.300}" } }
         }
       }
     }

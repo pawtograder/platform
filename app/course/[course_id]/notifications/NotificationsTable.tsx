@@ -192,7 +192,7 @@ export default function NotificationsTable() {
 
       {/* Regrade Requests */}
       <VStack align="stretch" gap={3}>
-        <HStack justify="space-between">
+        <HStack justify="space-between" flexWrap="wrap" gap={2}>
           <Text fontSize="md" fontWeight="semibold">
             Regrade Requests
           </Text>
@@ -335,7 +335,7 @@ export default function NotificationsTable() {
 
       {/* Office Hours */}
       <VStack align="stretch" gap={3}>
-        <HStack justify="space-between">
+        <HStack justify="space-between" flexWrap="wrap" gap={2}>
           <Text fontSize="md" fontWeight="semibold">
             Office Hours
           </Text>
@@ -460,7 +460,7 @@ export default function NotificationsTable() {
 
       {/* Discussion Threads */}
       <VStack align="stretch" gap={3}>
-        <HStack justify="space-between">
+        <HStack justify="space-between" flexWrap="wrap" gap={2}>
           <Text fontSize="md" fontWeight="semibold">
             Discussion Threads
           </Text>
@@ -585,7 +585,7 @@ export default function NotificationsTable() {
 
       {/* Other */}
       <VStack align="stretch" gap={3}>
-        <HStack justify="space-between">
+        <HStack justify="space-between" flexWrap="wrap" gap={2}>
           <Text fontSize="md" fontWeight="semibold">
             Other
           </Text>

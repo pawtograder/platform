@@ -104,7 +104,11 @@ function AnchoredRegradeRequestRow({ request }: { request: RegradeRequest }) {
               {checkName || rubricCheck?.name || "General"}
             </Text>
           </HStack>
-          <HStack gap={3} flexWrap="wrap" fontSize="xs" color="fg.muted">
+          {/* `regrade-request-meta` is a stable hook, not a style: axe's selector
+              for these lines is otherwise all emotion hashes, which churn on any
+              style change and cannot be referenced from SCOPED_SUPPRESSIONS
+              (see #910). */}
+          <HStack className="regrade-request-meta" gap={3} flexWrap="wrap" fontSize="xs" color="fg.muted">
             <Text>
               Initial:{" "}
               <Text as="span" fontWeight="semibold" color="fg.default">
@@ -118,7 +122,7 @@ function AnchoredRegradeRequestRow({ request }: { request: RegradeRequest }) {
               </Text>
             </Text>
           </HStack>
-          <HStack gap={3} flexWrap="wrap" fontSize="xs" color="fg.muted">
+          <HStack className="regrade-request-meta" gap={3} flexWrap="wrap" fontSize="xs" color="fg.muted">
             <Text>
               Created{" "}
               <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
