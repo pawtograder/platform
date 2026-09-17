@@ -22,6 +22,7 @@
  */
 
 import {
+  notReadyRequeuePatch,
   planRepoNotReadyWait,
   repoNotReadyDelaySeconds,
   repoNotReadyWorstCaseSeconds,
@@ -115,5 +116,51 @@ describe("repo-not-ready wait: the schedule", () => {
       if (p.action !== "requeue") throw new Error(`expected requeue for ${bad}`);
       expect(p.delaySeconds).toBe(REPO_NOT_READY_REQUEUE_BASE_SECONDS);
     }
+  });
+});
+
+describe("repo-not-ready deferral: the counters are separate (PR #999 review, P1)", () => {
+  it("never returns retry_count, so a deferral cannot spend the failure budget", () => {
+    // retry_count is what the circuit-breaker path DLQs on at >= 5 and what the exception paths back
+    // off on. If a deferral bumped it, a repo needing five polls would hit its first real GitHub
+    // error with the budget gone and be dead-lettered instead of retried. Asserting on the KEYS is
+    // the point: `retry_count` must not be settable from here even by accident.
+    const patch = notReadyRequeuePatch({ not_ready_count: 4 }, "2026-09-17T08:00:00.000Z");
+    expect(Object.keys(patch).sort()).toEqual(["not_ready_count", "original_enqueued_at"]);
+    expect(patch).not.toHaveProperty("retry_count");
+  });
+
+  it("increments the deferral counter", () => {
+    expect(notReadyRequeuePatch({}, "t").not_ready_count).toBe(1);
+    expect(notReadyRequeuePatch({ not_ready_count: 0 }, "t").not_ready_count).toBe(1);
+    expect(notReadyRequeuePatch({ not_ready_count: 7 }, "t").not_ready_count).toBe(8);
+  });
+
+  it("pins the original enqueue time once and never re-pins it", () => {
+    const first = notReadyRequeuePatch({}, "2026-09-17T08:00:00.000Z");
+    expect(first.original_enqueued_at).toBe("2026-09-17T08:00:00.000Z");
+    // Second hop: `currentEnqueuedAt` is the REPLACEMENT message's timestamp, eight minutes later.
+    // Taking it would report only the last wait and under-report every job that ever deferred.
+    const second = notReadyRequeuePatch(
+      { not_ready_count: first.not_ready_count, original_enqueued_at: first.original_enqueued_at },
+      "2026-09-17T08:08:00.000Z"
+    );
+    expect(second.original_enqueued_at).toBe("2026-09-17T08:00:00.000Z");
+    expect(second.not_ready_count).toBe(2);
+  });
+
+  it("the ladder and the counter agree: the deferral count is what reaches the ceiling", () => {
+    // Walk a full chain the way the handler does — plan from not_ready_count, then patch — and check
+    // it terminates at the ceiling rather than one either side of it.
+    let env: { not_ready_count?: number; original_enqueued_at?: string } = {};
+    let hops = 0;
+    for (;;) {
+      const plan = planRepoNotReadyWait(env.not_ready_count ?? 0, { random: noJitter });
+      if (plan.action === "dlq") break;
+      env = { ...env, ...notReadyRequeuePatch(env, "2026-09-17T08:00:00.000Z") };
+      hops++;
+      if (hops > 50) throw new Error("ladder did not terminate");
+    }
+    expect(hops).toBe(REPO_NOT_READY_MAX_RETRIES);
   });
 });

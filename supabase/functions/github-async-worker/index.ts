@@ -39,7 +39,7 @@ import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts"
 import { shouldSendOrgInvitation } from "../_shared/orgInviteWindow.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
-import { planRepoNotReadyWait } from "../_shared/repoNotReadyPlan.ts";
+import { notReadyRequeuePatch, planRepoNotReadyWait } from "../_shared/repoNotReadyPlan.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -290,16 +290,45 @@ function computeBackoffSeconds(baseSeconds: number | undefined, retryCount: numb
   return backoff + jitter;
 }
 
+/**
+ * Options for a requeue that is not a failure retry.
+ *
+ * `incrementRetryCount` defaults to TRUE so every existing caller keeps its behaviour; only the
+ * readiness ladder passes false, because a deferral must not spend the failure budget the
+ * circuit-breaker and exception paths share. See `not_ready_count` on GitHubAsyncEnvelope.
+ */
+interface RequeueOptions {
+  incrementRetryCount?: boolean;
+  patch?: Partial<GitHubAsyncEnvelope>;
+}
+
+/**
+ * RETURNS WHETHER THE REPLACEMENT WAS ACTUALLY ENQUEUED, and callers must not archive the original
+ * until it says true.
+ *
+ * This used to resolve normally on a failed `send` — the error went to Sentry and nothing else — so
+ * a caller doing `await requeueWithDelay(...); await archiveMessage(...)` deleted the only copy of
+ * the job whenever the queue write failed. Silent, permanent work loss on a transient database
+ * error. Returning a boolean is what lets a caller leave the message unarchived instead, which falls
+ * back to plain visibility-timeout redelivery: slower, but the job still happens.
+ *
+ * NOTE for anyone touching the other call sites: they still ignore this return value and archive
+ * unconditionally, which is the same latent bug. Left alone here deliberately — each one needs its
+ * own decision about whether leaving the message unarchived is correct in that path — and tracked
+ * rather than half-fixed.
+ */
 async function requeueWithDelay(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
   delaySeconds: number,
   scope: Sentry.Scope,
-  queueName: string = "async_calls"
-) {
+  queueName: string = "async_calls",
+  opts: RequeueOptions = {}
+): Promise<boolean> {
   const newEnvelope: GitHubAsyncEnvelope = {
     ...envelope,
-    retry_count: (envelope.retry_count ?? 0) + 1
+    ...(opts.patch ?? {}),
+    retry_count: (envelope.retry_count ?? 0) + (opts.incrementRetryCount === false ? 0 : 1)
   };
   const result = await adminSupabase.schema("pgmq_public").rpc("send", {
     queue_name: queueName,
@@ -309,7 +338,9 @@ async function requeueWithDelay(
   if (result.error) {
     scope.setContext("requeue_error", { error_message: result.error.message, delay_seconds: delaySeconds });
     Sentry.captureException(result.error, scope);
+    return false;
   }
+  return true;
 }
 
 async function sendToDeadLetterQueue(
@@ -1289,18 +1320,46 @@ export async function processEnvelope(
             return true;
           }
           // Still provisioning: wait for it, but wait on an EXPLICIT delay rather than by letting
-          // the visibility timeout expire. See REPO_NOT_READY_REQUEUE_BASE_SECONDS for why the
-          // difference matters and what it cost in production.
-          const notReadyRetryCount = envelope.retry_count ?? 0;
-          const notReadyPlan = planRepoNotReadyWait(notReadyRetryCount);
+          // the visibility timeout expire. See _shared/repoNotReadyPlan.ts for why the difference
+          // matters and what it cost in production.
+          //
+          // The counter is `not_ready_count`, NOT `retry_count`. A deferral is not a failure, and retry_count is the
+          // failure budget the circuit-breaker (DLQ at >= 5) and exception paths share — spending it
+          // on waiting means a repo that needed five polls meets its first real GitHub error with
+          // the budget gone and gets DLQ'd instead of retried.
+          const notReadyDeferrals = envelope.not_ready_count ?? 0;
+          // Pinned once, on the first deferral, so latency_ms is measured against the original
+          // request rather than the last hop. requeueWithDelay sends a NEW message, so
+          // meta.enqueued_at restarts each time while the api_gateway_calls row (keyed on log_id)
+          // stays open across the whole chain.
+          const originalEnqueuedAt = envelope.original_enqueued_at ?? meta.enqueued_at;
+          const notReadyPlan = planRepoNotReadyWait(notReadyDeferrals);
           if (notReadyPlan.action === "dlq") {
             // Same shape as the circuit-breaker ceiling above: DLQ, then archive only if the DLQ
             // write landed, so a transient DLQ outage leaves the message to be retried rather than
             // dropping the terminal record on the floor.
             const exhausted = new Error(
-              `Repository ${org}/${repoName} was still not marked ready after ${notReadyRetryCount} requeues`
+              `Repository ${org}/${repoName} was still not marked ready after ${notReadyDeferrals} deferrals`
             );
             scope.setTag("permission_sync_skipped", "repo_never_ready");
+            // Close the api_gateway_calls row this job opened. sendToDeadLetterQueue does not touch
+            // it and no replacement envelope survives this branch, so without this the row sits at
+            // its pending status_code = 0 forever. 422 rather than a new code, matching the parked
+            // terminal path a few lines up: same situation — well-formed job, no attempt left that
+            // can succeed — and a third status for a near-identical outcome would only make the
+            // metric harder to read.
+            recordMetric(
+              adminSupabase,
+              {
+                method: envelope.method,
+                status_code: 422,
+                class_id: envelope.class_id,
+                debug_id: envelope.debug_id,
+                enqueued_at: originalEnqueuedAt,
+                log_id: envelope.log_id
+              },
+              scope
+            );
             const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, exhausted, scope);
             if (dlqSuccess) {
               await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
@@ -1320,7 +1379,28 @@ export async function processEnvelope(
           // this one's log_id, so the api_gateway_calls row this job opened is closed by whichever
           // attempt finally succeeds. Recording a status here would close it early and the eventual
           // success would have nothing to write to.
-          await requeueWithDelay(adminSupabase, envelope, notReadyPlan.delaySeconds, scope, queueName);
+          const requeued = await requeueWithDelay(
+            adminSupabase,
+            envelope,
+            notReadyPlan.delaySeconds,
+            scope,
+            queueName,
+            {
+              incrementRetryCount: false,
+              patch: notReadyRequeuePatch(envelope, meta.enqueued_at)
+            }
+          );
+          if (!requeued) {
+            // The replacement never made it onto the queue, so this message is the only copy left.
+            // Leave it UNARCHIVED: it falls back to visibility-timeout redelivery, which is the slow
+            // path this change exists to avoid but is still infinitely better than losing the sync.
+            // read_ct's poison limit continues to bound it.
+            console.error(
+              `Failed to requeue not-ready permission sync for ${org}/${repoName}; leaving unarchived for visibility-timeout redelivery`
+            );
+            scope.setTag("permission_sync_requeue_failed", "true");
+            return false;
+          }
           await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
@@ -1332,7 +1412,10 @@ export async function processEnvelope(
             status_code: 200,
             class_id: envelope.class_id,
             debug_id: envelope.debug_id,
-            enqueued_at: meta.enqueued_at,
+            // The FIRST enqueue in the chain when this job waited for provisioning, so latency_ms is
+            // the student's actual wait and not just the last hop's. Falls back to this message's own
+            // timestamp for the overwhelmingly common case that never deferred.
+            enqueued_at: envelope.original_enqueued_at ?? meta.enqueued_at,
             log_id: envelope.log_id
           },
           scope

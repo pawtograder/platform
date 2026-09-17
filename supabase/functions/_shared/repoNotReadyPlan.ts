@@ -102,3 +102,37 @@ export function repoNotReadyWorstCaseSeconds(opts: RepoNotReadyPlanOptions = {})
   for (let i = 0; i < maxRetries; i++) total += repoNotReadyDelaySeconds(i, { ...opts, random: () => 0.9999 });
   return total;
 }
+
+/** The envelope fields a readiness deferral must carry forward. */
+export interface NotReadyRequeuePatch {
+  not_ready_count: number;
+  original_enqueued_at: string;
+}
+
+/**
+ * What to change on the envelope when deferring for readiness — and, just as importantly, what NOT
+ * to change.
+ *
+ * `retry_count` IS ABSENT FROM THE RETURN TYPE ON PURPOSE. It is the FAILURE budget: the
+ * circuit-breaker path DLQs at `retry_count >= 5` and the exception paths back off on it. A
+ * readiness deferral is not a failure — nothing went wrong, the repository is simply not
+ * provisioned yet — so counting deferrals there means a repo that needed five polls reaches its
+ * first real GitHub error with the budget already spent and gets dead-lettered instead of retried.
+ * Two meanings, two counters. Reported on PR #999.
+ *
+ * `original_enqueued_at` is pinned on the FIRST deferral and preserved verbatim after that, because
+ * a requeue sends a NEW pgmq message: `meta.enqueued_at` restarts every hop while the
+ * api_gateway_calls row (keyed on `log_id`) stays open for the whole chain. Re-pinning it each hop
+ * would report only the last wait and under-report every job that ever deferred.
+ */
+export function notReadyRequeuePatch(
+  envelope: { not_ready_count?: number; original_enqueued_at?: string },
+  currentEnqueuedAt: string
+): NotReadyRequeuePatch {
+  const current = envelope.not_ready_count;
+  const count = Number.isFinite(current) && (current as number) > 0 ? Math.floor(current as number) : 0;
+  return {
+    not_ready_count: count + 1,
+    original_enqueued_at: envelope.original_enqueued_at ?? currentEnqueuedAt
+  };
+}
