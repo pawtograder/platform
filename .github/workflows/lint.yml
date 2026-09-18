@@ -184,6 +184,7 @@ jobs:
           npx jest --runInBand \
             tests/unit/async-worker-tuning.test.ts \
             tests/unit/create-repo-step-timings.test.ts \
+            tests/unit/repo-not-ready-plan.test.ts \
             tests/unit/prom-client-bundle.test.ts
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
