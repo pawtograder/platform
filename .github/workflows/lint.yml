@@ -20,7 +20,9 @@ on:
   pull_request_target:
     branches:
       - "**"
-  workflow_dispatch:
+  # No workflow_dispatch: `push: branches: ["**"]` above already runs this lane
+  # on any branch in the repo, so dispatch added nothing except another
+  # privileged trigger reaching the cache steps.
 
 concurrency:
   group: lint-${{ github.event.pull_request.number || github.ref }}
@@ -51,7 +53,7 @@ jobs:
         with:
           # Explicit: under pull_request_target the default checkout is the
           # BASE branch, which would lint the wrong code and pass silently.
-          ref: ${{ needs.gate.outputs.head_sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       # Restore-only, with a separate conditional save below. Under
       # pull_request_target the job runs in BASE-BRANCH context, so an
       # actions/cache WRITE from a fork PR lands in the default branch's cache
@@ -116,7 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.gate.outputs.head_sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       # Restore-only, with a separate conditional save below. Under
       # pull_request_target the job runs in BASE-BRANCH context, so an
       # actions/cache WRITE from a fork PR lands in the default branch's cache
@@ -183,7 +185,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.gate.outputs.head_sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.20.2
@@ -211,7 +213,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.gate.outputs.head_sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

@@ -90,9 +90,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # From the gate, not recomputed: one place decides which SHA
-          # was vetted and which SHA runs, so they cannot diverge.
-          ref: ${{ needs.gate.outputs.head_sha }}
+          # Explicit: under pull_request_target a bare checkout is the BASE
+          # branch, which would test the wrong code and pass silently.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       # Restore-only, with a separate conditional save below. Under
       # pull_request_target the job runs in BASE-BRANCH context, so an

@@ -19,9 +19,18 @@ name: Trust gate
 # from the base branch. The cost is that CI changes in a PR do not take effect
 # until merged; that is the same property that makes the gate unbypassable.
 #
-# Callers must therefore check out `head_sha` EXPLICITLY. Under
+# Callers must therefore set `ref:` on their checkout EXPLICITLY, to
+# `${{ github.event.pull_request.head.sha || github.sha }}`. Under
 # pull_request_target the default checkout is the base branch, which silently
 # tests the wrong code rather than failing loudly.
+#
+# That expression is read inline at each call site rather than handed down as
+# an output of this workflow. Routing it through a job output is equivalent —
+# the event payload is immutable for the life of a run, so there is no
+# check-then-use window to close — but it costs: CodeQL cannot see where an
+# opaque `needs.*.outputs.*` value came from, so it taints every consuming
+# checkout and reports actions/cache-poisoning and untrusted-checkout on paths
+# that are not reachable. Inline keeps the provenance visible to the analysis.
 #
 # WHAT "trusted" MEANS
 # --------------------
@@ -79,9 +88,6 @@ on:
       approved:
         description: "trusted, AND (require_label empty OR that label is on the PR)"
         value: ${{ jobs.gate.outputs.approved }}
-      head_sha:
-        description: "the exact SHA callers must check out"
-        value: ${{ jobs.gate.outputs.head_sha }}
 
 permissions: {}
 
@@ -101,7 +107,6 @@ jobs:
     outputs:
       trusted: ${{ steps.trust.outputs.trusted }}
       approved: ${{ steps.approve.outputs.approved }}
-      head_sha: ${{ steps.trust.outputs.head_sha }}
     steps:
       - id: trust
         name: Resolve trust
@@ -116,13 +121,8 @@ jobs:
           IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
           HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
           SENDER: ${{ github.event.sender.login }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          FALLBACK_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-
-          head_sha="${PR_HEAD_SHA:-$FALLBACK_SHA}"
-          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
 
           # Resolve one login to write/no-write. Any API failure is a hard
           # "no" (fail closed) with an actionable warning, rather than a
