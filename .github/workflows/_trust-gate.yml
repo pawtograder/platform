@@ -118,7 +118,15 @@ jobs:
           GH_TOKEN: ${{ secrets.trust_token || secrets.GITHUB_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
           REPO: ${{ github.repository }}
-          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          # full_name, not the `fork` flag. `head.repo` is NULL in the
+          # payload when the head repository has been deleted or is otherwise
+          # unavailable, which made the old `fork != true` test read an empty
+          # string and classify the PR as a same-repo branch — i.e. trusted.
+          # The commit stays reachable through refs/pull/N/head, so a later
+          # `reopened` or `labeled` event could then run fork-supplied code on
+          # the self-hosted pool with neither principal checked. Identify the
+          # head repo positively and treat absent metadata as untrusted.
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
           SENDER: ${{ github.event.sender.login }}
         run: |
@@ -127,15 +135,29 @@ jobs:
           # Resolve one login to write/no-write. Any API failure is a hard
           # "no" (fail closed) with an actionable warning, rather than a
           # silent pass.
+          # Reads `.permission`, not `.role_name`. Per the REST docs the
+          # legacy `permission` field collapses the granular roles onto
+          # admin/write/read/none, "where the maintain role is mapped to write
+          # and the triage role is mapped to read" — which is exactly the
+          # predicate wanted here: write + maintain + admin pass, triage and
+          # read do not. It also resolves a CUSTOM repository role to its base
+          # role, whereas `role_name` returns the custom role's own name and
+          # would silently drop such a contributor to untrusted. (Custom roles
+          # are not available on this org's current plan, so that part is
+          # future-proofing.) role_name is still logged, for diagnosis.
           has_write() {
-            local user="$1" role
-            if ! role=$(gh api "repos/${REPO}/collaborators/${user}/permission" --jq '.role_name' 2>/dev/null); then
+            local user="$1" out perm role
+            # One request, both fields. Fetching them in two calls doubled the
+            # requests per principal for a log line.
+            if ! out=$(gh api "repos/${REPO}/collaborators/${user}/permission" --jq '"\(.permission) \(.role_name)"' 2>/dev/null); then
               echo "::warning title=Trust check failed::Could not resolve repo permission for '${user}'. Treating this PR as untrusted. If the built-in GITHUB_TOKEN is not accepted by this endpoint, set a CI_TRUST_TOKEN secret (Metadata: read) and pass it as trust_token."
               return 1
             fi
-            echo "  ${user}: ${role}"
-            case "$role" in
-              write | maintain | admin) return 0 ;;
+            perm="${out%% *}"
+            role="${out#* }"
+            echo "  ${user}: permission=${perm} (role_name=${role})"
+            case "$perm" in
+              admin | write) return 0 ;;
               *) return 1 ;;
             esac
           }
@@ -145,7 +167,10 @@ jobs:
             # both run from a ref that already required write access.
             trusted=true
             reason="event '${EVENT_NAME}' runs from a ref in ${REPO}"
-          elif [[ "$IS_FORK" != "true" ]]; then
+          elif [[ -z "${HEAD_REPO:-}" ]]; then
+            trusted=false
+            reason="head repository metadata is absent (fork deleted or unavailable), so neither principal can be identified"
+          elif [[ "$HEAD_REPO" == "$REPO" ]]; then
             trusted=true
             reason="head branch lives in ${REPO}, so pushing it already required write access"
           else
