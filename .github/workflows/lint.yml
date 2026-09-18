@@ -52,8 +52,17 @@ jobs:
           # Explicit: under pull_request_target the default checkout is the
           # BASE branch, which would lint the wrong code and pass silently.
           ref: ${{ needs.gate.outputs.head_sha }}
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
+      # Restore-only, with a separate conditional save below. Under
+      # pull_request_target the job runs in BASE-BRANCH context, so an
+      # actions/cache WRITE from a fork PR lands in the default branch's cache
+      # scope and would later be restored by trusted builds — CodeQL
+      # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
+      # cache was isolated to the PR scope, so this vector arrives with the
+      # trigger change rather than being pre-existing. Fork PRs still RESTORE
+      # (they get the speed-up); they just cannot write what a trusted run
+      # will read.
+      - name: Restore npm dependencies
+        uses: actions/cache/restore@v4
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
@@ -70,6 +79,15 @@ jobs:
       # thing standing between fork code and this runner.
       - name: Install dependencies
         run: npm ci
+      # Only a same-repo ref may WRITE the cache. `github.event.pull_request`
+      # is null on push/dispatch, so `.head.repo.fork != true` holds there and
+      # those refs keep populating the cache.
+      - name: Save npm dependencies
+        if: github.event.pull_request.head.repo.fork != true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
       - name: Run linting check
         run: npm run lint
 
@@ -99,8 +117,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.gate.outputs.head_sha }}
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
+      # Restore-only, with a separate conditional save below. Under
+      # pull_request_target the job runs in BASE-BRANCH context, so an
+      # actions/cache WRITE from a fork PR lands in the default branch's cache
+      # scope and would later be restored by trusted builds — CodeQL
+      # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
+      # cache was isolated to the PR scope, so this vector arrives with the
+      # trigger change rather than being pre-existing. Fork PRs still RESTORE
+      # (they get the speed-up); they just cannot write what a trusted run
+      # will read.
+      - name: Restore npm dependencies
+        uses: actions/cache/restore@v4
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
@@ -122,6 +149,15 @@ jobs:
       # would fix it at the source and is worth doing separately.
       - name: Install dependencies
         run: npm ci
+      # Only a same-repo ref may WRITE the cache. `github.event.pull_request`
+      # is null on push/dispatch, so `.head.repo.fork != true` holds there and
+      # those refs keep populating the cache.
+      - name: Save npm dependencies
+        if: github.event.pull_request.head.repo.fork != true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
       # SCOPED to the suites this PR added, deliberately, rather than all of
       # tests/unit. A repo-wide gate is the right end state but I could not
       # verify it would be green: under the locked jest pair 11 of 101 suites

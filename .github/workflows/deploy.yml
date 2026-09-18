@@ -94,16 +94,34 @@ jobs:
           # was vetted and which SHA runs, so they cannot diverge.
           ref: ${{ needs.gate.outputs.head_sha }}
 
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
+      # Restore-only, with a separate conditional save below. Under
+      # pull_request_target the job runs in BASE-BRANCH context, so an
+      # actions/cache WRITE from a fork PR lands in the default branch's cache
+      # scope and would later be restored by trusted builds — CodeQL
+      # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
+      # cache was isolated to the PR scope, so this vector arrives with the
+      # trigger change rather than being pre-existing. Fork PRs still RESTORE
+      # (they get the speed-up); they just cannot write what a trusted run
+      # will read.
+      - name: Restore npm dependencies
+        uses: actions/cache/restore@v4
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-node-22-
 
-      - name: Cache Next.js build
-        uses: actions/cache@v4
+      # Restore-only, with a separate conditional save below. Under
+      # pull_request_target the job runs in BASE-BRANCH context, so an
+      # actions/cache WRITE from a fork PR lands in the default branch's cache
+      # scope and would later be restored by trusted builds — CodeQL
+      # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
+      # cache was isolated to the PR scope, so this vector arrives with the
+      # trigger change rather than being pre-existing. Fork PRs still RESTORE
+      # (they get the speed-up); they just cannot write what a trusted run
+      # will read.
+      - name: Restore next.js build
+        uses: actions/cache/restore@v4
         with:
           path: .next/cache
           key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**') }}
@@ -123,6 +141,15 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+      # Only a same-repo ref may WRITE the cache. `github.event.pull_request`
+      # is null on push/dispatch, so `.head.repo.fork != true` holds there and
+      # those refs keep populating the cache.
+      - name: Save npm dependencies
+        if: github.event.pull_request.head.repo.fork != true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
 
       # No repo secrets go into .env.local — every value below is a literal or
       # is generated on the runner. The suite does not need the real ones:
@@ -290,6 +317,19 @@ jobs:
         env:
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL: http://localhost:3001
         run: npm run build
+
+      # Saved HERE, after the build, not next to the restore: .next/cache is
+      # populated BY `npm run build`, so saving it earlier would store an empty
+      # directory and every later run would miss. Same fork condition as the
+      # npm cache above — a fork PR may restore this cache but never write it,
+      # because under pull_request_target a write would land in the default
+      # branch's cache scope.
+      - name: Save next.js build
+        if: github.event.pull_request.head.repo.fork != true
+        uses: actions/cache/save@v4
+        with:
+          path: .next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**') }}
 
       # prom-client is Node-only and lib/metrics.ts imports it dynamically, so
       # webpack will happily split it into a CLIENT chunk if anything under a

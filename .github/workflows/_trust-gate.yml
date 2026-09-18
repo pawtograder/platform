@@ -62,10 +62,15 @@ on:
     secrets:
       trust_token:
         description: >-
-          Optional. A token with `Metadata: read` on this repo, used for the
-          permission lookup instead of GITHUB_TOKEN. Only needed if the
-          built-in token turns out not to be accepted by the collaborators
-          endpoint — see the "could not resolve" warning this workflow emits.
+          Optional escape hatch, not currently needed. A token with
+          `Metadata: read` on this repo, used for the permission lookup
+          instead of GITHUB_TOKEN.
+          VERIFIED 2026-09-18: the built-in GITHUB_TOKEN *is* accepted by the
+          collaborators endpoint from a job holding `contents/pull-requests/
+          issues: read` — a probe run resolved a team member to `write`, a
+          non-team org member to `read`, and a stranger to `read`. Wire this
+          secret only if that ever regresses; the gate will say so via the
+          "could not resolve" warning below.
         required: false
     outputs:
       trusted:
