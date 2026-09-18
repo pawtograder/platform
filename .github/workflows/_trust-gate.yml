@@ -1,0 +1,209 @@
+name: Trust gate
+
+# Single source of truth for two questions:
+#   1. may this ref execute on our self-hosted pools?          -> `trusted`
+#   2. ...and, for the preview lane, was a deploy asked for?    -> `approved`
+#
+# Called by lint.yml, deploy.yml and preview.yml so the three lanes cannot
+# drift apart. They had already drifted: deploy.yml carried ~40 lines of
+# reasoning about keeping fork code off the self-hosted pool, while lint.yml
+# ran every fork PR on pawtograder-ci — same cluster, same ARC pool, with the
+# in-cluster registry credential seeded into the runner's docker config. The
+# careful gate and the open door were in the same repo.
+#
+# WHY EVERY CALLER MUST USE pull_request_target
+# ---------------------------------------------
+# Under `pull_request`, GitHub runs the workflow *file* from the PR head, so a
+# fork can delete its own gate in the same commit it attacks. Under
+# `pull_request_target` the workflow — and therefore this check — always comes
+# from the base branch. The cost is that CI changes in a PR do not take effect
+# until merged; that is the same property that makes the gate unbypassable.
+#
+# Callers must therefore check out `head_sha` EXPLICITLY. Under
+# pull_request_target the default checkout is the base branch, which silently
+# tests the wrong code rather than failing loudly.
+#
+# WHAT "trusted" MEANS
+# --------------------
+# Effective write permission on this repository, resolved live from the API.
+#
+# Deliberately NOT `author_association`: that describes the PR's author and
+# their standing here, not whoever pushed the head commit that is about to be
+# executed. Anyone with push access to the head branch can fire `synchronize`.
+#
+# Deliberately NOT "is an org member" either. On this org
+# `default_repository_permission` is `none`, so plain membership grants nothing
+# on this repo — as of writing, 7 of 15 members resolve to `read`, the same
+# level a total stranger gets on a public repo. Membership is "did we ever add
+# them"; write permission is "do we trust them now". Write arrives via the
+# `pawtograder-contributors` team, so granting a student CI is a team addition
+# and revoking it takes effect on their next push.
+#
+# For a fork PR we require write for BOTH principals:
+#   * head.repo.owner — whoever owns the fork controls who may push to it
+#   * sender          — whoever fired this event (on `synchronize`, the pusher)
+#
+# Residual risk, accepted deliberately: a collaborator on a trusted user's
+# personal fork can land code that runs here without holding write themselves.
+# Closing that would mean refusing fork PRs altogether, which is the workflow
+# we want for a large, mostly-trusted class.
+
+on:
+  workflow_call:
+    inputs:
+      require_label:
+        description: >-
+          When non-empty, `approved` additionally requires this label on the PR.
+          Used by the preview lane so a full-stack namespace is never created
+          unasked — trust decides who MAY deploy, the label decides who DID ask.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      trust_token:
+        description: >-
+          Optional. A token with `Metadata: read` on this repo, used for the
+          permission lookup instead of GITHUB_TOKEN. Only needed if the
+          built-in token turns out not to be accepted by the collaborators
+          endpoint — see the "could not resolve" warning this workflow emits.
+        required: false
+    outputs:
+      trusted:
+        description: "true when the head commit came from someone with write access here"
+        value: ${{ jobs.gate.outputs.trusted }}
+      approved:
+        description: "trusted, AND (require_label empty OR that label is on the PR)"
+        value: ${{ jobs.gate.outputs.approved }}
+      head_sha:
+        description: "the exact SHA callers must check out"
+        value: ${{ jobs.gate.outputs.head_sha }}
+
+permissions: {}
+
+jobs:
+  gate:
+    # `ubuntu-latest` and the absence of any `actions/checkout` are both
+    # load-bearing. This job decides whether untrusted code may touch the
+    # self-hosted pool, so it runs on an ephemeral GitHub-hosted VM with no PR
+    # content on disk: there is no build, no lockfile, no config file and no
+    # test source from the PR that could influence the decision. Never add a
+    # checkout here, and never move it to pawtograder-ci.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      trusted: ${{ steps.trust.outputs.trusted }}
+      approved: ${{ steps.approve.outputs.approved }}
+      head_sha: ${{ steps.trust.outputs.head_sha }}
+    steps:
+      - id: trust
+        name: Resolve trust
+        env:
+          # Event fields go through env: rather than being interpolated into
+          # the script. These are GitHub-controlled today, but a login is
+          # attacker-chosen in the general case and the habit is what keeps a
+          # future field from becoming a shell injection.
+          GH_TOKEN: ${{ secrets.trust_token || secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          SENDER: ${{ github.event.sender.login }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          FALLBACK_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          head_sha="${PR_HEAD_SHA:-$FALLBACK_SHA}"
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+
+          # Resolve one login to write/no-write. Any API failure is a hard
+          # "no" (fail closed) with an actionable warning, rather than a
+          # silent pass.
+          has_write() {
+            local user="$1" role
+            if ! role=$(gh api "repos/${REPO}/collaborators/${user}/permission" --jq '.role_name' 2>/dev/null); then
+              echo "::warning title=Trust check failed::Could not resolve repo permission for '${user}'. Treating this PR as untrusted. If the built-in GITHUB_TOKEN is not accepted by this endpoint, set a CI_TRUST_TOKEN secret (Metadata: read) and pass it as trust_token."
+              return 1
+            fi
+            echo "  ${user}: ${role}"
+            case "$role" in
+              write | maintain | admin) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          if [[ "$EVENT_NAME" != "pull_request_target" ]]; then
+            # push to a protected branch, or a maintainer's manual dispatch:
+            # both run from a ref that already required write access.
+            trusted=true
+            reason="event '${EVENT_NAME}' runs from a ref in ${REPO}"
+          elif [[ "$IS_FORK" != "true" ]]; then
+            trusted=true
+            reason="head branch lives in ${REPO}, so pushing it already required write access"
+          else
+            # Check the fork owner and the event sender. Usually the same
+            # person; dedupe so the common case is one API call.
+            principals=("$HEAD_OWNER")
+            [[ "$SENDER" != "$HEAD_OWNER" && -n "${SENDER:-}" ]] && principals+=("$SENDER")
+            echo "fork PR — checking write access for: ${principals[*]}"
+            trusted=true
+            reason="fork owner and sender both have write on ${REPO}"
+            for u in "${principals[@]}"; do
+              if ! has_write "$u"; then
+                trusted=false
+                reason="'${u}' does not have write access to ${REPO}"
+                break
+              fi
+            done
+          fi
+
+          echo "trusted=${trusted}" >> "$GITHUB_OUTPUT"
+          echo "reason=${reason}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$trusted" == "true" ]]; then
+            echo "::notice title=Trusted::${reason}"
+          else
+            echo "::notice title=Untrusted ref::${reason}. Self-hosted lanes (lint, unit tests, E2E, preview) are skipped. To grant access, add the contributor to the pawtograder-contributors team; it takes effect on their next push."
+          fi
+
+      - id: approve
+        name: Apply label requirement
+        env:
+          GH_TOKEN: ${{ secrets.trust_token || secrets.GITHUB_TOKEN }}
+          TRUSTED: ${{ steps.trust.outputs.trusted }}
+          REQUIRE_LABEL: ${{ inputs.require_label }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$TRUSTED" != "true" ]]; then
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "${REQUIRE_LABEL}" || -z "${PR_NUMBER:-}" ]]; then
+            # No label requirement, or not a PR event (push / dispatch).
+            echo "approved=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Read labels from the API, not from the event payload: on a re-run
+          # the payload is a snapshot from when the event fired, so a label
+          # added afterwards would not be seen.
+          if ! labels=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null); then
+            echo "::warning title=Label check failed::Could not list labels on PR #${PR_NUMBER}; treating the preview as not requested."
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if grep -Fxq -- "$REQUIRE_LABEL" <<<"$labels"; then
+            echo "approved=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Preview requested::label '${REQUIRE_LABEL}' is present"
+          else
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=No preview::Add the '${REQUIRE_LABEL}' label to this PR to deploy a preview environment."
+          fi

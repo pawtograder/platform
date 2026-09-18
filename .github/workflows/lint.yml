@@ -5,17 +5,53 @@ on:
   push:
     branches:
       - "**"
-  pull_request:
+  # pull_request_target, NOT pull_request. These jobs run on `pawtograder-ci`
+  # — the in-cluster ARC pool, whose runner pods carry the in-cluster registry
+  # credential in ~/.docker/config.json — and they execute PR-supplied code:
+  # `npm ci` runs lockfile lifecycle scripts, and jest/deno test sources and
+  # config files are all attacker-controlled on a fork PR.
+  #
+  # Under `pull_request` the workflow file itself comes from the PR head, so a
+  # fork could delete the gate below in the same commit that abuses it. Under
+  # `pull_request_target` the file always comes from the base branch.
+  #
+  # Consequence to remember: edits to THIS file in a PR do not take effect
+  # until merged. Use workflow_dispatch on a branch to try changes.
+  pull_request_target:
     branches:
       - "**"
+  workflow_dispatch:
+
+concurrency:
+  group: lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Decides whether this ref may run on the self-hosted pool at all. See
+  # _trust-gate.yml for what "trusted" means and why it is not
+  # author_association or bare org membership.
+  gate:
+    # Granted explicitly: a reusable workflow can only intersect with the
+    # caller's token, and this workflow's top-level grant is `contents: read`.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: ./.github/workflows/_trust-gate.yml
+
   lint:
+    needs: gate
+    if: needs.gate.outputs.trusted == 'true'
     runs-on: pawtograder-ci
     strategy:
       matrix:
         node-version: [22.x]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Explicit: under pull_request_target the default checkout is the
+          # BASE branch, which would lint the wrong code and pass silently.
+          ref: ${{ needs.gate.outputs.head_sha }}
       - name: Cache npm dependencies
         uses: actions/cache@v4
         with:
@@ -27,8 +63,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+      # `npm ci` rather than `npm install`: install must not silently drift off
+      # package-lock.json, which is what bit jest below. This is a
+      # reproducibility fix and NOT a security boundary — `npm ci` still runs
+      # lifecycle scripts from the PR's lockfile. The gate above is the only
+      # thing standing between fork code and this runner.
       - name: Install dependencies
-        run: npm install
+        run: npm ci
       - name: Run linting check
         run: npm run lint
 
@@ -48,12 +89,16 @@ jobs:
   # under tests/unit gate themselves on that flag and self-skip without it, so
   # they stay in deploy.yml where a database actually exists.
   jest-unit-tests:
+    needs: gate
+    if: needs.gate.outputs.trusted == 'true'
     runs-on: pawtograder-ci
     strategy:
       matrix:
         node-version: [22.x]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
       - name: Cache npm dependencies
         uses: actions/cache@v4
         with:
@@ -96,9 +141,13 @@ jobs:
   # non-recoverable secrets, seeding, resetOnDrift, floating image tags,
   # unauthenticated Studio). See charts/pawtograder/PRODUCTION-READINESS.md §4.
   chart-guardrails:
+    needs: gate
+    if: needs.gate.outputs.trusted == 'true'
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.20.2
@@ -120,9 +169,13 @@ jobs:
   # gradebook-calculations e2e fixtures exercise end-to-end through the async pipeline).
   # These run the real edge-function expression functions directly — no DB, no pipeline.
   deno-unit-tests:
+    needs: gate
+    if: needs.gate.outputs.trusted == 'true'
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

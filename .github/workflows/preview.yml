@@ -2,11 +2,22 @@ name: Deploy preview
 
 # Per-PR ephemeral previews of the full pawtograder stack on ripley.
 #
-# Trigger model:
-#   pull_request: opened/sync/reopened    → build + deploy preview, comment URL
-#   pull_request: closed                  → tear down preview
-#   workflow_dispatch (action=deploy)     → same as opened, with manual preview_id
+# Trigger model (all PR events are pull_request_target — see below):
+#   PR labelled `preview`                 → build + deploy preview, comment URL
+#   PR sync/reopen WHILE labelled         → rebuild the preview
+#   PR label `preview` removed            → tear down preview
+#   PR closed                             → tear down preview
+#   workflow_dispatch (action=deploy)     → same as labelled, with manual preview_id
 #   workflow_dispatch (action=destroy)    → manual teardown
+#
+# Previews are opt-in by label, not automatic. Two reasons: a full-stack
+# namespace per open PR is real pressure on ripley once the contributor pool is
+# class-sized, and the deploy path is the one lane that holds cluster
+# credentials, so it should not be the default path for every push.
+#
+# Trust vs. intent are separate gates and both must pass:
+#   trust  — does the pusher hold write access here (see _trust-gate.yml)
+#   intent — is the `preview` label on the PR
 #
 # Cluster access: provided via KUBECONFIG_BASE64 repo secret (base64 of a
 # kubeconfig that can helm install + create namespaces in
@@ -18,13 +29,25 @@ name: Deploy preview
 # package-cleanup workflow if image bloat becomes a problem).
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
-  # pull_request is the canonical trigger: it auto-destroys the preview on
-  # close and comments back on the PR, so it owns the namespace lifecycle.
+  # pull_request_target, NOT pull_request, and this is what makes fork previews
+  # possible at all. Under `pull_request` a fork PR gets no secrets and a
+  # read-only token, so the `secrets` job below died on an empty
+  # KUBECONFIG_BASE64 and the comment step could not even say why — every fork
+  # PR showed a red "Deploy preview" check its author could not fix.
+  # `pull_request_target` runs in base context, so the secrets exist, the
+  # workflow file (and therefore the gate) comes from the base branch, and a
+  # fork cannot edit its way past it.
+  #
+  # The flip side: PR-supplied code is built and deployed by jobs that hold
+  # cluster credentials. That is only acceptable behind the gate, which is why
+  # every job below is conditioned on `needs.gate.outputs.approved`.
+  #
+  # `labeled`/`unlabeled` own the namespace lifecycle alongside `closed`.
+  pull_request_target:
+    types: [opened, synchronize, reopened, closed, labeled, unlabeled]
   # For a one-off branch deploy without a PR, use workflow_dispatch with
-  # action=deploy (don't add a push trigger — it would race pull_request's
-  # synchronize event and deploy two near-identical previews from one SHA).
+  # action=deploy (don't add a push trigger — it would race the synchronize
+  # event and deploy two near-identical previews from one SHA).
   workflow_dispatch:
     inputs:
       preview_id:
@@ -46,6 +69,9 @@ env:
   REGISTRY: ghcr.io
   REPO_OWNER: ${{ github.repository_owner }}
   PREVIEW_DOMAIN: preview.pawtograder.net
+  # The label that opts a PR into a preview. Must match the `require_label`
+  # passed to the gate above.
+  PREVIEW_LABEL: preview
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
@@ -54,9 +80,33 @@ concurrency:
 
 jobs:
   # --------------------------------------------------------------------------
+  # gate — may this ref reach the cluster, and was a preview actually asked
+  # for? Shared with lint.yml and deploy.yml; see _trust-gate.yml.
+  # --------------------------------------------------------------------------
+  gate:
+    # Granted explicitly: a reusable workflow can only intersect with the
+    # caller's token, never elevate, and this workflow's top-level grant
+    # includes writes the gate must not inherit.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: ./.github/workflows/_trust-gate.yml
+    with:
+      # Literal rather than an env var: the `env` context is not available in
+      # a reusable-workflow `with:` block. Keep in sync with PREVIEW_LABEL
+      # below, which the meta job uses for the same label.
+      require_label: preview
+
+  # --------------------------------------------------------------------------
   # meta — derive preview id, hostnames, image tag, namespace, etc.
   # --------------------------------------------------------------------------
   meta:
+    needs: gate
+    # Nothing here reads or writes anything: no checkout, no API calls. This
+    # job runs for every fork PR event, so it must not inherit the
+    # workflow-level pull-requests:write / packages:write.
+    permissions: {}
     runs-on: ubuntu-latest
     outputs:
       preview_id: ${{ steps.v.outputs.preview_id }}
@@ -76,21 +126,51 @@ jobs:
         env:
           GH_EVENT_NAME: ${{ github.event_name }}
           GH_PR_NUMBER: ${{ github.event.pull_request.number }}
-          GH_PR_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_PR_SHA: ${{ needs.gate.outputs.head_sha }}
           GH_PR_ACTION: ${{ github.event.action }}
+          # Which label was added/removed on a labeled/unlabeled event.
+          GH_LABEL_NAME: ${{ github.event.label.name }}
           GH_REF_NAME: ${{ github.ref_name }}
           INPUT_PREVIEW_ID: ${{ inputs.preview_id }}
           INPUT_ACTION: ${{ inputs.action }}
         run: |
           set -euo pipefail
-          if [[ "$GH_EVENT_NAME" == "pull_request" ]]; then
+          if [[ "$GH_EVENT_NAME" == "pull_request_target" ]]; then
             preview_id="$GH_PR_NUMBER"
             sha="$GH_PR_SHA"
-            if [[ "$GH_PR_ACTION" == "closed" ]]; then
-              mode="destroy"
-            else
-              mode="deploy"
-            fi
+            case "$GH_PR_ACTION" in
+              closed)
+                mode="destroy"
+                ;;
+              labeled)
+                # Only the preview label starts a deploy. Without this, adding
+                # any unrelated label to a PR that already carries `preview`
+                # would kick off a full rebuild.
+                if [[ "$GH_LABEL_NAME" == "$PREVIEW_LABEL" ]]; then
+                  mode="deploy"
+                else
+                  mode="noop"
+                fi
+                ;;
+              unlabeled)
+                # Removing the label is the explicit "tear this down" signal,
+                # so a reviewer can reclaim the namespace without closing the
+                # PR. Any other label being removed is not our business.
+                if [[ "$GH_LABEL_NAME" == "$PREVIEW_LABEL" ]]; then
+                  mode="destroy"
+                else
+                  mode="noop"
+                fi
+                ;;
+              *)
+                # opened / synchronize / reopened: deploy, but only if the
+                # label is already on the PR. The gate reports that as
+                # `approved`, which every deploy-path job below also checks;
+                # mode stays "deploy" here so an unlabelled PR simply has no
+                # jobs to run rather than showing a skipped destroy.
+                mode="deploy"
+                ;;
+            esac
           elif [[ "$GH_EVENT_NAME" == "push" ]]; then
             # Push trigger: use branch name as the preview id. URL becomes
             # pr-<branch>.preview.pawtograder.net. No PR comment is posted.
@@ -141,15 +221,15 @@ jobs:
   # anon key persist across PR-sync pushes.
   # --------------------------------------------------------------------------
   secrets:
-    needs: meta
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     # Cluster apiserver isn't reachable from gh-hosted runners (private LB);
     # use the in-cluster runner pool. Same goes for the deploy job below.
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.gate.outputs.head_sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -294,13 +374,13 @@ jobs:
   # are PR-content-dependent only, no per-preview args.
   # --------------------------------------------------------------------------
   build-web:
-    needs: [meta, secrets]
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate, secrets]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.gate.outputs.head_sha }}
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
@@ -339,7 +419,7 @@ jobs:
             NEXT_PUBLIC_PAWTOGRADER_WEB_URL=https://${{ needs.meta.outputs.hostname }}
             NEXT_PUBLIC_SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
             NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ env.ANON_KEY }}
-            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
+            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ needs.gate.outputs.head_sha }}
             NEXT_PUBLIC_ENABLE_SIGNUPS=true
             SENTRY_RELEASE=${{ needs.meta.outputs.tag }}
             SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
@@ -364,13 +444,13 @@ jobs:
             type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest,mode=max
 
   build-edge-functions:
-    needs: meta
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.gate.outputs.head_sha }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -392,13 +472,13 @@ jobs:
             type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest,mode=max
 
   build-migrations:
-    needs: meta
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.gate.outputs.head_sha }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -425,13 +505,13 @@ jobs:
   # Stays out of the per-pod runtime path (~600 MiB vs migrations ~50 MiB).
   # --------------------------------------------------------------------------
   build-seeder:
-    needs: meta
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.gate.outputs.head_sha }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -469,11 +549,20 @@ jobs:
       # server rejecting anything, so the fix is on this side.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    needs: [meta, secrets, build-web, build-edge-functions, build-migrations, build-seeder]
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate, secrets, build-web, build-edge-functions, build-migrations, build-seeder]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Explicit head SHA. This checkout supplies the HELM CHART, and under
+          # `pull_request` it used to resolve to the merge commit, so a PR's
+          # chart changes were part of the preview. A bare checkout under
+          # pull_request_target is the base branch, which would keep deploying
+          # green while never exercising the chart under review. Deploying a
+          # PR-supplied chart with cluster credentials is only sane behind the
+          # gate — which is exactly what `approved` below asserts.
+          ref: ${{ needs.gate.outputs.head_sha }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
@@ -671,7 +760,7 @@ jobs:
           kubectl -n "$NS" get pods,svc,ingress 2>&1 | head -50
 
       - name: Comment URL on PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: preview
@@ -712,7 +801,15 @@ jobs:
       # server rejecting anything, so the fix is on this side.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    needs: meta
+    needs: [meta, gate]
+    # Deliberately NOT gated on trust, unlike every deploy-path job above.
+    # This job does no checkout and runs no PR-supplied code — just pinned
+    # setup actions and helm/kubectl/bao against a namespace whose name comes
+    # only from the PR number — so the kubeconfig here is never reachable by
+    # fork code. Requiring trust would instead strand a namespace and its PVCs
+    # whenever someone's write access is revoked between deploying a preview
+    # and closing the PR: teardown would silently skip and nothing would ever
+    # retry it. Cleanup must not be revocable.
     if: needs.meta.outputs.mode == 'destroy'
     runs-on: pawtograder-ci
     steps:
@@ -779,7 +876,7 @@ jobs:
             || echo "no e2e bundle to remove for pr-${PREVIEW_ID}"
 
       - name: Update PR comment
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: preview

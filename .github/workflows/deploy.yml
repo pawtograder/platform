@@ -27,70 +27,44 @@ jobs:
   # (see the .env.local step below) and ARGOS_TOKEN is all that remains, so the
   # main exposure is now the runner itself — an untrusted PR gets arbitrary code
   # execution in a pod on the cluster, with only a container boundary between it
-  # and everything else. That is a low-probability, high-cost failure, and it is
-  # not worth carrying for drive-by PRs.
+  # and everything else.
   #
-  # This is also why the trigger stays `pull_request_target` even though the
-  # job no longer wants secrets: under `pull_request`, GitHub runs the workflow
-  # file from the PR head, so a fork could simply delete this gate. Under
-  # `pull_request_target` the workflow — and therefore this check — always comes
-  # from the base branch.
+  # The decision itself now lives in _trust-gate.yml, shared with lint.yml and
+  # preview.yml. It used to live here, inline, and be binary on
+  # `head.repo.fork`: every fork PR was refused, and the documented way to run
+  # the suite was for a maintainer to push the branch into this repo. That does
+  # not survive contact with a class-sized contributor pool — it asks a
+  # maintainer to adopt every student's branch, and it is the reason we kept
+  # drifting toward giving students push access instead of forks.
   #
-  # Trust is decided on where the head branch lives, and nothing else. A branch
-  # in this repo can only have been pushed by someone who already has write
-  # access, so whoever supplied the latest commit is someone we already trust.
+  # The gate now asks the sharper question: does whoever supplied this head
+  # commit hold write access to this repo right now? Fork PRs from the
+  # pawtograder-contributors team run; everyone else is refused. See
+  # _trust-gate.yml for why that is neither author_association nor bare org
+  # membership.
   #
-  # Deliberately NOT author_association: that field describes the PR's author
-  # and their standing in *this* repo, not whoever pushed the head commit that
-  # is about to be checked out. Anyone with push access to the head branch can
-  # update a PR and fire `synchronize`, and for a fork that set is controlled by
-  # the fork's owner -- a personal fork's collaborators, or, for an org-owned
-  # fork, every member with write there. Trusting a fork PR because its author
-  # is a MEMBER would let any of them land code on this runner under that
-  # member's standing. Current head-repo permission is not answerable from the
-  # event payload either, and the API call it would need is not something a
-  # fork-triggered token can be relied on to make.
-  #
-  # An untrusted PR gets no E2E run. To run one, a maintainer reviews the diff
-  # and pushes the branch into this repo, which makes it a same-repo PR; that is
-  # the same manual path canvas-e2e.yml documents. Everyone whose fork PR this
-  # used to wave through -- owners, org members, collaborators -- already has
-  # write access here, so that is a branch push rather than a favour to ask.
-  check-trust:
-    runs-on: ubuntu-latest
-    outputs:
-      trusted: ${{ steps.check.outputs.trusted }}
-    steps:
-      - id: check
-        # Read the event through env rather than interpolating into the script:
-        # these are GitHub-controlled enums today, but the habit is what keeps a
-        # future field from becoming an injection.
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-        run: |
-          set -euo pipefail
-          if [[ "${EVENT_NAME}" != "pull_request_target" ]]; then
-            # push to main/staging, or a maintainer's manual dispatch
-            trusted=true
-          elif [[ "${IS_FORK}" != "true" ]]; then
-            # a branch in this repo: pushing it already required write access
-            trusted=true
-          else
-            trusted=false
-          fi
-          echo "trusted=${trusted}" >> "$GITHUB_OUTPUT"
-          if [[ "${trusted}" != "true" ]]; then
-            echo "::notice title=E2E skipped::This PR's head branch lives in a fork, so it does not run on the self-hosted E2E pool. A maintainer can run the suite by pushing the branch into this repo after reviewing the diff."
-          fi
+  # The trigger stays `pull_request_target` even though this job wants no
+  # secrets: under `pull_request` GitHub runs the workflow file from the PR
+  # head, so a fork could simply delete the gate.
+  gate:
+    # Granted explicitly because this workflow's top-level `permissions: {}`
+    # would otherwise hand the reusable workflow a zero-permission token: a
+    # called workflow can only intersect with the caller's grant, never
+    # elevate. The gate fails closed on an API error, so an empty token would
+    # quietly mark every PR untrusted and disable E2E altogether.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: ./.github/workflows/_trust-gate.yml
 
   # Local-Supabase E2E. Spins up a clean dev environment on the runner and runs
   # the Playwright suite against it. The Coolify branch-preview job that used to
   # run alongside this one is gone — it'll come back once the deployment target
   # moves into the same k8s cluster as this runner.
   e2e-local:
-    needs: check-trust
-    if: needs.check-trust.outputs.trusted == 'true'
+    needs: gate
+    if: needs.gate.outputs.trusted == 'true'
     runs-on: pawtograder-e2e
     timeout-minutes: 75
     permissions:
@@ -116,7 +90,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # From the gate, not recomputed: one place decides which SHA
+          # was vetted and which SHA runs, so they cannot diverge.
+          ref: ${{ needs.gate.outputs.head_sha }}
 
       - name: Cache npm dependencies
         uses: actions/cache@v4
@@ -499,7 +475,7 @@ jobs:
           # ever restating the default.
           #
           # ARGOS_TOKEN is the one secret this job still takes. Visual
-          # regression is worth keeping, and check-trust above means only a
+          # regression is worth keeping, and the gate above means only a
           # trusted ref ever reaches this step, so the token is not exposed to
           # fork-supplied code the way the GitHub App key was. It is also the
           # mildest thing in the old set: scoped to one visual-testing project,
