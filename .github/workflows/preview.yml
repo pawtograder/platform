@@ -76,6 +76,13 @@ env:
   # The label that opts a PR into a preview. Must match the `require_label`
   # passed to the gate above.
   PREVIEW_LABEL: preview
+  # Stable namespace that the OIDC path's ephemeral provisioning/teardown
+  # ServiceAccounts are created in. Those two roles need CLUSTER-scoped verbs
+  # (create/delete namespace), which RBAC cannot restrict by name prefix, so
+  # the SA cannot live in the per-PR namespace it is about to create. The
+  # name-prefix restriction is enforced by a ValidatingAdmissionPolicy instead
+  # — see docs/operations/preview-oidc-cluster-credentials.md.
+  PREVIEW_CI_NAMESPACE: pawtograder-preview-ci
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
@@ -245,6 +252,10 @@ jobs:
     runs-on: pawtograder-ci
     permissions:
       contents: read
+      # Mints the OIDC token exchanged at OpenBao for a short-lived cluster
+      # credential. Not a secret and not a repo write: it only lets the job ask
+      # GitHub to sign a claim set about itself.
+      id-token: write
     # Scopes the cluster + MinIO credentials to jobs that declare this
     # environment, instead of leaving them readable by every job in every
     # workflow in the repo. Moving the secret VALUES from repo level to the
@@ -272,20 +283,30 @@ jobs:
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
-      - name: Write kubeconfig + ensure namespace
+      - name: Cluster credentials
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-provision
+          k8s_role: preview-provision
+          namespace: ${{ env.PREVIEW_CI_NAMESPACE }}
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
+      - name: Ensure namespace
         env:
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
           set -euo pipefail
-          if [ -z "${KUBECONFIG_B64:-}" ]; then
-            echo "::error::KUBECONFIG_BASE64 is required"
-            exit 1
-          fi
-          mkdir -p "$HOME/.kube"
-          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
           kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          # The label is load-bearing under OIDC, not decoration: the OpenBao
+          # Kubernetes role scopes credential issuance with
+          # allowed_kubernetes_namespace_selector on exactly this label.
+          # `allowed_kubernetes_namespaces` does not accept a
+          # `pawtograder-preview-*` glob, so the label is how per-PR namespaces
+          # are matched without granting `*`.
+          kubectl label namespace "$NS" pawtograder.net/preview=true --overwrite
       - name: Ensure secrets in namespace
         env:
           NS: ${{ needs.meta.outputs.namespace }}
@@ -398,6 +419,7 @@ jobs:
     runs-on: pawtograder-ci
     permissions:
       contents: read
+      id-token: write
     environment: preview
     steps:
       - uses: actions/checkout@v5
@@ -408,23 +430,17 @@ jobs:
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
-      - name: Write kubeconfig (read-only)
-        env:
-          # Falls back to the full kubeconfig so this keeps working before the
-          # scoped credential exists. See
-          # docs/operations/preview-readonly-kubeconfig.md for the RBAC and the
-          # minting steps; once KUBECONFIG_PREVIEW_RO_BASE64 is set, this job
-          # can only read Secrets in pawtograder-preview-* namespaces.
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
-        run: |
-          set -euo pipefail
-          if [ -z "${KUBECONFIG_B64:-}" ]; then
-            echo "::error::no kubeconfig available (KUBECONFIG_PREVIEW_RO_BASE64 or KUBECONFIG_BASE64)"
-            exit 1
-          fi
-          mkdir -p "$HOME/.kube"
-          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
+      - name: Cluster credentials
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-read
+          k8s_role: preview-read
+          namespace: ${{ needs.meta.outputs.namespace }}
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
       - name: Publish e2e bundle to OpenBao
         env:
           PREVIEW_ID: ${{ needs.meta.outputs.preview_id }}
@@ -462,6 +478,8 @@ jobs:
       # Needed only to push the per-PR image to GHCR. Note this job builds
       # PR-supplied code, so anything granted here is granted to that code.
       packages: write
+      # Mints the OIDC token for the read-only cluster credential.
+      id-token: write
     # Declared so KUBECONFIG_PREVIEW_RO_BASE64 still resolves once the
     # cluster credentials move from repo-level to the environment. Without
     # this, migrating the secret would silently fall back to... nothing, and
@@ -474,28 +492,22 @@ jobs:
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
+      - name: Cluster credentials
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-read
+          k8s_role: preview-read
+          namespace: ${{ needs.meta.outputs.namespace }}
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
       - name: Read anon key from cluster
         env:
-          # Read-only, namespace-scoped credential where available. This job
-          # runs the single largest amount of untrusted code in the workflow —
-          # a full `next build` against a PR-controlled lockfile and config —
-          # and it holds a cluster credential solely to read one value,
-          # pawtograder-jwt:ANON_KEY. Handing it the full kubeconfig for that
-          # was the worst privilege-to-need ratio here.
-          #
-          # The value cannot simply be passed down from the `secrets` job: it
-          # is ::add-mask::ed there, and masked values are stripped from job
-          # outputs (see that job's header). So the credential gets scoped
-          # instead of removed. Falls back to the full kubeconfig until
-          # KUBECONFIG_PREVIEW_RO_BASE64 exists — see
-          # docs/operations/preview-readonly-kubeconfig.md.
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.kube"
-          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
           ANON=$(kubectl -n "$NS" get secret pawtograder-jwt -o jsonpath='{.data.ANON_KEY}' | base64 -d)
           [ -n "$ANON" ] || { echo "::error::ANON_KEY missing in $NS/pawtograder-jwt"; exit 1; }
           echo "::add-mask::$ANON"
@@ -677,6 +689,7 @@ jobs:
       # the thing being deployed. Everything else it used to carry has been
       # moved out: the PR comment is now its own `comment` job below.
       contents: read
+      id-token: write
     environment: preview
     steps:
       - uses: actions/checkout@v5
@@ -696,19 +709,20 @@ jobs:
         with:
           version: v1.32.0
 
-      - name: Write kubeconfig
-        env:
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
-        run: |
-          set -euo pipefail
-          if [ -z "${KUBECONFIG_B64:-}" ]; then
-            echo "::error::KUBECONFIG_BASE64 secret is missing — set it under repo settings → Secrets and variables → Actions"
-            exit 1
-          fi
-          mkdir -p "$HOME/.kube"
-          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
-          kubectl version --client=true --output=yaml | head -20
+      - name: Cluster credentials
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-deploy
+          k8s_role: preview-deploy
+          namespace: ${{ needs.meta.outputs.namespace }}
+          ttl: 50m
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
+      - name: Show kubectl client version
+        run: kubectl version --client=true --output=yaml | head -20
 
       - name: Recover stuck helm release
         # A preview deploy that gets interrupted mid-`helm upgrade` — most
@@ -969,8 +983,15 @@ jobs:
       # here, for the same reason this job is not trust-gated: if the preview
       # environment ever gains required reviewers, teardown must not be the
       # thing waiting on an approval, or namespaces and PVCs leak.
+      #
+      # Because there is no `environment:`, this job's OIDC token carries NO
+      # `environment` claim — so the OpenBao role it uses (preview-teardown)
+      # must NOT bind that claim, unlike the other three roles. Binding it
+      # would leave teardown unable to authenticate, which is the same leak by
+      # a different route.
       contents: read
       pull-requests: write
+      id-token: write
     steps:
       - uses: azure/setup-helm@v4
         with:
@@ -979,14 +1000,18 @@ jobs:
         with:
           version: v1.32.0
 
-      - name: Write kubeconfig
-        env:
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.kube"
-          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
+      - name: Cluster credentials
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-teardown
+          k8s_role: preview-teardown
+          namespace: ${{ env.PREVIEW_CI_NAMESPACE }}
+          ttl: 20m
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
 
       - name: helm uninstall + delete namespace
         env:

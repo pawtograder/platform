@@ -1,5 +1,13 @@
 # Read-only kubeconfig for preview CI
 
+> **Superseded by
+> [OIDC-federated cluster credentials](./preview-oidc-cluster-credentials.md)**,
+> which removes the static kubeconfig entirely rather than scoping a second
+> one. This remains the right move only if you want the privilege reduction
+> without standing up the OpenBao JWT/Kubernetes engines — the two are
+> alternatives, not steps, and doing OIDC makes
+> `KUBECONFIG_PREVIEW_RO_BASE64` unnecessary.
+
 `.github/workflows/preview.yml` builds and deploys PR-supplied code. Two of its
 jobs need cluster access only to **read** one Secret, and giving them the same
 kubeconfig that the deploy job uses to `helm upgrade` is more privilege than the
