@@ -168,11 +168,23 @@ jobs:
       # blocking unrelated PRs on pre-existing red. Widening it, and refreshing
       # the lockfile's jest deps so `npm install` stops drifting, is the
       # follow-up. Adding a file here is one line; that is the point.
+      #
+      # prom-client-bundle was added later for a different reason: it already
+      # existed and ran nowhere. It shipped in #952 with a header claiming it
+      # "runs on every PR in milliseconds", but this list did not include it
+      # and deploy.yml's `--testPathPatterns "tests/unit/issue"` matches only
+      # tests/unit/issue*, so it was green-by-omission — the same pathology
+      # this job was created to fix. Its slow counterpart
+      # (scripts/check-prom-client-bundle.sh) does run, but only in
+      # deploy.yml after a production build, which is now behind the trust
+      # gate and so does not run at all for an untrusted PR. This is the
+      # cheap guard that catches the regression before the expensive one.
       - name: Run Jest unit tests
         run: |
           npx jest --runInBand \
             tests/unit/async-worker-tuning.test.ts \
-            tests/unit/create-repo-step-timings.test.ts
+            tests/unit/create-repo-step-timings.test.ts \
+            tests/unit/prom-client-bundle.test.ts
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
   # dangerous production values combination (e2e bypasses, plaintext/
