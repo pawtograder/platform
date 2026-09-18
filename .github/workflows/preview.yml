@@ -75,7 +75,20 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
-  group: preview-${{ github.event.pull_request.number || inputs.preview_id || github.ref_name }}
+  # Adding or removing an UNRELATED label now fires this workflow (the trigger
+  # list gained labeled/unlabeled), and with cancel-in-progress a run in the
+  # same group kills the one before it. Such a run resolves to mode=noop and
+  # schedules nothing, so left in the main group it would cancel an in-flight
+  # helm upgrade and leave the release half-applied with no successor to
+  # finish it — the "Recover stuck helm release" step only runs on a
+  # subsequent deploy, which may never come. Give those runs their own group.
+  #
+  # Label events for PREVIEW_LABEL itself deliberately stay in the main group:
+  # labeling is a deploy and unlabeling is a teardown, and both SHOULD
+  # supersede a running deploy. (The literal is repeated here because the
+  # `env` context is not available to `concurrency`; keep it in sync with
+  # PREVIEW_LABEL and the gate's require_label.)
+  group: preview-${{ github.event.pull_request.number || inputs.preview_id || github.ref_name }}${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'preview' && '-labelnoop' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -681,6 +694,14 @@ jobs:
           # is attacker-influenceable and these flow into a shell command.
           DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
           DEPLOY_PR: ${{ github.event.pull_request.number }}
+          # The HEAD sha, not $GITHUB_SHA. Under pull_request_target
+          # $GITHUB_SHA is the base branch tip, and this value reaches the
+          # edge functions as GIT_COMMIT_SHA (see the chart's
+          # _edge-functions-workload.tpl), which Sentry uses as its commit
+          # tag — so stamping $GITHUB_SHA attributes every preview error to
+          # the wrong revision. `github.head_ref` above is already the PR's
+          # branch, so only the commit was wrong.
+          DEPLOY_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           # helm --set splits on commas and interprets dots as key nesting, so a branch name reaches it
@@ -706,7 +727,7 @@ jobs:
             --set-string global.deploy.pr="$DEPLOY_PR" \
             --set-string global.deploy.runId="$GITHUB_RUN_ID" \
             --set-string global.deploy.runAttempt="$GITHUB_RUN_ATTEMPT" \
-            --set-string global.deploy.commit="$GITHUB_SHA" \
+            --set-string global.deploy.commit="$DEPLOY_SHA" \
             --wait --wait-for-jobs --timeout 20m
 
       - name: Status snapshot on failure
