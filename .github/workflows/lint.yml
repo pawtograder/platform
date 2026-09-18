@@ -5,19 +5,66 @@ on:
   push:
     branches:
       - "**"
-  pull_request:
+  # pull_request_target, NOT pull_request. These jobs run on `pawtograder-ci`
+  # — the in-cluster ARC pool, whose runner pods carry the in-cluster registry
+  # credential in ~/.docker/config.json — and they execute PR-supplied code:
+  # `npm ci` runs lockfile lifecycle scripts, and jest/deno test sources and
+  # config files are all attacker-controlled on a fork PR.
+  #
+  # Under `pull_request` the workflow file itself comes from the PR head, so a
+  # fork could delete the gate below in the same commit that abuses it. Under
+  # `pull_request_target` the file always comes from the base branch.
+  #
+  # Consequence to remember: edits to THIS file in a PR do not take effect
+  # until merged. Use workflow_dispatch on a branch to try changes.
+  pull_request_target:
     branches:
       - "**"
+  # No workflow_dispatch: `push: branches: ["**"]` above already runs this lane
+  # on any branch in the repo, so dispatch added nothing except another
+  # privileged trigger reaching the cache steps.
+
+concurrency:
+  group: lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Decides whether this ref may run on the self-hosted pool at all. See
+  # _trust-gate.yml for what "trusted" means and why it is not
+  # author_association or bare org membership.
+  gate:
+    # Granted explicitly: a reusable workflow can only intersect with the
+    # caller's token, and this workflow's top-level grant is `contents: read`.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: ./.github/workflows/_trust-gate.yml
+
   lint:
+    needs: gate
+    if: needs.gate.outputs.trusted == 'true'
     runs-on: pawtograder-ci
     strategy:
       matrix:
         node-version: [22.x]
     steps:
       - uses: actions/checkout@v4
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
+        with:
+          # Explicit: under pull_request_target the default checkout is the
+          # BASE branch, which would lint the wrong code and pass silently.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Restore-only, with a separate conditional save below. Under
+      # pull_request_target the job runs in BASE-BRANCH context, so an
+      # actions/cache WRITE from a fork PR lands in the default branch's cache
+      # scope and would later be restored by trusted builds — CodeQL
+      # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
+      # cache was isolated to the PR scope, so this vector arrives with the
+      # trigger change rather than being pre-existing. Fork PRs still RESTORE
+      # (they get the speed-up); they just cannot write what a trusted run
+      # will read.
+      - name: Restore npm dependencies
+        uses: actions/cache/restore@v4
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
@@ -27,8 +74,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+      # `npm ci` rather than `npm install`: install must not silently drift off
+      # package-lock.json, which is what bit jest below. This is a
+      # reproducibility fix and NOT a security boundary — `npm ci` still runs
+      # lifecycle scripts from the PR's lockfile. The gate above is the only
+      # thing standing between fork code and this runner.
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+      # Only a same-repo ref may WRITE the cache. `github.event.pull_request`
+      # is null on push/dispatch, so `.head.repo.fork != true` holds there and
+      # those refs keep populating the cache.
+      - name: Save npm dependencies
+        if: github.event.pull_request.head.repo.fork != true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
       - name: Run linting check
         run: npm run lint
 
@@ -48,14 +109,27 @@ jobs:
   # under tests/unit gate themselves on that flag and self-skip without it, so
   # they stay in deploy.yml where a database actually exists.
   jest-unit-tests:
+    needs: gate
+    if: needs.gate.outputs.trusted == 'true'
     runs-on: pawtograder-ci
     strategy:
       matrix:
         node-version: [22.x]
     steps:
       - uses: actions/checkout@v4
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Restore-only, with a separate conditional save below. Under
+      # pull_request_target the job runs in BASE-BRANCH context, so an
+      # actions/cache WRITE from a fork PR lands in the default branch's cache
+      # scope and would later be restored by trusted builds — CodeQL
+      # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
+      # cache was isolated to the PR scope, so this vector arrives with the
+      # trigger change rather than being pre-existing. Fork PRs still RESTORE
+      # (they get the speed-up); they just cannot write what a trusted run
+      # will read.
+      - name: Restore npm dependencies
+        uses: actions/cache/restore@v4
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
@@ -77,6 +151,15 @@ jobs:
       # would fix it at the source and is worth doing separately.
       - name: Install dependencies
         run: npm ci
+      # Only a same-repo ref may WRITE the cache. `github.event.pull_request`
+      # is null on push/dispatch, so `.head.repo.fork != true` holds there and
+      # those refs keep populating the cache.
+      - name: Save npm dependencies
+        if: github.event.pull_request.head.repo.fork != true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
       # SCOPED to the suites this PR added, deliberately, rather than all of
       # tests/unit. A repo-wide gate is the right end state but I could not
       # verify it would be green: under the locked jest pair 11 of 101 suites
@@ -85,21 +168,37 @@ jobs:
       # blocking unrelated PRs on pre-existing red. Widening it, and refreshing
       # the lockfile's jest deps so `npm install` stops drifting, is the
       # follow-up. Adding a file here is one line; that is the point.
+      #
+      # prom-client-bundle was added later for a different reason: it already
+      # existed and ran nowhere. It shipped in #952 with a header claiming it
+      # "runs on every PR in milliseconds", but this list did not include it
+      # and deploy.yml's `--testPathPatterns "tests/unit/issue"` matches only
+      # tests/unit/issue*, so it was green-by-omission — the same pathology
+      # this job was created to fix. Its slow counterpart
+      # (scripts/check-prom-client-bundle.sh) does run, but only in
+      # deploy.yml after a production build, which is now behind the trust
+      # gate and so does not run at all for an untrusted PR. This is the
+      # cheap guard that catches the regression before the expensive one.
       - name: Run Jest unit tests
         run: |
           npx jest --runInBand \
             tests/unit/async-worker-tuning.test.ts \
             tests/unit/create-repo-step-timings.test.ts \
-            tests/unit/repo-not-ready-plan.test.ts
+            tests/unit/repo-not-ready-plan.test.ts \
+            tests/unit/prom-client-bundle.test.ts
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
   # dangerous production values combination (e2e bypasses, plaintext/
   # non-recoverable secrets, seeding, resetOnDrift, floating image tags,
   # unauthenticated Studio). See charts/pawtograder/PRODUCTION-READINESS.md §4.
   chart-guardrails:
+    needs: gate
+    if: needs.gate.outputs.trusted == 'true'
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.20.2
@@ -121,9 +220,13 @@ jobs:
   # gradebook-calculations e2e fixtures exercise end-to-end through the async pipeline).
   # These run the real edge-function expression functions directly — no DB, no pipeline.
   deno-unit-tests:
+    needs: gate
+    if: needs.gate.outputs.trusted == 'true'
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

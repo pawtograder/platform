@@ -34,6 +34,14 @@ bootstrap in [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) and the chart docs in
 - [Deployment Channels (A/B by course)](./deployment-channels.md): run a
   different web + edge-functions build for a subset of courses against the shared
   database (staged rollouts, dogfooding), with per-course host routing.
+- [OIDC-federated cluster credentials for preview CI](./preview-oidc-cluster-credentials.md):
+  replacing the static `KUBECONFIG_BASE64` with short-lived ServiceAccount
+  tokens minted per job from a GitHub OIDC token via OpenBao, and the RBAC and
+  admission policy it needs.
+- [Read-only kubeconfig for preview CI](./preview-readonly-kubeconfig.md):
+  scoping the cluster credential held by the preview jobs that build and deploy
+  PR-supplied code down to `get secrets`, and verifying it is actually
+  restricted.
 
 ## Related
 
