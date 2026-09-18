@@ -514,19 +514,23 @@ jobs:
           # "change-it", which is what the seeder writes, so the secret was only
           # ever restating the default.
           #
-          # ARGOS_TOKEN is the one secret this job still takes. Visual
-          # regression is worth keeping, and the gate above means only a
-          # trusted ref ever reaches this step, so the token is not exposed to
-          # fork-supplied code the way the GitHub App key was. It is also the
-          # mildest thing in the old set: scoped to one visual-testing project,
-          # with no reach into GitHub, Redis, or any student repo.
+          # No ARGOS_TOKEN, and no secret of any kind: this job now takes
+          # none at all, which is the property worth protecting. Argos
+          # documents that it "automatically falls back to tokenless
+          # authentication when ARGOS_TOKEN is unset", with no configuration
+          # required — and tokenless is the mechanism built for exactly this
+          # case, a public repo where builds can originate from forks.
           #
-          # It has to be passed explicitly here. Argos can authenticate
-          # tokenlessly on GitHub Actions via OIDC -- which is how
-          # playwright-standalone.yml uploads without a token -- but that needs
-          # `id-token: write`, and this job deliberately holds only
-          # `contents: read`.
-          ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
+          # A previous version of this comment claimed playwright-standalone.yml
+          # already uploaded tokenlessly. It did not; that workflow used Percy,
+          # never Argos, and has been deleted along with its Coolify-era
+          # tooling. The Argos capability is real, the cited precedent was not.
+          #
+          # OIDC is the other option and would need `id-token: write` plus
+          # enabling it in the Argos project settings. Tokenless needs neither,
+          # so it is the cheaper way to get this job to zero secrets. If visual
+          # uploads stop working, restoring `ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}`
+          # here is the one-line revert.
         run: npx playwright test
 
       - name: Tail server logs on failure

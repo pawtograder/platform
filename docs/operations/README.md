@@ -34,6 +34,10 @@ bootstrap in [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) and the chart docs in
 - [Deployment Channels (A/B by course)](./deployment-channels.md): run a
   different web + edge-functions build for a subset of courses against the shared
   database (staged rollouts, dogfooding), with per-course host routing.
+- [Read-only kubeconfig for preview CI](./preview-readonly-kubeconfig.md):
+  scoping the cluster credential held by the preview jobs that build and deploy
+  PR-supplied code down to `get secrets`, and verifying it is actually
+  restricted.
 
 ## Related
 

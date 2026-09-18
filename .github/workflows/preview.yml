@@ -60,10 +60,14 @@ on:
         options: [deploy, destroy]
         default: deploy
 
+# Least privilege at the top; every job that needs more opts in explicitly.
+# This block used to carry `pull-requests: write` and `packages: write`, and
+# every job inherited BOTH — including the four build jobs and the deploy job,
+# all of which execute PR-supplied code. A job doing `next build` on an
+# untrusted lockfile had standing permission to rewrite PR comments as the
+# repo, for no reason at all.
 permissions:
   contents: read
-  pull-requests: write
-  packages: write
 
 env:
   REGISTRY: ghcr.io
@@ -239,10 +243,29 @@ jobs:
     # Cluster apiserver isn't reachable from gh-hosted runners (private LB);
     # use the in-cluster runner pool. Same goes for the deploy job below.
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+    # Scopes the cluster + MinIO credentials to jobs that declare this
+    # environment, instead of leaving them readable by every job in every
+    # workflow in the repo. Moving the secret VALUES from repo level to the
+    # environment is a settings change, not a workflow one — until that
+    # happens this is scaffolding and the repo-level secrets still resolve.
+    environment: preview
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # BASE, deliberately, unlike every other checkout in this file. This
+          # job holds the heaviest credential set in the workflow — full
+          # kubeconfig, MinIO keys — and it needs exactly two tracked infra
+          # scripts from the repo: scripts/GenerateJwtKeys.ts and (formerly)
+          # the OpenBao publisher. Checking out PR HEAD here meant a PR could
+          # rewrite those scripts and have them executed with those
+          # credentials, which is the sharpest edge this workflow had.
+          #
+          # Consequence to know: a PR that changes what secrets the chart
+          # requires needs that change merged before its preview will work.
+          # It fails loudly at helm time rather than silently.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -352,13 +375,57 @@ jobs:
           # pawtograder-edge-functions is created by the top-up loop above
           # (whether or not we hit this first-install path).
 
-      # Mirror the e2e bundle (Supabase keys, END_TO_END_SECRET, derived
-      # URLs) into OpenBao so out-of-cluster runners — the a11y VoiceOver
-      # Mac (a11y-voiceover.yml) — can fetch it without cluster access.
-      # Best-effort by design: Bao downtime or missing config must never
-      # break the preview hot path. Removed again by the destroy job.
-      - name: Publish e2e bundle to OpenBao (best-effort)
-        continue-on-error: true
+  # --------------------------------------------------------------------------
+  # publish-e2e-bundle — mirror the e2e bundle (Supabase keys,
+  # END_TO_END_SECRET, derived URLs) into OpenBao so out-of-cluster runners —
+  # the a11y VoiceOver Mac (a11y-voiceover.yml) — can fetch it without cluster
+  # access. Removed again by the destroy job.
+  #
+  # Its own job rather than a step in `secrets`, so the OpenBao PUBLISHER
+  # credential never sits in the same job as the cluster-admin kubeconfig and
+  # the MinIO keys. scripts/publish-preview-e2e-to-bao.sh only ever does
+  # `kubectl get secret`, so this job takes the read-only kubeconfig instead of
+  # the full one — the least-privileged combination available for the work.
+  #
+  # Best-effort by design: Bao downtime or missing config must never break the
+  # preview hot path, so the job carries continue-on-error and nothing depends
+  # on it.
+  # --------------------------------------------------------------------------
+  publish-e2e-bundle:
+    needs: [meta, gate, secrets]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
+    continue-on-error: true
+    runs-on: pawtograder-ci
+    permissions:
+      contents: read
+    environment: preview
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # BASE: this job runs a repo script with the OpenBao publisher
+          # credential, so the script must not come from the PR.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+      - name: Write kubeconfig (read-only)
+        env:
+          # Falls back to the full kubeconfig so this keeps working before the
+          # scoped credential exists. See
+          # docs/operations/preview-readonly-kubeconfig.md for the RBAC and the
+          # minting steps; once KUBECONFIG_PREVIEW_RO_BASE64 is set, this job
+          # can only read Secrets in pawtograder-preview-* namespaces.
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KUBECONFIG_B64:-}" ]; then
+            echo "::error::no kubeconfig available (KUBECONFIG_PREVIEW_RO_BASE64 or KUBECONFIG_BASE64)"
+            exit 1
+          fi
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+      - name: Publish e2e bundle to OpenBao
         env:
           PREVIEW_ID: ${{ needs.meta.outputs.preview_id }}
           BAO_ADDR: ${{ vars.BAO_ADDR }}
@@ -390,6 +457,16 @@ jobs:
     needs: [meta, gate, secrets]
     if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      # Needed only to push the per-PR image to GHCR. Note this job builds
+      # PR-supplied code, so anything granted here is granted to that code.
+      packages: write
+    # Declared so KUBECONFIG_PREVIEW_RO_BASE64 still resolves once the
+    # cluster credentials move from repo-level to the environment. Without
+    # this, migrating the secret would silently fall back to... nothing, and
+    # the anon-key read would fail.
+    environment: preview
     steps:
       - uses: actions/checkout@v5
         with:
@@ -399,7 +476,20 @@ jobs:
           version: v1.32.0
       - name: Read anon key from cluster
         env:
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+          # Read-only, namespace-scoped credential where available. This job
+          # runs the single largest amount of untrusted code in the workflow —
+          # a full `next build` against a PR-controlled lockfile and config —
+          # and it holds a cluster credential solely to read one value,
+          # pawtograder-jwt:ANON_KEY. Handing it the full kubeconfig for that
+          # was the worst privilege-to-need ratio here.
+          #
+          # The value cannot simply be passed down from the `secrets` job: it
+          # is ::add-mask::ed there, and masked values are stripped from job
+          # outputs (see that job's header). So the credential gets scoped
+          # instead of removed. Falls back to the full kubeconfig until
+          # KUBECONFIG_PREVIEW_RO_BASE64 exists — see
+          # docs/operations/preview-readonly-kubeconfig.md.
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
           set -euo pipefail
@@ -460,6 +550,11 @@ jobs:
     needs: [meta, gate]
     if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      # Needed only to push the per-PR image to GHCR. Note this job builds
+      # PR-supplied code, so anything granted here is granted to that code.
+      packages: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -488,6 +583,11 @@ jobs:
     needs: [meta, gate]
     if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      # Needed only to push the per-PR image to GHCR. Note this job builds
+      # PR-supplied code, so anything granted here is granted to that code.
+      packages: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -521,6 +621,11 @@ jobs:
     needs: [meta, gate]
     if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      # Needed only to push the per-PR image to GHCR. Note this job builds
+      # PR-supplied code, so anything granted here is granted to that code.
+      packages: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -565,6 +670,14 @@ jobs:
     needs: [meta, gate, secrets, build-web, build-edge-functions, build-migrations, build-seeder]
     if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    permissions:
+      # No pull-requests: write. This job checks out the PR's helm chart and
+      # holds the full kubeconfig, so it is the one place where untrusted code
+      # and cluster-admin genuinely have to meet — the chart under review is
+      # the thing being deployed. Everything else it used to carry has been
+      # moved out: the PR comment is now its own `comment` job below.
+      contents: read
+    environment: preview
     steps:
       - uses: actions/checkout@v5
         with:
@@ -780,6 +893,24 @@ jobs:
           fi
           kubectl -n "$NS" get pods,svc,ingress 2>&1 | head -50
 
+  # --------------------------------------------------------------------------
+  # comment — post the preview URL back to the PR.
+  #
+  # Split out of `deploy` so that `pull-requests: write` is held by a job with
+  # no checkout, no cluster credential and no PR-supplied code of any kind. It
+  # reads only `meta` outputs, which are validated strings. Runs on a
+  # gh-hosted runner because it never touches the cluster.
+  #
+  # Inherits deploy's success: `needs: deploy` without always(), so a failed
+  # deploy posts nothing, exactly as the in-job step behaved before.
+  # --------------------------------------------------------------------------
+  comment:
+    needs: [meta, gate, deploy]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
       - name: Comment URL on PR
         if: github.event_name == 'pull_request_target'
         uses: marocchino/sticky-pull-request-comment@v2
@@ -833,6 +964,13 @@ jobs:
     # retry it. Cleanup must not be revocable.
     if: needs.meta.outputs.mode == 'destroy'
     runs-on: pawtograder-ci
+    permissions:
+      # pull-requests: write for the teardown comment. No `environment:`
+      # here, for the same reason this job is not trust-gated: if the preview
+      # environment ever gains required reviewers, teardown must not be the
+      # thing waiting on an approval, or namespaces and PVCs leak.
+      contents: read
+      pull-requests: write
     steps:
       - uses: azure/setup-helm@v4
         with:
