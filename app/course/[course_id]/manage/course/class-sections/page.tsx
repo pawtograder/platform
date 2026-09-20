@@ -44,6 +44,20 @@ interface RenameClassSectionData {
   name: string;
 }
 
+/** Keep in step with the bound enforced by the update_class_section_name RPC. */
+const MAX_SECTION_NAME_LENGTH = 100;
+
+/** Maps TanStack's sort state onto the `aria-sort` values screen readers announce. */
+function ariaSortFor(sorted: false | "asc" | "desc"): "ascending" | "descending" | undefined {
+  if (sorted === "asc") {
+    return "ascending";
+  }
+  if (sorted === "desc") {
+    return "descending";
+  }
+  return undefined;
+}
+
 function RenameClassSectionModal({
   isOpen,
   onClose,
@@ -74,11 +88,21 @@ function RenameClassSectionModal({
       if (!section) {
         return;
       }
+
+      // Opening the dialog and saving without editing is a no-op. Skip the round
+      // trip entirely; the RPC also refuses to write an identical name, so neither
+      // path bumps updated_at or fires a realtime broadcast for nothing.
+      const name = data.name.trim();
+      if (name === section.name) {
+        onClose();
+        return;
+      }
+
       setIsLoading(true);
       try {
         const { error } = await supabase.rpc("update_class_section_name", {
           p_class_section_id: section.id,
-          p_name: data.name.trim()
+          p_name: name
         });
 
         if (error) {
@@ -118,7 +142,17 @@ function RenameClassSectionModal({
                       placeholder="e.g., 3500 - MWF 9:15am-10:20am (Doe)"
                       {...register("name", {
                         required: "Name is required",
-                        validate: (value) => value.trim().length > 0 || "Name is required"
+                        validate: (value) => {
+                          const trimmed = value.trim();
+                          if (trimmed.length === 0) {
+                            return "Name is required";
+                          }
+                          // Mirrors the bound in update_class_section_name, so the
+                          // limit surfaces as a field error instead of an RPC failure.
+                          return trimmed.length <= MAX_SECTION_NAME_LENGTH
+                            ? true
+                            : `Name must be ${MAX_SECTION_NAME_LENGTH} characters or fewer`;
+                        }
                       })}
                     />
                     <Field.HelperText>
@@ -320,22 +354,43 @@ function ClassSectionsTable() {
                 {table.getHeaderGroups().map((headerGroup) => (
                   <Table.Row bg="bg.subtle" key={headerGroup.id}>
                     {headerGroup.headers.map((header) => (
-                      <Table.ColumnHeader key={header.id}>
+                      // scope="col" is load-bearing: Chakra's ColumnHeader emits a bare
+                      // <th>, which Chromium then exposes as a generic `cell` rather than
+                      // a `columnheader`, so the header is not associated with its column
+                      // and the aria-sort below would be ignored.
+                      <Table.ColumnHeader
+                        key={header.id}
+                        scope="col"
+                        aria-sort={ariaSortFor(header.column.getIsSorted())}
+                      >
                         {header.isPlaceholder ? null : (
                           <>
-                            <Text
-                              onClick={header.column.getToggleSortingHandler()}
-                              cursor={header.column.getCanSort() ? "pointer" : "default"}
-                              userSelect="none"
-                            >
-                              {flexRender(header.column.columnDef.header, header.getContext())}
-                              {header.column.getCanSort() &&
-                                ({
+                            {/* A sortable header has to be a real button: the sibling
+                                lab-sections page hangs onClick off a Text, which no
+                                keyboard user can reach (WCAG 2.1.1). Columns that
+                                cannot sort stay plain text rather than becoming a
+                                button that does nothing. */}
+                            {header.column.getCanSort() ? (
+                              <Button
+                                type="button"
+                                variant="plain"
+                                size="sm"
+                                height="auto"
+                                fontWeight="inherit"
+                                userSelect="none"
+                                onClick={header.column.getToggleSortingHandler()}
+                              >
+                                {flexRender(header.column.columnDef.header, header.getContext())}
+                                {{
                                   asc: " 🔼",
                                   desc: " 🔽"
-                                }[header.column.getIsSorted() as string] ??
-                                  " 🔄")}
-                            </Text>
+                                }[header.column.getIsSorted() as string] ?? " 🔄"}
+                              </Button>
+                            ) : (
+                              <Text userSelect="none">
+                                {flexRender(header.column.columnDef.header, header.getContext())}
+                              </Text>
+                            )}
                             {header.id === "name" && (
                               <Input
                                 placeholder="Filter by name..."

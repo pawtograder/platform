@@ -93,6 +93,76 @@ test.describe("Class Sections Page", () => {
     await expect(page.getByRole("row").filter({ hasText: untouchedName })).toBeVisible();
   });
 
+  test("Saving without editing closes the dialog without writing", async ({ page }) => {
+    const before = await supabase
+      .from("class_sections")
+      .select("name, updated_at")
+      .eq("id", classSectionIds[1])
+      .single();
+
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/course/class-sections`);
+
+    const row = page.getByRole("row").filter({ hasText: untouchedName });
+    await row.getByRole("button", { name: `Rename ${untouchedName}` }).click();
+    await expect(page.getByText("Rename Class Section")).toBeVisible();
+    await page.getByRole("button", { name: "Save" }).click();
+
+    await expect(page.getByText("Rename Class Section")).toBeHidden();
+    await expect(page.getByText("Error renaming class section")).toBeHidden();
+
+    // No write means no updated_at bump, so nothing broadcasts for a no-op save.
+    const after = await supabase
+      .from("class_sections")
+      .select("name, updated_at")
+      .eq("id", classSectionIds[1])
+      .single();
+    expect(after.data?.name).toBe(before.data?.name);
+    expect(after.data?.updated_at).toBe(before.data?.updated_at);
+  });
+
+  test("A name longer than the 100-character limit is rejected in the form", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/course/class-sections`);
+
+    const row = page.getByRole("row").filter({ hasText: untouchedName });
+    await row.getByRole("button", { name: `Rename ${untouchedName}` }).click();
+    await page.getByPlaceholder("e.g., 3500 - MWF 9:15am-10:20am (Doe)").fill("x".repeat(101));
+    await page.getByRole("button", { name: "Save" }).click();
+
+    // The form catches it, so the RPC bound is never reached and the dialog stays open.
+    await expect(page.getByText("Name must be 100 characters or fewer")).toBeVisible();
+    await expect(page.getByText("Rename Class Section")).toBeVisible();
+
+    const { data } = await supabase.from("class_sections").select("name").eq("id", classSectionIds[1]).single();
+    expect(data?.name).toBe(untouchedName);
+  });
+
+  test("Sortable column headers are operable from the keyboard (WCAG 2.1.1)", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+    await page.goto(`/course/${course.id}/manage/course/class-sections`);
+
+    // The sort control must be a real button, not a Text with an onClick. Sort on
+    // Name rather than CRN: TanStack sorts string columns ascending-first but
+    // number columns descending-first, and asc-then-desc is the clearer assertion.
+    const sortButton = page.getByRole("button", { name: /^Name/ });
+    await expect(sortButton).toBeVisible();
+
+    // Unsorted to begin with, so the attribute is absent rather than "none".
+    // This also pins scope="col": without it Chromium exposes the <th> as a
+    // generic cell, there is no columnheader to find, and aria-sort is ignored.
+    const header = page.getByRole("columnheader").filter({ hasText: "Name" });
+    await expect(header).not.toHaveAttribute("aria-sort");
+
+    await sortButton.focus();
+    await expect(sortButton).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(header).toHaveAttribute("aria-sort", "ascending");
+
+    await page.keyboard.press("Enter");
+    await expect(header).toHaveAttribute("aria-sort", "descending");
+  });
+
   test("Graders see the sections but cannot rename them", async ({ page }) => {
     await loginAsUser(page, grader!, course);
     await page.goto(`/course/${course.id}/manage/course/class-sections`);

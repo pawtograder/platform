@@ -20,6 +20,7 @@ CREATE OR REPLACE FUNCTION public.update_class_section_name(
 RETURNS boolean AS $$
 DECLARE
     v_class_id bigint;
+    v_name text := trim(p_name);
 BEGIN
     SET LOCAL search_path = pg_catalog, public;
 
@@ -38,16 +39,31 @@ BEGIN
         RAISE EXCEPTION 'Access denied: Instructor role required for this course';
     END IF;
 
-    IF p_name IS NULL OR trim(p_name) = '' THEN
+    IF v_name IS NULL OR v_name = '' THEN
         RAISE EXCEPTION 'Section name is required';
     END IF;
 
-    UPDATE public.class_sections
-    SET name = trim(p_name),
-        updated_at = now()
-    WHERE id = p_class_section_id;
+    -- The name is rendered in dropdowns, enrollment tables and calendar titles,
+    -- none of which have anywhere to put an essay. Bound it at the RPC rather
+    -- than trusting the dialog, in the same spirit as the 2000-char cap on
+    -- ai_help_feedback's p_comment.
+    IF length(v_name) > 100 THEN
+        RAISE EXCEPTION 'Section name must be 100 characters or fewer';
+    END IF;
 
-    RETURN FOUND;
+    -- `IS DISTINCT FROM` keeps a save-without-editing from bumping updated_at and
+    -- firing broadcast_class_sections_realtime for nothing. This is the same
+    -- no-op-write problem 20260224140000 fixed for the hourly SIS sync; do not
+    -- drop the predicate.
+    UPDATE public.class_sections
+    SET name = v_name,
+        updated_at = now()
+    WHERE id = p_class_section_id
+      AND name IS DISTINCT FROM v_name;
+
+    -- True means "the section now carries this name", not "a row was written":
+    -- a no-op rename is a success, and existence was already checked above.
+    RETURN true;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
