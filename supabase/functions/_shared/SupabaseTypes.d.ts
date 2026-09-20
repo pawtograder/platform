@@ -14189,6 +14189,10 @@ export type Database = {
         Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
       };
+      update_class_section_name: {
+        Args: { p_class_section_id: number; p_name: string };
+        Returns: boolean;
+      };
       update_gradebook_column_student_with_recalc: {
         Args: { p_id: number; p_updates: Json };
         Returns: undefined;
