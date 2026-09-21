@@ -38,19 +38,60 @@ export const SUBMISSION_SURVEY_JSON = {
   ]
 };
 
+/**
+ * The question text that must never reach a student who was not assigned the survey.
+ *
+ * `get_survey_responses_for_submission` is SECURITY DEFINER, so it returns `surveys.json` without
+ * `surveys_select_students` ever running. A leak therefore exposes the wording of an unreleased
+ * survey's questions, not merely the fact that a survey exists. This string is deliberately
+ * distinctive so a spec can assert it appears nowhere in the entire RPC payload.
+ */
+export const UNASSIGNED_SURVEY_QUESTION_TEXT = "Which teammate contributed least to the unreleased capstone rewrite?";
+
+/**
+ * The SurveyJS model for the unreleased, individually-assigned survey. Separate from
+ * `SUBMISSION_SURVEY_JSON` so that "this text is absent" means something: the shared model's
+ * wording legitimately appears in every other survey's payload.
+ */
+export const UNASSIGNED_SURVEY_JSON = {
+  pages: [
+    {
+      name: "page1",
+      elements: [{ type: "comment", name: "leastContributor", title: UNASSIGNED_SURVEY_QUESTION_TEXT }]
+    }
+  ]
+};
+
 /** Survey titles are ordered so the RPC's `ORDER BY survey_title` is predictable in assertions. */
 export const SURVEY_TITLES = {
   published: "A Published Team Survey",
   closed: "B Closed Team Survey",
   draft: "C Draft Team Survey",
-  future: "D Not Yet Open Survey"
+  future: "D Not Yet Open Survey",
+  /** Published with an `available_at` that has already passed: the ordinary student-visible case. */
+  openNow: "E Already Open Survey",
+  /** `assigned_to_all = false`, with a `survey_assignments` row for exactly one group member. */
+  targeted: "F Targeted Survey",
+  /** `assigned_to_all = false`, unreleased, and assigned to nobody. The leak case. */
+  unassignedFuture: "G Unassigned Future Survey",
+  /**
+   * `assigned_to_all = false` and available, with a member who answered it and holds no
+   * `survey_assignments` row: assigned, answered, then unassigned.
+   */
+  revoked: "H Revoked Assignment Survey"
 } as const;
 
 /** Distinctive free-text answers, so a spec can assert one member's text is absent from a DOM. */
 export const SURVEY_ANSWER_TEXT = {
   submitter: "Sam wrote the parser and reviewed two pull requests.",
   teammate: "Tina paired with Sam on the parser tests.",
-  softDeleted: "Dana retracted this answer before the deadline."
+  softDeleted: "Dana retracted this answer before the deadline.",
+  /**
+   * Real work by a student whose assignment was later revoked. Suppressing this behind a
+   * "Not assigned" card is the failure the `response != null` check in `memberStatus` guards:
+   * a grader would record no participation while the answer sits in the table.
+   */
+  revoked: "Tina answered this before the survey was reassigned away from her."
 } as const;
 
 export type SurveySubmissionFixture = {
@@ -84,8 +125,32 @@ export type SurveySubmissionFixture = {
   publishedSurveyId: string;
   closedSurveyId: string;
   draftSurveyId: string;
-  /** Published, but `available_at` is in the future. The RPC returns it anyway. */
+  /** Published, `assigned_to_all`, but `available_at` is in the future. Staff-only visibility. */
   futureSurveyId: string;
+  /** Published, `assigned_to_all`, `available_at` already passed. The ordinary student case. */
+  openNowSurveyId: string;
+  /**
+   * `assigned_to_all = false`, available now, with a `survey_assignments` row for
+   * `targetedStudent` only. Every other group member is on the roster but unassigned.
+   */
+  targetedSurveyId: string;
+  /**
+   * `assigned_to_all = false`, `available_at` in the future, and assigned to nobody at all.
+   * No student may see this survey or its question text; staff must still see the roster.
+   */
+  unassignedFutureSurveyId: string;
+  /**
+   * `assigned_to_all = false`, available now, assigned to nobody — but `revokedStudent` has a
+   * submitted response on it. The row that has to come back as answered despite `is_assigned`
+   * being false.
+   */
+  revokedSurveyId: string;
+  /** The one group member with a `survey_assignments` row on `targetedSurveyId`. */
+  targetedStudent: TestingUser;
+  /** A group member with no `survey_assignments` row on `targetedSurveyId`. */
+  untargetedStudent: TestingUser;
+  /** Answered `revokedSurveyId` and holds no `survey_assignments` row for it. */
+  revokedStudent: TestingUser;
 };
 
 async function seedSurvey({
@@ -95,7 +160,9 @@ async function seedSurvey({
   title,
   status,
   availableAt,
-  allowResponseEditing = false
+  allowResponseEditing = false,
+  assignedToAll = true,
+  json = SUBMISSION_SURVEY_JSON
 }: {
   course: Course;
   instructor: TestingUser;
@@ -105,6 +172,9 @@ async function seedSurvey({
   status: "draft" | "published" | "closed";
   availableAt?: string | null;
   allowResponseEditing?: boolean;
+  /** False means the survey reaches only the profiles named in `survey_assignments`. */
+  assignedToAll?: boolean;
+  json?: TablesInsert<"surveys">["json"];
 }): Promise<string> {
   const { data, error } = await supabase
     .from("surveys")
@@ -112,9 +182,9 @@ async function seedSurvey({
       class_id: course.id,
       created_by: instructor.public_profile_id,
       assignment_id: assignmentId,
-      assigned_to_all: true,
+      assigned_to_all: assignedToAll,
       allow_response_editing: allowResponseEditing,
-      json: SUBMISSION_SURVEY_JSON,
+      json,
       version: 1,
       status,
       title,
@@ -293,6 +363,64 @@ export async function seedSurveySubmissionFixture(): Promise<SurveySubmissionFix
     status: "published",
     availableAt: addDays(new Date(), 30).toISOString()
   });
+  const openNowSurveyId = await seedSurvey({
+    course,
+    instructor,
+    assignmentId: assignment.id,
+    title: SURVEY_TITLES.openNow,
+    status: "published",
+    availableAt: addDays(new Date(), -1).toISOString()
+  });
+  const targetedSurveyId = await seedSurvey({
+    course,
+    instructor,
+    assignmentId: assignment.id,
+    title: SURVEY_TITLES.targeted,
+    status: "published",
+    // Null rather than a past timestamp: `surveys_select_students` spells the availability gate
+    // `available_at IS NULL OR available_at <= now()`, and `openNow` already covers the other half.
+    availableAt: null,
+    assignedToAll: false
+  });
+  const unassignedFutureSurveyId = await seedSurvey({
+    course,
+    instructor,
+    assignmentId: assignment.id,
+    title: SURVEY_TITLES.unassignedFuture,
+    status: "published",
+    availableAt: addDays(new Date(), 30).toISOString(),
+    assignedToAll: false,
+    json: UNASSIGNED_SURVEY_JSON
+  });
+  // Assigned, answered, then unassigned. `create_survey_assignments` deletes every row for the
+  // survey before re-inserting the new list, so a member dropped from the assignee list loses
+  // their `survey_assignments` row while their `survey_responses` row survives untouched — the
+  // shape seeded here is what that leaves behind, not a contrived one.
+  const revokedSurveyId = await seedSurvey({
+    course,
+    instructor,
+    assignmentId: assignment.id,
+    title: SURVEY_TITLES.revoked,
+    status: "published",
+    assignedToAll: false
+  });
+
+  // The assignment row is written under the PUBLIC profile id on purpose. `create_survey_assignments`
+  // inserts whatever ids its caller hands it, and `surveys_select_students` joins `user_privileges`
+  // on `private_profile_id OR public_profile_id`, so both shapes exist in real data. A visibility
+  // check that joins only on the private id passes every private-id fixture and silently hides this
+  // student's own survey from them. `createUsersInClass` already returns both ids; otherwise they
+  // are on `user_roles` for the (user_id, class_id) pair.
+  const targetedStudent = submitter;
+  // Tina rather than Nina: the browser spec asserts an unassigned chip does NOT read "not started",
+  // and "Nina Notstarted" would sit inside that assertion's own haystack.
+  const untargetedStudent = teammate;
+  const { error: surveyAssignmentError } = await supabase.from("survey_assignments").insert({
+    survey_id: targetedSurveyId,
+    profile_id: targetedStudent.public_profile_id,
+    class_id: course.id
+  });
+  if (surveyAssignmentError) throw new Error(`Failed to seed survey assignment: ${surveyAssignmentError.message}`);
 
   const submittedAt = new Date().toISOString();
   const respondingSurveys = [publishedSurveyId, closedSurveyId, futureSurveyId];
@@ -319,6 +447,17 @@ export async function seedSurveySubmissionFixture(): Promise<SurveySubmissionFix
       submitted_at: submittedAt
     }
   ]);
+
+  // Not in `respondingSurveys`: this row must NOT be soft-deleted below. It is the whole point of
+  // the revoked survey that a real, readable answer outlives the assignment that asked for it.
+  const revokedStudent = teammate;
+  responseRows.push({
+    survey_id: revokedSurveyId,
+    profile_id: revokedStudent.private_profile_id,
+    response: { teamwork: SURVEY_ANSWER_TEXT.revoked, load: 5 },
+    is_submitted: true,
+    submitted_at: submittedAt
+  });
 
   // The solo submitter answers the published survey so the solo case has content to show.
   responseRows.push({
@@ -360,7 +499,14 @@ export async function seedSurveySubmissionFixture(): Promise<SurveySubmissionFix
     publishedSurveyId,
     closedSurveyId,
     draftSurveyId,
-    futureSurveyId
+    futureSurveyId,
+    openNowSurveyId,
+    targetedSurveyId,
+    unassignedFutureSurveyId,
+    revokedSurveyId,
+    targetedStudent,
+    untargetedStudent,
+    revokedStudent
   };
 }
 
@@ -374,6 +520,12 @@ export type SurveyResponseForSubmissionRow = {
   profile_id: string;
   profile_name: string | null;
   is_submitter: boolean;
+  /**
+   * Whether this roster member was actually assigned the survey: `assigned_to_all`, or a
+   * `survey_assignments` row matching their private or public profile id. Non-null, so a UI can
+   * distinguish "was never asked" from "was asked and has not answered" without a second query.
+   */
+  is_assigned: boolean;
   is_submitted: boolean;
   submitted_at: string | null;
   updated_at: string | null;

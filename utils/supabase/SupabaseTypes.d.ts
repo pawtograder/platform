@@ -13367,6 +13367,7 @@ export type Database = {
         Returns: {
           available_at: string;
           due_date: string;
+          is_assigned: boolean;
           is_submitted: boolean;
           is_submitter: boolean;
           profile_id: string;

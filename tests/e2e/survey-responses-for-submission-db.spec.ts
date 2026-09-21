@@ -25,6 +25,7 @@ import {
   seedSurveySubmissionFixture,
   SURVEY_ANSWER_TEXT,
   SURVEY_TITLES,
+  UNASSIGNED_SURVEY_QUESTION_TEXT,
   type SurveyResponseForSubmissionRow,
   type SurveySubmissionFixture
 } from "./surveySubmissionSeeding";
@@ -70,7 +71,7 @@ test.describe("get_survey_responses_for_submission", () => {
 
   test.afterEach(async ({ logMagicLinksOnFailure }) => {
     if (!fx) return;
-    await logMagicLinksOnFailure([fx.instructor, fx.grader, fx.submitter, fx.teammate, fx.soloStudent]);
+    await logMagicLinksOnFailure([fx.instructor, fx.grader, fx.submitter, fx.teammate, fx.notStarted, fx.soloStudent]);
   });
 
   test("every group member comes back, including one who never started the survey", async () => {
@@ -249,13 +250,15 @@ test.describe("get_survey_responses_for_submission", () => {
       expect(rows[0].survey_title).toBe(SURVEY_TITLES.closed);
     });
 
-    test("a survey whose available_at is in the future IS returned", async () => {
-      // Deliberately unfiltered, unlike get_survey_status_for_assignment. The UI needs the row so it
-      // can badge the survey as not yet open. Do not "helpfully" add the available_at filter here:
-      // graders would lose visibility into a survey the moment it is scheduled ahead.
+    test("a survey whose available_at is in the future IS returned to staff", async () => {
+      // Unfiltered for staff, unlike get_survey_status_for_assignment. A grader needs the row so
+      // the UI can badge the survey as not yet open; scheduling a survey ahead must not blank out
+      // the grading view. The student half of this rule is in "student visibility" below, and the
+      // two assertions only make sense as a pair: filtering available_at for everyone breaks this
+      // test, filtering it for nobody breaks that one.
       const rows = onSurvey(await rowsFor(fx.instructor, fx.groupSubmissionId), fx.futureSurveyId);
 
-      expect(rows, "available_at must not be filtered on").toHaveLength(4);
+      expect(rows, "available_at must not be filtered on for staff").toHaveLength(4);
       expect(rows[0].available_at, "available_at is returned so the UI can badge it").not.toBeNull();
       expect(new Date(rows[0].available_at!).getTime()).toBeGreaterThan(Date.now());
     });
@@ -296,6 +299,183 @@ test.describe("get_survey_responses_for_submission", () => {
       const rows = onSurvey(await rowsFor(fx.instructor, fx.groupSubmissionId), fx.publishedSurveyId);
       const pages = (rows[0].survey_json as { pages?: unknown[] } | null)?.pages;
       expect(Array.isArray(pages), "survey_json carries surveys.json through unchanged").toBe(true);
+    });
+  });
+
+  /**
+   * The RPC is SECURITY DEFINER, so `surveys_select_students` never runs inside it. Everything that
+   * policy decides — published-or-closed, `available_at` reached, and assigned either through
+   * `assigned_to_all` or a `survey_assignments` row — has to be restated in the function body for
+   * non-staff callers, or a student reads a survey they were never given.
+   *
+   * These cases are paired on purpose. Each "a student must not see this" has a matching "staff
+   * must still see it", because the cheap way to make a leak test pass is to filter for everyone,
+   * and that silently removes scheduled surveys from the grading view.
+   */
+  test.describe("student visibility matches surveys_select_students", () => {
+    test("an unreleased, unassigned survey leaks neither rows nor question text to a group member", async () => {
+      for (const student of [fx.submitter, fx.teammate, fx.notStarted]) {
+        const all = await rowsFor(student, fx.groupSubmissionId);
+
+        // Positive control first: this student does read the submission, so the emptiness below is
+        // the visibility predicate doing its job and not an authorization failure or a bad id.
+        expect(all.length, `${student.private_profile_name} still reads their own survey rows`).toBeGreaterThan(0);
+
+        expect(
+          onSurvey(all, fx.unassignedFutureSurveyId),
+          `${student.private_profile_name} was never assigned this survey and it is not open yet`
+        ).toHaveLength(0);
+
+        // Row count alone is not enough. `survey_json` travels on every row, so a join that leaks
+        // the wrong survey's model onto a row the student is allowed to see would still pass the
+        // count check while handing over the unreleased questions verbatim.
+        expect(
+          JSON.stringify(all),
+          `the unreleased survey's question text must not appear anywhere in ${student.private_profile_name}'s payload`
+        ).not.toContain(UNASSIGNED_SURVEY_QUESTION_TEXT);
+      }
+    });
+
+    test("staff still see the unreleased, unassigned survey and its whole roster", async () => {
+      const rows = onSurvey(await rowsFor(fx.instructor, fx.groupSubmissionId), fx.unassignedFutureSurveyId);
+
+      expect(rows, "an instructor sees every group member on a survey assigned to none of them").toHaveLength(4);
+      expect(rows[0].survey_title).toBe(SURVEY_TITLES.unassignedFuture);
+      expect(rows[0].available_at, "staff visibility does not depend on available_at").not.toBeNull();
+      expect(new Date(rows[0].available_at!).getTime()).toBeGreaterThan(Date.now());
+      expect(JSON.stringify(rows), "staff do get the survey model: this is the text a student must not get").toContain(
+        UNASSIGNED_SURVEY_QUESTION_TEXT
+      );
+    });
+
+    test("an assigned_to_all survey that is not yet open does not reach a student", async () => {
+      // The same survey the staff-side test above asserts IS returned. `assigned_to_all` is true
+      // here, so this isolates the availability half of the predicate from the assignment half.
+      const all = await rowsFor(fx.submitter, fx.groupSubmissionId);
+      expect(all.length, "the caller reads the submission at all").toBeGreaterThan(0);
+      expect(onSurvey(all, fx.futureSurveyId), "a student cannot see a survey scheduled ahead").toHaveLength(0);
+    });
+
+    test("a published survey whose available_at has passed is returned to the student", async () => {
+      // The ordinary case, and the reason the two tests above cannot be satisfied by refusing
+      // everything: over-filtering shows up here.
+      const rows = onSurvey(await rowsFor(fx.submitter, fx.groupSubmissionId), fx.openNowSurveyId);
+
+      expect(rows, "a student sees their own row on an open, assigned-to-all survey").toHaveLength(1);
+      expect(rows[0].profile_id).toBe(fx.submitter.private_profile_id);
+      expect(rows[0].survey_title).toBe(SURVEY_TITLES.openNow);
+      expect(new Date(rows[0].available_at!).getTime()).toBeLessThan(Date.now());
+      expect(rows[0].is_assigned).toBe(true);
+    });
+
+    test("a student named in survey_assignments by public profile id still sees their survey", async () => {
+      // The fixture writes that row under the PUBLIC profile id, which is what the assignment UI
+      // can hand `create_survey_assignments`. The RPC's roster is keyed by private profile id, so a
+      // visibility join written only against the private id hides this student's own survey from
+      // them — a failure no private-id fixture would ever reproduce.
+      const rows = onSurvey(await rowsFor(fx.targetedStudent, fx.groupSubmissionId), fx.targetedSurveyId);
+
+      expect(rows, "the assigned student gets exactly their own row").toHaveLength(1);
+      expect(rows[0].profile_id).toBe(fx.targetedStudent.private_profile_id);
+      expect(rows[0].survey_title).toBe(SURVEY_TITLES.targeted);
+      expect(rows[0].is_assigned, "a survey_assignments match on either profile id counts").toBe(true);
+    });
+
+    test("a group member with no survey_assignments row does not see the targeted survey", async () => {
+      const all = await rowsFor(fx.untargetedStudent, fx.groupSubmissionId);
+
+      expect(all.length, "this member still reads the surveys they were assigned").toBeGreaterThan(0);
+      expect(
+        onSurvey(all, fx.targetedSurveyId),
+        "being a teammate of an assigned student does not assign you the survey"
+      ).toHaveLength(0);
+    });
+  });
+
+  test.describe("is_assigned", () => {
+    test("is true for every member of an assigned_to_all survey", async () => {
+      const rows = onSurvey(await rowsFor(fx.instructor, fx.groupSubmissionId), fx.publishedSurveyId);
+
+      expect(rows).toHaveLength(4);
+      expect(
+        rows.map((r) => r.is_assigned),
+        "assigned_to_all assigns the survey to everyone without any survey_assignments rows"
+      ).toEqual([true, true, true, true]);
+    });
+
+    test("distinguishes an unassigned member from one who simply has not started", async () => {
+      // The reason this column exists. Without it the UI reads `response == null` and labels an
+      // unassigned member "Not started", which blames a student for missing work never asked of
+      // them. Both members here have a null response; only one of them was assigned.
+      const rows = onSurvey(await rowsFor(fx.instructor, fx.groupSubmissionId), fx.targetedSurveyId);
+
+      expect(rows, "the roster is the group, not the assignment list").toHaveLength(4);
+
+      const assigned = rows.find((r) => r.profile_id === fx.targetedStudent.private_profile_id);
+      expect(assigned, "the assigned member is on the roster").toBeDefined();
+      expect(assigned!.is_assigned).toBe(true);
+      expect(assigned!.response, "assigned, and has not answered: the genuine 'not started'").toBeNull();
+
+      const unassigned = rows.find((r) => r.profile_id === fx.untargetedStudent.private_profile_id);
+      expect(
+        unassigned,
+        "an unassigned member must not vanish from a grader's roster: the grader needs to see why"
+      ).toBeDefined();
+      expect(unassigned!.is_assigned).toBe(false);
+      expect(unassigned!.response).toBeNull();
+
+      expect(
+        rows.filter((r) => r.is_assigned).map((r) => r.profile_id),
+        "exactly the one profile named in survey_assignments is assigned"
+      ).toEqual([fx.targetedStudent.private_profile_id]);
+    });
+
+    test("is a non-null boolean on every row", async () => {
+      // A null here is worse than a wrong value: the UI branches on it, and `null` would fall
+      // through to whatever the "not assigned" branch is for a member who was in fact assigned.
+      const rows = await rowsFor(fx.instructor, fx.groupSubmissionId);
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(typeof row.is_assigned, `is_assigned on ${row.survey_title}/${row.profile_name}`).toBe("boolean");
+      }
+    });
+
+    test("does not suppress the answer of a member who was unassigned after responding", async () => {
+      // `is_assigned` is about who was asked, not about what exists. `create_survey_assignments`
+      // clears and rewrites the whole assignee list, so dropping one name leaves that student's
+      // `survey_responses` row intact and their `survey_assignments` row gone. The RPC must keep
+      // returning the answer: it is real work, and a grader reading "not assigned" instead would
+      // record no participation for a student whose response is sitting in the table.
+      const rows = onSurvey(await rowsFor(fx.instructor, fx.groupSubmissionId), fx.revokedSurveyId);
+
+      expect(rows, "the whole roster comes back, assigned or not").toHaveLength(4);
+
+      const answered = rows.find((r) => r.profile_id === fx.revokedStudent.private_profile_id);
+      expect(answered, "the member who answered is on the roster").toBeDefined();
+      expect(answered!.is_assigned, "their assignment row was removed").toBe(false);
+      expect(answered!.response, "their answer was not removed with it").not.toBeNull();
+      expect(answered!.response).toMatchObject({ teamwork: SURVEY_ANSWER_TEXT.revoked });
+      expect(answered!.is_submitted).toBe(true);
+      expect(answered!.submitted_at).not.toBeNull();
+
+      // The contrast that makes `is_assigned: false` alone useless as a render signal: on this
+      // same survey another member is equally unassigned and has nothing to show. Only `response`
+      // separates them, which is why it is checked first.
+      const silent = rows.find((r) => r.profile_id === fx.notStarted.private_profile_id);
+      expect(silent!.is_assigned).toBe(false);
+      expect(silent!.response).toBeNull();
+    });
+
+    test("an unassigned member cannot read back their own answer through the student path", async () => {
+      // A consequence of restating `surveys_select_students`, pinned here so it is a decision
+      // rather than a surprise: once the assignment is revoked the survey fails the student
+      // predicate, so its author can no longer reach their own response through this RPC. The
+      // same student's answer is still fully visible to staff (asserted above), and the survey
+      // page applies the identical rule through RLS, so this is consistent rather than novel.
+      const all = await rowsFor(fx.revokedStudent, fx.groupSubmissionId);
+
+      expect(all.length, "the student still reads the surveys they are assigned").toBeGreaterThan(0);
+      expect(onSurvey(all, fx.revokedSurveyId), "an unassigned survey is withheld from the student").toHaveLength(0);
     });
   });
 });

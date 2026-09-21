@@ -10,6 +10,18 @@
 -- Roster members who have not started the survey still come back (LEFT JOIN, with
 -- deleted_at in the JOIN condition rather than the WHERE), with is_submitted = false
 -- and a null response -- that is the "who hasn't filled this out yet" signal.
+--
+-- This function is SECURITY DEFINER, so it does not get the surveys RLS policies for
+-- free: which surveys a non-staff caller may see has to be restated here. It mirrors
+-- surveys_select_students (as amended in 20260222000000_survey_assignment_grading.sql):
+-- not-yet-open surveys, and surveys assigned to someone else, are withheld from students.
+-- Staff keep unrestricted visibility -- a grader has to be able to see a survey that is
+-- scheduled ahead, and one that was assigned to only part of the group.
+
+-- A no-op on a database that has never had this function. It is here for the ones that ran
+-- an earlier build of this same (unmerged) migration: is_assigned is a new OUT column, which
+-- is a change to the composite return type, and CREATE OR REPLACE refuses that outright.
+DROP FUNCTION IF EXISTS public.get_survey_responses_for_submission(bigint);
 
 CREATE OR REPLACE FUNCTION public.get_survey_responses_for_submission(
   p_submission_id bigint
@@ -24,6 +36,7 @@ RETURNS TABLE(
   profile_id uuid,
   profile_name text,
   is_submitter boolean,
+  is_assigned boolean,
   is_submitted boolean,
   submitted_at timestamptz,
   updated_at timestamptz,
@@ -51,7 +64,7 @@ AS $$
     FROM submissions sub_row
     WHERE sub_row.id = p_submission_id
   ),
-  roster AS (
+  roster_members AS (
     -- Group submission: every member of the submitting group.
     SELECT agm.profile_id
     FROM sub
@@ -64,6 +77,30 @@ AS $$
     FROM sub
     WHERE sub.assignment_group_id IS NULL
       AND sub.profile_id IS NOT NULL
+  ),
+  roster AS (
+    -- Resolve each roster member's OTHER profile identity once, here, rather than per
+    -- (survey x member) below. survey_assignments.profile_id is not reliably a private
+    -- profile id: create_survey_assignments inserts unnest(p_profile_ids) verbatim, so
+    -- whichever identity the caller happened to pass is what landed in the row.
+    -- surveys_select_students copes by matching either side
+    -- (up.private_profile_id = sa.profile_id OR up.public_profile_id = sa.profile_id);
+    -- the roster ids here are private profile ids, so matching only those would
+    -- under-report assignment and -- now that assignment gates student visibility --
+    -- would hide a survey from a student who was genuinely assigned it.
+    --
+    -- user_roles rather than user_privileges: user_roles.private_profile_id carries a
+    -- UNIQUE constraint (user_roles_private_profile_id_key), so this is a single-row
+    -- lookup on a unique index and the class is implied by the id. user_privileges has
+    -- only a non-unique index there; the policy reaches for it because it keys off
+    -- auth.uid(), which this function -- which has to answer for OTHER people's roster
+    -- rows, not just the caller's -- cannot do. LEFT JOIN so a roster member with no
+    -- role row still gets their row, matched on the private id alone.
+    SELECT
+      rm.profile_id,
+      ur.public_profile_id
+    FROM roster_members rm
+    LEFT JOIN user_roles ur ON ur.private_profile_id = rm.profile_id
   )
   SELECT
     sv.id AS survey_id,
@@ -75,6 +112,7 @@ AS $$
     r.profile_id,
     p.name AS profile_name,
     (r.profile_id IS NOT DISTINCT FROM sub.profile_id) AS is_submitter,
+    vis.is_assigned,
     COALESCE(sr.is_submitted, false) AS is_submitted,
     sr.submitted_at,
     sr.updated_at,
@@ -95,6 +133,25 @@ AS $$
     ON sr.survey_id = sv.id
    AND sr.profile_id = r.profile_id
    AND sr.deleted_at IS NULL
+  -- LATERAL, so "is this roster member assigned this survey?" is written exactly once and
+  -- serves both the returned column and the student visibility filter below. Repeating the
+  -- EXISTS in the WHERE and in the select list would let the two drift, and a drift here is
+  -- a disclosure bug: the row would be filtered by one rule and labelled by another. A
+  -- LATERAL rather than a wrapping subselect keeps the rest of the query -- the join order,
+  -- the short-circuited WHERE, the ORDER BY -- untouched, and unlike an output alias a
+  -- LATERAL column CAN be referenced from the WHERE of this same query level.
+  -- assigned_to_all is NOT NULL and EXISTS never yields NULL, so is_assigned is non-null.
+  CROSS JOIN LATERAL (
+    SELECT (
+      sv.assigned_to_all
+      OR EXISTS (
+        SELECT 1
+        FROM survey_assignments sa
+        WHERE sa.survey_id = sv.id
+          AND (sa.profile_id = r.profile_id OR sa.profile_id = r.public_profile_id)
+      )
+    ) AS is_assigned
+  ) vis
   -- Same authorization rule as get_survey_status_for_assignment: a caller who is neither
   -- staff in the class nor the owner of the profile gets zero rows, not an error. The two
   -- class-level checks come from the CTE above so they are evaluated once rather than once
@@ -103,8 +160,20 @@ AS $$
   -- for this panel -- skip the per-row profile check entirely.
   WHERE sub.in_class
     AND (sub.is_staff OR authorizeforprofile(r.profile_id))
-  -- available_at is deliberately NOT filtered on -- it is returned so the UI can badge
-  -- a survey that is not open yet.
+    -- Which surveys, as opposed to which roster rows. Staff see every linked survey,
+    -- including one scheduled ahead (the UI badges it as not yet open) and one assigned to
+    -- only part of the group. A non-staff caller -- who by the predicate above is looking
+    -- only at their own row -- gets the surveys_select_students predicates restated, since
+    -- SECURITY DEFINER skipped that policy: not open yet, or assigned to someone else, means
+    -- the row is withheld entirely, survey_json -- the question text -- with it. is_staff
+    -- comes first here too, so staff never pay for the assignment lookup.
+    AND (
+      sub.is_staff
+      OR (
+        (sv.available_at IS NULL OR sv.available_at <= now())
+        AND vis.is_assigned
+      )
+    )
   ORDER BY
     sv.title,
     (r.profile_id IS NOT DISTINCT FROM sub.profile_id) DESC,
@@ -116,7 +185,24 @@ COMMENT ON FUNCTION public.get_survey_responses_for_submission(bigint) IS
 (survey, roster member). The roster is derived from the submission: every member of the
 submitting group, or the solo submitter. Roster members with no response are returned with
 is_submitted = false and a null response. Graders and instructors see the whole roster;
-a student sees only their own profile. available_at is returned but not filtered on.
+a student sees only their own profile.
+
+Which surveys are visible depends on the caller, because SECURITY DEFINER bypasses the
+surveys RLS policies. Staff see every published or closed survey linked to the assignment,
+including one whose available_at is in the future (returned unfiltered so the UI can badge
+it as not yet open) and one assigned to only part of the group. A non-staff caller gets the
+same predicates surveys_select_students applies: available_at IS NULL OR available_at <=
+now(), and the survey is assigned to them (assigned_to_all, or a survey_assignments row).
+A survey failing either is withheld whole, survey_json -- the question text -- included.
+
+is_assigned reports whether that roster member was asked to fill the survey out:
+assigned_to_all, or a survey_assignments row naming either of their profile identities.
+It is never null. A false here is why a blank row exists, and is the difference between
+"has not started" and "was never asked" -- the UI must not let a grader mark someone down
+for a survey nobody asked them to fill in. Matching both identities is required, not
+defensive: create_survey_assignments stores whatever profile ids the caller passed, so an
+assignment row may hold a public profile id while the roster is private ones, and the RLS
+policy matches either side for the same reason.
 
 is_submitter is true only where submissions.profile_id names an individual owner, which in
 practice means a solo submission. A group submission carries a NULL profile_id -- the ingest
