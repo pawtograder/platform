@@ -45,6 +45,10 @@ metadata:
   name: preview-ci-reader
   namespace: pawtograder-preview-ci
 ---
+# A ClusterRole is a DEFINITION and grants nothing until bound. Binding this
+# cluster-wide is deliberately NOT done here: it would let the preview
+# credential read Secrets in every namespace, production included, and this
+# credential is handed to a job that builds untrusted PR code.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -55,31 +59,23 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get"]
-  # publish-preview-e2e-to-bao.sh probes `kubectl get namespace <ns>` first.
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: preview-secret-reader
-subjects:
-  - kind: ServiceAccount
-    name: preview-ci-reader
-    namespace: pawtograder-preview-ci
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: preview-secret-reader
 ```
 
-A `ClusterRoleBinding` grants Secret `get` in **every** namespace, including
-`pawtograder-prod`. That is broader than intended. If the preview namespaces
-are predictable enough to enumerate, prefer per-namespace `RoleBinding`s created
-alongside the namespace in the `secrets` job, and drop the
-`ClusterRoleBinding`. The trade is a deliberate one — make it explicitly rather
-than defaulting to the cluster-wide binding because it is shorter.
+Bind it **per preview namespace**, as part of that namespace's lifecycle, so
+the credential reaches exactly the previews that currently exist. Add this to
+the `secrets` job right after it creates the namespace:
+
+```bash
+kubectl -n "$NS" create rolebinding preview-secret-reader \
+  --clusterrole=preview-secret-reader \
+  --serviceaccount=pawtograder-preview-ci:preview-ci-reader \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The binding is deleted along with the namespace, so teardown needs no extra
+step. `publish-preview-e2e-to-bao.sh` probes a Secret rather than the
+Namespace precisely so this can stay namespaced: `get namespace` is
+cluster-scoped and would force a cluster-wide grant straight back in.
 
 ## 2. Mint a long-lived token
 
