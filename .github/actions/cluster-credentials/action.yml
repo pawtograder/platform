@@ -92,6 +92,19 @@ runs:
         set -euo pipefail
         mkdir -p "$HOME/.kube"
 
+        # Validate the mode before branching. Previously anything that was not
+        # exactly "oidc" took the static path, so `OIDC`, `odic` or a stray
+        # space silently restored the long-lived kubeconfig while looking like
+        # a successful cutover — the precise failure the explicit-switch design
+        # was meant to prevent.
+        case "${MODE:-}" in
+          "" | static | oidc) ;;
+          *)
+            echo "::error title=Invalid PREVIEW_CLUSTER_AUTH::'${MODE}' is not a valid mode. Use 'oidc', or 'static'/empty for the legacy kubeconfig." >&2
+            exit 1
+            ;;
+        esac
+
         if [ "${MODE:-static}" != "oidc" ]; then
           # ---------------- static path ----------------
           if [ -z "${KUBECONFIG_B64:-}" ]; then

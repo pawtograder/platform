@@ -100,7 +100,13 @@ concurrency:
   # `env` context is not available to `concurrency`; keep it in sync with
   # PREVIEW_LABEL and the gate's require_label.)
   group: preview-${{ github.event.pull_request.number || inputs.preview_id || github.ref_name }}${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'preview' && '-labelnoop' || '' }}
-  cancel-in-progress: true
+  # NOT cancel-in-progress. Concurrency is evaluated before any job runs, so it
+  # cannot know whether the run is trusted: a `synchronize` from someone who
+  # fails the gate would still enter this group and kill a live helm upgrade,
+  # then be rejected and schedule no replacement — leaving the release
+  # half-applied with nothing to finish it. Cancellation therefore happens at
+  # JOB level on `deploy` (below), which only runs after the gate has passed.
+  cancel-in-progress: false
 
 jobs:
   # --------------------------------------------------------------------------
@@ -261,7 +267,12 @@ jobs:
     # workflow in the repo. Moving the secret VALUES from repo level to the
     # environment is a settings change, not a workflow one — until that
     # happens this is scaffolding and the repo-level secrets still resolve.
-    environment: preview
+    # Its own environment, and this is load-bearing rather than cosmetic: the
+    # OpenBao JWT role for this tier binds `environment` to exactly this value.
+    # Sharing one environment across tiers would let any job that can mint an
+    # OIDC token log in as any role, since the role name is chosen by the
+    # caller — the per-job privilege split would be nominal only.
+    environment: preview-provision
     steps:
       - uses: actions/checkout@v5
         with:
@@ -307,6 +318,23 @@ jobs:
           # `pawtograder-preview-*` glob, so the label is how per-PR namespaces
           # are matched without granting `*`.
           kubectl label namespace "$NS" pawtograder.net/preview=true --overwrite
+      # Second credential, deliberately. The first is cluster-scoped and may
+      # only create Namespaces; writing Secrets needs a namespaced Role, and
+      # putting the Secret rule on the ClusterRole instead would have granted
+      # Secret access in EVERY namespace including production — the admission
+      # policy bounds Namespace names, not Secret reach. Minted only now
+      # because the namespace has to exist and carry the label first.
+      - name: Cluster credentials (namespaced secret writer)
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-provision
+          k8s_role: preview-provision-secrets
+          namespace: ${{ needs.meta.outputs.namespace }}
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
       - name: Ensure secrets in namespace
         env:
           NS: ${{ needs.meta.outputs.namespace }}
@@ -420,7 +448,12 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    environment: preview
+    # Its own environment, and this is load-bearing rather than cosmetic: the
+    # OpenBao JWT role for this tier binds `environment` to exactly this value.
+    # Sharing one environment across tiers would let any job that can mint an
+    # OIDC token log in as any role, since the role name is chosen by the
+    # caller — the per-job privilege split would be nominal only.
+    environment: preview-publish
     steps:
       - uses: actions/checkout@v5
         with:
@@ -480,18 +513,23 @@ jobs:
       packages: write
       # Mints the OIDC token for the read-only cluster credential.
       id-token: write
-    # Declared so KUBECONFIG_PREVIEW_RO_BASE64 still resolves once the
-    # cluster credentials move from repo-level to the environment. Without
-    # this, migrating the secret would silently fall back to... nothing, and
-    # the anon-key read would fail.
-    environment: preview
+    # Its own environment, and this is load-bearing rather than cosmetic: the
+    # OpenBao JWT role for this tier binds `environment` to exactly this value.
+    # Sharing one environment across tiers would let any job that can mint an
+    # OIDC token log in as any role, since the role name is chosen by the
+    # caller — the per-job privilege split would be nominal only.
+    environment: preview-build
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: azure/setup-kubectl@v4
-        with:
-          version: v1.32.0
+          # BASE first, and the ordering is security-critical: it puts the
+          # TRUSTED copy of .github/actions/cluster-credentials into the
+          # workspace so the credential step below is reviewed code. The PR
+          # head is checked out afterwards, by which point the credential
+          # already exists outside the workspace in $HOME/.kube. Head-first
+          # would make the local action PR-controlled — a PR could rewrite it
+          # to exfiltrate the kubeconfig or request a different Bao role.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
       - name: Cluster credentials
         uses: ./.github/actions/cluster-credentials
         with:
@@ -503,6 +541,11 @@ jobs:
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
           kubeconfig_base64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
+      - uses: actions/checkout@v5
+        with:
+          # Now the PR head, for the build. checkout cleans the workspace,
+          # so the trusted action above is gone by here — fine, it already ran.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Read anon key from cluster
         env:
           NS: ${{ needs.meta.outputs.namespace }}
@@ -682,6 +725,12 @@ jobs:
     needs: [meta, gate, secrets, build-web, build-edge-functions, build-migrations, build-seeder]
     if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    # Job-level cancellation, deliberately not workflow-level: only runs that
+    # have already passed the trust gate reach this job, so superseding one is
+    # always a decision made by someone with write access.
+    concurrency:
+      group: preview-deploy-${{ needs.meta.outputs.preview_id }}
+      cancel-in-progress: true
     permissions:
       # No pull-requests: write. This job checks out the PR's helm chart and
       # holds the full kubeconfig, so it is the one place where untrusted code
@@ -690,25 +739,23 @@ jobs:
       # moved out: the PR comment is now its own `comment` job below.
       contents: read
       id-token: write
-    environment: preview
+    # Its own environment, and this is load-bearing rather than cosmetic: the
+    # OpenBao JWT role for this tier binds `environment` to exactly this value.
+    # Sharing one environment across tiers would let any job that can mint an
+    # OIDC token log in as any role, since the role name is chosen by the
+    # caller — the per-job privilege split would be nominal only.
+    environment: preview-deploy
     steps:
       - uses: actions/checkout@v5
         with:
-          # Explicit head SHA. This checkout supplies the HELM CHART, and under
-          # `pull_request` it used to resolve to the merge commit, so a PR's
-          # chart changes were part of the preview. A bare checkout under
-          # pull_request_target is the base branch, which would keep deploying
-          # green while never exercising the chart under review. Deploying a
-          # PR-supplied chart with cluster credentials is only sane behind the
-          # gate — which is exactly what `approved` below asserts.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: azure/setup-helm@v4
-        with:
-          version: v3.14.4
-      - uses: azure/setup-kubectl@v4
-        with:
-          version: v1.32.0
-
+          # BASE first, and the ordering is security-critical: it puts the
+          # TRUSTED copy of .github/actions/cluster-credentials into the
+          # workspace so the credential step below is reviewed code. The PR
+          # head is checked out afterwards, by which point the credential
+          # already exists outside the workspace in $HOME/.kube. Head-first
+          # would make the local action PR-controlled — a PR could rewrite it
+          # to exfiltrate the kubeconfig or request a different Bao role.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
       - name: Cluster credentials
         uses: ./.github/actions/cluster-credentials
         with:
@@ -721,6 +768,11 @@ jobs:
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
           kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
+      - uses: actions/checkout@v5
+        with:
+          # The PR head supplies the HELM CHART under review. After the
+          # credential step, for the same reason as build-web.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Show kubectl client version
         run: kubectl version --client=true --output=yaml | head -20
 
@@ -992,7 +1044,23 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write
+    # Teardown gets its own environment for two reasons: the Bao role needs a
+    # distinguishable claim like every other tier, and once cluster secrets
+    # move to environment scope a job with NO environment would resolve them
+    # empty and fail before deleting anything — stranding the namespace and
+    # PVCs, the exact outcome the no-approval rule exists to avoid.
+    #
+    # This environment MUST NOT be given required reviewers. That is the whole
+    # reason it is separate from preview-deploy.
+    environment: preview-teardown
     steps:
+      - uses: actions/checkout@v5
+        with:
+          # Required: this job uses a repository-local action, which must be
+          # present in the workspace. There was no checkout here at all, so
+          # every teardown would have failed to resolve it. Base ref —
+          # teardown must never execute PR-supplied code.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4

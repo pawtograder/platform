@@ -128,6 +128,13 @@ jobs:
           # head repo positively and treat absent metadata as untrusted.
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          # "User" or "Organization". An organization has no collaborator
+          # record on this repo — the permission endpoint returns `none` for
+          # one, verified against the live API — so running the owner check on
+          # an org-owned fork marked EVERY such PR untrusted regardless of who
+          # pushed. Fails closed, so it was a usability bug rather than a hole,
+          # but it silently excluded a legitimate contribution path.
+          HEAD_OWNER_TYPE: ${{ github.event.pull_request.head.repo.owner.type }}
           SENDER: ${{ github.event.sender.login }}
         run: |
           set -euo pipefail
@@ -176,8 +183,31 @@ jobs:
           else
             # Check the fork owner and the event sender. Usually the same
             # person; dedupe so the common case is one API call.
-            principals=("$HEAD_OWNER")
-            [[ "$SENDER" != "$HEAD_OWNER" && -n "${SENDER:-}" ]] && principals+=("$SENDER")
+            # The owner check exists because whoever owns a fork controls who
+            # may push to it. That reasoning only holds for a PERSONAL fork:
+            # for an org-owned one the owner is an org, "write access for an
+            # organization" is not a thing this endpoint can answer, and the
+            # equivalent question (who in that org can push) is not visible to
+            # us at all. So for org-owned forks we check the sender alone.
+            #
+            # The residual risk is the same shape as the one already accepted
+            # for personal forks — another principal with push access to the
+            # fork can land code that runs here — just with a larger set
+            # behind it. Worth knowing when adding org-owned forks.
+            principals=()
+            if [[ "$HEAD_OWNER_TYPE" == "Organization" ]]; then
+              echo "note: head repo is org-owned (${HEAD_OWNER}); checking the sender only"
+            else
+              principals+=("$HEAD_OWNER")
+            fi
+            [[ -n "${SENDER:-}" ]] && [[ ${#principals[@]} -eq 0 || "$SENDER" != "$HEAD_OWNER" ]] && principals+=("$SENDER")
+            if [[ ${#principals[@]} -eq 0 ]]; then
+              trusted=false
+              reason="no identifiable principal on this fork PR"
+              echo "trusted=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Untrusted ref::${reason}"
+              exit 0
+            fi
             echo "fork PR — checking write access for: ${principals[*]}"
             trusted=true
             reason="fork owner and sender both have write on ${REPO}"

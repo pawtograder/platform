@@ -34,6 +34,20 @@ already reach it, so brokering through it needs no control-plane change at all.
 | `KUBECONFIG_PREVIEW_RO_BASE64`                      | never needed — scoping is a Bao role, not a second kubeconfig (supersedes [preview-readonly-kubeconfig.md](./preview-readonly-kubeconfig.md)) |
 | `BAO_PUBLISHER_ROLE_ID` / `BAO_PUBLISHER_SECRET_ID` | delete — AppRole replaced by OIDC                                                                                                             |
 
+### The OpenBao AppRole is not retired by this change
+
+`publish-e2e-bundle` and `destroy` still authenticate to OpenBao with the
+AppRole to write and delete the e2e bundle under `kv/`. The OIDC roles here
+grant only `kubernetes/creds/*`; they cannot write KV. Deleting
+`BAO_PUBLISHER_ROLE_ID` / `BAO_PUBLISHER_SECRET_ID` at cutover would make the
+publish step skip silently (it treats missing config as a warning) and the
+teardown removal quietly no-op, so the out-of-cluster VoiceOver runner would
+stop getting bundles with nothing failing to tell you.
+
+Migrating those two KV operations to the same OIDC login is the obvious
+follow-up — add a `kv` write path to the `preview-publish` policy and replace
+the AppRole login in that step. Until then, keep both secrets.
+
 ## The switch
 
 `.github/actions/cluster-credentials` has two paths, selected by the
@@ -156,7 +170,10 @@ spec:
         operations: ["CREATE", "DELETE"]
         resources: ["namespaces"]
   validations:
-    - expression: "object.metadata.name.startsWith('pawtograder-preview-pr-')"
+    # `object` is null on DELETE — the resource being removed is `oldObject`.
+    # Testing `object` alone errors on every delete, and with failurePolicy:
+    # Fail + Deny that blocks teardown of even valid preview namespaces.
+    - expression: "(has(object) && object != null ? object : oldObject).metadata.name.startsWith('pawtograder-preview-pr-')"
       message: "preview CI may only create or delete pawtograder-preview-pr-* namespaces"
 ---
 apiVersion: admissionregistration.k8s.io/v1
