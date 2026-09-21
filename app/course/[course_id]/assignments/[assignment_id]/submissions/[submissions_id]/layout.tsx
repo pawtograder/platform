@@ -2292,19 +2292,21 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   // core tab, or it would render a second highlighted tab alongside the real one.
   const isNonCoreSubPage = /\/(repo-analytics|checks|deployments|survey)(?:\/|$|\?|#)/.test(pathname);
   const activeSubPage = explicitSubPage ?? (isNonCoreSubPage ? null : defaultSubPage);
+  // Survey is one of those non-core tabs, so it is never `activeSubPage`; read it off the
+  // path the way Checks and Deployments do. The trailing group keeps `/surveys` elsewhere
+  // in the app from matching.
+  const isSurveySubPage = /\/survey(?:\/|$|\?|#)/.test(pathname);
   // No-submission assignments render the grading UI directly below (see isNoSubmissionAssignment
   // further down) regardless of the sub-route, so none of files/results/checks/etc.'s own page
   // components ever mount here to run their own redirect-to-default-tab effect. Canonicalize the
   // URL to /grade ourselves so bookmarks, the back button, and stale links (e.g. "next incomplete
   // review", which always points at /files) all settle on the one URL this assignment type supports.
+  // Survey is exempt: a no-submission assignment can still have a linked survey, and that page
+  // needs to actually render instead of getting bounced back to /grade.
   useEffect(() => {
-    if (!isNoSubmissionAssignment || explicitSubPage === "grade") return;
+    if (!isNoSubmissionAssignment || explicitSubPage === "grade" || isSurveySubPage) return;
     router.replace(linkToSubPage(pathname, "grade", searchParams));
-  }, [isNoSubmissionAssignment, explicitSubPage, pathname, searchParams, router]);
-  // Survey is one of those non-core tabs, so it is never `activeSubPage`; read it off the
-  // path the way Checks and Deployments do. The trailing group keeps `/surveys` elsewhere
-  // in the app from matching.
-  const isSurveySubPage = /\/survey(?:\/|$|\?|#)/.test(pathname);
+  }, [isNoSubmissionAssignment, explicitSubPage, isSurveySubPage, pathname, searchParams, router]);
   // On the Files tab on large screens, present the content + rubric as a resizable, fixed-height
   // IDE shell (panes scroll internally so the editor fills its column). Other tabs / small screens
   // keep the original long-scroll flex layout. `useStableDesktop` (not raw `useBreakpointValue`) so a
@@ -2608,12 +2610,14 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </Button>
         )}
       </Box>
-      {isNoSubmissionAssignment ? (
+      {isNoSubmissionAssignment && !isSurveySubPage ? (
         // No-submission assignments have no files/autograder content worth rendering, and their
         // only tab (Grade) points at a read-only ledger page, not the editable rubric. Show the
         // real grading UI (RubricView) directly, full width, regardless of which sub-route the URL
         // happens to be on (stale "next incomplete review" links etc. still point at /files) --
         // that sub-route's own page component is never mounted here for this assignment type.
+        // Survey is exempt (see the redirect effect above) -- it falls through to the normal
+        // content + rubric layout below so the linked survey actually renders.
         <Box w="100%">
           <RubricView standalone />
         </Box>
