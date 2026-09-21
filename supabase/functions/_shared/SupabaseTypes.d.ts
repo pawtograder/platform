@@ -13362,6 +13362,25 @@ export type Database = {
         Args: { p_assignment_id: number };
         Returns: Json;
       };
+      get_survey_responses_for_submission: {
+        Args: { p_submission_id: number };
+        Returns: {
+          available_at: string;
+          due_date: string;
+          is_assigned: boolean;
+          is_submitted: boolean;
+          is_submitter: boolean;
+          profile_id: string;
+          profile_name: string;
+          response: Json;
+          submitted_at: string;
+          survey_id: string;
+          survey_json: Json;
+          survey_status: Database["public"]["Enums"]["survey_status"];
+          survey_title: string;
+          updated_at: string;
+        }[];
+      };
       get_survey_responses_with_full_context: {
         Args: { p_class_id: number; p_survey_id: string };
         Returns: {
@@ -14188,6 +14207,10 @@ export type Database = {
       update_class_late_tokens_per_student: {
         Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
+      };
+      update_class_section_name: {
+        Args: { p_class_section_id: number; p_name: string };
+        Returns: boolean;
       };
       update_gradebook_column_student_with_recalc: {
         Args: { p_id: number; p_updates: Json };

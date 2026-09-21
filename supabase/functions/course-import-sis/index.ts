@@ -10,6 +10,7 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { buildSectionName } from "./sectionNaming.ts";
 
 type SISSycEnrollmentResult = {
   success: boolean;
@@ -1132,10 +1133,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
 
     // Step 3: Process the data
     const sections: ProcessedSection[] = rosterResults.map(({ crn, data, sectionType }) => {
-      // Extract section name from course code and meeting info
-      const courseParts = data.section_meta.course.split(" ");
-      const courseNumber = courseParts[1] || "Unknown";
-      const sectionName = `${courseNumber} - ${data.section_meta.meeting_times}`;
+      // Extract section name from course code, meeting info and (for class sections) instructors
+      const sectionName = buildSectionName(
+        sectionType,
+        data.section_meta.course,
+        data.section_meta.meeting_times,
+        data.instructors
+      );
 
       // Parse meeting times for lab sections
       let parsedMeetingTimes: ParsedMeetingTime | undefined;
