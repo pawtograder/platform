@@ -56,6 +56,7 @@ import {
   useCourseController,
   useIsDroppedStudent
 } from "@/hooks/useCourseController";
+import { useAssignmentLinkedSurveys } from "@/hooks/useAssignmentLinkedSurveys";
 import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
 import {
   SubmissionProvider,
@@ -90,6 +91,7 @@ import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
   FaCheckCircle,
+  FaClipboardList,
   FaFile,
   FaFileExport,
   FaGithub,
@@ -2285,10 +2287,10 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       : hasGraderOutput
         ? "results"
         : "files";
-  // repo-analytics / checks / deployments aren't returned by
+  // repo-analytics / checks / deployments / survey aren't returned by
   // getSubmissionFilesOrResultsTab; on those pages don't fall back to the default
   // core tab, or it would render a second highlighted tab alongside the real one.
-  const isNonCoreSubPage = /\/(repo-analytics|checks|deployments)(?:\/|$|\?|#)/.test(pathname);
+  const isNonCoreSubPage = /\/(repo-analytics|checks|deployments|survey)(?:\/|$|\?|#)/.test(pathname);
   const activeSubPage = explicitSubPage ?? (isNonCoreSubPage ? null : defaultSubPage);
   // No-submission assignments render the grading UI directly below (see isNoSubmissionAssignment
   // further down) regardless of the sub-route, so none of files/results/checks/etc.'s own page
@@ -2299,6 +2301,10 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     if (!isNoSubmissionAssignment || explicitSubPage === "grade") return;
     router.replace(linkToSubPage(pathname, "grade", searchParams));
   }, [isNoSubmissionAssignment, explicitSubPage, pathname, searchParams, router]);
+  // Survey is one of those non-core tabs, so it is never `activeSubPage`; read it off the
+  // path the way Checks and Deployments do. The trailing group keeps `/surveys` elsewhere
+  // in the app from matching.
+  const isSurveySubPage = /\/survey(?:\/|$|\?|#)/.test(pathname);
   // On the Files tab on large screens, present the content + rubric as a resizable, fixed-height
   // IDE shell (panes scroll internally so the editor fills its column). Other tabs / small screens
   // keep the original long-scroll flex layout. `useStableDesktop` (not raw `useBreakpointValue`) so a
@@ -2316,6 +2322,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   // rather than cluttering every submission. Mirrors how repo-analytics is gated.
   const isPrSubmission =
     submission.pr_number != null || submission.pr_state != null || assignment?.submission_mode === "pr";
+  // Staff and students both get the Survey tab. RLS decides which surveys come back, and
+  // the RPC behind the panel decides whose responses are in it, so there is no role gate
+  // here — only "is there a survey linked to this assignment that you can see".
+  const { surveys: linkedSurveys } = useAssignmentLinkedSurveys(assignment?.id);
+  const hasLinkedSurveys = linkedSurveys.length > 0;
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
     assignmentGroupId: submission.assignment_group_id || undefined
@@ -2575,6 +2586,18 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
               </NextLink>
             </Button>
           </>
+        )}
+        {hasLinkedSurveys && (
+          <Button asChild variant={isSurveySubPage ? "solid" : "ghost"}>
+            <NextLink
+              href={linkToSubPage(pathname, "survey", searchParams)}
+              aria-current={isSurveySubPage ? "page" : undefined}
+              data-testid="submission-survey-tab"
+            >
+              <Icon as={FaClipboardList} />
+              Survey
+            </NextLink>
+          </Button>
         )}
         {isGraderOrInstructor && assignment.enable_repo_analytics && (
           <Button asChild variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>
