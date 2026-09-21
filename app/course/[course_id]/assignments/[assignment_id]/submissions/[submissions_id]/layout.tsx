@@ -2263,7 +2263,7 @@ function RequiredPrOpenIndicator({ prState }: { prState: string | null }) {
   );
 }
 
-function SubmissionsLayout({ children }: { children: React.ReactNode }) {
+function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.ReactNode; isStaffGradeRoute: boolean }) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -2303,10 +2303,14 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   // review", which always points at /files) all settle on the one URL this assignment type supports.
   // Survey is exempt: a no-submission assignment can still have a linked survey, and that page
   // needs to actually render instead of getting bounced back to /grade.
+  // The staff-prefixed route (isStaffGradeRoute) has no "/grade" sub-page at all -- its whole
+  // /course/[course_id]/grade/... prefix already means "you're grading", the way this same
+  // component's activeSubPage/defaultSubPage fallback already renders the right content without
+  // needing a URL change. Redirecting there would 404. Skip the whole effect for that route.
   useEffect(() => {
-    if (!isNoSubmissionAssignment || explicitSubPage === "grade" || isSurveySubPage) return;
+    if (isStaffGradeRoute || !isNoSubmissionAssignment || explicitSubPage === "grade" || isSurveySubPage) return;
     router.replace(linkToSubPage(pathname, "grade", searchParams));
-  }, [isNoSubmissionAssignment, explicitSubPage, isSurveySubPage, pathname, searchParams, router]);
+  }, [isStaffGradeRoute, isNoSubmissionAssignment, explicitSubPage, isSurveySubPage, pathname, searchParams, router]);
   // On the Files tab on large screens, present the content + rubric as a resizable, fixed-height
   // IDE shell (panes scroll internally so the editor fills its column). Other tabs / small screens
   // keep the original long-scroll flex layout. `useStableDesktop` (not raw `useBreakpointValue`) so a
@@ -2663,11 +2667,21 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function SubmissionsLayoutWrapper({ children }: { children: React.ReactNode }) {
+export default function SubmissionsLayoutWrapper({
+  children,
+  isStaffGradeRoute = false
+}: {
+  children: React.ReactNode;
+  /** True when mounted under /course/[course_id]/grade/... (GradeLayoutClient) rather than the
+   *  student-facing /course/[course_id]/assignments/... route. That tree has no "/grade" sub-page
+   *  of its own (the "grade" prefix already means "you're in the grading view") -- see
+   *  isStaffGradeRoute usage below. */
+  isStaffGradeRoute?: boolean;
+}) {
   const { submissions_id } = useParams();
   return (
     <SubmissionProvider submission_id={Number(submissions_id)}>
-      <SubmissionsLayout>{children}</SubmissionsLayout>
+      <SubmissionsLayout isStaffGradeRoute={isStaffGradeRoute}>{children}</SubmissionsLayout>
     </SubmissionProvider>
   );
 }
