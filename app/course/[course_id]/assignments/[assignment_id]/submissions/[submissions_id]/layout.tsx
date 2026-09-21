@@ -2545,7 +2545,14 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
             per tab (WCAG 2.4.3 / 4.1.2). */}
         <Button asChild variant={activeSubPage === "grade" ? "solid" : "ghost"}>
           <NextLink
-            href={linkToSubPage(pathname, "grade", searchParams)}
+            // The staff-prefixed route has no "/grade" sub-page (see isStaffGradeRoute above) --
+            // appending one 404s. That route's Grade tab is already the current page whenever it's
+            // shown active, so link back to exactly where we are instead of a URL that doesn't exist.
+            href={
+              isStaffGradeRoute
+                ? `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`
+                : linkToSubPage(pathname, "grade", searchParams)
+            }
             aria-current={activeSubPage === "grade" ? "page" : undefined}
           >
             <Icon as={FaCheckCircle} />
