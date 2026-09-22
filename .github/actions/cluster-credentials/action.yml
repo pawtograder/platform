@@ -135,7 +135,14 @@ runs:
           curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" bao
           chmod +x "$RUNNER_TEMP/bao"
+          # Both are needed: `export` covers the rest of THIS step, and
+          # $GITHUB_PATH covers later steps in the calling job. Without the
+          # second line the binary is on disk but invisible, so the `secrets`
+          # job's second credential step and the inline bao blocks in
+          # publish-e2e-bundle and destroy each re-download the same 64 MiB
+          # tarball.
           export PATH="$RUNNER_TEMP:$PATH"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
         fi
 
         # Audience is the Bao address, and the JWT role pins bound_audiences to

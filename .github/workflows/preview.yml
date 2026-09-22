@@ -3,11 +3,11 @@ name: Deploy preview
 # Per-PR ephemeral previews of the full pawtograder stack on ripley.
 #
 # Trigger model (all PR events are pull_request_target — see below):
-#   PR labelled `preview`                 → build + deploy preview, comment URL
-#   PR sync/reopen WHILE labelled         → rebuild the preview
+#   PR labeled `preview`                  → build + deploy preview, comment URL
+#   PR sync/reopen WHILE labeled          → rebuild the preview
 #   PR label `preview` removed            → tear down preview
 #   PR closed                             → tear down preview
-#   workflow_dispatch (action=deploy)     → same as labelled, with manual preview_id
+#   workflow_dispatch (action=deploy)     → same as labeled, with manual preview_id
 #   workflow_dispatch (action=destroy)    → manual teardown
 #
 # Previews are opt-in by label, not automatic. Two reasons: a full-stack
@@ -87,25 +87,30 @@ env:
 
 concurrency:
   # Adding or removing an UNRELATED label now fires this workflow (the trigger
-  # list gained labeled/unlabeled), and with cancel-in-progress a run in the
-  # same group kills the one before it. Such a run resolves to mode=noop and
-  # schedules nothing, so left in the main group it would cancel an in-flight
-  # helm upgrade and leave the release half-applied with no successor to
-  # finish it — the "Recover stuck helm release" step only runs on a
-  # subsequent deploy, which may never come. Give those runs their own group.
+  # list gained labeled/unlabeled). Such a run resolves to mode=noop and
+  # schedules nothing, but with cancel-in-progress: false a queued run still
+  # evicts whatever was PENDING in the same group, so left in the main group a
+  # stray label could displace a queued deploy or teardown. Give those runs
+  # their own group.
   #
   # Label events for PREVIEW_LABEL itself deliberately stay in the main group:
-  # labeling is a deploy and unlabeling is a teardown, and both SHOULD
-  # supersede a running deploy. (The literal is repeated here because the
-  # `env` context is not available to `concurrency`; keep it in sync with
-  # PREVIEW_LABEL and the gate's require_label.)
+  # labeling is a deploy and unlabeling is a teardown, and both belong in the
+  # PR's queue. (The literal is repeated here because the `env` context is not
+  # available to `concurrency`; keep it in sync with PREVIEW_LABEL and the
+  # gate's require_label.)
   group: preview-${{ github.event.pull_request.number || inputs.preview_id || github.ref_name }}${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'preview' && '-labelnoop' || '' }}
   # NOT cancel-in-progress. Concurrency is evaluated before any job runs, so it
   # cannot know whether the run is trusted: a `synchronize` from someone who
   # fails the gate would still enter this group and kill a live helm upgrade,
-  # then be rejected and schedule no replacement — leaving the release
-  # half-applied with nothing to finish it. Cancellation therefore happens at
-  # JOB level on `deploy` (below), which only runs after the gate has passed.
+  # then be rejected and schedule no replacement, leaving the release
+  # half-applied with nothing to finish it.
+  #
+  # Known cost, accepted: because this group serializes rather than cancels, a
+  # second run for the same PR waits out the first, so a rapid push sequence
+  # queues four image builds plus `helm --wait --timeout 20m` per push instead
+  # of superseding. The `deploy` job's own `cancel-in-progress` (below) cannot
+  # shorten that: two runs for one PR are never in progress at the same time,
+  # so it can only fire if this setting is ever flipped back to true.
   cancel-in-progress: false
 
 jobs:
@@ -132,7 +137,12 @@ jobs:
   # meta — derive preview id, hostnames, image tag, namespace, etc.
   # --------------------------------------------------------------------------
   meta:
-    needs: gate
+    # Deliberately NOT `needs: gate`. Nothing here reads a gate output, and
+    # every job that consumes `mode` checks `approved` for itself. Depending on
+    # the gate would put `destroy` (which needs meta) downstream of a job that
+    # can fail for infrastructure reasons, and a skipped teardown strands a
+    # namespace and its PVCs with nothing to retry it.
+    #
     # Nothing here reads or writes anything: no checkout, no API calls. This
     # job runs for every fork PR event, so it must not inherit the
     # workflow-level pull-requests:write / packages:write.
@@ -196,7 +206,7 @@ jobs:
                 # opened / synchronize / reopened: deploy, but only if the
                 # label is already on the PR. The gate reports that as
                 # `approved`, which every deploy-path job below also checks;
-                # mode stays "deploy" here so an unlabelled PR simply has no
+                # mode stays "deploy" here so an unlabeled PR simply has no
                 # jobs to run rather than showing a skipped destroy.
                 mode="deploy"
                 ;;
@@ -287,7 +297,19 @@ jobs:
           # Consequence to know: a PR that changes what secrets the chart
           # requires needs that change merged before its preview will work.
           # It fails loudly at helm time rather than silently.
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          #
+          # `github.sha`, NOT `github.event.pull_request.base.sha`. Both are
+          # base-branch commits, but base.sha is the base tip recorded on the
+          # PR object and does not advance when the base branch does: at the
+          # time of writing, 4 of the 5 open PRs against staging carry a
+          # base.sha several commits behind it. Under pull_request_target
+          # `github.sha` is by definition the commit the executing workflow
+          # file itself was read from, so the tree on disk always contains
+          # `.github/actions/cluster-credentials` and the scripts this file
+          # references. With base.sha, every PR opened before those landed
+          # would fail with "Can't find 'action.yml'". Every other BASE
+          # checkout in this file uses `github.sha` for the same reason.
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -459,7 +481,7 @@ jobs:
         with:
           # BASE: this job runs a repo script with the OpenBao publisher
           # credential, so the script must not come from the PR.
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.sha }}
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
@@ -468,8 +490,13 @@ jobs:
         with:
           mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
           bao_addr: ${{ vars.BAO_ADDR }}
-          bao_role: preview-read
-          k8s_role: preview-read
+          # preview-publish, not preview-read: each jwt role binds exactly one
+          # `environment` value, and preview-read is bound to preview-build
+          # (build-web's environment). This job declares preview-publish, so
+          # logging in as preview-read is rejected at auth/jwt/login. Same
+          # grant, separate tier.
+          bao_role: preview-publish
+          k8s_role: preview-publish
           namespace: ${{ needs.meta.outputs.namespace }}
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
@@ -529,7 +556,10 @@ jobs:
           # already exists outside the workspace in $HOME/.kube. Head-first
           # would make the local action PR-controlled — a PR could rewrite it
           # to exfiltrate the kubeconfig or request a different Bao role.
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.sha }}
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
       - name: Cluster credentials
         uses: ./.github/actions/cluster-credentials
         with:
@@ -728,6 +758,12 @@ jobs:
     # Job-level cancellation, deliberately not workflow-level: only runs that
     # have already passed the trust gate reach this job, so superseding one is
     # always a decision made by someone with write access.
+    #
+    # Dormant as written. This group is a strict refinement of the workflow
+    # group above, which already serializes runs for one PR, so two deploy
+    # jobs for the same preview_id are never in progress together and this
+    # rule never fires. Kept because it is the correct rule the moment the
+    # workflow-level `cancel-in-progress` is reconsidered.
     concurrency:
       group: preview-deploy-${{ needs.meta.outputs.preview_id }}
       cancel-in-progress: true
@@ -755,7 +791,13 @@ jobs:
           # already exists outside the workspace in $HOME/.kube. Head-first
           # would make the local action PR-controlled — a PR could rewrite it
           # to exfiltrate the kubeconfig or request a different Bao role.
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.sha }}
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
       - name: Cluster credentials
         uses: ./.github/actions/cluster-credentials
         with:
@@ -1007,40 +1049,30 @@ jobs:
   # --------------------------------------------------------------------------
   destroy:
     env:
-      # Raise the client-side API throttle for every helm call in this job
-      # (upgrade, the recovery uninstall/rollback, smoke test, teardown).
-      #
-      # Helm defaults to burst 100 and QPS 0 — and QPS 0 means client-go's
-      # default of 5 req/s. The initial apply spends the burst, then everything
-      # after it (notably --wait/--wait-for-jobs polling every resource in the
-      # release) crawls at 5 req/s until the operation context expires:
-      #   UPGRADE FAILED: client rate limiter Wait returned an error
-      # That error is the client queueing behind its own limiter, not the API
-      # server rejecting anything, so the fix is on this side.
+      # Same client-side API throttle as the deploy job, for the single
+      # `helm uninstall` below. See that job for why helm's defaults
+      # (burst 100, QPS 0, which client-go reads as 5 req/s) make a release's
+      # worth of API calls crawl.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    needs: [meta, gate]
+    # `meta` only, and that is the whole dependency chain: `meta` does not
+    # need the gate either. Listing `gate` here would not gate anything (this
+    # job reads no gate output) but WOULD skip teardown whenever the gate job
+    # fails for an infrastructure reason, since an `if:` with no status
+    # function still carries an implicit success() over `needs`.
+    needs: [meta]
     # Deliberately NOT gated on trust, unlike every deploy-path job above.
-    # This job does no checkout and runs no PR-supplied code — just pinned
-    # setup actions and helm/kubectl/bao against a namespace whose name comes
-    # only from the PR number — so the kubeconfig here is never reachable by
-    # fork code. Requiring trust would instead strand a namespace and its PVCs
-    # whenever someone's write access is revoked between deploying a preview
-    # and closing the PR: teardown would silently skip and nothing would ever
-    # retry it. Cleanup must not be revocable.
+    # Its checkout is the base ref and it runs no PR-supplied code — just
+    # pinned setup actions and helm/kubectl/bao against a namespace whose name
+    # comes only from the PR number — so the kubeconfig here is never
+    # reachable by fork code. Requiring trust would instead strand a namespace
+    # and its PVCs whenever someone's write access is revoked between
+    # deploying a preview and closing the PR: teardown would silently skip and
+    # nothing would ever retry it. Cleanup must not be revocable.
     if: needs.meta.outputs.mode == 'destroy'
     runs-on: pawtograder-ci
     permissions:
-      # pull-requests: write for the teardown comment. No `environment:`
-      # here, for the same reason this job is not trust-gated: if the preview
-      # environment ever gains required reviewers, teardown must not be the
-      # thing waiting on an approval, or namespaces and PVCs leak.
-      #
-      # Because there is no `environment:`, this job's OIDC token carries NO
-      # `environment` claim — so the OpenBao role it uses (preview-teardown)
-      # must NOT bind that claim, unlike the other three roles. Binding it
-      # would leave teardown unable to authenticate, which is the same leak by
-      # a different route.
+      # pull-requests: write for the teardown comment.
       contents: read
       pull-requests: write
       id-token: write
@@ -1060,7 +1092,7 @@ jobs:
           # present in the workspace. There was no checkout here at all, so
           # every teardown would have failed to resolve it. Base ref —
           # teardown must never execute PR-supplied code.
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.sha }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
@@ -1132,5 +1164,10 @@ jobs:
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: preview
+          # Edit the existing preview comment, never create one. Previews are
+          # opt-in by label now, so most closed PRs never had one, and without
+          # this every close would post a teardown notice for a namespace that
+          # never existed.
+          only_update: true
           message: |
             🧹 **Preview torn down** — namespace `${{ needs.meta.outputs.namespace }}` deleted.

@@ -16,7 +16,8 @@ on:
   # `pull_request_target` the file always comes from the base branch.
   #
   # Consequence to remember: edits to THIS file in a PR do not take effect
-  # until merged. Use workflow_dispatch on a branch to try changes.
+  # until merged. To try changes, push the branch: the `push` trigger above
+  # covers every branch in this repo and runs the edited file.
   pull_request_target:
     branches:
       - "**"
@@ -82,8 +83,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
       # Only a same-repo ref may WRITE the cache. `github.event.pull_request`
-      # is null on push/dispatch, so `.head.repo.fork != true` holds there and
-      # those refs keep populating the cache.
+      # is null on a push event, so `.head.repo.fork != true` holds there and
+      # push refs keep populating the cache. (This workflow has no
+      # workflow_dispatch trigger; see the note on the triggers above.)
       - name: Save npm dependencies
         if: github.event.pull_request.head.repo.fork != true
         uses: actions/cache/save@v4
@@ -152,8 +154,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
       # Only a same-repo ref may WRITE the cache. `github.event.pull_request`
-      # is null on push/dispatch, so `.head.repo.fork != true` holds there and
-      # those refs keep populating the cache.
+      # is null on a push event, so `.head.repo.fork != true` holds there and
+      # push refs keep populating the cache. (This workflow has no
+      # workflow_dispatch trigger; see the note on the triggers above.)
       - name: Save npm dependencies
         if: github.event.pull_request.head.repo.fork != true
         uses: actions/cache/save@v4

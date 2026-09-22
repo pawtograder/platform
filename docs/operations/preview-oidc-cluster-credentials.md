@@ -6,7 +6,7 @@ OpenBao. Nothing long-lived exists to leak or rotate, and authority comes from
 claims OpenBao verifies rather than from a value in repo settings.
 
 ```
-preview.yml job  (permissions: id-token: write, environment: preview)
+preview.yml job  (permissions: id-token: write, environment: preview-deploy)
   │  GitHub signs a claim set: repository, ref, environment, job_workflow_ref
   ▼
 OpenBao  auth/jwt/login  (bound_audiences + bound_claims)
@@ -30,9 +30,22 @@ already reach it, so brokering through it needs no control-plane change at all.
 
 | Secret                                              | After cutover                                                                                                                                 |
 | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `KUBECONFIG_BASE64`                                 | delete                                                                                                                                        |
+| `KUBECONFIG_BASE64`                                 | **keep** — see below                                                                                                                          |
 | `KUBECONFIG_PREVIEW_RO_BASE64`                      | never needed — scoping is a Bao role, not a second kubeconfig (supersedes [preview-readonly-kubeconfig.md](./preview-readonly-kubeconfig.md)) |
-| `BAO_PUBLISHER_ROLE_ID` / `BAO_PUBLISHER_SECRET_ID` | delete — AppRole replaced by OIDC                                                                                                             |
+| `BAO_PUBLISHER_ROLE_ID` / `BAO_PUBLISHER_SECRET_ID` | **keep** — see below                                                                                                                          |
+
+### `KUBECONFIG_BASE64` is not retired by this change
+
+Only `preview.yml` moved to OIDC. `release-images.yml`'s `deploy-staging` job
+still decodes `KUBECONFIG_BASE64` and exits with
+`KUBECONFIG_BASE64 secret is required to deploy staging` when it is empty, and
+its `build-web` job reads the staging anon key the same way. Deleting the
+secret stops every push to `main` and `staging` from deploying. It is also
+still the `static` fallback that `preview.yml` passes at five call sites, which
+is the path in use until `PREVIEW_CLUSTER_AUTH` is flipped.
+
+Migrating `release-images.yml` to the same action is the follow-up. Until then,
+keep the secret.
 
 ### The OpenBao AppRole is not retired by this change
 
@@ -61,16 +74,32 @@ this change exists to remove. Each run logs a notice naming the path taken.
 
 ## Roles
 
-| Job                               | Bao role            | k8s role type | Grants                                               |
-| --------------------------------- | ------------------- | ------------- | ---------------------------------------------------- |
-| `secrets`                         | `preview-provision` | ClusterRole   | get/create/patch Namespace; get/create/update Secret |
-| `build-web`, `publish-e2e-bundle` | `preview-read`      | Role          | **get Secret only**                                  |
-| `deploy`                          | `preview-deploy`    | Role          | broad, but only inside the preview namespace         |
-| `destroy`                         | `preview-teardown`  | ClusterRole   | get/delete Namespace, delete workloads/PVCs          |
+| Job                  | Bao role                    | k8s role type | Grants                                       |
+| -------------------- | --------------------------- | ------------- | -------------------------------------------- |
+| `secrets`            | `preview-provision`         | ClusterRole   | get/create/patch Namespace                   |
+| `secrets`            | `preview-provision-secrets` | Role          | get/create/update/patch Secret               |
+| `build-web`          | `preview-read`              | Role          | **get Secret only**                          |
+| `publish-e2e-bundle` | `preview-publish`           | Role          | **get Secret only**                          |
+| `deploy`             | `preview-deploy`            | Role          | broad, but only inside the preview namespace |
+| `destroy`            | `preview-teardown`          | ClusterRole   | get/delete Namespace, delete workloads/PVCs  |
+
+`secrets` mints two credentials because the Secret rule cannot ride on the
+ClusterRole: a ClusterRole is bound cluster-wide, so it would grant Secret
+access in every namespace including production. The admission policy below
+bounds Namespace names, not Secret reach.
+
+**`preview-teardown` has the problem that split was meant to avoid.** Its
+`generated_role_rules` put namespaced resources (`secrets`, `configmaps`,
+`pods`, `services`, `persistentvolumeclaims`, and all of `apps`/`batch`) on a
+ClusterRole, so the token `destroy` mints on every PR close can read every
+Secret and delete every Deployment in the cluster, production included. Split
+it the same way `preview-provision` was: a ClusterRole holding only
+`namespaces: [get, delete]`, plus a label-selected namespaced Role for the
+workload and PVC deletes, minted as a second credential in the job.
 
 `build-web` runs the most untrusted code in the workflow — a full `next build`
 against a PR-controlled lockfile — and now gets a token that can do exactly one
-thing: read a Secret in one labelled namespace, for 20 minutes.
+thing: read a Secret in one labeled namespace, for 20 minutes.
 
 ### Two things that are load-bearing, not incidental
 
@@ -78,15 +107,21 @@ thing: read a Secret in one labelled namespace, for 20 minutes.
 accept a `pawtograder-preview-*` glob, and `*` would include
 `pawtograder-prod`. So the `secrets` job labels each namespace
 `pawtograder.net/preview=true` on creation and the read/deploy roles select on
-that label. If that labelling step is ever removed, credential issuance stops —
+that label. If that labeling step is ever removed, credential issuance stops —
 which is the correct direction to fail.
 
-**`destroy` binds no `environment` claim.** It deliberately declares no
-`environment:`, so that a future required-reviewer rule can never block
-teardown and leak namespaces and PVCs. GitHub only emits the `environment`
-claim when a job declares one, so `preview-teardown` must not bind it. The
-other three roles do bind `environment=preview`, which is what makes that
-declaration meaningful.
+**Every tier binds a different `environment` claim, teardown included.** The
+role name is chosen by the caller at login, so if two tiers bound the same
+claim, the job holding the weaker one could log in as the stronger. That is
+what makes the split real, and it is why `publish-e2e-bundle` has its own
+`preview-publish` role rather than reusing `preview-read`: `preview-read` is
+bound to `preview-build`, so a job declaring `environment: preview-publish` is
+rejected by it at `auth/jwt/login`.
+
+`destroy` is the one tier with an extra constraint: its environment
+(`preview-teardown`) **must never be given required reviewers**. Teardown
+blocked on an approval is a leaked namespace and a leaked PVC, which is the
+whole reason it is a separate environment from `preview-deploy`.
 
 ## Prerequisites
 
@@ -203,7 +238,7 @@ BAO_ADDR=https://bao.work.ripley.cloud BAO_TOKEN=... \
   ./scripts/setup-openbao-preview-oidc.sh
 ```
 
-Idempotent. Override `REPO`, `BASE_REF`, `WORKFLOW`, `CI_NS` by env if needed.
+Idempotent. Override `REPO`, `BASE_REFS`, `WORKFLOW`, `CI_NS` by env if needed.
 
 ## Verify — before switching CI over
 
@@ -239,13 +274,19 @@ gh variable set PREVIEW_CLUSTER_AUTH --body oidc --repo pawtograder/platform
 ```
 
 Re-label a PR `preview` and watch the `Cluster credentials` step log
-`OIDC-federated ServiceAccount token`. Then delete the static secrets listed at
-the top.
+`OIDC-federated ServiceAccount token`.
+
+Do not delete any secret at this point. Per the table above,
+`KUBECONFIG_BASE64` is still required by `release-images.yml` and the
+`BAO_PUBLISHER_*` pair is still the login for both KV operations; the only one
+this change makes unnecessary is `KUBECONFIG_PREVIEW_RO_BASE64`, which was
+never created.
 
 **Rollback** is one variable: `gh variable set PREVIEW_CLUSTER_AUTH --body static`.
-Keep `KUBECONFIG_BASE64` until at least one full preview deploy _and_ one
-teardown have run green on OIDC — teardown is the path least likely to be
-exercised by accident and the most expensive to have broken.
+That only works while `KUBECONFIG_BASE64` still exists, which is one more
+reason to keep it. Confirm at least one full preview deploy _and_ one teardown
+have run green on OIDC before relying on the new path: teardown is the least
+likely to be exercised by accident and the most expensive to have broken.
 
 ## Token lifetimes
 

@@ -138,14 +138,19 @@ helm list -n pawtograder-preview-pr-1                        # should fail
 ## 5. Install it
 
 ```bash
-base64 -w0 preview-ro.kubeconfig | gh secret set KUBECONFIG_PREVIEW_RO_BASE64 \
-  --repo pawtograder/platform --env preview
+for env in preview-build preview-publish; do
+  base64 -w0 preview-ro.kubeconfig | gh secret set KUBECONFIG_PREVIEW_RO_BASE64 \
+    --repo pawtograder/platform --env "$env"
+done
 shred -u preview-ro.kubeconfig
 ```
 
-Set it on the `preview` **environment** (not repo-wide) so only the jobs that
-declare `environment: preview` can read it. `build-web`, `publish-e2e-bundle`,
-`secrets` and `deploy` all declare it.
+Each job declares its own environment, so a secret on a single `preview`
+environment resolves to empty everywhere and the workflow silently falls back
+to `KUBECONFIG_BASE64`. The two jobs that read this one are `build-web`
+(`environment: preview-build`) and `publish-e2e-bundle`
+(`environment: preview-publish`), so set it on both, or set it repo-wide and
+accept the wider scope.
 
 ## 6. Confirm the fallback is no longer in use
 
@@ -154,7 +159,7 @@ credential is the one being used:
 
 ```bash
 gh run view <run-id> --repo pawtograder/platform --log \
-  | grep -E "Read anon key from cluster|Write kubeconfig \(read-only\)"
+  | grep -E "Read anon key from cluster|Cluster credentials"
 ```
 
 Then re-run a preview and check `build-web` still gets a non-empty `ANON_KEY`.

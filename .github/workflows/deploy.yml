@@ -124,7 +124,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .next/cache
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**') }}
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**') }}
           restore-keys: |
             nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
             nextjs-${{ runner.os }}-
@@ -321,15 +321,23 @@ jobs:
       # Saved HERE, after the build, not next to the restore: .next/cache is
       # populated BY `npm run build`, so saving it earlier would store an empty
       # directory and every later run would miss. Same fork condition as the
-      # npm cache above — a fork PR may restore this cache but never write it,
-      # because under pull_request_target a write would land in the default
-      # branch's cache scope.
+      # npm cache above: a fork PR may restore this cache but never write it,
+      # because under pull_request_target a write request would go to the
+      # default branch's cache scope.
+      #
+      # The key MUST stay byte-identical to the restore step's. `actions/cache`
+      # evaluated its key once, pre-build, and reused it in the post step;
+      # split into restore + save, the key is evaluated twice, and by save time
+      # `npm run build` has written .next/server/**/*.js. hashFiles globs with
+      # dot: true, so without the `!**/.next/**` exclusion on BOTH steps the
+      # save key would never equal the restore key and the exact-match hit
+      # could never occur again.
       - name: Save next.js build
         if: github.event.pull_request.head.repo.fork != true
         uses: actions/cache/save@v4
         with:
           path: .next/cache
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**') }}
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**') }}
 
       # prom-client is Node-only and lib/metrics.ts imports it dynamically, so
       # webpack will happily split it into a CLIENT chunk if anything under a

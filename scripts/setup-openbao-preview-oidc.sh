@@ -122,8 +122,19 @@ EOF
 echo "==> kubernetes roles"
 
 # read: the narrowest. A namespaced Role granting `get` on Secrets, nothing
-# else. Used by build-web (which builds untrusted PR code) and the Bao publish.
+# else. Used by build-web, which builds untrusted PR code.
 $CLI write kubernetes/roles/preview-read \
+  allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
+  kubernetes_role_type=Role \
+  token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
+  generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["secrets"],"verbs":["get"]}]}'
+
+# publish: identical grant to preview-read, but a separate role so the
+# publish-e2e-bundle job can keep its own `environment: preview-publish`
+# claim. Sharing preview-read would not work: each jwt role binds exactly one
+# environment value, so a job declaring preview-publish is rejected at
+# auth/jwt/login by the role bound to preview-build.
+$CLI write kubernetes/roles/preview-publish \
   allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
   kubernetes_role_type=Role \
   token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
@@ -148,7 +159,7 @@ $CLI write kubernetes/roles/preview-provision \
   generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["namespaces"],"verbs":["get","create","patch"]}]}'
 
 # Namespaced counterpart to preview-provision: writes the chart's Secrets into
-# one labelled preview namespace and can reach no other.
+# one labeled preview namespace and can reach no other.
 $CLI write kubernetes/roles/preview-provision-secrets \
   allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
   kubernetes_role_type=Role \
@@ -170,8 +181,9 @@ Done. Next:
   2. Verify a role end to end BEFORE switching CI over (that doc's §Verify).
   3. Flip the switch:
        gh variable set PREVIEW_CLUSTER_AUTH --body oidc --repo ${REPO}
-  4. Once a preview is green on OIDC, delete the static credentials:
-       gh secret delete KUBECONFIG_BASE64 --repo ${REPO}
-       gh secret delete BAO_PUBLISHER_ROLE_ID --repo ${REPO}
-       gh secret delete BAO_PUBLISHER_SECRET_ID --repo ${REPO}
+  4. Do NOT delete KUBECONFIG_BASE64 or BAO_PUBLISHER_ROLE_ID /
+     BAO_PUBLISHER_SECRET_ID. Only preview.yml's CLUSTER credential moved to
+     OIDC: release-images.yml's deploy-staging still requires the kubeconfig,
+     KUBECONFIG_BASE64 is the rollback path, and both KV operations still log
+     in with the AppRole. See the runbook's "What this retires".
 EOF

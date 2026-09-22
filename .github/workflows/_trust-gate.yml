@@ -48,9 +48,13 @@ name: Trust gate
 # `pawtograder-contributors` team, so granting a student CI is a team addition
 # and revoking it takes effect on their next push.
 #
-# For a fork PR we require write for BOTH principals:
-#   * head.repo.owner — whoever owns the fork controls who may push to it
-#   * sender          — whoever fired this event (on `synchronize`, the pusher)
+# For a fork PR we require write for EVERY principal we can identify:
+#   * pull_request.user — the PR author; the only one of the three that is
+#                         stable across every event on the PR
+#   * head.repo.owner   — whoever owns the fork controls who may push to it
+#                         (a personal fork only; see the principal list below)
+#   * sender            — whoever fired this event (on `synchronize`, the
+#                         pusher; on `labeled`, whoever added the label)
 #
 # Residual risk, accepted deliberately: a collaborator on a trusted user's
 # personal fork can land code that runs here without holding write themselves.
@@ -136,6 +140,9 @@ jobs:
           # but it silently excluded a legitimate contribution path.
           HEAD_OWNER_TYPE: ${{ github.event.pull_request.head.repo.owner.type }}
           SENDER: ${{ github.event.sender.login }}
+          # Stable across every event on the PR, unlike `sender`. See the
+          # principal list below for why that matters on org-owned forks.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           set -euo pipefail
 
@@ -188,19 +195,37 @@ jobs:
             # for an org-owned one the owner is an org, "write access for an
             # organization" is not a thing this endpoint can answer, and the
             # equivalent question (who in that org can push) is not visible to
-            # us at all. So for org-owned forks we check the sender alone.
+            # us at all. So for org-owned forks the owner is dropped from the
+            # principal list and the PR author plus the sender carry it.
             #
             # The residual risk is the same shape as the one already accepted
-            # for personal forks — another principal with push access to the
-            # fork can land code that runs here — just with a larger set
+            # for personal forks: another principal with push access to the
+            # fork can merge code that runs here, just with a larger set
             # behind it. Worth knowing when adding org-owned forks.
+            #
+            # The PR AUTHOR is always a principal, and on an org-owned fork it
+            # is the only one tied to the code. `sender` is the pusher on
+            # `synchronize`, but on `reopened`, `labeled` and `unlabeled` it is
+            # whoever performed that action, which is normally a maintainer.
+            # Without the author, a maintainer adding the `preview` label to a
+            # PR from a throwaway org-owned fork would resolve the gate against
+            # the maintainer's own write access and run fork code here with no
+            # check on who supplied it. Personal forks were already covered by
+            # the head-owner check; this closes the org-owned path.
             principals=()
+            [[ -n "${PR_AUTHOR:-}" ]] && principals+=("$PR_AUTHOR")
             if [[ "$HEAD_OWNER_TYPE" == "Organization" ]]; then
-              echo "note: head repo is org-owned (${HEAD_OWNER}); checking the sender only"
-            else
+              echo "note: head repo is org-owned (${HEAD_OWNER}); checking the PR author and the sender"
+            elif [[ -n "${HEAD_OWNER:-}" && "$HEAD_OWNER" != "${PR_AUTHOR:-}" ]]; then
               principals+=("$HEAD_OWNER")
             fi
-            [[ -n "${SENDER:-}" ]] && [[ ${#principals[@]} -eq 0 || "$SENDER" != "$HEAD_OWNER" ]] && principals+=("$SENDER")
+            if [[ -n "${SENDER:-}" ]]; then
+              already=false
+              for p in ${principals[@]+"${principals[@]}"}; do
+                [[ "$p" == "$SENDER" ]] && already=true && break
+              done
+              [[ "$already" == "true" ]] || principals+=("$SENDER")
+            fi
             if [[ ${#principals[@]} -eq 0 ]]; then
               trusted=false
               reason="no identifiable principal on this fork PR"
@@ -210,7 +235,7 @@ jobs:
             fi
             echo "fork PR — checking write access for: ${principals[*]}"
             trusted=true
-            reason="fork owner and sender both have write on ${REPO}"
+            reason="every identifiable principal on this fork PR has write on ${REPO}"
             for u in "${principals[@]}"; do
               if ! has_write "$u"; then
                 trusted=false
