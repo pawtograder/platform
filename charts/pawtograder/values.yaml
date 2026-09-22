@@ -2507,6 +2507,14 @@ monitoring:
     # there is no burst to ride out and the only useful warning is an early one.
     sharedMemoryPercentWarning: 70
     sharedMemoryPercentCritical: 90
+    # Schema-cache reloads per PostgREST pod per hour above which
+    # PawtograderPostgrestPoolRebuilds fires. Each reload means the pool was
+    # rebuilt and everything in flight on that pod got a 503. A healthy
+    # long-lived pod sits at 0; prod during the /dev/shm incident ran ~3/hour.
+    # The rule pairs this low threshold with a 2h `for:`, because bootstrap and
+    # migration bursts are large but short-lived (a fresh preview pod hit 37 in
+    # three minutes) while real churn never decays.
+    postgrestPoolRebuildsPerHour: 2
     # Streaming-standby replay lag (bytes) above which PawtograderReplicaLagHigh
     # fires (only when postgres.replica.enabled). Primary current LSN − standby
     # replay_lsn; ~0 on a healthy standby. 100 MiB tolerates a bulk write/migration
