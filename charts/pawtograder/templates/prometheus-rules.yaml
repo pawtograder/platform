@@ -380,9 +380,10 @@ spec:
         # pg_current_wal_lsn note there -- it ERRORS in recovery and would 500
         # the whole /metrics endpoint) and re-checking the existing
         # unqualified max() alerts, which would begin aggregating across both
-        # servers. That is its own change. The per-instance form above means
-        # this rule starts covering the standby the day such an exporter
-        # exists, with no edit here.
+        # servers. That is its own change, tracked in
+        # https://github.com/pawtograder/platform/issues/1022. The
+        # per-instance form above means this rule starts covering the standby
+        # the day such an exporter exists, with no edit here.
         - alert: PawtograderPostgresSharedMemoryHigh
           expr: |
             max(
