@@ -81,21 +81,38 @@ this change exists to remove. Each run logs a notice naming the path taken.
 | `build-web`          | `preview-read`              | Role          | **get Secret only**                          |
 | `publish-e2e-bundle` | `preview-publish`           | Role          | **get Secret only**                          |
 | `deploy`             | `preview-deploy`            | Role          | broad, but only inside the preview namespace |
-| `destroy`            | `preview-teardown`          | ClusterRole   | get/delete Namespace, delete workloads/PVCs  |
+| `destroy`            | `preview-teardown`          | ClusterRole   | **get/delete Namespace only**                |
+| `destroy`            | `preview-teardown-ns`       | Role          | delete workloads/PVCs/Secrets in the preview |
 
 `secrets` mints two credentials because the Secret rule cannot ride on the
 ClusterRole: a ClusterRole is bound cluster-wide, so it would grant Secret
 access in every namespace including production. The admission policy below
 bounds Namespace names, not Secret reach.
 
-**`preview-teardown` has the problem that split was meant to avoid.** Its
-`generated_role_rules` put namespaced resources (`secrets`, `configmaps`,
-`pods`, `services`, `persistentvolumeclaims`, and all of `apps`/`batch`) on a
-ClusterRole, so the token `destroy` mints on every PR close can read every
-Secret and delete every Deployment in the cluster, production included. Split
-it the same way `preview-provision` was: a ClusterRole holding only
-`namespaces: [get, delete]`, plus a label-selected namespaced Role for the
-workload and PVC deletes, minted as a second credential in the job.
+`destroy` mints two for the same reason, and the order matters. Its
+`generated_role_rules` originally put namespaced resources (`secrets`,
+`configmaps`, `pods`, `services`, `persistentvolumeclaims`, and all of
+`apps`/`batch`) on the ClusterRole, so the token minted on every PR close could
+read every Secret and delete every Deployment in the cluster, production
+included — and because `destroy` is deliberately not trust-gated, that was the
+widest credential in the system. The cluster-scoped role now holds only
+`namespaces: [get, delete]`.
+
+The cluster-scoped credential is minted first, because `preview-teardown-ns`
+selects its namespace by label: for a PR closed without ever having had a
+preview — the common case now that previews are opt-in — there is no namespace
+to select and the mint fails. `destroy` therefore checks existence with the
+cluster-scoped token, mints the namespaced one only if the namespace is there,
+empties the namespace with it, and deletes the namespace itself back on the
+cluster-scoped token. The two live in different files (`$HOME/.kube/config` and
+`$RUNNER_TEMP/kubeconfig-preview-ns`) so neither has to be minted twice.
+
+`preview-teardown-ns` grants `update` on Secrets on top of get/list/delete, and
+covers the same apiGroups as `preview-deploy` rather than just core and
+apps/batch. Both are for helm: uninstall writes the release Secret back as
+"uninstalling" before it deletes anything, and it deletes every kind the chart
+rendered. Without them `helm uninstall` 403s — invisibly, because the job runs
+it with `|| true` and the namespace delete afterwards cleans up regardless.
 
 `build-web` runs the most untrusted code in the workflow — a full `next build`
 against a PR-controlled lockfile — and now gets a token that can do exactly one

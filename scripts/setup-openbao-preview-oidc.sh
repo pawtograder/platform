@@ -14,10 +14,16 @@
 set -euo pipefail
 
 REPO="${REPO:-pawtograder/platform}"
-# Every base ref a preview may legitimately run from. preview.yml has no
-# base-branch filter and workflow_dispatch can select any branch, so pinning a
-# single ref made previews and teardowns from anything but staging fail at
-# auth/jwt/login. bound_claims accepts a list; any one may match.
+# Every base ref a preview may legitimately run from. Pinning a single ref made
+# previews and teardowns from anything but staging fail at auth/jwt/login;
+# bound_claims accepts a list, and any one may match.
+#
+# This list is one half of a pair. preview.yml filters pull_request_target to
+# the same branches, and — because GitHub has no branch filter for
+# workflow_dispatch — its `meta` job refuses a dispatch from any other ref when
+# PREVIEW_CLUSTER_AUTH=oidc. Widening this list without widening those, or the
+# reverse, is what produces a run that gets all the way to auth/jwt/login and
+# is rejected on a claim mismatch that names no ref.
 BASE_REFS="${BASE_REFS:-refs/heads/staging refs/heads/main}"
 WORKFLOW="${WORKFLOW:-.github/workflows/preview.yml}"
 CI_NS="${CI_NS:-pawtograder-preview-ci}"
@@ -90,7 +96,7 @@ jwt_role preview-deploy    preview-deploy    preview-deploy
 jwt_role preview-teardown  preview-teardown  preview-teardown
 
 echo "==> policies"
-for r in read publish deploy teardown; do
+for r in read publish deploy; do
   $CLI policy write "preview-${r}" - <<EOF
 path "kubernetes/creds/preview-${r}" {
   capabilities = ["update"]
@@ -107,6 +113,18 @@ path "kubernetes/creds/preview-provision" {
   capabilities = ["update"]
 }
 path "kubernetes/creds/preview-provision-secrets" {
+  capabilities = ["update"]
+}
+EOF
+# teardown is split the same way and for the same reason: deleting a Namespace
+# is cluster-scoped, but emptying one first (helm release Secrets, PVCs,
+# workloads) is not. A single ClusterRole carrying both would grant the
+# namespaced half in EVERY namespace — see preview-teardown-ns below.
+$CLI policy write preview-teardown - <<EOF
+path "kubernetes/creds/preview-teardown" {
+  capabilities = ["update"]
+}
+path "kubernetes/creds/preview-teardown-ns" {
   capabilities = ["update"]
 }
 EOF
@@ -166,11 +184,43 @@ $CLI write kubernetes/roles/preview-provision-secrets \
   token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
   generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["secrets"],"verbs":["get","create","update","patch"]}]}'
 
+# Cluster-scoped half: Namespace get/delete and NOTHING else. The namespaced
+# rules that used to live here (Secrets, PVCs, ConfigMaps, Pods, Services,
+# apps/batch) applied in every namespace, production included, because a
+# generated ClusterRole is bound with a ClusterRoleBinding — the same mistake
+# preview-provision was split to avoid. The token `destroy` mints runs on every
+# PR close and that job is deliberately not trust-gated, so it was the widest
+# credential in the system. Namespace NAMES are bounded by the admission policy
+# in the runbook, which matches CREATE and DELETE.
 $CLI write kubernetes/roles/preview-teardown \
   allowed_kubernetes_namespaces="${CI_NS}" \
   kubernetes_role_type=ClusterRole \
   token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
-  generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["namespaces"],"verbs":["get","delete"]},{"apiGroups":[""],"resources":["persistentvolumeclaims","secrets","configmaps","pods","services"],"verbs":["get","list","delete"]},{"apiGroups":["apps","batch"],"resources":["*"],"verbs":["get","list","delete"]}]}'
+  generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["namespaces"],"verbs":["get","delete"]}]}'
+
+# Namespaced half: empty one labeled preview namespace before it is deleted.
+# PVCs must go explicitly because helm does not remove them.
+#
+# Two things here are easy to get wrong and both fail only at teardown time:
+#
+#   * The apiGroups mirror preview-deploy's, because helm uninstall deletes
+#     everything the chart rendered — Ingresses, HPAs, ServiceMonitors and
+#     ExternalSecrets included, not just core and apps/batch. With a shorter
+#     list `helm uninstall` reports errors for each kind it may not touch.
+#   * `update` on Secrets, because helm's first act in uninstall is to write
+#     the release Secret back with status "uninstalling"
+#     (pkg/action/uninstall.go:118 in v3.14.4, the version this workflow pins,
+#     via the secrets driver's Update at pkg/storage/driver/secrets.go:188).
+#     get/list/delete alone makes helm 403 before it deletes anything.
+#
+# Both are survivable today only because the job runs `helm uninstall || true`
+# and then deletes the namespace, which garbage-collects whatever helm left —
+# so the failure is silent and the release looks cleanly uninstalled.
+$CLI write kubernetes/roles/preview-teardown-ns \
+  allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
+  kubernetes_role_type=Role \
+  token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
+  generated_role_rules='{"rules":[{"apiGroups":["","apps","batch","networking.k8s.io","policy","autoscaling","monitoring.coreos.com","external-secrets.io"],"resources":["*"],"verbs":["get","list","delete"]},{"apiGroups":[""],"resources":["secrets"],"verbs":["update"]}]}'
 
 cat <<EOF
 

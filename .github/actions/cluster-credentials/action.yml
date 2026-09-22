@@ -71,6 +71,15 @@ inputs:
     description: "OpenBao CLI version to fetch when not already present."
     required: false
     default: "2.2.0"
+  kubeconfig_path:
+    description: >-
+      Where to write the kubeconfig. Defaults to $HOME/.kube/config, which
+      kubectl and helm pick up with no further configuration. Set this when a
+      job needs TWO credentials at once — the teardown job mints a
+      cluster-scoped one and a namespaced one — and point $KUBECONFIG at the
+      right file per step, rather than minting the same credential twice.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -88,9 +97,11 @@ runs:
         CA_B64: ${{ inputs.ca_base64 }}
         KUBECONFIG_B64: ${{ inputs.kubeconfig_base64 }}
         BAO_VERSION: ${{ inputs.bao_version }}
+        KUBECONFIG_PATH: ${{ inputs.kubeconfig_path }}
       run: |
         set -euo pipefail
-        mkdir -p "$HOME/.kube"
+        KUBECONFIG_PATH="${KUBECONFIG_PATH:-$HOME/.kube/config}"
+        mkdir -p "$(dirname "$KUBECONFIG_PATH")"
 
         # Validate the mode before branching. Previously anything that was not
         # exactly "oidc" took the static path, so `OIDC`, `odic` or a stray
@@ -111,8 +122,8 @@ runs:
             echo "::error title=No cluster credential::PREVIEW_CLUSTER_AUTH is not 'oidc' and no static kubeconfig was supplied." >&2
             exit 1
           fi
-          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
+          echo "$KUBECONFIG_B64" | base64 -d > "$KUBECONFIG_PATH"
+          chmod 600 "$KUBECONFIG_PATH"
           echo "::notice title=Cluster auth::static kubeconfig (long-lived). Set the PREVIEW_CLUSTER_AUTH variable to 'oidc' to use short-lived federated credentials."
           exit 0
         fi
@@ -186,7 +197,7 @@ runs:
         fi
 
         umask 077
-        cat > "$HOME/.kube/config" <<EOF
+        cat > "$KUBECONFIG_PATH" <<EOF
         apiVersion: v1
         kind: Config
         clusters:
@@ -206,5 +217,5 @@ runs:
               namespace: ${NS}
         current-context: preview
         EOF
-        chmod 600 "$HOME/.kube/config"
+        chmod 600 "$KUBECONFIG_PATH"
         echo "::notice title=Cluster auth::OIDC-federated ServiceAccount token (ttl ${TTL}, role ${K8S_ROLE}, ns ${NS}). No long-lived credential was used."

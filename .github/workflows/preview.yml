@@ -43,8 +43,23 @@ on:
   # every job below is conditioned on `needs.gate.outputs.approved`.
   #
   # `labeled`/`unlabeled` own the namespace lifecycle alongside `closed`.
+  #
+  # `branches:` filters the BASE branch, and it exists to match the OIDC trust
+  # chain rather than for taste. Under pull_request_target both this workflow
+  # file and the trust gate are read from the base branch, so a PR based on an
+  # arbitrary branch would run whatever preview.yml that branch happens to
+  # contain — and the JWT roles bind `job_workflow_ref`, which pins the file to
+  # a ref, to `BASE_REFS` in scripts/setup-openbao-preview-oidc.sh (staging and
+  # main). Without this filter a PR based on anything else reaches
+  # `auth/jwt/login` and is rejected there, several jobs in, with an error that
+  # says nothing about refs. Keep this list and BASE_REFS in sync; widening one
+  # without the other is what produces that failure.
+  #
+  # The cost is that a stacked PR based on a feature branch gets no preview.
+  # Use workflow_dispatch from staging/main with a manual preview_id.
   pull_request_target:
     types: [opened, synchronize, reopened, closed, labeled, unlabeled]
+    branches: [staging, main]
   # For a one-off branch deploy without a PR, use workflow_dispatch with
   # action=deploy (don't add a push trigger — it would race the synchronize
   # event and deploy two near-identical previews from one SHA).
@@ -157,6 +172,31 @@ jobs:
       namespace: ${{ steps.v.outputs.namespace }}
       mode: ${{ steps.v.outputs.mode }}
     steps:
+      # GitHub has no `branches:` filter for workflow_dispatch, so the trigger
+      # block above cannot express this and it has to be a runtime check. A
+      # dispatch from a ref outside BASE_REFS can start every job here and then
+      # fail at `auth/jwt/login` in whichever one mints credentials first,
+      # reporting a claim mismatch rather than the actual cause. Fail here, in
+      # the first job, saying what is wrong. Only under `oidc`: the static
+      # kubeconfig is not ref-bound, so any branch works in that mode and this
+      # must not take the capability away before the cutover.
+      - name: Check this ref can mint cluster credentials
+        if: github.event_name == 'workflow_dispatch' && vars.PREVIEW_CLUSTER_AUTH == 'oidc'
+        env:
+          # Must match BASE_REFS in scripts/setup-openbao-preview-oidc.sh and
+          # the `branches:` filter above.
+          ALLOWED_REFS: refs/heads/staging refs/heads/main
+          GH_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          for r in $ALLOWED_REFS; do
+            if [[ "$GH_REF" == "$r" ]]; then
+              echo "ref ${GH_REF} is bound in the OpenBao JWT roles"
+              exit 0
+            fi
+          done
+          echo "::error title=Ref cannot mint cluster credentials::PREVIEW_CLUSTER_AUTH=oidc and the OpenBao JWT roles bind job_workflow_ref to [${ALLOWED_REFS}]. A dispatch from '${GH_REF}' would be rejected at auth/jwt/login. Re-run from staging or main, or add this ref to BASE_REFS in scripts/setup-openbao-preview-oidc.sh and re-run that script." >&2
+          exit 1
       - id: v
         # Move attacker-influenceable inputs (workflow_dispatch input,
         # branch name) into env: so they're shell variables rather than
@@ -1100,7 +1140,27 @@ jobs:
         with:
           version: v1.32.0
 
-      - name: Cluster credentials
+      # Teardown mints TWO credentials, and the order is load-bearing.
+      #
+      # `preview-teardown` is cluster-scoped and now carries ONLY Namespace
+      # get/delete. It used to carry the namespaced rules as well — Secrets,
+      # PVCs, ConfigMaps, Pods, Services, apps/batch — but a generated
+      # ClusterRole is bound with a ClusterRoleBinding, so those verbs applied
+      # in EVERY namespace, production included. Since this job is deliberately
+      # not trust-gated and runs on every PR close, that made it the widest
+      # credential in the system. The namespaced half is `preview-teardown-ns`,
+      # a label-selected Role, exactly as preview-provision was split.
+      # Namespace NAMES stay bounded by the admission policy in the runbook,
+      # which matches CREATE and DELETE.
+      #
+      # Cluster scope comes FIRST because it answers "does this namespace still
+      # exist?". That question has to be settled before minting the namespaced
+      # credential: `kubernetes/creds/preview-teardown-ns` selects the target
+      # namespace by label, so for a PR closed without ever having had a
+      # preview — the common case now that previews are opt-in — there is
+      # nothing to select and the mint would fail. Asking first turns that into
+      # a clean no-op instead of a red teardown.
+      - name: Cluster credentials (cluster scope — namespaces only)
         uses: ./.github/actions/cluster-credentials
         with:
           mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
@@ -1113,22 +1173,61 @@ jobs:
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
           kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
 
-      - name: helm uninstall + delete namespace
+      - name: Does the preview namespace still exist?
+        id: ns
         env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          if kubectl get ns "$NS" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "preview ${NS} already absent — nothing to do"
+          fi
+
+      # Written to its own file rather than over $HOME/.kube/config: the
+      # cluster-scoped credential is still needed afterwards to delete the
+      # namespace itself, and re-minting it would be a second round trip for a
+      # token we already hold.
+      - name: Cluster credentials (in-namespace)
+        if: steps.ns.outputs.exists == 'true'
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-teardown
+          k8s_role: preview-teardown-ns
+          namespace: ${{ needs.meta.outputs.namespace }}
+          ttl: 20m
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
+          kubeconfig_path: ${{ runner.temp }}/kubeconfig-preview-ns
+
+      - name: helm uninstall + empty the namespace
+        if: steps.ns.outputs.exists == 'true'
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig-preview-ns
           NS: ${{ needs.meta.outputs.namespace }}
           RELEASE: ${{ needs.meta.outputs.release }}
         run: |
           set -euo pipefail
-          if kubectl get ns "$NS" >/dev/null 2>&1; then
-            helm uninstall "$RELEASE" --namespace "$NS" --ignore-not-found || true
-            # PVCs are not deleted by helm uninstall — clean them up so
-            # the namespace can actually go away.
-            kubectl -n "$NS" delete pvc --all --wait=false || true
-            kubectl delete namespace "$NS" --wait=false
-            echo "preview ${NS} torn down"
-          else
-            echo "preview ${NS} already absent — nothing to do"
-          fi
+          helm uninstall "$RELEASE" --namespace "$NS" --ignore-not-found || true
+          # PVCs are not deleted by helm uninstall — clean them up so
+          # the namespace can actually go away.
+          kubectl -n "$NS" delete pvc --all --wait=false || true
+
+      # Back on the cluster-scoped credential ($HOME/.kube/config), which is
+      # the only one that may delete a Namespace.
+      - name: Delete the namespace
+        if: steps.ns.outputs.exists == 'true'
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          kubectl delete namespace "$NS" --wait=false
+          echo "preview ${NS} torn down"
 
       # Counterpart of the secrets job's OpenBao publish: drop the mirrored
       # e2e bundle with the preview. Best-effort — a stale bundle is dead
