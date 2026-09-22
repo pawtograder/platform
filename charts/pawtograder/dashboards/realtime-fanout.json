@@ -4,7 +4,7 @@
   "tags": ["pawtograder", "realtime"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "30s",
   "time": { "from": "now-1h", "to": "now" },
   "templating": {
@@ -23,11 +23,149 @@
   },
   "panels": [
     {
+      "id": 100,
+      "type": "gauge",
+      "title": "Connection cap utilisation",
+      "description": "Cluster connections as a fraction of the tenant's max_concurrent_users. This is the number that took production down on 2026-09-22: it sat at 1.00 for 47 minutes while every new websocket was refused with ConnectionRateLimitReached, and nothing on this dashboard showed it. Numerator uses max(), not sum(): realtime_connections_connected_cluster is a cluster-wide total that EVERY replica reports identically, so sum() would multiply it by the replica count.",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "max(realtime_connections_connected_cluster{job=\"pawtograder-realtime\"}) / max(pawtograder_realtime_tenant_max_concurrent_users)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.75 }, { "color": "red", "value": 0.9 }] } } }
+    },
+    {
+      "id": 101,
+      "type": "stat",
+      "title": "Connections (cluster)",
+      "description": "Live cluster-wide websocket count for the tenant. max() across replicas — each replica reports the same cluster total.",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "max(realtime_connections_connected_cluster{job=\"pawtograder-realtime\"})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 102,
+      "type": "stat",
+      "title": "Connection cap",
+      "description": "max_concurrent_users from realtime.tenants, exported by postgres_exporter. Read from the DATABASE rather than a chart value on purpose: the row is seeded once by SEED_SELF_HOST and drifts, and a hardcoded denominator would have shown false headroom throughout the 2026-09-22 outage.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "max(pawtograder_realtime_tenant_max_concurrent_users)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 103,
+      "type": "stat",
+      "title": "Tenant DB pool in use",
+      "description": "realtime_connect backends open against the configured db_pool. One node owns this pool for the WHOLE deployment; every private-channel authorization transaction and every realtime.messages read/write serialises through it. Saturation here precedes a tenant-connection kill.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "max(pawtograder_realtime_tenant_db_pool_in_use) / max(pawtograder_realtime_tenant_db_pool)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.75 }, { "color": "red", "value": 0.9 }] } } }
+    },
+    {
+      "id": 110,
+      "type": "timeseries",
+      "title": "Connections vs cap (cluster)",
+      "description": "Connected clients against the tenant ceiling. When these two lines touch, new connections are being refused — not queued. Watch the gap, not the absolute value.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "max(realtime_connections_connected_cluster{job=\"pawtograder-realtime\"})", "legendFormat": "connected" },
+        { "refId": "B", "expr": "max(pawtograder_realtime_tenant_max_concurrent_users)", "legendFormat": "max_concurrent_users" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "fillOpacity": 8 } } }
+    },
+    {
+      "id": 120,
+      "type": "timeseries",
+      "title": "Channel joins/s vs cap",
+      "description": "Cluster join rate against max_joins_per_second. sum(rate(...)) here — unlike the connection gauge, joins are a per-replica counter. A reconnect storm after a pod restart spikes this, which is why the join cap must be raised whenever the connection cap is.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(realtime_channel_joins{job=\"pawtograder-realtime\"}[5m]))", "legendFormat": "joins/s" },
+        { "refId": "B", "expr": "max(pawtograder_realtime_tenant_max_joins_per_second)", "legendFormat": "max_joins_per_second" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 8 } } }
+    },
+    {
+      "id": 121,
+      "type": "timeseries",
+      "title": "Channel events/s vs cap",
+      "description": "Cluster message rate against max_events_per_second.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(realtime_channel_events{job=\"pawtograder-realtime\"}[5m]))", "legendFormat": "events/s" },
+        { "refId": "B", "expr": "max(pawtograder_realtime_tenant_max_events_per_second)", "legendFormat": "max_events_per_second" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 8 } } }
+    },
+    {
+      "id": 130,
+      "type": "timeseries",
+      "title": "Broadcast throughput vs cap",
+      "description": "Socket bytes/s against max_bytes_per_second. Input and output are shown separately; the cap line is for reference against outbound fanout.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(realtime_channel_output_bytes{job=\"pawtograder-realtime\"}[5m]))", "legendFormat": "output" },
+        { "refId": "B", "expr": "sum(rate(realtime_channel_input_bytes{job=\"pawtograder-realtime\"}[5m]))", "legendFormat": "input" },
+        { "refId": "C", "expr": "max(pawtograder_realtime_tenant_max_bytes_per_second)", "legendFormat": "max_bytes_per_second" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "fillOpacity": 8 } } }
+    },
+    {
+      "id": 131,
+      "type": "timeseries",
+      "title": "realtime_connect pool: in use vs size",
+      "description": "The single tenant pool. Upstream defaults this to 1 connection, which is what let a burst queue past DBConnection's 5s queue_target on 2026-09-22 — Realtime counts those as database timeouts and answers by killing the tenant connection, tearing down Broadcast Changes replication for every user on every pod.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "max(pawtograder_realtime_tenant_db_pool_in_use)", "legendFormat": "in use" },
+        { "refId": "B", "expr": "max(pawtograder_realtime_tenant_db_pool)", "legendFormat": "db_pool" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "fillOpacity": 8 } } }
+    },
+    {
+      "id": 140,
+      "type": "timeseries",
+      "title": "Slow read-authorization checks",
+      "description": "Fraction of read-authorization checks falling outside the 250 bucket. Deliberately expressed as a bucket ratio rather than a quantile: the upstream histogram has only three boundaries (10 / 250 / 5000) and does not document its unit, so a histogram_quantile() here would be false precision. This is the leading indicator for pool saturation — auth checks queue behind realtime_connect before anything else breaks.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "1 - (sum(rate(realtime_tenants_read_authorization_check_bucket{job=\"pawtograder-realtime\",le=\"250.0\"}[5m])) / clamp_min(sum(rate(realtime_tenants_read_authorization_check_count{job=\"pawtograder-realtime\"}[5m])), 1e-9))", "legendFormat": "fraction over 250" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "fillOpacity": 8 } } }
+    },
+    {
+      "id": 141,
+      "type": "timeseries",
+      "title": "Tenant connection owner",
+      "description": "Which replica currently holds the tenant's database connections (realtime_connect, the RLS checker, and the Broadcast Changes replication stream). Exactly one should be 1. Flapping means the tenant connection is being killed and re-initialised — the shape of the IncreaseConnectionPool incident. A graceful recycle happens roughly every 4h and is normal.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "realtime_tenants_connected{job=\"pawtograder-realtime\"}", "legendFormat": "{{pod}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "fillOpacity": 8 } } }
+    },
+    {
       "id": 1,
       "type": "stat",
       "title": "Phoenix connections",
       "description": "Aggregate Phoenix connection count across all realtime replicas. Tracks active WebSocket + HTTP keepalive sessions.",
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 0 },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 33 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         { "refId": "A", "expr": "sum(phoenix_connections_total{job=\"pawtograder-realtime\"})" }
@@ -39,7 +177,7 @@
       "type": "stat",
       "title": "Tenants connected",
       "description": "Distinct Supabase realtime tenants with at least one active client. Self-hosted pawtograder has one tenant per deploy.",
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 33 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         { "refId": "A", "expr": "sum(realtime_tenants_connected{job=\"pawtograder-realtime\"})" }
@@ -51,7 +189,7 @@
       "type": "stat",
       "title": "Erlang reductions / s",
       "description": "Reduction-count delta across all realtime replicas — a coarse proxy for VM workload (every function call increments reductions).",
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 33 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         { "refId": "A", "expr": "sum(rate(beam_stats_reduction_count{job=\"pawtograder-realtime\"}[1m]))" }
@@ -62,7 +200,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Phoenix connections by replica",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 37 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
@@ -78,7 +216,7 @@
       "type": "timeseries",
       "title": "Realtime memory by kind",
       "description": "beam_memory_*_total_bytes — processes is the dominant share under load; binary signals large message buffers; ets is the in-memory state.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 45 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
@@ -104,7 +242,7 @@
       "type": "timeseries",
       "title": "Erlang VM activity",
       "description": "Process and port counts indicate concurrency level. Run-queue depth > 0 sustained means a scheduler is backlogged.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 45 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
@@ -130,7 +268,7 @@
       "type": "timeseries",
       "title": "Realtime pod CPU (host view)",
       "description": "osmon reads /proc; osmon_cpu_util is the per-replica utilization fraction. RAM lives on the Stack Overview dashboard (different unit / scale, doesn't compose with percentunit on the same axis).",
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 53 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
@@ -146,7 +284,7 @@
       "type": "timeseries",
       "title": "GC reclaimed bytes / s",
       "description": "Rate of bytes reclaimed by the BEAM garbage collector — proxy for GC pressure.",
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 53 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         {
@@ -158,5 +296,5 @@
       "fieldConfig": { "defaults": { "unit": "Bps" } }
     }
   ],
-  "description": "DELETED 2026-09-04 (WS-APP): the two web_realtime_broadcast_total panels (\"Server broadcasts / s\" and \"Server-initiated broadcasts by channel class\") are gone rather than retargeted at a postgres_exporter query. Three reasons, in order. (1) The only trigger-side row a broadcast produces is an insert into realtime.messages, which is DAILY-PARTITIONED with short retention \u2014 a COUNT over it falls every time a partition is dropped, and Prometheus reads a falling counter as a reset, so it cannot back a rate() panel at all. (2) The windowed-gauge alternative means scanning the highest-write table in the database on every scrape, which is precisely the database_ram_metrics() pathology that cost 77.7% of production DB execution time (see the SCOPE block in supabase/functions/metrics/index.ts). (3) channel_class would have to be reconstructed by parsing realtime.messages.topic, which embeds class and resource ids, so the label would be loosely bounded by user-controlled data. Everything else on this dashboard comes from the realtime container's own /metrics endpoint (job=\"pawtograder-realtime\"); if broadcast counts are wanted back, that is where they belong, not in a database scan."
+  "description": "Tenant quota + capacity panels (ids 100-141) added 2026-09-22 after two incidents this dashboard could not have shown: a 47-minute outage at max_concurrent_users=200 (ConnectionRateLimitReached), and a tenant-connection kill caused by a realtime_connect pool of 1 (IncreaseConnectionPool). The ceilings come from postgres_exporter's pawtograder_realtime_tenant collector reading realtime.tenants directly, NOT from chart values — a hardcoded denominator would have drawn reassuring headroom through both. PRIOR NOTE: DELETED 2026-09-04 (WS-APP): the two web_realtime_broadcast_total panels (\"Server broadcasts / s\" and \"Server-initiated broadcasts by channel class\") are gone rather than retargeted at a postgres_exporter query. Three reasons, in order. (1) The only trigger-side row a broadcast produces is an insert into realtime.messages, which is DAILY-PARTITIONED with short retention \u2014 a COUNT over it falls every time a partition is dropped, and Prometheus reads a falling counter as a reset, so it cannot back a rate() panel at all. (2) The windowed-gauge alternative means scanning the highest-write table in the database on every scrape, which is precisely the database_ram_metrics() pathology that cost 77.7% of production DB execution time (see the SCOPE block in supabase/functions/metrics/index.ts). (3) channel_class would have to be reconstructed by parsing realtime.messages.topic, which embeds class and resource ids, so the label would be loosely bounded by user-controlled data. Everything else on this dashboard comes from the realtime container's own /metrics endpoint (job=\"pawtograder-realtime\"); if broadcast counts are wanted back, that is where they belong, not in a database scan."
 }

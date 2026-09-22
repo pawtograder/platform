@@ -299,3 +299,65 @@ tests:
             exp_annotations:
               summary: "Pawtograder queue async_calls msg_id sequence is implausibly high"
               description: "The pgmq msg_id sequence for queue async_calls (pawtograder) is above 1e+12. Traffic cannot put it there — the busiest prod sequence was at 137,603 on 2026-09-13 and moves ~7 msg/h — so something SET it: a restore replaying a foreign setval, a migration or backfill seeding ids, or a manual ALTER SEQUENCE ... RESTART WITH. Above 2^53 (9007199254740992) a msg_id no longer survives JSON.parse in the workers and they archive or delete the wrong message. Do not raise this threshold; find what moved the sequence, compare it with max(msg_id) in pgmq.q_async_calls and pgmq.a_async_calls, and reset it above both with the queue drained. Runbook: docs/operations/monitoring-alerting.md."
+
+  # 6. REALTIME CONNECTION CAP — the 2026-09-22 outage shape.
+  # Three replicas each report realtime_connections_connected_cluster as the
+  # SAME cluster-wide total (200), against a cap of 200. The alert must read
+  # that as 100% and page.
+  #
+  # This is the invertible bug the test exists for: swapping max() for sum()
+  # still renders, still parses, and still looks right — it just computes
+  # 600/200 = 3.0 here, which also fires, so a firing test alone proves
+  # nothing. The healthy case below is the real discriminator: at a
+  # comfortable 60/2000 per-replica-reported total, sum() yields 180/2000
+  # and stays quiet, but at 700/2000 sum() yields 2100/2000 = 105% and pages
+  # on a deployment that is only a third utilised.
+  - interval: 1m
+    name: realtime at its tenant connection cap pages
+    input_series:
+      - series: 'realtime_connections_connected_cluster{namespace="pawtograder",pod="pawtograder-realtime-0"}'
+        values: "200x10"
+      - series: 'realtime_connections_connected_cluster{namespace="pawtograder",pod="pawtograder-realtime-1"}'
+        values: "200x10"
+      - series: 'realtime_connections_connected_cluster{namespace="pawtograder",pod="pawtograder-realtime-2"}'
+        values: "200x10"
+      - series: 'pawtograder_realtime_tenant_max_concurrent_users{namespace="pawtograder",external_id="pawtograder-realtime"}'
+        values: "200x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PawtograderRealtimeConnectionsAtCap
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Pawtograder Realtime is at its tenant connection cap and refusing clients"
+              description: >-
+                Cluster websocket connections in pawtograder have been at or above
+                98% of max_concurrent_users for 2m. New connections are being
+                REFUSED right now (ConnectionRateLimitReached). This is a
+                user-visible outage of all live updates for anyone connecting.
+                Raise the cap; realtime pod CPU/memory is almost never the binding
+                constraint. Runbook: docs/operations/monitoring-alerting.md.
+
+  # 7. REALTIME WELL INSIDE THE CAP — must stay quiet.
+  # 700 connections against the raised 2000 cap: 35% real utilisation. Under
+  # sum() this reads 2100/2000 and pages. Under max() it is silent, which is
+  # the correct answer.
+  - interval: 1m
+    name: realtime at a third of its cap does not page
+    input_series:
+      - series: 'realtime_connections_connected_cluster{namespace="pawtograder",pod="pawtograder-realtime-0"}'
+        values: "700x20"
+      - series: 'realtime_connections_connected_cluster{namespace="pawtograder",pod="pawtograder-realtime-1"}'
+        values: "700x20"
+      - series: 'realtime_connections_connected_cluster{namespace="pawtograder",pod="pawtograder-realtime-2"}'
+        values: "700x20"
+      - series: 'pawtograder_realtime_tenant_max_concurrent_users{namespace="pawtograder",external_id="pawtograder-realtime"}'
+        values: "2000x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PawtograderRealtimeConnectionsAtCap
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PawtograderRealtimeConnectionsHigh
+        exp_alerts: []

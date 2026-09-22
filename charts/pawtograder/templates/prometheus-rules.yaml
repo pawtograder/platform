@@ -427,6 +427,115 @@ spec:
               match your Prometheus ruleSelector/serviceMonitorSelector. Runbook:
               docs/operations/monitoring-alerting.md.
     {{- end }}
+    # Realtime tenant quota + capacity alerts.
+    #
+    # Added 2026-09-22 after two incidents that produced NO alert at all: a
+    # 47-minute outage refusing every new websocket at max_concurrent_users=200
+    # (ConnectionRateLimitReached), and a tenant-connection kill caused by a
+    # realtime_connect pool of 1 (IncreaseConnectionPool). Realtime was the only
+    # tier in the stack with no rules of its own.
+    #
+    # Ceilings come from the pawtograder_realtime_tenant collector reading
+    # realtime.tenants, so these compare against the LIVE cap rather than a
+    # chart value — the seeded row drifts from the chart, and that drift is
+    # exactly what both incidents were. No absent() arm anywhere here: a
+    # realtime pod or exporter that is down must not page as quota exhaustion.
+    - name: pawtograder.realtime
+      rules:
+        # max() not sum() on the numerator: realtime_connections_connected_cluster
+        # is a cluster-wide total that EVERY replica reports identically, so
+        # sum() would multiply it by the replica count and page at a third of
+        # the real utilisation.
+        - alert: PawtograderRealtimeConnectionsHigh
+          expr: |
+            max(realtime_connections_connected_cluster{namespace="{{ $ns }}"})
+              / max(pawtograder_realtime_tenant_max_concurrent_users{namespace="{{ $ns }}"})
+              > 0.75
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Realtime is approaching its tenant connection cap"
+            description: >-
+              Cluster websocket connections in {{ $ns }} have been above 75% of
+              the tenant's max_concurrent_users for 10m. Past the cap, Realtime
+              does not queue — it refuses the handshake outright with
+              ConnectionRateLimitReached, so users simply stop receiving live
+              updates. Raise realtime.tenant.maxConcurrentUsers (and
+              maxJoinsPerSecond with it, or the next reconnect storm just moves
+              the failure). Runbook: docs/operations/monitoring-alerting.md.
+        - alert: PawtograderRealtimeConnectionsAtCap
+          expr: |
+            max(realtime_connections_connected_cluster{namespace="{{ $ns }}"})
+              / max(pawtograder_realtime_tenant_max_concurrent_users{namespace="{{ $ns }}"})
+              >= 0.98
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder Realtime is at its tenant connection cap and refusing clients"
+            description: >-
+              Cluster websocket connections in {{ $ns }} have been at or above
+              98% of max_concurrent_users for 2m. New connections are being
+              REFUSED right now (ConnectionRateLimitReached). This is a
+              user-visible outage of all live updates for anyone connecting.
+              Raise the cap; realtime pod CPU/memory is almost never the binding
+              constraint. Runbook: docs/operations/monitoring-alerting.md.
+        # The tenant's single Postgrex pool. Saturation here is the leading
+        # indicator: once checkouts queue past DBConnection's 5s queue_target,
+        # Realtime counts them as database timeouts and kills the tenant
+        # connection, which drops Broadcast Changes for EVERY user on EVERY pod.
+        - alert: PawtograderRealtimeConnectPoolSaturated
+          expr: |
+            max(pawtograder_realtime_tenant_db_pool_in_use{namespace="{{ $ns }}"})
+              / max(pawtograder_realtime_tenant_db_pool{namespace="{{ $ns }}"})
+              > 0.9
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Realtime tenant database pool is saturated"
+            description: >-
+              The realtime_connect pool in {{ $ns }} has been above 90% utilised
+              for 10m. Only one node holds this pool for the whole deployment,
+              and every private-channel authorization transaction plus every
+              realtime.messages read and write serialises through it. Raise
+              realtime.tenant.dbPool (check postgres.config.max_connections
+              headroom first). Runbook: docs/operations/monitoring-alerting.md.
+        # Tenant connection flapping. Exactly one replica should own the tenant
+        # connection. A graceful recycle happens roughly every 4h, so this only
+        # fires on repeated churn — the shape of a timeout-driven kill.
+        - alert: PawtograderRealtimeTenantFlapping
+          expr: |
+            sum(changes(realtime_tenants_connected{namespace="{{ $ns }}"}[30m])) > 4
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Realtime tenant connection is flapping"
+            description: >-
+              The tenant database connection in {{ $ns }} has changed owner more
+              than twice in 30m (a normal recycle is roughly 4-hourly). Each
+              cycle tears down the Broadcast Changes replication stream and
+              drops live updates for every user until it re-initialises, logging
+              a burst of IncreaseConnectionPool. Usually means the
+              realtime_connect pool is too small for the join rate. Runbook:
+              docs/operations/monitoring-alerting.md.
+        # Suspended tenants refuse every connection, silently from the app side.
+        - alert: PawtograderRealtimeTenantSuspended
+          expr: |
+            max(pawtograder_realtime_tenant_suspended{namespace="{{ $ns }}"}) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder Realtime tenant is suspended"
+            description: >-
+              The realtime tenant in {{ $ns }} is marked suspended and is
+              refusing all connections. Nothing in the chart sets this, so it
+              was set by hand or by an upstream process. Clear
+              realtime.tenants.suspend. Runbook:
+              docs/operations/monitoring-alerting.md.
     # App-level KPI alerts. Converted from the Ripley Grafana-managed rules
     # (k8s/apps/monitoring/alerting/rules.yaml — reference only; a SEPARATE
     # deployment, so no cutover/double-fire concern). Fire on app-emitted metrics

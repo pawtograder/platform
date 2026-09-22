@@ -854,6 +854,25 @@ realtime:
     maxEventsPerSecond: 1000
     maxBytesPerSecond: 1000000
     maxChannelsPerClient: 100
+    # Size of the tenant's `realtime_connect` Postgrex pool, stored on the CDC
+    # extension row rather than the tenant row. Defaults to 1 upstream — and
+    # that single connection carries EVERY private-channel authorization
+    # transaction plus every realtime.messages read and write for the whole
+    # deployment, because only one node owns the tenant's database connections
+    # at a time (the others hold only the shared metadata pool). Work does not
+    # spread across replicas; it serialises here.
+    #
+    # At pool 1 the symptom is a burst that queues past DBConnection's 5s
+    # queue_target, which Realtime counts as database timeouts and answers by
+    # killing the tenant connection — tearing down the Broadcast Changes
+    # replication stream and dropping realtime for every user on every pod
+    # until it re-initialises, with the retry storm logged as
+    #   error_code=IncreaseConnectionPool "Please increase your connection pool size"
+    # Scale this with maxConcurrentUsers, and mind postgres.config.max_connections.
+    #
+    # Only `realtime_connect` honours this; realtime_rls, the subscription
+    # managers and the replication connection are hardcoded to 1 upstream.
+    dbPool: 20
   resources:
     requests: { cpu: "500m", memory: "1Gi" }
     limits: { cpu: "2", memory: "2Gi" }

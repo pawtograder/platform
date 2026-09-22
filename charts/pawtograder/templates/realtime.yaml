@@ -211,6 +211,8 @@ spec:
               value: {{ .Values.realtime.tenant.maxBytesPerSecond | int64 | quote }}
             - name: TENANT_MAX_CHANNELS_PER_CLIENT
               value: {{ .Values.realtime.tenant.maxChannelsPerClient | int64 | quote }}
+            - name: TENANT_DB_POOL
+              value: {{ .Values.realtime.tenant.dbPool | int64 | quote }}
           # Realtime applies per-tenant DB migrations LAZILY — they run when
           # a client first connects to the tenant. realtime.messages and
           # realtime.subscription (referenced by pawtograder migrations) are
@@ -313,6 +315,27 @@ spec:
                             |> Realtime.Repo.update!()
                             Realtime.Tenants.Cache.invalidate_tenant_cache(eid)
                           end
+                      end
+                    ' >/dev/null 2>&1 || true
+                    # Same problem one table over: the tenant's Postgrex pool size
+                    # lives on the CDC extension row as "db_pool", is seeded
+                    # once, and defaults to 1. Realtime only reads it when
+                    # Realtime.Tenants.Connect starts, so this write takes
+                    # effect on the next tenant connect — which a helm upgrade
+                    # forces anyway by rolling the pod that owns it.
+                    /app/bin/realtime rpc '
+                      eid = System.get_env("SELF_HOST_TENANT_NAME")
+                      want = String.to_integer(System.get_env("TENANT_DB_POOL"))
+                      case Realtime.Api.get_tenant_by_external_id(eid) do
+                        %{extensions: exts} when exts != [] ->
+                          for ext <- exts, Map.get(ext.settings, "db_pool") != want do
+                            ext
+                            |> Ecto.Changeset.change(
+                                 settings: Map.put(ext.settings, "db_pool", want))
+                            |> Realtime.Repo.update!()
+                            Realtime.Tenants.Cache.invalidate_tenant_cache(eid)
+                          end
+                        _ -> :no_tenant
                       end
                     ' >/dev/null 2>&1 || true
           # Realtime v2.34 has no public unauthenticated health endpoint
