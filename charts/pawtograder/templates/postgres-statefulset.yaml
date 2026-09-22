@@ -161,6 +161,14 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            {{- if .Values.postgres.shm.enabled }}
+            # Parallel-query DSM lands here. Without this mount the container
+            # gets the runtime default 64Mi and parallel workers fail with
+            # SQLSTATE 53100, which PostgREST turns into pool rebuilds and
+            # user-facing 503s. See postgres.shm in values.yaml.
+            - name: dshm
+              mountPath: /dev/shm
+            {{- end }}
             - name: config
               mountPath: /etc/postgresql/postgresql.conf
               subPath: postgresql.conf
@@ -391,6 +399,17 @@ spec:
         # postgres.persistence.enabled=true.
         - name: data
           emptyDir: {}
+        {{- end }}
+        {{- if .Values.postgres.shm.enabled }}
+        # medium: Memory = tmpfs. This REPLACES the container runtime's default
+        # 64Mi /dev/shm; it is not additive. sizeLimit is enforced by the
+        # kubelet and the bytes count against
+        # postgres.resources.limits.memory, so raising it trades directly
+        # against the postgres heap.
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.postgres.shm.sizeLimit }}
         {{- end }}
         - name: config
           configMap:

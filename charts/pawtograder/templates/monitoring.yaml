@@ -72,6 +72,58 @@ spec:
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 {{- end }}
 ---
+{{- if and .Values.rest.adminServer.enabled (dig "serviceMonitors" "rest" true .Values.monitoring) }}
+# Headless Service fronting PostgREST's admin server, and its ServiceMonitor.
+#
+# A SEPARATE Service on purpose. The main pawtograder-rest Service is what Kong
+# routes the public /rest/v1 path to; adding the admin port there would put an
+# unauthenticated /metrics (plus /live and /ready) one Kong route change away
+# from the internet. Same reasoning as the storage-api ADMIN_PORT note below --
+# and unlike that case this one is safe to turn on, because PostgREST's admin
+# server serves only those three read-only endpoints.
+#
+# WHAT THIS BUYS: pgrst_schema_cache_loads_total is the pool-rebuild counter.
+# PostgREST rebuilds its pool and reloads the schema cache on any fatal
+# connection error, 503ing everything in flight, and until this target existed
+# the only trace was a log line. On Khoury prod that hid 225 rebuilds and 190
+# 503s in 24h behind a green dashboard. pgrst_db_pool_waiting /
+# pgrst_db_pool_available additionally distinguish "pool exhausted by load"
+# from "pool destroyed and rebuilt", which the 503s alone cannot.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "rest-admin") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "rest-admin") | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "rest") | nindent 4 }}
+  ports:
+    - name: admin
+      port: {{ .Values.rest.adminServer.port }}
+      targetPort: admin
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "rest-admin") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "rest-admin") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "rest-admin") | nindent 6 }}
+  endpoints:
+    - port: admin
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+{{- end }}
+---
 # ServiceMonitor: storage-api. /metrics on the http port.
 #
 # This comment used to say the opposite -- that /metrics lives only on the admin

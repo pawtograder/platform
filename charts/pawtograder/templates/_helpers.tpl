@@ -495,3 +495,39 @@ on — production and the chart default already disagree.
 {{- define "pawtograder.asyncWorker.runBudgetCeiling" -}}
 {{- max 120 (sub (div (.Values.edgeFunctions.worker.timeoutMs | int) 1000) 150) -}}
 {{- end -}}
+
+{{/*
+Convert a Kubernetes INTEGER quantity (1Gi / 512Mi / 65536Ki / plain bytes) to
+a byte count.
+
+Used to keep a /dev/shm sizeLimit and the monitoring that watches it derived
+from ONE value: postgres.shm.sizeLimit sets the emptyDir, and the same number
+becomes limit_bytes in the postgres_exporter query and the denominator of
+PawtograderPostgresSharedMemoryHigh. Raising the volume therefore moves the
+alert threshold with it, instead of leaving a rule that still compares against
+the old ceiling.
+
+Integer quantities only. "1.5Gi" would silently truncate to 1Gi via `int`, so
+fractions FAIL here rather than producing an alert that is quietly wrong about
+the size of the thing it is watching.
+*/}}
+{{- define "pawtograder.quantityToBytes" -}}
+{{- $v := . | toString | trim -}}
+{{- if hasSuffix "Gi" $v -}}
+{{- $n := trimSuffix "Gi" $v -}}
+{{- if not (regexMatch "^[0-9]+$" $n) -}}{{- fail (printf "pawtograder.quantityToBytes: %q must be an integer quantity (no fractions)" $v) -}}{{- end -}}
+{{- mul (int $n) 1073741824 -}}
+{{- else if hasSuffix "Mi" $v -}}
+{{- $n := trimSuffix "Mi" $v -}}
+{{- if not (regexMatch "^[0-9]+$" $n) -}}{{- fail (printf "pawtograder.quantityToBytes: %q must be an integer quantity (no fractions)" $v) -}}{{- end -}}
+{{- mul (int $n) 1048576 -}}
+{{- else if hasSuffix "Ki" $v -}}
+{{- $n := trimSuffix "Ki" $v -}}
+{{- if not (regexMatch "^[0-9]+$" $n) -}}{{- fail (printf "pawtograder.quantityToBytes: %q must be an integer quantity (no fractions)" $v) -}}{{- end -}}
+{{- mul (int $n) 1024 -}}
+{{- else if regexMatch "^[0-9]+$" $v -}}
+{{- int $v -}}
+{{- else -}}
+{{- fail (printf "pawtograder.quantityToBytes: unsupported quantity %q (want Gi/Mi/Ki or plain bytes)" $v) -}}
+{{- end -}}
+{{- end -}}
