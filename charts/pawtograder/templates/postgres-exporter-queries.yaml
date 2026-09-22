@@ -153,6 +153,17 @@ data:
             usage: "GAUGE"
             description: "superuser_reserved_connections — slots reserved for superusers, shrinking the app-usable ceiling"
 
+{{- if .Values.postgres.enabled }}
+    # NOTE: emitted only for CHART-MANAGED Postgres. With postgres.enabled=false
+    # plus monitoring.externalPostgresExporter=true this ConfigMap is still
+    # mounted into the operator's own exporter (see the header), but the chart
+    # did NOT create that server's /dev/shm and has no idea how big it is --
+    # limit_bytes would be postgres.shm.sizeLimit, a value describing a volume
+    # that does not exist, and the ratio in
+    # PawtograderPostgresSharedMemoryHigh would be arbitrarily wrong in either
+    # direction. Better to emit no series (the alert then simply has nothing to
+    # match) than a confident wrong one. An external deployment that wants this
+    # coverage needs its own capacity value. (Raised in review on #1021.)
     # /dev/shm occupancy -- the ceiling on parallel-query dynamic shared memory.
     #
     # WHY THIS IS A METRIC AT ALL: nothing else in the stack reports it. The
@@ -185,6 +196,16 @@ data:
     # of all database execution time) -- it is a directory listing, it touches no
     # relation, and it does not scale with table size or connection count.
     #
+    # WHY LOGICAL SIZE IS THE RIGHT NUMBER HERE. pg_stat_file().size is st_size,
+    # the logical length, and tmpfs allocates pages lazily -- so in principle a
+    # sparse segment could make this over-report and fire the alert against free
+    # space that really exists. Measured on Khoury prod at one instant:
+    # df used 43160 KB, du (allocated blocks) 43160 KB, du --apparent-size
+    # (this sum) 43096 KB. 0.15% apart, with ALLOCATED slightly higher than
+    # logical. Postgres faults its DSM segments in rather than leaving them
+    # sparse, so the two track. Re-measure that way before believing any claim
+    # that this over-reports. (Raised in review on #1021.)
+    #
     # missing_ok => true because a segment can be unlinked between the
     # pg_ls_dir and the pg_stat_file; without it a routine race would error the
     # whole /metrics endpoint. Needs superuser to read outside the data dir; the
@@ -207,6 +228,7 @@ data:
         - limit_bytes:
             usage: "GAUGE"
             description: "Configured /dev/shm ceiling (postgres.shm.sizeLimit, or 64Mi when the emptyDir is disabled)"
+{{- end }}
 
     # =========================================================================
     # Global database state, moved here from the `metrics` edge function

@@ -850,7 +850,7 @@ rest:
   # by rebuilding its whole pool and reloading the schema cache, 503ing every
   # request in flight -- and the only evidence is a line in the pod log.
   # pgrst_schema_cache_loads_total turns that into a countable series; see
-  # PawtograderPostgrestPoolRebuilds.
+  # PawtograderPostgrestSchemaCacheChurn.
   #
   # Metric names verified against postgrest/postgrest:v14.8 (2026-09-22):
   # pgrst_schema_cache_loads_total{status}, pgrst_schema_cache_query_time_seconds,
@@ -2508,13 +2508,16 @@ monitoring:
     sharedMemoryPercentWarning: 70
     sharedMemoryPercentCritical: 90
     # Schema-cache reloads per PostgREST pod per hour above which
-    # PawtograderPostgrestPoolRebuilds fires. Each reload means the pool was
-    # rebuilt and everything in flight on that pod got a 503. A healthy
-    # long-lived pod sits at 0; prod during the /dev/shm incident ran ~3/hour.
+    # PawtograderPostgrestSchemaCacheChurn fires. A reload means EITHER the pool
+    # was rebuilt after a fatal connection error (everything in flight on that
+    # pod got a 503) or a `NOTIFY pgrst, 'reload schema'` arrived (harmless);
+    # the counter cannot separate them, so the alert reports churn and the
+    # description says how to tell. A healthy long-lived pod sits at 0; prod
+    # during the /dev/shm incident ran ~3/hour.
     # The rule pairs this low threshold with a 2h `for:`, because bootstrap and
     # migration bursts are large but short-lived (a fresh preview pod hit 37 in
     # three minutes) while real churn never decays.
-    postgrestPoolRebuildsPerHour: 2
+    postgrestSchemaCacheLoadsPerHour: 2
     # Streaming-standby replay lag (bytes) above which PawtograderReplicaLagHigh
     # fires (only when postgres.replica.enabled). Primary current LSN − standby
     # replay_lsn; ~0 on a healthy standby. 100 MiB tolerates a bulk write/migration

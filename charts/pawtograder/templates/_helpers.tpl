@@ -497,7 +497,7 @@ on — production and the chart default already disagree.
 {{- end -}}
 
 {{/*
-Convert a Kubernetes INTEGER quantity (1Gi / 512Mi / 65536Ki / plain bytes) to
+Convert a Kubernetes quantity (1Gi / 1.5Gi / 512Mi / 65536Ki / plain bytes) to
 a byte count.
 
 Used to keep a /dev/shm sizeLimit and the monitoring that watches it derived
@@ -507,27 +507,29 @@ PawtograderPostgresSharedMemoryHigh. Raising the volume therefore moves the
 alert threshold with it, instead of leaving a rule that still compares against
 the old ceiling.
 
-Integer quantities only. "1.5Gi" would silently truncate to 1Gi via `int`, so
-fractions FAIL here rather than producing an alert that is quietly wrong about
-the size of the thing it is watching.
+Fractions are supported deliberately. An earlier version rejected them, which
+turned a perfectly valid Kubernetes quantity into a LATENT render failure:
+monitoring.enabled defaults to false, so `sizeLimit: 1.5Gi` rendered fine and
+then broke the next upgrade that switched monitoring on, in a template the
+operator had not touched. Accepting what Kubernetes accepts removes the trap
+rather than relocating it. (Raised in review on #1021.)
+
+validations.yaml calls this for every enabled shm volume so a malformed value
+fails at render time regardless of whether monitoring is on.
 */}}
 {{- define "pawtograder.quantityToBytes" -}}
 {{- $v := . | toString | trim -}}
+{{- $mult := 1 -}}
+{{- $n := $v -}}
 {{- if hasSuffix "Gi" $v -}}
-{{- $n := trimSuffix "Gi" $v -}}
-{{- if not (regexMatch "^[0-9]+$" $n) -}}{{- fail (printf "pawtograder.quantityToBytes: %q must be an integer quantity (no fractions)" $v) -}}{{- end -}}
-{{- mul (int $n) 1073741824 -}}
+{{- $mult = 1073741824 -}}{{- $n = trimSuffix "Gi" $v -}}
 {{- else if hasSuffix "Mi" $v -}}
-{{- $n := trimSuffix "Mi" $v -}}
-{{- if not (regexMatch "^[0-9]+$" $n) -}}{{- fail (printf "pawtograder.quantityToBytes: %q must be an integer quantity (no fractions)" $v) -}}{{- end -}}
-{{- mul (int $n) 1048576 -}}
+{{- $mult = 1048576 -}}{{- $n = trimSuffix "Mi" $v -}}
 {{- else if hasSuffix "Ki" $v -}}
-{{- $n := trimSuffix "Ki" $v -}}
-{{- if not (regexMatch "^[0-9]+$" $n) -}}{{- fail (printf "pawtograder.quantityToBytes: %q must be an integer quantity (no fractions)" $v) -}}{{- end -}}
-{{- mul (int $n) 1024 -}}
-{{- else if regexMatch "^[0-9]+$" $v -}}
-{{- int $v -}}
-{{- else -}}
-{{- fail (printf "pawtograder.quantityToBytes: unsupported quantity %q (want Gi/Mi/Ki or plain bytes)" $v) -}}
+{{- $mult = 1024 -}}{{- $n = trimSuffix "Ki" $v -}}
 {{- end -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?$" $n) -}}
+{{- fail (printf "pawtograder.quantityToBytes: unsupported quantity %q (want Gi/Mi/Ki or plain bytes, e.g. 1Gi, 1.5Gi, 512Mi)" $v) -}}
+{{- end -}}
+{{- int64 (mulf (float64 $n) $mult) -}}
 {{- end -}}

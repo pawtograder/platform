@@ -592,3 +592,24 @@ neither is visible from the rendered rule.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+Validate every enabled /dev/shm sizeLimit at render time, unconditionally.
+
+pawtograder.quantityToBytes is otherwise reached only from
+postgres-exporter-queries.yaml, which is gated on monitoring.enabled -- and
+that defaults to FALSE. A malformed postgres.shm.sizeLimit therefore rendered
+happily and detonated on the later, unrelated upgrade that switched monitoring
+on; postgres.replica.shm.sizeLimit was never checked at all, because nothing
+feeds the replica's value through the helper. Both are checked here so the
+error lands on the change that introduced it. (Raised in review on #1021.)
+
+Discards the result -- this is called for its side effect of failing on a
+malformed quantity.
+*/ -}}
+{{- if and .Values.postgres.enabled .Values.postgres.shm.enabled -}}
+{{- $_ := include "pawtograder.quantityToBytes" .Values.postgres.shm.sizeLimit -}}
+{{- end -}}
+{{- if and .Values.postgres.enabled .Values.postgres.replica.enabled .Values.postgres.replica.shm.enabled -}}
+{{- $_ := include "pawtograder.quantityToBytes" .Values.postgres.replica.shm.sizeLimit -}}
+{{- end -}}

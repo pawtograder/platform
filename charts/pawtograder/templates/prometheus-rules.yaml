@@ -428,7 +428,7 @@ spec:
               configured /dev/shm for 5m. Parallel-query DSM allocations are failing or
               about to, each failure costs a full PostgREST pool rebuild, and in-flight
               user requests are being answered with 503. Cross-check
-              PawtograderPostgrestPoolRebuilds. Raise postgres.shm.sizeLimit and restart
+              PawtograderPostgrestSchemaCacheChurn. Raise postgres.shm.sizeLimit and restart
               the primary in a maintenance window. Runbook:
               docs/operations/monitoring-alerting.md.
 
@@ -523,17 +523,44 @@ spec:
               Service still selects it, and that the ServiceMonitor's labels still
               match your Prometheus ruleSelector/serviceMonitorSelector. Runbook:
               docs/operations/monitoring-alerting.md.
-{{- if .Values.rest.adminServer.enabled }}
+    {{- end }}
+    {{- if .Values.rest.adminServer.enabled }}
+    # PostgREST health. Its OWN group, gated on rest.adminServer.enabled and
+    # NOT on postgres.enabled.
+    #
+    # These two rules first shipped inside the pawtograder.postgres group,
+    # which is wrapped in `if .Values.postgres.enabled`. That silently dropped
+    # both of them in the supported external-database mode
+    # (postgres.enabled=false with monitoring.externalPostgresExporter=true) --
+    # a mode where the chart still runs PostgREST and still ships its admin
+    # ServiceMonitor, and where an external database can destroy pooled
+    # connections exactly as a chart-managed one can. Whether the pool is being
+    # rebuilt has nothing to do with who owns the database.
+    # (Raised in review on #1021.)
+    - name: pawtograder.rest
+      rules:
 
         # PostgREST pool churn -- the generic detector for "something is
         # killing database connections".
         #
         # PostgREST reloads its schema cache exactly once at startup, and again
-        # whenever it rebuilds the pool after a FATAL connection error or
-        # receives a `NOTIFY pgrst, 'reload schema'`. So per pod, per hour, a
-        # healthy replica shows ~1. Khoury prod 2026-09-22 showed ~3/hour/pod
-        # sustained -- 225 rebuilds in 24h across 3 replicas -- caused by
-        # /dev/shm exhaustion (SQLSTATE 53100).
+        # on EITHER of two events: it rebuilt the pool after a FATAL connection
+        # error, or it received a `NOTIFY pgrst, 'reload schema'`. So per pod,
+        # per hour, a healthy replica shows ~1. Khoury prod 2026-09-22 showed
+        # ~3/hour/pod sustained -- 225 loads in 24h across 3 replicas -- caused
+        # by /dev/shm exhaustion (SQLSTATE 53100).
+        #
+        # THE COUNTER CANNOT SEPARATE THOSE TWO CAUSES, and PostgREST 14.8
+        # exposes no pool-reinitialisation metric to correlate against (the
+        # full set is pgrst_jwt_cache_*, pgrst_schema_cache_loads_total,
+        # pgrst_schema_cache_query_time_seconds, pgrst_db_pool_{max,waiting,
+        # available} and pgrst_db_pool_timeouts_total). A DDL rollout that
+        # keeps issuing NOTIFY for more than the `for:` window therefore trips
+        # this rule with a perfectly healthy pool. The alert is named and
+        # worded for what it actually measures -- schema-cache churn -- and the
+        # description sends the responder to the rest pod logs to decide which
+        # cause it is, rather than asserting the damaging one.
+        # (Raised in review on #1021.)
         #
         # Deliberately CAUSE-AGNOSTIC. PawtograderPostgresSharedMemoryHigh
         # catches the one cause we have actually been bitten by, and catches it
@@ -567,27 +594,31 @@ spec:
         # The cost is 2h of detection latency, which is the right trade for a
         # cause-agnostic backstop at warning severity: the fast path for the
         # cause we actually know about is the /dev/shm pair above.
-        - alert: PawtograderPostgrestPoolRebuilds
+        - alert: PawtograderPostgrestSchemaCacheChurn
           expr: |
             sum by (pod) (increase(pgrst_schema_cache_loads_total{namespace="{{ $ns }}"}[1h]))
-              > {{ .Values.monitoring.prometheusRules.postgrestPoolRebuildsPerHour }}
+              > {{ .Values.monitoring.prometheusRules.postgrestSchemaCacheLoadsPerHour }}
           for: 2h
           labels:
             severity: warning
           annotations:
-            summary: "Pawtograder PostgREST is rebuilding its connection pool repeatedly"
+            summary: "Pawtograder PostgREST schema cache is reloading repeatedly"
             description: >-
               PostgREST pod {{`{{ $labels.pod }}`}} in {{ $ns }} has reloaded its schema
               cache more than
-              {{ .Values.monitoring.prometheusRules.postgrestPoolRebuildsPerHour }} times
-              an hour for 2h straight, which means it is tearing down and
-              rebuilding its whole connection pool -- PostgREST does that in response to
-              a fatal connection error, and every request in flight on that pod gets a
-              503 each time. Users see failed submissions and gradebook writes, not a
-              database alert. Check PawtograderPostgresSharedMemoryHigh first (a full
-              /dev/shm raises SQLSTATE 53100, the known cause), then the rest pod logs
-              for the error that precedes each "Connection Pool initialized" line.
-              Runbook: docs/operations/monitoring-alerting.md.
+              {{ .Values.monitoring.prometheusRules.postgrestSchemaCacheLoadsPerHour }}
+              times an hour for 2h straight. TWO causes produce this and the counter
+              cannot tell them apart. (1) Pool rebuilds after fatal connection errors --
+              the damaging one: PostgREST tears down and rebuilds the whole pool and
+              every request in flight on that pod gets a 503, which users see as failed
+              submissions and gradebook writes rather than as a database alert.
+              (2) Repeated `NOTIFY pgrst, 'reload schema'`, which a long or batched DDL
+              rollout emits legitimately and which costs nothing. To tell which: check
+              PawtograderPostgresSharedMemoryHigh (a full /dev/shm raises SQLSTATE
+              53100, the known cause of (1)), then look in the rest pod logs for whether
+              an error precedes each "Connection Pool initialized" line -- if one does,
+              it is (1). If a migration is in flight, suspect (2) and confirm before
+              chasing the database. Runbook: docs/operations/monitoring-alerting.md.
 
         # Pool exhaustion, which is a DIFFERENT failure from the rebuild above
         # and needs a different fix. Rebuild = connections destroyed by an
@@ -608,13 +639,12 @@ spec:
               Requests in {{ $ns }} have been failing to acquire a PostgREST pool
               connection within rest.dbPoolAcquisitionTimeout
               ({{ .Values.rest.dbPoolAcquisitionTimeout }}s) for 15m, and are being
-              answered with 503. Unlike PawtograderPostgrestPoolRebuilds the pool is
+              answered with 503. Unlike PawtograderPostgrestSchemaCacheChurn the pool is
               intact and simply oversubscribed: check pgrst_db_pool_waiting against
               pgrst_db_pool_max, look for long-running or idle-in-transaction queries
               holding connections, and only then consider raising rest.dbPool -- it is
               multiplied by rest.replicas against postgres.config.max_connections.
               Runbook: docs/operations/monitoring-alerting.md.
-{{- end }}
     {{- end }}
     # App-level KPI alerts. Converted from the Ripley Grafana-managed rules
     # (k8s/apps/monitoring/alerting/rules.yaml — reference only; a SEPARATE
@@ -1032,7 +1062,7 @@ spec:
               the investigation at three things that were all fine: this refresh shares
               PostgREST with everything else, so FIRST rule out a platform-wide fault --
               check PawtograderPostgresSharedMemoryHigh and
-              PawtograderPostgrestPoolRebuilds, and compare the 503 rate on this RPC
+              PawtograderPostgrestSchemaCacheChurn, and compare the 503 rate on this RPC
               against other endpoints. If other endpoints are also failing, this alert
               is a symptom and the pool/shared-memory alerts name the real cause. Only
               if this refresh is failing ALONE are the app-level causes worth checking:
