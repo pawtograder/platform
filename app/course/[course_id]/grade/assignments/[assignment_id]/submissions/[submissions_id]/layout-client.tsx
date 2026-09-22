@@ -9,7 +9,7 @@ export default function GradeLayoutClient({ children }: { children: React.ReactN
   const { course_id, assignment_id } = useParams();
   return (
     <Box>
-      <SubmissionsLayoutWrapper>{children}</SubmissionsLayoutWrapper>
+      <SubmissionsLayoutWrapper isStaffGradeRoute>{children}</SubmissionsLayoutWrapper>
       <Box w="100%" bg="bg.muted" p={2} borderRadius="md" position="sticky" bottom={0} left={0} right={0}>
         <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/submissions`}>
           View All Student Submissions
