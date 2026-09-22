@@ -363,11 +363,32 @@ spec:
         # Fix is postgres.shm.sizeLimit (values.yaml), which needs a pod
         # restart. Restarting WITHOUT raising the limit is not a fix -- it
         # clears the current segments and the peak returns with the load.
+        #
+        # Divide INSIDE the max, not between two maxes. The two series share a
+        # label set (same exporter, same query block), so the division joins
+        # per instance and max picks the worst ratio. `max(used) / max(limit)`
+        # would be equivalent only while exactly one exporter exists -- with
+        # two it can divide one instance's used bytes by another's ceiling,
+        # which is silently wrong precisely when the ceilings differ.
+        #
+        # KNOWN GAP: only the PRIMARY is scraped today. The standby carries no
+        # postgres-exporter sidecar and the exporter Service selects
+        # component=postgres, so a standby that exhausts its own /dev/shm
+        # produces no series and this alert cannot see it. Accepted for now:
+        # giving the standby an exporter means auditing every query in
+        # postgres-exporter-queries.yaml for recovery-safety (see the
+        # pg_current_wal_lsn note there -- it ERRORS in recovery and would 500
+        # the whole /metrics endpoint) and re-checking the existing
+        # unqualified max() alerts, which would begin aggregating across both
+        # servers. That is its own change. The per-instance form above means
+        # this rule starts covering the standby the day such an exporter
+        # exists, with no edit here.
         - alert: PawtograderPostgresSharedMemoryHigh
           expr: |
-            max(pawtograder_shared_memory_used_bytes{namespace="{{ $ns }}"})
-              / max(pawtograder_shared_memory_limit_bytes{namespace="{{ $ns }}"})
-              > {{ divf .Values.monitoring.prometheusRules.sharedMemoryPercentWarning 100 }}
+            max(
+              pawtograder_shared_memory_used_bytes{namespace="{{ $ns }}"}
+                / pawtograder_shared_memory_limit_bytes{namespace="{{ $ns }}"}
+            ) > {{ divf .Values.monitoring.prometheusRules.sharedMemoryPercentWarning 100 }}
           for: 15m
           labels:
             severity: warning
@@ -391,9 +412,10 @@ spec:
 
         - alert: PawtograderPostgresSharedMemorySaturated
           expr: |
-            max(pawtograder_shared_memory_used_bytes{namespace="{{ $ns }}"})
-              / max(pawtograder_shared_memory_limit_bytes{namespace="{{ $ns }}"})
-              > {{ divf .Values.monitoring.prometheusRules.sharedMemoryPercentCritical 100 }}
+            max(
+              pawtograder_shared_memory_used_bytes{namespace="{{ $ns }}"}
+                / pawtograder_shared_memory_limit_bytes{namespace="{{ $ns }}"}
+            ) > {{ divf .Values.monitoring.prometheusRules.sharedMemoryPercentCritical 100 }}
           for: 5m
           labels:
             severity: critical
