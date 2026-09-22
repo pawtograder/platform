@@ -191,6 +191,26 @@ spec:
             # external_id). Set the seeded tenant name to match.
             - name: SELF_HOST_TENANT_NAME
               value: {{ include "pawtograder.realtime.host" . }}
+            # Per-tenant quotas. Realtime only reads these at seed time, so
+            # they are passed as env purely for the postStart reconcile below
+            # to compare against — changing them requires a pod restart
+            # (a helm upgrade rolls the statefulset, which is enough).
+            #
+            # `int64` is load-bearing, not decoration: YAML parses a bare
+            # 1000000 as a float, and `quote` alone renders it "1e+06".
+            # String.to_integer/1 raises on that, and the reconcile's
+            # `|| true` would swallow the crash — leaving the quotas frozen
+            # at realtime's seed defaults with nothing in the logs.
+            - name: TENANT_MAX_CONCURRENT_USERS
+              value: {{ .Values.realtime.tenant.maxConcurrentUsers | int64 | quote }}
+            - name: TENANT_MAX_JOINS_PER_SECOND
+              value: {{ .Values.realtime.tenant.maxJoinsPerSecond | int64 | quote }}
+            - name: TENANT_MAX_EVENTS_PER_SECOND
+              value: {{ .Values.realtime.tenant.maxEventsPerSecond | int64 | quote }}
+            - name: TENANT_MAX_BYTES_PER_SECOND
+              value: {{ .Values.realtime.tenant.maxBytesPerSecond | int64 | quote }}
+            - name: TENANT_MAX_CHANNELS_PER_CLIENT
+              value: {{ .Values.realtime.tenant.maxChannelsPerClient | int64 | quote }}
           # Realtime applies per-tenant DB migrations LAZILY — they run when
           # a client first connects to the tenant. realtime.messages and
           # realtime.subscription (referenced by pawtograder migrations) are
@@ -255,6 +275,44 @@ spec:
                             end
                           end
                         _ -> :no_tenant
+                      end
+                    ' >/dev/null 2>&1 || true
+                    # Reconcile the tenant's quota columns to the values above.
+                    # SEED_SELF_HOST only writes them on first install, so an
+                    # existing install keeps realtime's docker-compose seed
+                    # defaults (200 concurrent users / 100 joins per second)
+                    # no matter what the chart says — which shows up as
+                    # ConnectionRateLimitReached on a cluster that is 99% idle.
+                    # Idempotent: no write, and no cache bust, when they match.
+                    #
+                    # The cache is per-node, so this only refreshes THIS pod's
+                    # copy. That is fine on a helm upgrade (every replica rolls
+                    # and runs its own postStart) but means a hand-edit of the
+                    # row still needs invalidate_tenant_cache on each pod.
+                    /app/bin/realtime rpc '
+                      eid = System.get_env("SELF_HOST_TENANT_NAME")
+                      want = %{
+                        max_concurrent_users:
+                          String.to_integer(System.get_env("TENANT_MAX_CONCURRENT_USERS")),
+                        max_joins_per_second:
+                          String.to_integer(System.get_env("TENANT_MAX_JOINS_PER_SECOND")),
+                        max_events_per_second:
+                          String.to_integer(System.get_env("TENANT_MAX_EVENTS_PER_SECOND")),
+                        max_bytes_per_second:
+                          String.to_integer(System.get_env("TENANT_MAX_BYTES_PER_SECOND")),
+                        max_channels_per_client:
+                          String.to_integer(System.get_env("TENANT_MAX_CHANNELS_PER_CLIENT"))
+                      }
+                      case Realtime.Api.get_tenant_by_external_id(eid) do
+                        nil -> :no_tenant
+                        t ->
+                          have = Map.take(Map.from_struct(t), Map.keys(want))
+                          unless have == want do
+                            t
+                            |> Ecto.Changeset.change(want)
+                            |> Realtime.Repo.update!()
+                            Realtime.Tenants.Cache.invalidate_tenant_cache(eid)
+                          end
                       end
                     ' >/dev/null 2>&1 || true
           # Realtime v2.34 has no public unauthenticated health endpoint

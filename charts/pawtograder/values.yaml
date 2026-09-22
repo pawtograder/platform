@@ -834,6 +834,26 @@ realtime:
   # Tune timeouts/queue sizes for high WS counts. See realtime docs for full
   # list of env knobs (RUN_JANITOR, MAX_HEADER_LENGTH, etc.).
   maxHeaderLength: 4096
+  # Per-tenant quotas, reconciled into the realtime.tenants row by the pod's
+  # postStart hook (below). SEED_SELF_HOST=true seeds this row on FIRST install
+  # only — seeds.exs skips when the tenant already exists — and the upstream
+  # seed values are single-developer docker-compose scale: 200 concurrent
+  # users, 100 joins/s, 100 events/s, 100 KB/s. That is far below what this
+  # chart provisions for (3 replicas x 2 CPU / 2Gi, sized for ~600 WS), so
+  # without reconciliation the row keeps the seed values forever and Realtime
+  # starts refusing every new socket with
+  #   error_code=ConnectionRateLimitReached "Too many connected users"
+  # while the pods sit at ~1% CPU. Raise these with the deployment's real
+  # enrollment, not with pod resources.
+  #
+  # maxConcurrentUsers is a cluster-wide count for the tenant (tracked via
+  # Realtime.UsersCounter across the BEAM cluster), NOT per replica.
+  tenant:
+    maxConcurrentUsers: 2000
+    maxJoinsPerSecond: 1000
+    maxEventsPerSecond: 1000
+    maxBytesPerSecond: 1000000
+    maxChannelsPerClient: 100
   resources:
     requests: { cpu: "500m", memory: "1Gi" }
     limits: { cpu: "2", memory: "2Gi" }
