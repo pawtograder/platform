@@ -527,9 +527,15 @@ spec:
         # PostgREST schema-cache race in docs/operations. Warning, not
         # critical: by itself this is degradation, and the paging signal for
         # the known cause is the /dev/shm pair above.
+        #
+        # sum, not max, by pod: pgrst_schema_cache_loads_total carries a
+        # `status` label (SUCCESS/FAIL), so max would compare the two statuses
+        # against the threshold separately -- 3 SUCCESS plus 3 FAIL is six
+        # rebuilds but a max of three, and would not fire. Every load attempt
+        # is a rebuild regardless of how it ended, so they add.
         - alert: PawtograderPostgrestPoolRebuilds
           expr: |
-            max by (pod) (increase(pgrst_schema_cache_loads_total{namespace="{{ $ns }}"}[1h])) > 3
+            sum by (pod) (increase(pgrst_schema_cache_loads_total{namespace="{{ $ns }}"}[1h])) > 3
           for: 15m
           labels:
             severity: warning
