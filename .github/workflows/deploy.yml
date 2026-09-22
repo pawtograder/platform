@@ -529,6 +529,22 @@ jobs:
           # required — and tokenless is the mechanism built for exactly this
           # case, a public repo where builds can originate from forks.
           #
+          # Tokenless needs @argos-ci/playwright >= 6.6.4 (core >= 5.3.1) to
+          # work from a fork, which is why this PR bumps it. Up to core 4.0.2
+          # the tokenless claim was built from
+          # `payload.pull_request.head.repo.full_name` — the FORK — so a fork PR
+          # authenticated as `<forkowner>/platform`, a repo with no Argos
+          # project. The reporter returns `{status:"failed"}` on an upload
+          # error and Playwright propagates that to the exit code, so the job
+          # would go red with 100% of tests passing, on exactly the fork PRs the
+          # gate above exists to admit. core 5.3.1 split the two meanings:
+          # `repository` stays the fork for build metadata, `originalRepository`
+          # (= GITHUB_REPOSITORY, i.e. the repo the run actually lives in)
+          # carries the auth claim. The same release also fixed `commit` under
+          # pull_request_target, which previously reported GITHUB_SHA — the BASE
+          # sha — instead of the PR head, mis-attributing every visual build.
+          # Do not float this dependency back below that floor.
+          #
           # A previous version of this comment claimed playwright-standalone.yml
           # already uploaded tokenlessly. It did not; that workflow used Percy,
           # never Argos, and has been deleted along with its Coolify-era
