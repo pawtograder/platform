@@ -72,7 +72,7 @@ spec:
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 {{- end }}
 ---
-{{- if and .Values.rest.adminServer.enabled (dig "serviceMonitors" "rest" true .Values.monitoring) }}
+{{- if and .Values.rest.enabled .Values.rest.adminServer.enabled (dig "serviceMonitors" "rest" true .Values.monitoring) }}
 # Headless Service fronting PostgREST's admin server, and its ServiceMonitor.
 #
 # A SEPARATE Service on purpose. The main pawtograder-rest Service is what Kong

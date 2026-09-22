@@ -520,7 +520,7 @@ PrometheusRule must not fail a render over numbers that have no effect.
      anyway -- but a large value on any threshold that is NOT cast would reach
      the expression in that form, so the check has to allow what PromQL allows
      rather than what looks tidy in values.yaml. */ -}}
-{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "replicationLagBytesWarning" "queueMsgIdWarning" "queueMsgIdCritical") -}}
+{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "sharedMemoryPercentWarning" "sharedMemoryPercentCritical" "postgrestSchemaCacheLoadsPerHour" "replicationLagBytesWarning" "queueMsgIdWarning" "queueMsgIdCritical") -}}
 {{- $raw := "" -}}
 {{- if hasKey $pr $k -}}{{- $raw = (index $pr $k) | toString -}}{{- end -}}
 {{- if and (ne $raw "") (not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $raw)) -}}

@@ -524,7 +524,7 @@ spec:
               match your Prometheus ruleSelector/serviceMonitorSelector. Runbook:
               docs/operations/monitoring-alerting.md.
     {{- end }}
-    {{- if .Values.rest.adminServer.enabled }}
+    {{- if and .Values.rest.enabled .Values.rest.adminServer.enabled }}
     # PostgREST health. Its OWN group, gated on rest.adminServer.enabled and
     # NOT on postgres.enabled.
     #
@@ -537,6 +537,10 @@ spec:
     # connections exactly as a chart-managed one can. Whether the pool is being
     # rebuilt has nothing to do with who owns the database.
     # (Raised in review on #1021.)
+    #
+    # Also gated on rest.enabled: adminServer.enabled defaults to true, so
+    # disabling the REST tier alone would otherwise leave a ServiceMonitor with
+    # no endpoints and two alerts watching a component that is not deployed.
     - name: pawtograder.rest
       rules:
 

@@ -528,8 +528,31 @@ fails at render time regardless of whether monitoring is on.
 {{- else if hasSuffix "Ki" $v -}}
 {{- $mult = 1024 -}}{{- $n = trimSuffix "Ki" $v -}}
 {{- end -}}
-{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?$" $n) -}}
+{{- /*
+  Exponent notation is accepted because Helm PRODUCES it. A bare number in a
+  values file -- `sizeLimit: 1073741824`, the plain-byte form this helper
+  advertises -- is parsed as a float and `toString` renders it
+  "1.073741824e+09". Rejecting that broke every render, not just the monitoring
+  path, once validations.yaml started calling this unconditionally.
+  (Raised in review on #1021.)
+*/ -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $n) -}}
 {{- fail (printf "pawtograder.quantityToBytes: unsupported quantity %q (want Gi/Mi/Ki or plain bytes, e.g. 1Gi, 1.5Gi, 512Mi)" $v) -}}
 {{- end -}}
-{{- int64 (mulf (float64 $n) $mult) -}}
+{{- $bytes := int64 (ceil (mulf (float64 $n) $mult)) -}}
+{{- /*
+  ceil, not truncate: Kubernetes rounds a positive fractional quantity UP to
+  the nearest byte (resource.Quantity.Value), so truncating would disagree with
+  the ceiling the kubelet actually enforces. Immaterial at realistic sizes --
+  1.1Gi differs by one byte -- but a sub-byte value like `0.1` truncates to
+  ZERO, and limit_bytes=0 makes the alert's used/limit division +Inf, which
+  fires instantly and permanently. The positivity check below closes the rest
+  of that class (an explicit 0, or a value small enough to round to nothing),
+  since every consumer of this helper divides by the result.
+  (Raised in review on #1021.)
+*/ -}}
+{{- if le (int64 $bytes) (int64 0) -}}
+{{- fail (printf "pawtograder.quantityToBytes: %q resolves to %d bytes; a /dev/shm sizeLimit must be positive (the monitoring divides by it)" $v $bytes) -}}
+{{- end -}}
+{{- $bytes -}}
 {{- end -}}
