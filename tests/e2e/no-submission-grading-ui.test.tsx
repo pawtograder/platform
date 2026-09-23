@@ -97,12 +97,25 @@ test.describe("No-submission assignment grading UI", () => {
     await expect(page.getByRole("heading", { name: "Submission Review Actions" })).toBeVisible();
   });
 
-  test("the staff grading route also redirects to Grade for a no-submission assignment", async ({ page }) => {
+  test("the staff grading route stays put and renders the real rubric for a no-submission assignment", async ({
+    page
+  }) => {
     await loginAsUser(page, instructor, course);
 
-    await page.goto(`/course/${course.id}/grade/assignments/${assignment.id}/submissions/${submissionId}`);
+    // The staff-prefixed route has no "/grade" sub-page (appending one 404s), so the layout skips
+    // its canonicalizing redirect here and renders the rubric on the submission root itself.
+    const staffSubmissionPath = `/course/${course.id}/grade/assignments/${assignment.id}/submissions/${submissionId}`;
+    await page.goto(staffSubmissionPath);
 
-    await expect(page).toHaveURL(/\/grade(?:\?.*)?$/, { timeout: 15_000 });
+    // Wait for the rubric first: once it renders, the layout has hydrated, so any redirect effect
+    // would already have fired and the URL check below is meaningful.
+    const rubricSidebar = page.locator(`#rubric-${assignment.grading_rubric_id}`);
+    await expect(rubricSidebar).toBeVisible();
+    await expect(rubricSidebar).toContainText("Grading Review Check 1");
+    await expect(page.getByRole("heading", { name: "Submission Review Actions" })).toBeVisible();
+
+    await expect(page).toHaveURL(new RegExp(`${staffSubmissionPath}(?:\\?.*)?$`));
+    await expect(page.getByRole("link", { name: "Grade", exact: true })).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("link", { name: "Autograder Detail" })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Files", exact: true })).toHaveCount(0);
   });
