@@ -97,12 +97,17 @@ Components:
   followed by `Connection Pool initialized`. PostgREST treats the error as fatal
   and rebuilds its whole pool, which 503s everything in flight on that pod. The
   database itself logs nothing.
+- **Not every 53100 is this.** SQLSTATE 53100 is `disk_full` in general. The
+  "could not resize shared memory segment" message is what points at
+  `/dev/shm`. Without it, check the data volume (`df` on
+  `/var/lib/postgresql/data`) first; the workaround below does nothing for a
+  full PVC.
 - **Cause:** until chart 0.4.0 the primary runs on the container default 64Mi
   `/dev/shm`. Parallel queries put their dynamic shared memory segments there.
 - **Check:**
   ```bash
   kubectl -n $NS exec <release>-postgres-0 -c postgres -- df -h /dev/shm
-  kubectl -n $NS logs deploy/<release>-rest --since=1h | grep -c 53100
+  kubectl -n $NS logs deploy/<release>-rest --since=1h | grep -c 'could not resize shared memory segment'
   ```
 - **Permanent fix:** chart 0.4.0 (`postgres.shm.sizeLimit`, 1Gi) plus shm
   occupancy alerts. It restarts the primary, so it needs a

@@ -525,9 +525,11 @@ spec:
               (2) Repeated `NOTIFY pgrst, 'reload schema'`, which a long or batched DDL
               rollout emits legitimately and which costs nothing. To tell which: look in
               the rest pod logs for whether an error precedes each "Connection Pool
-              initialized" line -- if one does, it is (1). SQLSTATE 53100 ("could not
-              resize shared memory segment") there means a full Postgres /dev/shm, the
-              known cause of (1); see docs/operations/incident-response.md. If a migration is in flight, suspect (2) and confirm before
+              initialized" line -- if one does, it is (1). A "could not resize shared
+              memory segment ... No space left on device" error means a full Postgres
+              /dev/shm, the known cause of (1); see docs/operations/incident-response.md.
+              SQLSTATE 53100 alone only means disk_full, which a full data volume raises
+              too, so without that message check the Postgres PVC as well. If a migration is in flight, suspect (2) and confirm before
               chasing the database. Runbook: docs/operations/monitoring-alerting.md.
 
         # Pool exhaustion, which is a DIFFERENT failure from the rebuild above
@@ -972,7 +974,8 @@ spec:
               the investigation at three things that were all fine: this refresh shares
               PostgREST with everything else, so FIRST rule out a platform-wide fault --
               check PawtograderPostgrestSchemaCacheChurn, grep the rest pod logs for
-              SQLSTATE 53100, and compare the 503 rate on this RPC
+              "could not resize shared memory segment" (a full /dev/shm; a bare
+              SQLSTATE 53100 is disk_full, so check the data volume too), and compare the 503 rate on this RPC
               against other endpoints. If other endpoints are also failing, this alert
               is a symptom and the pool alerts or rest logs name the real cause. Only
               if this refresh is failing ALONE are the app-level causes worth checking:

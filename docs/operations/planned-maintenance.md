@@ -83,25 +83,38 @@ version says which kind of change it is:
 - **Patch (`0.3.26` → `0.3.27`): Postgres keeps running.** Other tiers may roll
   (web, edge functions, rest), but the primary and standby StatefulSets'
   pod templates are unchanged.
-- **Minor or major (`0.3.x` → `0.4.0`): Postgres restarts.** Plan it as a
-  maintenance window with the procedure below.
+- **Minor or major (`0.3.x` → `0.4.0`): Postgres may restart.** This is the
+  only kind of release allowed to restart it, but not every one does. Check
+  the release's PR for the `postgres-restart-gate` notice, or diff the rendered
+  StatefulSets yourself. If it restarts Postgres, plan a maintenance window
+  with the procedure below.
 
-What restarts Postgres is any change to the rendered `.spec.template` or
-`.spec.volumeClaimTemplates` of `templates/postgres-statefulset.yaml` or
-`templates/postgres-replica.yaml`. That includes volumes and mounts, env,
-resources, the image, and the `checksum/config` annotation. The annotation
-hashes `postgres-config.yaml` and `postgres-exporter-queries.yaml`, so a new
-exporter query restarts the primary too, even though it looks like a
-monitoring change. New monitoring objects belong in `monitoring.yaml`.
+What restarts Postgres is any change to the rendered `.spec.template` of
+`templates/postgres-statefulset.yaml` or `templates/postgres-replica.yaml`.
+That includes volumes and mounts, env, resources, the image, labels, and the
+`checksum/config` annotation. The annotation hashes `postgres-config.yaml` and
+`postgres-exporter-queries.yaml`, so a new exporter query restarts the primary
+too, even though it looks like a monitoring change. New monitoring objects
+belong in `monitoring.yaml`. Values count as much as templates: a
+`postgres.config` or `postgres.resources` edit in a values file rolls the pod
+the same way.
+
+A change to `.spec.volumeClaimTemplates` is different, and worse: it doesn't
+restart anything. The field is immutable, so Kubernetes rejects the
+StatefulSet update and the `helm upgrade` fails. A storage change like that
+needs its own plan, either a data migration to a new volume or deleting and
+recreating the StatefulSet (`--cascade=orphan`) around it, not just a window.
 
 CI enforces this. The `postgres-restart-gate` job in `.github/workflows/lint.yml`
 runs `charts/pawtograder/tests/postgres-restart-gate.sh`, which renders both
-StatefulSets at `main` and at the PR head across the example values files.
+StatefulSets at `main` and at the PR head across the example values files,
+each side with its own copy of the values.
 It compares against `main` rather than the PR's base because production
 deploys from `main`. Against `staging`, backing out a restart that was never
 released would itself look like a restart. It fails a PR that changes either
-pod template without a minor bump over `main`'s version, and adds a notice
-to one that does bump. To run it locally:
+pod template or claim template without a minor bump over `main`'s version,
+and fails if any of its renders breaks, rather than passing on partial
+coverage. A PR that does bump gets a notice instead. To run it locally:
 
 ```bash
 charts/pawtograder/tests/postgres-restart-gate.sh origin/main

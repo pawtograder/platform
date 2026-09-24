@@ -18,12 +18,15 @@
 #   .spec.template              -- pod spec, volumes, and the checksum/config
 #                                  annotation (postgres-config.yaml +
 #                                  postgres-exporter-queries.yaml)
-#   .spec.volumeClaimTemplates  -- immutable; a change here is a
-#                                  delete-and-recreate, which is worse
+#   .spec.volumeClaimTemplates  -- immutable: Kubernetes rejects the update,
+#                                  so the upgrade fails outright and needs a
+#                                  migration or recreate plan (reported
+#                                  separately)
 #
 # for the primary (postgres-statefulset.yaml) and the standby
 # (postgres-replica.yaml). If either differs under any values set below and the
-# version bump is only a patch (or nothing), it fails.
+# version bump is only a patch (or nothing), it fails. Values files come from
+# each side's own tree, so a values-only change counts too.
 #
 # Why this exists: #1021 shipped a /dev/shm volume on the primary as
 # 0.3.26 -> 0.3.27. The version said "routine"; the deploy needed a
@@ -64,12 +67,17 @@ if ! [[ "$BASE_VER" =~ $semver && "$HEAD_VER" =~ $semver ]]; then
   exit 2
 fi
 
-# Values sets. Taken from the HEAD tree and used for BOTH renders, so the only
-# thing that differs is the chart. The prod examples need two values the
-# guard-rails demand but the example leaves for the operator (image tags,
-# storage class, WAL-G prefix, backup endpoint, the ruleSelector label); they are pinned to fixed strings so they cannot
-# introduce a diff.
-EX="$CHART/examples"
+# Values sets: the example values files, each side rendered with ITS OWN copy
+# (base chart + base values vs HEAD chart + HEAD values). Staging auto-deploys
+# from examples/values-staging.yaml, so a values-only edit -- postgres.config,
+# resources, the image -- rolls Postgres as surely as a template edit, and has
+# to show up here. A file present on only one side is reported and skipped:
+# there is no old-to-new deployment to compare.
+#
+# The prod examples leave some values to the operator that the guard-rails
+# demand (image tags, storage class, WAL-G prefix, backup endpoint, the
+# ruleSelector label). Those are pinned to the same fixed strings on both
+# sides, so they cannot introduce a diff.
 PROD_FIXUPS=(
   --set monitoring.prometheusRules.labels.release=prometheus
   --set postgres.persistence.storageClass=gate
@@ -78,98 +86,131 @@ PROD_FIXUPS=(
 )
 for img in web edgeFunctions migrations backup; do PROD_FIXUPS+=(--set "$img.image.tag=v0.0.0-gate"); done
 CASES=(
-  "staging|-f $EX/values-staging.yaml"
-  "preview|-f $EX/values-preview.yaml"
-  "tartangrader|-f $EX/values-tartangrader.yaml"
-  "prod|-f $EX/values-prod.yaml ${PROD_FIXUPS[*]}"
-  "prod-noeso|-f $EX/values-prod-noeso.yaml ${PROD_FIXUPS[*]}"
+  "staging|values-staging.yaml|"
+  "preview|values-preview.yaml|"
+  "tartangrader|values-tartangrader.yaml|"
+  "prod|values-prod.yaml|prod"
+  "prod-noeso|values-prod-noeso.yaml|prod"
 )
 TEMPLATES=(postgres-statefulset.yaml postgres-replica.yaml)
 
-# Print the restart-relevant blocks of every StatefulSet in a rendered file:
-# the 2-space-indented `template:` and `volumeClaimTemplates:` keys under spec,
-# each up to the next 2-space key or document end. Chart-version labels are
-# dropped: they change on every bump and are not what rolls the pod here (the
-# pod template uses version-free labels; stripping keeps the gate honest if
-# that ever regresses, since a label-only roll is the bump's own doing).
+# extract <key>: print one 2-space-indented key under spec (`template` or
+# `volumeClaimTemplates`) of every StatefulSet in a rendered file, up to the
+# next 2-space key or document end. Nothing is filtered out: any change in the
+# pod template, labels included, rolls the pod. The pod templates use
+# version-free labels today; if chart-version labels ever get in, every bump
+# rolls Postgres, and the gate should say so.
 extract() {
-  awk '
+  awk -v key="$1" '
     /^---/                { in_ss=0; keep=0; next }
     /^kind: StatefulSet/  { in_ss=1; next }
     !in_ss                { next }
-    /^  [A-Za-z]/         { keep = ($0 ~ /^  (template|volumeClaimTemplates):/) }
+    /^  [A-Za-z]/         { keep = ($0 ~ ("^  " key ":")) }
     /^[A-Za-z]/           { keep=0 }
-    keep && $0 !~ /(helm\.sh\/chart|app\.kubernetes\.io\/version):/ { print }
+    keep                  { print }
   '
 }
 
-# render <chart> <template> <args...>: rendered blocks on stdout; exit 1 if
-# the chart fails to render. A template that renders to nothing (replica
-# disabled) makes helm say "could not find template" -- that is an empty
-# result, not a failure.
+# render <out-prefix> <chart> <template> <args...>: writes <out-prefix>.tpl
+# and <out-prefix>.vct; returns 1 if the chart fails to render. A template
+# that renders to nothing (replica disabled) makes helm say "could not find
+# template" -- that is an empty result, not a failure.
 render() {
-  local chart="$1" tpl="$2"; shift 2
-  local out err
-  err="$TMP/err"
-  if out="$(helm template t "$chart" "$@" --show-only "templates/$tpl" 2>"$err")"; then
-    printf '%s\n' "$out" | extract
+  local out="$1" chart="$2" tpl="$3"; shift 3
+  : >"$out.tpl"; : >"$out.vct"
+  if helm template t "$chart" "$@" --show-only "templates/$tpl" >"$out.yaml" 2>"$TMP/err"; then
+    extract template <"$out.yaml" >"$out.tpl"
+    extract volumeClaimTemplates <"$out.yaml" >"$out.vct"
     return 0
   fi
-  grep -q "could not find template" "$err" && return 0
-  return 1
+  grep -q "could not find template" "$TMP/err"
 }
 
-RESTARTS=()
+POD_CHANGES=()
+VCT_CHANGES=()
 SKIPPED=()
+BROKEN=()
 CHECKED=0
+show_diff() {
+  echo "---- $1 (base $BASE_REF -> HEAD) ----"
+  diff -u "$2" "$3" | sed -n '3,80p'
+  echo
+}
 for c in "${CASES[@]}"; do
-  label="${c%%|*}"
-  # shellcheck disable=SC2206  # word-splitting the args string is the intent
-  args=(${c#*|})
+  IFS='|' read -r label file kind <<<"$c"
+  if [ ! -f "$BASE_CHART/examples/$file" ] || [ ! -f "$CHART/examples/$file" ]; then
+    SKIPPED+=("$label: examples/$file exists on only one side; no old-to-new deployment to compare")
+    continue
+  fi
+  base_args=(-f "$BASE_CHART/examples/$file")
+  head_args=(-f "$CHART/examples/$file")
+  if [ "$kind" = prod ]; then base_args+=("${PROD_FIXUPS[@]}"); head_args+=("${PROD_FIXUPS[@]}"); fi
   for tpl in "${TEMPLATES[@]}"; do
-    if ! render "$CHART" "$tpl" "${args[@]}" >"$TMP/head.txt"; then
-      SKIPPED+=("$label/$tpl: HEAD does not render ($(head -c 160 "$TMP/err" | tr '\n' ' '))")
+    if ! render "$TMP/head" "$CHART" "$tpl" "${head_args[@]}"; then
+      BROKEN+=("$label/$tpl: HEAD does not render: $(head -c 200 "$TMP/err" | tr '\n' ' ')")
       continue
     fi
-    if ! render "$BASE_CHART" "$tpl" "${args[@]}" >"$TMP/base.txt"; then
-      SKIPPED+=("$label/$tpl: base does not render with HEAD's values ($(head -c 160 "$TMP/err" | tr '\n' ' '))")
+    if ! render "$TMP/base" "$BASE_CHART" "$tpl" "${base_args[@]}"; then
+      BROKEN+=("$label/$tpl: $BASE_REF does not render: $(head -c 200 "$TMP/err" | tr '\n' ' ')")
       continue
     fi
     CHECKED=$((CHECKED + 1))
-    if ! diff -q "$TMP/base.txt" "$TMP/head.txt" >/dev/null; then
-      RESTARTS+=("$label/$tpl")
-      echo "---- $label: $tpl pod template changes (base $BASE_REF -> HEAD) ----"
-      diff -u "$TMP/base.txt" "$TMP/head.txt" | sed -n '3,80p'
-      echo
+    if ! diff -q "$TMP/base.tpl" "$TMP/head.tpl" >/dev/null; then
+      POD_CHANGES+=("$label/$tpl")
+      show_diff "$label: $tpl pod template" "$TMP/base.tpl" "$TMP/head.tpl"
+    fi
+    if ! diff -q "$TMP/base.vct" "$TMP/head.vct" >/dev/null; then
+      VCT_CHANGES+=("$label/$tpl")
+      show_diff "$label: $tpl volumeClaimTemplates" "$TMP/base.vct" "$TMP/head.vct"
     fi
   done
 done
 
 for s in "${SKIPPED[@]}"; do echo "skip $s"; done
 
-# Fail closed: a gate that compared nothing must not report a pass.
-if [ "$CHECKED" -eq 0 ]; then
-  msg="No values set rendered at both $BASE_REF and HEAD, so nothing was compared. Fix the renders (see skips above) or the cases list in this script."
+gh_annotate() { [ -n "${GITHUB_ACTIONS:-}" ] && echo "::$1 title=$2::$3"; return 0; }
+
+# Fail closed. Every configured render has to compare: a case that cannot
+# render is coverage the gate does not have, and a partial pass would let a
+# change in exactly that case through.
+if [ ${#BROKEN[@]} -gt 0 ]; then
+  for b in "${BROKEN[@]}"; do echo "FAIL $b"; done
+  msg="${#BROKEN[@]} render(s) failed, so the gate cannot vouch for them. Fix the render, or change the cases list in this script."
   echo "FAIL $msg"
-  [ -n "${GITHUB_ACTIONS:-}" ] && echo "::error title=Postgres restart gate compared nothing::$msg"
+  gh_annotate error "Postgres restart gate could not render" "$msg"
+  exit 1
+fi
+if [ "$CHECKED" -eq 0 ]; then
+  msg="No values set exists at both $BASE_REF and HEAD, so nothing was compared."
+  echo "FAIL $msg"
+  gh_annotate error "Postgres restart gate compared nothing" "$msg"
   exit 1
 fi
 
-if [ ${#RESTARTS[@]} -eq 0 ]; then
-  echo "ok   no Postgres pod-template change against $BASE_REF across $CHECKED renders (chart $BASE_VER -> $HEAD_VER)"
+if [ ${#POD_CHANGES[@]} -eq 0 ] && [ ${#VCT_CHANGES[@]} -eq 0 ]; then
+  echo "ok   no Postgres pod-template or volumeClaimTemplates change against $BASE_REF across $CHECKED renders (chart $BASE_VER -> $HEAD_VER)"
   exit 0
 fi
+
+# What each kind of change does on upgrade. A pod-template change rolls the
+# pod. A volumeClaimTemplates change does NOT roll anything: the field is
+# immutable, so Kubernetes REJECTS the StatefulSet update and the helm upgrade
+# fails. That needs a migration or delete-and-recreate plan, not just a window.
+what=()
+[ ${#POD_CHANGES[@]} -gt 0 ] && what+=("restarts Postgres (${POD_CHANGES[*]})")
+[ ${#VCT_CHANGES[@]} -gt 0 ] && what+=("edits the immutable volumeClaimTemplates (${VCT_CHANGES[*]}), which Kubernetes rejects on upgrade and so needs an explicit storage migration or StatefulSet recreation plan")
+change="This change $(IFS=';'; echo "${what[*]}" | sed 's/;/; and /g')"
 
 IFS=. read -r bmaj bmin _ <<<"$BASE_VER"
 IFS=. read -r hmaj hmin _ <<<"$HEAD_VER"
 if [ "$hmaj" -gt "$bmaj" ] || { [ "$hmaj" -eq "$bmaj" ] && [ "$hmin" -gt "$bmin" ]; }; then
-  msg="This change restarts Postgres (${RESTARTS[*]}) and bumps the chart $BASE_VER -> $HEAD_VER. Coordinate the merge to staging with the production maintenance window: docs/operations/planned-maintenance.md."
+  msg="$change. The chart goes $BASE_VER -> $HEAD_VER. Coordinate the merge to staging with the production maintenance window: docs/operations/planned-maintenance.md."
   echo "ok   $msg"
-  [ -n "${GITHUB_ACTIONS:-}" ] && echo "::notice title=Postgres restart::$msg"
+  gh_annotate notice "Postgres restart" "$msg"
   exit 0
 fi
 
-msg="This change restarts Postgres (${RESTARTS[*]}) but the chart version goes $BASE_VER -> $HEAD_VER. A Postgres restart needs at least a MINOR bump (e.g. $bmaj.$((bmin + 1)).0) so the deploy is planned as a maintenance window. See docs/operations/planned-maintenance.md (Chart versions and Postgres restarts)."
+msg="$change, but the chart version goes $BASE_VER -> $HEAD_VER. This needs at least a MINOR bump (e.g. $bmaj.$((bmin + 1)).0) so the deploy is planned as a maintenance window. See docs/operations/planned-maintenance.md (Chart versions and Postgres restarts)."
 echo "FAIL $msg"
-[ -n "${GITHUB_ACTIONS:-}" ] && echo "::error title=Postgres restart needs a minor version bump::$msg"
+gh_annotate error "Postgres restart needs a minor version bump" "$msg"
 exit 1
