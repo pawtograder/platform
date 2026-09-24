@@ -74,6 +74,53 @@ behind the primary's retained `pg_wal`).
 
 ---
 
+## Chart versions and Postgres restarts
+
+A chart upgrade can restart the primary as surely as a node drain can, and
+nobody schedules a window for a change they think is routine. So the chart
+version says which kind of change it is:
+
+- **Patch (`0.3.26` → `0.3.27`): Postgres keeps running.** Other tiers may roll
+  (web, edge functions, rest), but the primary and standby StatefulSets'
+  pod templates are unchanged.
+- **Minor or major (`0.3.x` → `0.4.0`): Postgres restarts.** Plan it as a
+  maintenance window with the procedure below.
+
+What restarts Postgres is any change to the rendered `.spec.template` or
+`.spec.volumeClaimTemplates` of `templates/postgres-statefulset.yaml` or
+`templates/postgres-replica.yaml`. That includes volumes and mounts, env,
+resources, the image, and the `checksum/config` annotation. The annotation
+hashes `postgres-config.yaml` and `postgres-exporter-queries.yaml`, so a new
+exporter query restarts the primary too, even though it looks like a
+monitoring change. New monitoring objects belong in `monitoring.yaml`.
+
+CI enforces this. The `postgres-restart-gate` job in `.github/workflows/lint.yml`
+runs `charts/pawtograder/tests/postgres-restart-gate.sh`, which renders both
+StatefulSets at the PR's base and head across the example values files. It
+fails a PR that changes either pod template without a minor bump, and adds a
+notice to one that does bump. To run it locally:
+
+```bash
+charts/pawtograder/tests/postgres-restart-gate.sh origin/staging
+```
+
+**Coordinate the merge to `staging`.** A push to `staging` deploys staging at
+once, which restarts staging's Postgres. Staging then promotes to `main`
+branch-wide, so after the merge the change goes to production with the next
+promotion. Until the production window is booked, keep a Postgres-restarting
+change on its own branch, not on `staging`. When the window is booked,
+merge it to `staging`, promote it, and deploy it to production in the window.
+
+If production needs relief before a window can be scheduled, look for an
+online workaround first: a setting that takes effect on reload
+(`ALTER SYSTEM` + `pg_reload_conf()`) rather than a pod change. Record it
+where the next deploy will see it. The 2026-09-23 `/dev/shm` incident
+([incident-response.md](./incident-response.md#postgres-devshm-exhaustion-sqlstate-53100))
+is the worked example: #1021 shipped as a patch, was split, and its restarting
+half moved to 0.4.0.
+
+---
+
 ## Scheduling
 
 Pawtograder is a course tool: an outage during an assignment deadline or an exam
