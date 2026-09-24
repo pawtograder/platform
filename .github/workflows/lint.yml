@@ -117,6 +117,25 @@ jobs:
       - name: Run Prometheus rule behaviour tests
         run: charts/pawtograder/tests/promrules-unit.sh
 
+  # A chart change that restarts Postgres (pod template, checksum/config, volume
+  # claim templates) must bump at least the chart MINOR version, so the deploy
+  # is planned as a maintenance window rather than shipped as a routine patch.
+  # See docs/operations/planned-maintenance.md. Its own job, not a step in
+  # chart-guardrails, so a failing step there cannot skip it. PR-only: it needs
+  # the base commit to compare against.
+  postgres-restart-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.20.2
+      - name: Postgres restart needs a minor version bump
+        run: charts/pawtograder/tests/postgres-restart-gate.sh "${{ github.event.pull_request.base.sha }}"
+
   # Fast, deterministic unit tests for the gradebook recalc computation (the math the
   # gradebook-calculations e2e fixtures exercise end-to-end through the async pipeline).
   # These run the real edge-function expression functions directly — no DB, no pipeline.
