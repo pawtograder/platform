@@ -527,3 +527,64 @@ on — production and the chart default already disagree.
 {{- define "pawtograder.asyncWorker.runBudgetCeiling" -}}
 {{- max 120 (sub (div (.Values.edgeFunctions.worker.timeoutMs | int) 1000) 150) -}}
 {{- end -}}
+
+{{/*
+Convert a Kubernetes quantity (1Gi / 1.5Gi / 512Mi / 65536Ki / plain bytes) to
+a byte count.
+
+Used to keep a /dev/shm sizeLimit and the monitoring that watches it derived
+from ONE value: postgres.shm.sizeLimit sets the emptyDir, and the same number
+becomes limit_bytes in the postgres_exporter query and the denominator of
+PawtograderPostgresSharedMemoryHigh. Raising the volume therefore moves the
+alert threshold with it, instead of leaving a rule that still compares against
+the old ceiling.
+
+Fractions are supported deliberately. An earlier version rejected them, which
+turned a perfectly valid Kubernetes quantity into a LATENT render failure:
+monitoring.enabled defaults to false, so `sizeLimit: 1.5Gi` rendered fine and
+then broke the next upgrade that switched monitoring on, in a template the
+operator had not touched. Accepting what Kubernetes accepts removes the trap
+rather than relocating it. (Raised in review on #1021.)
+
+validations.yaml calls this for every enabled shm volume so a malformed value
+fails at render time regardless of whether monitoring is on.
+*/}}
+{{- define "pawtograder.quantityToBytes" -}}
+{{- $v := . | toString | trim -}}
+{{- $mult := 1 -}}
+{{- $n := $v -}}
+{{- if hasSuffix "Gi" $v -}}
+{{- $mult = 1073741824 -}}{{- $n = trimSuffix "Gi" $v -}}
+{{- else if hasSuffix "Mi" $v -}}
+{{- $mult = 1048576 -}}{{- $n = trimSuffix "Mi" $v -}}
+{{- else if hasSuffix "Ki" $v -}}
+{{- $mult = 1024 -}}{{- $n = trimSuffix "Ki" $v -}}
+{{- end -}}
+{{- /*
+  Exponent notation is accepted because Helm PRODUCES it. A bare number in a
+  values file -- `sizeLimit: 1073741824`, the plain-byte form this helper
+  advertises -- is parsed as a float and `toString` renders it
+  "1.073741824e+09". Rejecting that broke every render, not just the monitoring
+  path, once validations.yaml started calling this unconditionally.
+  (Raised in review on #1021.)
+*/ -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $n) -}}
+{{- fail (printf "pawtograder.quantityToBytes: unsupported quantity %q (want Gi/Mi/Ki or plain bytes, e.g. 1Gi, 1.5Gi, 512Mi)" $v) -}}
+{{- end -}}
+{{- $bytes := int64 (ceil (mulf (float64 $n) $mult)) -}}
+{{- /*
+  ceil, not truncate: Kubernetes rounds a positive fractional quantity UP to
+  the nearest byte (resource.Quantity.Value), so truncating would disagree with
+  the ceiling the kubelet actually enforces. Immaterial at realistic sizes --
+  1.1Gi differs by one byte -- but a sub-byte value like `0.1` truncates to
+  ZERO, and limit_bytes=0 makes the alert's used/limit division +Inf, which
+  fires instantly and permanently. The positivity check below closes the rest
+  of that class (an explicit 0, or a value small enough to round to nothing),
+  since every consumer of this helper divides by the result.
+  (Raised in review on #1021.)
+*/ -}}
+{{- if le (int64 $bytes) (int64 0) -}}
+{{- fail (printf "pawtograder.quantityToBytes: %q resolves to %d bytes; a /dev/shm sizeLimit must be positive (the monitoring divides by it)" $v $bytes) -}}
+{{- end -}}
+{{- $bytes -}}
+{{- end -}}

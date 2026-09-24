@@ -335,6 +335,103 @@ spec:
               are about to be refused (FATAL: too many clients). Kill leaked/idle
               sessions or scale down connection consumers immediately. Runbook:
               docs/operations/monitoring-alerting.md.
+        # /dev/shm saturation -- the parallel-query DSM ceiling.
+        #
+        # Added after Khoury prod 2026-09-22, where this condition ran for at
+        # least 24h with every existing alert green. The chain it catches:
+        # /dev/shm fills -> a parallel worker's segment resize fails with
+        # SQLSTATE 53100 -> PostgREST treats that as a FATAL connection error,
+        # rebuilds its pool and reloads its schema cache -> every request in
+        # flight on that replica 503s. Measured: 204 errors, 225 rebuilds, 190
+        # 503s (mostly GET /submissions) in 24h.
+        #
+        # Nothing else saw it. The database logged nothing (the error surfaces
+        # in the CLIENT), connection-count and replication alerts were nominal,
+        # and the only page that fired was
+        # PawtograderWorkflowMetricsRefreshFailing -- about a stale Grafana
+        # panel, with a "usual causes" list that pointed at three things that
+        # were all fine. This rule exists so the cause pages instead of the
+        # least important symptom.
+        #
+        # Warning not critical, and at a deliberately low threshold, because
+        # occupancy swings with parallel-query load (prod moved 94% -> 98% ->
+        # 64% inside half an hour) and the damage happens at the CEILING. There
+        # is no graceful degradation at 100%: the next allocation fails
+        # outright. So the threshold buys headroom to act before a peak lands,
+        # and the 15m `for:` keeps a normal spike from paging.
+        #
+        # Fix is postgres.shm.sizeLimit (values.yaml), which needs a pod
+        # restart. Restarting WITHOUT raising the limit is not a fix -- it
+        # clears the current segments and the peak returns with the load.
+        #
+        # Divide INSIDE the max, not between two maxes. The two series share a
+        # label set (same exporter, same query block), so the division joins
+        # per instance and max picks the worst ratio. `max(used) / max(limit)`
+        # would be equivalent only while exactly one exporter exists -- with
+        # two it can divide one instance's used bytes by another's ceiling,
+        # which is silently wrong precisely when the ceilings differ.
+        #
+        # KNOWN GAP: only the PRIMARY is scraped today. The standby carries no
+        # postgres-exporter sidecar and the exporter Service selects
+        # component=postgres, so a standby that exhausts its own /dev/shm
+        # produces no series and this alert cannot see it. Accepted for now:
+        # giving the standby an exporter means auditing every query in
+        # postgres-exporter-queries.yaml for recovery-safety (see the
+        # pg_current_wal_lsn note there -- it ERRORS in recovery and would 500
+        # the whole /metrics endpoint) and re-checking the existing
+        # unqualified max() alerts, which would begin aggregating across both
+        # servers. That is its own change, tracked in
+        # https://github.com/pawtograder/platform/issues/1022. The
+        # per-instance form above means this rule starts covering the standby
+        # the day such an exporter exists, with no edit here.
+        - alert: PawtograderPostgresSharedMemoryHigh
+          expr: |
+            max(
+              pawtograder_shared_memory_used_bytes{namespace="{{ $ns }}"}
+                / pawtograder_shared_memory_limit_bytes{namespace="{{ $ns }}"}
+            ) > {{ divf .Values.monitoring.prometheusRules.sharedMemoryPercentWarning 100 }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder Postgres /dev/shm is filling"
+            description: >-
+              Postgres parallel-query shared memory in {{ $ns }} has been above
+              {{ .Values.monitoring.prometheusRules.sharedMemoryPercentWarning }}% of the
+              configured /dev/shm for 15m. When it fills, parallel workers fail with
+              SQLSTATE 53100 ("could not resize shared memory segment ... No space left
+              on device"), and PostgREST answers that by rebuilding its connection pool
+              and 503ing every request in flight -- so this surfaces to users as failed
+              submissions, not as a database alert. Occupancy tracks parallel-query
+              load and does fall again, but the failure happens at the ceiling, so a
+              sustained high ratio means the next load peak will hit it. Raise
+              postgres.shm.sizeLimit and restart in a maintenance window -- restarting
+              without raising it only clears the current segments. Check
+              pawtograder_shared_memory_segments while the database is idle to tell
+              load from genuine leakage. Runbook:
+              docs/operations/monitoring-alerting.md.
+
+        - alert: PawtograderPostgresSharedMemorySaturated
+          expr: |
+            max(
+              pawtograder_shared_memory_used_bytes{namespace="{{ $ns }}"}
+                / pawtograder_shared_memory_limit_bytes{namespace="{{ $ns }}"}
+            ) > {{ divf .Values.monitoring.prometheusRules.sharedMemoryPercentCritical 100 }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder Postgres /dev/shm is nearly full"
+            description: >-
+              Postgres parallel-query shared memory in {{ $ns }} has been above
+              {{ .Values.monitoring.prometheusRules.sharedMemoryPercentCritical }}% of the
+              configured /dev/shm for 5m. Parallel-query DSM allocations are failing or
+              about to, each failure costs a full PostgREST pool rebuild, and in-flight
+              user requests are being answered with 503. Cross-check
+              PawtograderPostgrestSchemaCacheChurn. Raise postgres.shm.sizeLimit and restart
+              the primary in a maintenance window. Runbook:
+              docs/operations/monitoring-alerting.md.
+
         # Monitoring blind-spot guard. Added when the vacuum, buffer-cache and
         # dead-tuple metrics moved off the `metrics` edge function into the
         # postgres_exporter's queries.yaml (monitoring.yaml).
@@ -469,8 +566,9 @@ spec:
         # cause it is, rather than asserting the damaging one.
         # (Raised in review on #1021.)
         #
-        # Deliberately CAUSE-AGNOSTIC. It catches the /dev/shm exhaustion we
-        # were actually bitten by, and the next cause, whatever it turns out to
+        # Deliberately CAUSE-AGNOSTIC. PawtograderPostgresSharedMemoryHigh
+        # catches the one cause we have actually been bitten by, and catches it
+        # earlier; this one catches the next cause, whatever it turns out to
         # be, because the damage pattern is the same regardless of trigger:
         # pool destroyed, schema cache re-queried, every in-flight request
         # 503ed. Before the admin server was enabled there was no series for
@@ -498,12 +596,8 @@ spec:
         # healthy long-lived pod sits at 0.
         #
         # The cost is 2h of detection latency, which is the right trade for a
-        # cause-agnostic backstop at warning severity. A fast path for the
-        # cause we actually know about -- /dev/shm occupancy alerts -- lands
-        # with the /dev/shm volume in chart 0.4.0, because the exporter query
-        # that feeds them is part of the Postgres checksum/config and so
-        # restarts the primary. Until then, see "Postgres /dev/shm exhaustion"
-        # in docs/operations/incident-response.md.
+        # cause-agnostic backstop at warning severity: the fast path for the
+        # cause we actually know about is the /dev/shm pair above.
         - alert: PawtograderPostgrestSchemaCacheChurn
           expr: |
             sum by (pod) (increase(pgrst_schema_cache_loads_total{namespace="{{ $ns }}"}[1h]))
@@ -523,13 +617,13 @@ spec:
               every request in flight on that pod gets a 503, which users see as failed
               submissions and gradebook writes rather than as a database alert.
               (2) Repeated `NOTIFY pgrst, 'reload schema'`, which a long or batched DDL
-              rollout emits legitimately and which costs nothing. To tell which: look in
-              the rest pod logs for whether an error precedes each "Connection Pool
-              initialized" line -- if one does, it is (1). A "could not resize shared
-              memory segment ... No space left on device" error means a full Postgres
-              /dev/shm, the known cause of (1); see docs/operations/incident-response.md.
-              SQLSTATE 53100 alone only means disk_full, which a full data volume raises
-              too, so without that message check the Postgres PVC as well. If a migration is in flight, suspect (2) and confirm before
+              rollout emits legitimately and which costs nothing. To tell which: check
+              PawtograderPostgresSharedMemoryHigh (a full /dev/shm raises SQLSTATE
+              53100, the known cause of (1)), then look in the rest pod logs for whether
+              an error precedes each "Connection Pool initialized" line -- if one does,
+              it is (1). A bare SQLSTATE 53100 without "could not resize shared memory
+              segment" is disk_full on some other filesystem, so check the Postgres PVC
+              too. If a migration is in flight, suspect (2) and confirm before
               chasing the database. Runbook: docs/operations/monitoring-alerting.md.
 
         # Pool exhaustion, which is a DIFFERENT failure from the rebuild above
@@ -973,11 +1067,10 @@ spec:
               TRIAGE ORDER, learned from 2026-09-22 when the original list here sent
               the investigation at three things that were all fine: this refresh shares
               PostgREST with everything else, so FIRST rule out a platform-wide fault --
-              check PawtograderPostgrestSchemaCacheChurn, grep the rest pod logs for
-              "could not resize shared memory segment" (a full /dev/shm; a bare
-              SQLSTATE 53100 is disk_full, so check the data volume too), and compare the 503 rate on this RPC
+              check PawtograderPostgresSharedMemoryHigh and
+              PawtograderPostgrestSchemaCacheChurn, and compare the 503 rate on this RPC
               against other endpoints. If other endpoints are also failing, this alert
-              is a symptom and the pool alerts or rest logs name the real cause. Only
+              is a symptom and the pool/shared-memory alerts name the real cause. Only
               if this refresh is failing ALONE are the app-level causes worth checking:
               the metrics_workflow_* RPCs missing from the database, the service-role
               key being wrong, or the queries timing out (check the
