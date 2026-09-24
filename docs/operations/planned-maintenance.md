@@ -112,9 +112,12 @@ each side with its own copy of the values.
 It compares against `main` rather than the PR's base because production
 deploys from `main`. Against `staging`, backing out a restart that was never
 released would itself look like a restart. It fails a PR that changes either
-pod template or claim template without a minor bump over `main`'s version,
-and fails if any of its renders breaks, rather than passing on partial
-coverage. A PR that does bump gets a notice instead. To run it locally:
+pod template, claim template, or immutable identity field (name,
+`serviceName`, `selector`, `podManagementPolicy`) without a minor bump over
+`main`'s version. It also covers the persistence-disabled branch. It fails if
+any case can't be compared, whether a render breaks or a values file is
+missing, rather than passing on partial coverage. A PR that does bump gets a
+notice instead. To run it locally:
 
 ```bash
 charts/pawtograder/tests/postgres-restart-gate.sh origin/main
@@ -130,7 +133,9 @@ merge it to `staging`, promote it, and deploy it to production in the window.
 If production needs relief before a window can be scheduled, look for an
 online workaround first: a setting that takes effect on reload
 (`ALTER SYSTEM` + `pg_reload_conf()`) rather than a pod change. Record it
-where the next deploy will see it. The 2026-09-23 `/dev/shm` incident
+as a comment in the environment's values file, not as `postgres.config`
+keys. Rendering those keys changes `checksum/config`, so the next routine
+upgrade would restart the primary after all. The 2026-09-23 `/dev/shm` incident
 ([incident-response.md](./incident-response.md#postgres-devshm-exhaustion-sqlstate-53100))
 is the worked example: #1021 shipped as a patch, was split, and its restarting
 half moved to 0.4.0.

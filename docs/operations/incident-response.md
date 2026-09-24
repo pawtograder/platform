@@ -144,8 +144,14 @@ Components:
   per-connection.
 - **Afterwards:** `ALTER SYSTEM` writes `postgresql.auto.conf`, which overrides
   the chart's `postgresql.conf` and does not show up in any values file. Record
-  it in the environment's values file. After the 0.4.0 deploy, either keep it
-  on purpose or undo it:
+  it as a **comment** in the environment's values file. Do **not** add the
+  settings under `postgres.config`: that changes `postgres-config.yaml`, which
+  is hashed into the StatefulSet's `checksum/config`, so the next routine
+  `helm upgrade` would restart the primary. That is the outage the workaround
+  exists to avoid, and a production values file sits outside the CI gate's
+  checks. Move them into `postgres.config` only as part of a planned
+  restart, such as the 0.4.0 window. After the 0.4.0 deploy, either keep them
+  on purpose or undo them:
   `ALTER SYSTEM RESET max_parallel_workers_per_gather; ALTER SYSTEM RESET max_parallel_maintenance_workers; SELECT pg_reload_conf();`
 
 ### PostgREST / Realtime / Storage / Auth (`<release>-rest|realtime|storage|auth`)

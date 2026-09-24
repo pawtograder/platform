@@ -18,6 +18,9 @@
 #   .spec.template              -- pod spec, volumes, and the checksum/config
 #                                  annotation (postgres-config.yaml +
 #                                  postgres-exporter-queries.yaml)
+#   identity fields             -- metadata.name, serviceName, selector,
+#                                  podManagementPolicy: immutable, or (the
+#                                  name) replace the workload
 #   .spec.volumeClaimTemplates  -- immutable: Kubernetes rejects the update,
 #                                  so the upgrade fails outright and needs a
 #                                  migration or recreate plan (reported
@@ -71,8 +74,9 @@ fi
 # (base chart + base values vs HEAD chart + HEAD values). Staging auto-deploys
 # from examples/values-staging.yaml, so a values-only edit -- postgres.config,
 # resources, the image -- rolls Postgres as surely as a template edit, and has
-# to show up here. A file present on only one side is reported and skipped:
-# there is no old-to-new deployment to compare.
+# to show up here. A configured file missing on either side FAILS the gate:
+# a rename would otherwise drop that environment's coverage silently. For an
+# intentional rename, give the old path as the case's 4th field.
 #
 # The prod examples leave some values to the operator that the guard-rails
 # demand (image tags, storage class, WAL-G prefix, backup endpoint, the
@@ -85,12 +89,17 @@ PROD_FIXUPS=(
   --set backup.s3.endpoint=https://s3.gate.invalid
 )
 for img in web edgeFunctions migrations backup; do PROD_FIXUPS+=(--set "$img.image.tag=v0.0.0-gate"); done
+# Each case: label | HEAD values file | kind | base values file (defaults to
+# the HEAD file). kind "prod" adds PROD_FIXUPS; "nopersist" renders with
+# postgres.persistence.enabled=false, the emptyDir data-volume branch that no
+# example file exercises.
 CASES=(
   "staging|values-staging.yaml|"
   "preview|values-preview.yaml|"
   "tartangrader|values-tartangrader.yaml|"
   "prod|values-prod.yaml|prod"
   "prod-noeso|values-prod-noeso.yaml|prod"
+  "nopersist|values-preview.yaml|nopersist"
 )
 TEMPLATES=(postgres-statefulset.yaml postgres-replica.yaml)
 
@@ -111,16 +120,36 @@ extract() {
   '
 }
 
+# identity: the StatefulSet fields Kubernetes will not update in place
+# (metadata.name, spec.serviceName, spec.selector, spec.podManagementPolicy).
+# A change to any of them either gets the upgrade rejected (like
+# volumeClaimTemplates) or, for the name, replaces the database workload.
+identity() {
+  awk '
+    /^---/                { in_ss=0; keep=0; next }
+    /^kind: StatefulSet/  { in_ss=1; next }
+    !in_ss                { next }
+    /^metadata:/          { in_meta=1; next }
+    /^spec:/              { in_meta=0 }
+    in_meta && /^  name:/ { print "metadata." substr($0, 3) }
+    /^  [A-Za-z]/         { keep = ($0 ~ /^  (serviceName|selector|podManagementPolicy):/) }
+    /^[A-Za-z]/           { keep=0 }
+    keep                  { print }
+  '
+}
+
 # render <out-prefix> <chart> <template> <args...>: writes <out-prefix>.tpl
-# and <out-prefix>.vct; returns 1 if the chart fails to render. A template
+# (pod template), <out-prefix>.vct (claim templates) and <out-prefix>.id
+# (identity fields); returns 1 if the chart fails to render. A template
 # that renders to nothing (replica disabled) makes helm say "could not find
 # template" -- that is an empty result, not a failure.
 render() {
   local out="$1" chart="$2" tpl="$3"; shift 3
-  : >"$out.tpl"; : >"$out.vct"
+  : >"$out.tpl"; : >"$out.vct"; : >"$out.id"
   if helm template t "$chart" "$@" --show-only "templates/$tpl" >"$out.yaml" 2>"$TMP/err"; then
     extract template <"$out.yaml" >"$out.tpl"
     extract volumeClaimTemplates <"$out.yaml" >"$out.vct"
+    identity <"$out.yaml" >"$out.id"
     return 0
   fi
   grep -q "could not find template" "$TMP/err"
@@ -128,6 +157,7 @@ render() {
 
 POD_CHANGES=()
 VCT_CHANGES=()
+ID_CHANGES=()
 SKIPPED=()
 BROKEN=()
 CHECKED=0
@@ -137,14 +167,21 @@ show_diff() {
   echo
 }
 for c in "${CASES[@]}"; do
-  IFS='|' read -r label file kind <<<"$c"
-  if [ ! -f "$BASE_CHART/examples/$file" ] || [ ! -f "$CHART/examples/$file" ]; then
-    SKIPPED+=("$label: examples/$file exists on only one side; no old-to-new deployment to compare")
+  IFS='|' read -r label file kind base_file <<<"$c"
+  base_file="${base_file:-$file}"
+  missing=()
+  [ -f "$BASE_CHART/examples/$base_file" ] || missing+=("examples/$base_file at $BASE_REF")
+  [ -f "$CHART/examples/$file" ] || missing+=("examples/$file at HEAD")
+  if [ ${#missing[@]} -gt 0 ]; then
+    BROKEN+=("$label: ${missing[*]} not found. If the file was renamed, give the old path as the 4th field of this case; if the environment is gone, remove the case.")
     continue
   fi
-  base_args=(-f "$BASE_CHART/examples/$file")
+  base_args=(-f "$BASE_CHART/examples/$base_file")
   head_args=(-f "$CHART/examples/$file")
-  if [ "$kind" = prod ]; then base_args+=("${PROD_FIXUPS[@]}"); head_args+=("${PROD_FIXUPS[@]}"); fi
+  case "$kind" in
+    prod)      base_args+=("${PROD_FIXUPS[@]}"); head_args+=("${PROD_FIXUPS[@]}") ;;
+    nopersist) base_args+=(--set postgres.persistence.enabled=false); head_args+=(--set postgres.persistence.enabled=false) ;;
+  esac
   for tpl in "${TEMPLATES[@]}"; do
     if ! render "$TMP/head" "$CHART" "$tpl" "${head_args[@]}"; then
       BROKEN+=("$label/$tpl: HEAD does not render: $(head -c 200 "$TMP/err" | tr '\n' ' ')")
@@ -163,6 +200,10 @@ for c in "${CASES[@]}"; do
       VCT_CHANGES+=("$label/$tpl")
       show_diff "$label: $tpl volumeClaimTemplates" "$TMP/base.vct" "$TMP/head.vct"
     fi
+    if ! diff -q "$TMP/base.id" "$TMP/head.id" >/dev/null; then
+      ID_CHANGES+=("$label/$tpl")
+      show_diff "$label: $tpl StatefulSet identity fields" "$TMP/base.id" "$TMP/head.id"
+    fi
   done
 done
 
@@ -175,7 +216,7 @@ gh_annotate() { [ -n "${GITHUB_ACTIONS:-}" ] && echo "::$1 title=$2::$3"; return
 # change in exactly that case through.
 if [ ${#BROKEN[@]} -gt 0 ]; then
   for b in "${BROKEN[@]}"; do echo "FAIL $b"; done
-  msg="${#BROKEN[@]} render(s) failed, so the gate cannot vouch for them. Fix the render, or change the cases list in this script."
+  msg="${#BROKEN[@]} case(s) could not be compared, so the gate cannot vouch for them. Fix the render or the values file, or update the cases list in this script."
   echo "FAIL $msg"
   gh_annotate error "Postgres restart gate could not render" "$msg"
   exit 1
@@ -187,8 +228,8 @@ if [ "$CHECKED" -eq 0 ]; then
   exit 1
 fi
 
-if [ ${#POD_CHANGES[@]} -eq 0 ] && [ ${#VCT_CHANGES[@]} -eq 0 ]; then
-  echo "ok   no Postgres pod-template or volumeClaimTemplates change against $BASE_REF across $CHECKED renders (chart $BASE_VER -> $HEAD_VER)"
+if [ ${#POD_CHANGES[@]} -eq 0 ] && [ ${#VCT_CHANGES[@]} -eq 0 ] && [ ${#ID_CHANGES[@]} -eq 0 ]; then
+  echo "ok   no Postgres pod-template, volumeClaimTemplates or identity change against $BASE_REF across $CHECKED renders (chart $BASE_VER -> $HEAD_VER)"
   exit 0
 fi
 
@@ -198,6 +239,7 @@ fi
 # fails. That needs a migration or delete-and-recreate plan, not just a window.
 what=()
 [ ${#POD_CHANGES[@]} -gt 0 ] && what+=("restarts Postgres (${POD_CHANGES[*]})")
+[ ${#ID_CHANGES[@]} -gt 0 ] && what+=("alters the StatefulSet name, serviceName, selector or podManagementPolicy (${ID_CHANGES[*]}), which Kubernetes rejects on upgrade -- or, for a rename, replaces the database workload -- so it needs an explicit migration plan")
 [ ${#VCT_CHANGES[@]} -gt 0 ] && what+=("edits the immutable volumeClaimTemplates (${VCT_CHANGES[*]}), which Kubernetes rejects on upgrade and so needs an explicit storage migration or StatefulSet recreation plan")
 change="This change $(IFS=';'; echo "${what[*]}" | sed 's/;/; and /g')"
 
