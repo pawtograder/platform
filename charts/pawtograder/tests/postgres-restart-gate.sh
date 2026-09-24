@@ -18,6 +18,8 @@
 #   .spec.template              -- pod spec, volumes, and the checksum/config
 #                                  annotation (postgres-config.yaml +
 #                                  postgres-exporter-queries.yaml)
+#   .spec.replicas              -- scaling the primary to 0 stops the
+#                                  database with no pod-template change
 #   identity fields             -- metadata.name, serviceName, selector,
 #                                  podManagementPolicy: immutable, or (the
 #                                  name) replace the workload
@@ -138,18 +140,30 @@ identity() {
   '
 }
 
+# replicas: spec.replicas of every StatefulSet. Scaling the primary to 0 stops
+# the database without touching its pod template.
+replicas() {
+  awk '
+    /^---/                { in_ss=0; next }
+    /^kind: StatefulSet/  { in_ss=1; next }
+    in_ss && /^  replicas:/ { print }
+  '
+}
+
 # render <out-prefix> <chart> <template> <args...>: writes <out-prefix>.tpl
-# (pod template), <out-prefix>.vct (claim templates) and <out-prefix>.id
-# (identity fields); returns 1 if the chart fails to render. A template
+# (pod template), <out-prefix>.vct (claim templates), <out-prefix>.id
+# (identity fields) and <out-prefix>.rep (replica count); returns 1 if the
+# chart fails to render. A template
 # that renders to nothing (replica disabled) makes helm say "could not find
 # template" -- that is an empty result, not a failure.
 render() {
   local out="$1" chart="$2" tpl="$3"; shift 3
-  : >"$out.tpl"; : >"$out.vct"; : >"$out.id"
+  : >"$out.tpl"; : >"$out.vct"; : >"$out.id"; : >"$out.rep"
   if helm template t "$chart" "$@" --show-only "templates/$tpl" >"$out.yaml" 2>"$TMP/err"; then
     extract template <"$out.yaml" >"$out.tpl"
     extract volumeClaimTemplates <"$out.yaml" >"$out.vct"
     identity <"$out.yaml" >"$out.id"
+    replicas <"$out.yaml" >"$out.rep"
     return 0
   fi
   grep -q "could not find template" "$TMP/err"
@@ -158,6 +172,7 @@ render() {
 POD_CHANGES=()
 VCT_CHANGES=()
 ID_CHANGES=()
+SCALE_CHANGES=()
 SKIPPED=()
 BROKEN=()
 CHECKED=0
@@ -204,6 +219,10 @@ for c in "${CASES[@]}"; do
       ID_CHANGES+=("$label/$tpl")
       show_diff "$label: $tpl StatefulSet identity fields" "$TMP/base.id" "$TMP/head.id"
     fi
+    if ! diff -q "$TMP/base.rep" "$TMP/head.rep" >/dev/null; then
+      SCALE_CHANGES+=("$label/$tpl: $(tr -d ' \n' <"$TMP/base.rep") -> $(tr -d ' \n' <"$TMP/head.rep")")
+      show_diff "$label: $tpl replica count" "$TMP/base.rep" "$TMP/head.rep"
+    fi
   done
 done
 
@@ -228,8 +247,8 @@ if [ "$CHECKED" -eq 0 ]; then
   exit 1
 fi
 
-if [ ${#POD_CHANGES[@]} -eq 0 ] && [ ${#VCT_CHANGES[@]} -eq 0 ] && [ ${#ID_CHANGES[@]} -eq 0 ]; then
-  echo "ok   no Postgres pod-template, volumeClaimTemplates or identity change against $BASE_REF across $CHECKED renders (chart $BASE_VER -> $HEAD_VER)"
+if [ ${#POD_CHANGES[@]} -eq 0 ] && [ ${#VCT_CHANGES[@]} -eq 0 ] && [ ${#ID_CHANGES[@]} -eq 0 ] && [ ${#SCALE_CHANGES[@]} -eq 0 ]; then
+  echo "ok   no Postgres pod-template, volumeClaimTemplates, identity or replica-count change against $BASE_REF across $CHECKED renders (chart $BASE_VER -> $HEAD_VER)"
   exit 0
 fi
 
@@ -239,9 +258,13 @@ fi
 # fails. That needs a migration or delete-and-recreate plan, not just a window.
 what=()
 [ ${#POD_CHANGES[@]} -gt 0 ] && what+=("restarts Postgres (${POD_CHANGES[*]})")
+[ ${#SCALE_CHANGES[@]} -gt 0 ] && what+=("alters a Postgres StatefulSet replica count (${SCALE_CHANGES[*]}), which scales database pods up or down (on the primary, 0 is an outage)")
 [ ${#ID_CHANGES[@]} -gt 0 ] && what+=("alters the StatefulSet name, serviceName, selector or podManagementPolicy (${ID_CHANGES[*]}), which Kubernetes rejects on upgrade -- or, for a rename, replaces the database workload -- so it needs an explicit migration plan")
 [ ${#VCT_CHANGES[@]} -gt 0 ] && what+=("edits the immutable volumeClaimTemplates (${VCT_CHANGES[*]}), which Kubernetes rejects on upgrade and so needs an explicit storage migration or StatefulSet recreation plan")
-change="This change $(IFS=';'; echo "${what[*]}" | sed 's/;/; and /g')"
+change="This change"
+for i in "${!what[@]}"; do
+  if [ "$i" -eq 0 ]; then change+=" ${what[$i]}"; else change+="; and ${what[$i]}"; fi
+done
 
 IFS=. read -r bmaj bmin _ <<<"$BASE_VER"
 IFS=. read -r hmaj hmin _ <<<"$HEAD_VER"

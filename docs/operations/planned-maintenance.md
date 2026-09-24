@@ -112,9 +112,9 @@ each side with its own copy of the values.
 It compares against `main` rather than the PR's base because production
 deploys from `main`. Against `staging`, backing out a restart that was never
 released would itself look like a restart. It fails a PR that changes either
-pod template, claim template, or immutable identity field (name,
-`serviceName`, `selector`, `podManagementPolicy`) without a minor bump over
-`main`'s version. It also covers the persistence-disabled branch. It fails if
+pod template, claim template, replica count (scaling the primary to 0 stops
+the database), or immutable identity field (name, `serviceName`, `selector`,
+`podManagementPolicy`) without a minor bump over `main`'s version. It also covers the persistence-disabled branch. It fails if
 any case can't be compared, whether a render breaks or a values file is
 missing, rather than passing on partial coverage. A PR that does bump gets a
 notice instead. To run it locally:
