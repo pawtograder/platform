@@ -96,12 +96,15 @@ monitoring change. New monitoring objects belong in `monitoring.yaml`.
 
 CI enforces this. The `postgres-restart-gate` job in `.github/workflows/lint.yml`
 runs `charts/pawtograder/tests/postgres-restart-gate.sh`, which renders both
-StatefulSets at the PR's base and head across the example values files. It
-fails a PR that changes either pod template without a minor bump, and adds a
-notice to one that does bump. To run it locally:
+StatefulSets at `main` and at the PR head across the example values files.
+It compares against `main` rather than the PR's base because production
+deploys from `main`. Against `staging`, backing out a restart that was never
+released would itself look like a restart. It fails a PR that changes either
+pod template without a minor bump over `main`'s version, and adds a notice
+to one that does bump. To run it locally:
 
 ```bash
-charts/pawtograder/tests/postgres-restart-gate.sh origin/staging
+charts/pawtograder/tests/postgres-restart-gate.sh origin/main
 ```
 
 **Coordinate the merge to `staging`.** A push to `staging` deploys staging at

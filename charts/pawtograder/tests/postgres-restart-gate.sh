@@ -4,7 +4,16 @@
 # A chart change that restarts Postgres must bump the chart's MINOR (or major)
 # version. Patch releases promise the database stays up. This script enforces
 # that by rendering the chart at a base ref and at the working tree and
-# comparing the parts of the Postgres StatefulSets whose change rolls a pod:
+# comparing the parts of the Postgres StatefulSets whose change rolls a pod.
+#
+# The base ref is `main`, the branch production deploys from -- NOT the PR's
+# base branch. The promise is about what production will do on its next
+# upgrade. Measured against staging, backing out an unreleased restart looks
+# like a restart of its own, and a second restarting change on top of an
+# unreleased 0.4.0 looks like it needs 0.5.0; measured against main, the first
+# is correctly nothing and the second rides the same window.
+#
+# Compared:
 #
 #   .spec.template              -- pod spec, volumes, and the checksum/config
 #                                  annotation (postgres-config.yaml +
@@ -22,7 +31,7 @@
 # ("Chart versions and Postgres restarts").
 #
 # Usage:  charts/pawtograder/tests/postgres-restart-gate.sh <base-ref>
-#         (CI passes the PR's base sha; locally, e.g. origin/staging)
+#         (CI passes origin/main; locally, e.g. ghhttps/main)
 # Requires: helm 3.x, git, awk. Run from anywhere inside the repo.
 
 set -uo pipefail
