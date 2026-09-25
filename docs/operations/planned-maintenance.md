@@ -272,10 +272,13 @@ Rules for the window:
   the window drops a writer it recorded (a removed deployment channel, say),
   `up` warns that the object no longer exists and carries on restoring the
   rest. The same goes for a write CronJob the release disabled.
-- **Don't add writers in the window's upgrade.** A deployment channel that
-  `down` never captured would be created at 0 behind the page, and nothing
-  would bring it up before the page drops. The chart refuses a posture
-  upgrade that adds a channel; add channels in a routine deploy.
+- **Don't add writers or move the web Service in the window's upgrade.** A
+  tier or deployment channel that `down` never captured would be created at 0
+  behind the page, and nothing would bring it up before the page drops. And
+  `up` restores the web backend `down` recorded, so a changed web Service name
+  or port would leave the web host on a port that no longer exists. The chart
+  refuses a posture upgrade that enables a new writer, adds a channel, or
+  changes the web backend; make those changes in a routine deploy.
 - **Re-suspend hand-suspended CronJobs after the exit upgrade.** `up`
   restores a CronJob that was already suspended before the window, but the
   posture-off exit upgrade then drops the `suspend` field the posture

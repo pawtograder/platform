@@ -208,12 +208,43 @@ accident, because maintenance.active defaults to false.
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- /* New writers. A deployment channel added by the window's own upgrade is
-     created at 0 behind the page, but `down` never recorded it, so `up` would
-     drop the page without starting it and the exit upgrade would switch its
-     ingress to pods still starting. Refused at upgrade time, like the
-     functions check above: every channel workload must already exist. */ -}}
-{{- if lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-maintenance-state" .Release.Name) -}}
+{{- /* New writers. A writer the window's own upgrade adds -- a stable tier it
+     enables or a new deployment channel -- is created at 0 behind the page,
+     but `down` never recorded it, so `up` would drop the page without starting
+     it and the exit upgrade would route to pods still starting. Refused at
+     upgrade time, like the functions check above: every enabled writer must
+     already exist.
+
+     The web backend, likewise: `up` restores the ingress backend `down`
+     recorded, before the posture-off upgrade renders the target's. If the
+     target moves the web Service (name or port), that restore points the web
+     host at a port that no longer exists just as the page comes down. */ -}}
+{{- $stateCM := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-maintenance-state" .Release.Name) -}}
+{{- if $stateCM -}}
+{{- $stable := list
+      (dict "on" .Values.web.enabled "kind" "Deployment" "component" "web")
+      (dict "on" .Values.rest.enabled "kind" "Deployment" "component" "rest")
+      (dict "on" .Values.auth.enabled "kind" "Deployment" "component" "auth")
+      (dict "on" .Values.storage.enabled "kind" "Deployment" "component" "storage")
+      (dict "on" .Values.realtime.enabled "kind" "StatefulSet" "component" "realtime")
+      (dict "on" .Values.edgeFunctions.enabled "kind" "Deployment" "component" "functions") -}}
+{{- range $w := $stable -}}
+{{- if $w.on -}}
+{{- $n := include "pawtograder.componentName" (dict "ctx" $ "component" $w.component) -}}
+{{- if not (lookup "apps/v1" $w.kind $.Release.Namespace $n) -}}
+{{- fail (printf "maintenance.active=true: this upgrade would create %s %s inside the fence. maintenance.sh did not record it, so `up` would drop the page before it runs. Enable new tiers in a routine deploy, outside the window." $w.kind $n) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $recorded := dig "data" "ingress_backend" "" $stateCM | trim -}}
+{{- if and .Values.web.enabled $recorded -}}
+{{- $rb := fromJson $recorded -}}
+{{- $wantName := include "pawtograder.web.host" . -}}
+{{- $wantPort := int .Values.web.service.port -}}
+{{- if or (ne (toString (dig "name" "" $rb)) $wantName) (ne (int (dig "port" "number" 0 $rb)) $wantPort) -}}
+{{- fail (printf "maintenance.active=true: maintenance.sh recorded the web backend as %s, but this release renders %s:%d. `up` would restore the recorded backend and point the web host at a Service port that no longer exists as the page comes down. Change the web Service in a routine deploy, outside the window." $recorded $wantName $wantPort) -}}
+{{- end -}}
+{{- end -}}
 {{- range $c := .Values.channels -}}
 {{- range $kind := list "web" "functions" -}}
 {{- if hasKey $c $kind -}}
