@@ -1404,8 +1404,21 @@ jobs:
           # `exists == 'true'` guard, the job goes GREEN, and the namespace and
           # its PVCs are stranded with nothing left to retry them. Teardown
           # reporting success is precisely how that leak stays invisible.
-          if out=$(kubectl get ns "$NS" -o name 2>&1); then
+          # jsonpath rather than `-o name`: the PHASE is the diagnostic that
+          # was missing. This step printed nothing at all on the exists path,
+          # so a namespace wedged in Terminating looked identical to a healthy
+          # one being torn down for the first time — three consecutive
+          # teardowns of the same preview reported success and gave no way to
+          # tell which had happened.
+          if out=$(kubectl get ns "$NS" -o jsonpath='{.status.phase}' 2>&1); then
             echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "namespace ${NS} exists (phase=${out:-Unknown})"
+            if [ "$out" = "Terminating" ]; then
+              # Normal for a few seconds after a `--wait=false` delete; a
+              # problem if it persists, and this is the only place that can
+              # say so.
+              echo "::notice title=Namespace already terminating::${NS} was already being deleted when this teardown started. If it stays Terminating across runs a finalizer is wedged — check 'kubectl get ns ${NS} -o yaml' for .spec.finalizers and stuck PVCs."
+            fi
           elif printf '%s' "$out" | grep -qF 'NotFound'; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "preview ${NS} already absent — nothing to do"
