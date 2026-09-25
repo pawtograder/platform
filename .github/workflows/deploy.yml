@@ -85,6 +85,13 @@ jobs:
     timeout-minutes: 75
     permissions:
       contents: read
+    outputs:
+      # Read straight off the restore action's own output — not written by a
+      # `run:` step — so no value produced by PR code passes through here.
+      # save-next-cache needs it because the artifact upload below is skipped
+      # on an exact hit, and a download of an artifact that was never uploaded
+      # is a hard failure.
+      next_cache_hit: ${{ steps.next-cache.outputs.cache-hit }}
     env:
       # Per-run project name so that two e2e-local jobs running on different
       # refs (or different runners in the same pool) don't clobber each
@@ -366,37 +373,33 @@ jobs:
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL: http://localhost:3001
         run: npm run build
 
-      # Saved HERE, after the build, not next to the restore: .next/cache is
-      # populated BY `npm run build`, so saving it earlier would store an empty
-      # directory and every later run would miss. Same fork condition as the
-      # npm cache above: a fork PR may restore this cache but never write it,
-      # because under pull_request_target a write request would go to the
-      # default branch's cache scope.
+      # This job does NOT write the .next/cache entry, and that is structural
+      # rather than a condition anyone has to keep correct. It checks out the
+      # PR head and runs `npm ci` and `next build` on it, so a cache write
+      # anywhere in it is a cache-poisoning primitive the moment the guard
+      # protecting it is wrong — and CodeQL's actions/cache-poisoning query
+      # agrees: it pairs a PR-head checkout with any cache write into the
+      # workspace and never reads the write step's `if:`, so no condition here
+      # could have satisfied it either. `.next/cache` lands in the workspace;
+      # `~/.npm` (saved above) does not, which is why only this one moved.
       #
-      # The key MUST stay byte-identical to the restore step's. `actions/cache`
-      # evaluated its key once, pre-build, and reused it in the post step;
-      # split into restore + save, the key is evaluated twice, and by save time
-      # `npm run build` has written .next/server/**/*.js. hashFiles globs with
-      # dot: true, so without the `!**/.next/**` exclusion on BOTH steps the
-      # save key would never equal the restore key and the exact-match hit
-      # could never occur again.
+      # The build output is handed to `save-next-cache` below, which has no
+      # PR content on disk. Push only — a PR run restores and never writes,
+      # because under pull_request_target a write goes to the default
+      # branch's cache scope anyway.
       #
-      # `!**/next-env.d.ts` is the same hazard from a second source, and excluding
-      # .next alone does not cover it: next-env.d.ts is gitignored, so it is
-      # absent from a fresh checkout when the restore key is computed, and
-      # `next build` creates it at the repo root before the save key is
-      # computed. It matches `**/*.[jt]s`, so its appearance alone changes the
-      # hash — leaving the exact-match hit permanently unreachable and every
-      # run silently falling back to a restore-keys prefix match.
-      # Same two conditions as the npm save above, and the `cache-hit` half
-      # matters more here: this key already hashes every source file, so on a
-      # no-op push the exact hit is guaranteed and the upload is pure waste.
-      - name: Save next.js build
+      # Hidden files are included explicitly: upload-artifact v4 drops
+      # dot-prefixed paths by default, and every file here is under `.next/`.
+      - name: Upload the Next.js build cache for the save job
         if: github.event_name == 'push' && steps.next-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/upload-artifact@v4
         with:
+          name: next-cache-${{ github.run_id }}-${{ github.run_attempt }}
           path: .next/cache
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**', '!**/next-env.d.ts') }}
+          include-hidden-files: true
+          # Consumed by the very next job; it is a transport, not a record.
+          retention-days: 1
+          if-no-files-found: error
 
       # prom-client is Node-only and lib/metrics.ts imports it dynamically, so
       # webpack will happily split it into a CLIENT chunk if anything under a
@@ -671,3 +674,51 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 30
+
+  # --------------------------------------------------------------------------
+  # save-next-cache — the ONLY writer of the nextjs-* cache entry.
+  #
+  # Exists so that the cache write and PR-supplied code are never in the same
+  # job. e2e-local builds the PR's code and hands the result over as an
+  # artifact; this job has no PR content on disk at all — its checkout is
+  # `github.sha`, and it only runs on `push`, where that is the pushed commit
+  # on main or staging.
+  #
+  # The key is recomputed here rather than passed as a job output from
+  # e2e-local, deliberately: an output produced by a job that ran PR code is
+  # the output-clobbering pattern, and recomputing it from a FRESH checkout is
+  # also strictly more robust than computing it after a build. That is what
+  # the exclusions below were working around — `next build` writes
+  # .next/server/**/*.js and creates next-env.d.ts at the repo root, both of
+  # which match `**/*.[jt]s`, so a key computed post-build could never equal
+  # the pre-build restore key without them. They stay because the key must
+  # remain byte-identical to e2e-local's restore key, which still carries
+  # them; change one and you must change both, and the symptom of getting it
+  # wrong is silent (every run falls back to a restore-keys prefix match).
+  # --------------------------------------------------------------------------
+  save-next-cache:
+    needs: e2e-local
+    # `push` only, and gated on e2e-local actually succeeding: a cache
+    # populated from a build whose test suite failed is not one later runs
+    # should start from.
+    if: ${{ github.event_name == 'push' && needs.e2e-local.result == 'success' && needs.e2e-local.outputs.next_cache_hit != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The pushed commit. Not `pull_request.head.sha` — this job never
+          # runs for a PR, and the whole point of it is that no PR-supplied
+          # code is ever in this workspace.
+          ref: ${{ github.sha }}
+      - name: Download the Next.js build cache
+        uses: actions/download-artifact@v4
+        with:
+          name: next-cache-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .next/cache
+      - name: Save next.js build
+        uses: actions/cache/save@v4
+        with:
+          path: .next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**', '!**/next-env.d.ts') }}
