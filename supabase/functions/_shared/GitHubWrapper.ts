@@ -118,7 +118,7 @@ import {
   planBranchProtectionAction,
   requestsNoBranchProtection
 } from "./branchProtection.ts";
-
+import { isInvitationStale } from "./orgInviteWindow.ts";
 import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
@@ -3045,48 +3045,117 @@ export async function resolveTeamSlugIfExists(
   return pending;
 }
 
+/** A user's pending org invitation, as far as the reinvite decision needs it. */
+export type PendingOrgInvitation = {
+  id: number;
+  /** When GitHub created the invitation. GitHub expires it 7 days later. */
+  createdAt: string;
+  /** Every team the invitation carries, so a replacement can carry them all. */
+  teamIds: number[];
+};
+
 /**
- * Is there a pending invitation for this user that ALREADY carries the team we are about to attach?
+ * The user's pending org invitation, if GitHub lists one.
  *
  * Org invitations are org-scoped but carry a team list, and two classes can share one organization
  * (see 20260803120000_unique_class_slug_per_github_org.sql). "This user has a pending invitation"
  * is therefore not evidence that OUR class's invitation has been sent: the outstanding invitation
  * may attach a sibling class's team and nothing else, and suppressing on it would leave this class's
  * enrollment unattached, unconfirmed, and — since the sweep has already refreshed its
- * invitation_date — untouched for another staleness period.
+ * invitation_date — untouched for another staleness period. Callers check `teamIds` for their own
+ * team: only an invitation that already includes it is a true duplicate.
  *
- * Only an invitation that already includes this team is a true duplicate.
- *
- * Fails OPEN: any error reading the invitation list is answered "no", so a transient failure sends
+ * Fails OPEN: any error reading the invitation list is answered null, so a transient failure sends
  * a possibly-duplicate invitation rather than skipping a repair.
  */
-async function pendingInvitationIncludesTeam(
+export async function findPendingOrgInvitation(
   octokit: Octokit,
   org: string,
   githubUsername: string,
-  teamId: number,
   scope?: Sentry.Scope
-): Promise<boolean> {
+): Promise<PendingOrgInvitation | null> {
   try {
     const invitations = await octokit.paginate("GET /orgs/{org}/invitations", { org, per_page: 100 });
     const pending = invitations.find((i) => (i.login ?? "").toLowerCase() === githubUsername.toLowerCase());
-    if (!pending) return false;
-    // An org-only invitation (no teams) never covers this team.
-    if ((pending.team_count ?? 0) === 0) return false;
-    const teams = await octokit.paginate("GET /orgs/{org}/invitations/{invitation_id}/teams", {
-      org,
-      invitation_id: pending.id,
-      per_page: 100
-    });
-    return teams.some((t) => t.id === teamId);
+    if (!pending) return null;
+    // An org-only invitation (no teams) needs no second request to know it carries none.
+    const teams =
+      (pending.team_count ?? 0) === 0
+        ? []
+        : await octokit.paginate("GET /orgs/{org}/invitations/{invitation_id}/teams", {
+            org,
+            invitation_id: pending.id,
+            per_page: 100
+          });
+    return { id: pending.id, createdAt: pending.created_at, teamIds: teams.map((t) => t.id) };
   } catch (e) {
     scope?.addBreadcrumb({
       category: "github",
       message: `Could not read pending invitations for ${githubUsername} in ${org}; sending the invitation anyway: ${e}`,
       level: "warning"
     });
-    return false;
+    return null;
   }
+}
+
+/**
+ * What an automated reinvite does about the user's pending invitation.
+ *
+ *   - `replace`: GitHub created it 7 or more days ago, so it has expired even if the list still
+ *     shows it. Cancel it and send a fresh one.
+ *   - `skip`: a live invitation that already carries our team. Sending another is a duplicate.
+ *   - `attach`: no invitation carrying our team (a sibling class's, or none the list would show).
+ *     Add our team to the user's membership instead of posting a second org invitation.
+ */
+export function planPendingInvitation(
+  pending: PendingOrgInvitation | null,
+  teamId: number,
+  now: Date = new Date()
+): "replace" | "skip" | "attach" {
+  if (pending && isInvitationStale(pending.createdAt, now)) return "replace";
+  if (pending?.teamIds.includes(teamId)) return "skip";
+  return "attach";
+}
+
+/**
+ * Cancel a pending invitation that GitHub has certainly expired but still reports as pending.
+ *
+ * GitHub expires an org invitation 7 days after it is created, but moves it out of the pending
+ * list and into failed_invitations some hours later: one observed in production was created
+ * 2026-09-08T18:23Z and marked failed at 2026-09-15T22:50Z, 4.5 hours late. The membership sweep
+ * first re-invites at 7 days plus up to an hour, which lands inside that window, so the membership
+ * probe answers "pending" for an invitation the student can no longer accept. Suppressing the send
+ * on that answer is what left students holding a dead invitation for another full week.
+ *
+ * Returns true when the invitation is gone and a fresh one may be sent. A 404 counts: GitHub
+ * finished expiring it between the list and the delete. Any other failure returns false, and the
+ * caller falls back to skipping the send.
+ */
+export async function cancelLapsedInvitation(
+  octokit: Octokit,
+  org: string,
+  githubUsername: string,
+  invitation: PendingOrgInvitation,
+  scope?: Sentry.Scope
+): Promise<boolean> {
+  try {
+    await octokit.request("DELETE /orgs/{org}/invitations/{invitation_id}", {
+      org,
+      invitation_id: invitation.id
+    });
+  } catch (e) {
+    if ((e as { status?: number })?.status !== 404) {
+      scope?.setContext("lapsed_invitation_cancel", { invitation_id: invitation.id, created_at: invitation.createdAt });
+      Sentry.captureException(e, scope);
+      return false;
+    }
+  }
+  scope?.addBreadcrumb({
+    category: "github",
+    message: `Cancelled lapsed invitation ${invitation.id} for ${githubUsername} in ${org} (created ${invitation.createdAt})`,
+    level: "info"
+  });
+  return true;
 }
 
 export async function reinviteToOrgTeam(
@@ -3120,6 +3189,17 @@ export async function reinviteToOrgTeam(
      * point when a student never received or lost the first email.
      */
     skipIfInvitationPending?: boolean;
+    /**
+     * Called when `skipIfInvitationPending` suppresses the send, with the pending invitation's
+     * GitHub creation time.
+     *
+     * The membership sweep stamps `invitation_date` when it ENQUEUES, and only reconsiders the role a
+     * full staleness period after that stamp. When the send is then suppressed, the stamp no longer
+     * describes any invitation: the one the student actually holds is older and lapses sooner. The
+     * caller uses this to move `invitation_date` back to the real invitation, so the sweep comes
+     * back when that invitation expires rather than a week after the skip.
+     */
+    onInvitationStillPending?: (createdAt: string) => Promise<void>;
   } = {}
 ) {
   scope?.setTag("github_operation", "reinvite_to_team");
@@ -3166,7 +3246,8 @@ export async function reinviteToOrgTeam(
       userId: options.userId,
       // Carry the caller's automation flags into the retry, or a renamed account silently loses the
       // duplicate-invitation guard on the path most likely to need it.
-      skipIfInvitationPending: options.skipIfInvitationPending
+      skipIfInvitationPending: options.skipIfInvitationPending,
+      onInvitationStillPending: options.onInvitationStillPending
     });
   }
   const userID = user.data.id;
@@ -3275,42 +3356,61 @@ export async function reinviteToOrgTeam(
     }
   }
 
+  // Teams for the invitation POSTed below. Normally just ours. A replacement for a lapsed invitation
+  // also carries that invitation's teams, so a sibling class sharing the org is not dropped with it.
+  let inviteTeamIds = [teamID];
+
   if (membershipState === "pending" && options.skipIfInvitationPending) {
-    // Team-scoped, not org-scoped: see pendingInvitationIncludesTeam. A pending invitation for a
-    // sibling class in the same org must NOT suppress this one.
-    if (await pendingInvitationIncludesTeam(octokit, org, githubUsername, teamID, scope)) {
+    const pending = await findPendingOrgInvitation(octokit, org, githubUsername, scope);
+    let plan = planPendingInvitation(pending, teamID);
+    if (plan === "replace" && !(await cancelLapsedInvitation(octokit, org, githubUsername, pending!, scope))) {
+      // Could not clear it. Handle it as the live invitation GitHub still says it is.
+      plan = pending!.teamIds.includes(teamID) ? "skip" : "attach";
+    }
+    if (plan === "replace") {
+      // Expired by GitHub's own 7-day rule but still listed as pending (see cancelLapsedInvitation),
+      // and now cancelled. Fall through and send a fresh invitation in its place.
+      scope?.setTag("replaced_lapsed_invitation", "true");
+      inviteTeamIds = [...new Set([...pending!.teamIds, teamID])];
+    } else if (plan === "skip") {
+      // Team-scoped, not org-scoped: see findPendingOrgInvitation. A pending invitation for a
+      // sibling class in the same org must NOT suppress this one.
+      //
       // Returning false is "nothing changed", which is what callers do with it. Note it does NOT
       // mean "already a member": the callers that read this value to mark a role org-confirmed
       // (github-user-sync) never set skipIfInvitationPending, precisely so a pending invitation is
       // never mistaken for membership.
       scope?.addBreadcrumb({
         category: "github",
-        message: `User ${githubUsername} already has a pending invitation to ${org} covering team ${resolvedSlug}; not sending another`,
+        message: `User ${githubUsername} already has a pending invitation to ${org} covering team ${resolvedSlug} (created ${pending!.createdAt}); not sending another`,
         level: "info"
       });
+      await options.onInvitationStillPending?.(pending!.createdAt);
       return false;
+    } else {
+      // Pending, but not covering our team: a sibling class in the same org, or an invitation the
+      // list could not show us (see findPendingOrgInvitation's fail-open). Attach OUR team to the
+      // user directly rather than posting a second org invitation: GitHub rejects the duplicate with
+      // an `already_exists` validation error, and the handler below reads that as "already an active
+      // member" — which would mark this role org-confirmed for someone who has not accepted anything.
+      // A confirmed role is invisible to the reconciler and to the stuck alert, so if the invitation
+      // then expires the enrollment is broken permanently and silently. The team endpoint extends the
+      // invitation to this team and leaves the membership pending, which is the truth.
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} has a pending invitation to ${org} that does not cover team ${resolvedSlug}; adding the team to it`,
+        level: "info"
+      });
+      await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
+        org,
+        team_slug: resolvedSlug,
+        username: githubUsername,
+        role: "member"
+      });
+      // Deliberately NOT markUserRoleOrgConfirmedForTeam: the user is still pending. Returning true
+      // reports "an invitation was extended", which is what callers record as a change.
+      return true;
     }
-    // Pending, but for a different team (a sibling class in the same org). Attach OUR team to the
-    // user directly rather than posting a second org invitation: GitHub rejects the duplicate with
-    // an `already_exists` validation error, and the handler below reads that as "already an active
-    // member" — which would mark this role org-confirmed for someone who has not accepted anything.
-    // A confirmed role is invisible to the reconciler and to the stuck alert, so if the invitation
-    // then expires the enrollment is broken permanently and silently. The team endpoint extends the
-    // invitation to this team and leaves the membership pending, which is the truth.
-    scope?.addBreadcrumb({
-      category: "github",
-      message: `User ${githubUsername} has a pending invitation to ${org} that does not cover team ${resolvedSlug}; adding the team to it`,
-      level: "info"
-    });
-    await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
-      org,
-      team_slug: resolvedSlug,
-      username: githubUsername,
-      role: "member"
-    });
-    // Deliberately NOT markUserRoleOrgConfirmedForTeam: the user is still pending. Returning true
-    // reports "an invitation was extended", which is what callers record as a change.
-    return true;
   }
 
   if (membershipState === "active") {
@@ -3336,7 +3436,7 @@ export async function reinviteToOrgTeam(
         org,
         role: "direct_member",
         invitee_id: userID,
-        team_ids: [teamID]
+        team_ids: inviteTeamIds
       })
     );
     scope?.addBreadcrumb({
