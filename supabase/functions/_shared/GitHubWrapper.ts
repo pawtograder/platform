@@ -3118,11 +3118,13 @@ export function planPendingInvitation(
 }
 
 /**
- * GitHub team ids for these slugs, skipping any team that does not exist or cannot be read.
+ * GitHub team ids for these slugs, skipping any team that does not exist.
  *
- * For the extra teams an invitation carries alongside its own. Fails toward sending the invitation
- * with fewer teams, never toward not sending it: a skipped sibling is still repaired by its own
- * class's sweep.
+ * For the extra teams an invitation carries alongside its own. A team that does not exist yet is
+ * skipped: the invitation cannot carry it, and that class's own team sync creates it. Any other
+ * failure THROWS, so the envelope retries instead of sending a partial invitation. A partial one is
+ * worse than a late one, because its `member_invited` webhook stamps invitation_date for every
+ * class in the org and so hides the omitted enrollments from the sweep for a week.
  */
 export async function resolveTeamIds(
   octokit: Octokit,
@@ -3132,18 +3134,17 @@ export async function resolveTeamIds(
 ): Promise<number[]> {
   const ids: number[] = [];
   for (const slug of new Set(slugs)) {
-    try {
-      const resolved = await resolveTeamSlugIfExists(org, slug, octokit);
-      if (!resolved) continue;
-      const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug: resolved });
-      ids.push(team.data.id);
-    } catch (e) {
+    const resolved = await resolveTeamSlugIfExists(org, slug, octokit);
+    if (!resolved) {
       scope?.addBreadcrumb({
         category: "github",
-        message: `Could not resolve team ${slug} in ${org}; inviting without it: ${e}`,
-        level: "warning"
+        message: `Team ${slug} does not exist in ${org}; inviting without it`,
+        level: "info"
       });
+      continue;
     }
+    const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug: resolved });
+    ids.push(team.data.id);
   }
   return ids;
 }

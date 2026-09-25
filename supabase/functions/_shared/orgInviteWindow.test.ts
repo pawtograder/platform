@@ -185,6 +185,12 @@ Deno.test("siblingInviteTeamSlugs: never the class being invited to, or another 
   assertEquals(siblingInviteTeamSlugs([enrollment({ cls: { github_org: "other" } })], "org", 1, SIBLING_NOW), []);
 });
 
+Deno.test("siblingInviteTeamSlugs: the org matches case-insensitively", () => {
+  assertEquals(siblingInviteTeamSlugs([enrollment({ cls: { github_org: "ORG" } })], "Org", 1, SIBLING_NOW), [
+    "sibling-students"
+  ]);
+});
+
 Deno.test("siblingInviteTeamSlugs: a dropped enrollment is never re-invited", () => {
   assertEquals(siblingInviteTeamSlugs([enrollment({ disabled: true })], "org", 1, SIBLING_NOW), []);
 });

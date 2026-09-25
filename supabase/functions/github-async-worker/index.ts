@@ -745,8 +745,11 @@ function rewindInvitationDate(
  * enrollments in classes sharing `org`, so a fresh invitation (notably one replacing a lapsed
  * invitation that carried them) does not strand those enrollments. See siblingInviteTeamSlugs.
  *
- * A failed read is reported and answered with no extra teams: our own invitation still goes out,
- * and each sibling class's sweep repairs its own enrollment.
+ * A failed read THROWS, so the envelope retries. Answering "no siblings" would send a partial
+ * invitation, and its `member_invited` webhook stamps invitation_date for every class in the org,
+ * hiding the omitted enrollments from the sweep for a week.
+ *
+ * The org is matched case-insensitively, like classes_unique_github_org_slug: GitHub org names are.
  */
 function siblingTeamSlugs(
   adminSupabase: SupabaseClient<Database>,
@@ -763,13 +766,9 @@ function siblingTeamSlugs(
       )
       .eq("user_id", userId)
       .eq("disabled", false)
-      .eq("classes.github_org", org)
+      .ilike("classes.github_org", org)
       .neq("class_id", classId);
-    if (error) {
-      scope.setContext("sibling_team_slugs", { org, class_id: classId, user_id: userId });
-      Sentry.captureException(error, scope);
-      return [];
-    }
+    if (error) throw error;
     return siblingInviteTeamSlugs(data ?? [], org, classId);
   };
 }

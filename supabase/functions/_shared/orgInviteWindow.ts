@@ -204,7 +204,8 @@ export function siblingInviteTeamSlugs(
   const slugs = new Set<string>();
   for (const e of enrollments) {
     const cls = e.classes;
-    if (!cls || cls.id === excludeClassId || cls.github_org !== org || !cls.slug) continue;
+    // Case-insensitive, like GitHub and classes_unique_github_org_slug.
+    if (!cls || cls.id === excludeClassId || cls.github_org?.toLowerCase() !== org.toLowerCase() || !cls.slug) continue;
     if (e.disabled || e.github_org_confirmed === true || cls.is_demo === true) continue;
     if (!isOrgInviteWindowOpen(cls, now)) continue;
     slugs.add(`${cls.slug}-${e.role === "student" ? "students" : "staff"}`);

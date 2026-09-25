@@ -1236,14 +1236,22 @@ Deno.test("cancelLapsedInvitation: any other failure -> false, so the caller doe
   );
 });
 
-Deno.test("resolveTeamIds: existing teams resolve to ids; missing or unreadable teams are skipped", async () => {
+Deno.test("resolveTeamIds: existing teams resolve to ids; teams that do not exist are skipped", async () => {
   const octokit = fakeOctokit({
     "GET /orgs/{org}/teams/{team_slug}": (p) => {
       if (p.team_slug === "a-students") return { data: { id: 1, slug: "a-students" } };
-      if (p.team_slug === "b-staff") throw requestError(500);
       throw requestError(404);
     },
     "GET /orgs/{org}/teams": () => []
   });
-  assertEquals(await resolveTeamIds(octokit, "rt-org", ["a-students", "gone-students", "b-staff", "a-students"]), [1]);
+  assertEquals(await resolveTeamIds(octokit, "rt-org", ["a-students", "gone-students", "a-students"]), [1]);
+});
+
+Deno.test("resolveTeamIds: an unreadable team throws, so no partial invitation is sent", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(500);
+    }
+  });
+  await assertRejects(() => resolveTeamIds(octokit, "rt-org-2", ["b-staff"]));
 });
