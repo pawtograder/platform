@@ -2460,7 +2460,7 @@ MAINT_PROD_PINS=(
 assert_maintenance_posture "posture: staging overlay (HPA + canary channel)" \
   -f "$CHART/examples/values-staging.yaml"
 assert_maintenance_posture "posture: preview overlay (functions without an HPA)" \
-  -f "$CHART/examples/values-preview.yaml" --set auditPartitions.enabled=true
+  -f "$CHART/examples/values-preview.yaml" --set auditPartitions.enabled=true --set seed.enabled=false
 assert_maintenance_posture "posture: prod overlay (backup drill CronJobs)" \
   -f "$CHART/examples/values-prod.yaml" "${MAINT_PROD_PINS[@]}"
 MAINT_PROD_OVERLAY="$CHART/../../../prod-charts/values/values-prod.yaml"
@@ -2492,6 +2492,9 @@ assert_refused "posture: active with a page port maintenance.sh does not patch i
 assert_refused "posture: active with no chart Ingress is refused" \
   "maintenance.active=true requires ingress.enabled=true" \
   --set maintenance.active=true --set maintenance.enabled=true --set ingress.enabled=false
+assert_refused "posture: active with the seed hook enabled is refused" \
+  "maintenance.active=true is refused with seed.enabled=true" \
+  --set maintenance.active=true --set maintenance.enabled=true --set seed.enabled=true
 assert_refused "posture: active with web disabled is refused" \
   "maintenance.active=true requires web.enabled=true" \
   --set maintenance.active=true --set maintenance.enabled=true --set web.enabled=false

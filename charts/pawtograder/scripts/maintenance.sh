@@ -212,6 +212,15 @@ report_standby() {
   fi
   if [ "$mode" = "fenced" ]; then
     if $standby_ok; then
+      # Record the verdict where the chart can see it BEFORE announcing it: a
+      # maintenance.active=true upgrade refuses to run against a real cluster
+      # unless the state ConfigMap carries fence_complete (validations.yaml).
+      # The ConfigMap exists from `down`'s capture step, before anything is
+      # fenced, so its existence alone proves nothing. `up` deletes the whole
+      # ConfigMap, marker included.
+      run k patch configmap "$STATE_CM" --type=merge \
+        -p "{\"data\":{\"fence_complete\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}" \
+        || die "could not record fence_complete in ${STATE_CM}, so NOT declaring SAFE TO BOUNCE (the posture upgrade would refuse anyway). Confirm the fence with '$0 status', then add the key by hand: kubectl -n ${NAMESPACE} patch configmap ${STATE_CM} --type=merge -p '{\"data\":{\"fence_complete\":\"manual\"}}'"
       printf '%s[maint ✓] SAFE TO BOUNCE%s — writers fenced and standby streaming, replay lag %s <= %s bytes. Perform the node/DB maintenance, then run: %s up\n' \
         "$C_OK" "$C_RESET" "$lag" "$LAG_THRESHOLD_BYTES" "$0"
     else

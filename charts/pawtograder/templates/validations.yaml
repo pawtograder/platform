@@ -185,6 +185,9 @@ accident, because maintenance.active defaults to false.
 {{- if not .Values.web.enabled -}}
 {{- fail "maintenance.active=true requires web.enabled=true — the posture's exit restores the web backend maintenance.sh recorded; with web disabled the upgrade deletes that Service, and `up` would take the page down onto a deleted backend. Disable web in a routine deploy, outside the window." -}}
 {{- end -}}
+{{- if .Values.seed.enabled -}}
+{{- fail "maintenance.active=true is refused with seed.enabled=true — the seed Job is a post-upgrade hook that waits for auth's health endpoint, and the posture scales auth to 0, so the window's upgrade would hang on the hook and then fail. Seed outside the window." -}}
+{{- end -}}
 {{- if .Values.ingress.extraHosts -}}
 {{- fail "maintenance.active=true is refused while ingress.extraHosts is set — neither the posture nor maintenance.sh reroutes those aliases, so with web at 0 they would serve the ingress controller's bare 503 instead of the page. Neither staging nor production uses extraHosts today; routing them to the page is follow-up work." -}}
 {{- end -}}
@@ -223,6 +226,20 @@ accident, because maintenance.active defaults to false.
      target moves the web Service (name or port), that restore points the web
      host at a port that no longer exists just as the page comes down. */ -}}
 {{- $stateCM := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-maintenance-state" .Release.Name) -}}
+{{- /* Proof that `down` got as far as SAFE TO BOUNCE. Every guard in this block
+     keys off the state ConfigMap, but `down` creates it while capturing, before
+     pg_cron is paused or any writer is fenced, and without it they are all
+     skipped. So on a real cluster the posture needs the fence_complete marker
+     that `down` writes only with its SAFE TO BOUNCE verdict.
+
+     "A real cluster" = the release's Postgres primary exists. lookup returns
+     nothing under `helm template` (the doc's step 0 preflight must keep
+     working), and a fresh install has no database to protect. */ -}}
+{{- if and .Values.postgres.enabled (lookup "apps/v1" "StatefulSet" .Release.Namespace (include "pawtograder.componentName" (dict "ctx" . "component" "postgres"))) -}}
+{{- if not (dig "data" "fence_complete" "" $stateCM) -}}
+{{- fail (printf "maintenance.active=true, but %s-maintenance-state has no fence_complete marker: maintenance.sh down has not reported SAFE TO BOUNCE in this namespace (not run, still running, or it stopped at NOT READY). Upgrading now would roll Postgres outside a verified fence. Run down until SAFE TO BOUNCE first." .Release.Name) -}}
+{{- end -}}
+{{- end -}}
 {{- if $stateCM -}}
 {{- $stable := list
       (dict "on" .Values.web.enabled "kind" "Deployment" "component" "web")

@@ -195,6 +195,9 @@ helm upgrade pawtograder "$CHART" --version "$DEPLOYED" -n "$NS" --reuse-values 
 kubectl -n "$NS" rollout status deploy/pawtograder-maintenance
 
 # 2. Fence, and wait for the verdict. Do not go on without SAFE TO BOUNCE.
+#    With that verdict, `down` writes fence_complete into its state ConfigMap,
+#    and step 3 refuses to run on the cluster without it: a NOT READY, an
+#    interrupted `down`, or no `down` at all blocks the upgrade.
 charts/pawtograder/scripts/maintenance.sh down
 
 # 3a. Hold the STANDBY back, so the upgrade rolls only the primary. Without
@@ -296,6 +299,8 @@ Rules for the window:
   `updateStrategy` or `ordinals` change for `postgres-replica.yaml`, the
   target upgrade can overwrite the partition or replace the held pod, and
   the standby rolls with the primary. Stage that release differently.
+- **No seeding in the window.** The seed Job waits for auth, which the posture
+  holds at 0, so the chart refuses `seed.enabled` with `maintenance.active`.
 - **Don't shrink the standby in the window's upgrade.** The standby is the
   failover target while the primary rolls, and the partition in step 3a only
   holds existing pods. The chart refuses a posture upgrade that disables the
