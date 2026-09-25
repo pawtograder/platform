@@ -18,6 +18,12 @@
 # Prior state is captured into an in-cluster ConfigMap (<release>-maintenance-state)
 # so `up` restores exact replica counts / HPA / cron jobs / ingress backend.
 #
+# A chart release that RESTARTS Postgres is applied inside the window, after
+# SAFE TO BOUNCE, with maintenance.active=true: the chart then renders this same
+# fence, so the upgrade keeps it. Exit is `up` first, then a helm upgrade with
+# maintenance.active=false. `down` refuses a release that already holds the
+# posture, and `up` leaves the functions HPA to that exit upgrade.
+#
 # Requires: kubectl (context already pointed at the target cluster) and jq. DB
 # access is via `kubectl exec` into the primary pod — no local psql needed.
 #
@@ -227,6 +233,17 @@ report_standby() {
 # ----------------------------------------------------------------------------
 state_exists() { k get configmap "$STATE_CM" >/dev/null 2>&1; }
 
+# True when the Helm release itself carries the maintenance posture
+# (maintenance.active=true): the chart then renders the fence this script puts
+# up, and marks the primary Ingress with this annotation. Used for a chart
+# release that restarts Postgres, applied inside the window; see
+# docs/operations/planned-maintenance.md.
+POSTURE_ANNOTATION="pawtograder.io/maintenance-active"
+posture_held() {
+  # jsonpath needs the dot in the annotation key escaped.
+  [ "$(k get ingress "$INGRESS" -o jsonpath='{.metadata.annotations.pawtograder\.io/maintenance-active}' 2>/dev/null || true)" = "true" ]
+}
+
 
 # ----------------------------------------------------------------------------
 # Custom maintenance-page text (--title/--message/--eta)
@@ -310,6 +327,15 @@ cmd_down() {
     die "state ConfigMap ${STATE_CM} already exists — a window is already open. Run '$0 up' to restore, or '$0 status' to inspect."
   fi
   k get pod "$PG_POD" >/dev/null 2>&1 || die "primary pod ${PG_POD} not found"
+
+  # The release must NOT already carry the posture. If it does, the writers are
+  # already at 0 and the web host already on the page, so step 1 would record
+  # THAT as the prior state, and `up` would faithfully "restore" production to
+  # fenced. maintenance.active=true belongs on the upgrade that runs after
+  # SAFE TO BOUNCE, not before `down`.
+  if posture_held; then
+    die "the Helm release already carries maintenance.active=true (ingress ${INGRESS} is annotated ${POSTURE_ANNOTATION}). Capturing now would record the fenced state as 'prior' and 'up' would restore to it. Upgrade the release with maintenance.active=false first, then run 'down'."
+  fi
 
   # Precondition: the maintenance page must already be deployed AND Ready. The
   # fence scales the web tier to 0, so if the page can't serve, users get the
@@ -534,6 +560,14 @@ cmd_up() {
 
   tmp="$(mktemp -d)"; trap 'rm -rf "${tmp:-}" 2>/dev/null || true' EXIT
 
+  # Does the Helm release hold the posture (maintenance.active=true, i.e. a
+  # Postgres-restarting release was applied inside this window)? Read once, up
+  # front. The restore below is the same either way except for the HPA (step 2),
+  # and the operator is told to finish with the exit upgrade.
+  local held=false
+  posture_held && held=true
+  $held && log "release carries maintenance.active=true; after this restore, finish with a helm upgrade that sets it back to false"
+
   # Read the ENTIRE state ConfigMap ONCE, and fail if THAT read fails — so a
   # transient API/ConfigMap read can never be misread per-key as "empty" and
   # silently skip restoring CronJobs / cron / HPA / ingress before the state is
@@ -584,7 +618,15 @@ cmd_up() {
   #    (cleanest in GitOps) — we re-apply the captured object to stay self-contained.
   step "2/6 edge-functions" "re-applying the edge-functions HPA"
   sget functions_hpa > "$tmp/functions_hpa"
-  if [ -s "$tmp/functions_hpa" ] && [ "$(tr -d '[:space:]' < "$tmp/functions_hpa")" != "" ]; then
+  if $held; then
+    # The release does not render the HPA while it holds the posture, and the
+    # exit upgrade (maintenance.active=false) creates it from the TARGET chart.
+    # Re-applying the captured copy here would put an HPA from the OLD chart
+    # under kubectl's field manager, and any field the target chart changed is
+    # then a server-side apply conflict on the exit upgrade. functions keeps
+    # the replica count restored in step 1 until that upgrade.
+    log "release holds the posture: leaving the HPA to the exit helm upgrade (functions stays at its step-1 count until then)"
+  elif [ -s "$tmp/functions_hpa" ] && [ "$(tr -d '[:space:]' < "$tmp/functions_hpa")" != "" ]; then
     run k apply -f "$tmp/functions_hpa"
     ok "edge-functions HPA re-applied (autoscaler resumes managing functions replicas)"
   else
@@ -683,6 +725,9 @@ cmd_up() {
 
   run k delete configmap "$STATE_CM"
   ok "restore complete; maintenance state cleared"
+  if $held; then
+    warn "the Helm release still carries maintenance.active=true. Finish NOW with the same chart version and values plus --set maintenance.active=false (keep maintenance.enabled=true for this upgrade): it recreates the functions HPA, and until it runs any upgrade or rollback that keeps the posture re-fences ${NAMESPACE}."
+  fi
 }
 
 # ----------------------------------------------------------------------------
@@ -715,6 +760,10 @@ cmd_status() {
   discover_writers | while IFS=$'\t' read -r kind name replicas; do
     [ -n "$name" ] && printf '    %s/%s = %s\n' "$kind" "$name" "$replicas"
   done
+
+  if posture_held; then
+    warn "Helm release carries maintenance.active=true (${POSTURE_ANNOTATION} on ingress ${INGRESS}): every upgrade that keeps it re-fences"
+  fi
 
   local backend host
   host="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null)"
