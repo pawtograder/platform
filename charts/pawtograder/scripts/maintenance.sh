@@ -625,6 +625,16 @@ cmd_up() {
   #    was confirmed present above and `down` always records writers, so an EMPTY
   #    read here means a transient API/ConfigMap read failure — NOT "nothing to
   #    restore". Abort rather than silently leave every writer scaled to 0.
+  # 0. Withdraw the SAFE TO BOUNCE marker BEFORE the first restore step. From
+  #    here on the namespace is no longer fenced, and an `up` interrupted after
+  #    writers or pg_cron come back must not leave a marker that lets another
+  #    maintenance.active=true upgrade roll Postgres (validations.yaml).
+  if [ -n "$(sget fence_complete)" ]; then
+    run k patch configmap "$STATE_CM" --type=json -p '[{"op":"remove","path":"/data/fence_complete"}]' \
+      || die "could not withdraw fence_complete from ${STATE_CM}; restore not started (nothing changed). Retry '$0 up'."
+    log "fence_complete withdrawn: the namespace is no longer cleared for a bounce"
+  fi
+
   step "1/6 writers" "restoring app tiers + channels"
   sget deploy_replicas > "$tmp/deploy_replicas"
   [ -s "$tmp/deploy_replicas" ] \

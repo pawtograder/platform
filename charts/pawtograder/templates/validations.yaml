@@ -232,10 +232,16 @@ accident, because maintenance.active defaults to false.
      skipped. So on a real cluster the posture needs the fence_complete marker
      that `down` writes only with its SAFE TO BOUNCE verdict.
 
-     "A real cluster" = the release's Postgres primary exists. lookup returns
-     nothing under `helm template` (the doc's step 0 preflight must keep
-     working), and a fresh install has no database to protect. */ -}}
-{{- if and .Values.postgres.enabled (lookup "apps/v1" "StatefulSet" .Release.Namespace (include "pawtograder.componentName" (dict "ctx" . "component" "postgres"))) -}}
+     "A real cluster" = the release's Postgres primary exists, whatever the
+     target's postgres.enabled says (a target that disables Postgres is
+     refused outright). lookup returns nothing under `helm template` (the
+     doc's step 0 preflight must keep working), and a fresh install has no
+     database to protect. `up` withdraws the marker before it restores
+     anything, so an interrupted `up` cannot leave a stale clearance. */ -}}
+{{- if lookup "apps/v1" "StatefulSet" .Release.Namespace (include "pawtograder.componentName" (dict "ctx" . "component" "postgres")) -}}
+{{- if not .Values.postgres.enabled -}}
+{{- fail "maintenance.active=true with postgres.enabled=false while the release's Postgres primary still exists: this upgrade would DELETE the database StatefulSet. Decommissioning Postgres is not a maintenance-window upgrade; do it deliberately, outside this path." -}}
+{{- end -}}
 {{- if not (dig "data" "fence_complete" "" $stateCM) -}}
 {{- fail (printf "maintenance.active=true, but %s-maintenance-state has no fence_complete marker: maintenance.sh down has not reported SAFE TO BOUNCE in this namespace (not run, still running, or it stopped at NOT READY). Upgrading now would roll Postgres outside a verified fence. Run down until SAFE TO BOUNCE first." .Release.Name) -}}
 {{- end -}}
