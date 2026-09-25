@@ -240,6 +240,13 @@ helm upgrade pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
   --set maintenance.enabled=true --set maintenance.active=true \
   --set maintenance.eta="6:15pm ET" --wait --wait-for-jobs --timeout 25m
 
+# 4d. Re-pause pg_cron. A migration that calls cron.schedule (or unschedules and
+#     recreates a job) leaves it ACTIVE behind the fence. repause pauses
+#     whatever is active and adds it to the set `up` resumes. A job created by
+#     one migration can still fire during a later one in the same run; check
+#     the release's migrations for cron.schedule before the window.
+charts/pawtograder/scripts/maintenance.sh repause
+
 # 5. Exit, in this order.
 charts/pawtograder/scripts/maintenance.sh up       # restore; page down LAST
 helm upgrade pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
@@ -280,6 +287,12 @@ Rules for the window:
   refuses a posture upgrade that enables a new writer, adds a channel,
   disables web or changes its backend; make those changes in a routine
   deploy.
+- **Use this procedure only if the target leaves the standby's rollout
+  controls alone.** Step 3a relies on a live `partition` the chart doesn't
+  render. If the release's `postgres-restart-gate` notice lists an
+  `updateStrategy` or `ordinals` change for `postgres-replica.yaml`, the
+  target upgrade can overwrite the partition or replace the held pod, and
+  the standby rolls with the primary. Stage that release differently.
 - **Don't shrink the standby in the window's upgrade.** The standby is the
   failover target while the primary rolls, and the partition in step 3a only
   holds existing pods. The chart refuses a posture upgrade that disables the

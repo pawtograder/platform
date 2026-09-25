@@ -253,6 +253,9 @@ accident, because maintenance.active defaults to false.
 {{- end -}}
 {{- end -}}
 {{- $recorded := dig "data" "ingress_backend" "" $stateCM | trim -}}
+{{- if not $recorded -}}
+{{- fail (printf "maintenance.active=true: the maintenance state ConfigMap %s-maintenance-state has no recorded web backend (ingress_backend is empty; `down` could not read it). `up` would fall back to a hard-coded backend, so this guard cannot vouch for the web host. Re-run maintenance.sh up then down, or record the backend by hand, before this upgrade." .Release.Name) -}}
+{{- end -}}
 {{- if $recorded -}}
 {{- $rb := fromJson $recorded -}}
 {{- $wantName := include "pawtograder.web.host" . -}}

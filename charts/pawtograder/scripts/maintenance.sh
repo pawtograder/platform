@@ -14,6 +14,7 @@
 #   ...operator does the node/DB maintenance...
 #   maintenance.sh up            # restore everything, page down LAST
 #   maintenance.sh status        # read-only posture report
+#   maintenance.sh repause       # after an in-window migration: re-pause pg_cron
 #
 # Prior state is captured into an in-cluster ConfigMap (<release>-maintenance-state)
 # so `up` restores exact replica counts / HPA / cron jobs / ingress backend.
@@ -769,6 +770,35 @@ cmd_up() {
 # ----------------------------------------------------------------------------
 # status (read-only)
 # ----------------------------------------------------------------------------
+# repause: a migration run inside the window (planned-maintenance.md, step 4c)
+# can call cron.schedule, or unschedule and recreate a job, and either leaves an
+# ACTIVE pg_cron job behind the fence that `down` paused. This pauses whatever
+# is active now and appends it to the recorded cron_jobids, so `up` resumes it
+# with the rest. Recorded first, paused second: an interrupted run can then
+# leave a job recorded-but-active (re-run repause), never paused-and-forgotten.
+# A recreated job gets a new jobid; the stale old id in the record is harmless
+# to `up` (the UPDATE matches nothing).
+cmd_repause() {
+  need kubectl
+  state_exists || die "no state ConfigMap ${STATE_CM}: 'repause' only makes sense inside a window opened by '$0 down'."
+  local cron_read now prior merged
+  cron_read="$(psql_ro "SELECT 'MARK:' || COALESCE(string_agg(jobid::text, ','), '') FROM cron.job WHERE active;")"
+  case "$cron_read" in
+    MARK:*) now="${cron_read#MARK:}" ;;
+    *) die "could not read the pg_cron active-job set from ${PG_POD} (got '${cron_read:-<empty>}'). Nothing changed; retry." ;;
+  esac
+  if [ -z "$now" ]; then
+    ok "no pg_cron job is active; nothing to re-pause"
+    return 0
+  fi
+  prior="$(k get configmap "$STATE_CM" -o jsonpath='{.data.cron_jobids}')" \
+    || die "could not read cron_jobids from ${STATE_CM}; nothing changed. Retry."
+  merged="$(printf '%s,%s' "$prior" "$now" | tr ',' '\n' | grep -v '^$' | sort -nu | paste -sd, -)"
+  run k patch configmap "$STATE_CM" --type=merge -p "{\"data\":{\"cron_jobids\":\"${merged}\"}}"
+  psql_exec "UPDATE cron.job SET active=false WHERE jobid = ANY(ARRAY[${now}]::bigint[]);"
+  ok "re-paused pg_cron jobs active inside the window: ${now} ('up' will resume them)"
+}
+
 cmd_status() {
   need kubectl
   log "namespace=${NAMESPACE} release=${RELEASE}"
@@ -825,6 +855,9 @@ Usage: $0 <down|up|status> [options]
            Captures prior state. (pgmq backlog is durable and drains after 'up'.)
   up       Restore everything from the captured state; drop the page LAST.
   status   Read-only maintenance-posture report.
+  repause  Inside a window, after a helm upgrade that ran migrations: pause any
+           pg_cron job that is active now (a migration's cron.schedule creates
+           it active) and add it to the set 'up' resumes.
 
 Options:
   -n, --namespace NS   Namespace   (default: ${NAMESPACE}, env NAMESPACE)
@@ -875,6 +908,7 @@ main() {
     down)   cmd_down ;;
     up)     cmd_up ;;
     status) cmd_status ;;
+    repause) cmd_repause ;;
     -h | --help | "") usage; [ -z "$cmd" ] && exit 1 || exit 0 ;;
     *) usage; die "unknown command: $cmd" ;;
   esac
