@@ -277,8 +277,13 @@ Rules for the window:
   behind the page, and nothing would bring it up before the page drops. And
   `up` restores the web backend `down` recorded, so a changed web Service name
   or port would leave the web host on a port that no longer exists. The chart
-  refuses a posture upgrade that enables a new writer, adds a channel, or
-  changes the web backend; make those changes in a routine deploy.
+  refuses a posture upgrade that enables a new writer, adds a channel,
+  disables web or changes its backend; make those changes in a routine
+  deploy.
+- **Don't shrink the standby in the window's upgrade.** The standby is the
+  failover target while the primary rolls, and the partition in step 3a only
+  holds existing pods. The chart refuses a posture upgrade that disables the
+  standby or lowers its replica count; do that after the window.
 - **Re-suspend hand-suspended CronJobs after the exit upgrade.** `up`
   restores a CronJob that was already suspended before the window, but the
   posture-off exit upgrade then drops the `suspend` field the posture

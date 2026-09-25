@@ -182,6 +182,9 @@ accident, because maintenance.active defaults to false.
 {{- if not .Values.ingress.enabled -}}
 {{- fail "maintenance.active=true requires ingress.enabled=true — with no chart Ingress the posture still scales every writer to 0 and drops the functions HPA, but renders no maintenance route and no pawtograder.io/maintenance-active marker: the app goes dark with no page, and maintenance.sh cannot tell the release holds the posture." -}}
 {{- end -}}
+{{- if not .Values.web.enabled -}}
+{{- fail "maintenance.active=true requires web.enabled=true — the posture's exit restores the web backend maintenance.sh recorded; with web disabled the upgrade deletes that Service, and `up` would take the page down onto a deleted backend. Disable web in a routine deploy, outside the window." -}}
+{{- end -}}
 {{- if .Values.ingress.extraHosts -}}
 {{- fail "maintenance.active=true is refused while ingress.extraHosts is set — neither the posture nor maintenance.sh reroutes those aliases, so with web at 0 they would serve the ingress controller's bare 503 instead of the page. Neither staging nor production uses extraHosts today; routing them to the page is follow-up work." -}}
 {{- end -}}
@@ -236,8 +239,21 @@ accident, because maintenance.active defaults to false.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /* The standby must survive the primary's rollout: it is the failover
+     target if the new primary does not come back. The procedure's partition
+     only holds existing ordinals, so an upgrade that disables the standby or
+     lowers its replica count would still delete it while the primary rolls. */ -}}
+{{- $sbName := include "pawtograder.componentName" (dict "ctx" . "component" "postgres-replica") -}}
+{{- $sb := lookup "apps/v1" "StatefulSet" .Release.Namespace $sbName -}}
+{{- if $sb -}}
+{{- $live := int (dig "spec" "replicas" 1 $sb) -}}
+{{- $want := ternary (int .Values.postgres.replica.replicas) 0 (and .Values.postgres.enabled .Values.postgres.replica.enabled) -}}
+{{- if lt $want $live -}}
+{{- fail (printf "maintenance.active=true: this upgrade would take the Postgres standby %s from %d to %d replica(s) while the primary rolls, removing the failover target the window relies on. Reduce or disable the standby in a routine deploy, after the window." $sbName $live $want) -}}
+{{- end -}}
+{{- end -}}
 {{- $recorded := dig "data" "ingress_backend" "" $stateCM | trim -}}
-{{- if and .Values.web.enabled $recorded -}}
+{{- if $recorded -}}
 {{- $rb := fromJson $recorded -}}
 {{- $wantName := include "pawtograder.web.host" . -}}
 {{- $wantPort := int .Values.web.service.port -}}
