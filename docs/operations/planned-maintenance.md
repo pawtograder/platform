@@ -302,6 +302,12 @@ Rules for the window:
   `updateStrategy` or `ordinals` change for `postgres-replica.yaml`, the
   target upgrade can overwrite the partition or replace the held pod, and
   the standby rolls with the primary. Stage that release differently.
+- **Don't upgrade auth, storage or realtime in the window's release.** Those
+  services run their own schema migrations on startup, and the posture holds
+  them at 0, so step 4c's app migrations would run against the old service
+  schema. Their probes only check tables that already exist, so they won't
+  catch it. Ship service image upgrades in a routine deploy, before or after
+  the window.
 - **No seeding in the window.** The seed Job waits for auth, which the posture
   holds at 0, so the chart refuses `seed.enabled` with `maintenance.active`.
 - **Don't shrink the standby in the window's upgrade.** The standby is the

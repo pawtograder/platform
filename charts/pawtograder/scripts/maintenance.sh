@@ -842,7 +842,8 @@ cmd_repause() {
 # `down` ends in NOT READY when the standby is disconnected or lagging, and
 # writes no fence_complete then; once the standby recovers, a second `down`
 # refuses the existing state. This re-verifies the fence `down` left (web host on
-# the page, zero writer pods, pg_cron paused) and runs the standby gate again,
+# the page, writers held at 0 by spec and by pods, no functions HPA, every
+# recorded write CronJob suspended, pg_cron paused) and runs the standby gate again,
 # which writes fence_complete on SAFE TO BOUNCE. It changes nothing else: if the
 # fence is not intact it says so and stops.
 cmd_recheck() {
@@ -861,19 +862,44 @@ cmd_recheck() {
   [ "$backend" = "$MAINT_SVC" ] || die "web host points at ${backend:-?}, not ${MAINT_SVC}: the window is not fenced. Run '$0 up' to close it cleanly, then '$0 down' again."
   ok "web host -> ${MAINT_SVC}"
 
-  step "2/3 writers" "zero writer pods and pg_cron paused"
-  local kind name _r cur running=0 unreadable=0
+  step "2/3 writers" "writers held at 0, no HPA, CronJobs suspended, pg_cron paused"
+  # Intent AND pods: .spec.replicas must still be 0 (a writer scaled back up
+  # whose pods are not scheduled yet shows .status.replicas 0) and no pod may
+  # remain. Objects removed since `down` count as nothing running.
+  local kind name _r spec cur running=0 unreadable=0 raised=()
   while IFS=$'\t' read -r kind name _r; do
     [ -n "$name" ] || continue
-    present "$kind" "$name" || continue   # removed since `down`: nothing running
-    if ! cur="$(k get "$kind" "$name" -o jsonpath='{.status.replicas}')"; then
+    present "$kind" "$name" || continue
+    if ! spec="$(k get "$kind" "$name" -o jsonpath='{.spec.replicas}')" \
+       || ! cur="$(k get "$kind" "$name" -o jsonpath='{.status.replicas}')"; then
       unreadable=$((unreadable + 1)); continue
     fi
     [ -z "$cur" ] && cur=0
-    if [[ "$cur" =~ ^[0-9]+$ ]]; then running=$((running + cur)); else unreadable=$((unreadable + 1)); fi
+    if ! [[ "$spec" =~ ^[0-9]+$ && "$cur" =~ ^[0-9]+$ ]]; then unreadable=$((unreadable + 1)); continue; fi
+    [ "$spec" -eq 0 ] || raised+=("${kind}/${name}=${spec}")
+    running=$((running + cur))
   done < "$tmp/deploy_replicas"
-  if [ "$running" -ne 0 ] || [ "$unreadable" -ne 0 ]; then
-    die "writer fence not intact: ${running} writer pod(s) running, ${unreadable} unreadable. NOT safe to bounce."
+  if [ ${#raised[@]} -gt 0 ] || [ "$running" -ne 0 ] || [ "$unreadable" -ne 0 ]; then
+    die "writer fence not intact: desired replicas raised (${raised[*]:-none}), ${running} writer pod(s) running, ${unreadable} unreadable. NOT safe to bounce."
+  fi
+  # `down` deleted the functions HPA; one that is back would scale functions
+  # up during the rollout.
+  if present hpa "$FUNCTIONS_HPA"; then
+    die "the functions HPA ${FUNCTIONS_HPA} exists again inside the window; it would scale functions up during the rollout. NOT safe to bounce."
+  fi
+  # Every write CronJob `down` recorded (and still present) must be suspended:
+  # a `down` interrupted mid-suspension leaves one live that can start a
+  # writer during the rollout.
+  local cjname _prior susp live=()
+  while IFS=$'\t' read -r cjname _prior; do
+    [ -n "$cjname" ] || continue
+    present cronjob "$cjname" || continue
+    susp="$(k get cronjob "$cjname" -o jsonpath='{.spec.suspend}')" \
+      || die "could not read cronjob/${cjname}; not re-checking."
+    [ "$susp" = "true" ] || live+=("$cjname")
+  done < <(jq -r '.data.cronjobs_suspend // ""' "$tmp/state.json")
+  if [ ${#live[@]} -gt 0 ]; then
+    die "write CronJob(s) not suspended inside the window: ${live[*]}. NOT safe to bounce; suspend them (kubectl patch cronjob <name> --type=merge -p '{\"spec\":{\"suspend\":true}}') and recheck."
   fi
   local active
   active="$(psql_ro "SELECT 'MARK:' || count(*) FROM cron.job WHERE active;")"
