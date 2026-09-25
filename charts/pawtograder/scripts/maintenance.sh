@@ -15,6 +15,7 @@
 #   maintenance.sh up            # restore everything, page down LAST
 #   maintenance.sh status        # read-only posture report
 #   maintenance.sh repause       # after an in-window migration: re-pause pg_cron
+#   maintenance.sh recheck       # after NOT READY: re-verify the fence, re-run the standby gate
 #
 # Prior state is captured into an in-cluster ConfigMap (<release>-maintenance-state)
 # so `up` restores exact replica counts / HPA / cron jobs / ingress backend.
@@ -837,6 +838,55 @@ cmd_repause() {
   ok "re-paused pg_cron jobs active inside the window: ${now} ('up' will resume them)"
 }
 
+# recheck: re-run the SAFE TO BOUNCE gate on a window `down` already opened.
+# `down` ends in NOT READY when the standby is disconnected or lagging, and
+# writes no fence_complete then; once the standby recovers, a second `down`
+# refuses the existing state. This re-verifies the fence `down` left (web host on
+# the page, zero writer pods, pg_cron paused) and runs the standby gate again,
+# which writes fence_complete on SAFE TO BOUNCE. It changes nothing else: if the
+# fence is not intact it says so and stops.
+cmd_recheck() {
+  need kubectl; need jq
+  state_exists || die "no state ConfigMap ${STATE_CM}: 'recheck' re-verifies a window opened by '$0 down'; run 'down' instead."
+  local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "${tmp:-}" 2>/dev/null || true' EXIT
+  k get configmap "$STATE_CM" -o json > "$tmp/state.json" \
+    || die "could not read ${STATE_CM}; nothing changed. Retry."
+  jq -r '.data.deploy_replicas // ""' "$tmp/state.json" > "$tmp/deploy_replicas"
+  [ -s "$tmp/deploy_replicas" ] || die "${STATE_CM} records no writer tiers; cannot verify the fence. Inspect with '$0 status'."
+
+  step "1/3 page" "web host still on the maintenance page"
+  local backend
+  backend="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}')" \
+    || die "could not read ingress ${INGRESS}; not re-checking."
+  [ "$backend" = "$MAINT_SVC" ] || die "web host points at ${backend:-?}, not ${MAINT_SVC}: the window is not fenced. Run '$0 up' to close it cleanly, then '$0 down' again."
+  ok "web host -> ${MAINT_SVC}"
+
+  step "2/3 writers" "zero writer pods and pg_cron paused"
+  local kind name _r cur running=0 unreadable=0
+  while IFS=$'\t' read -r kind name _r; do
+    [ -n "$name" ] || continue
+    present "$kind" "$name" || continue   # removed since `down`: nothing running
+    if ! cur="$(k get "$kind" "$name" -o jsonpath='{.status.replicas}')"; then
+      unreadable=$((unreadable + 1)); continue
+    fi
+    [ -z "$cur" ] && cur=0
+    if [[ "$cur" =~ ^[0-9]+$ ]]; then running=$((running + cur)); else unreadable=$((unreadable + 1)); fi
+  done < "$tmp/deploy_replicas"
+  if [ "$running" -ne 0 ] || [ "$unreadable" -ne 0 ]; then
+    die "writer fence not intact: ${running} writer pod(s) running, ${unreadable} unreadable. NOT safe to bounce."
+  fi
+  local active
+  active="$(psql_ro "SELECT 'MARK:' || count(*) FROM cron.job WHERE active;")"
+  case "$active" in
+    MARK:0) ok "zero writer pods; pg_cron paused" ;;
+    MARK:*) die "${active#MARK:} pg_cron job(s) are active inside the window. Run '$0 repause', then recheck." ;;
+    *) die "could not read pg_cron state (got '${active:-<empty>}'); not re-checking." ;;
+  esac
+
+  step "3/3 standby" "re-checking replication"
+  report_standby fenced
+}
+
 cmd_status() {
   need kubectl
   log "namespace=${NAMESPACE} release=${RELEASE}"
@@ -894,6 +944,9 @@ Usage: $0 <down|up|status> [options]
            Captures prior state. (pgmq backlog is durable and drains after 'up'.)
   up       Restore everything from the captured state; drop the page LAST.
   status   Read-only maintenance-posture report.
+  recheck  Re-verify the fence of an open window and re-run the standby gate,
+           e.g. after 'down' ended in NOT READY and the standby recovered.
+           Writes the SAFE TO BOUNCE marker when it passes.
   repause  Inside a window, after a helm upgrade that ran migrations: pause any
            pg_cron job that is active now (a migration's cron.schedule creates
            it active) and add it to the set 'up' resumes.
@@ -948,6 +1001,7 @@ main() {
     up)     cmd_up ;;
     status) cmd_status ;;
     repause) cmd_repause ;;
+    recheck) cmd_recheck ;;
     -h | --help | "") usage; [ -z "$cmd" ] && exit 1 || exit 0 ;;
     *) usage; die "unknown command: $cmd" ;;
   esac

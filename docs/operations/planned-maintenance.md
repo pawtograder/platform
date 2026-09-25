@@ -199,6 +199,9 @@ kubectl -n "$NS" rollout status deploy/pawtograder-maintenance
 #    and step 3 refuses to run on the cluster without it: a NOT READY, an
 #    interrupted `down`, or no `down` at all blocks the upgrade.
 charts/pawtograder/scripts/maintenance.sh down
+#    NOT READY (standby disconnected or lagging)? Fix the standby, keep the page
+#    up, then re-verify the fence and re-run the standby gate, no second outage:
+#      charts/pawtograder/scripts/maintenance.sh recheck
 
 # 3a. Hold the STANDBY back, so the upgrade rolls only the primary. Without
 #     this, one upgrade submits both StatefulSet updates and their controllers
