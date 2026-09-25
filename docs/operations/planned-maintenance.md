@@ -143,25 +143,122 @@ half moved to 0.4.0.
 ### Deploying a Postgres-restarting release in a window
 
 The procedure below was written for node and host maintenance, where the chart
-doesn't change. A chart release that restarts Postgres needs two changes to
-it, and has one known gap.
+doesn't change. A release that restarts Postgres is different: its
+`helm upgrade` is the bounce, and it runs inside the window. The fence that
+`maintenance.sh down` puts up is made of live edits (the web host rerouted to
+the page, writers scaled to 0, the functions HPA deleted, CronJobs suspended),
+and a plain `helm upgrade` re-renders every one of them. Client-side, it puts
+the writers, HPA and web backend back while the primary is rolling.
+Server-side, it fails on the fields `kubectl` took over, in the middle of the
+window.
 
-1. **Pre-stage the page with the chart that is already deployed**
-   (`--version <deployed-version>`), never with the target release. Otherwise
-   that first `helm upgrade` rolls the primary before anything is fenced.
-2. **Apply the target release only after `maintenance.sh down` reports
-   `SAFE TO BOUNCE`.** That upgrade is the bounce.
-3. **Known gap: the target `helm upgrade` does not respect the fence.** The
-   fence is made of live edits, not values: the ingress reroute, writer
-   Deployments scaled to 0, and the functions HPA deleted. A `helm upgrade`
-   re-renders all of them. A client-side upgrade puts back the chart's
-   replica counts, HPA and ingress backend, so writers and the web host come
-   back while the primary is rolling. A server-side upgrade instead conflicts
-   on the fields `kubectl` took over and fails in the middle of the window.
-   Neither outcome is acceptable in production. Until the chart can express
-   the maintenance posture in values, **rehearse the whole sequence on staging
-   first**, and check with `maintenance.sh status` right after the upgrade
-   whether the fence is still in place.
+So the release carries the fence itself. `maintenance.active=true` renders the
+state `down` leaves behind, field for field: the web host's `/` (and each
+channel host's `/`) on `pawtograder-maintenance:8080`, the writers the script
+fences at `replicas: 0`, no functions HPA, and the write-capable CronJobs at
+`suspend: true`. The release and the live objects then agree, and neither
+apply mode has anything to change. pg_cron is paused in the database and
+survives the upgrade, so it stays the script's job. See `maintenance.active`
+in `charts/pawtograder/values.yaml` for the exact list.
+
+`maintenance.sh down` is still the entry point, because it captures the prior
+state, pauses pg_cron, and gates on zero writer pods. The posture only makes
+the upgrade agree with it. On exit, `maintenance.sh up` runs **first** and the
+upgrade that turns the posture off runs **second**.
+
+```bash
+NS=pawtograder-prod
+VALUES=values/values-prod.yaml       # the file the routine deploy uses
+# A versioned chart reference. Not charts/pawtograder: Helm ignores --version
+# for a local directory and renders whatever is checked out.
+CHART=oci://dev-harbor.khoury.northeastern.edu/pawtograder/charts/pawtograder
+DEPLOYED=$(helm list -n "$NS" -o json | jq -r '.[] | select(.name=="pawtograder") | .chart | sub("^pawtograder-"; "")')
+TARGET=0.4.0
+
+# 0. Before the window: confirm the TARGET chart knows the posture. Helm ignores
+#    values a chart doesn't define, so a chart without it would take
+#    --set maintenance.active=true silently and lift the fence. Expect "true".
+helm template pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
+  --set maintenance.enabled=true --set maintenance.active=true \
+  --show-only templates/ingress.yaml | grep 'pawtograder.io/maintenance-active'
+
+# 1. Pre-stage the page with the chart that is ALREADY DEPLOYED. The target
+#    chart here would roll the primary before anything is fenced. Set this
+#    window's page text now, as values (see below).
+helm upgrade pawtograder "$CHART" --version "$DEPLOYED" -n "$NS" -f "$VALUES" \
+  --set maintenance.enabled=true --set maintenance.eta="6:15pm ET" --wait
+kubectl -n "$NS" rollout status deploy/pawtograder-maintenance
+
+# 2. Fence, and wait for the verdict. Do not go on without SAFE TO BOUNCE.
+charts/pawtograder/scripts/maintenance.sh down
+
+# 3. The bounce: the target release, carrying the posture. Same values as the
+#    routine deploy, plus the posture and the page text from step 1.
+helm upgrade pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
+  --set maintenance.enabled=true --set maintenance.active=true \
+  --set maintenance.eta="6:15pm ET" --wait --timeout 25m
+
+# 4. Verify, still behind the page.
+charts/pawtograder/scripts/maintenance.sh status   # page UP, HPA ABSENT, writers 0,
+                                                   # "carries maintenance.active=true"
+kubectl -n "$NS" rollout status statefulset/pawtograder-postgres
+kubectl -n "$NS" rollout status statefulset/pawtograder-postgres-replica  # if enabled
+#    ...then the write probe and the standby query from step 4 of the manual
+#    sequence below.
+
+# 5. Exit, in this order.
+charts/pawtograder/scripts/maintenance.sh up       # restore; page down LAST
+helm upgrade pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
+  --wait --timeout 25m                             # posture off: the routine deploy
+charts/pawtograder/scripts/maintenance.sh status   # HPA present, no posture warning
+```
+
+Why the exit runs in that order:
+
+- **`up` first** keeps the guarantees `up` exists for. It checks the primary
+  accepts writes before any writer starts, and it drops the page only once the
+  restored tiers are Ready. An upgrade applies everything at once, so running
+  it first would move the web host off the page while web is still starting
+  (the controller's bare 503), with pg_cron still paused.
+- **The upgrade second** is then close to a no-op. Every field `up` restored
+  (replicas, CronJob `suspend`, the ingress backends) is back at the value the
+  chart renders with the posture off, so nothing conflicts. The one thing it
+  does is recreate the functions HPA. `up` leaves the HPA alone when the
+  release holds the posture. Its captured copy came from the old chart, and
+  re-applying it would put the HPA's fields under kubectl's field manager, so
+  any field the target chart changed would conflict on this upgrade.
+- **Nothing is left in drift.** With autoscaling on, the posture never renders
+  `replicas` on the functions Deployment. Rendering 0 there would make the exit
+  upgrade, under a client-side 3-way merge, delete the field and reset a
+  restored tier to one pod.
+
+Rules for the window:
+
+- **Set the page text as values, not with `down --title/--message/--eta`.**
+  Those flags patch the maintenance ConfigMap under kubectl's field manager.
+  The target upgrade renders the chart's text over it, which fails
+  server-side and reverts the text client-side. Pass the same
+  `maintenance.title`/`message`/`eta` to steps 1 and 3.
+- **Nothing else deploys during the window.** Any upgrade without
+  `maintenance.active=true`, including the routine deploy workflow, lifts the
+  fence. The workflow can't pass `--set`, and its `helm test` fails against
+  the page, so run step 3 by hand. Use the Helm major version the workflow
+  uses, so the upgrade applies the same way (server-side or client-side) as
+  the release's other revisions.
+- **Don't `helm rollback` inside the window.** Every earlier revision was
+  rendered without the posture, so a rollback lifts the fence as surely as a
+  plain upgrade. If step 3 fails, fix forward and re-run it with the posture.
+- **Never carry the posture past the window.** Pass it with `--set` for one
+  upgrade only. Don't put it in a values file or carry it with
+  `--reuse-values`, because every upgrade that keeps it re-fences production.
+  `down` refuses a release that already holds it, since it would capture the
+  fence as the "prior" state. `up` and `status` warn while it is still set.
+- **If the target changes a writer's replica count**, the exit upgrade
+  (server-side) reports a conflict on `.spec.replicas`, because
+  `maintenance.sh up` restored the old count under kubectl's manager. Check
+  that the conflict names only fields `up` restored, then re-run the exit
+  upgrade with `--force-conflicts` so the chart's value wins (see the SSA note
+  in the manual sequence).
 
 ---
 
@@ -196,7 +293,9 @@ pg_cron → (page up + scale every writer tier to 0, in one fence) → suspend
 write CronJobs → block until all writer pods terminate → report SAFE TO BOUNCE /
 NOT READY. `up` is the reverse (writable preflight → restore writers/channels →
 unsuspend CronJobs → re-apply the functions HPA → resume pg_cron → drop the page
-last).
+last). When the release holds `maintenance.active`, `up` leaves the HPA to the
+exit upgrade; see
+[above](#deploying-a-postgres-restarting-release-in-a-window).
 
 ```bash
 # 1. Pre-stage the page once (creates the Service; does NOT reroute yet).
