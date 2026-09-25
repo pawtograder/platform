@@ -179,6 +179,15 @@ accident, because maintenance.active defaults to false.
 {{- if ne (int .Values.maintenance.service.port) 8080 -}}
 {{- fail (printf "maintenance.active=true requires maintenance.service.port=8080 (got %v) — maintenance.sh patches the web host's backend to port 8080 (MAINT_PORT), so a chart backend on any other port is a different value in a field kubectl owns, and the window's own server-side upgrade fails on the conflict." .Values.maintenance.service.port) -}}
 {{- end -}}
+{{- if not .Values.ingress.enabled -}}
+{{- fail "maintenance.active=true requires ingress.enabled=true — with no chart Ingress the posture still scales every writer to 0 and drops the functions HPA, but renders no maintenance route and no pawtograder.io/maintenance-active marker: the app goes dark with no page, and maintenance.sh cannot tell the release holds the posture." -}}
+{{- end -}}
+{{- end -}}
+{{- /* The posture marker is chart-managed. A user-supplied copy in
+     ingress.annotations would be emitted as a second key after the chart's,
+     leaving the marker maintenance.sh relies on ambiguous or overridden. */ -}}
+{{- if hasKey (.Values.ingress.annotations | default dict) "pawtograder.io/maintenance-active" -}}
+{{- fail "ingress.annotations must not set pawtograder.io/maintenance-active — the chart manages that marker from maintenance.active, and maintenance.sh reads it to decide whether `down` may capture prior state. Set maintenance.active instead." -}}
 {{- end -}}
 
 {{- if has $env (list "staging" "production") -}}

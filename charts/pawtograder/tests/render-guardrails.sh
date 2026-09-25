@@ -2489,6 +2489,12 @@ assert_refused "posture: active with the API on the web host is refused" \
 assert_refused "posture: active with a page port maintenance.sh does not patch is refused" \
   "maintenance.active=true requires maintenance.service.port=8080" \
   --set maintenance.active=true --set maintenance.enabled=true --set maintenance.service.port=9090
+assert_refused "posture: active with no chart Ingress is refused" \
+  "maintenance.active=true requires ingress.enabled=true" \
+  --set maintenance.active=true --set maintenance.enabled=true --set ingress.enabled=false
+assert_refused "posture: a user-supplied posture marker annotation is refused" \
+  "ingress.annotations must not set pawtograder.io/maintenance-active" \
+  --set-string 'ingress.annotations.pawtograder\.io/maintenance-active=true'
 
 echo
 

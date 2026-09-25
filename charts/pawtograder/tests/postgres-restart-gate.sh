@@ -175,7 +175,17 @@ render() {
     replicas <"$out.yaml" >"$out.rep"
     return 0
   fi
-  grep -q "could not find template" "$TMP/err"
+  if grep -q "could not find template" "$TMP/err"; then
+    # Empty is legitimate only for the optional standby. Every case renders a
+    # chart-managed primary, so an empty primary is a broken render, not "no
+    # StatefulSet to compare".
+    if [ "$tpl" = "postgres-statefulset.yaml" ]; then
+      echo "templates/$tpl rendered no Postgres primary StatefulSet (postgres.enabled=false, or a broken condition?)" >"$TMP/err"
+      return 1
+    fi
+    return 0
+  fi
+  return 1
 }
 
 POD_CHANGES=()

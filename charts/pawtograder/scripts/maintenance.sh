@@ -240,8 +240,24 @@ state_exists() { k get configmap "$STATE_CM" >/dev/null 2>&1; }
 # docs/operations/planned-maintenance.md.
 POSTURE_ANNOTATION="pawtograder.io/maintenance-active"
 posture_held() {
-  # jsonpath needs the dot in the annotation key escaped.
-  [ "$(k get ingress "$INGRESS" -o jsonpath='{.metadata.annotations.pawtograder\.io/maintenance-active}' 2>/dev/null || true)" = "true" ]
+  # jsonpath needs the dot in the annotation key escaped. Fails CLOSED: a read
+  # error must not look like "no posture", or `down` would record the fenced
+  # state as prior and `up` would re-apply the old chart's HPA.
+  local v
+  v="$(k get ingress "$INGRESS" -o jsonpath='{.metadata.annotations.pawtograder\.io/maintenance-active}')" \
+    || die "could not read ingress ${INGRESS} to check for ${POSTURE_ANNOTATION}; refusing to guess whether the release holds maintenance.active. Retry once the API is reachable."
+  [ "$v" = "true" ]
+}
+
+# present <kind> <name>: 0 if the object exists, 1 if the API says NotFound.
+# A target release applied inside the window can remove a recorded object (a
+# dropped deployment channel, say), and `up` must not abort half-way on it.
+# Any other read error aborts: only a definite NotFound counts as removed.
+present() {
+  local err
+  if err="$(k get "$1" "$2" -o name 2>&1 >/dev/null)"; then return 0; fi
+  grep -q "NotFound" <<<"$err" && return 1
+  die "could not read $1/$2: ${err}"
 }
 
 
@@ -606,6 +622,10 @@ cmd_up() {
   local kind name replicas
   while IFS=$'\t' read -r kind name replicas; do
     [ -n "$name" ] || continue
+    if ! present "$kind" "$name"; then
+      warn "  ${kind}/${name} no longer exists (removed by the release applied in the window?); skipping"
+      continue
+    fi
     log "  ${kind}/${name} -> ${replicas}"
     run k scale "$kind" "$name" --replicas="$replicas"
   done < "$tmp/deploy_replicas"
@@ -670,6 +690,7 @@ cmd_up() {
     while IFS=$'\t' read -r rk rn rr; do
       [ -n "$rn" ] || continue
       [[ "$rr" =~ ^[0-9]+$ ]] && [ "$rr" -eq 0 ] && continue   # nothing to wait for at 0
+      present "$rk" "$rn" || continue                            # removed; skipped in step 1
       log "  waiting for ${rk}/${rn} (${rr} replica(s))"
       k rollout status "$rk" "$rn" --timeout="${READY_TIMEOUT_SECONDS}s" \
         || die "${rk}/${rn} not Ready within ${READY_TIMEOUT_SECONDS}s — leaving the maintenance page UP to avoid a broken cutover (users keep seeing the styled page, not errors). Investigate, then re-run '$0 up' to finish."
@@ -697,6 +718,10 @@ cmd_up() {
       [ -n "$crow" ] || continue
       cing="$(jq -r '.ingress' <<<"$crow")"; cidx="$(jq -r '.index' <<<"$crow")"
       cbackend="$(jq -c '.backend' <<<"$crow")"
+      if ! present ingress "$cing"; then
+        warn "  channel ingress ${cing} no longer exists (channel removed by the release?); skipping"
+        continue
+      fi
       run k patch ingress "$cing" --type=json -p \
         "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/${cidx}/backend/service\",\"value\":${cbackend}}]"
       log "  channel ingress ${cing} path[${cidx}] -> restored"

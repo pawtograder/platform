@@ -182,11 +182,16 @@ helm template pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
   --set maintenance.enabled=true --set maintenance.active=true \
   --show-only templates/ingress.yaml | grep 'pawtograder.io/maintenance-active'
 
-# 1. Pre-stage the page with the chart that is ALREADY DEPLOYED. The target
-#    chart here would roll the primary before anything is fenced. Set this
-#    window's page text now, as values (see below).
-helm upgrade pawtograder "$CHART" --version "$DEPLOYED" -n "$NS" -f "$VALUES" \
-  --set maintenance.enabled=true --set maintenance.eta="6:15pm ET" --wait
+# 1. Pre-stage the page with the chart AND values that are ALREADY DEPLOYED.
+#    The target chart would roll the primary before anything is fenced, and so
+#    would target values: $VALUES may already carry the window's
+#    postgres.config, resources or image change. --reuse-values keeps the
+#    release's current values and adds only the page. Set this window's page
+#    text now, as values (see below). --wait-for-jobs: this revision's
+#    migrations Job must finish before `down` counts writers.
+helm upgrade pawtograder "$CHART" --version "$DEPLOYED" -n "$NS" --reuse-values \
+  --set maintenance.enabled=true --set maintenance.eta="6:15pm ET" \
+  --wait --wait-for-jobs
 kubectl -n "$NS" rollout status deploy/pawtograder-maintenance
 
 # 2. Fence, and wait for the verdict. Do not go on without SAFE TO BOUNCE.
@@ -194,9 +199,11 @@ charts/pawtograder/scripts/maintenance.sh down
 
 # 3. The bounce: the target release, carrying the posture. Same values as the
 #    routine deploy, plus the posture and the page text from step 1.
+#    --wait-for-jobs: the migrations Job is a plain Job, not a hook, so --wait
+#    alone returns while schema changes may still be running.
 helm upgrade pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
   --set maintenance.enabled=true --set maintenance.active=true \
-  --set maintenance.eta="6:15pm ET" --wait --timeout 25m
+  --set maintenance.eta="6:15pm ET" --wait --wait-for-jobs --timeout 25m
 
 # 4. Verify, still behind the page.
 charts/pawtograder/scripts/maintenance.sh status   # page UP, HPA ABSENT, writers 0,
@@ -209,7 +216,7 @@ kubectl -n "$NS" rollout status statefulset/pawtograder-postgres-replica  # if e
 # 5. Exit, in this order.
 charts/pawtograder/scripts/maintenance.sh up       # restore; page down LAST
 helm upgrade pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
-  --wait --timeout 25m                             # posture off: the routine deploy
+  --wait --wait-for-jobs --timeout 25m             # posture off: the routine deploy
 charts/pawtograder/scripts/maintenance.sh status   # HPA present, no posture warning
 ```
 
@@ -234,6 +241,10 @@ Why the exit runs in that order:
 
 Rules for the window:
 
+- **`up` skips what the target release removed.** If the release applied in
+  the window drops a writer it recorded (a removed deployment channel, say),
+  `up` warns that the object no longer exists and carries on restoring the
+  rest. Only a definite NotFound counts; any other read error aborts `up`.
 - **Set the page text as values, not with `down --title/--message/--eta`.**
   Those flags patch the maintenance ConfigMap under kubectl's field manager.
   The target upgrade renders the chart's text over it, which fails
