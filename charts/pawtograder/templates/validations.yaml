@@ -265,9 +265,11 @@ accident, because maintenance.active defaults to false.
 {{- end -}}
 {{- end -}}
 {{- range $c := .Values.channels -}}
-{{- range $kind := list "web" "functions" -}}
-{{- if hasKey $c $kind -}}
-{{- $n := include "pawtograder.componentName" (dict "ctx" $ "component" (printf "%s-%s" $kind $c.name)) -}}
+{{- /* channels[] names the blocks `web` and `edgeFunctions`; the workloads
+     they create are web-<name> and functions-<name>. */ -}}
+{{- range $w := list (dict "key" "web" "component" "web") (dict "key" "edgeFunctions" "component" "functions") -}}
+{{- if index $c $w.key -}}
+{{- $n := include "pawtograder.componentName" (dict "ctx" $ "component" (printf "%s-%s" $w.component $c.name)) -}}
 {{- if not (lookup "apps/v1" "Deployment" $.Release.Namespace $n) -}}
 {{- fail (printf "maintenance.active=true: channel %q would create Deployment %s inside the fence. maintenance.sh did not record it, so `up` would drop the page before it runs. Add channels in a routine deploy, outside the window." $c.name $n) -}}
 {{- end -}}
