@@ -38,10 +38,11 @@ bootstrap in [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) and the chart docs in
   replacing the static `KUBECONFIG_BASE64` with short-lived ServiceAccount
   tokens minted per job from a GitHub OIDC token via OpenBao, and the RBAC and
   admission policy it needs.
-- [Read-only kubeconfig for preview CI](./preview-readonly-kubeconfig.md):
-  scoping the cluster credential held by the preview jobs that build and deploy
-  PR-supplied code down to `get secrets`, and verifying it is actually
-  restricted.
+- [Read-only kubeconfig for preview CI](./preview-readonly-kubeconfig.md)
+  (**superseded** by the OIDC runbook above; the two are alternatives, not
+  steps): scoping the cluster credential held by the preview jobs that build
+  and deploy PR-supplied code down to `get secrets`, and verifying it is
+  actually restricted.
 
 ## Related
 

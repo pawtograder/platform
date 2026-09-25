@@ -47,9 +47,19 @@ inputs:
     description: >-
       Lifetime of the minted ServiceAccount token. Must outlast the longest
       operation in the job — the deploy job runs `helm --wait --timeout 20m`,
-      so its floor is well above 20m.
+      so its floor is well above 20m, and it passes 50m explicitly. It must
+      also NOT exceed the JWT auth role's `token_ttl` in
+      scripts/setup-openbao-preview-oidc.sh: the lease is a child of the login
+      token, so a longer value here is silently truncated to that.
+      Every call site sets this explicitly. The default matches the LONGEST
+      any of them asks for, because the two ways of being wrong are not
+      symmetric: too long is a credential that outlives its job by minutes,
+      while too short is a mid-apply `Unauthorized` from helm that reads as a
+      cluster fault. A previous default of "20m" contradicted the sentence
+      above it — it was the deploy job's floor, not a safe value for a call
+      site that omits this.
     required: false
-    default: "40m"
+    default: "50m"
   api_server:
     description: >-
       Cluster API server URL (vars.PREVIEW_CLUSTER_API_SERVER). Not a secret.
@@ -100,6 +110,12 @@ runs:
         KUBECONFIG_PATH: ${{ inputs.kubeconfig_path }}
       run: |
         set -euo pipefail
+        # Before either branch writes anything. The static path used to create
+        # the file under the ambient umask and chmod it afterwards, leaving a
+        # world-readable cluster credential on disk for the window in between;
+        # only the OIDC path set this. A umask cannot be raced the way a
+        # post-hoc chmod can.
+        umask 077
         KUBECONFIG_PATH="${KUBECONFIG_PATH:-$HOME/.kube/config}"
         mkdir -p "$(dirname "$KUBECONFIG_PATH")"
 
@@ -124,6 +140,14 @@ runs:
           fi
           echo "$KUBECONFIG_B64" | base64 -d > "$KUBECONFIG_PATH"
           chmod 600 "$KUBECONFIG_PATH"
+          # The base64 form is a repo secret and masked automatically; the
+          # DECODED credential is not, so a later `kubectl --v=8`, a `helm
+          # --debug`, or a stray cat would print a working cluster credential
+          # into a public log. Mask the fields that actually authenticate. The
+          # OIDC path already masks each of its three secrets.
+          while IFS= read -r secret_value; do
+            [ -n "$secret_value" ] && echo "::add-mask::$secret_value"
+          done < <(grep -oE '(token|client-key-data|client-certificate-data|password):[[:space:]]*[^[:space:]]+' "$KUBECONFIG_PATH" | sed -E 's/^[^:]+:[[:space:]]*//')
           echo "::notice title=Cluster auth::static kubeconfig (long-lived). Set the PREVIEW_CLUSTER_AUTH variable to 'oidc' to use short-lived federated credentials."
           exit 0
         fi
@@ -131,7 +155,7 @@ runs:
         # ---------------- OIDC path ----------------
         # Fail loudly on missing config. This path must never degrade to the
         # static credential on its own.
-        for v in BAO_ADDR BAO_ROLE K8S_ROLE NS; do
+        for v in BAO_ADDR BAO_ROLE K8S_ROLE NS TTL; do
           if [ -z "${!v:-}" ]; then
             echo "::error title=OIDC misconfigured::PREVIEW_CLUSTER_AUTH=oidc but '$v' is empty." >&2
             exit 1
@@ -142,38 +166,81 @@ runs:
           exit 1
         fi
 
+        # jq is an unguarded hard dependency below. It is present on
+        # ubuntu-latest but this action also runs on the self-hosted
+        # `pawtograder-ci` pool, where the image is ours to change. Without
+        # this, a missing jq surfaces as `jq: command not found` inside a
+        # pipeline whose failure `set -o pipefail` turns into a bare non-zero
+        # exit, naming neither jq nor this action.
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "::error title=jq not installed::The OIDC path needs jq to read the GitHub token response. Install it on the runner image, or use PREVIEW_CLUSTER_AUTH=static." >&2
+          exit 1
+        fi
+
         if ! command -v bao >/dev/null 2>&1; then
+          # Its own directory rather than $RUNNER_TEMP itself. $GITHUB_PATH
+          # PREPENDS, and $RUNNER_TEMP is the shared scratch dir every other
+          # step in the job writes to — putting it first on PATH for the rest
+          # of the job means anything that later drops a file named `kubectl`,
+          # `helm` or `npm` there shadows the real binary. A directory that
+          # holds only this download cannot.
+          bao_bin="$RUNNER_TEMP/bao-bin"
+          mkdir -p "$bao_bin"
           curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP" bao
-          chmod +x "$RUNNER_TEMP/bao"
+            | tar -xz -C "$bao_bin" bao
+          chmod +x "$bao_bin/bao"
           # Both are needed: `export` covers the rest of THIS step, and
           # $GITHUB_PATH covers later steps in the calling job. Without the
           # second line the binary is on disk but invisible, so the `secrets`
           # job's second credential step and the inline bao blocks in
           # publish-e2e-bundle and destroy each re-download the same 64 MiB
           # tarball.
-          export PATH="$RUNNER_TEMP:$PATH"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          export PATH="$bao_bin:$PATH"
+          echo "$bao_bin" >> "$GITHUB_PATH"
         fi
 
         # Audience is the Bao address, and the JWT role pins bound_audiences to
         # the same string. The default audience is the repo URL, which every
         # workflow in the repo would share.
-        JWT=$(curl -sSf \
+        # curl and jq are separate statements on purpose. As a single
+        # pipeline, `set -o pipefail` aborts the step the moment curl fails,
+        # so the explicit error below could only ever fire for a well-formed
+        # response with no `.value` — the least likely of the two failures,
+        # and the one whose bare exit is least self-explanatory.
+        if ! jwt_response=$(curl -sSf \
           -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${BAO_ADDR}" | jq -r '.value')
-        [ -n "$JWT" ] && [ "$JWT" != "null" ] || { echo "::error::failed to mint a GitHub OIDC token" >&2; exit 1; }
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${BAO_ADDR}"); then
+          echo "::error title=OIDC token request failed::GitHub's token endpoint did not return a token. Check that this job has 'permissions: id-token: write'." >&2
+          exit 1
+        fi
+        JWT=$(printf '%s' "$jwt_response" | jq -r '.value // empty')
+        [ -n "$JWT" ] || { echo "::error::failed to mint a GitHub OIDC token (no .value in the response)" >&2; exit 1; }
         echo "::add-mask::$JWT"
 
         export BAO_ADDR
+        # Every mint below is checked for an EMPTY result, not just a non-zero
+        # exit. `bao write -field=X` can exit 0 having printed nothing when the
+        # response lacks that field, and an empty token flows straight into a
+        # syntactically valid kubeconfig — so the step would print its
+        # "No long-lived credential was used" success notice and the failure
+        # would not surface until some later step got a 401 it could not
+        # explain.
         BAO_TOKEN=$(bao write -field=token "auth/jwt/login" role="$BAO_ROLE" jwt="$JWT")
         echo "::add-mask::$BAO_TOKEN"
+        if [ -z "$BAO_TOKEN" ]; then
+          echo "::error title=OpenBao login returned no token::auth/jwt/login succeeded for role '${BAO_ROLE}' but returned an empty token field." >&2
+          exit 1
+        fi
         export BAO_TOKEN
 
         SA_TOKEN=$(bao write -field=service_account_token \
           "kubernetes/creds/${K8S_ROLE}" \
           kubernetes_namespace="$NS" ttl="$TTL")
         echo "::add-mask::$SA_TOKEN"
+        if [ -z "$SA_TOKEN" ]; then
+          echo "::error title=No ServiceAccount token::kubernetes/creds/${K8S_ROLE} returned an empty service_account_token for namespace '${NS}'." >&2
+          exit 1
+        fi
 
         # Server + CA are not secrets. Prefer explicit variables; fall back to
         # the runner pod's own mounted ServiceAccount, which exists when ARC
@@ -196,7 +263,6 @@ runs:
           fi
         fi
 
-        umask 077
         cat > "$KUBECONFIG_PATH" <<EOF
         apiVersion: v1
         kind: Config

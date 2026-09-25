@@ -116,7 +116,11 @@ it with `|| true` and the namespace delete afterwards cleans up regardless.
 
 `build-web` runs the most untrusted code in the workflow — a full `next build`
 against a PR-controlled lockfile — and now gets a token that can do exactly one
-thing: read a Secret in one labeled namespace, for 20 minutes.
+thing: read a Secret in one labeled namespace, for 20 minutes. That 20 minutes
+comes from the `ttl:` input at the call site, NOT from the role's
+`token_default_ttl`: the action always sends an explicit `ttl`, so the role
+default is never consulted. Shortening exposure means editing the call site in
+`preview.yml`.
 
 ### Two things that are load-bearing, not incidental
 
@@ -158,6 +162,18 @@ whole reason it is a separate environment from `preview-deploy`.
 The engine impersonates nothing; it calls TokenRequest and creates the
 SA/Role/RoleBinding itself, so it needs those rights.
 
+`bind` and `escalate` are the two that are easy to leave out and that fail
+100% of the time once they are. Kubernetes' privilege-escalation prevention
+refuses to let a principal create a Role whose rules exceed its own, or bind a
+Role it does not itself hold, and every role this setup generates does exactly
+that: `preview-deploy` grants `resources: ["*"], verbs: ["*"]` across eight API
+groups, and `preview-provision` grants `create` on namespaces, neither of which
+Bao's own ServiceAccount holds. `escalate` waives the first check and `bind`
+the second. Without them every `kubernetes/creds/...` mint fails with
+`attempt to grant extra privileges`, which reads like a Bao misconfiguration
+rather than missing cluster RBAC. `update` is needed because the engine writes
+these objects back rather than only creating them.
+
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -166,13 +182,18 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["serviceaccounts"]
-    verbs: ["get", "create", "delete"]
+    verbs: ["get", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["serviceaccounts/token"]
     verbs: ["create"]
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
-    verbs: ["get", "create", "delete"]
+    resources: ["rolebindings", "clusterrolebindings"]
+    verbs: ["get", "create", "update", "delete"]
+  # bind + escalate: see above. Without these the engine can create the
+  # SA and then fails on the Role it is supposed to attach to it.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "clusterroles"]
+    verbs: ["get", "create", "update", "delete", "bind", "escalate"]
   # Needed to evaluate allowed_kubernetes_namespace_selector.
   - apiGroups: [""]
     resources: ["namespaces"]
@@ -219,14 +240,33 @@ spec:
     resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
-        operations: ["CREATE", "DELETE"]
+        # UPDATE belongs here as much as CREATE and DELETE. `preview-provision`
+        # holds `patch` on namespaces CLUSTER-WIDE (a generated ClusterRole is
+        # bound with a ClusterRoleBinding), because the secrets job labels the
+        # namespace it just created. Every other tier is scoped by
+        # `allowed_kubernetes_namespace_selector` on
+        # `pawtograder.net/preview=true` — so a single `kubectl label namespace
+        # <any-namespace> pawtograder.net/preview=true` makes that namespace
+        # selectable by `preview-deploy` (verbs ["*"] on resources ["*"]) and
+        # `preview-teardown-ns`. Labelling is an UPDATE, so with CREATE/DELETE
+        # alone the policy never sees it and the name bound below is not a
+        # bound at all.
+        operations: ["CREATE", "UPDATE", "DELETE"]
         resources: ["namespaces"]
   validations:
     # `object` is null on DELETE — the resource being removed is `oldObject`.
     # Testing `object` alone errors on every delete, and with failurePolicy:
     # Fail + Deny that blocks teardown of even valid preview namespaces.
-    - expression: "(has(object) && object != null ? object : oldObject).metadata.name.startsWith('pawtograder-preview-pr-')"
-      message: "preview CI may only create or delete pawtograder-preview-pr-* namespaces"
+    # On UPDATE `object` is the incoming version, which is the one to bound.
+    #
+    # `object == null ? oldObject : object`, NOT `has(object) && ...`: `has()`
+    # is a CEL macro whose argument must be a field selection (`has(x.y)`), so
+    # a bare identifier does not compile in cel-go — which is what Kubernetes
+    # uses — and the policy is rejected at apply time rather than behaving
+    # oddly. The null test alone is also sufficient, which is why the
+    # conjunction was redundant as well as invalid.
+    - expression: "(object == null ? oldObject : object).metadata.name.startsWith('pawtograder-preview-pr-')"
+      message: "preview CI may only create, relabel or delete pawtograder-preview-pr-* namespaces"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -235,18 +275,37 @@ metadata:
 spec:
   policyName: preview-namespace-names
   validationActions: ["Deny"]
-  # Scope to the generated SAs only, so ops and Rancher are unaffected.
-  matchResources:
-    namespaceSelector: {}
+  # Scoped to the principals this policy is about, and this is the part you
+  # must get right BEFORE applying: confirm the username (below) and edit the
+  # prefix if your Bao mount path differs. Without a matchConditions this
+  # binding denies namespace CREATE/UPDATE/DELETE cluster-wide for every
+  # principal — see the warning under the block.
+  matchConditions:
+    - name: only-preview-ci-sas
+      expression: "request.userInfo.username.startsWith('system:serviceaccount:pawtograder-preview-ci:')"
 ```
 
-The binding as written applies to every principal, which would stop _you_
-deleting a namespace by hand. Narrow it with a `matchConditions` on
-`request.userInfo.username` matching
-`system:serviceaccount:pawtograder-preview-ci:*` before applying. Written out
-here rather than pre-narrowed because the generated SA name pattern depends on
-your Bao mount path, and a policy that silently matches nothing is worse than
-none.
+Confirm that username before applying — `kubectl get sa -n
+pawtograder-preview-ci` after one mint, or read it out of the API server audit
+log — because the generated SA name depends on your Bao mount path. The two
+ways to get this wrong fail in opposite directions:
+
+- **A `matchConditions` that matches nothing** silently disables the policy.
+  The namespace-name bound is then not enforced at all, and nothing says so.
+  Verify with the `can-i` checks in §Verify, not by the absence of errors.
+- **No `matchConditions` at all** — for instance `matchResources:
+{namespaceSelector: {}}`, the empty selector, which matches EVERY namespace
+  rather than none — denies namespace CREATE, UPDATE and DELETE cluster-wide
+  for every principal, including you, Rancher, and any controller that creates
+  a namespace. `failurePolicy: Fail` plus `validationActions: ["Deny"]` makes
+  that immediate and total. Do not apply the binding in that form to find out.
+
+Dry-run it first; a CEL compile error in either expression surfaces here rather
+than at the first teardown:
+
+```bash
+kubectl apply --dry-run=server -f preview-namespace-names.yaml
+```
 
 ## 3. Configure OpenBao
 
@@ -310,5 +369,21 @@ likely to be exercised by accident and the most expensive to have broken.
 `deploy` runs `helm upgrade --wait --wait-for-jobs --timeout 20m`, and the
 recovery path can run a second helm operation before it, so its token is minted
 at 50m against a 60m `token_max_ttl`. If a deploy ever exceeds that the symptom
-is a mid-apply `Unauthorized` rather than a timeout — raise `token_max_ttl` and
-the `ttl` input together, since the role cap silently truncates the request.
+is a mid-apply `Unauthorized` rather than a timeout.
+
+THREE limits have to clear the job's runtime, not one, and the third is the
+easy one to miss:
+
+1. the `ttl` input at the call site in `preview.yml` (50m for `deploy`);
+2. the Kubernetes role's `token_max_ttl` (60m), which silently truncates a
+   larger request;
+3. the JWT auth role's `token_ttl` — the lifetime of the **Bao token** the
+   action logs in with, in `scripts/setup-openbao-preview-oidc.sh`.
+
+(3) is the ceiling over the other two. A dynamic-secret lease is a child of the
+token that created it, so when the Bao token expires its lease is revoked with
+it, OpenBao deletes the generated ServiceAccount, and every token issued for
+that SA stops working _immediately_ — regardless of the 50m stamped on it. The
+action logs in once and never renews. So a `token_ttl` shorter than the longest
+`ttl` any job requests makes the extra minutes fiction: raise all three
+together, and keep `token_ttl >= max(ttl)`.

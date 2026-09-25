@@ -42,18 +42,87 @@ export BAO_ADDR BAO_TOKEN VAULT_ADDR="${BAO_ADDR}" VAULT_TOKEN="${BAO_TOKEN}"
 # workflow in the repo would share.
 AUDIENCE="${AUDIENCE:-$BAO_ADDR}"
 
+# `|| echo "(already enabled)"` swallowed EVERY failure, not just the
+# already-enabled one — a permission denial, an unreachable server, or "path is
+# already in use" by a DIFFERENT consumer all printed the same reassuring line,
+# and the `write ... /config` immediately after then repointed that mount at
+# our issuer. This OpenBao is shared (the KV layout is kv/apps/pawtograder/...,
+# one app among several), so `jwt/` and `kubernetes/` are not presumptively
+# ours. Distinguish the benign case from the rest.
+# Returns 0 when it CREATED the mount, 1 when one was already there. Any
+# other failure exits. The caller must handle the 1 — detecting that a mount
+# already belongs to someone and then configuring it anyway is the bug this
+# function was added to prevent.
+enable_mount() { # $1 = auth|secrets, $2 = type
+  local kind="$1" type="$2" out
+  if out=$($CLI "$kind" enable "$type" 2>&1); then
+    echo "    enabled ${type} at ${type}/"
+    return 0
+  fi
+  if printf '%s' "$out" | grep -qiE 'path is already in use|already in use'; then
+    return 1
+  fi
+  echo "ERROR: could not enable ${kind} mount '${type}': ${out}" >&2
+  exit 1
+}
+
+GH_ISSUER="https://token.actions.githubusercontent.com"
+
 echo "==> enable jwt auth"
-$CLI auth enable jwt 2>/dev/null || echo "    (already enabled)"
-$CLI write auth/jwt/config \
-  oidc_discovery_url="https://token.actions.githubusercontent.com" \
-  bound_issuer="https://token.actions.githubusercontent.com"
+# The pre-existing case is NOT automatically ours. This OpenBao is shared (the
+# KV layout is kv/apps/pawtograder/..., one app among several), so writing
+# `auth/jwt/config` unconditionally would repoint another consumer's JWT mount
+# at our issuer and invalidate every role on it. Configure the mount only when
+# we created it, or when it already points where we would point it anyway.
+if enable_mount auth jwt; then
+  $CLI write auth/jwt/config \
+    oidc_discovery_url="$GH_ISSUER" \
+    bound_issuer="$GH_ISSUER"
+else
+  existing_issuer=$($CLI read -field=bound_issuer auth/jwt/config 2>/dev/null || true)
+  if [ -z "$existing_issuer" ]; then
+    echo "    (jwt/ exists but is unconfigured — configuring it for GitHub Actions)"
+    $CLI write auth/jwt/config \
+      oidc_discovery_url="$GH_ISSUER" \
+      bound_issuer="$GH_ISSUER"
+  elif [ "$existing_issuer" = "$GH_ISSUER" ]; then
+    echo "    (jwt/ already points at GitHub Actions — leaving its config alone)"
+  else
+    cat >&2 <<ERR
+ERROR: auth/jwt/ on this OpenBao is configured for a DIFFERENT issuer:
+         ${existing_issuer}
+       Writing our config there would repoint that mount and invalidate every
+       role on it. Give this setup its own mount instead:
+         ${CLI} auth enable -path=jwt-preview jwt
+       and change 'auth/jwt/login' in
+       .github/actions/cluster-credentials/action.yml to 'auth/jwt-preview/login'
+       (the mount path is hard-coded there; both must move together).
+ERR
+    exit 1
+  fi
+fi
 
 echo "==> enable kubernetes secrets engine"
-$CLI secrets enable kubernetes 2>/dev/null || echo "    (already enabled)"
+# Same shape, and the stakes are the same: `write -f kubernetes/config` takes
+# no arguments, so on an existing mount it RESETS kubernetes_host,
+# kubernetes_ca_cert and service_account_jwt to the in-cluster defaults —
+# blanking another app's engine target.
+#
 # No arguments: OpenBao uses its own in-cluster ServiceAccount and the
 # pod's CA/host. Pass kubernetes_host / kubernetes_ca_cert only if Bao runs
 # outside the target cluster.
-$CLI write -f kubernetes/config
+if enable_mount secrets kubernetes; then
+  $CLI write -f kubernetes/config
+elif $CLI read kubernetes/config >/dev/null 2>&1; then
+  echo "    (kubernetes/ already configured — leaving its config alone)"
+  echo "    NOTE: if that mount belongs to another app, give this setup its own"
+  echo "          (${CLI} secrets enable -path=kubernetes-preview kubernetes) and"
+  echo "          update the 'kubernetes/creds/' paths in action.yml and the"
+  echo "          policies below to match."
+else
+  echo "    (kubernetes/ exists but is unconfigured — configuring it)"
+  $CLI write -f kubernetes/config
+fi
 
 # ---------------------------------------------------------------------------
 # JWT auth roles. One per job shape, each bound as tightly as its claims allow.
@@ -73,6 +142,14 @@ jwt_role() {
   local claims="{\"repository\":\"${REPO}\",\"job_workflow_ref\":[${refs_json}]"
   [ -n "$env_claim" ] && claims="${claims},\"environment\":\"${env_claim}\""
   claims="${claims}}"
+  # token_ttl must be >= the longest `ttl:` any job asks the credential action
+  # for (deploy requests 50m), NOT the 20m it used to be. A dynamic-secret
+  # lease is a child of the token that created it: when this token expires its
+  # lease is revoked with it, OpenBao deletes the generated ServiceAccount, and
+  # the 50m Kubernetes token stops working the moment the 20m Bao token does.
+  # The action logs in once per job and never renews, so this is a hard
+  # ceiling. The symptom is a mid-apply `Unauthorized` from helm ~20 minutes
+  # in, which looks like a cluster problem rather than a TTL one.
   $CLI write "auth/jwt/role/${name}" \
     role_type="jwt" \
     user_claim="job_workflow_ref" \
@@ -80,7 +157,7 @@ jwt_role() {
     bound_claims_type="string" \
     bound_claims="${claims}" \
     token_policies="${policy}" \
-    token_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" token_num_uses=0
+    token_ttl="${TOKEN_MAX_TTL}" token_max_ttl="${TOKEN_MAX_TTL}" token_num_uses=0
 }
 
 # Each tier binds a DIFFERENT environment claim, and that is what actually
@@ -159,11 +236,21 @@ $CLI write kubernetes/roles/preview-publish \
   generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["secrets"],"verbs":["get"]}]}'
 
 # deploy: helm needs broad verbs, but only INSIDE the preview namespace.
+#
+# rbac.authorization.k8s.io is in the list because the chart renders a Role and
+# a RoleBinding (templates/secrets-bootstrap-rbac.yaml). Latent today — the
+# preview passes `--set secrets.autogenerate=false`, which is the `if` guarding
+# that template, so nothing in that group is rendered — but the group belongs
+# here rather than being rediscovered as a 403 the first time someone enables
+# the bootstrap Job for a preview. If that day comes, check whether the
+# generated SA also needs `bind`/`escalate`: creating a RoleBinding for rules
+# it does not itself hold is refused by escalation prevention, the same rule
+# that governs OpenBao's own ServiceAccount in the runbook.
 $CLI write kubernetes/roles/preview-deploy \
   allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
   kubernetes_role_type=Role \
   token_default_ttl="50m" token_max_ttl="${TOKEN_MAX_TTL}" \
-  generated_role_rules='{"rules":[{"apiGroups":["","apps","batch","networking.k8s.io","policy","autoscaling","monitoring.coreos.com","external-secrets.io"],"resources":["*"],"verbs":["*"]}]}'
+  generated_role_rules='{"rules":[{"apiGroups":["","apps","batch","networking.k8s.io","policy","autoscaling","monitoring.coreos.com","external-secrets.io","rbac.authorization.k8s.io"],"resources":["*"],"verbs":["*"]}]}'
 
 # provision / teardown: these need CLUSTER-scoped verbs (create and delete
 # Namespace), which RBAC cannot restrict by name prefix. The name bound is
@@ -191,7 +278,10 @@ $CLI write kubernetes/roles/preview-provision-secrets \
 # preview-provision was split to avoid. The token `destroy` mints runs on every
 # PR close and that job is deliberately not trust-gated, so it was the widest
 # credential in the system. Namespace NAMES are bounded by the admission policy
-# in the runbook, which matches CREATE and DELETE.
+# in the runbook, which matches CREATE, UPDATE and DELETE — UPDATE because
+# preview-provision holds `patch` on namespaces cluster-wide, so labelling an
+# arbitrary namespace `pawtograder.net/preview=true` would otherwise make it
+# selectable by every label-scoped role here.
 $CLI write kubernetes/roles/preview-teardown \
   allowed_kubernetes_namespaces="${CI_NS}" \
   kubernetes_role_type=ClusterRole \
@@ -220,7 +310,7 @@ $CLI write kubernetes/roles/preview-teardown-ns \
   allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
   kubernetes_role_type=Role \
   token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
-  generated_role_rules='{"rules":[{"apiGroups":["","apps","batch","networking.k8s.io","policy","autoscaling","monitoring.coreos.com","external-secrets.io"],"resources":["*"],"verbs":["get","list","delete"]},{"apiGroups":[""],"resources":["secrets"],"verbs":["update"]}]}'
+  generated_role_rules='{"rules":[{"apiGroups":["","apps","batch","networking.k8s.io","policy","autoscaling","monitoring.coreos.com","external-secrets.io","rbac.authorization.k8s.io"],"resources":["*"],"verbs":["get","list","delete"]},{"apiGroups":[""],"resources":["secrets"],"verbs":["update"]}]}'
 
 cat <<EOF
 

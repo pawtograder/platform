@@ -2,9 +2,23 @@ name: Lint
 permissions:
   contents: read
 on:
+  # main and staging ONLY, deliberately. With `branches: ["**"]` every push to
+  # a PR's own branch produced a SECOND run of these jobs, publishing check
+  # runs with the same names — `lint (22.x)`, `jest-unit-tests (22.x)`,
+  # `deno-unit-tests`, all of them required contexts — on the same head SHA as
+  # the pull_request_target run. Confirmed on live PR heads: two of each, from
+  # `Lint / push` and `Lint / pull_request`. That was harmless while both
+  # triggers read the same branch-controlled file, but the whole point of
+  # pull_request_target is that the PR run reads STAGING's copy; the push run
+  # still reads the branch's. Branch protection resolves a required context to
+  # the most recent check run of that name, so anyone with push access could
+  # no-op these jobs in their branch's lint.yml and have the fast green push
+  # run land last and set the verdict — for exactly the population
+  # `pawtograder-contributors` exists to widen.
   push:
     branches:
-      - "**"
+      - main
+      - staging
   # pull_request_target, NOT pull_request. These jobs run on `pawtograder-ci`
   # — the in-cluster ARC pool, whose runner pods carry the in-cluster registry
   # credential in ~/.docker/config.json — and they execute PR-supplied code:
@@ -13,17 +27,21 @@ on:
   #
   # Under `pull_request` the workflow file itself comes from the PR head, so a
   # fork could delete the gate below in the same commit that abuses it. Under
-  # `pull_request_target` the file always comes from the base branch.
+  # `pull_request_target` the file always comes from the repository's DEFAULT
+  # branch (`staging`) — not the PR's base branch; see _trust-gate.yml.
   #
   # Consequence to remember: edits to THIS file in a PR do not take effect
-  # until merged. To try changes, push the branch: the `push` trigger above
-  # covers every branch in this repo and runs the edited file.
+  # until merged, and there is deliberately no way around that — a trigger
+  # that ran a branch's own copy of this file would also be able to claim the
+  # required contexts with it. Try changes on a scratch repo, or on a branch
+  # whose workflow jobs are RENAMED so they cannot collide with a required
+  # context.
   pull_request_target:
     branches:
       - "**"
-  # No workflow_dispatch: `push: branches: ["**"]` above already runs this lane
-  # on any branch in the repo, so dispatch added nothing except another
-  # privileged trigger reaching the cache steps.
+  # No workflow_dispatch: it is another privileged trigger reaching the cache
+  # steps, and `_trust-gate.yml` allow-lists it as trusted-by-ref, so it is a
+  # second way to run these jobs that branch protection never sees.
 
 concurrency:
   group: lint-${{ github.event.pull_request.number || github.ref }}
@@ -41,30 +59,72 @@ jobs:
       pull-requests: read
       issues: read
     uses: ./.github/workflows/_trust-gate.yml
+    # Forwarded unconditionally: a called workflow gets no secrets otherwise,
+    # which made the gate's "set CI_TRUST_TOKEN" advice inert. Undefined
+    # resolves to an empty string and the gate falls back to GITHUB_TOKEN.
+    secrets:
+      trust_token: ${{ secrets.CI_TRUST_TOKEN }}
 
   lint:
     needs: gate
-    if: needs.gate.outputs.trusted == 'true'
-    runs-on: pawtograder-ci
+    # NOT `if: needs.gate.outputs.trusted == 'true'`, and this is the whole
+    # shape of the gate. This job's name is a REQUIRED status context and
+    # GitHub reports a SKIPPED job as Success, so gating the job made an
+    # untrusted PR satisfy every required check having run nothing — strictly
+    # worse than before this lane was gated at all, when lint/jest/deno ran
+    # unconditionally on fork PRs and only e2e-local was refused.
+    #
+    # So the job always runs and fails on its first step instead, which is a
+    # RED required check. `!cancelled()` rather than a bare condition so that a
+    # gate job which FAILED (an API it could not resolve) is also red, not
+    # skipped-green.
+    if: ${{ !cancelled() }}
+    # Untrusted refs never touch the in-cluster pool: they get a throwaway
+    # GitHub-hosted VM, fail on the step below, and never reach a checkout.
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-ci' || 'ubuntu-latest' }}
     strategy:
       matrix:
         node-version: [22.x]
     steps:
+      # First, before any checkout: an untrusted ref must not reach the code.
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::This check cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
       - uses: actions/checkout@v4
         with:
-          # Explicit: under pull_request_target the default checkout is the
-          # BASE branch, which would lint the wrong code and pass silently.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      # Restore-only, with a separate conditional save below. Under
-      # pull_request_target the job runs in BASE-BRANCH context, so an
-      # actions/cache WRITE from a fork PR lands in the default branch's cache
-      # scope and would later be restored by trusted builds — CodeQL
+          # The MERGE ref, not the bare head. Explicit either way, because
+          # under pull_request_target the default checkout is the BASE branch,
+          # which would lint the wrong code and pass silently — but the head
+          # alone is the other half of that mistake: these four jobs are
+          # required contexts, neither ruleset sets
+          # strict_required_status_checks_policy, so a PR opened last week
+          # against an API staging has since changed passes every check on a
+          # stale head and breaks staging on merge. refs/pull/N/merge is the
+          # same PR-authored code the gate has already vetted, combined with
+          # the current base. A PR with merge conflicts has no merge ref and
+          # fails loudly here, which is the correct answer for something that
+          # cannot be merged.
+          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+      # Restore-only, with a separate conditional save below, so that no PR
+      # run writes a cache a later trusted build would restore — CodeQL
       # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
-      # cache was isolated to the PR scope, so this vector arrives with the
-      # trigger change rather than being pre-existing. Fork PRs still RESTORE
-      # (they get the speed-up); they just cannot write what a trusted run
-      # will read.
+      # cache was isolated to the `refs/pull/N/merge` scope; under
+      # pull_request_target a run resolves to the DEFAULT branch instead, which
+      # is where the concern comes from.
+      #
+      # Belt and braces, deliberately: GitHub already refuses this write.
+      # `pull_request_target` is not in the set of triggers permitted to create
+      # or overwrite caches in the default branch's scope (only push,
+      # workflow_dispatch, repository_dispatch, delete, registry_package,
+      # page_build and schedule are), so PR runs get read-only cache access and
+      # a save attempt "fails but the step and the job do not" — it is a
+      # warning in the log. In practice only the `push` trigger populates these
+      # caches now; PRs restore and keep the speed-up. Keep the guard: it costs
+      # nothing and does not depend on GitHub keeping that restriction.
       - name: Restore npm dependencies
+        id: npm-cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.npm
@@ -82,12 +142,22 @@ jobs:
       # thing standing between fork code and this runner.
       - name: Install dependencies
         run: npm ci
-      # Only a same-repo ref may WRITE the cache. `github.event.pull_request`
-      # is null on a push event, so `.head.repo.fork != true` holds there and
-      # push refs keep populating the cache. (This workflow has no
-      # workflow_dispatch trigger; see the note on the triggers above.)
+      # Two conditions, both load-bearing.
+      #
+      # `github.event_name == 'push'` is a POSITIVE test for the only trigger
+      # that may write here, replacing `head.repo.fork != true` — the exact
+      # null-coercion _trust-gate.yml documents as a bug it is fixing. When a
+      # fork is deleted the payload's `head.repo` is null, `null != true` is
+      # true, and a fork PR took the same-repo branch.
+      #
+      # `cache-hit != 'true'` because `actions/cache/save` is NOT the post
+      # step of `actions/cache`: it uses a NullStateProvider, so its
+      # isExactKeyMatch check is a documented no-op and it always attempts an
+      # upload. The npm key only changes when package-lock.json does, so the
+      # exact hit is the normal case and every push was uploading an archive
+      # for GitHub to reject as a duplicate.
       - name: Save npm dependencies
-        if: github.event.pull_request.head.repo.fork != true
+        if: github.event_name == 'push' && steps.npm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/.npm
@@ -112,25 +182,42 @@ jobs:
   # they stay in deploy.yml where a database actually exists.
   jest-unit-tests:
     needs: gate
-    if: needs.gate.outputs.trusted == 'true'
-    runs-on: pawtograder-ci
+    # Runs and fails on an untrusted ref rather than skipping; see the `lint`
+    # job above for why a skip is not safe for a required context.
+    if: ${{ !cancelled() }}
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-ci' || 'ubuntu-latest' }}
     strategy:
       matrix:
         node-version: [22.x]
     steps:
+      # First, before any checkout: an untrusted ref must not reach the code.
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::This check cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      # Restore-only, with a separate conditional save below. Under
-      # pull_request_target the job runs in BASE-BRANCH context, so an
-      # actions/cache WRITE from a fork PR lands in the default branch's cache
-      # scope and would later be restored by trusted builds — CodeQL
+          # MERGE ref; see the `lint` job's checkout for why.
+          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+      # Restore-only, with a separate conditional save below, so that no PR
+      # run writes a cache a later trusted build would restore — CodeQL
       # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
-      # cache was isolated to the PR scope, so this vector arrives with the
-      # trigger change rather than being pre-existing. Fork PRs still RESTORE
-      # (they get the speed-up); they just cannot write what a trusted run
-      # will read.
+      # cache was isolated to the `refs/pull/N/merge` scope; under
+      # pull_request_target a run resolves to the DEFAULT branch instead, which
+      # is where the concern comes from.
+      #
+      # Belt and braces, deliberately: GitHub already refuses this write.
+      # `pull_request_target` is not in the set of triggers permitted to create
+      # or overwrite caches in the default branch's scope (only push,
+      # workflow_dispatch, repository_dispatch, delete, registry_package,
+      # page_build and schedule are), so PR runs get read-only cache access and
+      # a save attempt "fails but the step and the job do not" — it is a
+      # warning in the log. In practice only the `push` trigger populates these
+      # caches now; PRs restore and keep the speed-up. Keep the guard: it costs
+      # nothing and does not depend on GitHub keeping that restriction.
       - name: Restore npm dependencies
+        id: npm-cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.npm
@@ -153,12 +240,22 @@ jobs:
       # would fix it at the source and is worth doing separately.
       - name: Install dependencies
         run: npm ci
-      # Only a same-repo ref may WRITE the cache. `github.event.pull_request`
-      # is null on a push event, so `.head.repo.fork != true` holds there and
-      # push refs keep populating the cache. (This workflow has no
-      # workflow_dispatch trigger; see the note on the triggers above.)
+      # Two conditions, both load-bearing.
+      #
+      # `github.event_name == 'push'` is a POSITIVE test for the only trigger
+      # that may write here, replacing `head.repo.fork != true` — the exact
+      # null-coercion _trust-gate.yml documents as a bug it is fixing. When a
+      # fork is deleted the payload's `head.repo` is null, `null != true` is
+      # true, and a fork PR took the same-repo branch.
+      #
+      # `cache-hit != 'true'` because `actions/cache/save` is NOT the post
+      # step of `actions/cache`: it uses a NullStateProvider, so its
+      # isExactKeyMatch check is a documented no-op and it always attempts an
+      # upload. The npm key only changes when package-lock.json does, so the
+      # exact hit is the normal case and every push was uploading an archive
+      # for GitHub to reject as a duplicate.
       - name: Save npm dependencies
-        if: github.event.pull_request.head.repo.fork != true
+        if: github.event_name == 'push' && steps.npm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/.npm
@@ -196,12 +293,21 @@ jobs:
   # unauthenticated Studio). See charts/pawtograder/PRODUCTION-READINESS.md §4.
   chart-guardrails:
     needs: gate
-    if: needs.gate.outputs.trusted == 'true'
-    runs-on: pawtograder-ci
+    # Runs and fails on an untrusted ref rather than skipping; see the `lint`
+    # job above for why a skip is not safe for a required context.
+    if: ${{ !cancelled() }}
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-ci' || 'ubuntu-latest' }}
     steps:
+      # First, before any checkout: an untrusted ref must not reach the code.
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::This check cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # MERGE ref; see the `lint` job's checkout for why.
+          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.20.2
@@ -224,12 +330,21 @@ jobs:
   # These run the real edge-function expression functions directly — no DB, no pipeline.
   deno-unit-tests:
     needs: gate
-    if: needs.gate.outputs.trusted == 'true'
-    runs-on: pawtograder-ci
+    # Runs and fails on an untrusted ref rather than skipping; see the `lint`
+    # job above for why a skip is not safe for a required context.
+    if: ${{ !cancelled() }}
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-ci' || 'ubuntu-latest' }}
     steps:
+      # First, before any checkout: an untrusted ref must not reach the code.
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::This check cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # MERGE ref; see the `lint` job's checkout for why.
+          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

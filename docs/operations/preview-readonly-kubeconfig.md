@@ -13,10 +13,10 @@ jobs need cluster access only to **read** one Secret, and giving them the same
 kubeconfig that the deploy job uses to `helm upgrade` is more privilege than the
 work needs:
 
-| Job                  | What it actually does with the cluster                                                                                                  |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `build-web`          | `kubectl -n <preview-ns> get secret pawtograder-jwt -o jsonpath={.data.ANON_KEY}`                                                       |
-| `publish-e2e-bundle` | `kubectl get namespace`, then `kubectl -n <preview-ns> get secret <name> -o jsonpath=...` (see `scripts/publish-preview-e2e-to-bao.sh`) |
+| Job                  | What it actually does with the cluster                                                                    |
+| -------------------- | --------------------------------------------------------------------------------------------------------- |
+| `build-web`          | `kubectl -n <preview-ns> get secret pawtograder-jwt -o jsonpath={.data.ANON_KEY}`                         |
+| `publish-e2e-bundle` | `kubectl -n <preview-ns> get secret <name> -o jsonpath=...` (see `scripts/publish-preview-e2e-to-bao.sh`) |
 
 `build-web` is the job that runs the most untrusted code in the workflow — a
 full `next build` against a PR-controlled lockfile and Next config — so it is
@@ -131,6 +131,11 @@ kubectl auth can-i get secrets -n pawtograder-preview-pr-1   # yes
 kubectl auth can-i list secrets -n pawtograder-preview-pr-1  # no
 kubectl auth can-i create namespace                          # no
 kubectl auth can-i delete namespace                          # no
+# Cluster-scoped reads too, not just writes. This one is the easy mistake:
+# `get namespaces` on the ClusterRole, or binding the role cluster-wide,
+# reinstates exactly the reach this document exists to remove, and none of
+# the checks above would notice.
+kubectl auth can-i get namespaces --all-namespaces           # no
 kubectl auth can-i '*' '*' --all-namespaces                  # no
 helm list -n pawtograder-preview-pr-1                        # should fail
 ```

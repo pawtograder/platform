@@ -16,8 +16,19 @@ name: Trust gate
 # Under `pull_request`, GitHub runs the workflow *file* from the PR head, so a
 # fork can delete its own gate in the same commit it attacks. Under
 # `pull_request_target` the workflow — and therefore this check — always comes
-# from the base branch. The cost is that CI changes in a PR do not take effect
-# until merged; that is the same property that makes the gate unbypassable.
+# from the repository's DEFAULT branch. The cost is that CI changes in a PR do
+# not take effect until merged; that is the same property that makes the gate
+# unbypassable.
+#
+# Default branch, NOT the PR's base branch, and on this repo those differ.
+# GitHub's event reference is explicit that pull_request_target "runs in the
+# context of the default branch of the base repository" and that GITHUB_REF is
+# the default branch (the "PR base branch" wording survives only for GHES
+# < 3.20). The default branch here is `staging`, and PRs are routinely opened
+# against `main` — chart bumps, mostly — so those PRs are gated by, and run,
+# STAGING's copy of this file and of every calling workflow. That is still a
+# trusted ref, so the guarantee holds; what does not hold is any inference
+# that a `main`-based PR runs `main`'s CI configuration.
 #
 # Callers must therefore set `ref:` on their checkout EXPLICITLY, to
 # `${{ github.event.pull_request.head.sha || github.sha }}`. Under
@@ -66,24 +77,30 @@ on:
     inputs:
       require_label:
         description: >-
-          When non-empty, `approved` additionally requires this label on the PR.
-          Used by the preview lane so a full-stack namespace is never created
-          unasked — trust decides who MAY deploy, the label decides who DID ask.
+          When non-empty, `approved` additionally requires this label on FORK
+          PRs. Used by the preview lane so a full-stack namespace is never
+          created unasked — trust decides who MAY deploy, the label decides
+          who DID ask. Same-repo PRs are exempt (see the approve step).
         required: false
         type: string
         default: ""
     secrets:
       trust_token:
         description: >-
-          Optional escape hatch, not currently needed. A token with
-          `Metadata: read` on this repo, used for the permission lookup
-          instead of GITHUB_TOKEN.
+          Optional escape hatch. A token with `Metadata: read` on this repo,
+          used for the permission lookup instead of GITHUB_TOKEN.
+          All three callers forward `secrets.CI_TRUST_TOKEN` here
+          unconditionally, so creating that repository secret is sufficient to
+          take effect — a called workflow receives NOTHING unless the caller
+          passes it explicitly or uses `secrets: inherit`, and an escape hatch
+          that needs three workflow files edited on the default branch before
+          it does anything is not an escape hatch.
           VERIFIED 2026-09-18: the built-in GITHUB_TOKEN *is* accepted by the
           collaborators endpoint from a job holding `contents/pull-requests/
           issues: read` — a probe run resolved a team member to `write`, a
           non-team org member to `read`, and a stranger to `read`. Wire this
-          secret only if that ever regresses; the gate will say so via the
-          "could not resolve" warning below.
+          secret only if that ever regresses; the gate will say so by FAILING
+          with the "could not resolve" error below.
         required: false
     outputs:
       trusted:
@@ -159,14 +176,29 @@ jobs:
           # would silently drop such a contributor to untrusted. (Custom roles
           # are not available on this org's current plan, so that part is
           # future-proofing.) role_name is still logged, for diagnosis.
+          # Returns 0 = has write, 1 = resolved and does NOT have write,
+          # 2 = COULD NOT RESOLVE. The third case used to collapse into the
+          # second, which is not a safe default here: `trusted=false` makes
+          # every consumer SKIP, and GitHub reports a skipped required job as
+          # Success — so one 502 or secondary rate limit turned a trusted PR
+          # into zero CI that renders green, with the only evidence a warning
+          # inside a job whose conclusion is Success. Failing closed has to
+          # mean this job FAILS, leaving a red check, not that its consumers
+          # quietly stand down. The caller turns a 2 into exit 1.
           has_write() {
-            local user="$1" out perm role
+            local user="$1" out err perm role
+            # stderr to a FILE, not 2>&1 into `out`: a diagnostic on a
+            # SUCCESSFUL call would otherwise land in the string being parsed
+            # below, and the first token of a warning is not a permission.
+            err=$(mktemp)
             # One request, both fields. Fetching them in two calls doubled the
             # requests per principal for a log line.
-            if ! out=$(gh api "repos/${REPO}/collaborators/${user}/permission" --jq '"\(.permission) \(.role_name)"' 2>/dev/null); then
-              echo "::warning title=Trust check failed::Could not resolve repo permission for '${user}'. Treating this PR as untrusted. If the built-in GITHUB_TOKEN is not accepted by this endpoint, set a CI_TRUST_TOKEN secret (Metadata: read) and pass it as trust_token."
-              return 1
+            if ! out=$(gh api "repos/${REPO}/collaborators/${user}/permission" --jq '"\(.permission) \(.role_name)"' 2>"$err"); then
+              echo "::error title=Trust check failed::Could not resolve repo permission for '${user}', so this PR's trust level is UNKNOWN rather than untrusted. The API said: $(tr '\n' ' ' < "$err"). If the built-in GITHUB_TOKEN is not accepted by this endpoint, set a CI_TRUST_TOKEN repository secret (Metadata: read) — every caller already forwards it to this workflow as trust_token." >&2
+              rm -f "$err"
+              return 2
             fi
+            rm -f "$err"
             perm="${out%% *}"
             role="${out#* }"
             echo "  ${user}: permission=${perm} (role_name=${role})"
@@ -176,11 +208,29 @@ jobs:
             esac
           }
 
-          if [[ "$EVENT_NAME" != "pull_request_target" ]]; then
+          # Positive allow-list, NOT `!= pull_request_target`. A negation
+          # trusts every event that is not literally that one — and the set of
+          # "every other event" is not the two this reasoning covers. Adding
+          # `pull_request:` back to a caller (which lint.yml's trigger comment
+          # used to invite), or an issue_comment / workflow_run /
+          # pull_request_review_comment trigger, would arrive under a
+          # different name, take the trusted branch with zero principal checks
+          # and zero API calls, and run fork-supplied code on the self-hosted
+          # pool. Anything not named below is refused.
+          case "$EVENT_NAME" in
+            push | workflow_dispatch) event_kind=trusted_ref ;;
+            pull_request_target) event_kind=pr ;;
+            *) event_kind=deny ;;
+          esac
+
+          if [[ "$event_kind" == "trusted_ref" ]]; then
             # push to a protected branch, or a maintainer's manual dispatch:
             # both run from a ref that already required write access.
             trusted=true
             reason="event '${EVENT_NAME}' runs from a ref in ${REPO}"
+          elif [[ "$event_kind" == "deny" ]]; then
+            trusted=false
+            reason="event '${EVENT_NAME}' is not an allow-listed trigger for the self-hosted lanes; add it to the case above deliberately if it should be"
           elif [[ -z "${HEAD_REPO:-}" ]]; then
             trusted=false
             reason="head repository metadata is absent (fork deleted or unavailable), so neither principal can be identified"
@@ -237,7 +287,17 @@ jobs:
             trusted=true
             reason="every identifiable principal on this fork PR has write on ${REPO}"
             for u in "${principals[@]}"; do
-              if ! has_write "$u"; then
+              # `|| rc=$?` rather than `if ! has_write`: this needs the
+              # DISTINCTION between 1 and 2, and it must not trip `set -e`.
+              rc=0
+              has_write "$u" || rc=$?
+              if [[ $rc -eq 2 ]]; then
+                # The API could not answer. Do not guess in either direction:
+                # fail the gate so the required checks downstream go RED and a
+                # human looks, rather than skipping green.
+                exit 1
+              fi
+              if [[ $rc -ne 0 ]]; then
                 trusted=false
                 reason="'${u}' does not have write access to ${REPO}"
                 break
@@ -261,6 +321,9 @@ jobs:
           TRUSTED: ${{ steps.trust.outputs.trusted }}
           REQUIRE_LABEL: ${{ inputs.require_label }}
           REPO: ${{ github.repository }}
+          # Positive identification of the head repository; see the trust step
+          # for why this is full_name rather than the `fork` flag.
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -276,14 +339,40 @@ jobs:
             exit 0
           fi
 
+          # Same-repo PRs are exempt from the label. The label exists so that
+          # a preview namespace is never created for code we have not decided
+          # to run — which is a question about FORKS. A branch in this repo
+          # could only be pushed by someone who already holds write, and those
+          # PRs had automatic previews before the trust gate existed; making
+          # them opt-in was a side effect of the label, not a decision anyone
+          # took. `HEAD_REPO` is the positive `full_name` test, not
+          # `head.repo.fork != true`, which reads empty (and so "same repo")
+          # when the head repository metadata is absent.
+          #
+          # Consequence worth knowing: on a same-repo PR, removing the
+          # `preview` label tears the namespace down (preview.yml maps
+          # `unlabeled` to destroy) but the next push redeploys it, because
+          # approval no longer depends on the label. Close the PR, or use the
+          # workflow_dispatch destroy path, to keep it down.
+          if [[ -n "${HEAD_REPO:-}" && "$HEAD_REPO" == "$REPO" ]]; then
+            echo "approved=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Preview approved::head branch lives in ${REPO}, so the '${REQUIRE_LABEL}' label is not required"
+            exit 0
+          fi
+
           # Read labels from the API, not from the event payload: on a re-run
           # the payload is a snapshot from when the event fired, so a label
           # added afterwards would not be seen.
-          if ! labels=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null); then
-            echo "::warning title=Label check failed::Could not list labels on PR #${PR_NUMBER}; treating the preview as not requested."
-            echo "approved=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          #
+          # An unresolvable API is NOT "no label" — see has_write above for
+          # why a silent downgrade is the wrong failure here. Fail the job.
+          err=$(mktemp)
+          if ! labels=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>"$err"); then
+            echo "::error title=Label check failed::Could not list labels on PR #${PR_NUMBER}, so whether a preview was requested is UNKNOWN. The API said: $(tr '\n' ' ' < "$err")" >&2
+            rm -f "$err"
+            exit 1
           fi
+          rm -f "$err"
 
           if grep -Fxq -- "$REQUIRE_LABEL" <<<"$labels"; then
             echo "approved=true" >> "$GITHUB_OUTPUT"

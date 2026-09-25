@@ -11,9 +11,10 @@ on:
 permissions: {}
 
 # Cancel an in-flight run when a newer one comes in for the same PR (or push
-# ref). Under pull_request_target, github.ref resolves to the base branch, so
-# keying on it alone would make every PR against staging collide; prefer
-# pull_request.number when present so each PR has its own group.
+# ref). Under pull_request_target, github.ref resolves to the repository's
+# DEFAULT branch, so keying on it alone would make every PR collide — not just
+# those against staging; prefer pull_request.number when present so each PR has
+# its own group.
 concurrency:
   group: e2e-local-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -24,8 +25,9 @@ jobs:
   # e2e-local checks out the PR head and executes it: `npm ci` runs lockfile
   # install scripts, and the build, the config files and the test sources are
   # all attacker-controlled on a fork PR. The app secrets are gone from that job
-  # (see the .env.local step below) and ARGOS_TOKEN is all that remains, so the
-  # main exposure is now the runner itself — an untrusted PR gets arbitrary code
+  # (see the .env.local step below) and ARGOS_TOKEN is all that remains — see
+  # the note on that env var for why it is still passed — so the main exposure
+  # is now the runner itself — an untrusted PR gets arbitrary code
   # execution in a pod on the cluster, with only a container boundary between it
   # and everything else.
   #
@@ -57,6 +59,12 @@ jobs:
       pull-requests: read
       issues: read
     uses: ./.github/workflows/_trust-gate.yml
+    # Forwarded unconditionally: a called workflow receives no secrets unless
+    # the caller passes them, which is what made the gate's "set a
+    # CI_TRUST_TOKEN secret" advice inert. Undefined resolves to an empty
+    # string and the gate falls back to GITHUB_TOKEN.
+    secrets:
+      trust_token: ${{ secrets.CI_TRUST_TOKEN }}
 
   # Local-Supabase E2E. Spins up a clean dev environment on the runner and runs
   # the Playwright suite against it. The Coolify branch-preview job that used to
@@ -64,8 +72,16 @@ jobs:
   # moves into the same k8s cluster as this runner.
   e2e-local:
     needs: gate
-    if: needs.gate.outputs.trusted == 'true'
-    runs-on: pawtograder-e2e
+    # NOT `if: needs.gate.outputs.trusted == 'true'`. `e2e-local` is a
+    # REQUIRED status context in both rulesets and GitHub reports a SKIPPED
+    # job as Success, so gating the job let an untrusted PR satisfy it having
+    # run nothing. The job runs either way now and fails on its first step —
+    # before any checkout — which is a red required check. `!cancelled()` so
+    # that a gate which FAILED (an API it could not resolve) is red too.
+    if: ${{ !cancelled() }}
+    # Untrusted refs get a throwaway GitHub-hosted VM, fail immediately, and
+    # never reach the self-hosted E2E pool or a checkout of the PR.
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-e2e' || 'ubuntu-latest' }}
     timeout-minutes: 75
     permissions:
       contents: read
@@ -88,22 +104,36 @@ jobs:
       # has since recycled to an unrelated process.
       RUN_TMP: /tmp/e2e-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
+      # First, before any checkout: an untrusted ref must not reach the code.
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::E2E cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
       - uses: actions/checkout@v4
         with:
           # Explicit: under pull_request_target a bare checkout is the BASE
           # branch, which would test the wrong code and pass silently.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      # Restore-only, with a separate conditional save below. Under
-      # pull_request_target the job runs in BASE-BRANCH context, so an
-      # actions/cache WRITE from a fork PR lands in the default branch's cache
-      # scope and would later be restored by trusted builds — CodeQL
+      # Restore-only, with a separate conditional save below, so that no PR
+      # run writes a cache a later trusted build would restore — CodeQL
       # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
-      # cache was isolated to the PR scope, so this vector arrives with the
-      # trigger change rather than being pre-existing. Fork PRs still RESTORE
-      # (they get the speed-up); they just cannot write what a trusted run
-      # will read.
+      # cache was isolated to the `refs/pull/N/merge` scope; under
+      # pull_request_target a run resolves to the DEFAULT branch instead, which
+      # is where the concern comes from.
+      #
+      # Belt and braces, deliberately: GitHub already refuses this write.
+      # `pull_request_target` is not in the set of triggers permitted to create
+      # or overwrite caches in the default branch's scope (only push,
+      # workflow_dispatch, repository_dispatch, delete, registry_package,
+      # page_build and schedule are), so PR runs get read-only cache access and
+      # a save attempt "fails but the step and the job do not" — it is a
+      # warning in the log. In practice only the `push` trigger populates these
+      # caches now; PRs restore and keep the speed-up. Keep the guard: it costs
+      # nothing and does not depend on GitHub keeping that restriction.
       - name: Restore npm dependencies
+        id: npm-cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.npm
@@ -111,20 +141,28 @@ jobs:
           restore-keys: |
             npm-${{ runner.os }}-node-22-
 
-      # Restore-only, with a separate conditional save below. Under
-      # pull_request_target the job runs in BASE-BRANCH context, so an
-      # actions/cache WRITE from a fork PR lands in the default branch's cache
-      # scope and would later be restored by trusted builds — CodeQL
+      # Restore-only, with a separate conditional save below, so that no PR
+      # run writes a cache a later trusted build would restore — CodeQL
       # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
-      # cache was isolated to the PR scope, so this vector arrives with the
-      # trigger change rather than being pre-existing. Fork PRs still RESTORE
-      # (they get the speed-up); they just cannot write what a trusted run
-      # will read.
+      # cache was isolated to the `refs/pull/N/merge` scope; under
+      # pull_request_target a run resolves to the DEFAULT branch instead, which
+      # is where the concern comes from.
+      #
+      # Belt and braces, deliberately: GitHub already refuses this write.
+      # `pull_request_target` is not in the set of triggers permitted to create
+      # or overwrite caches in the default branch's scope (only push,
+      # workflow_dispatch, repository_dispatch, delete, registry_package,
+      # page_build and schedule are), so PR runs get read-only cache access and
+      # a save attempt "fails but the step and the job do not" — it is a
+      # warning in the log. In practice only the `push` trigger populates these
+      # caches now; PRs restore and keep the speed-up. Keep the guard: it costs
+      # nothing and does not depend on GitHub keeping that restriction.
       - name: Restore next.js build
+        id: next-cache
         uses: actions/cache/restore@v4
         with:
           path: .next/cache
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**') }}
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**', '!**/next-env.d.ts') }}
           restore-keys: |
             nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
             nextjs-${{ runner.os }}-
@@ -141,11 +179,21 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-      # Only a same-repo ref may WRITE the cache. `github.event.pull_request`
-      # is null on push/dispatch, so `.head.repo.fork != true` holds there and
-      # those refs keep populating the cache.
+      # Two conditions, both load-bearing.
+      #
+      # `github.event_name == 'push'` is a POSITIVE test for the only trigger
+      # that may write here, replacing `head.repo.fork != true` — the exact
+      # null-coercion _trust-gate.yml documents as a bug it is fixing. With a
+      # deleted fork the payload's `head.repo` is null, `null != true` is
+      # true, and a fork PR took the same-repo branch.
+      #
+      # `cache-hit != 'true'` because `actions/cache/save` is NOT the post
+      # step of `actions/cache`: it uses a NullStateProvider, so its
+      # isExactKeyMatch check is a documented no-op and it always attempts an
+      # upload. The npm key only changes when package-lock.json does, so the
+      # exact hit is the normal case.
       - name: Save npm dependencies
-        if: github.event.pull_request.head.repo.fork != true
+        if: github.event_name == 'push' && steps.npm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/.npm
@@ -332,12 +380,23 @@ jobs:
       # dot: true, so without the `!**/.next/**` exclusion on BOTH steps the
       # save key would never equal the restore key and the exact-match hit
       # could never occur again.
+      #
+      # `!**/next-env.d.ts` is the same hazard from a second source, and excluding
+      # .next alone does not cover it: next-env.d.ts is gitignored, so it is
+      # absent from a fresh checkout when the restore key is computed, and
+      # `next build` creates it at the repo root before the save key is
+      # computed. It matches `**/*.[jt]s`, so its appearance alone changes the
+      # hash — leaving the exact-match hit permanently unreachable and every
+      # run silently falling back to a restore-keys prefix match.
+      # Same two conditions as the npm save above, and the `cache-hit` half
+      # matters more here: this key already hashes every source file, so on a
+      # no-op push the exact hit is guaranteed and the upload is pure waste.
       - name: Save next.js build
-        if: github.event.pull_request.head.repo.fork != true
+        if: github.event_name == 'push' && steps.next-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .next/cache
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**') }}
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**', '!**/next-env.d.ts') }}
 
       # prom-client is Node-only and lib/metrics.ts imports it dynamically, so
       # webpack will happily split it into a CLIENT chunk if anything under a
@@ -522,12 +581,28 @@ jobs:
           # "change-it", which is what the seeder writes, so the secret was only
           # ever restating the default.
           #
-          # No ARGOS_TOKEN, and no secret of any kind: this job now takes
-          # none at all, which is the property worth protecting. Argos
-          # documents that it "automatically falls back to tokenless
-          # authentication when ARGOS_TOKEN is unset", with no configuration
-          # required — and tokenless is the mechanism built for exactly this
-          # case, a public repo where builds can originate from forks.
+          # ARGOS_TOKEN is passed, and tokenless is the FALLBACK rather than
+          # the primary path. Dropping the token entirely was the previous
+          # shape of this block, on the reasoning that the job should hold no
+          # secret at all — but `argos/platform` is a required status check,
+          # and that change moved it onto an auth path this repo has never
+          # exercised, in the same commit that added
+          # `ignoreUploadFailures: true` to playwright.config.ts. Together
+          # those made a rejected tokenless claim look like a pass: e2e-local
+          # green with nothing uploaded, and every affected PR parked at
+          # "Expected — Waiting for status" with the cause buried in a
+          # 75-minute log. This lane also runs on `push: [main, staging]`,
+          # which is where the Argos BASELINE comes from, so the same failure
+          # would have frozen the reference build while PR diffs compared
+          # against stale snapshots.
+          #
+          # The secret is no longer the thing keeping fork code away from it:
+          # the trust gate admits only write-holders and now FAILS rather than
+          # skipping when it cannot tell. Prove tokenless works on a real fork
+          # PR before removing the token again — the config keeps
+          # `process.env.ARGOS_TOKEN || ""`, so unsetting it here is still the
+          # one-line switch.
+          ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
           #
           # Tokenless needs @argos-ci/playwright >= 6.6.4 (core >= 5.3.1) to
           # work from a fork, which is why this PR bumps it. Up to core 4.0.2
@@ -550,11 +625,8 @@ jobs:
           # never Argos, and has been deleted along with its Coolify-era
           # tooling. The Argos capability is real, the cited precedent was not.
           #
-          # OIDC is the other option and would need `id-token: write` plus
-          # enabling it in the Argos project settings. Tokenless needs neither,
-          # so it is the cheaper way to get this job to zero secrets. If visual
-          # uploads stop working, restoring `ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}`
-          # here is the one-line revert.
+          # OIDC is the third option and would need `id-token: write` plus
+          # enabling it in the Argos project settings.
         run: npx playwright test
 
       - name: Tail server logs on failure
