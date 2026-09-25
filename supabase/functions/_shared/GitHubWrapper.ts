@@ -3050,7 +3050,7 @@ export type PendingOrgInvitation = {
   id: number;
   /** When GitHub created the invitation. GitHub expires it 7 days later. */
   createdAt: string;
-  /** Every team the invitation carries, so a replacement can carry them all. */
+  /** Every team the invitation carries, so the caller can tell whether it already covers its own. */
   teamIds: number[];
 };
 
@@ -3115,6 +3115,37 @@ export function planPendingInvitation(
   if (pending && isInvitationStale(pending.createdAt, now)) return "replace";
   if (pending?.teamIds.includes(teamId)) return "skip";
   return "attach";
+}
+
+/**
+ * GitHub team ids for these slugs, skipping any team that does not exist or cannot be read.
+ *
+ * For the extra teams an invitation carries alongside its own. Fails toward sending the invitation
+ * with fewer teams, never toward not sending it: a skipped sibling is still repaired by its own
+ * class's sweep.
+ */
+export async function resolveTeamIds(
+  octokit: Octokit,
+  org: string,
+  slugs: string[],
+  scope?: Sentry.Scope
+): Promise<number[]> {
+  const ids: number[] = [];
+  for (const slug of new Set(slugs)) {
+    try {
+      const resolved = await resolveTeamSlugIfExists(org, slug, octokit);
+      if (!resolved) continue;
+      const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug: resolved });
+      ids.push(team.data.id);
+    } catch (e) {
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `Could not resolve team ${slug} in ${org}; inviting without it: ${e}`,
+        level: "warning"
+      });
+    }
+  }
+  return ids;
 }
 
 /**
@@ -3200,6 +3231,22 @@ export async function reinviteToOrgTeam(
      * back when that invitation expires rather than a week after the skip.
      */
     onInvitationStillPending?: (createdAt: string) => Promise<void>;
+    /**
+     * Slugs of OTHER teams in this org that a fresh invitation should also carry: the user's other
+     * live, unconfirmed enrollments in classes sharing the org. Consulted only when this call POSTs
+     * a new invitation.
+     *
+     * Needed because replacing a lapsed invitation cancels it for every class it carried, and GitHub
+     * then confirms each class only through its own team (the `membership` webhook). An invitation
+     * carrying only our team would leave a sibling enrollment unattached, and the `member_invited`
+     * webhook's fresh invitation_date would keep the sweep away from it for a week.
+     *
+     * Read from our enrollments rather than copied from the cancelled invitation, for two reasons.
+     * A retry after the cancel succeeded but the POST failed can no longer see the old invitation,
+     * and the database still answers the same. And the old invitation may carry a class the user has
+     * since dropped, which a copy would re-invite them to.
+     */
+    additionalTeamSlugs?: () => Promise<string[]>;
   } = {}
 ) {
   scope?.setTag("github_operation", "reinvite_to_team");
@@ -3247,7 +3294,8 @@ export async function reinviteToOrgTeam(
       // Carry the caller's automation flags into the retry, or a renamed account silently loses the
       // duplicate-invitation guard on the path most likely to need it.
       skipIfInvitationPending: options.skipIfInvitationPending,
-      onInvitationStillPending: options.onInvitationStillPending
+      onInvitationStillPending: options.onInvitationStillPending,
+      additionalTeamSlugs: options.additionalTeamSlugs
     });
   }
   const userID = user.data.id;
@@ -3356,10 +3404,6 @@ export async function reinviteToOrgTeam(
     }
   }
 
-  // Teams for the invitation POSTed below. Normally just ours. A replacement for a lapsed invitation
-  // also carries that invitation's teams, so a sibling class sharing the org is not dropped with it.
-  let inviteTeamIds = [teamID];
-
   if (membershipState === "pending" && options.skipIfInvitationPending) {
     const pending = await findPendingOrgInvitation(octokit, org, githubUsername, scope);
     let plan = planPendingInvitation(pending, teamID);
@@ -3369,9 +3413,9 @@ export async function reinviteToOrgTeam(
     }
     if (plan === "replace") {
       // Expired by GitHub's own 7-day rule but still listed as pending (see cancelLapsedInvitation),
-      // and now cancelled. Fall through and send a fresh invitation in its place.
+      // and now cancelled. Fall through and send a fresh invitation in its place. It carries our team
+      // plus `additionalTeamSlugs`, not the cancelled invitation's teams: see that option.
       scope?.setTag("replaced_lapsed_invitation", "true");
-      inviteTeamIds = [...new Set([...pending!.teamIds, teamID])];
     } else if (plan === "skip") {
       // Team-scoped, not org-scoped: see findPendingOrgInvitation. A pending invitation for a
       // sibling class in the same org must NOT suppress this one.
@@ -3429,6 +3473,14 @@ export async function reinviteToOrgTeam(
     return false;
   }
 
+  const inviteTeamIds = [
+    ...new Set([
+      teamID,
+      ...(options.additionalTeamSlugs
+        ? await resolveTeamIds(octokit, org, await options.additionalTeamSlugs(), scope)
+        : [])
+    ])
+  ];
   try {
     const limiter = getCreateContentLimiter(org);
     const resp = await limiter.schedule(() =>

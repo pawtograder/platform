@@ -40,6 +40,7 @@ const {
   RepositoryMissingError,
   RepositoryUnreadableError,
   resolveExistingTeamSlug,
+  resolveTeamIds,
   resolveTeamSlugIfExists,
   TeamMembersUnreadableError,
   TeamNotFoundError,
@@ -1233,4 +1234,16 @@ Deno.test("cancelLapsedInvitation: any other failure -> false, so the caller doe
     await cancelLapsedInvitation(octokit, "org", "student1", pendingInvite("2026-09-14T00:00:00Z", [])),
     false
   );
+});
+
+Deno.test("resolveTeamIds: existing teams resolve to ids; missing or unreadable teams are skipped", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => {
+      if (p.team_slug === "a-students") return { data: { id: 1, slug: "a-students" } };
+      if (p.team_slug === "b-staff") throw requestError(500);
+      throw requestError(404);
+    },
+    "GET /orgs/{org}/teams": () => []
+  });
+  assertEquals(await resolveTeamIds(octokit, "rt-org", ["a-students", "gone-students", "b-staff", "a-students"]), [1]);
 });
