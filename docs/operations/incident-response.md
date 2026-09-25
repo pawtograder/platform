@@ -108,9 +108,10 @@ Components:
   ```bash
   kubectl -n $NS exec <release>-postgres-0 -c postgres -- df -h /dev/shm
   # Every rest replica: `logs deploy/...` reads only one pod, and the errors
-  # are scattered across them.
+  # are scattered across them. --tail=-1: with a selector kubectl otherwise
+  # keeps only the last 10 lines per pod, whatever --since says.
   kubectl -n $NS logs -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=rest \
-    --since=1h --prefix --max-log-requests=10 | grep 'could not resize shared memory segment' | cut -d' ' -f1 | sort | uniq -c
+    --since=1h --tail=-1 --prefix --max-log-requests=10 | grep 'could not resize shared memory segment' | cut -d' ' -f1 | sort | uniq -c
   ```
 - **Permanent fix:** chart 0.4.0 (`postgres.shm.sizeLimit`, 1Gi) plus shm
   occupancy alerts. It restarts the primary, so it needs a

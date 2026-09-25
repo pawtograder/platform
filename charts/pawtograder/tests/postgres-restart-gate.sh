@@ -81,18 +81,25 @@ fi
 # intentional rename, give the old path as the case's 4th field.
 #
 # The prod examples leave some values to the operator that the guard-rails
-# demand (image tags, storage class, WAL-G prefix, backup endpoint, the
-# ruleSelector label). Those are pinned to the same fixed strings on both
-# sides, so they cannot introduce a diff.
-PROD_FIXUPS=(
-  --set monitoring.prometheusRules.labels.release=prometheus
-  --set postgres.persistence.storageClass=gate
-  --set postgres.walg.s3Prefix=s3://gate/wal-g
-  --set backup.s3.endpoint=https://s3.gate.invalid
-)
-for img in web edgeFunctions migrations backup; do PROD_FIXUPS+=(--set "$img.image.tag=v0.0.0-gate"); done
+# demand, written as `key: ""  # <- ...` blanks: image tags, storage classes,
+# the WAL-G prefix, S3 endpoints, the ruleSelector label. fill_blanks copies
+# each side's file and fills ONLY those empty strings with a fixed
+# placeholder. It never overrides a real value: a blanket --set would replace
+# values-prod-noeso.yaml's `storageClass: netapp` on both sides too, and hide
+# exactly the claim-template or env change this gate exists to catch. A blank
+# that becomes real (or the reverse) still shows, because the placeholder is
+# not the real value.
+fill_blanks() {
+  sed -E \
+    -e 's/^([[:space:]]+storageClass:)[[:space:]]*""/\1 "gate"/' \
+    -e 's#^([[:space:]]+s3Prefix:)[[:space:]]*""#\1 "s3://gate/wal-g"#' \
+    -e 's#^([[:space:]]+endpoint:)[[:space:]]*""#\1 "https://s3.gate.invalid"#' \
+    -e 's/^([[:space:]]+tag:)[[:space:]]*""/\1 "v0.0.0-gate"/' \
+    -e 's/^([[:space:]]+release:)[[:space:]]*""/\1 "prometheus"/' \
+    "$1" >"$2"
+}
 # Each case: label | HEAD values file | kind | base values file (defaults to
-# the HEAD file). kind "prod" adds PROD_FIXUPS; "nopersist" renders with
+# the HEAD file). kind "prod" renders the file through fill_blanks; "nopersist" renders with
 # postgres.persistence.enabled=false, the emptyDir data-volume branch that no
 # example file exercises.
 CASES=(
@@ -213,7 +220,10 @@ for c in "${CASES[@]}"; do
   base_args=(-f "$BASE_CHART/examples/$base_file")
   head_args=(-f "$CHART/examples/$file")
   case "$kind" in
-    prod)      base_args+=("${PROD_FIXUPS[@]}"); head_args+=("${PROD_FIXUPS[@]}") ;;
+    prod)
+      fill_blanks "$BASE_CHART/examples/$base_file" "$TMP/base-values.yaml"
+      fill_blanks "$CHART/examples/$file" "$TMP/head-values.yaml"
+      base_args=(-f "$TMP/base-values.yaml"); head_args=(-f "$TMP/head-values.yaml") ;;
     nopersist) base_args+=(--set postgres.persistence.enabled=false); head_args+=(--set postgres.persistence.enabled=false) ;;
   esac
   for tpl in "${TEMPLATES[@]}"; do

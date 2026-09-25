@@ -182,6 +182,32 @@ accident, because maintenance.active defaults to false.
 {{- if not .Values.ingress.enabled -}}
 {{- fail "maintenance.active=true requires ingress.enabled=true — with no chart Ingress the posture still scales every writer to 0 and drops the functions HPA, but renders no maintenance route and no pawtograder.io/maintenance-active marker: the app goes dark with no page, and maintenance.sh cannot tell the release holds the posture." -}}
 {{- end -}}
+{{- if .Values.ingress.extraHosts -}}
+{{- fail "maintenance.active=true is refused while ingress.extraHosts is set — neither the posture nor maintenance.sh reroutes those aliases, so with web at 0 they would serve the ingress controller's bare 503 instead of the page. Neither staging nor production uses extraHosts today; routing them to the page is follow-up work." -}}
+{{- end -}}
+{{- /* Functions with autoscaling on: the posture leaves spec.replicas
+     unrendered and relies on the 0 that `down` set (see edge-functions.yaml).
+     That holds only if the DEPLOYED release also left it unrendered, i.e.
+     already autoscaled. If the window's upgrade is the one that turns
+     autoscaling on, or creates the functions Deployment, the field is dropped
+     or never set and the API defaults it to 1 -- a writer back while Postgres
+     rolls. Detected from the live cluster: maintenance.sh `down` records the
+     functions HPA it deleted in its state ConfigMap, empty when there was
+     none. lookup returns nothing under `helm template` or when `down` has not
+     run, and then this check stays quiet; the doc's procedure runs `down`
+     first. */ -}}
+{{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.autoscaling.enabled -}}
+{{- $state := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-maintenance-state" .Release.Name) -}}
+{{- if $state -}}
+{{- $fnName := include "pawtograder.componentName" (dict "ctx" . "component" "functions") -}}
+{{- if not (lookup "apps/v1" "Deployment" .Release.Namespace $fnName) -}}
+{{- fail (printf "maintenance.active=true with edgeFunctions.autoscaling.enabled: Deployment %s does not exist yet, so this upgrade would create it with no replicas field and it would start at 1 pod inside the fence. Create the functions tier in a routine deploy, outside the window." $fnName) -}}
+{{- end -}}
+{{- if eq (dig "data" "functions_hpa" "" $state | trim) "" -}}
+{{- fail "maintenance.active=true with edgeFunctions.autoscaling.enabled, but the deployed release had no functions HPA (maintenance.sh recorded none). Turning autoscaling on in this upgrade drops spec.replicas from the functions Deployment, which the API then defaults to 1 pod inside the fence. Turn autoscaling on in a routine deploy, before or after the window." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- /* The posture marker is chart-managed. A user-supplied copy in
      ingress.annotations would be emitted as a second key after the chart's,

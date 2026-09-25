@@ -660,6 +660,10 @@ cmd_up() {
     local cjname prior
     while IFS=$'\t' read -r cjname prior; do
       [ -n "$cjname" ] || continue
+      if ! present cronjob "$cjname"; then
+        warn "  cronjob/${cjname} no longer exists (disabled by the release applied in the window?); skipping"
+        continue
+      fi
       log "  ${cjname} -> suspend=${prior}"
       run k patch cronjob "$cjname" --type=merge -p "{\"spec\":{\"suspend\":${prior}}}"
     done < "$tmp/cronjobs_suspend"

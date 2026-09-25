@@ -2492,6 +2492,9 @@ assert_refused "posture: active with a page port maintenance.sh does not patch i
 assert_refused "posture: active with no chart Ingress is refused" \
   "maintenance.active=true requires ingress.enabled=true" \
   --set maintenance.active=true --set maintenance.enabled=true --set ingress.enabled=false
+assert_refused "posture: active with ingress.extraHosts aliases is refused" \
+  "maintenance.active=true is refused while ingress.extraHosts is set" \
+  --set maintenance.active=true --set maintenance.enabled=true --set 'ingress.extraHosts[0]=alias.example.com'
 assert_refused "posture: a user-supplied posture marker annotation is refused" \
   "ingress.annotations must not set pawtograder.io/maintenance-active" \
   --set-string 'ingress.annotations.pawtograder\.io/maintenance-active=true'

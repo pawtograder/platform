@@ -197,6 +197,16 @@ kubectl -n "$NS" rollout status deploy/pawtograder-maintenance
 # 2. Fence, and wait for the verdict. Do not go on without SAFE TO BOUNCE.
 charts/pawtograder/scripts/maintenance.sh down
 
+# 3a. Hold the STANDBY back, so the upgrade rolls only the primary. Without
+#     this, one upgrade submits both StatefulSet updates and their controllers
+#     can take the primary and the standby down together, leaving no standby to
+#     promote if the primary does not come back. A partition >= the replica
+#     count keeps every standby pod on its old spec. The chart does not render
+#     updateStrategy, so neither apply mode touches this field, and Helm's
+#     --wait honours the partition.
+kubectl -n "$NS" patch statefulset pawtograder-postgres-replica --type=merge -p \
+  "{\"spec\":{\"updateStrategy\":{\"type\":\"RollingUpdate\",\"rollingUpdate\":{\"partition\":$(kubectl -n "$NS" get statefulset pawtograder-postgres-replica -o jsonpath='{.spec.replicas}')}}}}"
+
 # 3. The bounce: the target release, carrying the posture. Same values as the
 #    routine deploy, plus the posture and the page text from step 1.
 #    --wait-for-jobs: the migrations Job is a plain Job, not a hook, so --wait
@@ -209,9 +219,15 @@ helm upgrade pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
 charts/pawtograder/scripts/maintenance.sh status   # page UP, HPA ABSENT, writers 0,
                                                    # "carries maintenance.active=true"
 kubectl -n "$NS" rollout status statefulset/pawtograder-postgres
-kubectl -n "$NS" rollout status statefulset/pawtograder-postgres-replica  # if enabled
-#    ...then the write probe and the standby query from step 4 of the manual
-#    sequence below.
+#    ...then the write probe from step 4 of the manual sequence below. Only once
+#    the NEW primary accepts writes, release the standby and let it roll:
+kubectl -n "$NS" patch statefulset pawtograder-postgres-replica --type=merge -p \
+  '{"spec":{"updateStrategy":{"rollingUpdate":{"partition":0}}}}'
+kubectl -n "$NS" rollout status statefulset/pawtograder-postgres-replica
+#    ...then the standby query from step 4 of the manual sequence. partition 0
+#    is the default behaviour, so the field can stay; Helm never renders it.
+#    If the primary does NOT come back, the standby is still on its old spec
+#    and healthy: go to the promote path in point-in-time-recovery.md.
 
 # 5. Exit, in this order.
 charts/pawtograder/scripts/maintenance.sh up       # restore; page down LAST
@@ -244,7 +260,7 @@ Rules for the window:
 - **`up` skips what the target release removed.** If the release applied in
   the window drops a writer it recorded (a removed deployment channel, say),
   `up` warns that the object no longer exists and carries on restoring the
-  rest. Only a definite NotFound counts; any other read error aborts `up`.
+  rest. The same goes for a write CronJob the release disabled. Only a definite NotFound counts; any other read error aborts `up`.
 - **Set the page text as values, not with `down --title/--message/--eta`.**
   Those flags patch the maintenance ConfigMap under kubectl's field manager.
   The target upgrade renders the chart's text over it, which fails
