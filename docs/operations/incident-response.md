@@ -133,7 +133,7 @@ Components:
   each for as long as they live. On 2026-09-23 they aged out over about 25
   minutes, followed by a `pgrst` schema-reload NOTIFY that rebuilt the pools.
   `/dev/shm` went from 97% to 2%, with no 503s. If it has to drain faster,
-  `kubectl rollout restart deploy/<release>-rest` rolls the pools without
+  `kubectl -n $NS rollout restart deploy/<release>-rest` rolls the pools without
   touching Postgres.
 - **Confirming who holds the segments:** don't read file mtimes in `/dev/shm`.
   They change on writes, not only on creation. Map each segment to its owners

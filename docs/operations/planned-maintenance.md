@@ -299,10 +299,12 @@ exit upgrade; see
 
 ```bash
 # 1. Pre-stage the page once (creates the Service; does NOT reroute yet).
-#    <chart> is the CURRENTLY DEPLOYED version (--version), never the release
-#    you are about to install: a Postgres-restarting target chart would roll
-#    the primary right here, before anything is fenced.
-helm upgrade pawtograder <chart> --version <deployed-version> -n pawtograder-prod \
+#    Use the CURRENTLY DEPLOYED version (--version), never the release you are
+#    about to install: a Postgres-restarting target chart would roll the
+#    primary right here, before anything is fenced. <chart-ref> must be a
+#    versioned reference (oci://... or repo/chart). Helm ignores --version for
+#    a local chart directory and would install whatever that checkout holds.
+helm upgrade pawtograder <chart-ref> --version <deployed-version> -n pawtograder-prod \
   --reuse-values --set maintenance.enabled=true
 
 # 2. Page up + fence all writers, then read the SAFE TO BOUNCE / NOT READY line:
@@ -365,7 +367,9 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
 
    ```bash
    # <deployed-version>: the chart already running, NOT a target release.
-   helm upgrade pawtograder <chart> --version <deployed-version> -n "$NS" --reuse-values \
+   # <chart-ref>: a versioned oci:// or repo reference, never a local directory
+   # (Helm ignores --version for a local path).
+   helm upgrade pawtograder <chart-ref> --version <deployed-version> -n "$NS" --reuse-values \
      --set maintenance.enabled=true \
      --set maintenance.eta="6:15pm ET"   # optional; title/message also overridable
    kubectl -n "$NS" rollout status deploy/pawtograder-maintenance

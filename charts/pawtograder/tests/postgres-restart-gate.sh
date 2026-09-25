@@ -157,10 +157,17 @@ replicas() {
 # (identity fields) and <out-prefix>.rep (replica count); returns 1 if the
 # chart fails to render. A template
 # that renders to nothing (replica disabled) makes helm say "could not find
-# template" -- that is an empty result, not a failure.
+# template" -- that is an empty result, not a failure. Helm prints the SAME
+# message for a template file that does not exist, so a missing file is checked
+# first and is a failure: a renamed StatefulSet template would otherwise read
+# as "renders empty" on both sides and drop out of the comparison for good.
 render() {
   local out="$1" chart="$2" tpl="$3"; shift 3
   : >"$out.tpl"; : >"$out.vct"; : >"$out.id"; : >"$out.rep"
+  if [ ! -f "$chart/templates/$tpl" ]; then
+    echo "templates/$tpl does not exist in this chart (renamed or deleted? update TEMPLATES in this script)" >"$TMP/err"
+    return 1
+  fi
   if helm template t "$chart" "$@" --show-only "templates/$tpl" >"$out.yaml" 2>"$TMP/err"; then
     extract template <"$out.yaml" >"$out.tpl"
     extract volumeClaimTemplates <"$out.yaml" >"$out.vct"
