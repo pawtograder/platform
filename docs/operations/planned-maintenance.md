@@ -278,7 +278,10 @@ Rules for the window:
 - **`up` skips what the target release removed.** If the release applied in
   the window drops a writer it recorded (a removed deployment channel, say),
   `up` warns that the object no longer exists and carries on restoring the
-  rest. The same goes for a write CronJob the release disabled.
+  rest. The same goes for a write CronJob the release disabled. For channel
+  ingresses, `up` finds the `/` path again at restore time, so a release
+  that adds or removes API paths ahead of it doesn't send the restore to the
+  wrong path.
 - **Don't add writers or move the web Service in the window's upgrade.** A
   tier or deployment channel that `down` never captured would be created at 0
   behind the page, and nothing would bring it up before the page drops. And

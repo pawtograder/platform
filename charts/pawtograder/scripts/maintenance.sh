@@ -734,8 +734,20 @@ cmd_up() {
         warn "  channel ingress ${cing} no longer exists (channel removed by the release?); skipping"
         continue
       fi
+      # Re-locate "/" rather than trust the recorded index: a release applied
+      # inside the window can add or remove API paths ahead of it, and the
+      # stale index would then repoint an API path while "/" stays on the page.
+      # The JSON-patch `test` makes the replace fail rather than land on a path
+      # that is not "/".
+      local live_idx
+      live_idx="$(k get ingress "$cing" -o json | jq -r '[.spec.rules[0].http.paths | to_entries[] | select(.value.path == "/") | .key] | if length == 1 then .[0] else "" end')" \
+        || die "could not read ingress ${cing} to locate its \"/\" path. Restore aborted with the page still up; retry '$0 up'."
+      [ -n "$live_idx" ] \
+        || die "ingress ${cing} does not have exactly one \"/\" path; restore it by hand to ${cbackend}, then re-run '$0 up'."
+      [ "$live_idx" = "$cidx" ] || log "  ${cing}: \"/\" moved from path[${cidx}] to path[${live_idx}] (the release changed the path layout)"
+      cidx="$live_idx"
       run k patch ingress "$cing" --type=json -p \
-        "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/${cidx}/backend/service\",\"value\":${cbackend}}]"
+        "[{\"op\":\"test\",\"path\":\"/spec/rules/0/http/paths/${cidx}/path\",\"value\":\"/\"},{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/${cidx}/backend/service\",\"value\":${cbackend}}]"
       log "  channel ingress ${cing} path[${cidx}] -> restored"
     done < <(jq -c '.[]' <<<"$chan")
     ok "channel web hosts restored"
