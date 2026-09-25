@@ -855,6 +855,15 @@ cmd_recheck() {
   jq -r '.data.deploy_replicas // ""' "$tmp/state.json" > "$tmp/deploy_replicas"
   [ -s "$tmp/deploy_replicas" ] || die "${STATE_CM} records no writer tiers; cannot verify the fence. Inspect with '$0 status'."
 
+  # Withdraw any earlier clearance FIRST. The chart only checks that
+  # fence_complete is non-empty, so a failed recheck must not leave a marker
+  # from a previous SAFE TO BOUNCE standing. Only a full pass below re-mints it.
+  if [ -n "$(jq -r '.data.fence_complete // ""' "$tmp/state.json")" ]; then
+    run k patch configmap "$STATE_CM" --type=json -p '[{"op":"remove","path":"/data/fence_complete"}]' \
+      || die "could not withdraw the earlier fence_complete from ${STATE_CM}; not re-checking. Retry."
+    log "earlier fence_complete withdrawn; it is re-issued only if every check passes"
+  fi
+
   step "1/3 page" "web host still on the maintenance page"
   local backend
   backend="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}')" \
