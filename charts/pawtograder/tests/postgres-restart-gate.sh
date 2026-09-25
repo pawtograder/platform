@@ -21,8 +21,8 @@
 #   .spec.replicas              -- scaling the primary to 0 stops the
 #                                  database with no pod-template change
 #   identity fields             -- metadata.name, serviceName, selector,
-#                                  podManagementPolicy: immutable, or (the
-#                                  name) replace the workload
+#                                  podManagementPolicy, ordinals: immutable,
+#                                  or (name, ordinals) replace the workload
 #   .spec.volumeClaimTemplates  -- immutable: Kubernetes rejects the update,
 #                                  so the upgrade fails outright and needs a
 #                                  migration or recreate plan (reported
@@ -123,9 +123,11 @@ extract() {
 }
 
 # identity: the StatefulSet fields Kubernetes will not update in place
-# (metadata.name, spec.serviceName, spec.selector, spec.podManagementPolicy).
-# A change to any of them either gets the upgrade rejected (like
-# volumeClaimTemplates) or, for the name, replaces the database workload.
+# (metadata.name, spec.serviceName, spec.selector, spec.podManagementPolicy)
+# plus spec.ordinals. A change to any of them either gets the upgrade rejected
+# (like volumeClaimTemplates) or replaces the database workload: a new name, or
+# a new ordinals.start that turns postgres-0 into postgres-1 with a
+# differently named PVC.
 identity() {
   awk '
     /^---/                { in_ss=0; keep=0; next }
@@ -134,7 +136,7 @@ identity() {
     /^metadata:/          { in_meta=1; next }
     /^spec:/              { in_meta=0 }
     in_meta && /^  name:/ { print "metadata." substr($0, 3) }
-    /^  [A-Za-z]/         { keep = ($0 ~ /^  (serviceName|selector|podManagementPolicy):/) }
+    /^  [A-Za-z]/         { keep = ($0 ~ /^  (serviceName|selector|podManagementPolicy|ordinals):/) }
     /^[A-Za-z]/           { keep=0 }
     keep                  { print }
   '
@@ -259,7 +261,7 @@ fi
 what=()
 [ ${#POD_CHANGES[@]} -gt 0 ] && what+=("restarts Postgres (${POD_CHANGES[*]})")
 [ ${#SCALE_CHANGES[@]} -gt 0 ] && what+=("alters a Postgres StatefulSet replica count (${SCALE_CHANGES[*]}), which scales database pods up or down (on the primary, 0 is an outage)")
-[ ${#ID_CHANGES[@]} -gt 0 ] && what+=("alters the StatefulSet name, serviceName, selector or podManagementPolicy (${ID_CHANGES[*]}), which Kubernetes rejects on upgrade -- or, for a rename, replaces the database workload -- so it needs an explicit migration plan")
+[ ${#ID_CHANGES[@]} -gt 0 ] && what+=("alters the StatefulSet name, serviceName, selector, podManagementPolicy or ordinals (${ID_CHANGES[*]}), which Kubernetes rejects on upgrade -- or, for a rename or new start ordinal, replaces the database pod and its PVC -- so it needs an explicit migration plan")
 [ ${#VCT_CHANGES[@]} -gt 0 ] && what+=("edits the immutable volumeClaimTemplates (${VCT_CHANGES[*]}), which Kubernetes rejects on upgrade and so needs an explicit storage migration or StatefulSet recreation plan")
 change="This change"
 for i in "${!what[@]}"; do

@@ -140,6 +140,29 @@ upgrade would restart the primary after all. The 2026-09-23 `/dev/shm` incident
 is the worked example: #1021 shipped as a patch, was split, and its restarting
 half moved to 0.4.0.
 
+### Deploying a Postgres-restarting release in a window
+
+The procedure below was written for node and host maintenance, where the chart
+doesn't change. A chart release that restarts Postgres needs two changes to
+it, and has one known gap.
+
+1. **Pre-stage the page with the chart that is already deployed**
+   (`--version <deployed-version>`), never with the target release. Otherwise
+   that first `helm upgrade` rolls the primary before anything is fenced.
+2. **Apply the target release only after `maintenance.sh down` reports
+   `SAFE TO BOUNCE`.** That upgrade is the bounce.
+3. **Known gap: the target `helm upgrade` does not respect the fence.** The
+   fence is made of live edits, not values: the ingress reroute, writer
+   Deployments scaled to 0, and the functions HPA deleted. A `helm upgrade`
+   re-renders all of them. A client-side upgrade puts back the chart's
+   replica counts, HPA and ingress backend, so writers and the web host come
+   back while the primary is rolling. A server-side upgrade instead conflicts
+   on the fields `kubectl` took over and fails in the middle of the window.
+   Neither outcome is acceptable in production. Until the chart can express
+   the maintenance posture in values, **rehearse the whole sequence on staging
+   first**, and check with `maintenance.sh status` right after the upgrade
+   whether the fence is still in place.
+
 ---
 
 ## Scheduling
@@ -176,9 +199,12 @@ unsuspend CronJobs → re-apply the functions HPA → resume pg_cron → drop th
 last).
 
 ```bash
-# 1. Pre-stage the page once (creates the Service; does NOT reroute yet):
-helm upgrade pawtograder <chart> -n pawtograder-prod --reuse-values \
-  --set maintenance.enabled=true
+# 1. Pre-stage the page once (creates the Service; does NOT reroute yet).
+#    <chart> is the CURRENTLY DEPLOYED version (--version), never the release
+#    you are about to install: a Postgres-restarting target chart would roll
+#    the primary right here, before anything is fenced.
+helm upgrade pawtograder <chart> --version <deployed-version> -n pawtograder-prod \
+  --reuse-values --set maintenance.enabled=true
 
 # 2. Page up + fence all writers, then read the SAFE TO BOUNCE / NOT READY line:
 charts/pawtograder/scripts/maintenance.sh down            # add --dry-run to preview
@@ -239,7 +265,8 @@ writer replica counts, suspended CronJobs, the ingress web-host backend) into th
    is what reroutes. Roll it out and wait for endpoints:
 
    ```bash
-   helm upgrade pawtograder <chart> -n "$NS" --reuse-values \
+   # <deployed-version>: the chart already running, NOT a target release.
+   helm upgrade pawtograder <chart> --version <deployed-version> -n "$NS" --reuse-values \
      --set maintenance.enabled=true \
      --set maintenance.eta="6:15pm ET"   # optional; title/message also overridable
    kubectl -n "$NS" rollout status deploy/pawtograder-maintenance
