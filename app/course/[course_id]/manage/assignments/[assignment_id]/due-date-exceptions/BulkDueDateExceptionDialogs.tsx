@@ -57,8 +57,10 @@ function useInsertExceptions(assignment: Assignment) {
       // One insert so the batch is all-or-nothing.
       const { data, error } = await supabase.from("assignment_due_date_exceptions").insert(inserts).select("id");
       if (error) throw error;
-      // Pull the new rows in now rather than waiting on the realtime broadcast.
-      await assignmentDueDateExceptions.refetchByIds(data.map((row) => row.id));
+      // Pull the new rows in now rather than waiting on the realtime broadcast. The rows are
+      // already saved, so a failed refresh must not report failure and invite a duplicate retry;
+      // the realtime broadcast still delivers them.
+      await assignmentDueDateExceptions.refetchByIds(data.map((row) => row.id)).catch(() => {});
       return data.length;
     },
     [supabase, assignmentDueDateExceptions, assignment.class_id, assignment.id, private_profile_id]
@@ -336,14 +338,19 @@ export function BulkSetDeadlineDialog({
       }));
   }, [targets, targetDate]);
 
-  const targetDateError = !targetDate
-    ? "Select a target due date"
-    : latestCurrentDueDate && targetDate <= latestCurrentDueDate
-      ? "Target date must be after current due date"
-      : plan.some((p) => p.totalMinutes <= 0)
-        ? "Enter hours or minutes greater than 0"
-        : "";
+  // A group gets one exception, so members with different current due dates cannot all land on
+  // the target. Block rather than save a due date that is wrong for some of them.
   const mixedGroups = targets.filter((t) => t.hasMixedMemberDeadlines).length;
+  const targetDateError =
+    mixedGroups > 0
+      ? `Cannot set one due date for ${mixedGroups} group${mixedGroups === 1 ? " whose" : "s whose"} members have different current due dates`
+      : !targetDate
+        ? "Select a target due date"
+        : latestCurrentDueDate && targetDate <= latestCurrentDueDate
+          ? "Target date must be after current due date"
+          : plan.some((p) => p.totalMinutes <= 0)
+            ? "Enter hours or minutes greater than 0"
+            : "";
   const hasGroups = targets.some((t) => t.assignment_group_id);
   const hasLabScheduling = assignment.minutes_due_after_lab !== null;
 
@@ -448,10 +455,10 @@ export function BulkSetDeadlineDialog({
                     </Text>
                   )}
                   {mixedGroups > 0 && (
-                    <Text fontSize="sm" color="fg.warning">
-                      {mixedGroups} group{mixedGroups === 1 ? " has" : "s have"} members with different current due
-                      dates. The group exception is calculated from one member&apos;s due date, so other members may end
-                      up off by the difference.
+                    <Text fontSize="sm" color="fg.error">
+                      A group gets one exception, so its members cannot all reach the target due date. Deselect{" "}
+                      {mixedGroups === 1 ? "that group" : "those groups"} and adjust {mixedGroups === 1 ? "it" : "them"}{" "}
+                      with Adjust Due Date, or use Add Extension to add the same time to everyone.
                     </Text>
                   )}
                 </Box>
