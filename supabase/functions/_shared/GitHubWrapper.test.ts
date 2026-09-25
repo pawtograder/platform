@@ -20,9 +20,11 @@ const {
   assertSourceForkable,
   destinationHasContent,
   assertSourceNotEmpty,
+  cancelLapsedInvitation,
   computeCollaboratorRemovals,
   confirmedRemovals,
   filterToDirectCollaborators,
+  findPendingOrgInvitation,
   getGitHubUserIfExists,
   getTeamAndCreateIfNeeded,
   getTeamMembers,
@@ -33,10 +35,12 @@ const {
   listCollaboratorsOrThrowMissing,
   NonRetryableGitHubError,
   NonRetryableRepoError,
+  planPendingInvitation,
   publicSupabaseUrl,
   RepositoryMissingError,
   RepositoryUnreadableError,
   resolveExistingTeamSlug,
+  resolveTeamIds,
   resolveTeamSlugIfExists,
   TeamMembersUnreadableError,
   TeamNotFoundError,
@@ -1111,4 +1115,143 @@ Deno.test("confirmedRemovals: compares logins case-insensitively, as GitHub does
 
 Deno.test("confirmedRemovals: an empty candidate set stays empty", () => {
   assertEquals(confirmedRemovals([], ["alice"]), []);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Pending org invitations: a lapsed invitation GitHub still lists as pending must be replaced,
+// not treated as a live duplicate.
+// ---------------------------------------------------------------------------------------------
+
+const OUR_TEAM = 11;
+const SIBLING_TEAM = 22;
+const NOW = new Date("2026-09-21T15:23:00Z");
+
+function pendingInvite(createdAt: string, teamIds: number[]) {
+  return { id: 99, createdAt, teamIds };
+}
+
+Deno.test("planPendingInvitation: no pending invitation -> attach", () => {
+  assertEquals(planPendingInvitation(null, OUR_TEAM, NOW), "attach");
+});
+
+Deno.test("planPendingInvitation: live invitation carrying our team -> skip", () => {
+  assertEquals(planPendingInvitation(pendingInvite("2026-09-18T10:00:00Z", [OUR_TEAM]), OUR_TEAM, NOW), "skip");
+});
+
+Deno.test("planPendingInvitation: live invitation for a sibling class only -> attach", () => {
+  assertEquals(planPendingInvitation(pendingInvite("2026-09-18T10:00:00Z", [SIBLING_TEAM]), OUR_TEAM, NOW), "attach");
+});
+
+Deno.test("planPendingInvitation: 7 days old but still listed (GitHub expiry lag) -> replace", () => {
+  // The production case: invited 09-14 14:58, sweep ran 09-21 15:23, GitHub still said pending.
+  assertEquals(planPendingInvitation(pendingInvite("2026-09-14T14:58:09Z", [OUR_TEAM]), OUR_TEAM, NOW), "replace");
+  assertEquals(planPendingInvitation(pendingInvite("2026-09-14T14:58:09Z", [SIBLING_TEAM]), OUR_TEAM, NOW), "replace");
+});
+
+Deno.test("planPendingInvitation: one minute short of 7 days is still live", () => {
+  assertEquals(planPendingInvitation(pendingInvite("2026-09-14T15:24:00Z", [OUR_TEAM]), OUR_TEAM, NOW), "skip");
+});
+
+Deno.test("findPendingOrgInvitation: returns the user's invitation with its teams and creation time", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/invitations": () => [
+      { id: 1, login: "someone-else", team_count: 1, created_at: "2026-09-20T00:00:00Z" },
+      { id: 99, login: "Student1", team_count: 2, created_at: "2026-09-14T14:58:09Z" }
+    ],
+    "GET /orgs/{org}/invitations/{invitation_id}/teams": (p) => {
+      assertEquals(p.invitation_id, 99);
+      return [{ id: OUR_TEAM }, { id: SIBLING_TEAM }];
+    }
+  });
+  assertEquals(await findPendingOrgInvitation(octokit, "org", "student1"), {
+    id: 99,
+    createdAt: "2026-09-14T14:58:09Z",
+    teamIds: [OUR_TEAM, SIBLING_TEAM]
+  });
+});
+
+Deno.test("findPendingOrgInvitation: org-only invitation -> no teams, no second request", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/invitations": () => [
+      { id: 5, login: "student1", team_count: 0, created_at: "2026-09-20T00:00:00Z" }
+    ]
+  });
+  assertEquals(await findPendingOrgInvitation(octokit, "org", "student1"), {
+    id: 5,
+    createdAt: "2026-09-20T00:00:00Z",
+    teamIds: []
+  });
+});
+
+Deno.test("findPendingOrgInvitation: no invitation for the user -> null", async () => {
+  const octokit = fakeOctokit({ "GET /orgs/{org}/invitations": () => [] });
+  assertEquals(await findPendingOrgInvitation(octokit, "org", "student1"), null);
+});
+
+Deno.test("findPendingOrgInvitation: unreadable list fails open -> null", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/invitations": () => {
+      throw requestError(500);
+    }
+  });
+  assertEquals(await findPendingOrgInvitation(octokit, "org", "student1"), null);
+});
+
+Deno.test("cancelLapsedInvitation: deleted -> true", async () => {
+  let deleted: unknown;
+  const octokit = fakeOctokit({
+    "DELETE /orgs/{org}/invitations/{invitation_id}": (p) => {
+      deleted = p.invitation_id;
+      return { status: 204 };
+    }
+  });
+  assertEquals(
+    await cancelLapsedInvitation(octokit, "org", "student1", pendingInvite("2026-09-14T00:00:00Z", [])),
+    true
+  );
+  assertEquals(deleted, 99);
+});
+
+Deno.test("cancelLapsedInvitation: 404 (GitHub finished expiring it) -> true", async () => {
+  const octokit = fakeOctokit({
+    "DELETE /orgs/{org}/invitations/{invitation_id}": () => {
+      throw requestError(404);
+    }
+  });
+  assertEquals(
+    await cancelLapsedInvitation(octokit, "org", "student1", pendingInvite("2026-09-14T00:00:00Z", [])),
+    true
+  );
+});
+
+Deno.test("cancelLapsedInvitation: any other failure -> false, so the caller does not send", async () => {
+  const octokit = fakeOctokit({
+    "DELETE /orgs/{org}/invitations/{invitation_id}": () => {
+      throw requestError(403);
+    }
+  });
+  assertEquals(
+    await cancelLapsedInvitation(octokit, "org", "student1", pendingInvite("2026-09-14T00:00:00Z", [])),
+    false
+  );
+});
+
+Deno.test("resolveTeamIds: existing teams resolve to ids; teams that do not exist are skipped", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => {
+      if (p.team_slug === "a-students") return { data: { id: 1, slug: "a-students" } };
+      throw requestError(404);
+    },
+    "GET /orgs/{org}/teams": () => []
+  });
+  assertEquals(await resolveTeamIds(octokit, "rt-org", ["a-students", "gone-students", "a-students"]), [1]);
+});
+
+Deno.test("resolveTeamIds: an unreadable team throws, so no partial invitation is sent", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(500);
+    }
+  });
+  await assertRejects(() => resolveTeamIds(octokit, "rt-org-2", ["b-staff"]));
 });
