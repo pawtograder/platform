@@ -2298,6 +2298,200 @@ assert_refused "a fractional budget is refused" \
 
 echo
 
+echo "== maintenance.active renders exactly the fence maintenance.sh down leaves =="
+
+# ---------------------------------------------------------------------------
+# maintenance.active: the release carries the maintenance posture, so a
+# Postgres-restarting `helm upgrade` can run inside a window without lifting
+# the fence (docs/operations/planned-maintenance.md, "Deploying a
+# Postgres-restarting release in a window").
+#
+# The posture is only safe if it agrees with scripts/maintenance.sh field for
+# field. Where the release and the live object differ, a client-side 3-way merge
+# reverts the live value (writers come back while the primary is rolling), and
+# server-side apply refuses on a field kubectl owns (the upgrade fails mid-window).
+# So the writer set, the CronJob set and the page backend are READ FROM THE
+# SCRIPT below, not restated here. Add a tier to STABLE_WRITERS or a CronJob to
+# SUSPEND_CRONJOBS without teaching the chart about it, and this fails.
+# ---------------------------------------------------------------------------
+MAINT_SH="$CHART/scripts/maintenance.sh"
+# The script's own array/scalar assignments, evaluated in a subshell so nothing
+# else in it runs. Each is a single line of literals; anything fancier and the
+# eval would be the wrong tool, which is itself worth failing on.
+maint_sh_value() {
+  local line
+  line="$(grep -E "^$1=" "$MAINT_SH" | head -1)"
+  [ -n "$line" ] || return 1
+  ( eval "${line%%#*}"; eval "printf '%s\n' \"\${$1[@]}\"" )
+}
+mapfile -t MAINT_WRITERS < <(maint_sh_value STABLE_WRITERS)
+mapfile -t MAINT_CRONJOBS < <(maint_sh_value SUSPEND_CRONJOBS)
+MAINT_SH_PORT="$(maint_sh_value MAINT_PORT | tr -d '"')"
+
+# assert_maintenance_posture "<label>" <extra helm args...>
+# Renders the WHOLE chart as release `pawtograder` (the script's default RELEASE,
+# so every <release>-<x> name it derives lines up) with the posture on, and checks:
+#   - every Deployment/StatefulSet the script's discover_writers() would select
+#     (component in STABLE_WRITERS, or web-*/functions-*) renders replicas: 0.
+#     The one exception is functions under autoscaling, which must render NO
+#     replicas (templates/edge-functions.yaml says why); the script's live 0
+#     then holds.
+#   - no HorizontalPodAutoscaler at all.
+#   - every <release>-<SUSPEND_CRONJOBS> CronJob renders suspend: true.
+#   - the primary web host's "/" and every channel host's "/" route to
+#     <release>-maintenance on MAINT_PORT, the exact value the script patches in.
+#   - the Postgres StatefulSets render byte-identically to the posture off.
+# At least one writer, one CronJob and one Ingress must be seen, so an empty or
+# broken render cannot pass by having nothing to check.
+assert_maintenance_posture() {
+  local label="$1"; shift
+  local rel=pawtograder
+  if [ "${#MAINT_WRITERS[@]}" -eq 0 ] || [ "${#MAINT_CRONJOBS[@]}" -eq 0 ] || [ -z "$MAINT_SH_PORT" ]; then
+    echo "FAIL [$label]: could not read STABLE_WRITERS / SUSPEND_CRONJOBS / MAINT_PORT from $MAINT_SH"
+    FAILED=1
+    return
+  fi
+  if ! helm template "$rel" "$CHART" -n pawtograder-prod "$@" \
+      --set maintenance.enabled=true --set maintenance.active=true >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local stable_re cron_re
+  stable_re="$(IFS='|'; echo "${MAINT_WRITERS[*]}")"
+  cron_re="$(printf "${rel}-%s|" "${MAINT_CRONJOBS[@]}")"; cron_re="${cron_re%|}"
+  # One line per document: kind, metadata.name, component label, spec.replicas
+  # ("-" when absent), spec.suspend ("-" when absent). Top-level fields only:
+  # metadata/spec children sit at exactly two spaces.
+  local docs
+  docs="$(awk '
+    function flush() { if (kind != "") print kind, name, (comp == "" ? "-" : comp), rep, sus
+                       kind = ""; name = ""; comp = ""; rep = "-"; sus = "-"; sect = "" }
+    BEGIN { rep = "-"; sus = "-" }
+    /^---/ { flush(); next }
+    /^kind: / { kind = $2; next }
+    /^[a-z]/ { sect = $1; next }
+    sect == "metadata:" && /^  name: / && name == "" { name = $2 }
+    sect == "metadata:" && /app\.kubernetes\.io\/component: / && comp == "" { comp = $2 }
+    sect == "spec:" && /^  replicas: / { rep = $2 }
+    sect == "spec:" && /^  suspend: / { sus = $2 }
+    END { flush() }' "$OUTFILE")"
+  local bad=0 writers=0 crons=0 kind name comp rep sus
+  while read -r kind name comp rep sus; do
+    case "$kind" in
+      Deployment | StatefulSet)
+        if [[ "$comp" =~ ^(${stable_re})$ || "$comp" == web-* || "$comp" == functions-* ]]; then
+          writers=$((writers + 1))
+          if [ "$rep" = "0" ]; then :
+          elif [ "$comp" = "functions" ] && [ "$rep" = "-" ]; then :
+          else
+            echo "FAIL [$label]: $kind/$name ($comp) renders replicas $rep, not 0"; bad=1
+          fi
+        fi ;;
+      HorizontalPodAutoscaler)
+        echo "FAIL [$label]: HorizontalPodAutoscaler/$name is rendered; maintenance.sh deletes it"; bad=1 ;;
+      CronJob)
+        if [[ "$name" =~ ^(${cron_re})$ ]]; then
+          crons=$((crons + 1))
+          [ "$sus" = "true" ] || { echo "FAIL [$label]: CronJob/$name renders suspend $sus, not true"; bad=1; }
+        fi ;;
+    esac
+  done <<<"$docs"
+  # The script scales `functions` whether or not an HPA exists, so it must be
+  # here at 0 or unrendered, never at a count, and it must be in the render.
+  grep -qE '^Deployment [^ ]+ functions ' <<<"$docs" \
+    || { echo "FAIL [$label]: no functions Deployment rendered to check"; bad=1; }
+  [ "$writers" -gt 0 ] || { echo "FAIL [$label]: no writer workloads found to check"; bad=1; }
+  [ "$crons" -gt 0 ] || { echo "FAIL [$label]: none of ${MAINT_CRONJOBS[*]} rendered to check"; bad=1; }
+
+  # Page backend: the "/" path of the primary Ingress's rules[0], and of each
+  # channel Ingress, must be the script's value exactly. `- path: /$` matches
+  # "/" only, never an API path like /rest/v1/.
+  local want_backend="${rel}-maintenance:${MAINT_SH_PORT}" ing got n_ing=0
+  for ing in templates/ingress.yaml templates/ingress-channels.yaml; do
+    helm template "$rel" "$CHART" -n pawtograder-prod "$@" \
+      --set maintenance.enabled=true --set maintenance.active=true \
+      --show-only "$ing" >"$OUTFILE.ing" 2>/dev/null || continue
+    # Every "/" path in the channel Ingresses; only the FIRST in the primary one
+    # (rules[0]; the api host's "/" is Kong, and extraHosts stay on web, as the
+    # script leaves them).
+    got="$(grep -A6 -E '^[[:space:]]*- path: /$' "$OUTFILE.ing" \
+            | awk '/^[[:space:]]*name: / { n = $2 } /^[[:space:]]*number: / { print n ":" $2 }')"
+    [ "$ing" = templates/ingress.yaml ] && got="$(head -1 <<<"$got")"
+    while read -r b; do
+      [ -n "$b" ] || continue
+      n_ing=$((n_ing + 1))
+      [ "$b" = "$want_backend" ] || { echo "FAIL [$label]: $ing routes \"/\" to $b, not $want_backend"; bad=1; }
+    done <<<"$got"
+  done
+  rm -f "$OUTFILE.ing"
+  [ "$n_ing" -gt 0 ] || { echo "FAIL [$label]: no web-host \"/\" backend found to check"; bad=1; }
+
+  # And the posture leaves Postgres alone, byte for byte.
+  local pg
+  for pg in templates/postgres-statefulset.yaml templates/postgres-replica.yaml; do
+    helm template "$rel" "$CHART" -n pawtograder-prod "$@" --show-only "$pg" >"$OUTFILE.off" 2>/dev/null || continue
+    helm template "$rel" "$CHART" -n pawtograder-prod "$@" \
+      --set maintenance.enabled=true --set maintenance.active=true \
+      --show-only "$pg" >"$OUTFILE.on" 2>/dev/null
+    cmp -s "$OUTFILE.off" "$OUTFILE.on" || { echo "FAIL [$label]: $pg changes under maintenance.active"; bad=1; }
+  done
+  rm -f "$OUTFILE.off" "$OUTFILE.on"
+
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label] ($writers writers, $crons CronJobs, $n_ing page backends)"; fi
+}
+
+# The shipped overlays, pinned just enough to render (the same pins the restart
+# gate's PROD_FIXUPS uses for the prod examples). Staging carries the canary
+# channel (web + functions) and the functions HPA; preview has autoscaling off,
+# so functions renders an explicit 0 there (audit-partitions is switched on so
+# the case has a CronJob to check); prod has the backup drill CronJobs.
+MAINT_PROD_PINS=(
+  --set monitoring.prometheusRules.labels.release=prometheus
+  --set postgres.persistence.storageClass=gate
+  --set postgres.walg.s3Prefix=s3://gate/wal-g
+  --set backup.s3.endpoint=https://s3.gate.invalid
+  --set web.image.tag=v0.0.0-gate
+  --set edgeFunctions.image.tag=v0.0.0-gate
+  --set migrations.image.tag=v0.0.0-gate
+  --set backup.image.tag=v0.0.0-gate
+)
+assert_maintenance_posture "posture: staging overlay (HPA + canary channel)" \
+  -f "$CHART/examples/values-staging.yaml"
+assert_maintenance_posture "posture: preview overlay (functions without an HPA)" \
+  -f "$CHART/examples/values-preview.yaml" --set auditPartitions.enabled=true
+assert_maintenance_posture "posture: prod overlay (backup drill CronJobs)" \
+  -f "$CHART/examples/values-prod.yaml" "${MAINT_PROD_PINS[@]}"
+MAINT_PROD_OVERLAY="$CHART/../../../prod-charts/values/values-prod.yaml"
+if [ -f "$MAINT_PROD_OVERLAY" ]; then
+  assert_maintenance_posture "posture: prod-charts overlay (real production values)" \
+    -f "$MAINT_PROD_OVERLAY" "${MAINT_PROD_PINS[@]}"
+fi
+
+# Off is off: no marker, the HPA back, nothing suspended. (Byte-identity of the
+# whole default render is proved against the previous chart, not here.)
+assert_rendered_lacks "posture off: no maintenance-active marker on the Ingress" \
+  templates/ingress.yaml "pawtograder.io/maintenance-active"
+assert_rendered_contains "posture off: the functions HPA renders" \
+  templates/edge-functions-hpa.yaml "kind: HorizontalPodAutoscaler" \
+  --set edgeFunctions.autoscaling.enabled=true
+assert_rendered_lacks "posture off: audit-partitions is not suspended" \
+  templates/audit-partitions.yaml "suspend:"
+
+# Refusals.
+assert_refused "posture: active without the page is refused" \
+  "maintenance.active=true requires maintenance.enabled=true" \
+  --set maintenance.active=true
+assert_refused "posture: active with the API on the web host is refused" \
+  "maintenance.active=true requires global.apiOnSeparateHost=true" \
+  --set maintenance.active=true --set maintenance.enabled=true --set global.apiOnSeparateHost=false
+assert_refused "posture: active with a page port maintenance.sh does not patch is refused" \
+  "maintenance.active=true requires maintenance.service.port=8080" \
+  --set maintenance.active=true --set maintenance.enabled=true --set maintenance.service.port=9090
+
+echo
+
 echo
 
 if [ "$FAILED" -ne 0 ]; then

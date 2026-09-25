@@ -14,7 +14,9 @@ keyed off global.environment (dev | preview | staging | production):
                  ServiceMonitor is switched off (same empty panels, because the
                  refresh only runs during a scrape — cleared with
                  monitoring.allowUnscrapedMetricsLeader); Studio ingress
-                 without an auth layer (full DB control behind a bare URL).
+                 without an auth layer (full DB control behind a bare URL);
+                 maintenance.active without the page it routes to, or in a
+                 layout maintenance.sh cannot agree with.
   staging+prod — secrets.create (plaintext key material in helm release
                  history); migrations.resetOnDrift (wipes schema public +
                  auth.users + vault.secrets and replays from scratch —
@@ -138,6 +140,45 @@ cannot detect.
 
 {{- if and .Values.postgres.replica.enabled (not .Values.postgres.walg.enabled) -}}
 {{- fail "postgres.replica.enabled=true requires postgres.walg.enabled=true — the standby uses `wal-g wal-fetch` as its archive fallback when it falls behind the primary's retained pg_wal, and shares the WAL-G config. Enable postgres.walg first." -}}
+{{- end -}}
+
+{{- /*
+maintenance.active: the release carries the maintenance posture that
+scripts/maintenance.sh `down` produces (web host on the page, writers at 0, the
+functions HPA gone, write-capable CronJobs suspended), so a Postgres-restarting
+`helm upgrade` can run inside the window without lifting the fence. See
+docs/operations/planned-maintenance.md.
+
+Three combinations render a posture that does not match the script, and each
+fails at render time rather than in the middle of a window:
+
+  1. active without maintenance.enabled. The web host would point at a
+     maintenance Service this same render deletes: users get the ingress
+     controller's bare 503 instead of the page, and the upgrade removes the page
+     `down` checked was Ready.
+  2. active without global.apiOnSeparateHost. The script repoints
+     rules[0].paths[0], which is the web host's "/" only when the API has its
+     own host. With the API paths on the web host, paths[0] is an API path: the
+     script and the chart would each fence a different path, and whichever
+     applies second reverts or conflicts with the other.
+  3. active with maintenance.service.port other than 8080. maintenance.sh
+     hard-codes MAINT_PORT=8080 in the backend it patches in. A chart backend on
+     any other port is a different value in a field kubectl owns, which is a
+     server-side apply conflict on the window's own upgrade.
+
+Any environment: all three are wrong everywhere, and none can be reached by
+accident, because maintenance.active defaults to false.
+*/ -}}
+{{- if .Values.maintenance.active -}}
+{{- if not .Values.maintenance.enabled -}}
+{{- fail "maintenance.active=true requires maintenance.enabled=true — the posture routes the web host to the maintenance Service, and maintenance.enabled=false removes that Service in the same render, so users would get the ingress controller's bare 503 and the page maintenance.sh `down` checked would be deleted mid-window. Set maintenance.enabled=true alongside maintenance.active=true (and keep both on the upgrade that runs inside the window)." -}}
+{{- end -}}
+{{- if not .Values.global.apiOnSeparateHost -}}
+{{- fail "maintenance.active=true requires global.apiOnSeparateHost=true — maintenance.sh repoints the primary Ingress's rules[0].paths[0], which is the web host's \"/\" path only when the API is on its own host. With the API paths on the web host, paths[0] is an API path, so the script and the chart would fence different paths and the window's upgrade would revert or conflict with the script's patch." -}}
+{{- end -}}
+{{- if ne (int .Values.maintenance.service.port) 8080 -}}
+{{- fail (printf "maintenance.active=true requires maintenance.service.port=8080 (got %v) — maintenance.sh patches the web host's backend to port 8080 (MAINT_PORT), so a chart backend on any other port is a different value in a field kubectl owns, and the window's own server-side upgrade fails on the conflict." .Values.maintenance.service.port) -}}
+{{- end -}}
 {{- end -}}
 
 {{- if has $env (list "staging" "production") -}}

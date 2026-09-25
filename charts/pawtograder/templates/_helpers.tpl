@@ -280,6 +280,38 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "web") -}}
 {{- end -}}
 
+{{- define "pawtograder.maintenance.host" -}}
+{{- include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") -}}
+{{- end -}}
+
+{{/*
+Maintenance posture (maintenance.active): the replica count a WRITER tier
+renders. 0 while the posture is on, the caller's own count otherwise.
+
+"Writer" means exactly the set scripts/maintenance.sh scales to 0 in `down`:
+STABLE_WRITERS (functions web rest auth storage realtime) plus every channel
+Deployment (web-<channel>, functions-<channel>). Nothing else takes this helper.
+The metrics-leader Deployment, kong, supavisor, imgproxy and the Postgres
+StatefulSets are not in the script's set, so they are not in the chart's either.
+The posture has to render the state `down` leaves behind, no more and no less:
+where the release and the live object disagree, the next apply either reverts
+the live value (client-side 3-way merge) or refuses on a field kubectl owns
+(server-side apply), and in a maintenance window both are outages.
+
+Off, it prints `.replicas` through the same `{{ }}` action the templates used
+before this helper existed, so a default render is byte-identical
+(render-guardrails.sh asserts it).
+
+Usage: replicas: {{ include "pawtograder.maintenance.writerReplicas" (dict "ctx" . "replicas" .Values.rest.replicas) }}
+*/}}
+{{- define "pawtograder.maintenance.writerReplicas" -}}
+{{- if .ctx.Values.maintenance.active -}}
+0
+{{- else -}}
+{{ .replicas }}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.postgres.replica.host" -}}
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "postgres-replica") -}}
 {{- end -}}

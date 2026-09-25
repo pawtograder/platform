@@ -3,7 +3,24 @@ Stable edge-functions channel. The Service+Deployment body lives in
 templates/_edge-functions-workload.tpl so extra deployment channels
 (.Values.channels, rendered by templates/edge-functions-channels.yaml) reuse the
 exact same pod spec. The stable HPA stays in templates/edge-functions-hpa.yaml.
+
+maintenance.active: with autoscaling OFF, replicas renders 0 like every other
+writer. With autoscaling ON (production), the HPA is not rendered
+(edge-functions-hpa.yaml) and replicas stays UNRENDERED, deliberately — the 0
+comes from maintenance.sh `down` (`kubectl scale`), and the chart leaves it alone.
+
+Rendering `replicas: 0` here would look more complete and would break the exit.
+Leaving the posture puts replicas back to "not rendered" (the HPA owns it). Under
+a client-side 3-way merge, a field that was in the previous release manifest and
+is absent from the new one is DELETED from the live object, and the API server
+defaults a Deployment with no replicas to 1. So the exit upgrade would drop a
+fully restored functions tier (production runs 12 to 32 pods) to ONE pod, just
+as the window's pgmq backlog starts draining, and leave the HPA to climb back.
+Never rendering it avoids that under both apply modes. During the target upgrade
+neither the old manifest nor the new one carries replicas, so a 3-way merge does
+not touch the live 0, and server-side apply cannot conflict on a field Helm has
+never owned.
 */ -}}
 {{- if .Values.edgeFunctions.enabled }}
-{{- include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions" "image" .Values.edgeFunctions.image "replicas" .Values.edgeFunctions.replicas "autoscaling" .Values.edgeFunctions.autoscaling.enabled) }}
+{{- include "pawtograder.edgeFunctions.workload" (dict "ctx" . "component" "functions" "image" .Values.edgeFunctions.image "replicas" (include "pawtograder.maintenance.writerReplicas" (dict "ctx" . "replicas" .Values.edgeFunctions.replicas)) "autoscaling" .Values.edgeFunctions.autoscaling.enabled) }}
 {{- end }}

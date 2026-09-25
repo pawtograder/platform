@@ -472,6 +472,39 @@ postgres:
 # -----------------------------------------------------------------------------
 maintenance:
   enabled: false
+  # The maintenance POSTURE, distinct from `enabled` (which only deploys the
+  # page). true renders the state `scripts/maintenance.sh down` leaves behind:
+  #   - the web host's "/" backend (and each channel host's "/") -> this page's
+  #     Service, byte-for-byte what the script patches in (name + port 8080)
+  #   - every writer the script scales to 0 -> replicas: 0 (web, rest, auth,
+  #     storage, the realtime StatefulSet, every web-/functions-<channel>
+  #     Deployment, and functions when edgeFunctions.autoscaling is off)
+  #   - the edge-functions HPA -> not rendered. With autoscaling on, functions
+  #     replicas stays unrendered and the script's live 0 holds; rendering 0
+  #     there would make the EXIT upgrade reset the tier to 1 pod under a
+  #     client-side 3-way merge (templates/edge-functions.yaml has the detail)
+  #   - the write-capable CronJobs the script suspends -> suspend: true
+  #   - the primary Ingress -> annotation pawtograder.io/maintenance-active
+  # pg_cron is paused in the database, survives any upgrade, and stays the
+  # script's job. So do state capture and the SAFE TO BOUNCE gate.
+  #
+  # Purpose: a chart release that RESTARTS Postgres, applied inside a window.
+  # Without this, that upgrade re-renders the fence away. Client-side, it puts
+  # the writers, HPA and web backend back while the primary is rolling;
+  # server-side, it fails on the fields kubectl took over. With it, the release
+  # and the live objects agree field for field, so neither apply mode has
+  # anything to change. Entry is still `maintenance.sh down`; the posture only
+  # makes the upgrade agree with it. Exit is `maintenance.sh up` FIRST (writable
+  # preflight, restore, page down last), then `helm upgrade` with this back to
+  # false. Full procedure: docs/operations/planned-maintenance.md, "Deploying a
+  # Postgres-restarting release in a window".
+  #
+  # Leaves Postgres alone: neither StatefulSet reads this value. Requires
+  # enabled=true, global.apiOnSeparateHost=true and service.port=8080
+  # (templates/validations.yaml says why). Set it on the command line for the
+  # one upgrade, never in a values file, and don't carry it with --reuse-values:
+  # any later upgrade that keeps it re-fences the environment.
+  active: false
   # Copy shown on the page. eta is optional (omitted from the page when empty).
   title: "We'll be right back"
   message: "Pawtograder is down for a short scheduled maintenance window. Your work is safe — the pack is tidying up and we'll be back shortly. This page refreshes on its own."
