@@ -250,6 +250,13 @@ state_exists() { k get configmap "$STATE_CM" >/dev/null 2>&1; }
 # docs/operations/planned-maintenance.md.
 POSTURE_ANNOTATION="pawtograder.io/maintenance-active"
 posture_held() {
+  # `status` passes "lenient": a release that deliberately has no chart Ingress
+  # (maintenance.active is refused without one) cannot hold the posture, and
+  # the read-only report should still run. `down` and `up` stay fail-closed.
+  if [ "${1:-}" = "lenient" ] && ! present ingress "$INGRESS"; then
+    warn "no ingress ${INGRESS}: the posture marker is unavailable (a release without a chart Ingress cannot hold maintenance.active)"
+    return 1
+  fi
   # jsonpath needs the dot in the annotation key escaped. Fails CLOSED: a read
   # error must not look like "no posture", or `down` would record the fenced
   # state as prior and `up` would re-apply the old chart's HPA.
@@ -858,13 +865,14 @@ cmd_status() {
     [ -n "$name" ] && printf '    %s/%s = %s\n' "$kind" "$name" "$replicas"
   done
 
-  if posture_held; then
+  if posture_held lenient; then
     warn "Helm release carries maintenance.active=true (${POSTURE_ANNOTATION} on ingress ${INGRESS}): every upgrade that keeps it re-fences"
   fi
 
   local backend host
-  host="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null)"
-  backend="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}' 2>/dev/null)"
+  # Informational: a release with no chart Ingress must not abort the report.
+  host="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null)" || host=""
+  backend="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}' 2>/dev/null)" || backend=""
   if [ "$backend" = "$MAINT_SVC" ]; then
     warn "ingress web host (${host}) -> ${backend} (MAINTENANCE PAGE UP)"
   else

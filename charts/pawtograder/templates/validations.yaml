@@ -238,7 +238,22 @@ accident, because maintenance.active defaults to false.
      doc's step 0 preflight must keep working), and a fresh install has no
      database to protect. `up` withdraws the marker before it restores
      anything, so an interrupted `up` cannot leave a stale clearance. */ -}}
-{{- if lookup "apps/v1" "StatefulSet" .Release.Namespace (include "pawtograder.componentName" (dict "ctx" . "component" "postgres")) -}}
+{{- /* Found by LABEL, not by the name this render would give it: a target that
+     renames the primary (an identity change the restart gate reports) would
+     otherwise look up the new name, find nothing, and skip every check below
+     while it replaces the database. */ -}}
+{{- $livePrimary := "" -}}
+{{- range $sts := (lookup "apps/v1" "StatefulSet" .Release.Namespace "").items | default list -}}
+{{- $l := $sts.metadata.labels | default dict -}}
+{{- if and (eq (index $l "app.kubernetes.io/component" | default "") "postgres") (eq (index $l "app.kubernetes.io/instance" | default "") $.Release.Name) -}}
+{{- $livePrimary = $sts.metadata.name -}}
+{{- end -}}
+{{- end -}}
+{{- if $livePrimary -}}
+{{- $targetPrimary := include "pawtograder.componentName" (dict "ctx" . "component" "postgres") -}}
+{{- if and .Values.postgres.enabled (ne $livePrimary $targetPrimary) -}}
+{{- fail (printf "maintenance.active=true: the live Postgres primary is %s but this release renders %s. Renaming the primary replaces the database workload (a new StatefulSet and PVC); that is a migration, not a maintenance-window upgrade." $livePrimary $targetPrimary) -}}
+{{- end -}}
 {{- if not .Values.postgres.enabled -}}
 {{- fail "maintenance.active=true with postgres.enabled=false while the release's Postgres primary still exists: this upgrade would DELETE the database StatefulSet. Decommissioning Postgres is not a maintenance-window upgrade; do it deliberately, outside this path." -}}
 {{- end -}}
