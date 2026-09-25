@@ -657,7 +657,7 @@ cmd_up() {
   step "3/6 cronjobs" "restoring CronJob suspend state"
   sget cronjobs_suspend > "$tmp/cronjobs_suspend"
   if [ -s "$tmp/cronjobs_suspend" ]; then
-    local cjname prior
+    local cjname prior presuspended=()
     while IFS=$'\t' read -r cjname prior; do
       [ -n "$cjname" ] || continue
       if ! present cronjob "$cjname"; then
@@ -665,8 +665,15 @@ cmd_up() {
         continue
       fi
       log "  ${cjname} -> suspend=${prior}"
+      if [ "$prior" = "true" ]; then presuspended+=("$cjname"); fi
       run k patch cronjob "$cjname" --type=merge -p "{\"spec\":{\"suspend\":${prior}}}"
     done < "$tmp/cronjobs_suspend"
+    # The posture rendered suspend: true; the posture-off exit upgrade drops
+    # the field and Kubernetes defaults it to false, re-enabling a CronJob that
+    # was suspended on purpose before the window.
+    if $held && [ ${#presuspended[@]} -gt 0 ]; then
+      warn "suspended before the window, and the exit helm upgrade will UNSUSPEND them: ${presuspended[*]}. After that upgrade, re-suspend each: kubectl -n ${NAMESPACE} patch cronjob <name> --type=merge -p '{\"spec\":{\"suspend\":true}}'"
+    fi
   fi
   ok "CronJobs restored"
 

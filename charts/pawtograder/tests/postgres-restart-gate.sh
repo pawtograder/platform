@@ -18,6 +18,8 @@
 #   .spec.template              -- pod spec, volumes, and the checksum/config
 #                                  annotation (postgres-config.yaml +
 #                                  postgres-exporter-queries.yaml)
+#   .spec.updateStrategy        -- moving off OnDelete, or lowering a
+#                                  partition, rolls pods that were held back
 #   .spec.replicas              -- scaling the primary to 0 stops the
 #                                  database with no pod-template change
 #   identity fields             -- metadata.name, serviceName, selector,
@@ -170,7 +172,7 @@ replicas() {
 # as "renders empty" on both sides and drop out of the comparison for good.
 render() {
   local out="$1" chart="$2" tpl="$3"; shift 3
-  : >"$out.tpl"; : >"$out.vct"; : >"$out.id"; : >"$out.rep"
+  : >"$out.tpl"; : >"$out.vct"; : >"$out.id"; : >"$out.rep"; : >"$out.strat"
   if [ ! -f "$chart/templates/$tpl" ]; then
     echo "templates/$tpl does not exist in this chart (renamed or deleted? update TEMPLATES in this script)" >"$TMP/err"
     return 1
@@ -178,6 +180,7 @@ render() {
   if helm template t "$chart" "$@" --show-only "templates/$tpl" >"$out.yaml" 2>"$TMP/err"; then
     extract template <"$out.yaml" >"$out.tpl"
     extract volumeClaimTemplates <"$out.yaml" >"$out.vct"
+    extract updateStrategy <"$out.yaml" >"$out.strat"
     identity <"$out.yaml" >"$out.id"
     replicas <"$out.yaml" >"$out.rep"
     return 0
@@ -199,6 +202,7 @@ POD_CHANGES=()
 VCT_CHANGES=()
 ID_CHANGES=()
 SCALE_CHANGES=()
+STRAT_CHANGES=()
 SKIPPED=()
 BROKEN=()
 CHECKED=0
@@ -252,6 +256,10 @@ for c in "${CASES[@]}"; do
       SCALE_CHANGES+=("$label/$tpl: $(tr -d ' \n' <"$TMP/base.rep") -> $(tr -d ' \n' <"$TMP/head.rep")")
       show_diff "$label: $tpl replica count" "$TMP/base.rep" "$TMP/head.rep"
     fi
+    if ! diff -q "$TMP/base.strat" "$TMP/head.strat" >/dev/null; then
+      STRAT_CHANGES+=("$label/$tpl")
+      show_diff "$label: $tpl updateStrategy" "$TMP/base.strat" "$TMP/head.strat"
+    fi
   done
 done
 
@@ -276,8 +284,8 @@ if [ "$CHECKED" -eq 0 ]; then
   exit 1
 fi
 
-if [ ${#POD_CHANGES[@]} -eq 0 ] && [ ${#VCT_CHANGES[@]} -eq 0 ] && [ ${#ID_CHANGES[@]} -eq 0 ] && [ ${#SCALE_CHANGES[@]} -eq 0 ]; then
-  echo "ok   no Postgres pod-template, volumeClaimTemplates, identity or replica-count change against $BASE_REF across $CHECKED renders (chart $BASE_VER -> $HEAD_VER)"
+if [ ${#POD_CHANGES[@]} -eq 0 ] && [ ${#VCT_CHANGES[@]} -eq 0 ] && [ ${#ID_CHANGES[@]} -eq 0 ] && [ ${#SCALE_CHANGES[@]} -eq 0 ] && [ ${#STRAT_CHANGES[@]} -eq 0 ]; then
+  echo "ok   no Postgres pod-template, volumeClaimTemplates, identity, replica-count or updateStrategy change against $BASE_REF across $CHECKED renders (chart $BASE_VER -> $HEAD_VER)"
   exit 0
 fi
 
@@ -287,6 +295,7 @@ fi
 # fails. That needs a migration or delete-and-recreate plan, not just a window.
 what=()
 [ ${#POD_CHANGES[@]} -gt 0 ] && what+=("restarts Postgres (${POD_CHANGES[*]})")
+[ ${#STRAT_CHANGES[@]} -gt 0 ] && what+=("alters a Postgres StatefulSet updateStrategy (${STRAT_CHANGES[*]}), which can roll pods an OnDelete strategy or a partition was holding back, with no pod-template change")
 [ ${#SCALE_CHANGES[@]} -gt 0 ] && what+=("alters a Postgres StatefulSet replica count (${SCALE_CHANGES[*]}), which scales database pods up or down (on the primary, 0 is an outage)")
 [ ${#ID_CHANGES[@]} -gt 0 ] && what+=("alters the StatefulSet name, serviceName, selector, podManagementPolicy or ordinals (${ID_CHANGES[*]}), which Kubernetes rejects on upgrade -- or, for a rename or new start ordinal, replaces the database pod and its PVC -- so it needs an explicit migration plan")
 [ ${#VCT_CHANGES[@]} -gt 0 ] && what+=("edits the immutable volumeClaimTemplates (${VCT_CHANGES[*]}), which Kubernetes rejects on upgrade and so needs an explicit storage migration or StatefulSet recreation plan")

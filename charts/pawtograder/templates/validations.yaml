@@ -208,6 +208,23 @@ accident, because maintenance.active defaults to false.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /* New writers. A deployment channel added by the window's own upgrade is
+     created at 0 behind the page, but `down` never recorded it, so `up` would
+     drop the page without starting it and the exit upgrade would switch its
+     ingress to pods still starting. Refused at upgrade time, like the
+     functions check above: every channel workload must already exist. */ -}}
+{{- if lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-maintenance-state" .Release.Name) -}}
+{{- range $c := .Values.channels -}}
+{{- range $kind := list "web" "functions" -}}
+{{- if hasKey $c $kind -}}
+{{- $n := include "pawtograder.componentName" (dict "ctx" $ "component" (printf "%s-%s" $kind $c.name)) -}}
+{{- if not (lookup "apps/v1" "Deployment" $.Release.Namespace $n) -}}
+{{- fail (printf "maintenance.active=true: channel %q would create Deployment %s inside the fence. maintenance.sh did not record it, so `up` would drop the page before it runs. Add channels in a routine deploy, outside the window." $c.name $n) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- /* The posture marker is chart-managed. A user-supplied copy in
      ingress.annotations would be emitted as a second key after the chart's,

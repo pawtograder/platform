@@ -208,12 +208,15 @@ kubectl -n "$NS" patch statefulset pawtograder-postgres-replica --type=merge -p 
   "{\"spec\":{\"updateStrategy\":{\"type\":\"RollingUpdate\",\"rollingUpdate\":{\"partition\":$(kubectl -n "$NS" get statefulset pawtograder-postgres-replica -o jsonpath='{.spec.replicas}')}}}}"
 
 # 3. The bounce: the target release, carrying the posture. Same values as the
-#    routine deploy, plus the posture and the page text from step 1.
-#    --wait-for-jobs: the migrations Job is a plain Job, not a hook, so --wait
-#    alone returns while schema changes may still be running.
+#    routine deploy, plus the posture and the page text from step 1, and with
+#    MIGRATIONS OFF. The migrations Job is a plain Job submitted with the rest
+#    of the upgrade, not after the primary rolls, so it could start against the
+#    old primary and lose its connection when that pod is terminated. They run
+#    in step 4c, once the new primary is verified.
 helm upgrade pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
   --set maintenance.enabled=true --set maintenance.active=true \
-  --set maintenance.eta="6:15pm ET" --wait --wait-for-jobs --timeout 25m
+  --set maintenance.eta="6:15pm ET" --set migrations.enabled=false \
+  --wait --timeout 25m
 
 # 4. Verify, still behind the page.
 charts/pawtograder/scripts/maintenance.sh status   # page UP, HPA ABSENT, writers 0,
@@ -228,6 +231,14 @@ kubectl -n "$NS" rollout status statefulset/pawtograder-postgres-replica
 #    is the default behaviour, so the field can stay; Helm never renders it.
 #    If the primary does NOT come back, the standby is still on its old spec
 #    and healthy: go to the promote path in point-in-time-recovery.md.
+
+# 4c. Migrations, still fenced: the same target and values with migrations on.
+#     The StatefulSets already match, so nothing rolls; this only runs the
+#     migrations Job, and --wait-for-jobs waits for it (a plain Job, not a
+#     hook, so --wait alone would not).
+helm upgrade pawtograder "$CHART" --version "$TARGET" -n "$NS" -f "$VALUES" \
+  --set maintenance.enabled=true --set maintenance.active=true \
+  --set maintenance.eta="6:15pm ET" --wait --wait-for-jobs --timeout 25m
 
 # 5. Exit, in this order.
 charts/pawtograder/scripts/maintenance.sh up       # restore; page down LAST
@@ -260,7 +271,18 @@ Rules for the window:
 - **`up` skips what the target release removed.** If the release applied in
   the window drops a writer it recorded (a removed deployment channel, say),
   `up` warns that the object no longer exists and carries on restoring the
-  rest. The same goes for a write CronJob the release disabled. Only a definite NotFound counts; any other read error aborts `up`.
+  rest. The same goes for a write CronJob the release disabled.
+- **Don't add writers in the window's upgrade.** A deployment channel that
+  `down` never captured would be created at 0 behind the page, and nothing
+  would bring it up before the page drops. The chart refuses a posture
+  upgrade that adds a channel; add channels in a routine deploy.
+- **Re-suspend hand-suspended CronJobs after the exit upgrade.** `up`
+  restores a CronJob that was already suspended before the window, but the
+  posture-off exit upgrade then drops the `suspend` field the posture
+  rendered, which Kubernetes defaults to false. `up` lists the ones affected;
+  after the exit upgrade, re-run
+  `kubectl -n "$NS" patch cronjob <name> --type=merge -p '{"spec":{"suspend":true}}'`
+  for each. Only a definite NotFound counts; any other read error aborts `up`.
 - **Set the page text as values, not with `down --title/--message/--eta`.**
   Those flags patch the maintenance ConfigMap under kubectl's field manager.
   The target upgrade renders the chart's text over it, which fails
