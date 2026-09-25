@@ -10,6 +10,22 @@ on:
 # Secure baseline: no permissions. Jobs that need them override explicitly.
 permissions: {}
 
+# Cache namespace, and the reason it exists is the restore side rather than
+# the write side. Every cache entry a run can see lives in ONE scope — the ref
+# the run is on, which under pull_request_target is the DEFAULT BRANCH — and
+# that is not configurable. So isolation has to come from the key: a restore
+# whose fallback prefix is `nextjs-Linux-` matches any entry in that scope,
+# including one written by a run that built PR code.
+#
+# Writes from a trusted push land under `trunk`; anything else lands under
+# `pr-<number>`, and no trusted run carries a restore-key prefix that can
+# reach it. PR runs still read `trunk` (that is the speed-up) — the trust
+# flows one way. This holds by key construction rather than by an `if:`, and
+# the literals come from this file, which under pull_request_target is read
+# from the default branch and cannot be edited by the PR.
+env:
+  CACHE_SCOPE: ${{ github.event_name == 'push' && 'trunk' || github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || 'untrusted' }}
+
 # Cancel an in-flight run when a newer one comes in for the same PR (or push
 # ref). Under pull_request_target, github.ref resolves to the repository's
 # DEFAULT branch, so keying on it alone would make every PR collide — not just
@@ -144,9 +160,12 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
+          # Own namespace first, then trunk. A push run's CACHE_SCOPE is
+          # `trunk`, so its list is trunk-only and cannot reach a `pr-*` entry.
           restore-keys: |
-            npm-${{ runner.os }}-node-22-
+            npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-
+            npm-${{ runner.os }}-trunk-node-22-
 
       # Restore-only, with a separate conditional save below, so that no PR
       # run writes a cache a later trusted build would restore — CodeQL
@@ -169,10 +188,14 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .next/cache
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**', '!**/next-env.d.ts') }}
+          key: nextjs-${{ runner.os }}-${{ env.CACHE_SCOPE }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**', '!**/next-env.d.ts') }}
+          # Own namespace first, then trunk; a trusted run's list is
+          # trunk-only. See the CACHE_SCOPE note at the top of this file.
           restore-keys: |
-            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
-            nextjs-${{ runner.os }}-
+            nextjs-${{ runner.os }}-${{ env.CACHE_SCOPE }}-${{ hashFiles('package-lock.json') }}-
+            nextjs-${{ runner.os }}-${{ env.CACHE_SCOPE }}-
+            nextjs-${{ runner.os }}-trunk-${{ hashFiles('package-lock.json') }}-
+            nextjs-${{ runner.os }}-trunk-
 
       - uses: actions/setup-node@v4
         with:
@@ -204,7 +227,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
 
       # No repo secrets go into .env.local — every value below is a literal or
       # is generated on the runner. The suite does not need the real ones:
@@ -721,4 +744,6 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .next/cache
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**', '!**/next-env.d.ts') }}
+          # Byte-identical to e2e-local's restore key. This job only runs on
+          # `push`, so CACHE_SCOPE is `trunk` on both sides.
+          key: nextjs-${{ runner.os }}-${{ env.CACHE_SCOPE }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**', '!**/.next/**', '!**/next-env.d.ts') }}

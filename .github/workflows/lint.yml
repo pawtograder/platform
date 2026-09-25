@@ -43,6 +43,22 @@ on:
   # steps, and `_trust-gate.yml` allow-lists it as trusted-by-ref, so it is a
   # second way to run these jobs that branch protection never sees.
 
+# Cache namespace, and the reason it exists is the restore side rather than
+# the write side. Every cache entry a run can see lives in ONE scope — the ref
+# the run is on, which under pull_request_target is the DEFAULT BRANCH — and
+# that is not configurable. So isolation has to come from the key: a restore
+# whose fallback prefix is `nextjs-Linux-` matches any entry in that scope,
+# including one written by a run that built PR code.
+#
+# Writes from a trusted push land under `trunk`; anything else lands under
+# `pr-<number>`, and no trusted run carries a restore-key prefix that can
+# reach it. PR runs still read `trunk` (that is the speed-up) — the trust
+# flows one way. This holds by key construction rather than by an `if:`, and
+# the literals come from this file, which under pull_request_target is read
+# from the default branch and cannot be edited by the PR.
+env:
+  CACHE_SCOPE: ${{ github.event_name == 'push' && 'trunk' || github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || 'untrusted' }}
+
 concurrency:
   group: lint-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -128,9 +144,12 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
+          # Own namespace first, then trunk. A push run's CACHE_SCOPE is
+          # `trunk`, so its list is trunk-only and cannot reach a `pr-*` entry.
           restore-keys: |
-            npm-${{ runner.os }}-node-22-
+            npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-
+            npm-${{ runner.os }}-trunk-node-22-
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
@@ -161,7 +180,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
       - name: Run linting check
         run: npm run lint
 
@@ -221,9 +240,12 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
+          # Own namespace first, then trunk. A push run's CACHE_SCOPE is
+          # `trunk`, so its list is trunk-only and cannot reach a `pr-*` entry.
           restore-keys: |
-            npm-${{ runner.os }}-node-22-
+            npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-
+            npm-${{ runner.os }}-trunk-node-22-
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
@@ -259,7 +281,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
       # SCOPED to the suites this PR added, deliberately, rather than all of
       # tests/unit. A repo-wide gate is the right end state but I could not
       # verify it would be green: under the locked jest pair 11 of 101 suites
