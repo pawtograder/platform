@@ -503,13 +503,19 @@ spec:
     # pawtograder-preview-ci (cluster tiers), nowhere else.
     - expression: "request.resource.resource != 'serviceaccounts' || variables.previewNs"
       message: "OpenBao may only manage ServiceAccounts in pawtograder-preview-pr-* or pawtograder-preview-ci"
-    # RoleBindings: preview namespaces only, to one of the five namespaced
+    # RoleBindings: PR preview namespaces only, to one of the five namespaced
     # tiers, and ONLY to ServiceAccounts in that same namespace. Checking the
     # roleRef without the subjects bounded WHAT could be bound but not TO
     # WHOM: a stolen Bao token could bind a tier to any identity it liked.
+    #
+    # NOT pawtograder-preview-ci, unlike the ServiceAccount rule above. No
+    # tier ever binds there — the two cluster tiers always use a
+    # ClusterRoleBinding — and a namespaced grant there (preview-deploy is
+    # `*` on core) could mint tokens for the provision/teardown
+    # ServiceAccounts that live in it.
     - expression: >-
         request.resource.resource != 'rolebindings' || (
-          variables.previewNs &&
+          variables.ns.startsWith('pawtograder-preview-pr-') &&
           variables.obj.roleRef.kind == 'ClusterRole' &&
           variables.obj.roleRef.name in ['pawtograder-preview-read', 'pawtograder-preview-publish',
             'pawtograder-preview-deploy', 'pawtograder-preview-provision-secrets', 'pawtograder-preview-teardown-ns'] &&
@@ -559,6 +565,14 @@ BAO_ADDR=https://bao.work.ripley.cloud BAO_TOKEN=... \
 ```
 
 Idempotent. Override `REPO`, `BASE_REFS`, `WORKFLOW`, `CI_NS` by env if needed.
+
+`CI_NS` is not only a script setting. §2 and §2b both name
+`pawtograder-preview-ci` literally: the `matchConditions` username prefix in
+§2, and the ServiceAccount namespace and ClusterRoleBinding subject checks in
+§2b. Overriding `CI_NS` without editing both policies makes every
+provision/teardown mint fail at admission — and editing the §2 prefix wrongly
+disables that policy silently, per the warning under it. Change all three
+together, re-run the dry runs, and repeat the teardown check in §Verify.
 
 ## Verify — before switching CI over
 
