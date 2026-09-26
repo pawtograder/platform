@@ -153,6 +153,90 @@ data:
             usage: "GAUGE"
             description: "superuser_reserved_connections — slots reserved for superusers, shrinking the app-usable ceiling"
 
+    # Realtime per-tenant quotas, read from the source of truth.
+    #
+    # Realtime's own /metrics exports what is CONNECTED
+    # (realtime_connections_connected_cluster) but never what the CAP is, so a
+    # dashboard built only on the exporterless side cannot show utilisation —
+    # and the cap is not a constant: it lives in a table, is seeded once by
+    # SEED_SELF_HOST, and drifts from the chart whenever someone edits the row.
+    #
+    # Sourcing the denominator from realtime.tenants rather than from a chart
+    # value is the whole point. On 2026-09-22 Khoury prod sat at 200/200
+    # connections refusing every new socket while the chart said nothing at
+    # all; a rule that hardcoded the intended ceiling would have drawn a
+    # reassuring 10% utilisation through the entire outage.
+    #
+    # realtime_connect is the single pool that carries every private-channel
+    # authorization transaction and every realtime.messages read/write for the
+    # deployment. Only one node holds it at a time, so these are
+    # whole-deployment numbers, not per-replica ones.
+    #
+    # db_pool_open vs db_pool_in_use: DBConnection opens all db_pool
+    # connections when the pool starts and keeps them open while idle, so the
+    # open count sits at db_pool on a healthy deployment and says nothing about
+    # pressure. db_pool_in_use counts only backends that are not idle (running
+    # a statement or inside a transaction), which is the closest database-side
+    # proxy for checked-out connections. Realtime exports no checkout or
+    # queue-time metric of its own. This is a point sample every cache_seconds,
+    # so it misses sub-minute bursts; the read-authorization latency panel on
+    # the realtime dashboard is the faster queueing signal. Reading `state` for
+    # other roles' backends needs superuser or pg_read_all_stats, which the
+    # exporter has (it connects as supabase_admin).
+    pawtograder_realtime_tenant:
+      query: |
+        SELECT t.external_id,
+               t.max_concurrent_users::float    AS max_concurrent_users,
+               t.max_joins_per_second::float    AS max_joins_per_second,
+               t.max_events_per_second::float   AS max_events_per_second,
+               t.max_bytes_per_second::float    AS max_bytes_per_second,
+               t.max_channels_per_client::float AS max_channels_per_client,
+               COALESCE(MAX((e.settings->>'db_pool')::float), 1) AS db_pool,
+               (SELECT COUNT(*) FROM pg_stat_activity
+                 WHERE application_name = 'realtime_connect')::float AS db_pool_open,
+               (SELECT COUNT(*) FROM pg_stat_activity
+                 WHERE application_name = 'realtime_connect'
+                   AND state <> 'idle')::float AS db_pool_in_use,
+               (CASE WHEN t.suspend THEN 1 ELSE 0 END)::float AS suspended
+          FROM realtime.tenants t
+          LEFT JOIN realtime.extensions e ON e.tenant_external_id = t.external_id
+         GROUP BY t.external_id, t.max_concurrent_users, t.max_joins_per_second,
+                  t.max_events_per_second, t.max_bytes_per_second,
+                  t.max_channels_per_client, t.suspend
+      master: true
+      cache_seconds: 60
+      metrics:
+        - external_id:
+            usage: "LABEL"
+            description: "Realtime tenant external_id — matches the `tenant` label on realtime_* metrics"
+        - max_concurrent_users:
+            usage: "GAUGE"
+            description: "Tenant cap on concurrent websocket connections, cluster-wide. Denominator for realtime_connections_connected_cluster"
+        - max_joins_per_second:
+            usage: "GAUGE"
+            description: "Tenant cap on channel joins per second, cluster-wide"
+        - max_events_per_second:
+            usage: "GAUGE"
+            description: "Tenant cap on channel events per second, cluster-wide"
+        - max_bytes_per_second:
+            usage: "GAUGE"
+            description: "Tenant cap on broadcast throughput in bytes per second, cluster-wide"
+        - max_channels_per_client:
+            usage: "GAUGE"
+            description: "Tenant cap on channels a single client may join"
+        - db_pool:
+            usage: "GAUGE"
+            description: "Configured size of the tenant's realtime_connect Postgrex pool (extensions.settings db_pool; upstream default 1)"
+        - db_pool_open:
+            usage: "GAUGE"
+            description: "realtime_connect backends currently open, idle or not. Normally equals db_pool; below it means the pool is reconnecting"
+        - db_pool_in_use:
+            usage: "GAUGE"
+            description: "realtime_connect backends that are not idle (in a statement or transaction). Saturation against db_pool precedes the tenant-connection kill"
+        - suspended:
+            usage: "GAUGE"
+            description: "1 when the tenant is suspended and refusing all connections"
+
     # =========================================================================
     # Global database state, moved here from the `metrics` edge function
     # (supabase/functions/metrics/index.ts).
