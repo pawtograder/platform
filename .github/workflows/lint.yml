@@ -123,6 +123,34 @@ jobs:
           # fails loudly here, which is the correct answer for something that
           # cannot be merged.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+      # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
+      # after every push, so resolving it at checkout time is not the same as
+      # resolving the head SHA the gate vetted. Two ways that bites — a stale
+      # ref right after `synchronize`, where the required contexts would go
+      # green on a head nobody tested; and a ref that moved between the gate
+      # and here, which would run a commit whose pusher was never checked, on
+      # the self-hosted pool. That is exactly the check-then-use window
+      # _trust-gate.yml claims not to have, so close it here rather than
+      # weaken the claim.
+      #
+      # `git cat-file` rather than HEAD^2: the checkout is shallow, so the
+      # parent objects are absent even though the commit records their hashes.
+      - name: Verify the merge ref contains the vetted head
+        if: github.event.pull_request.number
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged_head=$(git cat-file -p HEAD | awk '/^parent /{print $2}' | sed -n 2p)
+          if [ -z "$merged_head" ]; then
+            echo "::error title=Not a merge commit::refs/pull/${{ github.event.pull_request.number }}/merge resolved to a commit with fewer than two parents, so the PR head it contains cannot be confirmed." >&2
+            exit 1
+          fi
+          if [ "$merged_head" != "$HEAD_SHA" ]; then
+            echo "::error title=Merge ref does not match the vetted head::This checkout contains ${merged_head}, but the trust gate approved ${HEAD_SHA}. The merge ref moved or is stale; re-run this job." >&2
+            exit 1
+          fi
+          echo "merge ref contains the vetted head ${HEAD_SHA}"
       # Restore-only, with a separate conditional save below, so that no PR
       # run writes a cache a later trusted build would restore — CodeQL
       # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
@@ -219,6 +247,34 @@ jobs:
         with:
           # MERGE ref; see the `lint` job's checkout for why.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+      # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
+      # after every push, so resolving it at checkout time is not the same as
+      # resolving the head SHA the gate vetted. Two ways that bites — a stale
+      # ref right after `synchronize`, where the required contexts would go
+      # green on a head nobody tested; and a ref that moved between the gate
+      # and here, which would run a commit whose pusher was never checked, on
+      # the self-hosted pool. That is exactly the check-then-use window
+      # _trust-gate.yml claims not to have, so close it here rather than
+      # weaken the claim.
+      #
+      # `git cat-file` rather than HEAD^2: the checkout is shallow, so the
+      # parent objects are absent even though the commit records their hashes.
+      - name: Verify the merge ref contains the vetted head
+        if: github.event.pull_request.number
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged_head=$(git cat-file -p HEAD | awk '/^parent /{print $2}' | sed -n 2p)
+          if [ -z "$merged_head" ]; then
+            echo "::error title=Not a merge commit::refs/pull/${{ github.event.pull_request.number }}/merge resolved to a commit with fewer than two parents, so the PR head it contains cannot be confirmed." >&2
+            exit 1
+          fi
+          if [ "$merged_head" != "$HEAD_SHA" ]; then
+            echo "::error title=Merge ref does not match the vetted head::This checkout contains ${merged_head}, but the trust gate approved ${HEAD_SHA}. The merge ref moved or is stale; re-run this job." >&2
+            exit 1
+          fi
+          echo "merge ref contains the vetted head ${HEAD_SHA}"
       # Restore-only, with a separate conditional save below, so that no PR
       # run writes a cache a later trusted build would restore — CodeQL
       # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
@@ -330,6 +386,34 @@ jobs:
         with:
           # MERGE ref; see the `lint` job's checkout for why.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+      # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
+      # after every push, so resolving it at checkout time is not the same as
+      # resolving the head SHA the gate vetted. Two ways that bites — a stale
+      # ref right after `synchronize`, where the required contexts would go
+      # green on a head nobody tested; and a ref that moved between the gate
+      # and here, which would run a commit whose pusher was never checked, on
+      # the self-hosted pool. That is exactly the check-then-use window
+      # _trust-gate.yml claims not to have, so close it here rather than
+      # weaken the claim.
+      #
+      # `git cat-file` rather than HEAD^2: the checkout is shallow, so the
+      # parent objects are absent even though the commit records their hashes.
+      - name: Verify the merge ref contains the vetted head
+        if: github.event.pull_request.number
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged_head=$(git cat-file -p HEAD | awk '/^parent /{print $2}' | sed -n 2p)
+          if [ -z "$merged_head" ]; then
+            echo "::error title=Not a merge commit::refs/pull/${{ github.event.pull_request.number }}/merge resolved to a commit with fewer than two parents, so the PR head it contains cannot be confirmed." >&2
+            exit 1
+          fi
+          if [ "$merged_head" != "$HEAD_SHA" ]; then
+            echo "::error title=Merge ref does not match the vetted head::This checkout contains ${merged_head}, but the trust gate approved ${HEAD_SHA}. The merge ref moved or is stale; re-run this job." >&2
+            exit 1
+          fi
+          echo "merge ref contains the vetted head ${HEAD_SHA}"
       - uses: azure/setup-helm@v4
         with:
           version: v3.20.2
@@ -367,6 +451,34 @@ jobs:
         with:
           # MERGE ref; see the `lint` job's checkout for why.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+      # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
+      # after every push, so resolving it at checkout time is not the same as
+      # resolving the head SHA the gate vetted. Two ways that bites — a stale
+      # ref right after `synchronize`, where the required contexts would go
+      # green on a head nobody tested; and a ref that moved between the gate
+      # and here, which would run a commit whose pusher was never checked, on
+      # the self-hosted pool. That is exactly the check-then-use window
+      # _trust-gate.yml claims not to have, so close it here rather than
+      # weaken the claim.
+      #
+      # `git cat-file` rather than HEAD^2: the checkout is shallow, so the
+      # parent objects are absent even though the commit records their hashes.
+      - name: Verify the merge ref contains the vetted head
+        if: github.event.pull_request.number
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged_head=$(git cat-file -p HEAD | awk '/^parent /{print $2}' | sed -n 2p)
+          if [ -z "$merged_head" ]; then
+            echo "::error title=Not a merge commit::refs/pull/${{ github.event.pull_request.number }}/merge resolved to a commit with fewer than two parents, so the PR head it contains cannot be confirmed." >&2
+            exit 1
+          fi
+          if [ "$merged_head" != "$HEAD_SHA" ]; then
+            echo "::error title=Merge ref does not match the vetted head::This checkout contains ${merged_head}, but the trust gate approved ${HEAD_SHA}. The merge ref moved or is stale; re-run this job." >&2
+            exit 1
+          fi
+          echo "merge ref contains the vetted head ${HEAD_SHA}"
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

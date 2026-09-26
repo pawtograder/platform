@@ -33,6 +33,10 @@ TOKEN_MAX_TTL="${TOKEN_MAX_TTL:-60m}"
 CLI=bao
 command -v bao >/dev/null 2>&1 || CLI=vault
 command -v "$CLI" >/dev/null 2>&1 || { echo "need the bao (or vault) CLI" >&2; exit 1; }
+# Used to inspect an existing mount's config before deciding whether it is
+# safe to overwrite. Checked up front so a missing jq is not discovered
+# halfway through, with some mounts already written.
+command -v jq >/dev/null 2>&1 || { echo "need jq (used to inspect existing mount config)" >&2; exit 1; }
 : "${BAO_ADDR:?set BAO_ADDR}"
 : "${BAO_TOKEN:?set BAO_TOKEN}"
 export BAO_ADDR BAO_TOKEN VAULT_ADDR="${BAO_ADDR}" VAULT_TOKEN="${BAO_TOKEN}"
@@ -74,23 +78,58 @@ echo "==> enable jwt auth"
 # `auth/jwt/config` unconditionally would repoint another consumer's JWT mount
 # at our issuer and invalidate every role on it. Configure the mount only when
 # we created it, or when it already points where we would point it anyway.
-if enable_mount auth jwt; then
+configure_jwt() {
   $CLI write auth/jwt/config \
     oidc_discovery_url="$GH_ISSUER" \
     bound_issuer="$GH_ISSUER"
+}
+
+# Read a mount's config, distinguishing three outcomes that must not be
+# conflated: configured / genuinely absent / COULD NOT READ. The last one is
+# reachable with a legitimate setup token — update without read is a normal
+# policy — and the previous `2>/dev/null || true` turned it into "absent",
+# which then rewrote a mount this script had just detected was not ours.
+# Fail closed: an unreadable mount aborts.
+read_mount_config() { # $1 = path, prints JSON on stdout
+  local path="$1" out
+  if out=$($CLI read -format=json "$path" 2>&1); then
+    printf '%s' "$out"
+    return 0
+  fi
+  if printf '%s' "$out" | grep -qiE 'no value found|No value found at'; then
+    printf '{"data":{}}'
+    return 0
+  fi
+  echo "ERROR: could not read ${path}: ${out}" >&2
+  echo "       Refusing to guess whether this mount is configured. Grant the" >&2
+  echo "       setup token read on ${path}, or give this setup its own mount." >&2
+  exit 1
+}
+
+if enable_mount auth jwt; then
+  configure_jwt
 else
-  existing_issuer=$($CLI read -field=bound_issuer auth/jwt/config 2>/dev/null || true)
-  if [ -z "$existing_issuer" ]; then
+  jwt_cfg=$(read_mount_config auth/jwt/config)
+  # bound_issuer is OPTIONAL in OpenBao's JWT auth config, so its absence is
+  # not evidence the mount is free: another consumer may have configured
+  # only oidc_discovery_url, jwks_url or jwt_validation_pubkeys. Treat ANY
+  # issuer or key source as "this belongs to someone".
+  existing_issuer=$(printf '%s' "$jwt_cfg" | jq -r '.data.bound_issuer // empty')
+  existing_sources=$(printf '%s' "$jwt_cfg" | jq -r '
+    [ .data.oidc_discovery_url,
+      .data.jwks_url,
+      ((.data.jwt_validation_pubkeys // []) | join(",")) ]
+    | map(select(. != null and . != "")) | join(" ")')
+  if [ -z "$existing_issuer" ] && [ -z "$existing_sources" ]; then
     echo "    (jwt/ exists but is unconfigured — configuring it for GitHub Actions)"
-    $CLI write auth/jwt/config \
-      oidc_discovery_url="$GH_ISSUER" \
-      bound_issuer="$GH_ISSUER"
-  elif [ "$existing_issuer" = "$GH_ISSUER" ]; then
+    configure_jwt
+  elif [ "$existing_issuer" = "$GH_ISSUER" ] || [ "$existing_sources" = "$GH_ISSUER" ]; then
     echo "    (jwt/ already points at GitHub Actions — leaving its config alone)"
   else
     cat >&2 <<ERR
-ERROR: auth/jwt/ on this OpenBao is configured for a DIFFERENT issuer:
-         ${existing_issuer}
+ERROR: auth/jwt/ on this OpenBao is already configured by another consumer:
+         bound_issuer: ${existing_issuer:-(none)}
+         key sources:  ${existing_sources:-(none)}
        Writing our config there would repoint that mount and invalidate every
        role on it. Give this setup its own mount instead:
          ${CLI} auth enable -path=jwt-preview jwt
@@ -113,15 +152,24 @@ echo "==> enable kubernetes secrets engine"
 # outside the target cluster.
 if enable_mount secrets kubernetes; then
   $CLI write -f kubernetes/config
-elif $CLI read kubernetes/config >/dev/null 2>&1; then
-  echo "    (kubernetes/ already configured — leaving its config alone)"
-  echo "    NOTE: if that mount belongs to another app, give this setup its own"
-  echo "          (${CLI} secrets enable -path=kubernetes-preview kubernetes) and"
-  echo "          update the 'kubernetes/creds/' paths in action.yml and the"
-  echo "          policies below to match."
 else
-  echo "    (kubernetes/ exists but is unconfigured — configuring it)"
-  $CLI write -f kubernetes/config
+  # Same three-way distinction as the jwt mount: `$CLI read ... 2>&1` with the
+  # result discarded treated a DENIED read as "unconfigured" and then ran
+  # `write -f`, which takes no arguments and so resets kubernetes_host,
+  # kubernetes_ca_cert and service_account_jwt to the in-cluster defaults —
+  # blanking another app's engine target.
+  k8s_cfg=$(read_mount_config kubernetes/config)
+  k8s_host=$(printf '%s' "$k8s_cfg" | jq -r '.data.kubernetes_host // empty')
+  if [ -z "$k8s_host" ]; then
+    echo "    (kubernetes/ exists but is unconfigured — configuring it)"
+    $CLI write -f kubernetes/config
+  else
+    echo "    (kubernetes/ already configured for ${k8s_host} — leaving its config alone)"
+    echo "    NOTE: if that mount belongs to another app, give this setup its own"
+    echo "          (${CLI} secrets enable -path=kubernetes-preview kubernetes) and"
+    echo "          update the 'kubernetes/creds/' paths in action.yml and the"
+    echo "          policies below to match."
+  fi
 fi
 
 # ---------------------------------------------------------------------------

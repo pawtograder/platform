@@ -438,6 +438,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Same-repo PRs are exempt from the label, exactly as in the gate's
+          # approve step; the re-check below must use the same rule.
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail
           # Re-check that the PR is still open, immediately before the step
@@ -466,6 +469,28 @@ jobs:
               exit 1
             fi
             [ -n "$state" ] || echo "::warning title=PR-state re-check inconclusive::could not read the state of PR #${PR_NUMBER}; continuing"
+          fi
+
+          # ...and that the preview is still WANTED. Closing is not the only
+          # teardown trigger — removing the label is one too, and teardown now
+          # has its own concurrency group, so this sequence is reachable:
+          # label added, gate approves, label removed seconds later, the
+          # destroy job finds nothing and exits, and this step then creates
+          # the namespace for a PR that no longer carries the label. Nothing
+          # would ever tear that one down: on close the destroy gate sees no
+          # label, a fork head, and no `unlabeled` action.
+          #
+          # Fork PRs only. A same-repo PR never needed the label, so its
+          # absence says nothing — and its teardown is covered by the
+          # same-repo disjunct on the destroy job.
+          if [ -n "${PR_NUMBER:-}" ] && [ -n "${HEAD_REPO:-}" ] && [ "$HEAD_REPO" != "$REPO" ] \
+             && command -v gh >/dev/null 2>&1; then
+            if ! labels=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null); then
+              echo "::warning title=Label re-check inconclusive::could not list labels on PR #${PR_NUMBER}; continuing"
+            elif ! grep -Fxq -- "$PREVIEW_LABEL" <<<"$labels"; then
+              echo "::error title=Preview no longer requested::the '${PREVIEW_LABEL}' label was removed from PR #${PR_NUMBER} while this deploy was in flight; refusing to create ${NS}, which no later event would tear down." >&2
+              exit 1
+            fi
           fi
           # Wait out a namespace that is still going away. `destroy` deletes
           # with --wait=false (holding a runner open for a PVC finalizer is
@@ -713,12 +738,19 @@ jobs:
             export PATH="$bao_bin:$PATH"
             CLI=bao
           fi
+          # vault reads VAULT_ADDR/VAULT_TOKEN; bao reads BAO_ADDR/BAO_TOKEN.
+          # Selecting the vault CLI without this left the endpoint unset, so
+          # the AppRole login below silently targeted vault's default
+          # https://127.0.0.1:8200 — publish would fail and the teardown's KV
+          # delete (continue-on-error) would leave live credentials behind.
+          # Same mapping every script in this repo already uses.
+          export VAULT_ADDR="$BAO_ADDR"
           BAO_TOKEN=$("$CLI" write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id="$BAO_SECRET_ID")
           # The logs of this job are public and this is a credential. The
           # composite action masks the equivalent value; these two inline
           # blocks did not, and the token is exported into a child script.
           echo "::add-mask::$BAO_TOKEN"
-          export BAO_TOKEN
+          export BAO_TOKEN VAULT_TOKEN="$BAO_TOKEN"
           ./scripts/publish-preview-e2e-to-bao.sh "$PREVIEW_ID"
 
   # --------------------------------------------------------------------------
@@ -1266,6 +1298,69 @@ jobs:
             The preview tears down automatically when this PR closes.
 
   # --------------------------------------------------------------------------
+  # teardown-check — was a preview ever ASKED FOR on this PR?
+  #
+  # The destroy job is gated on payload-derived evidence so that a stranger
+  # cannot fire a secret-bearing teardown by opening and closing a PR. The
+  # label in the payload was that evidence, and it has a hole: removing the
+  # label is itself a teardown trigger, so if THAT run fails the label is
+  # already gone, and a later `closed` event satisfies none of the disjuncts —
+  # not `unlabeled`, no label, external head repo. Cleanup could never be
+  # retried, which is the leak the gate exists to prevent, reached from the
+  # other side.
+  #
+  # The timeline answers the durable question: was PREVIEW_LABEL ever applied?
+  # That fact does not disappear when the label is removed. Only accounts with
+  # triage or better can label, so it is as maintainer-controlled as the
+  # payload check it backs up.
+  #
+  # ubuntu-latest, no checkout, no repo secrets beyond GITHUB_TOKEN, two
+  # read-only scopes: this must stay cheap enough to run on every close,
+  # including from strangers.
+  # --------------------------------------------------------------------------
+  teardown-check:
+    needs: [meta]
+    if: needs.meta.outputs.mode == 'destroy'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+      pull-requests: read
+    outputs:
+      had_preview: ${{ steps.check.outputs.had_preview }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            # workflow_dispatch: the dispatch IS the intent, and it already
+            # required write access.
+            echo "had_preview=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Fail OPEN here, unlike the trust gate. The two failures are not
+          # symmetric: a wrongly-skipped teardown strands a namespace, a PVC
+          # and a live service-role key with nothing to retry it, while a
+          # wrongly-attempted one runs a job that finds no namespace and
+          # exits. An attacker cannot choose this branch anyway — they would
+          # have to make GitHub's own API fail.
+          if ! labels=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/timeline" --paginate --jq '.[] | select(.event == "labeled") | .label.name' 2>/dev/null); then
+            echo "::warning title=Timeline unreadable::could not determine whether PR #${PR_NUMBER} ever had a preview; attempting teardown anyway"
+            echo "had_preview=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -Fxq -- "$PREVIEW_LABEL" <<<"$labels"; then
+            echo "had_preview=true" >> "$GITHUB_OUTPUT"
+            echo "PR #${PR_NUMBER} carried the '${PREVIEW_LABEL}' label at some point — teardown will run"
+          else
+            echo "had_preview=false" >> "$GITHUB_OUTPUT"
+            echo "PR #${PR_NUMBER} never had the '${PREVIEW_LABEL}' label — nothing was ever deployed for it"
+          fi
+
+  # --------------------------------------------------------------------------
   # destroy — helm uninstall + namespace delete on PR close (or manual)
   # --------------------------------------------------------------------------
   destroy:
@@ -1281,7 +1376,7 @@ jobs:
     # job reads no gate output) but WOULD skip teardown whenever the gate job
     # fails for an infrastructure reason, since an `if:` with no status
     # function still carries an implicit success() over `needs`.
-    needs: [meta]
+    needs: [meta, teardown-check]
     # Deliberately NOT gated on TRUST, unlike every deploy-path job above.
     # Its checkout is the base ref and it runs no PR-supplied code — just
     # pinned setup actions and helm/kubectl/bao against a namespace whose name
@@ -1314,13 +1409,22 @@ jobs:
     #                               the label (see _trust-gate.yml's approve
     #                               step), so the label is not evidence for it;
     #                               pushing the branch already required write
+    #   * the PR was EVER labelled  — from the timeline, so a teardown that
+    #                               failed after the label was removed can
+    #                               still be retried by the close event
+    #
+    # `!cancelled()` and `!= 'false'` rather than `== 'true'`: a
+    # teardown-check that failed or was skipped must not be able to CANCEL a
+    # teardown, only an explicit "this PR never had one" may do that. Cleanup
+    # must not be revocable — including by the job that decides it.
     if: >-
-      needs.meta.outputs.mode == 'destroy' && (
+      ${{ !cancelled() && needs.meta.outputs.mode == 'destroy' && (
         github.event_name != 'pull_request_target' ||
         github.event.action == 'unlabeled' ||
         contains(github.event.pull_request.labels.*.name, 'preview') ||
-        github.event.pull_request.head.repo.full_name == github.repository
-      )
+        github.event.pull_request.head.repo.full_name == github.repository ||
+        needs.teardown-check.outputs.had_preview != 'false'
+      ) }}
     runs-on: pawtograder-ci
     permissions:
       # pull-requests: write for the teardown comment.
@@ -1476,6 +1580,7 @@ jobs:
       # cleanup ahead of it went wrong. The job still reports the earlier
       # failure; it just does not leak a namespace on the way out.
       - name: Delete the namespace
+        id: delete
         if: ${{ !cancelled() && steps.ns.outputs.exists == 'true' }}
         env:
           NS: ${{ needs.meta.outputs.namespace }}
@@ -1538,12 +1643,19 @@ jobs:
             export PATH="$bao_bin:$PATH"
             CLI=bao
           fi
+          # vault reads VAULT_ADDR/VAULT_TOKEN; bao reads BAO_ADDR/BAO_TOKEN.
+          # Selecting the vault CLI without this left the endpoint unset, so
+          # the AppRole login below silently targeted vault's default
+          # https://127.0.0.1:8200 — publish would fail and the teardown's KV
+          # delete (continue-on-error) would leave live credentials behind.
+          # Same mapping every script in this repo already uses.
+          export VAULT_ADDR="$BAO_ADDR"
           BAO_TOKEN=$("$CLI" write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id="$BAO_SECRET_ID")
           # The logs of this job are public and this is a credential. The
           # composite action masks the equivalent value; these two inline
           # blocks did not, and the token is exported into a child script.
           echo "::add-mask::$BAO_TOKEN"
-          export BAO_TOKEN
+          export BAO_TOKEN VAULT_TOKEN="$BAO_TOKEN"
           # `|| echo "no e2e bundle to remove"` swallowed every failure mode
           # equally: a 403, an expired AppRole login and a genuine absence all
           # printed the same reassuring line. The bundle holds a live
@@ -1582,5 +1694,14 @@ jobs:
           # and without this the close would post a teardown notice for a
           # namespace that never existed.
           only_update: true
-          message: |
-            🧹 **Preview torn down** — namespace `${{ needs.meta.outputs.namespace }}` deleted.
+          # The message has to track what actually happened. With
+          # `!cancelled()` this step also runs when the probe or the delete
+          # FAILED, and it used to post "torn down — namespace deleted"
+          # regardless: the run went red while the PR comment told the author
+          # their namespace and PVCs were gone. Three outcomes, three texts.
+          message: >-
+            ${{ (steps.ns.outcome == 'success' && steps.ns.outputs.exists != 'true')
+                && format('🧹 **No preview to tear down** — `{0}` was already absent.', needs.meta.outputs.namespace)
+            || (steps.ns.outcome == 'success' && steps.delete.outcome == 'success')
+                && format('🧹 **Preview torn down** — namespace `{0}` deleted.', needs.meta.outputs.namespace)
+            || format('⚠️ **Preview teardown did not complete** — namespace `{0}` may still be running, with its PVCs and its mirrored credentials. See the workflow run for the reason.', needs.meta.outputs.namespace) }}

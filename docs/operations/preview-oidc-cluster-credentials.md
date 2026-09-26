@@ -213,6 +213,37 @@ roleRef:
   name: openbao-kubernetes-secrets-engine
 ```
 
+> **This is the most powerful identity in the design — treat it accordingly.**
+> The engine needs `create`/`update` on `roles` and `clusterroles` plus `bind`
+> and `escalate`, because it generates a Role per credential and attaches it.
+> Kubernetes documents `bind` and `escalate` as deliberate bypasses of its
+> privilege-escalation protections, so an actor holding this ServiceAccount's
+> token can mint arbitrary cluster permissions — production namespaces
+> included. The namespace-name admission policy in §2 does **not** constrain
+> RBAC objects; it only bounds Namespace names.
+>
+> Nothing else in this runbook reduces that, so decide about it explicitly:
+>
+> - **Preferred: isolate the identity.** Run the preview previews on their own
+>   cluster, or give OpenBao a second ServiceAccount used only by this engine,
+>   so a compromise does not reach production workloads.
+> - **If it must share a production cluster**, add an admission policy that
+>   constrains the RBAC objects this SA may create — for example, requiring
+>   generated `roles`/`rolebindings` to live in `pawtograder-preview-pr-*` and
+>   refusing `clusterroles`/`clusterrolebindings` from this principal
+>   altogether. The `matchConditions` form in §2 is the pattern to copy;
+>   `request.userInfo.username` is the same discriminator.
+> - **At minimum**, alert on `create`/`update` of `clusterroles` and
+>   `clusterrolebindings` by this ServiceAccount in the API server audit log.
+>   The engine's legitimate traffic is namespaced Roles, so cluster-scoped
+>   writes from it are worth a page.
+>
+> The narrower alternative — dropping `clusterroles`/`clusterrolebindings` from
+> the list — costs you `preview-provision` and `preview-teardown`, which are
+> `kubernetes_role_type: ClusterRole` by necessity (creating and deleting a
+> Namespace is cluster-scoped). You would have to provision those two
+> namespaces by another route.
+
 This makes OpenBao able to grant anything it can create a ClusterRole for — it
 is, by construction, a privileged component. That is the trade for not
 reconfiguring the API server. Treat Bao's own access as the thing to guard.
@@ -253,6 +284,21 @@ spec:
         # bound at all.
         operations: ["CREATE", "UPDATE", "DELETE"]
         resources: ["namespaces"]
+  # Scoped to the principals this policy is about, and this is the part you
+  # must get right BEFORE applying: confirm the username (below) and edit the
+  # prefix if your Bao mount path differs. Without it the policy denies
+  # namespace CREATE/UPDATE/DELETE cluster-wide for every principal — see the
+  # warning under the block.
+  #
+  # matchConditions lives HERE, on ValidatingAdmissionPolicySpec.
+  # ValidatingAdmissionPolicyBindingSpec has no such field — it takes
+  # policyName, paramRef, matchResources and validationActions — so putting it
+  # on the binding is rejected as an unknown field, and a client that prunes
+  # instead of rejecting leaves you with the unscoped binding this is meant to
+  # avoid.
+  matchConditions:
+    - name: only-preview-ci-sas
+      expression: "request.userInfo.username.startsWith('system:serviceaccount:pawtograder-preview-ci:')"
   validations:
     # `object` is null on DELETE — the resource being removed is `oldObject`.
     # Testing `object` alone errors on every delete, and with failurePolicy:
@@ -274,15 +320,10 @@ metadata:
   name: preview-namespace-names
 spec:
   policyName: preview-namespace-names
+  # No matchResources: an omitted selector means "everything the policy's
+  # matchConstraints already matched", which is what you want here. The
+  # principal restriction is on the policy above, not on this object.
   validationActions: ["Deny"]
-  # Scoped to the principals this policy is about, and this is the part you
-  # must get right BEFORE applying: confirm the username (below) and edit the
-  # prefix if your Bao mount path differs. Without a matchConditions this
-  # binding denies namespace CREATE/UPDATE/DELETE cluster-wide for every
-  # principal — see the warning under the block.
-  matchConditions:
-    - name: only-preview-ci-sas
-      expression: "request.userInfo.username.startsWith('system:serviceaccount:pawtograder-preview-ci:')"
 ```
 
 Confirm that username before applying — `kubectl get sa -n
@@ -293,12 +334,17 @@ ways to get this wrong fail in opposite directions:
 - **A `matchConditions` that matches nothing** silently disables the policy.
   The namespace-name bound is then not enforced at all, and nothing says so.
   Verify with the `can-i` checks in §Verify, not by the absence of errors.
-- **No `matchConditions` at all** — for instance `matchResources:
-{namespaceSelector: {}}`, the empty selector, which matches EVERY namespace
-  rather than none — denies namespace CREATE, UPDATE and DELETE cluster-wide
-  for every principal, including you, Rancher, and any controller that creates
-  a namespace. `failurePolicy: Fail` plus `validationActions: ["Deny"]` makes
-  that immediate and total. Do not apply the binding in that form to find out.
+- **No `matchConditions` at all** — for instance a binding with
+  `matchResources: {namespaceSelector: {}}`, the empty selector, which matches
+  EVERY namespace rather than none — denies namespace CREATE, UPDATE and
+  DELETE cluster-wide for every principal, including you, Rancher, and any
+  controller that creates a namespace. `failurePolicy: Fail` plus
+  `validationActions: ["Deny"]` makes that immediate and total. Do not apply it
+  in that form to find out.
+- **`matchConditions` on the binding instead of the policy** fails the same
+  way: the field does not exist on `ValidatingAdmissionPolicyBindingSpec`, so
+  you get either a validation error or — with a pruning client — a silently
+  unscoped binding, which is the previous bullet.
 
 Dry-run it first; a CEL compile error in either expression surfaces here rather
 than at the first teardown:
@@ -322,10 +368,28 @@ A credential that turns out to be equivalent to the old one is worse than none,
 because CI will report success either way.
 
 ```bash
-# 1. Does the JWT role reject a token from the wrong workflow/ref?
-#    Grab a real OIDC token from a scratch workflow run, then:
-bao write auth/jwt/login role=preview-read jwt="$JWT"      # expect success
-bao write auth/jwt/login role=preview-deploy jwt="$WRONG"  # expect permission denied
+# 1. Does the JWT role accept the right token and reject the wrong one?
+#
+#    The POSITIVE test needs a token minted BY preview.yml: the role binds
+#    job_workflow_ref to `.../preview.yml@<allowed base ref>` AND
+#    environment=preview-build, and a scratch workflow's token has neither.
+#    Testing with a scratch token reports "permission denied" for a correctly
+#    configured role, which reads as a broken cutover. Get one by temporarily
+#    echoing the token's CLAIMS (never the token) from a preview.yml job
+#    running in the preview-build environment.
+#
+#    Before either test, confirm the claim this binding rests on is present.
+#    GitHub documents job_workflow_ref under reusable workflows; its own
+#    example token for a direct job carries it too, and these jobs call a
+#    composite action rather than a reusable workflow. If it is ABSENT for
+#    your runs, bind `workflow_ref` in setup-openbao-preview-oidc.sh instead
+#    (same value for a direct job) rather than discovering it as five failing
+#    logins at cutover:
+python3 -c 'import base64,json,sys;p=sys.argv[1].split(".")[1];print(sorted(json.loads(base64.urlsafe_b64decode(p+"=="*(-len(p)%4)))))' "$PREVIEW_JWT"
+
+bao write auth/jwt/login role=preview-read jwt="$PREVIEW_JWT"   # expect success
+bao write auth/jwt/login role=preview-deploy jwt="$PREVIEW_JWT" # expect denied
+                                                                # (wrong environment claim)
 
 # 2. Is the read role actually read-only?
 SA=$(bao write -field=service_account_token \
