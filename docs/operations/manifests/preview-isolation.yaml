@@ -40,12 +40,18 @@ spec:
       expression: "'.preview.pawtograder.net'"
     - name: annotations
       expression: "object.metadata.?annotations.orValue({})"
-    # nginx annotations the chart uses. Everything else under that prefix is
-    # refused: server-alias adds hostnames, auth-url makes nginx call an
-    # arbitrary URL, and others rewrite upstream routing.
-    - name: allowedNginxAnnotations
+    # Every annotation must be on this list, not just nginx ones: other
+    # controllers act on Ingress annotations too. cert-manager's ingress-shim
+    # would issue a certificate from a DNS-01 ClusterIssuer for the whole
+    # pawtograder.net zone; within nginx's own prefix, server-alias adds
+    # hostnames and auth-url makes nginx call an arbitrary URL. The list is the
+    # annotations the chart sets, plus helm and kubectl bookkeeping.
+    - name: allowedAnnotations
       expression: >-
-        ['nginx.ingress.kubernetes.io/proxy-body-size',
+        ['meta.helm.sh/release-name',
+         'meta.helm.sh/release-namespace',
+         'kubectl.kubernetes.io/last-applied-configuration',
+         'nginx.ingress.kubernetes.io/proxy-body-size',
          'nginx.ingress.kubernetes.io/proxy-buffer-size',
          'nginx.ingress.kubernetes.io/proxy-buffers-number',
          'nginx.ingress.kubernetes.io/proxy-read-timeout',
@@ -89,13 +95,10 @@ spec:
           r.?http.?paths.orValue([]).all(p, has(p.backend.service)))
       message: "preview Ingress backends must be Services in the same namespace"
     - expression: >-
-        variables.annotations.all(k,
-          !k.startsWith('nginx.ingress.kubernetes.io/') ||
-          k in variables.allowedNginxAnnotations)
+        variables.annotations.all(k, k in variables.allowedAnnotations)
       messageExpression: >-
-        'nginx annotation not allowed on a preview Ingress: ' +
-        variables.annotations.filter(k, k.startsWith('nginx.ingress.kubernetes.io/') &&
-          !(k in variables.allowedNginxAnnotations)).join(', ')
+        'annotation not allowed on a preview Ingress: ' +
+        variables.annotations.filter(k, !(k in variables.allowedAnnotations)).join(', ')
     # ingress-nginx accepts <namespace>/<name> here, which would read another
     # namespace's Secret.
     - expression: >-
@@ -197,6 +200,245 @@ metadata:
   name: preview-endpoints-managed
 spec:
   policyName: preview-endpoints-managed
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# External Secrets: only chart-shaped ExternalSecrets against openbao-preview.
+#
+# The deploy role holds external-secrets.io/*. The `openbao` store refuses
+# preview namespaces, but a namespaced SecretStore is its own store: with the
+# Webhook provider, the shared ESO controller (outside the preview's egress
+# policy) fetches any URL and writes the response into a preview Secret. So:
+# no SecretStore, PushSecret or any other ESO kind, and an ExternalSecret may
+# name only ClusterSecretStore/openbao-preview, with no per-entry sourceRef
+# (which can point at another store or a generator).
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-externalsecret-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["external-secrets.io", "generators.external-secrets.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["*"]
+  validations:
+    - expression: "request.resource.resource == 'externalsecrets'"
+      messageExpression: >-
+        'preview namespaces may not create ' + request.resource.resource +
+        '; only ExternalSecrets against ClusterSecretStore/openbao-preview'
+    - expression: >-
+        request.resource.resource != 'externalsecrets' || (
+          object.spec.?secretStoreRef.?kind.orValue('') == 'ClusterSecretStore' &&
+          object.spec.?secretStoreRef.?name.orValue('') == 'openbao-preview')
+      message: "preview ExternalSecrets must use secretStoreRef ClusterSecretStore/openbao-preview"
+    - expression: >-
+        request.resource.resource != 'externalsecrets' || (
+          object.spec.?data.orValue([]).all(d, !has(d.sourceRef)) &&
+          object.spec.?dataFrom.orValue([]).all(d, !has(d.sourceRef)))
+      message: "preview ExternalSecrets may not set sourceRef (other stores or generators)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-externalsecret-surface
+spec:
+  policyName: preview-externalsecret-surface
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# Secrets and ConfigMaps: no keys that cluster-wide controllers act on.
+#
+# - Reflector (reflector.v1.k8s.emberstack.com/*) copies an annotated Secret or
+#   ConfigMap into other namespaces (reflection-auto-namespaces) or pulls one
+#   in (reflects). A preview could plant data in pawtograder-staging, e.g. an
+#   optional integration Secret staging reads on its next rollout. Only
+#   Reflector itself may write objects carrying its annotations; that is how
+#   the preview wildcard certificate arrives.
+# - The Grafana sidecars load any ConfigMap or Secret labelled
+#   grafana_dashboard (from ALL namespaces), grafana_datasource or
+#   grafana_alert. Dashboards are keyed by filename, so a preview replaces the
+#   shared ones. preview.yml renders none.
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-controller-keys
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["secrets", "configmaps"]
+  validations:
+    - expression: >-
+        request.userInfo.username == 'system:serviceaccount:reflector:reflector' ||
+        object.metadata.?annotations.orValue({}).all(k,
+          !k.startsWith('reflector.v1.k8s.emberstack.com/'))
+      message: "only Reflector may write reflector.v1.k8s.emberstack.com/* annotations in a preview namespace"
+    - expression: >-
+        object.metadata.?labels.orValue({}).all(k,
+          !(k in ['grafana_dashboard', 'grafana_datasource', 'grafana_alert']))
+      message: "Grafana sidecar discovery labels are not allowed in a preview namespace"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-controller-keys
+spec:
+  policyName: preview-controller-keys
+  validationActions: [Deny]
+---
+# Pods: no OpenTelemetry operator injection. Its annotations accept
+# <namespace>/<name> references, which would copy another namespace's
+# Instrumentation (endpoints, headers, env) into a preview pod.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-pod-injection
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  validations:
+    - expression: >-
+        object.metadata.?annotations.orValue({}).all(k,
+          !k.startsWith('instrumentation.opentelemetry.io/') &&
+          !k.startsWith('sidecar.opentelemetry.io/'))
+      message: "OpenTelemetry injection annotations are not allowed in a preview namespace"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-pod-injection
+spec:
+  policyName: preview-pod-injection
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# Resource ceilings: a ResourceQuota and LimitRange in every preview
+# namespace, generated and kept in sync by Kyverno (synchronize: true puts
+# them back if changed or deleted), and admission that lets nobody but
+# Kyverno and the namespace controller touch them. The deploy role holds
+# core/* and RBAC in the namespace, so without the admission policy the chart
+# could delete the quota, or grant that right to a ServiceAccount elsewhere.
+#
+# Sized from a measured preview (about 5 CPU / 15Gi requested,
+# 13 CPU / 37Gi limits, 11-15 pods including hook Jobs, one 10Gi PVC), with
+# room for a rolling deploy that surges edge-functions (2 CPU / 6Gi
+# Guaranteed) while hook Jobs run.
+# ---------------------------------------------------------------------------
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: preview-resource-ceilings
+spec:
+  generateExisting: true
+  rules:
+    - name: quota
+      match:
+        any:
+          - resources:
+              kinds: ["Namespace"]
+              selector:
+                matchLabels:
+                  pawtograder.net/preview: "true"
+      generate:
+        apiVersion: v1
+        kind: ResourceQuota
+        name: preview-quota
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            hard:
+              requests.cpu: "16"
+              requests.memory: 48Gi
+              limits.cpu: "40"
+              limits.memory: 80Gi
+              limits.ephemeral-storage: 100Gi
+              pods: "40"
+              count/jobs.batch: "20"
+              persistentvolumeclaims: "4"
+              requests.storage: 60Gi
+              services: "30"
+              services.loadbalancers: "0"
+              services.nodeports: "0"
+              configmaps: "60"
+              secrets: "60"
+              count/ingresses.networking.k8s.io: "5"
+    - name: limits
+      match:
+        any:
+          - resources:
+              kinds: ["Namespace"]
+              selector:
+                matchLabels:
+                  pawtograder.net/preview: "true"
+      generate:
+        apiVersion: v1
+        kind: LimitRange
+        name: preview-limits
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            limits:
+              - type: Container
+                default:
+                  cpu: "2"
+                  memory: 2Gi
+                  ephemeral-storage: 8Gi
+                defaultRequest:
+                  cpu: 50m
+                  memory: 64Mi
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-ceilings-managed
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["resourcequotas", "limitranges"]
+  validations:
+    - expression: >-
+        request.userInfo.username in [
+          'system:serviceaccount:kyverno:kyverno-background-controller',
+          'system:serviceaccount:kube-system:namespace-controller']
+      message: "preview ResourceQuotas and LimitRanges are managed by Kyverno"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-ceilings-managed
+spec:
+  policyName: preview-ceilings-managed
   validationActions: [Deny]
 ---
 # ---------------------------------------------------------------------------

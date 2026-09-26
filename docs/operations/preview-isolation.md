@@ -36,9 +36,12 @@ bound to preview namespaces:
 
 - `preview-ingress-surface`: every host must be
   `pr-<id>[-name].preview.pawtograder.net` for the namespace's own id, with no
-  hostless rules and no `defaultBackend`. The class must be `nginx`. Only the
-  nginx annotations the chart uses are allowed, and `auth-secret` may not name
-  another namespace. ingress-nginx merges every Ingress for a host into one
+  hostless rules and no `defaultBackend`. The class must be `nginx`. Every
+  annotation must be on an allow-list (the nginx annotations the chart uses,
+  plus helm and kubectl bookkeeping), because other controllers read Ingress
+  annotations too: cert-manager's ingress-shim would issue a certificate from
+  the DNS-01 issuer for the whole `pawtograder.net` zone. `auth-secret` may not
+  name another namespace. ingress-nginx merges every Ingress for a host into one
   server block, so without this a preview could publish paths on any hostname
   on the cluster.
 - `preview-service-surface`: Services must be ClusterIP with a selector and no
@@ -50,6 +53,37 @@ bound to preview namespaces:
   grant `endpoints` to a ServiceAccount anywhere on the cluster. There is no
   `system:masters` exemption, because in `PREVIEW_CLUSTER_AUTH=static` mode the
   chart is applied with a cluster-admin kubeconfig.
+
+## Other cluster-wide controllers
+
+Several controllers act on objects in any namespace. The deploy role can create
+those objects, so each gets an admission policy:
+
+- `preview-externalsecret-surface`: only ExternalSecrets, and only against
+  `ClusterSecretStore/openbao-preview` with no per-entry `sourceRef`. A
+  namespaced SecretStore with the Webhook provider would have the shared ESO
+  controller fetch any URL and store the response in a preview Secret.
+  SecretStores, PushSecrets and generators are refused.
+- `preview-controller-keys`: on Secrets and ConfigMaps, only Reflector itself
+  may write `reflector.v1.k8s.emberstack.com/*` annotations (otherwise a
+  preview could push data into `pawtograder-staging`), and the Grafana sidecar
+  labels `grafana_dashboard`, `grafana_datasource` and `grafana_alert` are
+  refused. The dashboard sidecar reads every namespace and keys files by name,
+  so preview dashboards were replacing staging's; `preview.yml` now renders
+  none.
+- `preview-pod-injection`: no OpenTelemetry operator injection annotations,
+  which accept references to another namespace's Instrumentation.
+
+## Resource ceilings
+
+Kyverno policy `preview-resource-ceilings` generates a ResourceQuota
+(`preview-quota`) and LimitRange (`preview-limits`) in every preview namespace
+and puts them back if they change. `preview-ceilings-managed` lets only
+Kyverno's background controller and the namespace controller write them; the
+deploy role holds core `*` and RBAC in the namespace, so without it the chart
+could delete the quota or grant that right elsewhere. The quota is sized from a
+measured preview with headroom for a rolling deploy; see the manifest for the
+numbers.
 
 ## Monitoring: admission policies and a Kyverno mutation
 
@@ -109,7 +143,8 @@ Check the admission policies type-checked:
 kubectl get validatingadmissionpolicy preview-ingress-surface \
   preview-service-surface preview-endpoints-managed \
   preview-servicemonitor-surface preview-prometheusrule-surface \
-  preview-monitoring-kinds \
+  preview-monitoring-kinds preview-externalsecret-surface \
+  preview-controller-keys preview-pod-injection preview-ceilings-managed \
   -o custom-columns=NAME:.metadata.name,TYPECHECK:.status.typeChecking
 ```
 
@@ -128,6 +163,11 @@ kubectl get validatingadmissionpolicy preview-ingress-surface \
   the probes above.
 
 ## Known residuals
+
+- The deploy job applies the PR's chart, and helm's `lookup` reads anything
+  the deploy credential can read. That is safe only because the credential is
+  the namespaced OIDC `preview-deploy` token; `preview.yml` has no static
+  kubeconfig path, and one must not be added back.
 
 - A preview's alert rules are evaluated by the shared Prometheus and can query
   any series, so an expensive expression costs cluster-wide query capacity.
