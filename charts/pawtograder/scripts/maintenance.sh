@@ -14,9 +14,17 @@
 #   ...operator does the node/DB maintenance...
 #   maintenance.sh up            # restore everything, page down LAST
 #   maintenance.sh status        # read-only posture report
+#   maintenance.sh repause       # after an in-window migration: re-pause pg_cron
+#   maintenance.sh recheck       # after NOT READY: re-verify the fence, re-run the standby gate
 #
 # Prior state is captured into an in-cluster ConfigMap (<release>-maintenance-state)
 # so `up` restores exact replica counts / HPA / cron jobs / ingress backend.
+#
+# A chart release that RESTARTS Postgres is applied inside the window, after
+# SAFE TO BOUNCE, with maintenance.active=true: the chart then renders this same
+# fence, so the upgrade keeps it. Exit is `up` first, then a helm upgrade with
+# maintenance.active=false. `down` refuses a release that already holds the
+# posture, and `up` leaves the functions HPA to that exit upgrade.
 #
 # Requires: kubectl (context already pointed at the target cluster) and jq. DB
 # access is via `kubectl exec` into the primary pod — no local psql needed.
@@ -205,6 +213,15 @@ report_standby() {
   fi
   if [ "$mode" = "fenced" ]; then
     if $standby_ok; then
+      # Record the verdict where the chart can see it BEFORE announcing it: a
+      # maintenance.active=true upgrade refuses to run against a real cluster
+      # unless the state ConfigMap carries fence_complete (validations.yaml).
+      # The ConfigMap exists from `down`'s capture step, before anything is
+      # fenced, so its existence alone proves nothing. `up` deletes the whole
+      # ConfigMap, marker included.
+      run k patch configmap "$STATE_CM" --type=merge \
+        -p "{\"data\":{\"fence_complete\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}" \
+        || die "could not record fence_complete in ${STATE_CM}, so NOT declaring SAFE TO BOUNCE (the posture upgrade would refuse anyway). Confirm the fence with '$0 status', then add the key by hand: kubectl -n ${NAMESPACE} patch configmap ${STATE_CM} --type=merge -p '{\"data\":{\"fence_complete\":\"manual\"}}'"
       printf '%s[maint ✓] SAFE TO BOUNCE%s — writers fenced and standby streaming, replay lag %s <= %s bytes. Perform the node/DB maintenance, then run: %s up\n' \
         "$C_OK" "$C_RESET" "$lag" "$LAG_THRESHOLD_BYTES" "$0"
     else
@@ -226,6 +243,40 @@ report_standby() {
 # State ConfigMap
 # ----------------------------------------------------------------------------
 state_exists() { k get configmap "$STATE_CM" >/dev/null 2>&1; }
+
+# True when the Helm release itself carries the maintenance posture
+# (maintenance.active=true): the chart then renders the fence this script puts
+# up, and marks the primary Ingress with this annotation. Used for a chart
+# release that restarts Postgres, applied inside the window; see
+# docs/operations/planned-maintenance.md.
+POSTURE_ANNOTATION="pawtograder.io/maintenance-active"
+posture_held() {
+  # `status` passes "lenient": a release that deliberately has no chart Ingress
+  # (maintenance.active is refused without one) cannot hold the posture, and
+  # the read-only report should still run. `down` and `up` stay fail-closed.
+  if [ "${1:-}" = "lenient" ] && ! present ingress "$INGRESS"; then
+    warn "no ingress ${INGRESS}: the posture marker is unavailable (a release without a chart Ingress cannot hold maintenance.active)"
+    return 1
+  fi
+  # jsonpath needs the dot in the annotation key escaped. Fails CLOSED: a read
+  # error must not look like "no posture", or `down` would record the fenced
+  # state as prior and `up` would re-apply the old chart's HPA.
+  local v
+  v="$(k get ingress "$INGRESS" -o jsonpath='{.metadata.annotations.pawtograder\.io/maintenance-active}')" \
+    || die "could not read ingress ${INGRESS} to check for ${POSTURE_ANNOTATION}; refusing to guess whether the release holds maintenance.active. Retry once the API is reachable."
+  [ "$v" = "true" ]
+}
+
+# present <kind> <name>: 0 if the object exists, 1 if the API says NotFound.
+# A target release applied inside the window can remove a recorded object (a
+# dropped deployment channel, say), and `up` must not abort half-way on it.
+# Any other read error aborts: only a definite NotFound counts as removed.
+present() {
+  local err
+  if err="$(k get "$1" "$2" -o name 2>&1 >/dev/null)"; then return 0; fi
+  grep -q "NotFound" <<<"$err" && return 1
+  die "could not read $1/$2: ${err}"
+}
 
 
 # ----------------------------------------------------------------------------
@@ -310,6 +361,15 @@ cmd_down() {
     die "state ConfigMap ${STATE_CM} already exists — a window is already open. Run '$0 up' to restore, or '$0 status' to inspect."
   fi
   k get pod "$PG_POD" >/dev/null 2>&1 || die "primary pod ${PG_POD} not found"
+
+  # The release must NOT already carry the posture. If it does, the writers are
+  # already at 0 and the web host already on the page, so step 1 would record
+  # THAT as the prior state, and `up` would faithfully "restore" production to
+  # fenced. maintenance.active=true belongs on the upgrade that runs after
+  # SAFE TO BOUNCE, not before `down`.
+  if posture_held; then
+    die "the Helm release already carries maintenance.active=true (ingress ${INGRESS} is annotated ${POSTURE_ANNOTATION}). Capturing now would record the fenced state as 'prior' and 'up' would restore to it. Upgrade the release with maintenance.active=false first, then run 'down'."
+  fi
 
   # Precondition: the maintenance page must already be deployed AND Ready. The
   # fence scales the web tier to 0, so if the page can't serve, users get the
@@ -534,6 +594,14 @@ cmd_up() {
 
   tmp="$(mktemp -d)"; trap 'rm -rf "${tmp:-}" 2>/dev/null || true' EXIT
 
+  # Does the Helm release hold the posture (maintenance.active=true, i.e. a
+  # Postgres-restarting release was applied inside this window)? Read once, up
+  # front. The restore below is the same either way except for the HPA (step 2),
+  # and the operator is told to finish with the exit upgrade.
+  local held=false
+  posture_held && held=true
+  $held && log "release carries maintenance.active=true; after this restore, finish with a helm upgrade that sets it back to false"
+
   # Read the ENTIRE state ConfigMap ONCE, and fail if THAT read fails — so a
   # transient API/ConfigMap read can never be misread per-key as "empty" and
   # silently skip restoring CronJobs / cron / HPA / ingress before the state is
@@ -565,6 +633,16 @@ cmd_up() {
   #    was confirmed present above and `down` always records writers, so an EMPTY
   #    read here means a transient API/ConfigMap read failure — NOT "nothing to
   #    restore". Abort rather than silently leave every writer scaled to 0.
+  # 0. Withdraw the SAFE TO BOUNCE marker BEFORE the first restore step. From
+  #    here on the namespace is no longer fenced, and an `up` interrupted after
+  #    writers or pg_cron come back must not leave a marker that lets another
+  #    maintenance.active=true upgrade roll Postgres (validations.yaml).
+  if [ -n "$(sget fence_complete)" ]; then
+    run k patch configmap "$STATE_CM" --type=json -p '[{"op":"remove","path":"/data/fence_complete"}]' \
+      || die "could not withdraw fence_complete from ${STATE_CM}; restore not started (nothing changed). Retry '$0 up'."
+    log "fence_complete withdrawn: the namespace is no longer cleared for a bounce"
+  fi
+
   step "1/6 writers" "restoring app tiers + channels"
   sget deploy_replicas > "$tmp/deploy_replicas"
   [ -s "$tmp/deploy_replicas" ] \
@@ -572,6 +650,10 @@ cmd_up() {
   local kind name replicas
   while IFS=$'\t' read -r kind name replicas; do
     [ -n "$name" ] || continue
+    if ! present "$kind" "$name"; then
+      warn "  ${kind}/${name} no longer exists (removed by the release applied in the window?); skipping"
+      continue
+    fi
     log "  ${kind}/${name} -> ${replicas}"
     run k scale "$kind" "$name" --replicas="$replicas"
   done < "$tmp/deploy_replicas"
@@ -584,7 +666,15 @@ cmd_up() {
   #    (cleanest in GitOps) — we re-apply the captured object to stay self-contained.
   step "2/6 edge-functions" "re-applying the edge-functions HPA"
   sget functions_hpa > "$tmp/functions_hpa"
-  if [ -s "$tmp/functions_hpa" ] && [ "$(tr -d '[:space:]' < "$tmp/functions_hpa")" != "" ]; then
+  if $held; then
+    # The release does not render the HPA while it holds the posture, and the
+    # exit upgrade (maintenance.active=false) creates it from the TARGET chart.
+    # Re-applying the captured copy here would put an HPA from the OLD chart
+    # under kubectl's field manager, and any field the target chart changed is
+    # then a server-side apply conflict on the exit upgrade. functions keeps
+    # the replica count restored in step 1 until that upgrade.
+    log "release holds the posture: leaving the HPA to the exit helm upgrade (functions stays at its step-1 count until then)"
+  elif [ -s "$tmp/functions_hpa" ] && [ "$(tr -d '[:space:]' < "$tmp/functions_hpa")" != "" ]; then
     run k apply -f "$tmp/functions_hpa"
     ok "edge-functions HPA re-applied (autoscaler resumes managing functions replicas)"
   else
@@ -595,12 +685,23 @@ cmd_up() {
   step "3/6 cronjobs" "restoring CronJob suspend state"
   sget cronjobs_suspend > "$tmp/cronjobs_suspend"
   if [ -s "$tmp/cronjobs_suspend" ]; then
-    local cjname prior
+    local cjname prior presuspended=()
     while IFS=$'\t' read -r cjname prior; do
       [ -n "$cjname" ] || continue
+      if ! present cronjob "$cjname"; then
+        warn "  cronjob/${cjname} no longer exists (disabled by the release applied in the window?); skipping"
+        continue
+      fi
       log "  ${cjname} -> suspend=${prior}"
+      if [ "$prior" = "true" ]; then presuspended+=("$cjname"); fi
       run k patch cronjob "$cjname" --type=merge -p "{\"spec\":{\"suspend\":${prior}}}"
     done < "$tmp/cronjobs_suspend"
+    # The posture rendered suspend: true; the posture-off exit upgrade drops
+    # the field and Kubernetes defaults it to false, re-enabling a CronJob that
+    # was suspended on purpose before the window.
+    if $held && [ ${#presuspended[@]} -gt 0 ]; then
+      warn "suspended before the window, and the exit helm upgrade will UNSUSPEND them: ${presuspended[*]}. After that upgrade, re-suspend each: kubectl -n ${NAMESPACE} patch cronjob <name> --type=merge -p '{\"spec\":{\"suspend\":true}}'"
+    fi
   fi
   ok "CronJobs restored"
 
@@ -628,6 +729,7 @@ cmd_up() {
     while IFS=$'\t' read -r rk rn rr; do
       [ -n "$rn" ] || continue
       [[ "$rr" =~ ^[0-9]+$ ]] && [ "$rr" -eq 0 ] && continue   # nothing to wait for at 0
+      present "$rk" "$rn" || continue                            # removed; skipped in step 1
       log "  waiting for ${rk}/${rn} (${rr} replica(s))"
       k rollout status "$rk" "$rn" --timeout="${READY_TIMEOUT_SECONDS}s" \
         || die "${rk}/${rn} not Ready within ${READY_TIMEOUT_SECONDS}s — leaving the maintenance page UP to avoid a broken cutover (users keep seeing the styled page, not errors). Investigate, then re-run '$0 up' to finish."
@@ -655,8 +757,24 @@ cmd_up() {
       [ -n "$crow" ] || continue
       cing="$(jq -r '.ingress' <<<"$crow")"; cidx="$(jq -r '.index' <<<"$crow")"
       cbackend="$(jq -c '.backend' <<<"$crow")"
+      if ! present ingress "$cing"; then
+        warn "  channel ingress ${cing} no longer exists (channel removed by the release?); skipping"
+        continue
+      fi
+      # Re-locate "/" rather than trust the recorded index: a release applied
+      # inside the window can add or remove API paths ahead of it, and the
+      # stale index would then repoint an API path while "/" stays on the page.
+      # The JSON-patch `test` makes the replace fail rather than land on a path
+      # that is not "/".
+      local live_idx
+      live_idx="$(k get ingress "$cing" -o json | jq -r '[.spec.rules[0].http.paths | to_entries[] | select(.value.path == "/") | .key] | if length == 1 then .[0] else "" end')" \
+        || die "could not read ingress ${cing} to locate its \"/\" path. Restore aborted with the page still up; retry '$0 up'."
+      [ -n "$live_idx" ] \
+        || die "ingress ${cing} does not have exactly one \"/\" path; restore it by hand to ${cbackend}, then re-run '$0 up'."
+      [ "$live_idx" = "$cidx" ] || log "  ${cing}: \"/\" moved from path[${cidx}] to path[${live_idx}] (the release changed the path layout)"
+      cidx="$live_idx"
       run k patch ingress "$cing" --type=json -p \
-        "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/${cidx}/backend/service\",\"value\":${cbackend}}]"
+        "[{\"op\":\"test\",\"path\":\"/spec/rules/0/http/paths/${cidx}/path\",\"value\":\"/\"},{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/${cidx}/backend/service\",\"value\":${cbackend}}]"
       log "  channel ingress ${cing} path[${cidx}] -> restored"
     done < <(jq -c '.[]' <<<"$chan")
     ok "channel web hosts restored"
@@ -683,11 +801,127 @@ cmd_up() {
 
   run k delete configmap "$STATE_CM"
   ok "restore complete; maintenance state cleared"
+  if $held; then
+    warn "the Helm release still carries maintenance.active=true. Finish NOW with the same chart version and values plus --set maintenance.active=false (keep maintenance.enabled=true for this upgrade): it recreates the functions HPA, and until it runs any upgrade or rollback that keeps the posture re-fences ${NAMESPACE}."
+  fi
 }
 
 # ----------------------------------------------------------------------------
 # status (read-only)
 # ----------------------------------------------------------------------------
+# repause: a migration run inside the window (planned-maintenance.md, step 4c)
+# can call cron.schedule, or unschedule and recreate a job, and either leaves an
+# ACTIVE pg_cron job behind the fence that `down` paused. This pauses whatever
+# is active now and appends it to the recorded cron_jobids, so `up` resumes it
+# with the rest. Recorded first, paused second: an interrupted run can then
+# leave a job recorded-but-active (re-run repause), never paused-and-forgotten.
+# A recreated job gets a new jobid; the stale old id in the record is harmless
+# to `up` (the UPDATE matches nothing).
+cmd_repause() {
+  need kubectl
+  state_exists || die "no state ConfigMap ${STATE_CM}: 'repause' only makes sense inside a window opened by '$0 down'."
+  local cron_read now prior merged
+  cron_read="$(psql_ro "SELECT 'MARK:' || COALESCE(string_agg(jobid::text, ','), '') FROM cron.job WHERE active;")"
+  case "$cron_read" in
+    MARK:*) now="${cron_read#MARK:}" ;;
+    *) die "could not read the pg_cron active-job set from ${PG_POD} (got '${cron_read:-<empty>}'). Nothing changed; retry." ;;
+  esac
+  if [ -z "$now" ]; then
+    ok "no pg_cron job is active; nothing to re-pause"
+    return 0
+  fi
+  prior="$(k get configmap "$STATE_CM" -o jsonpath='{.data.cron_jobids}')" \
+    || die "could not read cron_jobids from ${STATE_CM}; nothing changed. Retry."
+  merged="$(printf '%s,%s' "$prior" "$now" | tr ',' '\n' | grep -v '^$' | sort -nu | paste -sd, -)"
+  run k patch configmap "$STATE_CM" --type=merge -p "{\"data\":{\"cron_jobids\":\"${merged}\"}}"
+  psql_exec "UPDATE cron.job SET active=false WHERE jobid = ANY(ARRAY[${now}]::bigint[]);"
+  ok "re-paused pg_cron jobs active inside the window: ${now} ('up' will resume them)"
+}
+
+# recheck: re-run the SAFE TO BOUNCE gate on a window `down` already opened.
+# `down` ends in NOT READY when the standby is disconnected or lagging, and
+# writes no fence_complete then; once the standby recovers, a second `down`
+# refuses the existing state. This re-verifies the fence `down` left (web host on
+# the page, writers held at 0 by spec and by pods, no functions HPA, every
+# recorded write CronJob suspended, pg_cron paused) and runs the standby gate again,
+# which writes fence_complete on SAFE TO BOUNCE. It changes nothing else: if the
+# fence is not intact it says so and stops.
+cmd_recheck() {
+  need kubectl; need jq
+  state_exists || die "no state ConfigMap ${STATE_CM}: 'recheck' re-verifies a window opened by '$0 down'; run 'down' instead."
+  local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "${tmp:-}" 2>/dev/null || true' EXIT
+  k get configmap "$STATE_CM" -o json > "$tmp/state.json" \
+    || die "could not read ${STATE_CM}; nothing changed. Retry."
+  jq -r '.data.deploy_replicas // ""' "$tmp/state.json" > "$tmp/deploy_replicas"
+  [ -s "$tmp/deploy_replicas" ] || die "${STATE_CM} records no writer tiers; cannot verify the fence. Inspect with '$0 status'."
+
+  # Withdraw any earlier clearance FIRST. The chart only checks that
+  # fence_complete is non-empty, so a failed recheck must not leave a marker
+  # from a previous SAFE TO BOUNCE standing. Only a full pass below re-mints it.
+  if [ -n "$(jq -r '.data.fence_complete // ""' "$tmp/state.json")" ]; then
+    run k patch configmap "$STATE_CM" --type=json -p '[{"op":"remove","path":"/data/fence_complete"}]' \
+      || die "could not withdraw the earlier fence_complete from ${STATE_CM}; not re-checking. Retry."
+    log "earlier fence_complete withdrawn; it is re-issued only if every check passes"
+  fi
+
+  step "1/3 page" "web host still on the maintenance page"
+  local backend
+  backend="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}')" \
+    || die "could not read ingress ${INGRESS}; not re-checking."
+  [ "$backend" = "$MAINT_SVC" ] || die "web host points at ${backend:-?}, not ${MAINT_SVC}: the window is not fenced. Run '$0 up' to close it cleanly, then '$0 down' again."
+  ok "web host -> ${MAINT_SVC}"
+
+  step "2/3 writers" "writers held at 0, no HPA, CronJobs suspended, pg_cron paused"
+  # Intent AND pods: .spec.replicas must still be 0 (a writer scaled back up
+  # whose pods are not scheduled yet shows .status.replicas 0) and no pod may
+  # remain. Objects removed since `down` count as nothing running.
+  local kind name _r spec cur running=0 unreadable=0 raised=()
+  while IFS=$'\t' read -r kind name _r; do
+    [ -n "$name" ] || continue
+    present "$kind" "$name" || continue
+    if ! spec="$(k get "$kind" "$name" -o jsonpath='{.spec.replicas}')" \
+       || ! cur="$(k get "$kind" "$name" -o jsonpath='{.status.replicas}')"; then
+      unreadable=$((unreadable + 1)); continue
+    fi
+    [ -z "$cur" ] && cur=0
+    if ! [[ "$spec" =~ ^[0-9]+$ && "$cur" =~ ^[0-9]+$ ]]; then unreadable=$((unreadable + 1)); continue; fi
+    [ "$spec" -eq 0 ] || raised+=("${kind}/${name}=${spec}")
+    running=$((running + cur))
+  done < "$tmp/deploy_replicas"
+  if [ ${#raised[@]} -gt 0 ] || [ "$running" -ne 0 ] || [ "$unreadable" -ne 0 ]; then
+    die "writer fence not intact: desired replicas raised (${raised[*]:-none}), ${running} writer pod(s) running, ${unreadable} unreadable. NOT safe to bounce."
+  fi
+  # `down` deleted the functions HPA; one that is back would scale functions
+  # up during the rollout.
+  if present hpa "$FUNCTIONS_HPA"; then
+    die "the functions HPA ${FUNCTIONS_HPA} exists again inside the window; it would scale functions up during the rollout. NOT safe to bounce."
+  fi
+  # Every write CronJob `down` recorded (and still present) must be suspended:
+  # a `down` interrupted mid-suspension leaves one live that can start a
+  # writer during the rollout.
+  local cjname _prior susp live=()
+  while IFS=$'\t' read -r cjname _prior; do
+    [ -n "$cjname" ] || continue
+    present cronjob "$cjname" || continue
+    susp="$(k get cronjob "$cjname" -o jsonpath='{.spec.suspend}')" \
+      || die "could not read cronjob/${cjname}; not re-checking."
+    [ "$susp" = "true" ] || live+=("$cjname")
+  done < <(jq -r '.data.cronjobs_suspend // ""' "$tmp/state.json")
+  if [ ${#live[@]} -gt 0 ]; then
+    die "write CronJob(s) not suspended inside the window: ${live[*]}. NOT safe to bounce; suspend them (kubectl patch cronjob <name> --type=merge -p '{\"spec\":{\"suspend\":true}}') and recheck."
+  fi
+  local active
+  active="$(psql_ro "SELECT 'MARK:' || count(*) FROM cron.job WHERE active;")"
+  case "$active" in
+    MARK:0) ok "zero writer pods; pg_cron paused" ;;
+    MARK:*) die "${active#MARK:} pg_cron job(s) are active inside the window. Run '$0 repause', then recheck." ;;
+    *) die "could not read pg_cron state (got '${active:-<empty>}'); not re-checking." ;;
+  esac
+
+  step "3/3 standby" "re-checking replication"
+  report_standby fenced
+}
+
 cmd_status() {
   need kubectl
   log "namespace=${NAMESPACE} release=${RELEASE}"
@@ -716,9 +950,14 @@ cmd_status() {
     [ -n "$name" ] && printf '    %s/%s = %s\n' "$kind" "$name" "$replicas"
   done
 
+  if posture_held lenient; then
+    warn "Helm release carries maintenance.active=true (${POSTURE_ANNOTATION} on ingress ${INGRESS}): every upgrade that keeps it re-fences"
+  fi
+
   local backend host
-  host="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null)"
-  backend="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}' 2>/dev/null)"
+  # Informational: a release with no chart Ingress must not abort the report.
+  host="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].host}' 2>/dev/null)" || host=""
+  backend="$(k get ingress "$INGRESS" -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}' 2>/dev/null)" || backend=""
   if [ "$backend" = "$MAINT_SVC" ]; then
     warn "ingress web host (${host}) -> ${backend} (MAINTENANCE PAGE UP)"
   else
@@ -740,6 +979,12 @@ Usage: $0 <down|up|status> [options]
            Captures prior state. (pgmq backlog is durable and drains after 'up'.)
   up       Restore everything from the captured state; drop the page LAST.
   status   Read-only maintenance-posture report.
+  recheck  Re-verify the fence of an open window and re-run the standby gate,
+           e.g. after 'down' ended in NOT READY and the standby recovered.
+           Writes the SAFE TO BOUNCE marker when it passes.
+  repause  Inside a window, after a helm upgrade that ran migrations: pause any
+           pg_cron job that is active now (a migration's cron.schedule creates
+           it active) and add it to the set 'up' resumes.
 
 Options:
   -n, --namespace NS   Namespace   (default: ${NAMESPACE}, env NAMESPACE)
@@ -790,6 +1035,8 @@ main() {
     down)   cmd_down ;;
     up)     cmd_up ;;
     status) cmd_status ;;
+    repause) cmd_repause ;;
+    recheck) cmd_recheck ;;
     -h | --help | "") usage; [ -z "$cmd" ] && exit 1 || exit 0 ;;
     *) usage; die "unknown command: $cmd" ;;
   esac

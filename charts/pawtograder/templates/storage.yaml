@@ -23,7 +23,7 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "storage") | nindent 4 }}
 spec:
-  replicas: {{ .Values.storage.replicas }}
+  replicas: {{ include "pawtograder.maintenance.writerReplicas" (dict "ctx" . "replicas" .Values.storage.replicas) }}
   {{- include "pawtograder.deploymentStrategy" (dict "component" .Values.storage) | nindent 2 }}
   selector:
     matchLabels:

@@ -355,43 +355,6 @@ postgres:
     #     trident.netapp.io/unixPermissions: "0777"
     annotations: {}
 
-  # /dev/shm sizing for the primary.
-  #
-  # dynamic_shared_memory_type=posix means every parallel query allocates its
-  # DSM segments as files under /dev/shm. Kubernetes gives a container the
-  # runtime default of 64Mi and there is no way to raise it from postgresql.conf
-  # -- it is a volume property, so it has to be set here.
-  #
-  # 64Mi is not enough for this workload. On Khoury prod (2026-09-22) /dev/shm
-  # was observed at 94%, then 98%, then 64% over about half an hour, so
-  # occupancy tracks parallel-query load and segments ARE reclaimed -- just
-  # slowly enough that the peaks reach the ceiling. Size this for the PEAK, not
-  # the average; a restart is not a fix, because the peak returns with the
-  # load. When it does hit the ceiling, a parallel worker's segment resize
-  # fails with SQLSTATE 53100:
-  #
-  #   could not resize shared memory segment "/PostgreSQL.NNN" to 2097152
-  #   bytes: No space left on device
-  #
-  # That error is what makes this worth a chart change rather than a tuning
-  # knob: PostgREST treats 53100 as a FATAL connection error, so it tears down
-  # and rebuilds its entire pool and re-queries the schema cache. Every request
-  # in flight on that replica gets a 503. Measured over 24h on prod: 204 such
-  # errors -> 225 pool rebuilds across 3 rest replicas -> 190 user-facing 503s,
-  # the bulk of them GET /submissions. The database never logged a problem and
-  # no alert covered it; see PawtograderPostgresSharedMemoryHigh.
-  #
-  # sizeLimit must be an INTEGER quantity (Gi/Mi/Ki or plain bytes) --
-  # pawtograder.quantityToBytes in _helpers.tpl does not parse fractions, and
-  # the exporter query and alert threshold are both derived from this value.
-  #
-  # NOTE: medium=Memory emptyDir counts against the container memory LIMIT
-  # (postgres.resources.limits.memory), it is not extra headroom. Keep
-  # sizeLimit well under that limit or the pod is OOMKilled when shm fills.
-  shm:
-    enabled: true
-    sizeLimit: 1Gi
-
   # postgresql.conf overrides — bumped for Realtime fan-out + supavisor.
   config:
     max_connections: "400"
@@ -486,15 +449,6 @@ postgres:
       accessMode: ReadWriteOnce
       # Same as postgres.persistence.annotations (e.g. Trident unixPermissions).
       annotations: {}
-    # Same /dev/shm problem as the primary (see postgres.shm). The standby
-    # runs read-only query traffic, so it allocates DSM too -- it just fills
-    # slower (prod standby sat at 2% while the primary was at 98%), which means
-    # a standby promoted during an incident inherits a fresh 64Mi ceiling and
-    # hits the same wall under primary write+read load. Sized independently
-    # because the replica has its own, smaller, memory limit.
-    shm:
-      enabled: true
-      sizeLimit: 1Gi
     resources:
       requests: { cpu: "500m", memory: "2Gi" }
       limits:   { cpu: "2",    memory: "8Gi" }
@@ -518,6 +472,39 @@ postgres:
 # -----------------------------------------------------------------------------
 maintenance:
   enabled: false
+  # The maintenance POSTURE, distinct from `enabled` (which only deploys the
+  # page). true renders the state `scripts/maintenance.sh down` leaves behind:
+  #   - the web host's "/" backend (and each channel host's "/") -> this page's
+  #     Service, byte-for-byte what the script patches in (name + port 8080)
+  #   - every writer the script scales to 0 -> replicas: 0 (web, rest, auth,
+  #     storage, the realtime StatefulSet, every web-/functions-<channel>
+  #     Deployment, and functions when edgeFunctions.autoscaling is off)
+  #   - the edge-functions HPA -> not rendered. With autoscaling on, functions
+  #     replicas stays unrendered and the script's live 0 holds; rendering 0
+  #     there would make the EXIT upgrade reset the tier to 1 pod under a
+  #     client-side 3-way merge (templates/edge-functions.yaml has the detail)
+  #   - the write-capable CronJobs the script suspends -> suspend: true
+  #   - the primary Ingress -> annotation pawtograder.io/maintenance-active
+  # pg_cron is paused in the database, survives any upgrade, and stays the
+  # script's job. So do state capture and the SAFE TO BOUNCE gate.
+  #
+  # Purpose: a chart release that RESTARTS Postgres, applied inside a window.
+  # Without this, that upgrade re-renders the fence away. Client-side, it puts
+  # the writers, HPA and web backend back while the primary is rolling;
+  # server-side, it fails on the fields kubectl took over. With it, the release
+  # and the live objects agree field for field, so neither apply mode has
+  # anything to change. Entry is still `maintenance.sh down`; the posture only
+  # makes the upgrade agree with it. Exit is `maintenance.sh up` FIRST (writable
+  # preflight, restore, page down last), then `helm upgrade` with this back to
+  # false. Full procedure: docs/operations/planned-maintenance.md, "Deploying a
+  # Postgres-restarting release in a window".
+  #
+  # Leaves Postgres alone: neither StatefulSet reads this value. Requires
+  # enabled=true, global.apiOnSeparateHost=true and service.port=8080
+  # (templates/validations.yaml says why). Set it on the command line for the
+  # one upgrade, never in a values file, and don't carry it with --reuse-values:
+  # any later upgrade that keeps it re-fences the environment.
+  active: false
   # Copy shown on the page. eta is optional (omitted from the page when empty).
   title: "We'll be right back"
   message: "Pawtograder is down for a short scheduled maintenance window. Your work is safe — the pack is tidying up and we'll be back shortly. This page refreshes on its own."
@@ -2501,12 +2488,6 @@ monitoring:
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
-    # /dev/shm occupancy (used/limit) above which the PawtograderPostgresSharedMemory*
-    # alerts fire. Lower than the connection thresholds on purpose: occupancy is a
-    # leak rather than load -- observed pinned at 94-98% with the database idle -- so
-    # there is no burst to ride out and the only useful warning is an early one.
-    sharedMemoryPercentWarning: 70
-    sharedMemoryPercentCritical: 90
     # Schema-cache reloads per PostgREST pod per hour above which
     # PawtograderPostgrestSchemaCacheChurn fires. A reload means EITHER the pool
     # was rebuilt after a fatal connection error (everything in flight on that
