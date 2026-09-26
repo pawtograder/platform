@@ -480,10 +480,16 @@ spec:
         resources: ["rolebindings", "clusterrolebindings"]
       # ServiceAccounts too: the engine creates one per credential, and
       # without this it could create (or edit) one in any namespace.
+      #
+      # serviceaccounts/token is the TokenRequest subresource and a SEPARATE
+      # resource string: matching "serviceaccounts" alone does not cover it,
+      # and §1 grants OpenBao cluster-wide create on it, so without it here
+      # OpenBao could mint a token for ANY ServiceAccount in the cluster
+      # without creating or binding anything.
       - apiGroups: [""]
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE", "DELETE"]
-        resources: ["serviceaccounts"]
+        resources: ["serviceaccounts", "serviceaccounts/token"]
   # The OpenBao pod's own ServiceAccount — NOT the per-credential SAs the
   # engine generates, which live in the preview namespaces. Confirm it before
   # applying; a matchConditions that matches nothing disables the policy
@@ -498,11 +504,20 @@ spec:
       expression: "request.namespace"
     - name: previewNs
       expression: "request.namespace.startsWith('pawtograder-preview-pr-') || request.namespace == 'pawtograder-preview-ci'"
+    # The engine's generated-name prefix (default name_template
+    # "v-{{.DisplayName}}-{{.RoleName}}-..."). Accounts that already exist —
+    # `default`, the chart's own — never match it.
+    - name: generated
+      expression: "'v-'"
   validations:
-    # ServiceAccounts: the preview namespace (namespaced tiers) or
-    # pawtograder-preview-ci (cluster tiers), nowhere else.
-    - expression: "request.resource.resource != 'serviceaccounts' || variables.previewNs"
-      message: "OpenBao may only manage ServiceAccounts in pawtograder-preview-pr-* or pawtograder-preview-ci"
+    # ServiceAccounts AND their tokens: the preview namespace (namespaced
+    # tiers) or pawtograder-preview-ci (cluster tiers), and only accounts the
+    # engine generated. request.name is the ServiceAccount's name for both the
+    # object and its token subresource.
+    - expression: >-
+        request.resource.resource != 'serviceaccounts' ||
+        (variables.previewNs && request.name.startsWith(variables.generated))
+      message: "OpenBao may only manage, or mint tokens for, its own generated (v-*) ServiceAccounts in pawtograder-preview-pr-* or pawtograder-preview-ci"
     # RoleBindings: PR preview namespaces only, to one of the five namespaced
     # tiers, and ONLY to ServiceAccounts in that same namespace. Checking the
     # roleRef without the subjects bounded WHAT could be bound but not TO
@@ -520,7 +535,8 @@ spec:
           variables.obj.roleRef.name in ['pawtograder-preview-read', 'pawtograder-preview-publish',
             'pawtograder-preview-deploy', 'pawtograder-preview-provision-secrets', 'pawtograder-preview-teardown-ns'] &&
           (!has(variables.obj.subjects) || variables.obj.subjects.all(s,
-            s.kind == 'ServiceAccount' && has(s.namespace) && s.namespace == variables.ns))
+            s.kind == 'ServiceAccount' && has(s.namespace) && s.namespace == variables.ns &&
+            s.name.startsWith(variables.generated)))
         )
       message: "OpenBao may only bind a namespaced preview tier, inside a preview namespace, to a ServiceAccount in that namespace"
     # ClusterRoleBindings: only the two tiers that are cluster-scoped by
@@ -533,7 +549,8 @@ spec:
         request.resource.resource != 'clusterrolebindings' || (
           variables.obj.roleRef.name in ['pawtograder-preview-provision', 'pawtograder-preview-teardown'] &&
           (!has(variables.obj.subjects) || variables.obj.subjects.all(s,
-            s.kind == 'ServiceAccount' && has(s.namespace) && s.namespace == 'pawtograder-preview-ci'))
+            s.kind == 'ServiceAccount' && has(s.namespace) && s.namespace == 'pawtograder-preview-ci' &&
+            s.name.startsWith(variables.generated)))
         )
       message: "OpenBao may only create ClusterRoleBindings for preview-provision/-teardown, to ServiceAccounts in pawtograder-preview-ci"
 ---
@@ -556,6 +573,28 @@ With §1 and §2b together, a compromised OpenBao token can bind seven reviewed
 roles, in preview namespaces only, plus two of them cluster-scoped. That is a
 bounded, enumerable blast radius rather than "arbitrary cluster permissions",
 which is what it was when the engine authored its own rules.
+
+`serviceaccounts/token` in `resourceRules` is load-bearing. §1 grants OpenBao
+cluster-wide `create` on that subresource, which RBAC cannot narrow to labeled
+namespaces, and a rule matching only `serviceaccounts` does not see
+TokenRequest. Without it, a stolen OpenBao token mints a token for any
+ServiceAccount in the cluster — production workloads, `preview-deployer` —
+without creating or binding anything. Check it directly:
+
+```bash
+kubectl --as=system:serviceaccount:openbao:openbao \
+  create token pawtograder -n pawtograder-staging --duration=10m >/dev/null
+# expect: ... denied request: OpenBao may only manage, or mint tokens for ...
+```
+
+The `v-` name check keeps OpenBao away from accounts it did not create —
+`default`, the chart's own ServiceAccounts — as token targets and as binding
+subjects. It does not stop an attacker who holds OpenBao's token from creating
+a new `v-`-prefixed account in `pawtograder-preview-ci` and binding a cluster
+tier to it: that binding has no lease, so it outlives cleanup. The residual is
+bounded to `preview-provision` and `preview-teardown`, whose namespace reach
+§2 limits to `pawtograder-preview-pr-*`. The audit-log alert in §1 is what
+catches it.
 
 ## 3. Configure OpenBao
 
