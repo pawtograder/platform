@@ -1,6 +1,7 @@
 "use client";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DialogCloseTrigger } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import PersonAvatar from "@/components/ui/person-avatar";
 import PersonName from "@/components/ui/person-name";
@@ -8,16 +9,25 @@ import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
-  useAllStudentRoles,
   useAssignmentDueDate,
   useClassSections,
   useCourse,
   useCourseController,
   useLabSections
 } from "@/hooks/useCourseController";
-import { useListTableControllerValues, useTableControllerValueById } from "@/lib/TableController";
+import {
+  useListTableControllerValues,
+  useTableControllerTableValues,
+  useTableControllerValueById
+} from "@/lib/TableController";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
-import { Assignment, AssignmentDueDateException, AssignmentGroup, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import {
+  Assignment,
+  AssignmentDueDateException,
+  AssignmentGroup,
+  UserProfile,
+  UserRoleWithPrivateProfileAndUser
+} from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
@@ -45,13 +55,19 @@ import {
   getSortedRowModel,
   Row,
   RowSelectionState,
+  Table as TanStackTable,
   Updater,
   useReactTable,
   VisibilityState
 } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
-import { BulkAddExtensionDialog, BulkExceptionTarget, BulkSetDeadlineDialog } from "./BulkDueDateExceptionDialogs";
-import { addHours, addMinutes, differenceInMinutes } from "date-fns";
+import {
+  BulkAddExtensionDialog,
+  BulkExceptionTarget,
+  BulkSetDeadlineDialog,
+  minutesUntil
+} from "./BulkDueDateExceptionDialogs";
+import { addHours, addMinutes } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -61,6 +77,7 @@ import { FaSort, FaSortDown, FaSortUp, FaTrash } from "react-icons/fa";
 // Simplified data structure for student due date information
 type StudentDueDateRow = {
   student: UserProfile;
+  email: string | null;
   group: AssignmentGroup | null;
   classSectionName: string | null;
   labSectionName: string | null;
@@ -278,7 +295,8 @@ function AdjustDueDateDialogContent({
         setTargetDateError("");
         clearErrors(["hours", "minutes"]);
 
-        const totalMinutes = differenceInMinutes(targetDate, finalDueDateMemo);
+        // Round a partial minute up so the new due date is not before the target.
+        const totalMinutes = minutesUntil(targetDate, finalDueDateMemo);
         if (totalMinutes > 0) {
           const hours = Math.floor(totalMinutes / 60);
           const minutes = totalMinutes % 60;
@@ -353,7 +371,7 @@ function AdjustDueDateDialogContent({
           Adjust Due Date for {group ? group.name : <PersonName uid={student_id} showAvatar={false} />} on{" "}
           {assignment.title}
         </Dialog.Title>
-        <Dialog.CloseTrigger />
+        <DialogCloseTrigger />
       </Dialog.Header>
       <Dialog.Description>
         {hasLabScheduling ? (
@@ -630,16 +648,37 @@ export function AdjustDueDateDialog({
   );
 }
 
-/** Multi-select filter: matches when the row's label (or `emptyLabel` when unset) is one of the chosen values. */
-function includesFilter(emptyLabel: string) {
-  return (row: Row<StudentDueDateRow>, columnId: string, filterValue: unknown) => {
-    if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-    const values = Array.isArray(filterValue) ? (filterValue as string[]) : [String(filterValue)];
-    const label = row.getValue<string | null>(columnId);
-    return values.includes(label ?? emptyLabel);
-  };
+/**
+ * Option value for "no group" / "no section". Not a possible name, so a group or section that is
+ * literally called "No group" stays a separate option.
+ */
+const FILTER_EMPTY_VALUE = "__none__";
+
+/** Multi-select filter: matches when the row's label (or FILTER_EMPTY_VALUE when unset) is one of the chosen values. */
+function includesFilter(row: Row<StudentDueDateRow>, columnId: string, filterValue: unknown) {
+  if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+  const values = Array.isArray(filterValue) ? (filterValue as string[]) : [String(filterValue)];
+  const label = row.getValue<string | undefined>(columnId);
+  return values.includes(label || FILTER_EMPTY_VALUE);
 }
 
+/**
+ * Select or deselect every row matching the current filters, on every page, in one state update
+ * (row.toggleSelected copies the selection object once per row).
+ */
+function setFilteredSelection(table: TanStackTable<StudentDueDateRow>, selected: boolean) {
+  const ids = table.getFilteredRowModel().rows.map((r) => r.id);
+  table.setRowSelection((prev) => {
+    const next = { ...prev };
+    for (const id of ids) {
+      if (selected) next[id] = true;
+      else delete next[id];
+    }
+    return next;
+  });
+}
+
+/** Display labels for the FILTER_EMPTY_VALUE option. */
 const FILTER_EMPTY_LABELS: Record<string, string> = {
   group_name: "No group",
   class_section_name: "Not assigned",
@@ -672,10 +711,25 @@ export default function DueDateExceptions() {
   }, [assignment_id]);
   const allExtensions = useListTableControllerValues(assignmentDueDateExceptions, extensionPredicate);
 
-  // Active (not dropped) students, with their section assignments
-  const studentRoles = useAllStudentRoles();
+  // Active (not dropped) students, with their section assignments. Subscribes per row, so a
+  // section or name change on an existing role re-renders (useAllStudentRoles keeps its old array
+  // while the set of ids is unchanged).
+  const studentRolePredicate = useCallback(
+    (r: UserRoleWithPrivateProfileAndUser) => r.role === "student" && !r.disabled,
+    []
+  );
+  const studentRoles = useListTableControllerValues(controller.userRolesWithProfiles, studentRolePredicate);
+  // Catch up on roles changed since the controller's watermark, as useAllStudentRoles does on
+  // mount: the first-channel-join catch-up can be dropped when a full refetch races it, or the
+  // SSR data can predate a cache invalidation, which would hide students enrolled moments ago.
+  useEffect(() => {
+    void controller.userRolesWithProfiles.catchUpSinceWatermark();
+  }, [controller.userRolesWithProfiles]);
   const classSections = useClassSections();
   const labSections = useLabSections();
+  // calculateEffectiveDueDate reads these from the controller; subscribe so lab-based dates
+  // recompute once they load or change.
+  const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
 
   const hasLabScheduling = assignment?.minutes_due_after_lab !== null;
   const hasGroups = (groups?.length ?? 0) > 0;
@@ -685,33 +739,67 @@ export default function DueDateExceptions() {
 
   // Process student data with extensions and due dates
   const studentData = useMemo(() => {
+    // calculateEffectiveDueDate reads lab section meetings from the controller, which the linter
+    // cannot see; referencing them here keeps them a dependency.
+    void labSectionMeetings;
     if (!assignment) return [];
     const classSectionNames = new Map(classSections.map((s) => [s.id, s.name]));
     const labSectionNames = new Map(labSections.map((s) => [s.id, s.name]));
 
+    // Lookups built once, so each row is O(1) rather than a scan of groups and exceptions.
+    const groupByStudent = new Map<string, AssignmentGroup>();
+    for (const g of groups ?? []) {
+      for (const m of g.assignment_groups_members) groupByStudent.set(m.profile_id, g);
+    }
+    const extensionsByStudent = new Map<string, AssignmentDueDateException[]>();
+    const extensionsByGroup = new Map<number, AssignmentDueDateException[]>();
+    const extensionOrder = new Map<AssignmentDueDateException, number>();
+    const push = <K,>(map: Map<K, AssignmentDueDateException[]>, key: K, ext: AssignmentDueDateException) => {
+      const list = map.get(key);
+      if (list) list.push(ext);
+      else map.set(key, [ext]);
+    };
+    (allExtensions ?? []).forEach((ext, i) => {
+      extensionOrder.set(ext, i);
+      if (ext.student_id) push(extensionsByStudent, ext.student_id, ext);
+      if (ext.assignment_group_id) push(extensionsByGroup, ext.assignment_group_id, ext);
+    });
+    // The lab-based date depends only on the lab section.
+    const effectiveDueDateByLab = new Map<number, TZDate | null>();
+
     return studentRoles.map((role): StudentDueDateRow => {
       const student = role.profiles;
-      // Find group for this student
-      const group = groups?.find((g) => g.assignment_groups_members.some((m) => m.profile_id === student.id)) || null;
+      const group = groupByStudent.get(student.id) ?? null;
 
       // The student's own exceptions plus their group's, as calculate_final_due_date sums them.
       // Group members can hold their own too (student-wide extensions are keyed by student_id).
-      const extensions = allExtensions?.filter(
-        (ext) => ext.student_id === student.id || (!!group && ext.assignment_group_id === group.id)
-      );
+      const ownExtensions = extensionsByStudent.get(student.id) ?? [];
+      const groupExtensions = group ? (extensionsByGroup.get(group.id) ?? []) : [];
+      // Merge in the controller's order (the most recent is shown last).
+      const extensions = groupExtensions.length
+        ? [...ownExtensions, ...groupExtensions.filter((ext) => ext.student_id !== student.id)].sort(
+            (a, b) => extensionOrder.get(a)! - extensionOrder.get(b)!
+          )
+        : ownExtensions;
 
-      // Calculate effective due date (lab-based if applicable)
+      // Calculate effective due date (lab-based if applicable). A student with no lab section
+      // keeps the original due date, as calculateEffectiveDueDate would return.
       let effectiveDueDate = originalDueDate;
-      if (hasLabScheduling && originalDueDate && assignment) {
-        try {
-          const calculatedDate = controller.calculateEffectiveDueDate(assignment, {
-            studentPrivateProfileId: student.id
-          });
-          effectiveDueDate = new TZDate(calculatedDate, course.time_zone || "America/New_York");
-        } catch {
-          // Fallback to original due date if calculation fails
-          effectiveDueDate = originalDueDate;
+      const labSectionId = role.lab_section_id;
+      if (hasLabScheduling && originalDueDate && assignment && labSectionId) {
+        if (!effectiveDueDateByLab.has(labSectionId)) {
+          try {
+            const calculatedDate = controller.calculateEffectiveDueDate(assignment, {
+              studentPrivateProfileId: student.id,
+              labSectionId
+            });
+            effectiveDueDateByLab.set(labSectionId, new TZDate(calculatedDate, course.time_zone || "America/New_York"));
+          } catch {
+            // Fallback to original due date if calculation fails
+            effectiveDueDateByLab.set(labSectionId, originalDueDate);
+          }
         }
+        effectiveDueDate = effectiveDueDateByLab.get(labSectionId) ?? originalDueDate;
       }
 
       // Calculate total extensions
@@ -725,6 +813,7 @@ export default function DueDateExceptions() {
 
       return {
         student,
+        email: role.users?.email ?? null,
         group,
         classSectionName: role.class_section_id ? (classSectionNames.get(role.class_section_id) ?? null) : null,
         labSectionName: role.lab_section_id ? (labSectionNames.get(role.lab_section_id) ?? null) : null,
@@ -739,6 +828,7 @@ export default function DueDateExceptions() {
     studentRoles,
     classSections,
     labSections,
+    labSectionMeetings,
     assignment,
     groups,
     allExtensions,
@@ -747,7 +837,18 @@ export default function DueDateExceptions() {
     controller,
     course.time_zone
   ]);
-  const { time_zone } = useCourse();
+
+  // Names shared by more than one student, whose row checkboxes need more than the name to be told apart.
+  const duplicateNames = useMemo(() => {
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+    for (const row of studentData) {
+      const name = row.student.name ?? "student";
+      if (seen.has(name)) duplicates.add(name);
+      else seen.add(name);
+    }
+    return duplicates;
+  }, [studentData]);
 
   // Set up columns for the table
   const columns = useMemo<ColumnDef<StudentDueDateRow>[]>(
@@ -764,28 +865,19 @@ export default function DueDateExceptions() {
           return (
             <VStack align="stretch" gap={1}>
               <Checkbox
-                aria-label="Select all rows matching current filters"
+                inputProps={{ "aria-label": "Select all rows matching current filters" }}
                 checked={someSelected ? "indeterminate" : allSelected}
                 disabled={filteredRows.length === 0}
-                onCheckedChange={(details) => {
-                  const checked = details.checked === true;
-                  for (const r of filteredRows) {
-                    r.toggleSelected(checked);
-                  }
-                }}
+                onCheckedChange={(details) => setFilteredSelection(table, details.checked === true)}
               />
               <HStack gap={1} flexWrap="wrap">
                 <Button
                   size="2xs"
                   variant="plain"
                   disabled={filteredRows.length === 0}
-                  onClick={() => {
-                    for (const r of filteredRows) {
-                      r.toggleSelected(true);
-                    }
-                  }}
+                  onClick={() => setFilteredSelection(table, true)}
                 >
-                  All in view
+                  All matching filters
                 </Button>
                 <Button size="2xs" variant="plain" onClick={() => table.resetRowSelection()}>
                   None
@@ -794,17 +886,22 @@ export default function DueDateExceptions() {
             </VStack>
           );
         },
-        cell: ({ row }) => (
-          <Checkbox
-            aria-label="Select row for bulk actions"
-            checked={row.getIsSelected()}
-            onCheckedChange={(details) => row.toggleSelected(details.checked === true)}
-          />
-        )
+        cell: ({ row }) => {
+          const { student, email } = row.original;
+          const name = student.name ?? "student";
+          const label = duplicateNames.has(name) ? `${name} (${email ?? student.id.slice(0, 8)})` : name;
+          return (
+            <Checkbox
+              inputProps={{ "aria-label": `Select ${label} for bulk actions` }}
+              checked={row.getIsSelected()}
+              onCheckedChange={(details) => row.toggleSelected(details.checked === true)}
+            />
+          );
+        }
       },
       {
         id: "student_name",
-        accessorFn: (row) => row.student.name,
+        accessorFn: (row) => row.student.name ?? undefined,
         header: "Student",
         sortUndefined: "last",
         enableColumnFilter: true,
@@ -812,36 +909,37 @@ export default function DueDateExceptions() {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values: string[] = Array.isArray(filterValue) ? filterValue : [filterValue];
           const name = row.original.student.name;
-          if (!name) return false;
-          return values.some((val) => name.toLowerCase().includes(val.toLowerCase()));
+          // Options are exact names, so "Sam Lee" must not also match "Sam Leeds".
+          return !!name && values.includes(name);
         },
         cell: ({ row }) => <PersonName uid={row.original.student.id} showAvatar={false} />
       },
       {
         id: "group_name",
-        accessorFn: (row) => row.group?.name ?? null,
+        // `undefined`, not `null`, for empty values: sortUndefined only checks `=== undefined`.
+        accessorFn: (row) => row.group?.name || undefined,
         header: "Group",
         sortUndefined: "last",
         enableColumnFilter: true,
-        filterFn: includesFilter(FILTER_EMPTY_LABELS.group_name),
+        filterFn: includesFilter,
         cell: ({ row }) => row.original.group?.name || <Text color="fg.muted">No group</Text>
       },
       {
         id: "class_section_name",
-        accessorFn: (row) => row.classSectionName,
+        accessorFn: (row) => row.classSectionName || undefined,
         header: "Class Section",
         sortUndefined: "last",
         enableColumnFilter: true,
-        filterFn: includesFilter(FILTER_EMPTY_LABELS.class_section_name),
+        filterFn: includesFilter,
         cell: ({ row }) => row.original.classSectionName ?? <Text color="fg.muted">Not assigned</Text>
       },
       {
         id: "lab_section_name",
-        accessorFn: (row) => row.labSectionName,
+        accessorFn: (row) => row.labSectionName || undefined,
         header: "Lab Section",
         sortUndefined: "last",
         enableColumnFilter: true,
-        filterFn: includesFilter(FILTER_EMPTY_LABELS.lab_section_name),
+        filterFn: includesFilter,
         cell: ({ row }) => row.original.labSectionName ?? <Text color="fg.muted">Not assigned</Text>
       },
       {
@@ -925,7 +1023,7 @@ export default function DueDateExceptions() {
         }
       }
     ],
-    [hasLabScheduling, originalDueDate, assignment, time_zone]
+    [hasLabScheduling, originalDueDate, assignment, duplicateNames]
   );
 
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
@@ -981,11 +1079,23 @@ export default function DueDateExceptions() {
     }
   });
 
+  // Set when a filter change can only widen the rows, so the selection is kept.
+  const filtersOnlyWidened = useRef(false);
   const columnFiltersKey = JSON.stringify(table.getState().columnFilters);
   useEffect(() => {
-    setRowSelection({});
+    if (filtersOnlyWidened.current) filtersOnlyWidened.current = false;
+    else setRowSelection({});
     table.setPageIndex(0);
   }, [columnFiltersKey, table]);
+
+  // A filter's control only renders on a visible column, but TanStack keeps applying it; drop the
+  // filter when its column is hidden so hidden state cannot narrow the rows.
+  useEffect(() => {
+    if (table.getState().columnFilters.some((f) => columnVisibility[f.id] === false)) {
+      filtersOnlyWidened.current = true;
+      table.setColumnFilters((prev) => prev.filter((f) => columnVisibility[f.id] !== false));
+    }
+  }, [columnVisibility, table]);
 
   const filterOptions = useMemo(() => {
     const collect = (getLabel: (row: StudentDueDateRow) => string | null, emptyLabel?: string) => {
@@ -993,7 +1103,7 @@ export default function DueDateExceptions() {
         (a, b) => a.localeCompare(b)
       );
       const options = labels.map((label) => ({ label, value: label }));
-      return emptyLabel ? [...options, { label: emptyLabel, value: emptyLabel }] : options;
+      return emptyLabel ? [...options, { label: emptyLabel, value: FILTER_EMPTY_VALUE }] : options;
     };
     return {
       student_name: collect((row) => row.student.name),
@@ -1015,24 +1125,31 @@ export default function DueDateExceptions() {
     () => studentData.filter((row) => rowSelection[row.student.id]),
     [studentData, rowSelection]
   );
+  const memberDeadlinesByGroup = useMemo(() => {
+    const deadlines = new Map<number, Set<number | undefined>>();
+    for (const row of studentData) {
+      if (!row.group) continue;
+      const set = deadlines.get(row.group.id) ?? new Set<number | undefined>();
+      set.add(row.finalDueDate?.getTime());
+      deadlines.set(row.group.id, set);
+    }
+    return deadlines;
+  }, [studentData]);
   const bulkTargets = useMemo(() => {
     const targets = new Map<string, BulkExceptionTarget>();
     for (const original of selectedRows) {
       const key = original.group ? `group:${original.group.id}` : `student:${original.student.id}`;
       if (targets.has(key)) continue;
-      const memberDeadlines = original.group
-        ? new Set(studentData.filter((r) => r.group?.id === original.group!.id).map((r) => r.finalDueDate?.getTime()))
-        : null;
       targets.set(key, {
         key,
         student_id: original.student.id,
         assignment_group_id: original.group?.id ?? null,
         currentFinalDueDate: original.finalDueDate,
-        hasMixedMemberDeadlines: (memberDeadlines?.size ?? 0) > 1
+        hasMixedMemberDeadlines: (original.group ? (memberDeadlinesByGroup.get(original.group.id)?.size ?? 0) : 0) > 1
       });
     }
     return Array.from(targets.values());
-  }, [selectedRows, studentData]);
+  }, [selectedRows, memberDeadlinesByGroup]);
   const [bulkAction, setBulkAction] = useState<"extend" | "set" | null>(null);
 
   const tableRows = table.getRowModel().rows;
@@ -1041,6 +1158,13 @@ export default function DueDateExceptions() {
     minRowsForVirtualization: 60
   });
   const visibleColumnCount = table.getVisibleLeafColumns().length;
+
+  // Each page starts at its top row.
+  const pageIndex = table.getState().pagination.pageIndex;
+  const scrollContainerRef = rowWindow.containerRef;
+  useEffect(() => {
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
+  }, [pageIndex, scrollContainerRef]);
 
   if (!assignment) {
     return <Skeleton height="400px" width="100%" />;
@@ -1097,7 +1221,7 @@ export default function DueDateExceptions() {
               Add extension
             </Button>
             <Button colorPalette="green" variant="subtle" onClick={() => setBulkAction("set")}>
-              Set deadline to...
+              Set due date to...
             </Button>
           </HStack>
         )}
@@ -1149,6 +1273,15 @@ export default function DueDateExceptions() {
                         key={header.id}
                         bg="bg.muted"
                         verticalAlign="top"
+                        // Without scope the header cells are exposed as plain cells, where aria-sort is not allowed.
+                        scope="col"
+                        aria-sort={
+                          header.column.getIsSorted() === "asc"
+                            ? "ascending"
+                            : header.column.getIsSorted() === "desc"
+                              ? "descending"
+                              : undefined
+                        }
                         style={{
                           position: "sticky",
                           top: 0,
@@ -1158,7 +1291,16 @@ export default function DueDateExceptions() {
                         {header.isPlaceholder ? null : (
                           <>
                             {header.column.getCanSort() ? (
-                              <Text cursor="pointer" onClick={header.column.getToggleSortingHandler()}>
+                              <Button
+                                variant="plain"
+                                size="sm"
+                                h="auto"
+                                p={0}
+                                gap={0}
+                                fontWeight="inherit"
+                                color="inherit"
+                                onClick={header.column.getToggleSortingHandler()}
+                              >
                                 {flexRender(header.column.columnDef.header, header.getContext())}
                                 {{
                                   asc: (
@@ -1176,7 +1318,7 @@ export default function DueDateExceptions() {
                                     <FaSort />
                                   </Icon>
                                 )}
-                              </Text>
+                              </Button>
                             ) : (
                               flexRender(header.column.columnDef.header, header.getContext())
                             )}
@@ -1185,6 +1327,13 @@ export default function DueDateExceptions() {
                                 isMulti={true}
                                 id={header.id}
                                 aria-label={filterPlaceholders[header.id]}
+                                value={((header.column.getFilterValue() as string[] | undefined) ?? []).map(
+                                  (value) =>
+                                    filterOptions[header.id].find((option) => option.value === value) ?? {
+                                      label: value,
+                                      value
+                                    }
+                                )}
                                 onChange={(e) => {
                                   const values = Array.isArray(e) ? e.map((item) => item.value) : [];
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
