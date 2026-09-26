@@ -76,6 +76,17 @@ export const SURVEY_COMPLETE_TASK: TaskDefinition = {
     "answer the name question with 'Ada Lovelace', choose the middle option for the pace question,",
     "check at least one topic, add a short comment, then submit the survey with the Complete button."
   ].join(" "),
+  /**
+   * Asserts the ANSWERS, not just that a row was submitted.
+   *
+   * `is_submitted === true` alone was the whole predicate, and it is how issue
+   * #913 shipped: the NVDA driver's own arrow keys were re-selecting the q2
+   * radio group on every sweep press (in focus mode an arrow inside a radio
+   * group moves AND selects), so the submitted answer was whichever option the
+   * last press happened to land on — and nothing in a green run disagreed. The
+   * prompt above names an exact answer for each question, so the predicate can
+   * check each one; q2 in particular is the one a mutating sweep rewrites.
+   */
   predicate: async (_verdict, ctx) => {
     const row = await ctx.queryRow("survey_responses", {
       survey_id: ctx.seed.surveyId,
@@ -85,7 +96,36 @@ export const SURVEY_COMPLETE_TASK: TaskDefinition = {
     if (row.is_submitted !== true) {
       return { success: false, detail: `survey_responses row exists but is_submitted=${String(row.is_submitted)}` };
     }
-    return { success: true, detail: "survey_responses.is_submitted=true" };
+    const response = (row.response ?? {}) as Record<string, unknown>;
+    const problems: string[] = [];
+
+    // q2 — the pace radiogroup. Exact match on the middle choice: "the driver
+    // arrowed one past it" is precisely the failure being caught, and any
+    // looser check (non-empty, one-of-three) would pass it.
+    if (response.q2 !== "Just right") {
+      problems.push(`q2 (pace) is ${JSON.stringify(response.q2 ?? null)}, expected "Just right"`);
+    }
+    // q1 — free text. Compared case- and space-insensitively because the value
+    // travels through real keystrokes and NVDA's own field handling.
+    const q1 = typeof response.q1 === "string" ? response.q1.trim().toLowerCase() : "";
+    if (q1 !== "ada lovelace") {
+      problems.push(`q1 (name) is ${JSON.stringify(response.q1 ?? null)}, expected "Ada Lovelace"`);
+    }
+    // q3 — checkbox group. The prompt says "at least one", so the assertion is
+    // the same shape: a non-empty array drawn from the seeded choices.
+    const q3 = Array.isArray(response.q3) ? response.q3 : [];
+    if (q3.length === 0) {
+      problems.push(`q3 (topics) is ${JSON.stringify(response.q3 ?? null)}, expected at least one topic`);
+    }
+    // q4 — the prompt asks for "a short comment" without dictating its text, so
+    // only its presence can be asserted.
+    if (typeof response.q4 !== "string" || response.q4.trim().length === 0) {
+      problems.push(`q4 (comment) is ${JSON.stringify(response.q4 ?? null)}, expected a non-empty comment`);
+    }
+
+    return problems.length === 0
+      ? { success: true, detail: `survey submitted with q1/q2/q3/q4 as instructed (q2="${String(response.q2)}")` }
+      : { success: false, detail: `survey was submitted but the answers are wrong: ${problems.join("; ")}` };
   }
 };
 
