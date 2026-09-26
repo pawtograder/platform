@@ -1,0 +1,315 @@
+# Cluster-side isolation for Pawtograder PR previews on ripley.
+# See docs/operations/preview-isolation.md for what each object closes and how
+# to verify it. Apply with:  kubectl apply -f docs/operations/manifests/preview-isolation.yaml
+#
+# Every object here is keyed on the namespace label pawtograder.net/preview=true,
+# which the preview workflow's `secrets` job sets on creation. The preview
+# deploy credential cannot change namespace labels, cilium.io objects or
+# admission policies, so nothing in a PR's chart can loosen these.
+
+# ---------------------------------------------------------------------------
+# Ingress: a preview may only publish its own hostnames.
+#
+# ingress-nginx merges every Ingress that names the same host into one server
+# block, and there is one IngressClass for the whole cluster. Without this, a
+# PR's chart could add a path under auth.in.ripley.cloud, bao.work.ripley.cloud
+# or any other host and have it served with that host's certificate.
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-ingress-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["ingresses"]
+  variables:
+    # pawtograder-preview-pr-1034 -> pr-1034, the label every host must carry.
+    - name: id
+      expression: >-
+        namespaceObject.metadata.name.startsWith('pawtograder-preview-')
+        ? namespaceObject.metadata.name.substring(20) : ''
+    - name: suffix
+      expression: "'.preview.pawtograder.net'"
+    - name: annotations
+      expression: "object.metadata.?annotations.orValue({})"
+    # nginx annotations the chart uses. Everything else under that prefix is
+    # refused: server-alias adds hostnames, auth-url makes nginx call an
+    # arbitrary URL, and others rewrite upstream routing.
+    - name: allowedNginxAnnotations
+      expression: >-
+        ['nginx.ingress.kubernetes.io/proxy-body-size',
+         'nginx.ingress.kubernetes.io/proxy-buffer-size',
+         'nginx.ingress.kubernetes.io/proxy-buffers-number',
+         'nginx.ingress.kubernetes.io/proxy-read-timeout',
+         'nginx.ingress.kubernetes.io/proxy-send-timeout',
+         'nginx.ingress.kubernetes.io/proxy-connect-timeout',
+         'nginx.ingress.kubernetes.io/limit-rps',
+         'nginx.ingress.kubernetes.io/limit-connections',
+         'nginx.ingress.kubernetes.io/auth-type',
+         'nginx.ingress.kubernetes.io/auth-secret',
+         'nginx.ingress.kubernetes.io/auth-realm',
+         'nginx.ingress.kubernetes.io/ssl-redirect',
+         'nginx.ingress.kubernetes.io/force-ssl-redirect']
+  validations:
+    - expression: variables.id.startsWith('pr-')
+      message: "preview Ingresses must live in a pawtograder-preview-pr-* namespace"
+    # Host must be <id>.preview.pawtograder.net or <id>-<x>.preview.pawtograder.net,
+    # one DNS label (the wildcard certificate covers exactly one). A rule with
+    # no host is a catch-all for every hostname, so it is refused.
+    - expression: >-
+        object.spec.?rules.orValue([]).all(r,
+          r.?host.orValue('').endsWith(variables.suffix) &&
+          !r.host.substring(0, size(r.host) - size(variables.suffix)).contains('.') &&
+          (r.host == variables.id + variables.suffix ||
+           r.host.startsWith(variables.id + '-')))
+      messageExpression: >-
+        'every Ingress rule needs a host of the form ' + variables.id +
+        '[-name].preview.pawtograder.net'
+    - expression: >-
+        object.spec.?tls.orValue([]).all(t, t.?hosts.orValue([]).all(h,
+          h.endsWith(variables.suffix) &&
+          !h.substring(0, size(h) - size(variables.suffix)).contains('.') &&
+          (h == variables.id + variables.suffix || h.startsWith(variables.id + '-'))))
+      messageExpression: >-
+        'TLS hosts must be of the form ' + variables.id + '[-name].preview.pawtograder.net'
+    - expression: "!has(object.spec.defaultBackend)"
+      message: "preview Ingresses may not set a defaultBackend"
+    - expression: "object.spec.?ingressClassName.orValue('') == 'nginx'"
+      message: "preview Ingresses must set ingressClassName: nginx"
+    - expression: >-
+        object.spec.?rules.orValue([]).all(r,
+          r.?http.?paths.orValue([]).all(p, has(p.backend.service)))
+      message: "preview Ingress backends must be Services in the same namespace"
+    - expression: >-
+        variables.annotations.all(k,
+          !k.startsWith('nginx.ingress.kubernetes.io/') ||
+          k in variables.allowedNginxAnnotations)
+      messageExpression: >-
+        'nginx annotation not allowed on a preview Ingress: ' +
+        variables.annotations.filter(k, k.startsWith('nginx.ingress.kubernetes.io/') &&
+          !(k in variables.allowedNginxAnnotations)).join(', ')
+    # ingress-nginx accepts <namespace>/<name> here, which would read another
+    # namespace's Secret.
+    - expression: >-
+        !('nginx.ingress.kubernetes.io/auth-secret' in variables.annotations) ||
+        !variables.annotations['nginx.ingress.kubernetes.io/auth-secret'].contains('/')
+      message: "auth-secret must name a Secret in the preview's own namespace"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-ingress-surface
+spec:
+  policyName: preview-ingress-surface
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# Services: ClusterIP with a selector, nothing else.
+#
+# NodePort and LoadBalancer open ports outside the namespace. externalIPs lets
+# a Service capture cluster traffic to an arbitrary IP (CVE-2020-8554).
+# ExternalName, or a selectorless Service with hand-written Endpoints, points
+# an in-namespace name (and so the preview's Ingress) at anything the ingress
+# controller can reach, which is every internal service.
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-service-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["services"]
+  validations:
+    - expression: "object.spec.?type.orValue('ClusterIP') == 'ClusterIP'"
+      message: "preview Services must be type ClusterIP"
+    - expression: "size(object.spec.?externalIPs.orValue([])) == 0"
+      message: "preview Services may not set externalIPs"
+    - expression: "size(object.spec.?selector.orValue({})) > 0"
+      message: "preview Services must have a pod selector"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-service-surface
+spec:
+  policyName: preview-service-surface
+  validationActions: [Deny]
+---
+# Endpoints are written by the endpoints controller. Anything running as a
+# preview-namespace identity (the deploy credential, or a ServiceAccount the
+# chart grants rights to) may not write them by hand. EndpointSlices are not
+# in the deploy role's API groups, so they are covered by RBAC already; they
+# are listed here so that stays true if the role grows.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-endpoints-managed
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["endpoints"]
+      - apiGroups: ["discovery.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["endpointslices"]
+  matchConditions:
+    - name: preview-identities
+      expression: "request.userInfo.username.startsWith('system:serviceaccount:pawtograder-preview-')"
+  validations:
+    - expression: "false"
+      message: "preview identities may not write Endpoints or EndpointSlices"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-endpoints-managed
+spec:
+  policyName: preview-endpoints-managed
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# Network: preview pods reach the internet, their own stack and shared Redis.
+#
+# Egress allow-list. Everything else in the cluster (pawtograder-staging,
+# openbao, minio, monitoring, kube-apiserver, kubelets) and on the LAN is
+# dropped. The chart's own NetworkPolicy cannot provide this: the PR controls
+# the chart, and the deploy role can delete NetworkPolicies.
+#
+# Observed traffic from idle previews before this was written: kube-dns:53,
+# pawtograder-shared-redis:6379, and the preview's own pods. The rest comes
+# from values-preview.yaml: S3 at s3.talos.ripley.cloud (ingress-nginx, which
+# runs on the host network, so it is `host`/`remote-node` on 443), and the
+# preview's own API host, which resolves to the public edge address.
+#
+# Known residual: port 443 on the nodes is ingress-nginx, which serves every
+# Ingress in the cluster, so a preview can reach internal hostnames the same
+# way any LAN client can. Those rely on their own authentication.
+# ---------------------------------------------------------------------------
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: pawtograder-preview-egress
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:io.cilium.k8s.namespace.labels.pawtograder.net/preview: "true"
+  egress:
+    # Pods of this (or another) preview. A clusterwide policy cannot say
+    # "same namespace"; cross-preview reach is accepted.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.cilium.k8s.namespace.labels.pawtograder.net/preview: "true"
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: pawtograder-shared-redis
+      toPorts:
+        - ports:
+            - port: "6379"
+              protocol: TCP
+    - toEntities: [host, remote-node]
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+            - port: "443"
+              protocol: TCP
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except:
+            - 10.0.0.0/8
+            - 172.16.0.0/12
+            - 192.168.0.0/16
+            - 100.64.0.0/10
+            - 169.254.0.0/16
+---
+# ---------------------------------------------------------------------------
+# Network: the pawtograder ARC pool (pawtograder-ci, pawtograder-e2e).
+#
+# Trusted PRs run there: lint/jest/deno/e2e execute PR code on the runner, and
+# the preview build jobs run PR Dockerfiles in its docker daemon. A deny-list
+# rather than an allow-list because the pool's legitimate needs are wider and
+# less observable (runners scale to zero): GitHub, GHCR, the kube-apiserver
+# for preview deploys, the registry and cache behind ingress-nginx, OpenBao
+# via its public name. What it never needs is another namespace's pods or a
+# LAN host that is not a cluster node.
+#
+# enableDefaultDeny.egress=false keeps every other destination allowed; a
+# deny rule wins over any allow.
+# ---------------------------------------------------------------------------
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: pawtograder-ci-egress-deny
+  namespace: arc-runners-pawtograder
+spec:
+  endpointSelector: {}
+  enableDefaultDeny:
+    egress: false
+    ingress: false
+  egressDeny:
+    - toEndpoints:
+        - matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: NotIn
+              values: [arc-runners-pawtograder, kube-system]
+    - toEndpoints:
+        - matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: In
+              values: [kube-system]
+            - key: k8s:k8s-app
+              operator: NotIn
+              values: [kube-dns]
+    # Node management ports. Nodes are `host`/`remote-node`, not CIDRs, so the
+    # LAN deny below does not cover them; 80/443 (ingress-nginx) and 6443
+    # (kube-apiserver, used by preview deploys) stay open.
+    - toEntities: [host, remote-node]
+      toPorts:
+        - ports:
+            - port: "10250" # kubelet
+              protocol: TCP
+            - port: "10255"
+              protocol: TCP
+            - port: "2379" # etcd
+              endPort: 2380
+              protocol: TCP
+            - port: "50000" # talos apid / trustd
+              endPort: 50001
+              protocol: TCP
+    - toCIDRSet:
+        - cidr: 10.0.0.0/8
+        - cidr: 172.16.0.0/12
+        - cidr: 192.168.0.0/16
+        - cidr: 100.64.0.0/10
+        - cidr: 169.254.0.0/16

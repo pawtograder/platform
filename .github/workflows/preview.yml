@@ -1216,6 +1216,11 @@ jobs:
           # postgres,e2e,s3} Secrets created by the `secrets` job.
           # secrets.autogenerate=false: skip the in-cluster bootstrap Job
           # (we already provisioned everything from CI).
+          # *.storeName=openbao-preview: the cluster-wide `openbao` store
+          # refuses preview namespaces (it reads all of kv/apps/*). Set here,
+          # not only in values-preview.yaml, because the chart and its values
+          # come from the PR; the store's own conditions are what enforce it.
+          # See docs/operations/preview-isolation.md.
           helm upgrade --install "$RELEASE" \
             ./charts/pawtograder \
             --namespace "$NAMESPACE" \
@@ -1227,6 +1232,9 @@ jobs:
             --set seed.image.tag="$TAG" \
             --set secrets.autogenerate=false \
             --set secrets.create=false \
+            --set redis.shared.storeName=openbao-preview \
+            --set seed.externalSecret.storeName=openbao-preview \
+            --set secrets.externalSecret.storeName=openbao-preview \
             --set-string global.deploy.branch="$SAFE_BRANCH" \
             --set-string global.deploy.pr="$DEPLOY_PR" \
             --set-string global.deploy.runId="$GITHUB_RUN_ID" \
