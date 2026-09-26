@@ -376,8 +376,8 @@ spec:
       - apiGroups: [""]
         apiVersions: ["v1"]
         # UPDATE belongs here as much as CREATE and DELETE. `preview-provision`
-        # holds `patch` on namespaces CLUSTER-WIDE (a generated ClusterRole is
-        # bound with a ClusterRoleBinding), because the secrets job labels the
+        # holds `patch` on namespaces CLUSTER-WIDE (it is minted with
+        # cluster_role_binding=true), because the secrets job labels the
         # namespace it just created. Every other tier is scoped by
         # `allowed_kubernetes_namespace_selector` on
         # `pawtograder.net/preview=true` — so a single `kubectl label namespace

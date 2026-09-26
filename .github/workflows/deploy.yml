@@ -138,6 +138,7 @@ jobs:
           # Explicit: under pull_request_target a bare checkout is the BASE
           # branch, which would test the wrong code and pass silently.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       # Restore-only, with a separate conditional save below, so that no PR
       # run writes a cache a later trusted build would restore — CodeQL

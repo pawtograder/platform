@@ -110,6 +110,11 @@ jobs:
   build-web:
     needs: meta
     runs-on: pawtograder-ci
+    # Holds KUBECONFIG_BASE64 and the STAGING_* build values. An environment
+    # rather than repo secrets so its deployment-branch policy (staging, main,
+    # v* tags) decides who can reach them: repo secrets go to any workflow on
+    # any branch, and anyone with push can write one.
+    environment: release-build
     # NEXT_PUBLIC_* values are baked into the client bundle by Next.js, so
     # one image cannot serve arbitrary deployments. We only build web on
     # events where the bake target is unambiguous:
@@ -470,6 +475,9 @@ jobs:
     # same cluster from this runner to read the anon-key secret, so it's the
     # proven path for the helm upgrade too.
     runs-on: pawtograder-ci
+    # KUBECONFIG_BASE64 lives here, restricted to the staging branch; see
+    # build-web.
+    environment: staging
     # Serialize deploys so two staging pushes landing close together can't run
     # overlapping `helm upgrade`s against the same release.
     concurrency:

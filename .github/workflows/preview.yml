@@ -188,6 +188,9 @@ jobs:
       # a reusable-workflow `with:` block. Keep in sync with PREVIEW_LABEL
       # below, which the meta job uses for the same label.
       require_label: preview
+      # Fork previews stay off while the static cluster-admin kubeconfig is
+      # the credential; see the input's description in _trust-gate.yml.
+      forks_allowed: ${{ vars.PREVIEW_CLUSTER_AUTH == 'oidc' }}
 
   # --------------------------------------------------------------------------
   # meta — derive preview id, hostnames, image tag, namespace, etc.
@@ -424,6 +427,7 @@ jobs:
           bao_addr: ${{ vars.BAO_ADDR }}
           bao_role: preview-provision
           k8s_role: preview-provision
+          cluster_scoped: "true"
           namespace: ${{ env.PREVIEW_CI_NAMESPACE }}
           # Explicit, like every other call site. The action's default is the
           # longest any call site asks for (see action.yml), so an omitted
@@ -517,6 +521,18 @@ jobs:
           # `pawtograder-preview-*` glob, so the label is how per-PR namespaces
           # are matched without granting `*`.
           kubectl label namespace "$NS" pawtograder.net/preview=true --overwrite
+          # Pod Security: `preview-deploy` holds `*/*` inside this namespace and
+          # applies the PR's own chart, so without an enforce level a chart
+          # could run a privileged or hostPath pod and step off the namespace
+          # onto the node — RBAC alone does not bound that. The chart passes
+          # `baseline` today (checked with a server-side dry run against a live
+          # preview); `restricted` does not (auth, kong and others lack
+          # runAsNonRoot), so it is warn/audit only until the chart catches up.
+          kubectl label namespace "$NS" --overwrite \
+            pod-security.kubernetes.io/enforce=baseline \
+            pod-security.kubernetes.io/enforce-version=latest \
+            pod-security.kubernetes.io/warn=restricted \
+            pod-security.kubernetes.io/audit=restricted
           # Which run owns this namespace. Run IDs increase monotonically per
           # repository, so this is a total order over deploys and teardowns
           # that does not depend on event delivery order — which is exactly
@@ -829,6 +845,7 @@ jobs:
           # Now the PR head, for the build. checkout cleans the workspace,
           # so the trusted action above is gone by here — fine, it already ran.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Read anon key from cluster
         env:
           NS: ${{ needs.meta.outputs.namespace }}
@@ -906,6 +923,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -939,6 +957,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -977,6 +996,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -1077,6 +1097,7 @@ jobs:
           # The PR head supplies the HELM CHART under review. After the
           # credential step, for the same reason as build-web.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Show kubectl client version
         run: kubectl version --client=true --output=yaml | head -20
 
@@ -1468,8 +1489,8 @@ jobs:
       #
       # `preview-teardown` is cluster-scoped and now carries ONLY Namespace
       # get/delete. It used to carry the namespaced rules as well — Secrets,
-      # PVCs, ConfigMaps, Pods, Services, apps/batch — but a generated
-      # ClusterRole is bound with a ClusterRoleBinding, so those verbs applied
+      # PVCs, ConfigMaps, Pods, Services, apps/batch — but it is minted
+      # with cluster_role_binding=true (it must be, to reach Namespaces), so those verbs applied
       # in EVERY namespace, production included. Since this job is deliberately
       # not trust-gated and runs on every PR close, that made it the widest
       # credential in the system. The namespaced half is `preview-teardown-ns`,
@@ -1497,6 +1518,7 @@ jobs:
           bao_addr: ${{ vars.BAO_ADDR }}
           bao_role: preview-teardown
           k8s_role: preview-teardown
+          cluster_scoped: "true"
           namespace: ${{ env.PREVIEW_CI_NAMESPACE }}
           ttl: 20m
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}

@@ -60,6 +60,17 @@ inputs:
       site that omits this.
     required: false
     default: "50m"
+  cluster_scoped:
+    description: >-
+      "true" to have the secrets engine bind the role with a ClusterRoleBinding
+      instead of a RoleBinding in `namespace` (mode=oidc). The engine's default
+      is a RoleBinding, which cannot grant cluster-scoped resources, so the
+      provision and teardown roles — which create, read and delete
+      `namespaces` — need this. The namespaced tiers must NOT set it, and the
+      Bao policies in scripts/setup-openbao-preview-oidc.sh deny the parameter
+      to them so a token for those tiers cannot ask for it either.
+    required: false
+    default: "false"
   api_server:
     description: >-
       Cluster API server URL (vars.PREVIEW_CLUSTER_API_SERVER). Not a secret.
@@ -103,6 +114,7 @@ runs:
         K8S_ROLE: ${{ inputs.k8s_role }}
         NS: ${{ inputs.namespace }}
         TTL: ${{ inputs.ttl }}
+        CLUSTER_SCOPED: ${{ inputs.cluster_scoped }}
         API_SERVER: ${{ inputs.api_server }}
         CA_B64: ${{ inputs.ca_base64 }}
         KUBECONFIG_B64: ${{ inputs.kubeconfig_base64 }}
@@ -233,9 +245,14 @@ runs:
         fi
         export BAO_TOKEN
 
+        # Sent only when true: the namespaced tiers' policies deny the
+        # parameter outright, so passing cluster_role_binding=false to them
+        # would be refused too.
+        crb=()
+        [ "$CLUSTER_SCOPED" = "true" ] && crb=(cluster_role_binding=true)
         SA_TOKEN=$(bao write -field=service_account_token \
           "kubernetes/creds/${K8S_ROLE}" \
-          kubernetes_namespace="$NS" ttl="$TTL")
+          kubernetes_namespace="$NS" ttl="$TTL" ${crb[@]+"${crb[@]}"})
         echo "::add-mask::$SA_TOKEN"
         if [ -z "$SA_TOKEN" ]; then
           echo "::error title=No ServiceAccount token::kubernetes/creds/${K8S_ROLE} returned an empty service_account_token for namespace '${NS}'." >&2

@@ -221,10 +221,17 @@ jwt_role preview-deploy    preview-deploy    preview-deploy
 jwt_role preview-teardown  preview-teardown  preview-teardown
 
 echo "==> policies"
+# The secrets engine binds with a RoleBinding unless the creds request passes
+# cluster_role_binding=true. Only preview-provision and preview-teardown need
+# cluster scope (Namespaces); every other path DENIES the parameter, or a
+# preview-deploy token could ask for its `*/*` ClusterRole bound cluster-wide.
 for r in read publish deploy; do
   $CLI policy write "preview-${r}" - <<EOF
 path "kubernetes/creds/preview-${r}" {
   capabilities = ["update"]
+  denied_parameters = {
+    "cluster_role_binding" = []
+  }
 }
 EOF
 done
@@ -239,6 +246,9 @@ path "kubernetes/creds/preview-provision" {
 }
 path "kubernetes/creds/preview-provision-secrets" {
   capabilities = ["update"]
+  denied_parameters = {
+    "cluster_role_binding" = []
+  }
 }
 EOF
 # teardown is split the same way and for the same reason: deleting a Namespace
@@ -251,6 +261,9 @@ path "kubernetes/creds/preview-teardown" {
 }
 path "kubernetes/creds/preview-teardown-ns" {
   capabilities = ["update"]
+  denied_parameters = {
+    "cluster_role_binding" = []
+  }
 }
 EOF
 
@@ -340,8 +353,8 @@ $CLI write kubernetes/roles/preview-provision-secrets \
 
 # Cluster-scoped half: Namespace get/delete and NOTHING else. The namespaced
 # rules that used to live here (Secrets, PVCs, ConfigMaps, Pods, Services,
-# apps/batch) applied in every namespace, production included, because a
-# generated ClusterRole is bound with a ClusterRoleBinding — the same mistake
+# apps/batch) applied in every namespace, production included, because this
+# role is minted with cluster_role_binding=true — the same mistake
 # preview-provision was split to avoid. The token `destroy` mints runs on every
 # PR close and that job is deliberately not trust-gated, so it was the widest
 # credential in the system. Namespace NAMES are bounded by the admission policy

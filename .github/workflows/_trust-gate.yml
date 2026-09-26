@@ -84,6 +84,16 @@ on:
         required: false
         type: string
         default: ""
+      forks_allowed:
+        description: >-
+          When false, `approved` is false for every FORK PR regardless of trust
+          or label. The preview lane passes `vars.PREVIEW_CLUSTER_AUTH ==
+          'oidc'`: under the static credential the deploy job applies the PR's
+          own chart with a cluster-admin kubeconfig, and fork previews are not
+          worth that. Flipping to OIDC turns them on with no workflow edit.
+        required: false
+        type: boolean
+        default: true
     secrets:
       trust_token:
         description: >-
@@ -320,6 +330,7 @@ jobs:
           GH_TOKEN: ${{ secrets.trust_token || secrets.GITHUB_TOKEN }}
           TRUSTED: ${{ steps.trust.outputs.trusted }}
           REQUIRE_LABEL: ${{ inputs.require_label }}
+          FORKS_ALLOWED: ${{ inputs.forks_allowed }}
           REPO: ${{ github.repository }}
           # Positive identification of the head repository; see the trust step
           # for why this is full_name rather than the `fork` flag.
@@ -357,6 +368,13 @@ jobs:
           if [[ -n "${HEAD_REPO:-}" && "$HEAD_REPO" == "$REPO" ]]; then
             echo "approved=true" >> "$GITHUB_OUTPUT"
             echo "::notice title=Preview approved::head branch lives in ${REPO}, so the '${REQUIRE_LABEL}' label is not required"
+            exit 0
+          fi
+
+          # Everything past here is a fork PR (or one whose head repo is gone).
+          if [[ "$FORKS_ALLOWED" != "true" ]]; then
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=No preview::Fork previews are disabled until PREVIEW_CLUSTER_AUTH=oidc; the static credential is cluster-admin."
             exit 0
           fi
 

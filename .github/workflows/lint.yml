@@ -123,6 +123,7 @@ jobs:
           # fails loudly here, which is the correct answer for something that
           # cannot be merged.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          persist-credentials: false
       # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
       # after every push, so resolving it at checkout time is not the same as
       # resolving the head SHA the gate vetted. Two ways that bites — a stale
@@ -247,6 +248,7 @@ jobs:
         with:
           # MERGE ref; see the `lint` job's checkout for why.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          persist-credentials: false
       # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
       # after every push, so resolving it at checkout time is not the same as
       # resolving the head SHA the gate vetted. Two ways that bites — a stale
@@ -386,6 +388,7 @@ jobs:
         with:
           # MERGE ref; see the `lint` job's checkout for why.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          persist-credentials: false
       # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
       # after every push, so resolving it at checkout time is not the same as
       # resolving the head SHA the gate vetted. Two ways that bites — a stale
@@ -439,12 +442,36 @@ jobs:
   # header says why. Its own job, not a step in chart-guardrails, so a failing
   # step there cannot skip it. PR-only, so it does not double up on pushes.
   postgres-restart-gate:
-    if: github.event_name == 'pull_request'
-    runs-on: pawtograder-ci
+    needs: gate
+    # PR-only, as before; `pull_request_target` because that is the only PR
+    # trigger this file has (a bare `pull_request` test here never matches).
+    # Gated like chart-guardrails: fails red on an untrusted ref rather than
+    # running its code on pawtograder-ci.
+    if: ${{ !cancelled() && github.event_name == 'pull_request_target' }}
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-ci' || 'ubuntu-latest' }}
     steps:
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::This check cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
       - uses: actions/checkout@v4
         with:
+          # MERGE ref; see the `lint` job's checkout. Full depth so the
+          # script can resolve origin/main.
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
           fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the merge ref contains the vetted head
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged_head=$(git rev-parse HEAD^2 2>/dev/null || true)
+          if [ "$merged_head" != "$HEAD_SHA" ]; then
+            echo "::error title=Merge ref does not match the vetted head::This checkout contains '${merged_head}', but the trust gate approved ${HEAD_SHA}. The merge ref moved or is stale; re-run this job." >&2
+            exit 1
+          fi
       - uses: azure/setup-helm@v4
         with:
           version: v3.20.2
@@ -471,6 +498,7 @@ jobs:
         with:
           # MERGE ref; see the `lint` job's checkout for why.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          persist-credentials: false
       # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
       # after every push, so resolving it at checkout time is not the same as
       # resolving the head SHA the gate vetted. Two ways that bites — a stale
