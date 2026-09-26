@@ -31,7 +31,7 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "auth") | nindent 4 }}
 spec:
-  replicas: {{ .Values.auth.replicas }}
+  replicas: {{ include "pawtograder.maintenance.writerReplicas" (dict "ctx" . "replicas" .Values.auth.replicas) }}
   {{- include "pawtograder.deploymentStrategy" (dict "component" .Values.auth) | nindent 2 }}
   selector:
     matchLabels:

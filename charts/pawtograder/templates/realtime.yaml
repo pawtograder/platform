@@ -46,7 +46,7 @@ metadata:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "realtime") | nindent 4 }}
 spec:
   serviceName: {{ include "pawtograder.realtime.headless" . }}
-  replicas: {{ .Values.realtime.replicas }}
+  replicas: {{ include "pawtograder.maintenance.writerReplicas" (dict "ctx" . "replicas" .Values.realtime.replicas) }}
   podManagementPolicy: Parallel
   selector:
     matchLabels:
