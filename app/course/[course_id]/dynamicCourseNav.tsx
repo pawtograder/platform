@@ -41,7 +41,7 @@ import {
   FiStar,
   FiUsers
 } from "react-icons/fi";
-import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
+import { MdOutlineMail, MdOutlineSchool, MdOutlineScience } from "react-icons/md";
 import { TbCards } from "react-icons/tb";
 import UserMenu from "./UserMenu";
 import { NavigationProgressBar } from "@/components/ui/navigation-progress";
@@ -158,6 +158,12 @@ const LinkItems = (courseID: number) => [
         icon: FaGithub,
         instructors_only: true,
         target: `/course/${courseID}/manage/course/github`
+      },
+      {
+        name: "Class Sections",
+        instructors_or_graders_only: true,
+        icon: MdOutlineSchool,
+        target: `/course/${courseID}/manage/course/class-sections`
       },
       {
         name: "Lab Sections",
@@ -546,7 +552,12 @@ export default function DynamicCourseNav() {
                         href={link.target || "#"}
                         aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
                       >
-                        <Flex align="center" role="group">
+                        {/* No role="group" here (WCAG 2.4.4 / 4.1.2): `group` does not support
+                            accessible-name-from-content, so wrapping the label in it left every
+                            desktop nav link with an EMPTY accessible name — screen readers
+                            announced them as bare "link". Nothing styles off it (no _groupHover
+                            in this file), so it was purely vestigial. */}
+                        <Flex align="center">
                           <HStack>
                             {React.createElement(link.icon)}
                             {link.name}

@@ -31,6 +31,8 @@ import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import {
   computeHandoutFileHashesForCommit,
+  describeHandoutSeedResult,
+  isExpectedHandoutSeedSkip,
   seedHandoutFileHashes,
   type HandoutHashCaches
 } from "../_shared/handoutFileHashes.ts";
@@ -45,10 +47,14 @@ import {
   MAX_FILE_SIZE_MB
 } from "../_shared/SubmissionIngestion.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { createRedis, type RedisClient } from "../_shared/Redis.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
+import { ExpectedRetryError, expectedRetryReport } from "../_shared/ExpectedRetryError.ts";
+import { classifyUnreadyRepoPush } from "../_shared/unreadyRepoPush.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
@@ -142,6 +148,41 @@ if (Deno.env.get("SENTRY_DSN")) {
   });
 }
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
+
+/**
+ * Capture at the severity the error asked for.
+ *
+ * Most of what this webhook throws is a fault. Some of it is not: a few sites throw specifically to
+ * make EventBridge redeliver the event (GitHub's webhook reaches this function through an
+ * EventBridge rule, which is what retries a non-2xx), because a redelivery is what makes the
+ * outcome correct (see ExpectedRetryError). Those must not be reported at `error` level, and they
+ * must not share a
+ * Bugsink group with genuine failures from the same frame — otherwise routine provisioning buries
+ * the real thing. Concretely: one 58-student assignment release produced 412 error-level events
+ * from one such throw site over the 88 minutes the create_repo queue took to drain.
+ *
+ * Used at the generic catch sites rather than at the throw sites, because the throw sites do not
+ * capture — they throw, and these catches are what report. `expectedRetryReport` also looks inside an
+ * AggregateError, which is how `eventHandler.receive` may hand a listener's throw to the entry catch,
+ * so both catches agree on the level for the same underlying error.
+ *
+ * Anything without a report captures exactly as before, so no existing issue's grouping or severity
+ * moves.
+ */
+function captureWebhookException(err: unknown, scope: Sentry.Scope) {
+  const expected = expectedRetryReport(err);
+  if (!expected) {
+    Sentry.captureException(err, scope);
+    return;
+  }
+  // Cloned rather than mutated: the caller's scope carries the tags for this delivery and may be
+  // reused for further captures, which must not inherit the downgrade.
+  const expectedScope = typeof scope?.clone === "function" ? scope.clone() : new Sentry.Scope();
+  expectedScope.setLevel(expected.level);
+  expectedScope.setFingerprint(expected.fingerprint);
+  expectedScope.setTag("expected_retry", "true");
+  Sentry.captureException(err, expectedScope);
+}
 
 /**
  * Returns true if the given file path appears in the modified/added/removed lists
@@ -331,7 +372,7 @@ async function createPushDirectSubmission(
   // whose first delivery threw transiently came back after the deadline and was then treated as
   // late — silently skipped, or spending late tokens the student should not have needed. It is
   // also not student-controllable, which is the property that ruled out head_commit.timestamp
-  // (`git commit --date=...`). Falls back to now when absent, which is the previous behaviour.
+  // (`git commit --date=...`). Falls back to now when absent, which is the previous behavior.
   const pushedAtRaw = payload.repository?.pushed_at;
   const pushedAt =
     typeof pushedAtRaw === "number"
@@ -1874,7 +1915,15 @@ async function handlePushToStudentRepo(
     // set up — the repository works and the student can push to it, and the reconciler will repair
     // the flag shortly. Acknowledging those pushes discarded them permanently, so none of the
     // student's work between the failure and the repair became a submission. Those are thrown, so
-    // GitHub redelivers until the flag is repaired.
+    // the delivery is redelivered until the flag is repaired.
+    //
+    // Redelivered by EVENTBRIDGE, not by GitHub. GitHub's webhook goes to an EventBridge rule that
+    // invokes this function (hence the EVENTBRIDGE_SECRET check at the entry point, and the
+    // `attempt=N` counter in the [DISPATCH] log line), so the retry policy that decides whether a
+    // student push survives a provisioning window is an EventBridge rule/target configuration in
+    // AWS — defined outside this repository and NOT verifiable from this code. Anyone reasoning
+    // about worst-case loss here has to go read that configuration; no attempt count or maximum
+    // event age is asserted anywhere in this file, because none has been confirmed.
     if (!studentRepo.is_github_ready) {
       const isProvisioningPush = !!studentRepo.synced_repo_sha && studentRepo.synced_repo_sha === payload.after;
       if (isProvisioningPush) {
@@ -1885,10 +1934,98 @@ async function handlePushToStudentRepo(
         );
         return;
       }
+      // Which of the two cases above this is, reported accordingly. BOTH still throw: the
+      // redelivery is the mechanism that makes provisioning converge, and removing it is how the
+      // student-work case starts losing submissions again. How many redeliveries there are, and for
+      // how long, is an EventBridge setting defined outside this repository — so the size of that
+      // budget cannot be read off this code, and nothing here should be tuned as if it could.
+      // What differs between the two cases is only the severity of the Sentry event, and that
+      // difference is the whole point of this branch.
+      //
+      // The expected case is not rare or incidental — it happens once for EVERY repository, on the
+      // first delivery, because the `repositories` row is inserted before createRepo runs and the
+      // readiness write lands after it returns. Measured in Khoury production on 2026-09-07: CS 4530
+      // released one assignment to 58 students, and the async create_repo queue drained the batch on
+      // GitHub between 04:09 and 05:37 UTC. Over those 88 minutes this line threw 412 times across
+      // all 58 repositories (~7 deliveries each, EventBridge backing off until the readiness write
+      // landed), and every one of them arrived in Bugsink at `error` level in the same group. The
+      // outcome was completely correct — 58/58 ready, no duplicates, empty DLQ, no lost work — which
+      // is exactly the problem: a genuine readiness-write failure occurring in that window was
+      // indistinguishable from the batch. Fall 2026's CS 2000 has ~585 students, i.e. several
+      // thousand such events on day one.
+      //
+      // What the split rests on, and what it deliberately does NOT rest on.
+      //
+      // The tempting discriminator is the shape of the push: case 1 is by construction the creation
+      // of the default branch, so it arrives with `created: true` and an all-zero `before`. That is
+      // insufficient, and an earlier version of this branch was wrong for exactly that reason. When
+      // GitHub created the repository and our readiness write then FAILED, the delivery being
+      // rejected is still that same branch-creation push — and a redelivery carries a byte-identical
+      // payload, so `created: true` never stops being true. Classifying on shape alone would report
+      // case 2 as expected forever, permanently hiding the one failure this branch exists to surface.
+      //
+      // So the shape is only a necessary condition, and the decision rests on independent evidence
+      // that creation is still running: `payload.repository.created_at`, GitHub's own per-repository
+      // creation timestamp, which must fall inside a finalize window (see
+      // PROVISIONING_IN_FLIGHT_WINDOW_MS). That is NOT the grace window on `repositories.created_at`
+      // rejected earlier, and the difference matters: our row is stamped when the whole release is
+      // enqueued, so its age grows with the size of the batch (~96 minutes for the last of 58, many
+      // hours for 585). GitHub creates the repository INSIDE our createRepo call, so its timestamp
+      // measures that one repository's own remaining finalize time — ~275s to the readiness write,
+      // ~8.7 minutes worst case traced — and does not grow with the batch at all.
+      //
+      // Every uncertainty resolves to the visible side: no timestamp, an unusable one, or a push onto
+      // existing history is `readiness_write_failed`. A mislabelled error event costs ten seconds of
+      // triage; a hidden readiness failure costs student submissions.
+      //
+      // One inference remains, and it is only about the volume, not the logic: that those 412
+      // deliveries carried `created: true` / an all-zero `before` follows from how a
+      // template-generated repository's first push must look, but the payloads retrievable from that
+      // incident are truncated, so it was never confirmed against them. The tags below are how to
+      // confirm it — after the next release, an all-`provisioning_in_flight` batch is the expected
+      // shape, and any `readiness_write_failed` in it deserves a look at `repo_not_ready_reason`.
+      //
+      // Do not "fix" this by deleting the throw or by loosening the sha comparison above: neither is
+      // broken. The sha comparison is the fast path for a provisioning push whose readiness write
+      // HAS landed; this branch is the same push arriving before it landed.
+      const unready = classifyUnreadyRepoPush({
+        created: payload.created,
+        before: payload.before,
+        repositoryCreatedAt: payload.repository?.created_at,
+        repositoryPushedAt: payload.repository?.pushed_at
+      });
       scope.setTag("push_direct_retry_reason", "repo_not_github_ready");
+      scope.setTag("repo_not_ready_kind", unready.kind);
+      scope.setTag("repo_not_ready_reason", unready.reason);
+      if (unready.repoAgeMs !== undefined) {
+        scope.setTag("repo_age_seconds", String(Math.round(unready.repoAgeMs / 1000)));
+      }
+      if (unready.kind === "provisioning_in_flight") {
+        console.log(
+          `Rejecting delivery for ${repoName}@${payload.after}: repository creation is still in flight (this is the ` +
+            `branch-creation push, GitHub created the repository ${Math.round((unready.repoAgeMs ?? 0) / 1000)}s ago, ` +
+            `and the readiness write has not landed yet). EventBridge will redeliver, and the retry will recognize ` +
+            `it as the starter-template push once synced_repo_sha is recorded.`
+        );
+        throw new ExpectedRetryError(
+          `${repoName} is not marked ready yet, ${payload.after} created the default branch and GitHub created the ` +
+            `repository within the provisioning window, so creation is still in flight; rejecting this delivery so ` +
+            `EventBridge retries it once provisioning is recorded`,
+          {
+            name: "RepoProvisioningInFlightError",
+            level: "info",
+            fingerprint: ["github-repo-webhook", "push-direct", "repo-provisioning-in-flight"]
+          }
+        );
+      }
+      // Reached when the push is not the branch creation, when GitHub created this repository too long
+      // ago for creation to still be running, or when its creation timestamp is unusable. All three
+      // mean the same thing operationally: readiness was never recorded for a repository that exists,
+      // so the student's pushes are being rejected and only the reconciler (or a human) will fix it.
       throw new Error(
-        `${repoName} is not marked ready yet, but ${payload.after} is not the starter-template commit either, so ` +
-          `this is student work; rejecting this delivery so GitHub retries it once provisioning is recorded`
+        `${repoName} is not marked ready yet, but ${payload.after} is not a push from provisioning either ` +
+          `(${unready.reason}), so this is student work on a repository whose readiness was never recorded; ` +
+          `rejecting this delivery so EventBridge retries it once provisioning is recorded`
       );
     }
     // Record the commit history BEFORE any of the reasons this delivery might not become a
@@ -1992,7 +2129,7 @@ async function handlePushToStudentRepo(
     // records "superseded", so each of those scans would need to re-derive it. Not creating
     // the row removes the question, and takes the demote/re-promote/unwind machinery with it.
     //
-    // What is lost is a history entry for an intermediate commit, which is what the behaviour
+    // What is lost is a history entry for an intermediate commit, which is what the behavior
     // before this feature did anyway (only `#submit` pushes were recorded). The student's
     // newest push still becomes their submission, via its own delivery.
     if (!!studentRepoHeadSha && !!payload.after && studentRepoHeadSha !== payload.after) {
@@ -2079,7 +2216,7 @@ async function handlePushToStudentRepo(
     // actually installed.
     //
     // One API read, on `#submit` pushes only. A failure to determine it falls through to the
-    // dispatch below, which is the pre-existing behaviour.
+    // dispatch below, which is the pre-existing behavior.
     if (pushAssignment?.has_autograder !== false && pushRepoModeHasRepo && studentRepo.is_github_ready) {
       let workflowInstalled: boolean | undefined;
       try {
@@ -2230,6 +2367,7 @@ async function handlePushToGraderSolution(
     // previous webhook missed an update (e.g. the file was changed in a non-head
     // commit of a multi-commit push, or the >20-commit truncation hid it), an
     // instructor can force a re-sync by pushing any commit (e.g. touching README).
+    let configReconcileOk = true;
     try {
       console.log("Reconciling pawtograder.yml on push to main", { ymlTouched });
       const file = await getFileFromRepo(repoName, PAWTOGRADER_YML_PATH);
@@ -2261,6 +2399,12 @@ async function handlePushToGraderSolution(
           })
           .eq("id", autograder.id);
         if (updateError) {
+          // Clears the flag too. The pointer guard below is only as good as the set of failures
+          // that reach it, and a write that returns a PostgREST error (statement timeout, pool
+          // exhaustion, an RLS hiccup) leaves the config exactly as un-applied as a parse failure
+          // does. Logging it and letting the SHA advance is the precise thing the guard exists to
+          // prevent -- "this config is live" over a config that never landed.
+          configReconcileOk = false;
           Sentry.captureException(updateError, scope);
           console.error(updateError);
         }
@@ -2275,6 +2419,7 @@ async function handlePushToGraderSolution(
             .eq("id", autograder.id)
             .single();
           if (error) {
+            configReconcileOk = false;
             Sentry.captureException(error, scope);
             console.error(error);
           }
@@ -2289,11 +2434,27 @@ async function handlePushToGraderSolution(
       // configure-webhook flows do; an instructor editing pawtograder.yml through RepoFileEditor
       // arrives here instead of either of those.
       for (const autograder of autograders) {
-        const { data: handoutTarget } = await adminSupabase
+        const { data: handoutTarget, error: handoutTargetError } = await adminSupabase
           .from("assignments")
           .select("template_repo, latest_template_sha, class_id")
           .eq("id", autograder.id)
           .maybeSingle();
+        if (handoutTargetError) {
+          // A failed read is NOT "this assignment has no handout". Falling through to the
+          // `continue` below would skip the reseed while leaving configReconcileOk true, so the
+          // pointer would advance over hashes the config write above has already invalidated --
+          // the exact state the seedResult guard further down refuses. Same transient causes
+          // (statement timeout, pool exhaustion) as the update errors above.
+          configReconcileOk = false;
+          scope?.setTag("handout_target_lookup_failed", "true");
+          Sentry.captureException(handoutTargetError, scope);
+          console.error(
+            `Could not read the handout target for assignment ${autograder.id} after a grader-config push`,
+            handoutTargetError
+          );
+          continue;
+        }
+        // An assignment that genuinely has no template_repo is a steady state, not a failure.
         if (!handoutTarget?.template_repo) continue;
         const seedResult = await seedHandoutFileHashes({
           adminSupabase,
@@ -2303,36 +2464,72 @@ async function handlePushToGraderSolution(
           commitSha: handoutTarget.latest_template_sha,
           scope
         });
-        if (!seedResult.seeded) {
+        if (isExpectedHandoutSeedSkip(seedResult)) {
+          // Nothing to seed is not a failure. no_template_repo / no_commit_sha /
+          // no_submission_files are steady states of a healthy assignment -- there is no
+          // comparable file set, so no hash rows is the right answer, and there is nothing stale
+          // for the pointer guard to protect. Holding the pointer for these meant every later
+          // grader-config push on such an assignment pinned latest_autograder_sha and raised an
+          // incident, for a config that had in fact been saved correctly.
           console.log(
-            `Not reseeding handout file hashes for assignment ${autograder.id} after a grader-config push: ${seedResult.reason}`
+            `No handout file hashes to reseed for assignment ${autograder.id} after a grader-config push: ${describeHandoutSeedResult(seedResult)}`
+          );
+        } else if (!seedResult.seeded) {
+          // A real failure: seedHandoutFileHashes swallows its own errors and returns
+          // { seeded: false } with the message as the reason, so this never reached the catch
+          // below — and the config write that INVALIDATED these hashes had already succeeded.
+          // Advancing latest_autograder_sha there announces "this config is live" over hashes
+          // still built from the OLD submissionFiles globs, which is the
+          // comparison-between-two-file-sets the comment above describes.
+          configReconcileOk = false;
+          scope?.setTag("handout_file_hash_reseed_failed", "true");
+          console.error(
+            `Not reseeding handout file hashes for assignment ${autograder.id} after a grader-config push: ${describeHandoutSeedResult(seedResult)}`
           );
         }
       }
     } catch (err) {
-      // Don't fail the whole webhook if pawtograder.yml is missing/malformed —
-      // log it and continue so we still update the latest_autograder_sha below.
+      // Still don't fail the whole webhook if pawtograder.yml is missing/malformed — GitHub would
+      // redeliver the entire push forever. But do record that the reconcile failed, so the SHA
+      // pointer below is not advanced past a config that was never applied.
+      configReconcileOk = false;
       scope?.setTag("error_source", "pawtograder_yml_reconcile_failed");
       scope?.setTag("yml_touched_in_push", ymlTouched.toString());
       console.error("Failed to reconcile pawtograder.yml", err);
       Sentry.captureException(err, scope);
     }
-    // `payload.commits` is ordered oldest -> newest, so commits[0] is the FIRST
-    // (oldest) commit in the push, not the head. Use payload.after / head_commit
-    // so multi-commit pushes don't leave latest_autograder_sha stuck on an old SHA.
-    const newAutograderSha =
-      payload.after || payload.head_commit?.id || payload.commits.at(-1)?.id || payload.commits[0]?.id;
-    for (const autograder of autograders) {
-      const { error } = await adminSupabase
-        .from("autograder")
-        .update({
-          latest_autograder_sha: newAutograderSha
-        })
-        .eq("id", autograder.id)
-        .single();
-      if (error) {
-        Sentry.captureException(error, scope);
-        console.error(error);
+    if (!configReconcileOk) {
+      // latest_autograder_sha is what an instructor reads as "this config is live". Advancing it
+      // while `autograder.config` still holds the OLD yml is worse than not advancing: it reports
+      // that a fix has taken effect when grading is still running the previous configuration.
+      // Holding the pointer leaves the honest answer — the last good config is what is in force.
+      scope?.setTag("autograder_sha_pointer", "held");
+      console.error(
+        `Not advancing latest_autograder_sha for ${repoName}: pawtograder.yml reconcile failed. ` +
+          `The autograder still runs the last good config. Fix pawtograder.yml and push again.`
+      );
+      Sentry.withScope((s) => {
+        s.setFingerprint(["handout-pointer-held", "config"]);
+        Sentry.captureMessage(`Held latest_autograder_sha for ${repoName}: pawtograder.yml reconcile failed`, s);
+      });
+    } else {
+      // `payload.commits` is ordered oldest -> newest, so commits[0] is the FIRST
+      // (oldest) commit in the push, not the head. Use payload.after / head_commit
+      // so multi-commit pushes don't leave latest_autograder_sha stuck on an old SHA.
+      const newAutograderSha =
+        payload.after || payload.head_commit?.id || payload.commits.at(-1)?.id || payload.commits[0]?.id;
+      for (const autograder of autograders) {
+        const { error } = await adminSupabase
+          .from("autograder")
+          .update({
+            latest_autograder_sha: newAutograderSha
+          })
+          .eq("id", autograder.id)
+          .single();
+        if (error) {
+          Sentry.captureException(error, scope);
+          console.error(error);
+        }
       }
     }
   }
@@ -2425,11 +2622,14 @@ async function handlePushToTemplateRepo(
       currentHeadSha = await getDefaultBranchHeadSha(assignments[0].template_repo, scope);
     } catch (headErr) {
       // Never block history on this check: fall through and trust the payload, which is
-      // exactly the behaviour that existed before it.
+      // exactly the behavior that existed before it.
       scope?.setTag("template_head_lookup_failed", "true");
       Sentry.captureException(headErr, scope);
     }
   }
+  // Defaults true so the branches that never attempt a reconcile (no template repo, or no
+  // autograded assignments using it) keep advancing the pointer exactly as before.
+  let gradeYmlReconcileOk = true;
   if (!assignments[0].template_repo) {
     Sentry.captureMessage("No matching assignment found", scope);
   } else if (autogradedAssignments.length === 0) {
@@ -2450,6 +2650,11 @@ async function handlePushToTemplateRepo(
         content: string;
       };
       if (!file.content) {
+        // Holds the pointer, same as a throw would. An empty body means workflow_sha was never
+        // recomputed for this revision, so advancing latest_template_sha would report the handout
+        // as in sync while every student Actions run built from it fails the workflow-hash check.
+        // Only the catch below set the flag, and this branch does not throw.
+        gradeYmlReconcileOk = false;
         Sentry.captureMessage(`File ${GRADER_WORKFLOW_PATH} not found for ${assignments[0].template_repo}`, scope);
       } else {
         // Remove all whitespace (spaces, tabs, newlines, etc.) before hashing
@@ -2474,8 +2679,10 @@ async function handlePushToTemplateRepo(
         }
       }
     } catch (err) {
-      // Don't fail the whole webhook if grade.yml is missing — log and continue
-      // so latest_template_sha still gets updated below.
+      // Still don't fail the whole webhook if grade.yml is missing — GitHub would redeliver
+      // forever. But record the failure so the pointer below is not advanced past a revision whose
+      // workflow hash was never reconciled.
+      gradeYmlReconcileOk = false;
       scope?.setTag("error_source", "grade_yml_reconcile_failed");
       scope?.setTag("workflow_touched_in_push", workflowTouched.toString());
       console.error("Failed to reconcile grade.yml workflow hash", err);
@@ -2500,6 +2707,25 @@ async function handlePushToTemplateRepo(
   // evade empty-submission detection. History and hashes are per-revision and
   // order-independent; only the "current head" pointer is not.
   const isStaleDelivery = !!currentHeadSha && !!pushedSha && currentHeadSha !== pushedSha;
+  // isStaleDelivery guards against out-of-order deliveries; it says nothing about whether the
+  // reconcile succeeded. A failed grade.yml reconcile must hold the pointer for the same reason:
+  // latest_template_sha is what the repositories page renders as "in sync", so advancing it past a
+  // revision we could not reconcile tells students to pull a handout state that was never applied.
+  const holdPointer = isStaleDelivery || !gradeYmlReconcileOk;
+  if (!gradeYmlReconcileOk) {
+    scope?.setTag("template_sha_pointer", "held");
+    console.error(
+      `Not advancing latest_template_sha for ${assignments[0].template_repo}: grade.yml reconcile failed. ` +
+        `Still recording this revision's history and hashes.`
+    );
+    Sentry.withScope((s) => {
+      s.setFingerprint(["handout-pointer-held", "grade-yml"]);
+      Sentry.captureMessage(
+        `Held latest_template_sha for ${assignments[0].template_repo}: grade.yml reconcile failed`,
+        s
+      );
+    });
+  }
   if (isStaleDelivery) {
     scope?.setTag("stale_template_push_delivery", "true");
     console.log(
@@ -2510,7 +2736,7 @@ async function handlePushToTemplateRepo(
   for (const assignment of assignments) {
     // Guarded around the pointer write ONLY — the assignment_handout_commits upsert
     // further down this same loop must still run for a stale delivery.
-    const { error: assignmentUpdateError } = isStaleDelivery
+    const { error: assignmentUpdateError } = holdPointer
       ? { error: null }
       : await adminSupabase
           .from("assignments")
@@ -2620,7 +2846,8 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       const repoName = payload.repository.full_name;
       const adminSupabase = createClient<Database>(
         Deno.env.get("SUPABASE_URL") || "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+        { auth: REQUEST_SCOPED_AUTH_OPTIONS }
       );
       console.log(`[PUSH] repo=${repoName}`);
       //Is it a student repo?
@@ -2690,7 +2917,7 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       }
     }
   } catch (err) {
-    Sentry.captureException(err, scope);
+    captureWebhookException(err, scope);
     throw err;
   }
 });
@@ -2705,7 +2932,8 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
         maybeCrash("check_run.before_db_lookup");
         const adminSupabase = createClient<Database>(
           Deno.env.get("SUPABASE_URL") || "",
-          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+          { auth: REQUEST_SCOPED_AUTH_OPTIONS }
         );
         const checkRun = await adminSupabase
           .from("repository_check_runs")
@@ -2837,7 +3065,9 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
   tagScopeWithGenericPayload(scope, "membership", payload);
 
   try {
-    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+      auth: REQUEST_SCOPED_AUTH_OPTIONS
+    });
 
     // Only process when a member is added to a team
     if (payload.action !== "added") {
@@ -2952,6 +3182,82 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
 });
 
 // Handle organization invitation events
+/**
+ * A user left (or was removed from) a course's GitHub org.
+ *
+ * Until this handler existed, `github_org_confirmed` was a one-way latch: set true when the user
+ * joined the team, and never cleared. An enrollment whose org membership disappeared therefore
+ * looked confirmed forever, so nothing re-invited them, the team sync kept counting them as an
+ * intended member, and the student's only symptom was repo permissions that silently stopped
+ * working. Clearing both columns puts the row back into the state the ordinary invite machinery
+ * already knows how to repair: the enrollment triggers on the next role change, and the hourly
+ * membership reconciler otherwise.
+ *
+ * Only rows for classes IN THIS ORG are touched, and only live enrollments — a dropped student who
+ * is removed from the org must stay removed. This is also the shape the instructor unlink flow
+ * produces (github-user-sync removes the member, then clears the link); clearing there is harmless
+ * because every re-invite path requires a non-null github_username.
+ */
+async function handleOrgMemberRemoved(
+  adminSupabase: SupabaseClient<Database>,
+  organizationName: string,
+  removedUser: { login: string; id?: number | null },
+  scope: Sentry.Scope
+) {
+  // Resolve by GitHub ACCOUNT ID first, falling back to the login. A user who renames their GitHub
+  // account and then leaves arrives here under the new login while `users.github_username` may
+  // still hold the old one, so a login-only lookup finds nothing and the enrollment stays falsely
+  // confirmed forever — the exact latch this handler exists to release. The account id is the
+  // stable identity, and it is the same one `reresolveMissingGitHubLogin` recovers renames from.
+  let userData: { user_id: string } | null = null;
+  if (removedUser.id !== undefined && removedUser.id !== null) {
+    const { data, error } = await adminSupabase
+      .from("users")
+      .select("user_id")
+      .eq("github_user_id", String(removedUser.id))
+      .maybeSingle();
+    // Throw rather than capture-and-return. Every early return here looks to the dispatcher exactly
+    // like "handled", so it marks the delivery complete and GitHub never redelivers — and nothing
+    // else in the system clears this latch, so a transient database error would leave the departed
+    // member confirmed until some unrelated role mutation. The organization handler's own catch
+    // captures with the org/user tags already on the scope.
+    if (error) throw error;
+    userData = data;
+  }
+  if (!userData) {
+    const { data, error } = await adminSupabase
+      .from("users")
+      .select("user_id")
+      // Case-insensitive: GitHub logins are, and `users.github_username` stores whatever casing was
+      // current when the account was linked.
+      .ilike("github_username", removedUser.login)
+      .maybeSingle();
+    if (error) throw error;
+    userData = data;
+  }
+  if (!userData) {
+    // Not one of ours (an org owner, a bot, someone added out of band). Not an error.
+    return;
+  }
+
+  // One RPC for the whole repair: it clears the confirmation for the user's live enrollments in
+  // this org's classes and, for the classes actually in session, enqueues a forced re-invite. The
+  // enqueue matters — clearing alone would leave the student waiting for the sweep, which only
+  // reconsiders an enrollment whose invitation is a staleness period old, so someone removed days
+  // after accepting would have no repository access for the rest of that period. The window check
+  // and the org's case-insensitive match live in SQL alongside the predicate they share.
+  const { data: enqueued, error: repairError } = await adminSupabase.rpc("clear_org_membership_and_repair", {
+    p_user_id: userData.user_id,
+    p_org: organizationName
+  });
+  if (repairError) throw repairError;
+  scope?.setTag("org_membership_repairs_enqueued", String(enqueued ?? 0));
+  scope?.setTag("org_membership_cleared", "true");
+  console.log(
+    `[github-repo-webhook] ${removedUser.login} left ${organizationName}; cleared github_org_confirmed for their live enrollments, enqueued ${enqueued ?? 0} repair(s)`
+  );
+}
+
 eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent }) => {
   // Extract organization name early for e2e-ignore guard
   const organizationName = payload.organization?.login;
@@ -2972,7 +3278,24 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
   }
 
   try {
-    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+      auth: REQUEST_SCOPED_AUTH_OPTIONS
+    });
+
+    // A departure is the mirror of an invitation: it must un-confirm the enrollment, or the row
+    // claims a membership that no longer exists and no repair path will ever look at it again.
+    if (payload.action === "member_removed") {
+      const removedUser = "membership" in payload ? payload.membership?.user : undefined;
+      if (removedUser?.login && organizationName) {
+        await handleOrgMemberRemoved(
+          adminSupabase,
+          organizationName,
+          { login: removedUser.login, id: removedUser.id },
+          scope
+        );
+      }
+      return;
+    }
 
     // Only process member invitation events
     if (payload.action !== "member_invited") {
@@ -3199,7 +3522,8 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   try {
@@ -3332,7 +3656,8 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   try {
@@ -3471,7 +3796,8 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Which assignments treat this repo as their upstream/class repo? (Could be
@@ -3775,7 +4101,8 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
 
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     try {
@@ -3870,7 +4197,7 @@ export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
   return "tests" in unit && "testCount" in unit;
 }
 
-Deno.serve(async (req) => {
+serveWithSentryFlush(async (req) => {
   console.log("[ENTRY] Received webhook request");
   if (req.headers.get("Authorization") !== Deno.env.get("EVENTBRIDGE_SECRET")) {
     return Response.json(
@@ -3998,7 +4325,7 @@ Deno.serve(async (req) => {
     } catch (err) {
       console.log(`Error processing webhook for ${eventName} id ${id}`);
       console.error(err);
-      Sentry.captureException(err, scope);
+      captureWebhookException(err, scope);
 
       // Log error in Redis
       if (redis) {
@@ -4035,7 +4362,7 @@ Deno.serve(async (req) => {
   } catch (err) {
     console.log(`Error processing webhook for ${eventName} id ${id}`);
     console.error(err);
-    Sentry.captureException(err, scope);
+    captureWebhookException(err, scope);
     return Response.json(
       {
         message: "Error processing webhook"

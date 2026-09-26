@@ -48,6 +48,9 @@ export default function MCPTokensMenu() {
   const [newTokenType, setNewTokenType] = useState<TokenType>("mcp");
   const [newlyCreatedToken, setNewlyCreatedToken] = useState<string | null>(null);
   const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null);
+  // Which token is mid-revoke. The row only disappears once the refetch lands, so without this the
+  // button stays live for the whole round trip and a second click fires a second DELETE.
+  const [revokingTokenId, setRevokingTokenId] = useState<string | null>(null);
 
   const fetchTokens = useCallback(async () => {
     setLoading(true);
@@ -111,6 +114,8 @@ export default function MCPTokensMenu() {
   };
 
   const revokeToken = async (tokenId: string) => {
+    if (revokingTokenId) return;
+    setRevokingTokenId(tokenId);
     try {
       const supabase = createClient();
       await mcpTokensRevoke({ token_id: tokenId }, supabase);
@@ -125,6 +130,8 @@ export default function MCPTokensMenu() {
         title: "Error revoking token",
         description: error instanceof Error ? error.message : "Unknown error"
       });
+    } finally {
+      setRevokingTokenId(null);
     }
   };
 
@@ -312,6 +319,8 @@ export default function MCPTokensMenu() {
                                     size="sm"
                                     variant="ghost"
                                     colorPalette="red"
+                                    loading={revokingTokenId === token.token_id}
+                                    disabled={revokingTokenId !== null}
                                     onClick={() => revokeToken(token.token_id)}
                                   >
                                     <LuTrash2 />

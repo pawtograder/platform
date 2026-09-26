@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { verify } from "@noble/ed25519";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 /**
  * Discord webhook endpoint for application events
@@ -21,7 +22,7 @@ import { verify } from "@noble/ed25519";
  * The signature is in the X-Signature-Ed25519 header and the timestamp
  * is in the X-Signature-Timestamp header.
  */
-export async function POST(request: NextRequest) {
+async function postHandler(request: NextRequest) {
   const scope = Sentry.getCurrentScope();
 
   try {
@@ -157,3 +158,7 @@ function hexToBytes(hex: string): Uint8Array {
   }
   return bytes;
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const POST = withRouteMetrics("/api/discord/webhook", postHandler);

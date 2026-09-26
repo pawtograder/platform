@@ -12,6 +12,7 @@
 import "server-only";
 import { fetchMemberships, mapRoster, type RosterEntry, type SectionConfig } from "./nrps";
 import { ltiAdminClient, type LtiDb } from "./db";
+import { classifySupabase, timeRpc } from "@/lib/metrics";
 
 export type ContextLinkRow = {
   id: number;
@@ -199,7 +200,12 @@ export async function syncContextRoster(link: ContextLinkRow, db: LtiDb = ltiAdm
     const manageClassSections = cfg.sectionRole === "lecture" || cfg.splitByMemberSection;
     const manageLabSections = cfg.sectionRole === "lab" || cfg.splitByMemberSection;
 
-    const { error } = await db.rpc("sis_sync_enrollment", {
+    // web_supabase_rpc_*: reached from the live /api/lti/sync-roster route.
+    // Built here and awaited inside timeRpc: a PostgREST builder is lazy, so the
+    // timer still covers the whole round trip. (Building it inline inside the
+    // callback re-infers the argument literal against timeRpc's generic and loses
+    // the RPC arg types.)
+    const syncEnrollment = db.rpc("sis_sync_enrollment", {
       p_class_id: link.class_id,
       p_roster_data: roster.map((r) => ({
         sis_user_id: r.sis_user_id,
@@ -215,6 +221,7 @@ export async function syncContextRoster(link: ContextLinkRow, db: LtiDb = ltiAdm
         manage_lab_sections: manageLabSections
       } as never
     });
+    const { error } = await timeRpc("lti_sis_sync_enrollment", async () => await syncEnrollment, classifySupabase);
     if (error) throw error;
 
     const unmappedNote =

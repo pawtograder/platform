@@ -17,6 +17,9 @@ const courseController: any = {
 export function useCourseController(): any { return { courseController, role: "grader", course }; }
 export function useCourse(): any { return course; }
 export function useAssignmentGroupWithMembers(): any { return undefined; }
+// `loaded: true` so the toolbar's per-student completion check is not blocked in the offline
+// preview; the real hook returns `loaded` from the TableController's ready state.
+export function useAssignmentGroupWithMembersLoadState(): any { return { group: undefined, loaded: true }; }
 export function useAssignmentGroupForUser(): any { return undefined; }
 export function useAllProfilesForClass(): any[] { return Object.values(profiles); }
 export function useAllStudentProfiles(): any[] { return Object.values(profiles); }

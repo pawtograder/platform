@@ -16,6 +16,13 @@ metadata:
     # have headroom for cookie-stacked redirects too.
     nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
     nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
+    {{- if .Values.maintenance.active }}
+    # The release carries the maintenance posture (maintenance.active). This is
+    # how scripts/maintenance.sh tells a Helm-held fence from its own: `down`
+    # refuses to capture it as "prior state", and `up` and `status` say the
+    # release still has to be upgraded with maintenance.active=false.
+    pawtograder.io/maintenance-active: "true"
+    {{- end }}
     {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -36,6 +43,16 @@ spec:
       secretName: {{ .Values.ingress.tls.secretName }}
   {{- end }}
   rules:
+    {{- /* maintenance.active renders the web host's "/" backend exactly as
+       maintenance.sh `down` patches it: a JSON-patch replace of
+       /spec/rules/0/http/paths/0/backend/service with
+       {"name":"<release>-maintenance","port":{"number":8080}}. Same object,
+       same two fields, so the release and the live Ingress agree and neither
+       apply mode has a difference to act on. It is rules[0].paths[0] only
+       because global.apiOnSeparateHost puts "/" first; with the API paths on
+       this host the script would patch an API path instead, which is why
+       validations.yaml refuses the posture without apiOnSeparateHost.
+       extraHosts below are left on web, as the script leaves them. */}}
     - host: {{ .Values.global.hostname | quote }}
       http:
         paths:
@@ -46,9 +63,15 @@ spec:
             pathType: Prefix
             backend:
               service:
+                {{- if .Values.maintenance.active }}
+                name: {{ include "pawtograder.maintenance.host" . }}
+                port:
+                  number: {{ .Values.maintenance.service.port }}
+                {{- else }}
                 name: {{ include "pawtograder.web.host" . }}
                 port:
                   number: {{ .Values.web.service.port }}
+                {{- end }}
     {{- if .Values.global.apiOnSeparateHost }}
     - host: {{ include "pawtograder.api.hostname" . | quote }}
       http:

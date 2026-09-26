@@ -1,8 +1,11 @@
 import "server-only";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { viewAsCookieName } from "@/lib/viewAs";
+import { parseViewAsCookieValue, viewAsCookieName } from "@/lib/viewAs";
+import { classScopedTableTags, courseTag } from "@/lib/next-cache-tags";
+import { classifySupabase, timeRpc } from "@/lib/metrics";
 import { createClient } from "@supabase/supabase-js";
+import { SERVICE_CLIENT_AUTH_OPTIONS } from "@/utils/supabase/serviceClientOptions";
 import { cookies } from "next/headers";
 import type {
   Assignment,
@@ -90,12 +93,15 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
       throw new Error("Cannot create client with no caching and tags");
     }
     // If revalidate is 0, we do NO caching
-    return createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    return createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+      auth: SERVICE_CLIENT_AUTH_OPTIONS
+    });
   }
   const client = await createClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
+      auth: SERVICE_CLIENT_AUTH_OPTIONS,
       global: {
         fetch: createFetch({
           next: {
@@ -110,10 +116,26 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
   );
   return client;
 }
-export async function getUserRolesForCourse(course_id: number, user_id: string): Promise<UserRoleData | undefined> {
-  const client = await createClientWithCaching({ revalidate: 60, tags: [`user_roles:${course_id}:${user_id}`] });
+/**
+ * Envelope returned by the two loaders that swallow a PostgREST error rather
+ * than throwing. `error` is carried out purely so timeRpc's classifier can see
+ * it — see the note above getUserRolesForCourse().
+ */
+type LoaderResult<T> = { value: T; error: { code?: string | null } | null };
 
-  const { data: userRoles } = await client
+async function getUserRolesForCourseUntimed(
+  course_id: number,
+  user_id: string
+): Promise<LoaderResult<UserRoleData | undefined>> {
+  // The per-user tag is kept for targeted invalidation, but nothing emits it: the `user_roles`
+  // trigger emits the class+role form. Without those two the 60s TTL was the only thing that
+  // ever refreshed a role change.
+  const client = await createClientWithCaching({
+    revalidate: 60,
+    tags: [`user_roles:${course_id}:${user_id}`, ...classScopedTableTags("user_roles", course_id)]
+  });
+
+  const { data: userRoles, error } = await client
     .from("user_roles")
     .select("role, class_id, public_profile_id, private_profile_id")
     .eq("class_id", course_id)
@@ -121,7 +143,11 @@ export async function getUserRolesForCourse(course_id: number, user_id: string):
     .eq("disabled", false);
 
   if (!userRoles || userRoles.length === 0) {
-    return undefined;
+    // Unchanged control flow: a PostgREST failure still resolves to `undefined`
+    // for the caller. The error only rides along in the envelope so the metric
+    // records it; making this throw would change what every consumer of
+    // getUserRolesForCourse() sees on a transient RLS or SQL error.
+    return { value: undefined, error };
   }
 
   // A user may hold more than one non-disabled role in a class — the unique index is on
@@ -134,18 +160,12 @@ export async function getUserRolesForCourse(course_id: number, user_id: string):
     const idx = roleHierarchy.indexOf(role);
     return idx === -1 ? roleHierarchy.length : idx;
   };
-  return [...userRoles].sort((a, b) => rank(a.role) - rank(b.role))[0];
+  return { value: [...userRoles].sort((a, b) => rank(a.role) - rank(b.role))[0], error };
 }
 
 export type EffectiveCourseIdentity = UserRoleData & {
   /** True when real staff are viewing the course as a student. */
   isViewingAs: boolean;
-  /**
-   * True when staff are previewing their *own* test-assignment work as a student, rather than
-   * masquerading as an enrolled student. These viewers keep staff-level access to the assignment
-   * itself (they own it) — only the student-facing content filters apply.
-   */
-  isViewingAsSelf: boolean;
   /** The viewer's actual role in the course (unchanged by view-as). */
   realRole: Database["public"]["Enums"]["app_role"];
   /** The target private profile id when viewing as, otherwise null. */
@@ -157,8 +177,10 @@ export type EffectiveCourseIdentity = UserRoleData & {
  * "view as student" cookie. When the real user is an instructor for the course and the
  * `view_as_<course_id>` cookie names a non-disabled student in that course, the returned
  * role/profile ids are the student's (so server-branching pages render the student view
- * scoped to that student). Staff can also view their own test-assignment submissions as
- * a synthetic student. Otherwise the viewer's real identity is returned unchanged.
+ * scoped to that student). Otherwise the viewer's real identity is returned unchanged.
+ *
+ * The Test Assignment self-preview is deliberately not here: it changes what the UI renders, not
+ * whose data is fetched, so it lives as client state in ClassProfileProvider.
  *
  * Auth/RLS identity is unaffected — the override is purely presentation/scoping. UI read-only
  * gates prevent writes while RLS remains the backstop for cross-profile data access.
@@ -175,7 +197,6 @@ export async function getEffectiveCourseIdentity(
   const base: EffectiveCourseIdentity = {
     ...realRole,
     isViewingAs: false,
-    isViewingAsSelf: false,
     realRole: realRole.role,
     viewAsProfileId: null
   };
@@ -186,22 +207,16 @@ export async function getEffectiveCourseIdentity(
   }
 
   const cookieStore = await cookies();
-  const targetProfileId = cookieStore.get(viewAsCookieName(course_id))?.value;
+  const targetProfileId = parseViewAsCookieValue(cookieStore.get(viewAsCookieName(course_id))?.value);
   if (!targetProfileId) {
     return base;
   }
 
+  // The Test Assignment self-preview is client state, not a cookie: it changes what the UI renders,
+  // not whose data is fetched. A cookie naming the viewer's own profile is therefore not a view-as
+  // target and is ignored here.
   if (targetProfileId === realRole.private_profile_id) {
-    return {
-      role: "student",
-      class_id: realRole.class_id,
-      public_profile_id: realRole.public_profile_id,
-      private_profile_id: realRole.private_profile_id,
-      isViewingAs: true,
-      isViewingAsSelf: true,
-      realRole: realRole.role,
-      viewAsProfileId: realRole.private_profile_id
-    };
+    return base;
   }
 
   if (realRole.role !== "instructor") {
@@ -210,7 +225,7 @@ export async function getEffectiveCourseIdentity(
 
   const client = await createClientWithCaching({
     revalidate: 60,
-    tags: [`user_roles:${course_id}:view_as`]
+    tags: [`user_roles:${course_id}:view_as`, ...classScopedTableTags("user_roles", course_id)]
   });
   const { data: targetRole } = await client
     .from("user_roles")
@@ -231,16 +246,18 @@ export async function getEffectiveCourseIdentity(
     public_profile_id: targetRole.public_profile_id,
     private_profile_id: targetRole.private_profile_id,
     isViewingAs: true,
-    isViewingAsSelf: false,
     realRole: realRole.role,
     viewAsProfileId: targetRole.private_profile_id
   };
 }
 
-export async function getCourse(course_id: number) {
-  const client = await createClientWithCaching({ tags: [`course:${course_id}`] });
+async function getCourseUntimed(course_id: number) {
+  const client = await createClientWithCaching({ tags: [courseTag(course_id)] });
   const course = await client.from("classes").select("*").eq("id", course_id).eq("archived", false).single();
-  return course.data;
+  // Same shape as getUserRolesForCourseUntimed: the caller still gets
+  // `course.data` (null on failure, and null is the legitimate "no such course"
+  // answer too), and the error is carried out only for classification.
+  return { value: course.data, error: course.error };
 }
 
 /**
@@ -297,7 +314,7 @@ async function fetchAllPages<T>(
  * @param user_id Optional user ID for user-specific data (notifications, etc)
  * @returns CourseControllerInitialData object with all pre-loaded data
  */
-export async function fetchCourseControllerData(
+async function fetchCourseControllerDataUntimed(
   course_id: number,
   role: "instructor" | "student" | "grader" | "admin"
 ): Promise<CourseControllerInitialData> {
@@ -549,7 +566,7 @@ export async function fetchCourseControllerData(
  * @param assignment_id The assignment ID to fetch data for
  * @returns AssignmentControllerInitialData object with all pre-loaded data
  */
-export async function fetchAssignmentControllerData(
+async function fetchAssignmentControllerDataUntimed(
   assignment_id: number,
   isStaff: boolean
 ): Promise<AssignmentControllerInitialData> {
@@ -647,4 +664,70 @@ export async function fetchAssignmentControllerData(
     rubricChecks,
     rubricCheckReferences
   };
+}
+
+// ---------------------------------------------------------------------------
+// web_supabase_rpc_* instrumentation.
+//
+// These four are the SSR boundary: everything an RSC page render costs on the
+// server-side database path goes through one of them. RSC renders themselves
+// are not timed — there is no seam short of middleware, and middleware is Edge
+// (see lib/routeMetrics.ts) — so this family is the substitute signal.
+//
+// Each `rpc` label is a hardcoded constant from the closed RPC_LABELS union in
+// lib/metrics.ts.
+//
+// TWO DIFFERENT ERROR SHAPES, and they need different classifiers:
+//
+//   * fetchCourseControllerData / fetchAssignmentControllerData run every read
+//     through fetchAllPages(), which THROWS on a PostgREST error. timeRpc's
+//     catch path records status="error", code="throw", so `ok` is correct for
+//     these two: if they return, they succeeded.
+//
+//   * getUserRolesForCourse / getCourse do NOT throw. A PostgREST failure (SQL,
+//     RLS, a timeout) resolves as { data: null, error }, and both loaders
+//     historically returned only `data`. Classified with `ok` that recorded
+//     status="ok" and never incremented web_supabase_rpc_errors_total, which
+//     made the SSR error panel structurally blind to the failures it exists to
+//     show. The *Untimed loaders now return a LoaderResult envelope so
+//     classifySupabase can see the error; the exported functions unwrap it, so
+//     their runtime contract (a role, a course row, or undefined/null) is
+//     unchanged. Deliberately not converted to throwing: callers treat
+//     undefined/null as "not enrolled" / "no such course" and a throw here
+//     would turn a transient DB error into a 500 on pages that currently
+//     degrade.
+//
+// The two aggregate RPCs in lib/ssr-course-dashboard.ts and the two in
+// lib/lti/* already pass classifySupabase and return the raw PostgREST
+// envelope, so they were never affected.
+// ---------------------------------------------------------------------------
+
+const ok = () => ({ status: "ok" });
+
+export async function getUserRolesForCourse(course_id: number, user_id: string): Promise<UserRoleData | undefined> {
+  const { value } = await timeRpc(
+    "ssr_user_roles",
+    () => getUserRolesForCourseUntimed(course_id, user_id),
+    classifySupabase
+  );
+  return value;
+}
+
+export async function getCourse(course_id: number) {
+  const { value } = await timeRpc("ssr_course", () => getCourseUntimed(course_id), classifySupabase);
+  return value;
+}
+
+export function fetchCourseControllerData(
+  course_id: number,
+  role: "instructor" | "student" | "grader" | "admin"
+): Promise<CourseControllerInitialData> {
+  return timeRpc("ssr_course_controller", () => fetchCourseControllerDataUntimed(course_id, role), ok);
+}
+
+export function fetchAssignmentControllerData(
+  assignment_id: number,
+  isStaff: boolean
+): Promise<AssignmentControllerInitialData> {
+  return timeRpc("ssr_assignment_controller", () => fetchAssignmentControllerDataUntimed(assignment_id, isStaff), ok);
 }

@@ -97,9 +97,21 @@ secrets:
     # `llm` carries the LLM-hint provider API keys (OPENAI_API_KEY,
     # ANTHROPIC_API_KEY, ...) read by app/api/llm-hint/route.ts — without it the
     # LLM-hint route returns 500 "API key is required".
+    # `discord` is listed here AS WELL AS under edgeFunctionsBundles, and both are
+    # required. It carries DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN, which the
+    # Next.js bot-install routes read directly: /api/discord/install uses the
+    # application id as the authorize URL's client_id, and
+    # /api/discord/install/callback uses the bot token to confirm the bot is really
+    # in the guild before recording the claim. Without it here the install button
+    # answers 500 and no course can connect a Discord server -- and the failure
+    # lands after the instructor has already authorized the bot on Discord's own
+    # screen, which is the most confusing place for it to surface. Two ExternalSecret
+    # entries reading one Bao path is deliberate: the alternative is a second copy of
+    # the same two credentials in the `web` bundle, and two copies rotate apart.
     webBundles:
       - web
       - llm
+      - discord
     # Edge runtime bundles. These all land in pawtograder-edge-functions.
     # `misc` carries EDGE_FUNCTION_SECRET for DB->edge callbacks plus other
     # catch-all runtime env. Add aws-chime/sis/smtp/redis only when those paths
@@ -156,6 +168,13 @@ postgres:
 # drains, and baseline security contexts. Pin image tags per release.
 web:
   replicas: 3
+  # Dedicated 1-replica workflow-metrics leader (chart 0.3.18+). Required at
+  # web.replicas > 1: nothing else populates the nine workflow panels on the
+  # `app-business` dashboard, and templates/validations.yaml refuses a
+  # multi-replica web tier with monitoring on and no leader (the alternative is
+  # to acknowledge the gap with monitoring.allowMissingWorkflowMetrics: true).
+  metricsLeader:
+    enabled: true
   image:
     repository: ghcr.io/pawtograder/web
     tag: ""             # ← pin per release: vX.Y.Z or <branch>-<sha>
@@ -164,7 +183,108 @@ web:
 
 edgeFunctions:
   policy: per_request
-  maxParallelism: 16
+  # 8, not 16: under per_request this is the cap on concurrent isolates per pod, and each isolate is
+  # admitted with its own memory budget. maxParallelism x edgeFunctions.worker.memoryLimitMb is the
+  # aggregate the runtime will admit, and nothing enforces it -- the runtime's protections are all
+  # per-isolate -- so once it exceeds the container limit the kernel OOM-kills PID 1 and every
+  # in-flight request dies at once (Kong then reports 502).
+  #
+  # The arithmetic has to actually leave headroom, which 8 alone does not: at the chart-default
+  # worker.memoryLimitMb of 256 and the chart-default limits.memory of 2Gi, 8 x 256 MiB is EXACTLY
+  # the container limit, with nothing left for the main.ts demuxer or the Deno runtime -- and the
+  # PawtograderEdgeFunctionsMemoryHigh alert fires at 0.85 of the limit, below the admission budget.
+  # The explicit resources block below raises the limit to 4Gi (matching staging), so the budget is
+  # 50% and a burst has somewhere to go. Keep the three numbers consistent if you change any of them.
+  maxParallelism: 8
+  resources:
+    requests: { cpu: "200m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "4Gi"   }
+  # github-async-worker pgmq drain tuning. LEFT AT THE CHART DEFAULTS (4 / 300) on purpose: those
+  # are the values that were hardcoded in the worker before they became tunable, so this example
+  # deploys today's behaviour and the throughput decision stays an explicit operator action.
+  #
+  # It IS a decision this tier has to make. Measured here on 2026-09-07: CS 4530 enqueued 58
+  # create_repo messages at once and they took 88 MINUTES to drain (2-4 completing every ~7 min,
+  # mean time-in-queue 3,230s), tripping PawtograderQueueOldestMessageAging for over an hour, and
+  # 20 of the 58 were re-read (read_ct > 1, max 3) because a ~420s batch outlives a 300s
+  # visibility timeout. Correct outcome, terrible latency. At ~0.6 msg/min a 585-student
+  # enrollment burst is ~15 hours.
+  #
+  # There are TWO ceilings over the batch, and the render is refused if either is broken:
+  # visibilityTimeoutSeconds >= drainConcurrency x 120 AND worker.timeoutMs/1000 >= the same.
+  # worker.timeoutMs is the ISOLATE LIFETIME, and the whole batch runs in one isolate: a
+  # configuration whose modelled batch outlives it is incoherent, because if it ever did overrun
+  # the archive calls would not run and successful work would redeliver. Under n x 120 against the
+  # 400s default the largest coherent concurrency is THREE, so a raised visibility timeout ALWAYS
+  # has to bring worker.timeoutMs with it. This is a coherence rule only: the claim that isolates
+  # are currently being truncated mid-batch was measured and retracted (the runtime's wall-clock
+  # recycle log is flat at ~200/hour whether or not a burst is running, which is baseline churn
+  # from leased mode's resident isolate). The 300s visibility timeout remains the established
+  # cause of the re-reads.
+  #
+  # So the cheapest correct first move here is NOT to raise concurrency. It is to leave
+  # drainConcurrency at 4 and lift both timeouts to cover the modelled batch:
+  #
+  #   githubAsyncWorker:
+  #     drainConcurrency: 4
+  #     visibilityTimeoutSeconds: 480   # 4 x 120
+  #   worker:
+  #     timeoutMs: 480000               # the isolate must outlive the batch
+  #   gracefulExitTimeoutSeconds: 490   # >= worker.timeoutMs, or a rollout kills the batch
+  #   terminationGracePeriodSeconds: 510 # >= preStopSleepSeconds + gracefulExitTimeout
+  #   metrics:
+  #     # Top finite bucket must reach the new lifetime or the 400-480s range all lands in +Inf.
+  #     buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 400, 480]
+  #
+  # Doubling throughput on top of that means moving all FIVE again, together — 8 x 120 = 960:
+  #
+  #   githubAsyncWorker:
+  #     drainConcurrency: 8
+  #     visibilityTimeoutSeconds: 960
+  #   worker:
+  #     timeoutMs: 960000
+  #   gracefulExitTimeoutSeconds: 970
+  #   terminationGracePeriodSeconds: 990
+  #   metrics:
+  #     buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 400, 960]
+  #
+  # Every one of those five is enforced at render time (templates/validations.yaml), so an
+  # incomplete bundle is refused rather than deployed: the visibility timeout and the isolate
+  # lifetime must cover the modelled batch, the graceful exit must cover the isolate lifetime, the
+  # SIGKILL backstop must cover preStop + graceful exit, and the top metrics bucket must reach the
+  # lifetime whenever metrics are enabled.
+  #
+  # Do NOT set drainConcurrency: 8 with worker.timeoutMs left at 400000. That combination is
+  # incoherent — a batch modelled at 960s inside a 400s isolate — and the chart refuses it. Stated
+  # the other way round: if worker.timeoutMs stays at the 400000 default, the largest coherent
+  # drainConcurrency is 3, so under the current isolate lifetime there is NO throughput increase
+  # available from this knob alone. Raising the lifetime is the price of raising concurrency.
+  # Be deliberate about the blast radius before choosing it: worker.timeoutMs is per-isolate for
+  # EVERY function in this pod, and a 960s lifetime means isolates live 2.4x longer and accumulate
+  # correspondingly more heap on a tier that has OOM-killed PID 1 twice.
+  #
+  # Do it as its own deploy, ahead of a known release burst rather than during one, and watch
+  # pgmq queue depth, the edge pods' memory (all 8 handlers share ONE 256MiB leaseholder isolate),
+  # the GitHub secondary-rate-limit / circuit-breaker signals, and — the one that bites first —
+  # whether org INVITATIONS start lagging: a create_repo holds one of the 40 slots in the
+  # fleet-wide per-org content limiter for ~280s (measured p50 279.5s here on 2026-09-07), and
+  # invitations draw from that same pool. 8 is the chart's ceiling and it
+  # is still only ~1.2 msg/min; anything beyond that needs more than one concurrent leaseholder,
+  # which is a code change, not a values change. See values.yaml for the full reasoning.
+  githubAsyncWorker:
+    drainConcurrency: 4
+    visibilityTimeoutSeconds: 300
+  # Mount the same SMTP Secret GoTrue uses, rather than populating a second OpenBao `smtp` bundle.
+  # Without it SMTP_HOST is unset in the functions environment, and the notification processor read
+  # that as "no work found" -- deferring the email queue indefinitely with no error anywhere, which
+  # is why notification email had never worked here.
+  # The Secret provides SMTP_PASS and SMTP_ADMIN_EMAIL; emailTransportConfig.ts accepts those as
+  # well as the older SMTP_PASSWORD / SMTP_FROM names.
+  envFromSecrets:
+    - pawtograder-smtp
+  email:
+    # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
+    enabled: "true"
   autoscaling:
     enabled: true
     minReplicas: 12
@@ -229,6 +349,19 @@ seed:
 # ----- Backups + verification ---------------------------------------------------
 backup:
   enabled: true
+  # Baked mc — see charts/pawtograder/images/backup/Dockerfile. Pin this rather
+  # than leaving the default (plain supabase/postgres), or every backup,
+  # backup-verify and restore-drill run falls back to fetching mc at runtime
+  # from a third party. That is the dependency that broke backups on
+  # 2026-09-12, when MinIO archived the open-source mc project and dl.min.io
+  # started returning 410 for every binary.
+  # Tag it like the other Pawtograder images (release version or <branch>-<sha>),
+  # NOT with the Postgres version — release-images.yml publishes this repo as
+  # backup:<version>. What tracks postgres.image.tag is the Dockerfile's FROM,
+  # so pg_dump still matches the server it dumps.
+  image:
+    repository: ghcr.io/pawtograder/backup
+    tag: ""             # ← pin per release
   schedule: "0 4 * * *"
   retentionDays: 30
   s3:

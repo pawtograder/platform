@@ -161,7 +161,7 @@ time you want a clean slate — it's idempotent on a missing release.
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `pawtograder-postgres`       | `POSTGRES_PASSWORD`, `PAWTOGRADER_PASSWORD`                                                                                                                                                                                                                  |
 | `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `JWT_PRIVATE_JWKS`, `JWT_PUBLIC_JWKS`, `JWT_REALTIME_JWKS`, `JWT_SIGNING_JWK` (MCP/CLI only), `REALTIME_ENC_KEY`, `PG_META_CRYPTO_KEY`, `PGSODIUM_ROOT_KEY` (+ `SUPAVISOR_SECRET_KEY_BASE`, `SUPAVISOR_VAULT_ENC_KEY`, `SUPAVISOR_API_JWT_SECRET`, `SUPAVISOR_METRICS_JWT_SECRET` if `supavisor.enabled=true`) |
-| `pawtograder-smtp`           | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL` (if `auth.smtp.enabled=true`)                                                                                                                                                          |
+| `pawtograder-smtp`           | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL` (if `auth.smtp.enabled=true`; also mount into `edgeFunctions.envFromSecrets` to enable notification email)                                                                                                                                                          |
 | `pawtograder-s3`             | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (if S3 storage)                                                                                                                                                                                                 |
 | `pawtograder-web`            | Optional. Mounted via envFrom into the web pod. Use this for GitHub App, Discord, Canvas, LLM credentials, etc.                                                                                                                                              |
 | `pawtograder-edge-functions` | Optional. Same idea, mounted into the edge-runtime pod.                                                                                                                                                                                                      |
@@ -344,6 +344,46 @@ docker build \
   -t ghcr.io/pawtograder/web:$VERSION .
 ```
 
+### Source map upload (optional)
+
+Every web bundle carries injected debug IDs, but a stack trace in Bugsink stays
+minified until the matching source maps are uploaded. That upload is off unless
+the build is given somewhere to send them:
+
+```sh
+docker build \
+  --build-arg NEXT_PUBLIC_PAWTOGRADER_WEB_URL=https://staging.pawtograder.net \
+  --build-arg NEXT_PUBLIC_BUGSINK_DSN=$BUGSINK_DSN \
+  --build-arg SENTRY_URL=https://bugsink.example.edu \
+  --build-arg SENTRY_PROJECT=pawtograder-web \
+  --build-arg SENTRY_UPLOAD_ID=$(date +%s) \
+  --secret id=sentry_auth_token,env=BUGSINK_AUTH_TOKEN \
+  -t ghcr.io/pawtograder/web:$VERSION .
+```
+
+- **`sentry_auth_token`** is a BuildKit secret, never a build-arg, so it stays out
+  of the image layers and `docker history`. Create it in the Bugsink UI.
+- **`NEXT_PUBLIC_BUGSINK_DSN`** is what enables the bundler plugin that does the
+  upload, so it is required here even though it is otherwise about runtime error
+  reporting. Without it there are no reported errors to symbolicate, so a token
+  without a DSN is a misconfiguration and fails the build rather than reporting an
+  upload that never happens.
+- **`SENTRY_URL`** — your Bugsink base URL. Required whenever the token is
+  present: the bundler plugin reads a missing URL as sentry.io, so the build
+  fails rather than shipping your source maps to a third party.
+- **`SENTRY_PROJECT`** — Bugsink ≥ 2.2.0 rejects an upload naming a project slug
+  it does not have. `SENTRY_ORG` is accepted but ignored (Bugsink is single-org).
+- **`SENTRY_UPLOAD_ID`** — cache key for the layer that performs the upload.
+  BuildKit deliberately leaves secret *contents* out of the build cache, so
+  without a value that changes per build, a layer built before the token existed
+  can be replayed afterwards and upload nothing. Any changing non-secret value
+  works; in CI use the run id plus the run attempt, since re-running a run keeps
+  the same run id. The build refuses a token without one.
+
+Pass none of these and the build behaves exactly as it did before: maps are
+generated, debug IDs are injected, and the upload step is skipped with
+`sentry: no auth token supplied, skipping source map upload` in the log.
+
 ## Deployment skinning / branding
 
 Self-hosted deployments can re-brand the app — service name, tagline, logos, and
@@ -442,7 +482,12 @@ id/secret (stored in the `pawtograder-web` Secret). `github`, `azure`, and
 auth:
   external:
     github: { enabled: true } # reads GITHUB_OAUTH_CLIENT_ID / _SECRET
-    azure: { enabled: true } # reads AZURE_OAUTH_CLIENT_ID / _SECRET
+    azure:
+      enabled: true # reads AZURE_OAUTH_CLIENT_ID / _SECRET
+      # Optional: pin sign-in to one Entra directory. Unset, GoTrue talks to
+      # login.microsoftonline.com/common and accepts an ID token from any
+      # issuer — including personal Microsoft accounts.
+      url: https://login.microsoftonline.com/<tenant-id>
   externalProviders:
     - name: google # -> GOTRUE_EXTERNAL_GOOGLE_*
       enabled: true # reads GOOGLE_OAUTH_CLIENT_ID / _SECRET from the web Secret
@@ -461,7 +506,10 @@ Each enabled provider's redirect URI defaults to the API gateway origin +
   `https://<hostname>/auth/v1/callback`
 
 Register that exact URL in the provider's OAuth app (override per provider with
-`redirectUri` if your topology differs). Put the client id/secret in the
+`redirectUri` if your topology differs). Microsoft/Entra matches it
+character-for-character and rejects a mismatch with `AADSTS50011` at the
+*consent* screen — after the client id has already been accepted — so a wrong
+value here looks like a working button that dead-ends on Microsoft's side. Put the client id/secret in the
 `pawtograder-web` Secret under the `<NAME>_OAUTH_CLIENT_ID` /
 `<NAME>_OAUTH_CLIENT_SECRET` keys (e.g. `GOOGLE_OAUTH_CLIENT_ID`). A complete
 worked example (Google + Microsoft + GitHub) is in
@@ -506,6 +554,13 @@ gap analysis that drove the production hardening (and the items still
 deferred — automatic postgres failover, per-service metrics auth) lives in
 [PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
 
+**Read the chart version before you upgrade.** A patch bump (`0.3.26` →
+`0.3.27`) leaves Postgres running. A minor or major bump (`0.3.x` → `0.4.0`)
+is the only kind allowed to restart it. Not every one does, so check the
+release's PR for the restart-gate notice before booking a maintenance window.
+CI enforces the rule; see
+[Chart versions and Postgres restarts](../../docs/operations/planned-maintenance.md#chart-versions-and-postgres-restarts).
+
 Key mechanics:
 
 - **`global.environment: production` arms render-time guard rails**
@@ -528,6 +583,29 @@ Key mechanics:
   and a weekly `backup-verify` CronJob re-downloads the newest object,
   re-parses its TOC, and fails if the newest backup is older than 48 h.
   Restore with `pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file>`.
+  Both jobs stage the dump on a per-pod ephemeral PVC, sized by
+  `backup.scratchSize` (30Gi default) on `backup.scratchStorageClass` — the
+  dump must fit whole, since its TOC is verified locally before upload. Size
+  this for your database and point it at a cheap tier; leaving it on node
+  ephemeral storage is what makes a nightly backup fail part-written and put
+  the whole node under DiskPressure. Point it at NETWORK storage — it falls
+  back to `postgres.persistence.storageClass`, which is node-local on some
+  installs. Because a retained Job keeps its pod and each pod keeps its claim,
+  `backup.successfulJobsHistoryLimit` defaults to 1 (failures keep 3); turn
+  both down under a namespace storage quota.
+  Point `backup.image` at `ghcr.io/pawtograder/backup` (published by
+  `release-images.yml` from `charts/pawtograder/images/backup/Dockerfile`) —
+  supabase/postgres with a SHA-pinned `mc` baked in. Pin the tag: in
+  production an empty or floating `backup.image.tag` is refused, because the
+  image is only pulled on the nightly run and would otherwise fail at 04:00
+  rather than at deploy time. The jobs fall back to installing `mc` at runtime
+  when it isn't on PATH, but that fetch is a third-party dependency on the one
+  run that has to work: it broke production on 2026-09-12 when MinIO archived
+  the open-source `mc` project and `dl.min.io` began returning 410 for every
+  binary. Tag it like the other Pawtograder images (release version or
+  `<branch>-<sha>`), *not* with the Postgres version — `release-images.yml`
+  publishes it as `backup:<version>`. What tracks `postgres.image.tag` is the
+  Dockerfile's `FROM`, so `pg_dump` still matches the server it dumps.
 - **Web images are environment-specific**: `NEXT_PUBLIC_*` values (incl. the
   cluster's anon key) are baked at build time. Build prod images via
   `release-images.yml` `workflow_dispatch` with the prod hostname/namespace
@@ -629,6 +707,53 @@ Prometheus or Grafana itself.
 | realtime         | `:4000 /metrics`         | HS256 JWT in `pawtograder-jwt:REALTIME_METRICS_BEARER` |
 | supavisor        | `:4000 /metrics`         | HS256 JWT in `pawtograder-jwt:SUPAVISOR_METRICS_BEARER` |
 | web (Next.js)    | `:3000 /api/metrics`     | bearer in `pawtograder-jwt:METRICS_SCRAPE_TOKEN` |
+| metrics-leader   | `:3000 /api/metrics`     | same bearer (only when `web.metricsLeader.enabled`) |
+
+### Workflow metrics and the metrics leader
+
+The four `web_workflow_*` families behind the workflow panels on the
+**App Business** dashboard are DB-derived global aggregates: every pod that
+refreshes them runs the same `metrics_workflow_*` RPCs over the same rows and
+exports the same values. So exactly one pod in the release may hold
+`METRICS_WORKFLOW_REFRESH_LEADER`, or the queries multiply and `sum()`
+over-counts. There are two ways to arrange that, and which one is right is
+purely a function of `web.replicas`:
+
+| `web.replicas` | Use | Why |
+|---|---|---|
+| 1 | `web.workflowMetricsLeader: true` | Free. No extra pod, no extra memory, and `templates/validations.yaml` refuses the flag above one replica so it cannot silently start double-counting. Correct for previews and small single-replica installs. **Not deprecated.** |
+| > 1 | `web.metricsLeader.enabled: true` | Renders `templates/web-metrics-leader.yaml`: a dedicated 1-replica Deployment running the same web image, under component `metrics-leader`, with its own Service and ServiceMonitor. |
+
+Setting both is refused. So is `monitoring.enabled: true` with
+`web.replicas > 1` and neither — that combination ships a dashboard with nine
+permanently empty panels, which reads exactly like "no workflow runs happened".
+Acknowledge it deliberately with `monitoring.allowMissingWorkflowMetrics: true`
+if you do not want the metrics.
+
+Two things about the leader Deployment are structural rather than tuning:
+
+- **`replicas` is not exposed as a value.** It is the literal `1`. A second
+  replica doubles the query load on `public.workflow_runs` and double-counts
+  every gauge — the precise failure the workload exists to prevent.
+- **The rollout strategy is `Recreate`.** RollingUpdate would run two leaders for
+  the few seconds of every deploy. A few seconds of gauge staleness is free
+  against the 300s default refresh interval.
+
+The `metrics-leader` component label is what keeps the pod off every
+user-traffic path: the web Service, the Ingress backend, the web ServiceMonitor,
+the `allow-ingress-controller` NetworkPolicy, the PDB, web pod anti-affinity and
+the `helm test` smoke job all select `component: web` or the web Service by name.
+The release-wide `allow-monitoring` NetworkPolicy does include it, so it is
+scrapeable. No metric relabeling is configured, and none is needed: a prom-client
+labelled gauge that was never `.set()` emits zero samples, so ordinary web pods
+contribute nothing to a `sum()` over the workflow families by construction.
+
+Independently of scrape frequency, the app throttles the actual DB refresh to
+`web.metricsLeader.refreshIntervalSeconds` (rendered as
+`METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS`, default 300). That is the only bound
+that survives a second Prometheus, a hand-edited ServiceMonitor, or a `curl` loop
+against `/api/metrics`. A failed refresh does not arm the throttle, so a database
+blip is retried on the next scrape rather than backed off for five minutes.
 
 The postgres exporter ships custom queries that surface pawtograder-specific
 gauges (active submissions per class, help_request queue depth, total class

@@ -2,11 +2,30 @@ name: Deploy preview
 
 # Per-PR ephemeral previews of the full pawtograder stack on ripley.
 #
-# Trigger model:
-#   pull_request: opened/sync/reopened    → build + deploy preview, comment URL
-#   pull_request: closed                  → tear down preview
-#   workflow_dispatch (action=deploy)     → same as opened, with manual preview_id
-#   workflow_dispatch (action=destroy)    → manual teardown
+# Trigger model (all PR events are pull_request_target — see below):
+#   PR opened/sync/reopened FROM THIS REPO → build + deploy preview, comment URL
+#   fork PR labeled `preview`              → build + deploy preview, comment URL
+#   fork PR sync/reopen WHILE labeled      → rebuild the preview
+#   PR label `preview` removed             → tear down preview
+#   PR closed                              → tear down preview
+#   workflow_dispatch (action=deploy)      → deploy, with manual preview_id
+#   workflow_dispatch (action=destroy)     → manual teardown
+#
+# FORK previews are opt-in by label; same-repo PRs get one automatically, as
+# they did before the trust gate existed. The label answers "have we decided
+# to run this code at all", which is a question about forks — a branch in this
+# repo could only be pushed by someone who already holds write. Requiring it
+# everywhere was a side effect of adding the gate rather than a decision, and
+# it would have silently turned previews off for every open PR on merge.
+#
+# The pressure that motivated opt-in is real — a full-stack namespace per open
+# PR is a lot for ripley with a class-sized contributor pool — so if in-repo
+# previews become the load, narrow WHICH same-repo PRs get one rather than
+# putting fork and non-fork behind the same switch.
+#
+# Trust vs. intent are separate gates:
+#   trust  — does the pusher hold write access here (see _trust-gate.yml)
+#   intent — the `preview` label, required on fork PRs only
 #
 # Cluster access: provided via KUBECONFIG_BASE64 repo secret (base64 of a
 # kubeconfig that can helm install + create namespaces in
@@ -18,13 +37,50 @@ name: Deploy preview
 # package-cleanup workflow if image bloat becomes a problem).
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
-  # pull_request is the canonical trigger: it auto-destroys the preview on
-  # close and comments back on the PR, so it owns the namespace lifecycle.
+  # pull_request_target, NOT pull_request, and this is what makes fork previews
+  # possible at all. Under `pull_request` a fork PR gets no secrets and a
+  # read-only token, so the `secrets` job below died on an empty
+  # KUBECONFIG_BASE64 and the comment step could not even say why — every fork
+  # PR showed a red "Deploy preview" check its author could not fix.
+  # `pull_request_target` runs in base context, so the secrets exist, the
+  # workflow file (and therefore the gate) comes from the base branch, and a
+  # fork cannot edit its way past it.
+  #
+  # The flip side: PR-supplied code is built and deployed by jobs that hold
+  # cluster credentials. That is only acceptable behind the gate, which is why
+  # every job below is conditioned on `needs.gate.outputs.approved`.
+  #
+  # `labeled`/`unlabeled` own the namespace lifecycle alongside `closed`.
+  #
+  # `branches:` filters the BASE branch. It does NOT, as an earlier version of
+  # this comment claimed, protect the OIDC trust chain: under
+  # pull_request_target the workflow file and the trust gate are read from the
+  # repository's DEFAULT branch (`staging`), never from the PR's base, so
+  # `job_workflow_ref` is `.../preview.yml@refs/heads/staging` for every PR
+  # event regardless of base. A PR based on an arbitrary branch would run
+  # staging's preview.yml and satisfy BASE_REFS, not be "rejected at
+  # auth/jwt/login". BASE_REFS still needs `refs/heads/main` for the
+  # workflow_dispatch path, which is the only way a run's ref is not staging —
+  # that is what the `meta` job's ref check below guards.
+  #
+  # NO `branches:` filter, deliberately — it was here and had to come out.
+  # The filter applies to every type in the list, teardown types included, so
+  # a PR that deployed a preview and was then RETARGETED off staging/main
+  # (`edited` is not a type here, so nothing fires at the moment of
+  # retargeting) would never fire a `closed` or `unlabeled` event that reached
+  # this workflow at all. Its namespace, its Postgres PVC and its OpenBao
+  # bundle — which holds a live SUPABASE_SERVICE_ROLE_KEY — survived
+  # indefinitely with no failed run and nothing to retry. The pre-gate trigger
+  # had no branches filter for exactly this reason.
+  #
+  # The scope the filter was buying — only PRs aimed at a release branch may
+  # consume a preview namespace — is enforced in the `meta` job instead, where
+  # it can apply to DEPLOY and leave teardown base-independent.
+  pull_request_target:
+    types: [opened, synchronize, reopened, closed, labeled, unlabeled]
   # For a one-off branch deploy without a PR, use workflow_dispatch with
-  # action=deploy (don't add a push trigger — it would race pull_request's
-  # synchronize event and deploy two near-identical previews from one SHA).
+  # action=deploy (don't add a push trigger — it would race the synchronize
+  # event and deploy two near-identical previews from one SHA).
   workflow_dispatch:
     inputs:
       preview_id:
@@ -37,26 +93,119 @@ on:
         options: [deploy, destroy]
         default: deploy
 
+# Least privilege at the top; every job that needs more opts in explicitly.
+# This block used to carry `pull-requests: write` and `packages: write`, and
+# every job inherited BOTH — including the four build jobs and the deploy job,
+# all of which execute PR-supplied code. A job doing `next build` on an
+# untrusted lockfile had standing permission to rewrite PR comments as the
+# repo, for no reason at all.
 permissions:
   contents: read
-  pull-requests: write
-  packages: write
 
 env:
   REGISTRY: ghcr.io
   REPO_OWNER: ${{ github.repository_owner }}
   PREVIEW_DOMAIN: preview.pawtograder.net
+  # The label that opts a PR into a preview. Must match the `require_label`
+  # passed to the gate above.
+  PREVIEW_LABEL: preview
+  # Stable namespace that the OIDC path's ephemeral provisioning/teardown
+  # ServiceAccounts are created in. Those two roles need CLUSTER-scoped verbs
+  # (create/delete namespace), which RBAC cannot restrict by name prefix, so
+  # the SA cannot live in the per-PR namespace it is about to create. The
+  # name-prefix restriction is enforced by a ValidatingAdmissionPolicy instead
+  # — see docs/operations/preview-oidc-cluster-credentials.md.
+  PREVIEW_CI_NAMESPACE: pawtograder-preview-ci
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
-  group: preview-${{ github.event.pull_request.number || inputs.preview_id || github.ref_name }}
-  cancel-in-progress: true
+  # Adding or removing an UNRELATED label now fires this workflow (the trigger
+  # list gained labeled/unlabeled). Such a run resolves to mode=noop and
+  # schedules nothing, but with cancel-in-progress: false a queued run still
+  # evicts whatever was PENDING in the same group, so left in the main group a
+  # stray label could displace a queued deploy or teardown. Give those runs
+  # their own group.
+  #
+  # TEARDOWN runs get their own group too, and for a sharper reason than the
+  # label no-ops. With cancel-in-progress: false, a THIRD run entering a group
+  # evicts whatever is pending — GitHub keeps at most one pending run per
+  # group. So: a reviewer removes the label mid-deploy (four image builds plus
+  # `helm --wait --timeout 20m` is a 20-40 minute window), the teardown run
+  # queues behind the running deploy, the author pushes once more, and the
+  # `synchronize` run displaces the PENDING TEARDOWN. The namespace, its PVC
+  # and the OpenBao bundle all survive, and every run in the workflow is
+  # green. Teardown must not be evictable by a deploy.
+  #
+  # The cost, accepted: a teardown can now run CONCURRENTLY with a deploy for
+  # the same PR. Destruction wins that race by construction — `helm upgrade`
+  # into a namespace being deleted fails, and the end state is the one the
+  # teardown asked for — which is the safe direction. The reverse ordering is
+  # handled on the deploy side, where `Ensure namespace` waits out a
+  # Terminating namespace before recreating it.
+  #
+  # Label events for PREVIEW_LABEL itself are deploys (labeled) or teardowns
+  # (unlabeled) and route accordingly; any OTHER label is a no-op that must
+  # not displace either. (The literal is repeated here because the `env`
+  # context is not available to `concurrency`; keep it in sync with
+  # PREVIEW_LABEL and the gate's require_label.)
+  group: preview-${{ github.event.pull_request.number || inputs.preview_id || github.ref_name }}${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'preview' && '-labelnoop' || (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'preview') || inputs.action == 'destroy') && '-destroy' || '' }}
+  # NOT cancel-in-progress. Concurrency is evaluated before any job runs, so it
+  # cannot know whether the run is trusted: a `synchronize` from someone who
+  # fails the gate would still enter this group and kill a live helm upgrade,
+  # then be rejected and schedule no replacement, leaving the release
+  # half-applied with nothing to finish it.
+  #
+  # Known cost, accepted: because this group serializes rather than cancels, a
+  # second run for the same PR waits out the first, so a rapid push sequence
+  # queues four image builds plus `helm --wait --timeout 20m` per push instead
+  # of superseding. The `deploy` job's own `cancel-in-progress` (below) cannot
+  # shorten that: two runs for one PR are never in progress at the same time,
+  # so it can only fire if this setting is ever flipped back to true.
+  cancel-in-progress: false
 
 jobs:
+  # --------------------------------------------------------------------------
+  # gate — may this ref reach the cluster, and was a preview actually asked
+  # for? Shared with lint.yml and deploy.yml; see _trust-gate.yml.
+  # --------------------------------------------------------------------------
+  gate:
+    # Granted explicitly: a reusable workflow can only intersect with the
+    # caller's token, never elevate, and this workflow's top-level grant
+    # includes writes the gate must not inherit.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: ./.github/workflows/_trust-gate.yml
+    # Forwarded unconditionally: a called workflow receives no secrets unless
+    # the caller passes them, which is what made the gate's "set a
+    # CI_TRUST_TOKEN secret" advice inert. Undefined resolves to an empty
+    # string and the gate falls back to GITHUB_TOKEN.
+    secrets:
+      trust_token: ${{ secrets.CI_TRUST_TOKEN }}
+    with:
+      # Literal rather than an env var: the `env` context is not available in
+      # a reusable-workflow `with:` block. Keep in sync with PREVIEW_LABEL
+      # below, which the meta job uses for the same label.
+      require_label: preview
+      # Fork previews stay off while the static cluster-admin kubeconfig is
+      # the credential; see the input's description in _trust-gate.yml.
+      forks_allowed: ${{ vars.PREVIEW_CLUSTER_AUTH == 'oidc' }}
+
   # --------------------------------------------------------------------------
   # meta — derive preview id, hostnames, image tag, namespace, etc.
   # --------------------------------------------------------------------------
   meta:
+    # Deliberately NOT `needs: gate`. Nothing here reads a gate output, and
+    # every job that consumes `mode` checks `approved` for itself. Depending on
+    # the gate would put `destroy` (which needs meta) downstream of a job that
+    # can fail for infrastructure reasons, and a skipped teardown strands a
+    # namespace and its PVCs with nothing to retry it.
+    #
+    # Nothing here reads or writes anything: no checkout, no API calls. This
+    # job runs for every fork PR event, so it must not inherit the
+    # workflow-level pull-requests:write / packages:write.
+    permissions: {}
     runs-on: ubuntu-latest
     outputs:
       preview_id: ${{ steps.v.outputs.preview_id }}
@@ -67,6 +216,31 @@ jobs:
       namespace: ${{ steps.v.outputs.namespace }}
       mode: ${{ steps.v.outputs.mode }}
     steps:
+      # GitHub has no `branches:` filter for workflow_dispatch, so the trigger
+      # block above cannot express this and it has to be a runtime check. A
+      # dispatch from a ref outside BASE_REFS can start every job here and then
+      # fail at `auth/jwt/login` in whichever one mints credentials first,
+      # reporting a claim mismatch rather than the actual cause. Fail here, in
+      # the first job, saying what is wrong. Only under `oidc`: the static
+      # kubeconfig is not ref-bound, so any branch works in that mode and this
+      # must not take the capability away before the cutover.
+      - name: Check this ref can mint cluster credentials
+        if: github.event_name == 'workflow_dispatch' && vars.PREVIEW_CLUSTER_AUTH == 'oidc'
+        env:
+          # Must match BASE_REFS in scripts/setup-openbao-preview-oidc.sh and
+          # the `branches:` filter above.
+          ALLOWED_REFS: refs/heads/staging refs/heads/main
+          GH_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          for r in $ALLOWED_REFS; do
+            if [[ "$GH_REF" == "$r" ]]; then
+              echo "ref ${GH_REF} is bound in the OpenBao JWT roles"
+              exit 0
+            fi
+          done
+          echo "::error title=Ref cannot mint cluster credentials::PREVIEW_CLUSTER_AUTH=oidc and the OpenBao JWT roles bind job_workflow_ref to [${ALLOWED_REFS}]. A dispatch from '${GH_REF}' would be rejected at auth/jwt/login. Re-run from staging or main, or add this ref to BASE_REFS in scripts/setup-openbao-preview-oidc.sh and re-run that script." >&2
+          exit 1
       - id: v
         # Move attacker-influenceable inputs (workflow_dispatch input,
         # branch name) into env: so they're shell variables rather than
@@ -76,20 +250,66 @@ jobs:
         env:
           GH_EVENT_NAME: ${{ github.event_name }}
           GH_PR_NUMBER: ${{ github.event.pull_request.number }}
-          GH_PR_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_PR_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           GH_PR_ACTION: ${{ github.event.action }}
+          # Which label was added/removed on a labeled/unlabeled event.
+          GH_LABEL_NAME: ${{ github.event.label.name }}
+          # The PR's BASE branch. Replaces the `branches:` filter that used to
+          # sit on the trigger; see the note there for why it could not stay.
+          GH_BASE_REF: ${{ github.event.pull_request.base.ref }}
           GH_REF_NAME: ${{ github.ref_name }}
           INPUT_PREVIEW_ID: ${{ inputs.preview_id }}
           INPUT_ACTION: ${{ inputs.action }}
         run: |
           set -euo pipefail
-          if [[ "$GH_EVENT_NAME" == "pull_request" ]]; then
+          if [[ "$GH_EVENT_NAME" == "pull_request_target" ]]; then
             preview_id="$GH_PR_NUMBER"
             sha="$GH_PR_SHA"
-            if [[ "$GH_PR_ACTION" == "closed" ]]; then
-              mode="destroy"
-            else
-              mode="deploy"
+            case "$GH_PR_ACTION" in
+              closed)
+                mode="destroy"
+                ;;
+              labeled)
+                # Only the preview label starts a deploy. Without this, adding
+                # any unrelated label to a PR that already carries `preview`
+                # would kick off a full rebuild.
+                if [[ "$GH_LABEL_NAME" == "$PREVIEW_LABEL" ]]; then
+                  mode="deploy"
+                else
+                  mode="noop"
+                fi
+                ;;
+              unlabeled)
+                # Removing the label is the explicit "tear this down" signal,
+                # so a reviewer can reclaim the namespace without closing the
+                # PR. Any other label being removed is not our business.
+                if [[ "$GH_LABEL_NAME" == "$PREVIEW_LABEL" ]]; then
+                  mode="destroy"
+                else
+                  mode="noop"
+                fi
+                ;;
+              *)
+                # opened / synchronize / reopened: deploy, subject to the
+                # gate's `approved` — the label for a fork PR, automatic for a
+                # same-repo one. Every deploy-path job below checks it, so
+                # mode stays "deploy" here and an unapproved PR simply has no
+                # jobs to run rather than showing a skipped destroy.
+                mode="deploy"
+                ;;
+            esac
+            # Deploy is scoped to the release branches; TEARDOWN is not, and
+            # that asymmetry is the whole point of doing this here rather than
+            # with a `branches:` filter on the trigger. A PR retargeted onto a
+            # feature branch stops getting rebuilds and still gets cleaned up.
+            if [[ "$mode" == "deploy" ]]; then
+              case "$GH_BASE_REF" in
+                staging | main) ;;
+                *)
+                  mode="noop"
+                  echo "::notice title=No preview::previews are only built for PRs based on staging or main (this one targets '${GH_BASE_REF}'). Use workflow_dispatch from staging/main with a manual preview_id for a stacked branch."
+                  ;;
+              esac
             fi
           elif [[ "$GH_EVENT_NAME" == "push" ]]; then
             # Push trigger: use branch name as the preview id. URL becomes
@@ -141,35 +361,205 @@ jobs:
   # anon key persist across PR-sync pushes.
   # --------------------------------------------------------------------------
   secrets:
-    needs: meta
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     # Cluster apiserver isn't reachable from gh-hosted runners (private LB);
     # use the in-cluster runner pool. Same goes for the deploy job below.
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      # For the "is this PR still open" re-check on the namespace step below.
+      pull-requests: read
+      # Mints the OIDC token exchanged at OpenBao for a short-lived cluster
+      # credential. Not a secret and not a repo write: it only lets the job ask
+      # GitHub to sign a claim set about itself.
+      id-token: write
+    # Scopes the cluster + MinIO credentials to jobs that declare this
+    # environment, instead of leaving them readable by every job in every
+    # workflow in the repo. Moving the secret VALUES from repo level to the
+    # environment is a settings change, not a workflow one — until that
+    # happens this is scaffolding and the repo-level secrets still resolve.
+    # Its own environment, and this is load-bearing rather than cosmetic: the
+    # OpenBao JWT role for this tier binds `environment` to exactly this value.
+    # Sharing one environment across tiers would let any job that can mint an
+    # OIDC token log in as any role, since the role name is chosen by the
+    # caller — the per-job privilege split would be nominal only.
+    environment: preview-provision
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # BASE, deliberately, unlike every other checkout in this file. This
+          # job holds the heaviest credential set in the workflow — full
+          # kubeconfig, MinIO keys — and it needs exactly two tracked infra
+          # scripts from the repo: scripts/GenerateJwtKeys.ts and (formerly)
+          # the OpenBao publisher. Checking out PR HEAD here meant a PR could
+          # rewrite those scripts and have them executed with those
+          # credentials, which is the sharpest edge this workflow had.
+          #
+          # Consequence to know: a PR that changes what secrets the chart
+          # requires needs that change merged before its preview will work.
+          # It fails loudly at helm time rather than silently.
+          #
+          # `github.sha`, NOT `github.event.pull_request.base.sha`. base.sha is
+          # the base tip recorded on the PR object and does not advance when
+          # the base branch does: at the time of writing, 4 of the 5 open PRs
+          # against staging carry a base.sha several commits behind it.
+          # `github.sha` under pull_request_target is the DEFAULT branch tip
+          # (`staging`) — not the PR's base, so for a PR based on `main` this
+          # checks out staging's copy of these scripts — and it is by
+          # definition the commit the executing workflow file itself was read
+          # from, so the tree on disk always contains
+          # `.github/actions/cluster-credentials` and the scripts this file
+          # references. With base.sha, every PR opened before those landed
+          # would fail with "Can't find 'action.yml'". Every other BASE
+          # checkout in this file uses `github.sha` for the same reason.
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
-      - name: Write kubeconfig + ensure namespace
+      - name: Cluster credentials
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-provision
+          k8s_role: preview-provision
+          cluster_scoped: "true"
+          namespace: ${{ env.PREVIEW_CI_NAMESPACE }}
+          # Explicit, like every other call site. The action's default is the
+          # longest any call site asks for (see action.yml), so an omitted
+          # `ttl` is safe but longer than this job needs.
+          ttl: 20m
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
+      - name: Ensure namespace
         env:
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
           NS: ${{ needs.meta.outputs.namespace }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Same-repo PRs are exempt from the label, exactly as in the gate's
+          # approve step; the re-check below must use the same rule.
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail
-          if [ -z "${KUBECONFIG_B64:-}" ]; then
-            echo "::error::KUBECONFIG_BASE64 is required"
+          # Re-check that the PR is still open, immediately before the step
+          # that CREATES the namespace. Teardown has its own concurrency group
+          # now (see the top of this file), which is what stops a queued
+          # teardown from being evicted by a deploy — but it also means the
+          # two can run at once, and in one ordering the teardown finishes
+          # first and this step then recreates a namespace for a PR that is
+          # already closed, with no further event coming to tear it down.
+          #
+          # The window is short and this check does not close it in the limit
+          # (the PR can close one second later), so it is a narrowing, not a
+          # proof. The durable answer is a periodic reaper that deletes
+          # preview namespaces whose PR is closed; there isn't one yet.
+          if [ -z "${PR_NUMBER:-}" ]; then
+            : # workflow_dispatch: no PR to ask about
+          elif ! command -v gh >/dev/null 2>&1; then
+            # Not fatal — this is a narrowing, not a precondition — but it
+            # must not pass silently, or the check quietly stops existing the
+            # day the runner image changes.
+            echo "::warning title=PR-state re-check skipped::the gh CLI is not on this runner, so this deploy cannot confirm PR #${PR_NUMBER} is still open"
+          else
+            state=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")
+            if [ "$state" = "closed" ]; then
+              echo "::error title=PR already closed::PR #${PR_NUMBER} closed while this deploy was in flight; refusing to create ${NS}, which nothing would tear down." >&2
+              exit 1
+            fi
+            [ -n "$state" ] || echo "::warning title=PR-state re-check inconclusive::could not read the state of PR #${PR_NUMBER}; continuing"
+          fi
+
+          # ...and that the preview is still WANTED. Closing is not the only
+          # teardown trigger — removing the label is one too, and teardown now
+          # has its own concurrency group, so this sequence is reachable:
+          # label added, gate approves, label removed seconds later, the
+          # destroy job finds nothing and exits, and this step then creates
+          # the namespace for a PR that no longer carries the label. Nothing
+          # would ever tear that one down: on close the destroy gate sees no
+          # label, a fork head, and no `unlabeled` action.
+          #
+          # Fork PRs only. A same-repo PR never needed the label, so its
+          # absence says nothing — and its teardown is covered by the
+          # same-repo disjunct on the destroy job.
+          if [ -n "${PR_NUMBER:-}" ] && [ -n "${HEAD_REPO:-}" ] && [ "$HEAD_REPO" != "$REPO" ] \
+             && command -v gh >/dev/null 2>&1; then
+            if ! labels=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null); then
+              echo "::warning title=Label re-check inconclusive::could not list labels on PR #${PR_NUMBER}; continuing"
+            elif ! grep -Fxq -- "$PREVIEW_LABEL" <<<"$labels"; then
+              echo "::error title=Preview no longer requested::the '${PREVIEW_LABEL}' label was removed from PR #${PR_NUMBER} while this deploy was in flight; refusing to create ${NS}, which no later event would tear down." >&2
+              exit 1
+            fi
+          fi
+          # Wait out a namespace that is still going away. `destroy` deletes
+          # with --wait=false (holding a runner open for a PVC finalizer is
+          # minutes of nothing), and teardown now has its own concurrency
+          # group, so a relabel — or an unlabel/relabel gesture — can put this
+          # job directly behind that delete. Creating into a Terminating
+          # namespace fails with `namespaces "..." is being terminated`, which
+          # reads as a cluster fault and is nondeterministic on timing.
+          for _ in $(seq 1 60); do
+            phase=$(kubectl get namespace "$NS" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            [ "$phase" = "Terminating" ] || break
+            echo "namespace ${NS} is Terminating — waiting for the previous teardown to finish"
+            sleep 5
+          done
+          if [ "${phase:-}" = "Terminating" ]; then
+            echo "::error title=Namespace stuck terminating::${NS} has been Terminating for 5 minutes; a finalizer is probably wedged. Check 'kubectl get ns ${NS} -o yaml'." >&2
             exit 1
           fi
-          mkdir -p "$HOME/.kube"
-          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
           kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          # The label is load-bearing under OIDC, not decoration: the OpenBao
+          # Kubernetes role scopes credential issuance with
+          # allowed_kubernetes_namespace_selector on exactly this label.
+          # `allowed_kubernetes_namespaces` does not accept a
+          # `pawtograder-preview-*` glob, so the label is how per-PR namespaces
+          # are matched without granting `*`.
+          kubectl label namespace "$NS" pawtograder.net/preview=true --overwrite
+          # Pod Security: `preview-deploy` holds `*/*` inside this namespace and
+          # applies the PR's own chart, so without an enforce level a chart
+          # could run a privileged or hostPath pod and step off the namespace
+          # onto the node — RBAC alone does not bound that. The chart passes
+          # `baseline` today (checked with a server-side dry run against a live
+          # preview); `restricted` does not (auth, kong and others lack
+          # runAsNonRoot), so it is warn/audit only until the chart catches up.
+          kubectl label namespace "$NS" --overwrite \
+            pod-security.kubernetes.io/enforce=baseline \
+            pod-security.kubernetes.io/enforce-version=latest \
+            pod-security.kubernetes.io/warn=restricted \
+            pod-security.kubernetes.io/audit=restricted
+          # Which run owns this namespace. Run IDs increase monotonically per
+          # repository, so this is a total order over deploys and teardowns
+          # that does not depend on event delivery order — which is exactly
+          # what giving teardown its own concurrency group gave up. A teardown
+          # older than this value is stale and must not delete what a newer
+          # deploy just created. `annotate`, not `label`: the value is not a
+          # selector and labels cannot hold arbitrary numbers safely.
+          kubectl annotate namespace "$NS" \
+            pawtograder.net/deploy-run-id="$GITHUB_RUN_ID" --overwrite
+      # Second credential, deliberately. The first is cluster-scoped and may
+      # only create Namespaces; writing Secrets needs a namespaced Role, and
+      # putting the Secret rule on the ClusterRole instead would have granted
+      # Secret access in EVERY namespace including production — the admission
+      # policy bounds Namespace names, not Secret reach. Minted only now
+      # because the namespace has to exist and carry the label first.
+      - name: Cluster credentials (namespaced secret writer)
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-provision
+          k8s_role: preview-provision-secrets
+          namespace: ${{ needs.meta.outputs.namespace }}
+          ttl: 20m
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
       - name: Ensure secrets in namespace
         env:
           NS: ${{ needs.meta.outputs.namespace }}
@@ -259,13 +649,81 @@ jobs:
           # pawtograder-edge-functions is created by the top-up loop above
           # (whether or not we hit this first-install path).
 
-      # Mirror the e2e bundle (Supabase keys, END_TO_END_SECRET, derived
-      # URLs) into OpenBao so out-of-cluster runners — the a11y VoiceOver
-      # Mac (a11y-voiceover.yml) — can fetch it without cluster access.
-      # Best-effort by design: Bao downtime or missing config must never
-      # break the preview hot path. Removed again by the destroy job.
-      - name: Publish e2e bundle to OpenBao (best-effort)
-        continue-on-error: true
+  # --------------------------------------------------------------------------
+  # publish-e2e-bundle — mirror the e2e bundle (Supabase keys,
+  # END_TO_END_SECRET, derived URLs) into OpenBao so out-of-cluster runners —
+  # the a11y VoiceOver Mac (a11y-voiceover.yml) — can fetch it without cluster
+  # access. Removed again by the destroy job.
+  #
+  # Its own job rather than a step in `secrets`, so the OpenBao PUBLISHER
+  # credential never sits in the same job as the cluster-admin kubeconfig and
+  # the MinIO keys. scripts/publish-preview-e2e-to-bao.sh only ever does
+  # `kubectl get secret`, so this job asks for the narrowest credential the
+  # work needs.
+  #
+  # Under `oidc` that is real: it mints kubernetes/creds/preview-publish, a
+  # namespaced Role with `get` on Secrets and nothing else. Under `static` —
+  # which is the mode in effect until PREVIEW_CLUSTER_AUTH is set — it is NOT:
+  # KUBECONFIG_PREVIEW_RO_BASE64 does not exist as a repo secret, so the `||`
+  # below falls through to the full cluster-admin KUBECONFIG_BASE64. Complete
+  # the OIDC cutover (docs/operations/preview-oidc-cluster-credentials.md)
+  # before treating this job as least-privileged. The read-only-kubeconfig
+  # runbook is the alternative if you do not want to stand up the OpenBao
+  # engines, but it is marked superseded — do not follow both.
+  #
+  # Best-effort by design: Bao downtime or missing config must never break the
+  # preview hot path, so the job carries continue-on-error and nothing depends
+  # on it.
+  # --------------------------------------------------------------------------
+  publish-e2e-bundle:
+    needs: [meta, gate, secrets]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
+    continue-on-error: true
+    runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      id-token: write
+    # Its own environment, and this is load-bearing rather than cosmetic: the
+    # OpenBao JWT role for this tier binds `environment` to exactly this value.
+    # Sharing one environment across tiers would let any job that can mint an
+    # OIDC token log in as any role, since the role name is chosen by the
+    # caller — the per-job privilege split would be nominal only.
+    environment: preview-publish
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # BASE: this job runs a repo script with the OpenBao publisher
+          # credential, so the script must not come from the PR.
+          ref: ${{ github.sha }}
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+      - name: Cluster credentials
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          # preview-publish, not preview-read: each jwt role binds exactly one
+          # `environment` value, and preview-read is bound to preview-build
+          # (build-web's environment). This job declares preview-publish, so
+          # logging in as preview-read is rejected at auth/jwt/login. Same
+          # grant, separate tier.
+          bao_role: preview-publish
+          k8s_role: preview-publish
+          namespace: ${{ needs.meta.outputs.namespace }}
+          # One `kubectl get secret`; it does not need the longer default.
+          ttl: 20m
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          # Same caveat as build-web's: under `static` this falls through to
+          # the cluster-admin KUBECONFIG_BASE64, because
+          # KUBECONFIG_PREVIEW_RO_BASE64 is not a secret on this repo. Less
+          # sharp here — this job checks out the BASE ref and runs no
+          # PR-supplied code — but it is the same silent downgrade, and the
+          # job's header comment above says so rather than claiming a
+          # least-privilege property it does not currently have.
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
+      - name: Publish e2e bundle to OpenBao
         env:
           PREVIEW_ID: ${{ needs.meta.outputs.preview_id }}
           BAO_ADDR: ${{ vars.BAO_ADDR }}
@@ -278,14 +736,46 @@ jobs:
             echo "::warning::OpenBao e2e publish skipped — vars.BAO_ADDR / secrets.BAO_PUBLISHER_ROLE_ID / secrets.BAO_PUBLISHER_SECRET_ID not configured"
             exit 0
           fi
-          if ! command -v bao >/dev/null 2>&1 && ! command -v vault >/dev/null 2>&1; then
+          # One CLI variable, like every other OpenBao consumer in this repo
+          # (publish-preview-e2e-to-bao.sh, export-preview-e2e-from-bao.sh,
+          # setup-openbao-*.sh). The old form tested for `bao` OR `vault` and
+          # then called `bao` unconditionally, so a runner image carrying
+          # vault but not bao satisfied the guard, skipped the download, and
+          # hit `bao: command not found` — fatal in publish-e2e-bundle and
+          # SILENT in destroy, which is continue-on-error and would have left
+          # the live bundle in place.
+          CLI=bao
+          command -v bao >/dev/null 2>&1 || CLI=vault
+          if ! command -v "$CLI" >/dev/null 2>&1; then
+            # Its OWN directory, not $RUNNER_TEMP itself. $RUNNER_TEMP is the
+            # shared scratch dir — teardown keeps kubeconfig-preview-ns there
+            # and deploy writes follow-hook-logs.sh — and prepending it to
+            # PATH lets anything later dropped in it shadow kubectl, helm or
+            # npm. This is the pattern the cluster-credentials action already
+            # uses; these two blocks were the exception.
+            bao_bin="$RUNNER_TEMP/bao-bin"
+            mkdir -p "$bao_bin"
             curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
-              | tar -xz -C "$RUNNER_TEMP" bao
-            chmod +x "$RUNNER_TEMP/bao"
-            export PATH="$RUNNER_TEMP:$PATH"
+              | tar -xz -C "$bao_bin" bao
+            chmod +x "$bao_bin/bao"
+            # On PATH, not just in $CLI: the publish script below does its own
+            # bao/vault lookup and would not see an absolute path.
+            export PATH="$bao_bin:$PATH"
+            CLI=bao
           fi
-          BAO_TOKEN=$(bao write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id="$BAO_SECRET_ID")
-          export BAO_TOKEN
+          # vault reads VAULT_ADDR/VAULT_TOKEN; bao reads BAO_ADDR/BAO_TOKEN.
+          # Selecting the vault CLI without this left the endpoint unset, so
+          # the AppRole login below silently targeted vault's default
+          # https://127.0.0.1:8200 — publish would fail and the teardown's KV
+          # delete (continue-on-error) would leave live credentials behind.
+          # Same mapping every script in this repo already uses.
+          export VAULT_ADDR="$BAO_ADDR"
+          BAO_TOKEN=$("$CLI" write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id="$BAO_SECRET_ID")
+          # The logs of this job are public and this is a credential. The
+          # composite action masks the equivalent value; these two inline
+          # blocks did not, and the token is exported into a child script.
+          echo "::add-mask::$BAO_TOKEN"
+          export BAO_TOKEN VAULT_TOKEN="$BAO_TOKEN"
           ./scripts/publish-preview-e2e-to-bao.sh "$PREVIEW_ID"
 
   # --------------------------------------------------------------------------
@@ -294,31 +784,88 @@ jobs:
   # are PR-content-dependent only, no per-preview args.
   # --------------------------------------------------------------------------
   build-web:
-    needs: [meta, secrets]
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate, secrets]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      # Needed only to push the per-PR image to GHCR. Note this job builds
+      # PR-supplied code, so anything granted here is granted to that code.
+      packages: write
+      # Mints the OIDC token for the read-only cluster credential.
+      id-token: write
+    # Its own environment, and this is load-bearing rather than cosmetic: the
+    # OpenBao JWT role for this tier binds `environment` to exactly this value.
+    # Sharing one environment across tiers would let any job that can mint an
+    # OIDC token log in as any role, since the role name is chosen by the
+    # caller — the per-job privilege split would be nominal only.
+    environment: preview-build
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # BASE first, and the ordering is security-critical: it puts the
+          # TRUSTED copy of .github/actions/cluster-credentials into the
+          # workspace so the credential step below is reviewed code. The PR
+          # head is checked out afterwards, by which point the credential
+          # already exists outside the workspace in $HOME/.kube. Head-first
+          # would make the local action PR-controlled — a PR could rewrite it
+          # to exfiltrate the kubeconfig or request a different Bao role.
+          ref: ${{ github.sha }}
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
+      - name: Cluster credentials
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-read
+          k8s_role: preview-read
+          namespace: ${{ needs.meta.outputs.namespace }}
+          # 20m, matching what the runbook claims for this job. build-web runs
+          # the most untrusted code in the workflow and needs the credential
+          # only for one `kubectl get secret` at the top, so inheriting the
+          # action's default would leave it valid for most of a `next build`
+          # against a PR-controlled lockfile. The step below discards it as
+          # soon as that read is done, which is the stronger guarantee.
+          ttl: 20m
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          # CAVEAT, and it is the load-bearing one for this job: under
+          # `static` — the mode in force until PREVIEW_CLUSTER_AUTH is set —
+          # bao_role, k8s_role, namespace and ttl above are all IGNORED, and
+          # KUBECONFIG_PREVIEW_RO_BASE64 does not exist as a repo secret, so
+          # this `||` falls through to the full cluster-admin
+          # KUBECONFIG_BASE64. Everything above reads as a least-privilege
+          # argument and none of it is in effect. That is why the credential
+          # is discarded below rather than left in $HOME for the build.
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
+      - uses: actions/checkout@v5
+        with:
+          # Now the PR head, for the build. checkout cleans the workspace,
+          # so the trusted action above is gone by here — fine, it already ran.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Read anon key from cluster
         env:
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.kube"
-          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
           ANON=$(kubectl -n "$NS" get secret pawtograder-jwt -o jsonpath='{.data.ANON_KEY}' | base64 -d)
           [ -n "$ANON" ] || { echo "::error::ANON_KEY missing in $NS/pawtograder-jwt"; exit 1; }
           echo "::add-mask::$ANON"
           # Stash in env for the build step. Within a single job env is
           # mask-aware but not subject to the cross-job output stripping.
           echo "ANON_KEY=$ANON" >> "$GITHUB_ENV"
+      # Immediately after the single read this job needed it for, and BEFORE
+      # any step that touches PR-supplied content. Under `oidc` the token is
+      # narrow and short-lived; under `static` it is the cluster-admin
+      # kubeconfig (see the caveat on the credential step above), and leaving
+      # it at $HOME/.kube/config would mean it is on disk, un-expiring, for
+      # the whole `docker/build-push-action` run against a PR-controlled
+      # Dockerfile and lockfile. Nothing below here uses kubectl.
+      - name: Discard the cluster credential
+        run: rm -f "$HOME/.kube/config"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -339,7 +886,7 @@ jobs:
             NEXT_PUBLIC_PAWTOGRADER_WEB_URL=https://${{ needs.meta.outputs.hostname }}
             NEXT_PUBLIC_SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
             NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ env.ANON_KEY }}
-            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
+            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.event.pull_request.head.sha || github.sha }}
             NEXT_PUBLIC_ENABLE_SIGNUPS=true
             SENTRY_RELEASE=${{ needs.meta.outputs.tag }}
             SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
@@ -364,13 +911,19 @@ jobs:
             type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest,mode=max
 
   build-edge-functions:
-    needs: meta
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      # Needed only to push the per-PR image to GHCR. Note this job builds
+      # PR-supplied code, so anything granted here is granted to that code.
+      packages: write
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -392,13 +945,19 @@ jobs:
             type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest,mode=max
 
   build-migrations:
-    needs: meta
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      # Needed only to push the per-PR image to GHCR. Note this job builds
+      # PR-supplied code, so anything granted here is granted to that code.
+      packages: write
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -425,13 +984,19 @@ jobs:
   # Stays out of the per-pod runtime path (~600 MiB vs migrations ~50 MiB).
   # --------------------------------------------------------------------------
   build-seeder:
-    needs: meta
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      # Needed only to push the per-PR image to GHCR. Note this job builds
+      # PR-supplied code, so anything granted here is granted to that code.
+      packages: write
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -469,31 +1034,72 @@ jobs:
       # server rejecting anything, so the fix is on this side.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    needs: [meta, secrets, build-web, build-edge-functions, build-migrations, build-seeder]
-    if: needs.meta.outputs.mode == 'deploy'
+    needs: [meta, gate, secrets, build-web, build-edge-functions, build-migrations, build-seeder]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
     runs-on: pawtograder-ci
+    # Job-level cancellation, deliberately not workflow-level: only runs that
+    # have already passed the trust gate reach this job, so superseding one is
+    # always a decision made by someone with write access.
+    #
+    # Dormant as written. This group is a strict refinement of the workflow
+    # group above, which already serializes runs for one PR, so two deploy
+    # jobs for the same preview_id are never in progress together and this
+    # rule never fires. Kept because it is the correct rule the moment the
+    # workflow-level `cancel-in-progress` is reconsidered.
+    concurrency:
+      group: preview-deploy-${{ needs.meta.outputs.preview_id }}
+      cancel-in-progress: true
+    permissions:
+      # No pull-requests: write. This job checks out the PR's helm chart and
+      # holds the full kubeconfig, so it is the one place where untrusted code
+      # and cluster-admin genuinely have to meet — the chart under review is
+      # the thing being deployed. Everything else it used to carry has been
+      # moved out: the PR comment is now its own `comment` job below.
+      contents: read
+      id-token: write
+    # Its own environment, and this is load-bearing rather than cosmetic: the
+    # OpenBao JWT role for this tier binds `environment` to exactly this value.
+    # Sharing one environment across tiers would let any job that can mint an
+    # OIDC token log in as any role, since the role name is chosen by the
+    # caller — the per-job privilege split would be nominal only.
+    environment: preview-deploy
     steps:
       - uses: actions/checkout@v5
+        with:
+          # BASE first, and the ordering is security-critical: it puts the
+          # TRUSTED copy of .github/actions/cluster-credentials into the
+          # workspace so the credential step below is reviewed code. The PR
+          # head is checked out afterwards, by which point the credential
+          # already exists outside the workspace in $HOME/.kube. Head-first
+          # would make the local action PR-controlled — a PR could rewrite it
+          # to exfiltrate the kubeconfig or request a different Bao role.
+          ref: ${{ github.sha }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
-
-      - name: Write kubeconfig
-        env:
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
-        run: |
-          set -euo pipefail
-          if [ -z "${KUBECONFIG_B64:-}" ]; then
-            echo "::error::KUBECONFIG_BASE64 secret is missing — set it under repo settings → Secrets and variables → Actions"
-            exit 1
-          fi
-          mkdir -p "$HOME/.kube"
-          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
-          kubectl version --client=true --output=yaml | head -20
+      - name: Cluster credentials
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-deploy
+          k8s_role: preview-deploy
+          namespace: ${{ needs.meta.outputs.namespace }}
+          ttl: 50m
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
+      - uses: actions/checkout@v5
+        with:
+          # The PR head supplies the HELM CHART under review. After the
+          # credential step, for the same reason as build-web.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Show kubectl client version
+        run: kubectl version --client=true --output=yaml | head -20
 
       - name: Recover stuck helm release
         # A preview deploy that gets interrupted mid-`helm upgrade` — most
@@ -521,6 +1127,66 @@ jobs:
               ;;
           esac
 
+      - name: Start hook-job log capture
+        # `kubectl logs job/x` after the fact only works while a pod still
+        # exists, and a failed hook job's pod does not survive: once the Job
+        # hits its backoff limit the Job controller deletes the pod, typically
+        # a couple of seconds after the container exits. So the failure
+        # snapshot below reliably lost exactly the output we needed — a seed
+        # failure showed up as nothing but `error: timed out waiting for the
+        # condition`, and diagnosing it meant re-running the job by hand
+        # against the live preview.
+        #
+        # Follow every batch job pod from the moment it appears instead, and
+        # spool it to disk. `--pod-running-timeout` makes each follower wait
+        # out ContainerCreating rather than erroring on a not-yet-started
+        # container, and `-f` returns on its own when the pod ends or is
+        # deleted, so the followers wind themselves up.
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hook-logs"
+          cat > "$RUNNER_TEMP/follow-hook-logs.sh" <<'EOS'
+          #!/usr/bin/env bash
+          # usage: follow-hook-logs.sh <namespace> <output-dir>
+          ns="$1"; dir="$2"
+
+          follow_pod() {
+            local pod="$1" out="$2" phase i
+            for i in $(seq 1 900); do
+              phase=$(kubectl -n "$ns" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+              # Pod is gone (deleted, or never observed) — nothing left to read.
+              [ -z "$phase" ] && return 0
+              # `kubectl logs -f <pod>` does NOT wait out ContainerCreating: it
+              # errors immediately with "is waiting to start", and
+              # --pod-running-timeout only applies to selector/controller
+              # lookups, not a named pod. So poll until the container exists.
+              if [ "$phase" = "Pending" ]; then sleep 1; continue; fi
+              # Succeeded/Failed pods that still exist return their full log and
+              # exit 0 immediately; Running pods stream until the pod ends.
+              kubectl -n "$ns" logs -f --all-containers --timestamps "$pod" >>"$out" 2>/dev/null && return 0
+              sleep 1
+            done
+          }
+
+          while :; do
+            for pod in $(kubectl -n "$ns" get pods -l batch.kubernetes.io/job-name \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+              marker="$dir/.$pod.following"
+              [ -e "$marker" ] && continue
+              : > "$marker"
+              follow_pod "$pod" "$dir/$pod.log" &
+            done
+            sleep 2
+          done
+          EOS
+          chmod +x "$RUNNER_TEMP/follow-hook-logs.sh"
+          nohup "$RUNNER_TEMP/follow-hook-logs.sh" "$NS" "$RUNNER_TEMP/hook-logs" \
+            > "$RUNNER_TEMP/hook-logs/.watcher.out" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/hook-logs/.watcher.pid"
+          echo "following batch job pods in $NS (pid $(cat "$RUNNER_TEMP/hook-logs/.watcher.pid"))"
+
       - name: helm upgrade --install
         env:
           RELEASE: ${{ needs.meta.outputs.release }}
@@ -532,6 +1198,14 @@ jobs:
           # is attacker-influenceable and these flow into a shell command.
           DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
           DEPLOY_PR: ${{ github.event.pull_request.number }}
+          # The HEAD sha, not $GITHUB_SHA. Under pull_request_target
+          # $GITHUB_SHA is the base branch tip, and this value reaches the
+          # edge functions as GIT_COMMIT_SHA (see the chart's
+          # _edge-functions-workload.tpl), which Sentry uses as its commit
+          # tag — so stamping $GITHUB_SHA attributes every preview error to
+          # the wrong revision. `github.head_ref` above is already the PR's
+          # branch, so only the commit was wrong.
+          DEPLOY_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           # helm --set splits on commas and interprets dots as key nesting, so a branch name reaches it
@@ -557,7 +1231,7 @@ jobs:
             --set-string global.deploy.pr="$DEPLOY_PR" \
             --set-string global.deploy.runId="$GITHUB_RUN_ID" \
             --set-string global.deploy.runAttempt="$GITHUB_RUN_ATTEMPT" \
-            --set-string global.deploy.commit="$GITHUB_SHA" \
+            --set-string global.deploy.commit="$DEPLOY_SHA" \
             --wait --wait-for-jobs --timeout 20m
 
       - name: Status snapshot on failure
@@ -566,20 +1240,70 @@ jobs:
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
           kubectl -n "$NS" get pods,jobs 2>&1 | head -50
-          for j in $(kubectl -n "$NS" get jobs -o name); do
-            echo "=== $j ==="
-            kubectl -n "$NS" logs "$j" --all-containers --tail=200 2>&1 | tail -200 || true
+
+          # Captured live by the follower above, so this survives the Job
+          # controller deleting a failed pod. Print the tail of every hook pod
+          # we managed to follow, failures last-and-loudest.
+          shopt -s nullglob
+          for f in "$RUNNER_TEMP"/hook-logs/*.log; do
+            echo "=== $(basename "$f" .log) (captured live) ==="
+            tail -200 "$f"
           done
+
+          # Best-effort fallback for anything the follower missed (a pod that
+          # came and went inside one poll interval, or a job whose pod is
+          # somehow still around).
+          for j in $(kubectl -n "$NS" get jobs -o name); do
+            pod_logs=$(kubectl -n "$NS" logs "$j" --all-containers --tail=200 2>/dev/null || true)
+            [ -z "$pod_logs" ] && continue
+            echo "=== $j (live pod) ==="
+            printf '%s\n' "$pod_logs" | tail -200
+          done
+
+          # Whatever the seed/migration containers printed, the Job's own
+          # failure reason (BackoffLimitExceeded, DeadlineExceeded, an image
+          # pull that never resolved) is only on the Job object and its events.
+          for j in $(kubectl -n "$NS" get jobs -o name); do
+            echo "=== $j conditions ==="
+            kubectl -n "$NS" get "$j" -o jsonpath='{range .status.conditions[*]}{.type}: {.reason} — {.message}{"\n"}{end}' 2>&1 || true
+          done
+          echo "=== recent events ==="
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp 2>&1 | tail -30
 
       - name: Status snapshot
         if: always()
         env:
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
+          # Wind up the log follower before the runner does it for us — an
+          # `kubectl logs -f` left attached keeps the job alive to its cleanup
+          # phase and shows up as "Cleaning up orphan processes".
+          if [ -f "$RUNNER_TEMP/hook-logs/.watcher.pid" ]; then
+            pkill -P "$(cat "$RUNNER_TEMP/hook-logs/.watcher.pid")" 2>/dev/null || true
+            kill "$(cat "$RUNNER_TEMP/hook-logs/.watcher.pid")" 2>/dev/null || true
+          fi
           kubectl -n "$NS" get pods,svc,ingress 2>&1 | head -50
 
+  # --------------------------------------------------------------------------
+  # comment — post the preview URL back to the PR.
+  #
+  # Split out of `deploy` so that `pull-requests: write` is held by a job with
+  # no checkout, no cluster credential and no PR-supplied code of any kind. It
+  # reads only `meta` outputs, which are validated strings. Runs on a
+  # gh-hosted runner because it never touches the cluster.
+  #
+  # Inherits deploy's success: `needs: deploy` without always(), so a failed
+  # deploy posts nothing, exactly as the in-job step behaved before.
+  # --------------------------------------------------------------------------
+  comment:
+    needs: [meta, gate, deploy]
+    if: needs.meta.outputs.mode == 'deploy' && needs.gate.outputs.approved == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
       - name: Comment URL on PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: preview
@@ -604,26 +1328,156 @@ jobs:
             The preview tears down automatically when this PR closes.
 
   # --------------------------------------------------------------------------
+  # teardown-check — was a preview ever ASKED FOR on this PR?
+  #
+  # The destroy job is gated on payload-derived evidence so that a stranger
+  # cannot fire a secret-bearing teardown by opening and closing a PR. The
+  # label in the payload was that evidence, and it has a hole: removing the
+  # label is itself a teardown trigger, so if THAT run fails the label is
+  # already gone, and a later `closed` event satisfies none of the disjuncts —
+  # not `unlabeled`, no label, external head repo. Cleanup could never be
+  # retried, which is the leak the gate exists to prevent, reached from the
+  # other side.
+  #
+  # The timeline answers the durable question: was PREVIEW_LABEL ever applied?
+  # That fact does not disappear when the label is removed. Only accounts with
+  # triage or better can label, so it is as maintainer-controlled as the
+  # payload check it backs up.
+  #
+  # ubuntu-latest, no checkout, no repo secrets beyond GITHUB_TOKEN, two
+  # read-only scopes: this must stay cheap enough to run on every close,
+  # including from strangers.
+  # --------------------------------------------------------------------------
+  teardown-check:
+    needs: [meta]
+    if: needs.meta.outputs.mode == 'destroy'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+      pull-requests: read
+    outputs:
+      had_preview: ${{ steps.check.outputs.had_preview }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            # workflow_dispatch: the dispatch IS the intent, and it already
+            # required write access.
+            echo "had_preview=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Fail OPEN here, unlike the trust gate. The two failures are not
+          # symmetric: a wrongly-skipped teardown strands a namespace, a PVC
+          # and a live service-role key with nothing to retry it, while a
+          # wrongly-attempted one runs a job that finds no namespace and
+          # exits. An attacker cannot choose this branch anyway — they would
+          # have to make GitHub's own API fail.
+          if ! labels=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/timeline" --paginate --jq '.[] | select(.event == "labeled") | .label.name' 2>/dev/null); then
+            echo "::warning title=Timeline unreadable::could not determine whether PR #${PR_NUMBER} ever had a preview; attempting teardown anyway"
+            echo "had_preview=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -Fxq -- "$PREVIEW_LABEL" <<<"$labels"; then
+            echo "had_preview=true" >> "$GITHUB_OUTPUT"
+            echo "PR #${PR_NUMBER} carried the '${PREVIEW_LABEL}' label at some point — teardown will run"
+          else
+            echo "had_preview=false" >> "$GITHUB_OUTPUT"
+            echo "PR #${PR_NUMBER} never had the '${PREVIEW_LABEL}' label — nothing was ever deployed for it"
+          fi
+
+  # --------------------------------------------------------------------------
   # destroy — helm uninstall + namespace delete on PR close (or manual)
   # --------------------------------------------------------------------------
   destroy:
     env:
-      # Raise the client-side API throttle for every helm call in this job
-      # (upgrade, the recovery uninstall/rollback, smoke test, teardown).
-      #
-      # Helm defaults to burst 100 and QPS 0 — and QPS 0 means client-go's
-      # default of 5 req/s. The initial apply spends the burst, then everything
-      # after it (notably --wait/--wait-for-jobs polling every resource in the
-      # release) crawls at 5 req/s until the operation context expires:
-      #   UPGRADE FAILED: client rate limiter Wait returned an error
-      # That error is the client queueing behind its own limiter, not the API
-      # server rejecting anything, so the fix is on this side.
+      # Same client-side API throttle as the deploy job, for the single
+      # `helm uninstall` below. See that job for why helm's defaults
+      # (burst 100, QPS 0, which client-go reads as 5 req/s) make a release's
+      # worth of API calls crawl.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    needs: meta
-    if: needs.meta.outputs.mode == 'destroy'
+    # `meta` only, and that is the whole dependency chain: `meta` does not
+    # need the gate either. Listing `gate` here would not gate anything (this
+    # job reads no gate output) but WOULD skip teardown whenever the gate job
+    # fails for an infrastructure reason, since an `if:` with no status
+    # function still carries an implicit success() over `needs`.
+    needs: [meta, teardown-check]
+    # Deliberately NOT gated on TRUST, unlike every deploy-path job above.
+    # Its checkout is the base ref and it runs no PR-supplied code — just
+    # pinned setup actions and helm/kubectl/bao against a namespace whose name
+    # comes only from the PR number — so the kubeconfig here is never
+    # reachable by fork code. Requiring trust would instead strand a namespace
+    # and its PVCs whenever someone's write access is revoked between
+    # deploying a preview and closing the PR: teardown would silently skip and
+    # nothing would ever retry it. Cleanup must not be revocable.
+    #
+    # It IS gated on there having been something to tear down, which is a
+    # different question and one the event payload answers on its own. Without
+    # this, the `pull_request` → `pull_request_target` switch made teardown a
+    # secret-bearing job that any GitHub user could fire at will: fork the
+    # repo, open a PR, close it — no label, no write access, and none of the
+    # first-time-contributor approval that `pull_request` would have required,
+    # because that policy does not apply to pull_request_target. The job would
+    # then decode KUBECONFIG_BASE64 and AppRole-login to OpenBao with
+    # BAO_PUBLISHER_ROLE_ID/SECRET_ID on every such close, N in parallel for N
+    # PRs, with several mutable `@v2`/`@v4`/`@v5` action tags in the run.
+    #
+    # Each disjunct is payload-derived (no API call, nothing to fail closed
+    # on) and maintainer-controlled:
+    #   * not a PR event          — workflow_dispatch, which needs write access
+    #   * `unlabeled`             — the label was just REMOVED, so it cannot
+    #                               still be in the payload; `meta` has already
+    #                               checked it was PREVIEW_LABEL
+    #   * label present on close  — a preview was asked for; only someone with
+    #                               triage or better can have applied it
+    #   * head branch is in this repo — a same-repo PR gets a preview WITHOUT
+    #                               the label (see _trust-gate.yml's approve
+    #                               step), so the label is not evidence for it;
+    #                               pushing the branch already required write
+    #   * the PR was EVER labelled  — from the timeline, so a teardown that
+    #                               failed after the label was removed can
+    #                               still be retried by the close event
+    #
+    # `!cancelled()` and `!= 'false'` rather than `== 'true'`: a
+    # teardown-check that failed or was skipped must not be able to CANCEL a
+    # teardown, only an explicit "this PR never had one" may do that. Cleanup
+    # must not be revocable — including by the job that decides it.
+    if: >-
+      ${{ !cancelled() && needs.meta.outputs.mode == 'destroy' && (
+        github.event_name != 'pull_request_target' ||
+        github.event.action == 'unlabeled' ||
+        contains(github.event.pull_request.labels.*.name, 'preview') ||
+        github.event.pull_request.head.repo.full_name == github.repository ||
+        needs.teardown-check.outputs.had_preview != 'false'
+      ) }}
     runs-on: pawtograder-ci
+    permissions:
+      # pull-requests: write for the teardown comment.
+      contents: read
+      pull-requests: write
+      id-token: write
+    # Teardown gets its own environment for two reasons: the Bao role needs a
+    # distinguishable claim like every other tier, and once cluster secrets
+    # move to environment scope a job with NO environment would resolve them
+    # empty and fail before deleting anything — stranding the namespace and
+    # PVCs, the exact outcome the no-approval rule exists to avoid.
+    #
+    # This environment MUST NOT be given required reviewers. That is the whole
+    # reason it is separate from preview-deploy.
+    environment: preview-teardown
     steps:
+      - uses: actions/checkout@v5
+        with:
+          # Required: this job uses a repository-local action, which must be
+          # present in the workspace. There was no checkout here at all, so
+          # every teardown would have failed to resolve it. Base ref —
+          # teardown must never execute PR-supplied code.
+          ref: ${{ github.sha }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
@@ -631,36 +1485,186 @@ jobs:
         with:
           version: v1.32.0
 
-      - name: Write kubeconfig
+      # Teardown mints TWO credentials, and the order is load-bearing.
+      #
+      # `preview-teardown` is cluster-scoped and now carries ONLY Namespace
+      # get/delete. It used to carry the namespaced rules as well — Secrets,
+      # PVCs, ConfigMaps, Pods, Services, apps/batch — but it is minted
+      # with cluster_role_binding=true (it must be, to reach Namespaces), so those verbs applied
+      # in EVERY namespace, production included. Since this job is deliberately
+      # not trust-gated and runs on every PR close, that made it the widest
+      # credential in the system. The namespaced half is `preview-teardown-ns`,
+      # a label-selected Role, exactly as preview-provision was split.
+      # Namespace NAMES stay bounded by the admission policy in the runbook,
+      # which matches CREATE, UPDATE and DELETE. UPDATE is not optional
+      # there: `preview-provision` holds `patch` on namespaces cluster-wide,
+      # so with CREATE/DELETE alone a single `kubectl label namespace
+      # <any-namespace> pawtograder.net/preview=true` makes that namespace
+      # selectable by `preview-deploy` and `preview-teardown-ns`, and the name
+      # bound is not a bound at all.
+      #
+      # Cluster scope comes FIRST because it answers "does this namespace still
+      # exist?". That question has to be settled before minting the namespaced
+      # credential: `kubernetes/creds/preview-teardown-ns` selects the target
+      # namespace by label, so for a PR closed without ever having had a
+      # preview — the common case for a fork PR, where previews are opt-in by
+      # label — there is
+      # nothing to select and the mint would fail. Asking first turns that into
+      # a clean no-op instead of a red teardown.
+      - name: Cluster credentials (cluster scope — namespaces only)
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-teardown
+          k8s_role: preview-teardown
+          cluster_scoped: "true"
+          namespace: ${{ env.PREVIEW_CI_NAMESPACE }}
+          ttl: 20m
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
+
+      - name: Does the preview namespace still exist?
+        id: ns
         env:
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+          NS: ${{ needs.meta.outputs.namespace }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.kube"
-          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
+          # A NotFound and an unusable credential are different answers and
+          # must not collapse into the same one. `kubectl get ns >/dev/null
+          # 2>&1` is non-zero for both, so an expired token, a 403 from a
+          # misconfigured OpenBao role, or an unreachable API server all read
+          # as "already absent": every remaining step is skipped by the
+          # `exists == 'true'` guard, the job goes GREEN, and the namespace and
+          # its PVCs are stranded with nothing left to retry them. Teardown
+          # reporting success is precisely how that leak stays invisible.
+          # jsonpath rather than `-o name`: the PHASE is the diagnostic that
+          # was missing. This step printed nothing at all on the exists path,
+          # so a namespace wedged in Terminating looked identical to a healthy
+          # one being torn down for the first time — three consecutive
+          # teardowns of the same preview reported success and gave no way to
+          # tell which had happened.
+          if out=$(kubectl get ns "$NS" -o jsonpath='{.status.phase}' 2>&1); then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "namespace ${NS} exists (phase=${out:-Unknown})"
+            if [ "$out" = "Terminating" ]; then
+              # Normal for a few seconds after a `--wait=false` delete; a
+              # problem if it persists, and this is the only place that can
+              # say so.
+              echo "::notice title=Namespace already terminating::${NS} was already being deleted when this teardown started. If it stays Terminating across runs a finalizer is wedged — check 'kubectl get ns ${NS} -o yaml' for .spec.finalizers and stuck PVCs."
+            fi
+          elif printf '%s' "$out" | grep -qF 'NotFound'; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "preview ${NS} already absent — nothing to do"
+          else
+            # Deliberately NOT a loose "not found" match: that also matches
+            # "kubectl: command not found", which is a broken runner rather
+            # than an absent namespace, and treating it as absent is the bug
+            # being fixed. Only the server's NotFound reason means absent.
+            echo "::error title=Teardown precondition failed::Could not determine whether namespace ${NS} exists, so it may still be running. kubectl said: ${out}" >&2
+            exit 1
+          fi
 
-      - name: helm uninstall + delete namespace
+      # The other half of the ordering problem. The deploy side refuses to
+      # CREATE a namespace whose preview is no longer wanted; this refuses to
+      # DELETE one that a newer deploy already owns. Sequence it prevents:
+      # label removed, this teardown queues, label added again, the new deploy
+      # runs in the other concurrency group and recreates the namespace, and
+      # then this run — still holding its original intent — deletes a live
+      # preview that no further event would rebuild.
+      #
+      # Fails toward CLEANUP, deliberately and unlike the deploy-side check: a
+      # missing or unreadable annotation means an older preview or an
+      # unreachable API, and skipping teardown on that basis is how namespaces
+      # leak. Only a well-formed, strictly newer run id stops the deletion.
+      - name: Is this teardown superseded by a newer deploy?
+        id: supersede
+        if: steps.ns.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          owner=$(kubectl get ns "$NS" \
+            -o jsonpath='{.metadata.annotations.pawtograder\.net/deploy-run-id}' 2>/dev/null || true)
+          superseded=false
+          if [ -n "$owner" ] && printf '%s' "$owner" | grep -qE '^[0-9]+$' \
+             && [ "$owner" -gt "$GITHUB_RUN_ID" ]; then
+            superseded=true
+            echo "::notice title=Teardown superseded::namespace ${NS} is owned by deploy run ${owner}, which is newer than this teardown (${GITHUB_RUN_ID}). A preview was re-requested while this run was queued; leaving it alone."
+          fi
+          echo "superseded=${superseded}" >> "$GITHUB_OUTPUT"
         env:
+          NS: ${{ needs.meta.outputs.namespace }}
+
+      # Written to its own file rather than over $HOME/.kube/config: the
+      # cluster-scoped credential is still needed afterwards to delete the
+      # namespace itself, and re-minting it would be a second round trip for a
+      # token we already hold.
+      - name: Cluster credentials (in-namespace)
+        if: steps.ns.outputs.exists == 'true' && steps.supersede.outputs.superseded != 'true'
+        uses: ./.github/actions/cluster-credentials
+        with:
+          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          bao_addr: ${{ vars.BAO_ADDR }}
+          bao_role: preview-teardown
+          k8s_role: preview-teardown-ns
+          namespace: ${{ needs.meta.outputs.namespace }}
+          ttl: 20m
+          api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
+          ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
+          kubeconfig_path: ${{ runner.temp }}/kubeconfig-preview-ns
+
+      - name: helm uninstall + empty the namespace
+        if: steps.ns.outputs.exists == 'true' && steps.supersede.outputs.superseded != 'true'
+        env:
+          KUBECONFIG: ${{ runner.temp }}/kubeconfig-preview-ns
           NS: ${{ needs.meta.outputs.namespace }}
           RELEASE: ${{ needs.meta.outputs.release }}
         run: |
           set -euo pipefail
-          if kubectl get ns "$NS" >/dev/null 2>&1; then
-            helm uninstall "$RELEASE" --namespace "$NS" --ignore-not-found || true
-            # PVCs are not deleted by helm uninstall — clean them up so
-            # the namespace can actually go away.
-            kubectl -n "$NS" delete pvc --all --wait=false || true
-            kubectl delete namespace "$NS" --wait=false
-            echo "preview ${NS} torn down"
-          else
-            echo "preview ${NS} already absent — nothing to do"
-          fi
+          helm uninstall "$RELEASE" --namespace "$NS" --ignore-not-found || true
+          # PVCs are not deleted by helm uninstall — clean them up so
+          # the namespace can actually go away.
+          kubectl -n "$NS" delete pvc --all --wait=false || true
+
+      # Back on the cluster-scoped credential ($HOME/.kube/config), which is
+      # the only one that may delete a Namespace.
+      # `!cancelled()`, not the bare `steps.ns...` guard, and that is the whole
+      # point of this step. An `if:` with no status function carries an
+      # implicit success(), so ANY earlier failure — most likely the
+      # in-namespace mint above, which is a live network call to OpenBao —
+      # skipped this step and stranded the namespace and its PVCs. Deleting
+      # the Namespace is what actually reclaims the resources (it garbage
+      # collects everything inside, including whatever `helm uninstall` did
+      # not get to), so it is the one step that must still run when the
+      # cleanup ahead of it went wrong. The job still reports the earlier
+      # failure; it just does not leak a namespace on the way out.
+      - name: Delete the namespace
+        id: delete
+        if: ${{ !cancelled() && steps.ns.outputs.exists == 'true' && steps.supersede.outputs.superseded != 'true' }}
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          kubectl delete namespace "$NS" --wait=false
+          echo "preview ${NS} torn down"
 
       # Counterpart of the secrets job's OpenBao publish: drop the mirrored
       # e2e bundle with the preview. Best-effort — a stale bundle is dead
       # weight anyway once the namespace is gone.
+      # `!cancelled()`, for the same reason as the namespace delete above and
+      # it was missed here: `continue-on-error` governs what happens when a
+      # step FAILS, not whether it runs after an earlier failure, and an `if:`
+      # with no status function carries an implicit success(). Both new
+      # failure points in this job — the in-namespace mint (a live OpenBao
+      # call) and the namespace probe's `exit 1` — sit above it, so the
+      # namespace would be deleted (that step has the guard) while the bundle
+      # holding this preview's live SUPABASE_SERVICE_ROLE_KEY and
+      # END_TO_END_SECRET was silently left behind, with nothing to retry it.
       - name: Remove e2e bundle from OpenBao (best-effort)
+        # Not when superseded: the bundle belongs to the live preview that
+        # just replaced this teardown's target.
+        if: ${{ !cancelled() && steps.supersede.outputs.superseded != 'true' }}
         continue-on-error: true
         env:
           PREVIEW_ID: ${{ needs.meta.outputs.preview_id }}
@@ -674,22 +1678,94 @@ jobs:
             echo "OpenBao not configured — nothing to remove"
             exit 0
           fi
-          if ! command -v bao >/dev/null 2>&1 && ! command -v vault >/dev/null 2>&1; then
+          # One CLI variable, like every other OpenBao consumer in this repo
+          # (publish-preview-e2e-to-bao.sh, export-preview-e2e-from-bao.sh,
+          # setup-openbao-*.sh). The old form tested for `bao` OR `vault` and
+          # then called `bao` unconditionally, so a runner image carrying
+          # vault but not bao satisfied the guard, skipped the download, and
+          # hit `bao: command not found` — fatal in publish-e2e-bundle and
+          # SILENT in destroy, which is continue-on-error and would have left
+          # the live bundle in place.
+          CLI=bao
+          command -v bao >/dev/null 2>&1 || CLI=vault
+          if ! command -v "$CLI" >/dev/null 2>&1; then
+            # Its OWN directory, not $RUNNER_TEMP itself. $RUNNER_TEMP is the
+            # shared scratch dir — teardown keeps kubeconfig-preview-ns there
+            # and deploy writes follow-hook-logs.sh — and prepending it to
+            # PATH lets anything later dropped in it shadow kubectl, helm or
+            # npm. This is the pattern the cluster-credentials action already
+            # uses; these two blocks were the exception.
+            bao_bin="$RUNNER_TEMP/bao-bin"
+            mkdir -p "$bao_bin"
             curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
-              | tar -xz -C "$RUNNER_TEMP" bao
-            chmod +x "$RUNNER_TEMP/bao"
-            export PATH="$RUNNER_TEMP:$PATH"
+              | tar -xz -C "$bao_bin" bao
+            chmod +x "$bao_bin/bao"
+            # On PATH, not just in $CLI: the publish script below does its own
+            # bao/vault lookup and would not see an absolute path.
+            export PATH="$bao_bin:$PATH"
+            CLI=bao
           fi
-          BAO_TOKEN=$(bao write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id="$BAO_SECRET_ID")
-          export BAO_TOKEN
-          bao kv metadata delete -mount=kv "apps/pawtograder/preview-e2e/pr-${PREVIEW_ID}" \
-            && echo "removed e2e bundle for pr-${PREVIEW_ID}" \
-            || echo "no e2e bundle to remove for pr-${PREVIEW_ID}"
+          # vault reads VAULT_ADDR/VAULT_TOKEN; bao reads BAO_ADDR/BAO_TOKEN.
+          # Selecting the vault CLI without this left the endpoint unset, so
+          # the AppRole login below silently targeted vault's default
+          # https://127.0.0.1:8200 — publish would fail and the teardown's KV
+          # delete (continue-on-error) would leave live credentials behind.
+          # Same mapping every script in this repo already uses.
+          export VAULT_ADDR="$BAO_ADDR"
+          BAO_TOKEN=$("$CLI" write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id="$BAO_SECRET_ID")
+          # The logs of this job are public and this is a credential. The
+          # composite action masks the equivalent value; these two inline
+          # blocks did not, and the token is exported into a child script.
+          echo "::add-mask::$BAO_TOKEN"
+          export BAO_TOKEN VAULT_TOKEN="$BAO_TOKEN"
+          # `|| echo "no e2e bundle to remove"` swallowed every failure mode
+          # equally: a 403, an expired AppRole login and a genuine absence all
+          # printed the same reassuring line. The bundle holds a live
+          # SUPABASE_SERVICE_ROLE_KEY and END_TO_END_SECRET for the preview, so
+          # a delete that silently did not happen leaves working credentials in
+          # OpenBao after the namespace they belong to is gone. Still
+          # best-effort — the job keeps `continue-on-error` — but a real
+          # failure now says so in the log with the reason attached.
+          #
+          # TWO outcomes, not three. The replacement had a middle arm matching
+          # `no value found|404` on the output, and both halves were wrong:
+          # KV-v2 metadata DELETE is idempotent (204 whether or not the key
+          # exists), so `bao kv metadata delete` exits 0 on an absent path and
+          # that arm was dead; and `404` as an unanchored substring of merged
+          # stdout+stderr also matches an ingress 404 from a repointed
+          # BAO_ADDR, a typo in `-mount=kv`, or a request id containing those
+          # digits — each of which would print the reassuring line and return
+          # success. Exit 0 means nothing remains at that path, which is the
+          # only property this step needs to assert.
+          if out=$("$CLI" kv metadata delete -mount=kv "apps/pawtograder/preview-e2e/pr-${PREVIEW_ID}" 2>&1); then
+            echo "no e2e bundle remains for pr-${PREVIEW_ID}"
+          else
+            echo "::warning title=e2e bundle not removed::The preview's OpenBao bundle for pr-${PREVIEW_ID} could not be deleted and may still hold live credentials. Delete it by hand: bao kv metadata delete -mount=kv apps/pawtograder/preview-e2e/pr-${PREVIEW_ID}. Reason: ${out}"
+          fi
 
       - name: Update PR comment
-        if: github.event_name == 'pull_request'
+        # `!cancelled() &&`, not a bare event test: same implicit-success()
+        # trap as the two steps above. A teardown that hit a snag is exactly
+        # when the PR comment should stop advertising a preview URL.
+        if: ${{ !cancelled() && github.event_name == 'pull_request_target' }}
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: preview
-          message: |
-            🧹 **Preview torn down** — namespace `${{ needs.meta.outputs.namespace }}` deleted.
+          # Edit the existing preview comment, never create one. A closed PR
+          # may never have had a preview (a fork PR that was never labeled),
+          # and without this the close would post a teardown notice for a
+          # namespace that never existed.
+          only_update: true
+          # The message has to track what actually happened. With
+          # `!cancelled()` this step also runs when the probe or the delete
+          # FAILED, and it used to post "torn down — namespace deleted"
+          # regardless: the run went red while the PR comment told the author
+          # their namespace and PVCs were gone. Three outcomes, three texts.
+          message: >-
+            ${{ steps.supersede.outputs.superseded == 'true'
+                && format('♻️ **Teardown skipped** — a newer deploy re-requested this preview, so `{0}` was left running.', needs.meta.outputs.namespace)
+            || (steps.ns.outcome == 'success' && steps.ns.outputs.exists != 'true')
+                && format('🧹 **No preview to tear down** — `{0}` was already absent.', needs.meta.outputs.namespace)
+            || (steps.ns.outcome == 'success' && steps.delete.outcome == 'success')
+                && format('🧹 **Preview torn down** — namespace `{0}` deleted.', needs.meta.outputs.namespace)
+            || format('⚠️ **Preview teardown did not complete** — namespace `{0}` may still be running, with its PVCs and its mirrored credentials. See the workflow run for the reason.', needs.meta.outputs.namespace) }}

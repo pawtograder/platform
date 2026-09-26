@@ -15,6 +15,14 @@
 # Branding is read from plain server-side env vars at request time
 # (lib/branding.ts), so the SAME published web image renders this skin purely
 # from these values — no rebuild needed once the assets are in the image.
+#
+# Deliberately says NOTHING about metrics. Chart 0.3.18 refuses a multi-replica
+# web tier with monitoring on and no workflow-metrics leader, but that is a
+# property of the BASE overlay this file is layered on, not of a branding skin:
+# values-staging.yaml and values-prod.yaml set web.metricsLeader.enabled, and
+# values-preview.yaml sets web.workflowMetricsLeader on its single replica.
+# Pinning either one here would be wrong — the two are mutually exclusive, so
+# hard-coding the dedicated leader would break exactly the preview layering.
 
 web:
   branding:

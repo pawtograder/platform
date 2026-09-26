@@ -16,8 +16,105 @@ Args:
 All other config is shared from .Values.edgeFunctions; channels differ only by
 name, labels, image, and replicas, and target the same Postgres/auth/storage.
 */}}
+{{/*
+Guardrail: the edge-function container memory budget is a SUM, and every
+production incident on this tier has come from reconciling fewer than three of
+them. 2026-08-11 counted only the isolates (maxParallelism x per-isolate limit)
+and OOM-killed 21 of 24 pods. 2026-08-19 counted isolates + host but not the
+demuxer's eszip cache, which grows to eszipCacheMaxMb, and OOM-killed pods again.
+
+So the sum is asserted at render time rather than documented and hoped for:
+
+    eszipCacheMaxMb + eszipColdLoadHeadroomMb
+      + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
+      <= resources.limits.memory
+
+The host term is measured, not guessed: a freshly started pod with an empty
+cache sits at ~87Mi. It also absorbs the pawtograder_edge_* metrics collector
+added in chart 0.3.18: its state is bounded at image-build time to one
+fixed-size numeric array plus a <=32-entry status map per allowlisted function,
+~85KB total for ~56 functions. That is inside the rounding error of the ~90Mi
+host term, so it is NOT a separate line in this sum -- recorded here so the next
+person reconciling these numbers finds it accounted for rather than discovering
+it.
+
+The cold-load term covers bundle buffers that residentBytes does NOT count: a
+bundle being read for a cache miss, and one the LRU evicted or refused while a
+worker creation still holds it. main.ts narrows that window to the duration of
+create(), but it cannot be zero, and a burst of cold requests for distinct
+functions is exactly when it is largest.
+
+maxParallelism is REQUIRED rather than defaulted-to-zero. Left unset the runtime
+derives it from CPU count, which cannot be known at render time; treating that as
+zero made this assertion accept the very combinations the values documentation
+says it rejects, which is worse than not having it.
+
+One deliberate gap remains: a limit that is not an integer number of Gi/Mi is
+skipped rather than mis-parsed -- a guardrail that silently computes the wrong
+number is worse than one that admits it cannot.
+*/}}
+{{- define "pawtograder.edgeFunctions.assertMemoryBudget" -}}
+{{- $ef := .Values.edgeFunctions -}}
+{{- $limit := "" -}}
+{{- if $ef.resources -}}
+{{- if $ef.resources.limits -}}
+{{- $limit = $ef.resources.limits.memory | default "" | toString -}}
+{{- end -}}
+{{- end -}}
+{{- $limitMi := 0 -}}
+{{- if hasSuffix "Gi" $limit -}}
+{{- $limitMi = mul (trimSuffix "Gi" $limit | int) 1024 -}}
+{{- else if hasSuffix "Mi" $limit -}}
+{{- $limitMi = trimSuffix "Mi" $limit | int -}}
+{{- end -}}
+{{- $cacheMi := $ef.eszipCacheMaxMb | int -}}
+{{- if le $cacheMi 0 -}}
+{{- fail (printf "edgeFunctions.eszipCacheMaxMb must be a positive number of MiB (got %v). Zero or negative would be counted as-is by this assertion while main.ts substitutes its own 512Mi default, so the process would reserve memory the budget never accounted for." $ef.eszipCacheMaxMb) -}}
+{{- end -}}
+{{/* Every one of these is rendered into the environment AND has a fallback in
+     main.ts of the shape `Number(env) || default`. A zero, negative or
+     non-numeric value therefore renders as configured, is counted as configured
+     (or as nothing) here, and is then silently replaced by the runtime with its
+     own default -- so the process runs on a number this assertion never saw.
+     worker.memoryLimitMb is the one that breaks the memory budget directly: at
+     0 the isolate term vanishes from the sum while eight workers still reserve
+     8 x 256Mi. The other four are not budget terms, but the same divergence
+     makes them worth rejecting in the same place rather than leaving one
+     validated knob beside four unvalidated ones. */}}
+{{- range $knob, $value := dict "worker.memoryLimitMb" $ef.worker.memoryLimitMb "worker.timeoutMs" $ef.worker.timeoutMs "worker.cpuSoftMs" $ef.worker.cpuSoftMs "worker.cpuHardMs" $ef.worker.cpuHardMs "worker.lowMemoryMultiplier" $ef.worker.lowMemoryMultiplier -}}
+{{- if le ($value | int) 0 -}}
+{{- fail (printf "edgeFunctions.%s must be a positive number (got %v). main.ts falls back to its own default for anything non-positive, so the container would run on a value this budget assertion never counted." $knob $value) -}}
+{{- end -}}
+{{- end -}}
+{{- $perIsolateMi := $ef.worker.memoryLimitMb | int -}}
+{{- $par := $ef.maxParallelism | toString -}}
+{{- if or (eq $par "") (le ($par | int) 0) -}}
+{{- fail (printf "edgeFunctions.maxParallelism must be set to a positive integer (got %q). Left unset the runtime derives it from CPU count, which cannot be known at render time -- so the isolate term of the memory budget could not be checked and this assertion would pass configurations it documents as rejected. Set it explicitly; 8 is the chart default and what production runs." $par) -}}
+{{- end -}}
+{{- $isolatesMi := mul ($par | int) $perIsolateMi -}}
+{{- $hostMi := 90 -}}
+{{- $coldMi := $ef.eszipColdLoadHeadroomMb | int -}}
+{{- if le $coldMi 0 -}}
+{{- fail (printf "edgeFunctions.eszipColdLoadHeadroomMb must be a positive number of MiB (got %v). Same reason as eszipCacheMaxMb: main.ts would substitute its own 256Mi default and the process would reserve memory this assertion did not count." $ef.eszipColdLoadHeadroomMb) -}}
+{{- end -}}
+{{/* The cold-load semaphore charges a bundle's FULL size, so an allowance smaller
+     than the largest bundle in the image cannot bound it -- an oversized bundle is
+     admitted alone and overshoots by (size - allowance). 64Mi covers the largest
+     bundle measured in this image (58.4MiB); if the bundles grow past that, this
+     minimum and the sizing note in values.yaml both need revisiting. */}}
+{{- $minColdMi := 64 -}}
+{{- if lt $coldMi $minColdMi -}}
+{{- fail (printf "edgeFunctions.eszipColdLoadHeadroomMb is %dMi, below the %dMi needed to cover the largest bundle in the image (58.4MiB measured). Below that the cold-load semaphore cannot enforce the ceiling this assertion certifies: the read allocates the whole bundle regardless of the allowance." $coldMi $minColdMi) -}}
+{{- end -}}
+{{- $needMi := add $cacheMi $coldMi $isolatesMi $hostMi -}}
+{{- if and (gt $limitMi 0) (gt $needMi $limitMi) -}}
+{{- fail (printf "edgeFunctions memory budget does not fit inside resources.limits.memory (%s = %dMi): eszipCacheMaxMb %dMi + eszipColdLoadHeadroomMb %dMi + isolates %dMi (maxParallelism %s x worker.memoryLimitMb %dMi) + ~%dMi Deno host = %dMi. Raise the limit, or lower eszipCacheMaxMb / maxParallelism. This exact sum is what OOM-killed production on 2026-08-11 and again on 2026-08-19; see the notes above these values." $limit $limitMi $cacheMi $coldMi $isolatesMi (or $par "unset") $perIsolateMi $hostMi $needMi) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.edgeFunctions.workload" -}}
 {{- $ctx := .ctx -}}
+{{- include "pawtograder.edgeFunctions.assertMemoryBudget" $ctx -}}
 {{- $component := .component -}}
 {{- $image := .image -}}
 {{- $name := include "pawtograder.componentName" (dict "ctx" $ctx "component" $component) -}}
@@ -164,6 +261,74 @@ spec:
               value: {{ $ctx.Values.edgeFunctions.worker.cpuHardMs | quote }}
             - name: EDGE_WORKER_LOW_MEMORY_MULTIPLIER
               value: {{ $ctx.Values.edgeFunctions.worker.lowMemoryMultiplier | quote }}
+            # Byte budget for the demuxer's resident eszip cache. This is the
+            # THIRD term in the container's memory budget, alongside
+            # maxParallelism x worker.memoryLimitMb — see values.yaml.
+            - name: EDGE_ESZIP_CACHE_MAX_BYTES
+              value: {{ mul $ctx.Values.edgeFunctions.eszipCacheMaxMb 1048576 | quote }}
+            # Enforced at runtime by main.ts, not just budgeted here: a semaphore
+            # holds these bytes from before a cold read until create() returns.
+            - name: EDGE_ESZIP_COLD_LOAD_MAX_BYTES
+              value: {{ mul $ctx.Values.edgeFunctions.eszipColdLoadHeadroomMb 1048576 | quote }}
+            # Per-request pawtograder_edge_* metrics, collected by main.ts and
+            # appended to the metrics function's /metrics response. A RUNTIME
+            # switch, not a build-time constant, so it is flipped by a values
+            # change rather than an image rebuild. Default off: the deploy plan
+            # ships this dark to prod and enables it in a later, separate deploy
+            # so the cardinality delta has a single attributable cause.
+            - name: EDGE_METRICS
+              value: {{ ternary "1" "0" $ctx.Values.edgeFunctions.metrics.enabled | quote }}
+            # github-async-worker pgmq drain tuning, read by
+            # supabase/functions/_shared/asyncWorkerTuning.ts. Defaults (4 / 300)
+            # are the values that were hardcoded in the worker until 2026-09-07,
+            # when a 58-message create_repo burst took 88 minutes to drain and
+            # re-read 20 of those 58 against the 300s timeout. The two are
+            # COUPLED — visibilityTimeoutSeconds must cover a whole batch of
+            # drainConcurrency (x120s/message) — and validations.yaml enforces
+            # that whenever concurrency is raised. See values.yaml.
+            - name: GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.drainConcurrency | quote }}
+            - name: GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds | quote }}
+            # Per-org leaseholders. A SECOND scaling axis to the two above: those
+            # make one leaseholder's batch bigger inside a single 256MiB isolate,
+            # these run more leaseholders, one isolate each, one GitHub org each.
+            # globalCap 0 = off, which is the shipped default, so this renders the
+            # pre-2026-09-13 behaviour until an operator sets it. Rendered as
+            # explicit `env` (an `env` entry beats `envFrom`), so envFromSecrets
+            # cannot override them — same rule as the two knobs above.
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotGlobalCap | quote }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_ORG
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg | quote }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_LEASE_TTL_SECONDS
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds | quote }}
+            # Continuous-refill KILL SWITCH, 1 = on (shipped). Only meaningful on
+            # the org-leased path. It exists so the drain SHAPE can be rolled
+            # back without a code deploy and without setting orgSlotGlobalCap: 0,
+            # which would also give up per-org leaseholders.
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill | quote }}
+            # Wall-clock run budget for one org-leased drain: when a leaseholder
+            # stops claiming and lets the in-flight messages finish, so
+            # EDGE_WORKER_TIMEOUT_MS above cannot kill the isolate mid-message.
+            # Default and ceiling are the same number and both are DERIVED from
+            # worker.timeoutMs, so only DOWN is useful and the chart leaves the
+            # default to the worker: RENDERED ONLY WHEN SET, because a present-
+            # but-empty variable is read as a botched edit and fails safe to the
+            # 120s floor. validations.yaml refuses anything outside
+            # 120..ceiling(worker.timeoutMs) before it reaches this line.
+            {{- $runBudget := include "pawtograder.asyncWorker.runBudgetRaw" $ctx }}
+            {{- if ne $runBudget "" }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS
+              value: {{ $runBudget | quote }}
+            {{- end }}
+            # Latency histogram bounds in seconds. The top finite bucket must be
+            # >= worker.timeoutMs/1000 or every request that hits the worker
+            # timeout lands in +Inf and the upper quantiles become an
+            # extrapolation; render-guardrails.sh asserts that.
+            - name: EDGE_METRICS_BUCKETS
+              value: {{ join "," $ctx.Values.edgeFunctions.metrics.buckets | quote }}
             # JWT_SECRET here is NOT the deployment's HS256 shared secret. The
             # only consumer inside the edge runtime is _shared/MCPAuth.ts, which
             # mints short-lived per-user RLS JWTs for MCP and the CLI — with
@@ -181,7 +346,7 @@ spec:
             # optional: true is deliberate. Externally-managed Secrets
             # (ESO/OpenBao/SealedSecrets) need this key added by hand, and a
             # missing *required* secretKeyRef crash-loops the entire edge tier.
-            # Optional degrades to exactly the pre-existing behaviour instead:
+            # Optional degrades to exactly the pre-existing behavior instead:
             # every function keeps working and only MCP/CLI fail, with
             # MCPAuth's "JWT_SECRET must be set" pointing at the cause.
             # Nothing else in this container reads JWT_SECRET and
@@ -226,6 +391,22 @@ spec:
             - name: GIT_COMMIT_SHA
               value: {{ . | quote }}
             {{- end }}
+            {{- $emailEnabled := $ctx.Values.edgeFunctions.email.enabled }}
+            {{- if or (kindIs "bool" $emailEnabled) $emailEnabled }}
+            # Explicit switch for notification email, consumed by
+            # supabase/functions/_shared/emailTransportConfig.ts. Leave unset to infer from
+            # SMTP_HOST (the historical behavior). Set "true" wherever email is meant to work: the
+            # processor then REFUSES loudly if SMTP config is missing, rather than treating an
+            # unconfigured mailer as an empty queue and deferring the backlog forever.
+            #
+            # `kindIs "bool"` first, NOT a bare `with`/`if`: Go templates treat the boolean false as
+            # empty, so `enabled: false` -- the natural reading of a key named `enabled` -- would
+            # skip this block entirely and never render EMAIL_ENABLED. The runtime would then fall
+            # back to inferring from SMTP_HOST, which the SMTP Secret now supplies, and the
+            # deployment would send mail from an environment the operator had just switched off.
+            - name: EMAIL_ENABLED
+              value: {{ $emailEnabled | toString | quote }}
+            {{- end }}
             {{- if $ctx.Values.edgeFunctions.e2e.enabled }}
             - name: E2E_ENABLE
               value: "true"
@@ -238,6 +419,24 @@ spec:
             - secretRef:
                 name: {{ $ctx.Values.secrets.names.edgeFunctions }}
                 optional: true
+            {{- if $ctx.Values.edgeFunctions.envFromSecrets }}
+            # These are always optional: true, deliberately and permanently. envFrom is one-shot
+            # and all-or-nothing: if any named Secret is absent when the pod starts, the kubelet
+            # fails the container with CreateContainerConfigError and never retries the lookup on
+            # its own, so the ENTIRE edge tier — grading included — stays down until an operator
+            # notices. A list like this one inevitably names Secrets that are not guaranteed to
+            # exist in every environment (per-tier integrations, an ESO sync that lags a fresh
+            # install), and one absent Secret must not take the tier offline.
+            #
+            # The trade-off is real: a pod that boots before a Secret has synced runs WITHOUT
+            # those variables for its whole life, with nothing to re-read them later. That is how
+            # notification email went dark and stayed dark. Detect that case instead of trying to
+            # prevent it here — edgeFunctions.email.enabled makes missing SMTP config a loud
+            # runtime failure, and Reloader (edgeFunctions.reloader) rolls the Deployment when a
+            # referenced Secret changes. Secrets that genuinely must gate startup get their own
+            # explicit `optional: false` secretRef (see pawtograder-redis below), not a
+            # chart-wide switch over a list of unrelated names.
+            {{- end }}
             {{- range $ctx.Values.edgeFunctions.envFromSecrets }}
             - secretRef:
                 name: {{ . }}

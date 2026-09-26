@@ -19,6 +19,22 @@ RUN npm config set fetch-retries 5 \
 
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
+
+# node:22-bookworm-slim ships no system CA bundle at all — /etc/ssl/certs is
+# empty and ca-certificates is not installed. Node does not care, because it has
+# its own CA list compiled in, which is why `npm ci` has always worked and why
+# nothing noticed. sentry-cli is a native libcurl binary, not Node, so it reads
+# the system bundle and without it every source map upload dies with curl error
+# 60 "unable to get local issuer certificate" — see build 730, which uploaded
+# nothing and still went green.
+#
+# apt over http needs no CA itself, so this bootstraps cleanly. Retries because
+# this builds on a network that has already eaten one package mirror.
+RUN apt-get -o Acquire::Retries=3 update \
+ && apt-get -o Acquire::Retries=3 install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && test -s /etc/ssl/certs/ca-certificates.crt
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
@@ -41,6 +57,21 @@ ARG NEXT_PUBLIC_GIT_COMMIT_SHA=""
 ARG NEXT_PUBLIC_PAWTOGRADER_CHANNEL=""
 ARG NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=""
 ARG SENTRY_RELEASE=""
+# Source map upload target. Set SENTRY_URL to a self-hosted Bugsink base URL to
+# upload there; leave empty to skip upload entirely. sentry.io is never a valid
+# target — a token without a URL is an error, not a silent upload to the SaaS
+# endpoint. The auth token is NOT an ARG — it arrives as a BuildKit secret below.
+ARG SENTRY_URL=""
+ARG SENTRY_ORG=""
+ARG SENTRY_PROJECT=""
+# Cache key for the build layer that performs the upload. BuildKit deliberately
+# leaves secret *contents* out of the cache key, and both image workflows import
+# and export layer caches, so a build of the same commit that ran before the
+# token was wired can otherwise be replayed from cache — reusing the layer and
+# skipping the upload permanently. Any non-secret value that changes when the
+# upload configuration changes works (a token fingerprint, the CI run id);
+# builds that mount sentry_auth_token are required to pass one.
+ARG SENTRY_UPLOAD_ID=""
 ARG SUPABASE_URL=""
 
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
@@ -57,6 +88,10 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_PAWTOGRADER_CHANNEL=$NEXT_PUBLIC_PAWTOGRADER_CHANNEL \
     NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=$NEXT_PUBLIC_CHANNEL_HOST_SUFFIX \
     SENTRY_RELEASE=$SENTRY_RELEASE \
+    SENTRY_URL=$SENTRY_URL \
+    SENTRY_ORG=$SENTRY_ORG \
+    SENTRY_PROJECT=$SENTRY_PROJECT \
+    SENTRY_UPLOAD_ID=$SENTRY_UPLOAD_ID \
     SUPABASE_URL=$SUPABASE_URL \
     NEXT_TELEMETRY_DISABLED=1 \
     NEXT_OUTPUT_STANDALONE=true
@@ -65,7 +100,47 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
 RUN test -n "$NEXT_PUBLIC_PAWTOGRADER_WEB_URL" \
     || (echo "ERROR: NEXT_PUBLIC_PAWTOGRADER_WEB_URL build arg is required" && exit 1)
 
-RUN NODE_OPTIONS=--max-old-space-size=8000 npm run build
+# The Sentry auth token is a BuildKit secret, not an ARG, so it never lands in
+# an image layer or `docker history`. The mount is optional: without a token the
+# bundler plugin still emits and injects debug IDs, it just skips the upload.
+# Empty ARGs are unset rather than exported as "" — the plugin only falls back to
+# sentry.io when SENTRY_URL is nullish, and "" would be treated as a real URL.
+RUN --mount=type=secret,id=sentry_auth_token \
+    set -eu; \
+    [ -n "${SENTRY_URL:-}" ] || unset SENTRY_URL; \
+    [ -n "${SENTRY_ORG:-}" ] || unset SENTRY_ORG; \
+    [ -n "${SENTRY_PROJECT:-}" ] || unset SENTRY_PROJECT; \
+    if [ -s /run/secrets/sentry_auth_token ]; then \
+      if [ -z "${SENTRY_URL:-}" ]; then \
+        echo "ERROR: sentry_auth_token was supplied without SENTRY_URL. The bundler" >&2; \
+        echo "       plugin treats a missing URL as sentry.io, so this would ship" >&2; \
+        echo "       private source maps to the SaaS endpoint. Pass the Bugsink base" >&2; \
+        echo "       URL as SENTRY_URL, or drop the secret to skip the upload." >&2; \
+        exit 1; \
+      fi; \
+      if [ -z "${NEXT_PUBLIC_BUGSINK_DSN:-}" ]; then \
+        echo "ERROR: sentry_auth_token was supplied without NEXT_PUBLIC_BUGSINK_DSN." >&2; \
+        echo "       The DSN is what enables the bundler plugin that performs the" >&2; \
+        echo "       upload, so without it this build would report an upload and" >&2; \
+        echo "       send nothing. It is also what makes the app report the errors" >&2; \
+        echo "       the maps would symbolicate." >&2; \
+        exit 1; \
+      fi; \
+      if [ -z "${SENTRY_UPLOAD_ID:-}" ]; then \
+        echo "ERROR: sentry_auth_token was supplied without SENTRY_UPLOAD_ID. Secret" >&2; \
+        echo "       contents are not part of the BuildKit cache key, so this layer" >&2; \
+        echo "       could be served from a cached build that skipped the upload." >&2; \
+        echo "       Pass any non-secret value that changes with the upload config" >&2; \
+        echo "       (a token fingerprint, the CI run id) as SENTRY_UPLOAD_ID." >&2; \
+        exit 1; \
+      fi; \
+      SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token)"; \
+      export SENTRY_AUTH_TOKEN; \
+      echo "sentry: uploading source maps to $SENTRY_URL (project ${SENTRY_PROJECT:-pawtograder-web}, upload id $SENTRY_UPLOAD_ID)"; \
+    else \
+      echo "sentry: no auth token supplied, skipping source map upload"; \
+    fi; \
+    NODE_OPTIONS=--max-old-space-size=8000 npm run build
 
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app

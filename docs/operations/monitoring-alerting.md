@@ -126,6 +126,40 @@ Each alert's expression depends on an exporter being present in the cluster:
 - replication alerts → the chart's own `postgres_exporter` custom query
   (`pawtograder_replication_*`, defined in `templates/monitoring.yaml`; read from
   the **primary's** `pg_stat_replication`, not `pg_replication_slots`).
+- **database availability** (`PawtograderPostgresUnavailable`, critical, `for`
+  `monitoring.prometheusRules.postgresUnavailableFor`, default 5m) →
+  **kube-state-metrics** (`kube_statefulset_status_replicas_ready`, labels
+  `statefulset` / `namespace`). Deliberately keyed OUTSIDE the postgres pod, and
+  the only rule in the chart that actually detects a dead or wedged primary — see
+  the fail-open note below.
+- vacuum health and RAM/buffer-cache dashboards
+  (`docs/grafana-dashboard-vacuum-health.json`) → the chart's own
+  `postgres_exporter` custom queries `pawtograder_vacuum_alert`,
+  `pawtograder_db_buffer_cache_bytes`,
+  `pawtograder_db_buffer_cache_total_used_bytes` and
+  `pawtograder_db_dead_tuples` (all in `templates/monitoring.yaml`). These used
+  to come from the `metrics` edge function, which meant Prometheus called
+  `database_ram_metrics()` and `vacuum_health_check()` once per functions pod —
+  32 replicas in prod, ~1.07 calls/sec, and **77.7% of all database execution
+  time**, almost all of it `pg_buffercache` scans (524,288 buffer descriptors
+  per call at `shared_buffers = 4GB`). They are global database state, so the
+  exporter — scraped once — is the right home. These four kept their exact metric
+  and label names; **two other contracts did change** in the same move, and are
+  documented in `supabase/migrations/20260827120000_drop_database_ram_metrics.sql`
+  — the per-state `pawtograder_db_connections{state}` series is gone (use the
+  built-in `pg_stat_activity_count` if you need the breakdown), and table sizes
+  moved to `pawtograder_table_sizes_total_bytes{relation}` where the label is
+  `relation` rather than `relname` and its value is schema-qualified. The
+  buffer-cache queries carry `cache_seconds: 300`, so the scan runs at most once
+  per 5 minutes even from that one target.
+- exporter self-health alerts (`PawtograderPostgresExporterQueryFailing`,
+  `PawtograderPostgresExporterDown`) → `pg_exporter_last_scrape_error`, which
+  `postgres_exporter` emits on every scrape. These exist because a failing custom
+  query is **silently dropped** from `/metrics` rather than failing the scrape,
+  and the vacuum dashboard's `OR vector(0)` then renders the missing series as
+  zero alerts — i.e. green. `absent()` is deliberately on this gauge and not on
+  the `pawtograder_db_*` families, which are legitimately empty on a healthy
+  database (dead-tuple and buffer-cache queries have >100-tuple and >1 MiB floors).
 - ESO alert → the External Secrets Operator's `/metrics`
   (`externalsecret_status_condition`).
 - cert alert → cert-manager's `/metrics`
@@ -154,6 +188,93 @@ query_preview)` label sets whenever a statement ran under more than one
 > entire `/metrics` endpoint**, taking down \_all* postgres metrics (the target
 > read "down"). Summing per `queryid` keeps each series unique. If you add custom
 > queries, ensure their label sets are unique or you will re-break the endpoint.
+
+> **Every other critical rule fails OPEN when the database is down.** This
+> predates the availability alert and is worth understanding before you trust any
+> of them as an outage signal. All of them are `metric > threshold` on series that
+> **disappear** in that scenario, and a threshold comparison against no data
+> returns no data — so they go silent rather than firing:
+>
+> | rule                                      | severity / `for` | series it reads                                    | why it vanishes                                                          |
+> | ----------------------------------------- | ---------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
+> | `PawtograderPostgresConnectionsSaturated` | critical / 5m    | `pawtograder_db_connections_*`                     | postgres_exporter is a **sidecar in the postgres pod**                   |
+> | `PawtograderRecalcStalled`                | critical / 3m    | `pawtograder_gradebook_row_recalculate_queue_size` | `metrics` edge function returns **HTTP 500** when its first DB RPC fails |
+> | `PawtograderAsyncDLQGrowing`              | critical / 1m    | `pawtograder_async_dlq_size`                       | same                                                                     |
+> | `PawtograderAsyncQueueBacklog`            | critical / 5m    | `pawtograder_async_queue_size`                     | same                                                                     |
+> | `PawtograderQueueOldestMessageAging`      | critical / 10m   | `pawtograder_queue_oldest_message_seconds`         | same                                                                     |
+>
+> Before `PawtograderPostgresUnavailable` existed, a wedged primary was therefore
+> **silent for 30 minutes** and then only warned
+> (`PawtograderPostgresExporterDown`). That became load-bearing when the Postgres
+> liveness probes were removed — nothing restarts a wedged postmaster
+> automatically now, so the condition has to page. `PawtograderPostgresUnavailable`
+> is keyed on kube-state-metrics precisely so it survives a dead database, a dead
+> exporter _and_ a dead edge function. **Do not remove it on the grounds that the
+> queue alerts appear to cover the same ground — they do not.**
+>
+> The two exporter self-health rules have a narrower job and keep their existing
+> shape: `PawtograderPostgresExporterQueryFailing` (warning, 15m) means a custom
+> query is broken while the DB is fine, and `PawtograderPostgresExporterDown`
+> (warning, 30m) means the exporter specifically is not being scraped. Neither is
+> an availability signal.
+>
+> Not fixed here: adding `absent()` companions to the queue alerts would close the
+> fail-open for those specific rules, but it changes the meaning of long-standing
+> critical alerts and risks paging on any edge-function scrape gap, so it belongs
+> in its own change.
+
+> **Externally managed database (`postgres.enabled=false`) has no DB metrics.**
+> Every DB-derived series this chart ships — `pawtograder_vacuum_alert`,
+> `pawtograder_db_buffer_cache*`, `pawtograder_db_dead_tuples`,
+> `pawtograder_db_connections_*`, `pawtograder_table_sizes_*`,
+> `pawtograder_replication_*`, `pawtograder_wal_archiving_*` and
+> `pg_stat_statements_top` — comes from the `postgres_exporter` **sidecar inside
+> the chart-managed Postgres StatefulSet**. With `postgres.enabled=false` that pod
+> does not exist, so there is no collector, and the `metrics` edge function no
+> longer gathers them either (it cost 77.7% of all database execution time when
+> Prometheus scraped it once per functions pod). The
+> `PawtograderPostgresExporter*` self-health rules are gated on the same
+> condition, so nothing would report the absence.
+>
+> `templates/validations.yaml` therefore **refuses** `monitoring.enabled=true`
+> together with `postgres.enabled=false` unless you set
+> `monitoring.externalPostgresExporter=true`, which asserts you run your own
+> exporter against the external database. In that mode the chart still renders the
+> `queries.yaml` ConfigMap (mount it into your exporter to keep the metric names
+> the dashboards and alert rules expect) but deliberately does **not** render its
+> own postgres-exporter Service or ServiceMonitor — they select the sidecar's pod,
+> which is absent, so they would sit permanently "down" and mask your real
+> exporter. Supply a ServiceMonitor for your own exporter instead.
+
+> **Every custom query sets `master: true`.** The exporter sidecar runs with
+> `PG_EXPORTER_AUTO_DISCOVER_DATABASES=true`, so without that flag a block runs
+> once per discovered database. Every query in `templates/monitoring.yaml` is
+> either cluster-wide (`pg_stat_statements`, `pg_buffercache`, `pg_settings`,
+> `pg_stat_replication`) or specific to the application database
+> (`public.classes`, `public.submissions`, `public.help_requests`, the
+> `pawtograder_*` functions), so per-database execution is wrong in all of them.
+> Whether auto-discovery bites depends on the Postgres image. Its query is
+> `SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate AND datname != current_database()`.
+> On the **currently deployed** supabase/postgres 17.4.x there is nothing to
+> find — the only databases are `postgres`, `template0` and `template1`, and
+> templates are excluded — so these blocks only ever run against the application
+> database and are **latent**. Confirmed on the live prod exporter:
+> `pg_exporter_last_scrape_error` is 0 and there is exactly one `server` label
+> value (`127.0.0.1:5432`) across the whole scrape. On **17.6.x and later**
+> Supabase adds `_supabase` and `storage_vectors` (verified against 17.6.1.132),
+> and then `pg_stat_statements`, `public.classes`, `public.submissions` and
+> `public.help_requests` would raise "relation does not exist" once per
+> discovered database on every scrape, while `pawtograder_table_sizes` would run
+> against the wrong databases. So `master: true` is a **prerequisite for the next
+> Postgres image bump**, not a fix for a present failure. It also guards
+> something worse than log noise: the `server` label is only `host:port`
+> (`parseFingerprint(dsn)`, no database name), so databases on one instance are
+> indistinguishable by label — the first time one of these queries returns a row
+> from a second database, the result is a genuinely **duplicate** label set and
+> the same HTTP 500 failure mode as the gotcha above, not merely a mis-ranked
+> `topk`. A new block needs `master: true` unless it truly means something
+> different per database; `charts/pawtograder/tests/render-guardrails.sh` asserts
+> this and requires an explicit `ALLOW_NO_MASTER` entry for any exception.
 
 ---
 

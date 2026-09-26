@@ -146,14 +146,26 @@ auth:
     github:
       enabled: true
       redirectUri: https://api.staging.pawtograder.net/auth/v1/callback
-    # Microsoft (Entra ID), multi-tenant — GoTrue uses the common endpoint,
-    # so any Microsoft account can sign in. Creds come from the
-    # pawtograder-web Secret keys AZURE_OAUTH_CLIENT_ID /
-    # AZURE_OAUTH_CLIENT_SECRET (synced from kv/apps/pawtograder-staging/web).
-    # Redirect URI registered in Azure:
-    #   https://api.staging.pawtograder.net/auth/v1/callback
+    # Microsoft (Entra ID). Creds come from the pawtograder-web Secret keys
+    # AZURE_OAUTH_CLIENT_ID / AZURE_OAUTH_CLIENT_SECRET, synced from
+    # kv/apps/pawtograder-staging/web — populate them with
+    # k8s/apps/pawtograder-staging/setup-azure.sh, which also registers the
+    # redirect URI expectation below and restarts auth.
+    #
+    # redirectUri is spelled out rather than left to the chart default because
+    # it has to match the Entra app registration's "Web" redirect URI
+    # character-for-character; having it in one visible place makes the two
+    # easy to diff when sign-in starts failing with AADSTS50011.
+    #
+    # `url` is intentionally unset: staging runs against the common endpoint so
+    # any Microsoft account can sign in, which is what we want for testing with
+    # non-NU accounts. The trade-off is that a non-Northeastern account gets no
+    # employeeId from Microsoft Graph, so user-fetch-azure-profile leaves
+    # sis_user_id NULL. To restrict staging to the NU directory, set
+    #   url: https://login.microsoftonline.com/<northeastern-tenant-id>
     azure:
       enabled: true
+      redirectUri: https://api.staging.pawtograder.net/auth/v1/callback
     # GitHub + Discord OAuth (sign-in / identity-linking). Client id+secret are
     # read from the pawtograder-web Secret as {GITHUB,DISCORD}_OAUTH_CLIENT_ID /
     # _CLIENT_SECRET (synced from kv/apps/pawtograder-staging/web). GitHub reuses
@@ -220,7 +232,21 @@ edgeFunctions:
   # spreads ~1 request/isolate. Together: lifecycle (EarlyDrop) + isolation +
   # capacity = the supabase.com-style resilience.
   policy: per_request
-  maxParallelism: 16
+  # Edge-tier per-function metrics ON here. Chart default is false so the first
+  # production deploy of chart 0.3.18 is inert; staging is where the label shape,
+  # the cardinality delta and the memory behaviour actually get exercised before
+  # that gate is flipped in prod. Buckets inherit the chart default (top finite
+  # bucket 400s = worker.timeoutMs).
+  metrics:
+    enabled: true
+  # 8, not 16: under per_request this is the cap on concurrent isolates per pod, and each isolate is
+  # admitted with its own memory budget. maxParallelism x worker.memoryLimitMb is what the runtime
+  # will admit and nothing enforces it, so once it exceeds the container limit the kernel OOM-kills
+  # PID 1 and every in-flight request dies at once (Kong then reports 502). At 8 x 256 MiB against
+  # the 4Gi limit set below the budget is 50%, which leaves a burst somewhere to go; 16 would have
+  # admitted the whole limit. Keep maxParallelism, worker.memoryLimitMb and resources.limits.memory
+  # consistent if you change any of them.
+  maxParallelism: 8
   autoscaling:
     enabled: true
     minReplicas: 12
@@ -253,6 +279,15 @@ edgeFunctions:
     # (_shared/HandlerUtils.ts). The secret also carries the frontend
     # NEXT_PUBLIC_BUGSINK_* keys, which are inert in the Deno runtime.
     - pawtograder-sentry
+    # The same Secret GoTrue uses. Without it SMTP_HOST is simply unset in the functions
+    # environment, which is why notification email never sent: the processor read "no SMTP host"
+    # as "no work found" and deferred the queue indefinitely, with no error anywhere.
+    # Note this Secret provides SMTP_PASS and SMTP_ADMIN_EMAIL; emailTransportConfig.ts accepts
+    # those names as well as the older SMTP_PASSWORD / SMTP_FROM.
+    - pawtograder-smtp
+  email:
+    # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
+    enabled: "true"
   e2e:
     enabled: true
     mockGitHub: true
@@ -285,10 +320,18 @@ web:
     description: "PawtograderNext — the next generation of Pawtograder course operations"
     tagline: "The next generation of your pawsome course companion"
     colorPalette: "teal"
-  # Multiple web replicas → leader flag stays off; if you need workflow
-  # metrics on staging, drop web.replicas to 1 and flip this true (see
-  # values-preview.yaml for the pattern).
+  # Multiple web replicas → the single-pod leader flag stays off (the chart
+  # refuses it above 1 replica). values-preview.yaml shows that pattern, which
+  # is the right one for a 1-replica install.
   # workflowMetricsLeader: true
+  #
+  # Staging runs the DEDICATED leader instead, and is the only environment that
+  # exercises this path before production: a separate 1-replica Deployment on
+  # component `metrics-leader`, off every user-traffic path, with its own
+  # Service + ServiceMonitor. Everything unset here (placement, image, security
+  # context) is inherited from the web block above.
+  metricsLeader:
+    enabled: true
 
 migrations:
   image:
@@ -350,8 +393,34 @@ studio:
 # ----- Nightly Postgres backups to S3 ---------------------------------------
 backup:
   enabled: true
+  # Baked mc — see charts/pawtograder/images/backup/Dockerfile. Pin this rather
+  # than leaving the default (plain supabase/postgres), or every backup,
+  # backup-verify and restore-drill run falls back to fetching mc at runtime
+  # from a third party. That is the dependency that broke backups on
+  # 2026-09-12, when MinIO archived the open-source mc project and dl.min.io
+  # started returning 410 for every binary.
+  # Tag it like the other Pawtograder images (release version or <branch>-<sha>),
+  # NOT with the Postgres version — release-images.yml publishes this repo as
+  # backup:<version>. What tracks postgres.image.tag is the Dockerfile's FROM,
+  # so pg_dump still matches the server it dumps.
+  image:
+    repository: ghcr.io/pawtograder/backup
+    tag: staging-latest
+    # staging-latest FLOATS, and it is not literally ":latest", so the k8s
+    # default would be IfNotPresent — a node would keep its cached copy after
+    # release-images.yml moves the alias, and the nightly dump would silently
+    # run a stale image. The automated deploy pins staging-<sha> and does not
+    # need this; scripts/redeploy-staging.sh uses this file as-is and does.
+    pullPolicy: Always
   schedule: "0 4 * * *"
   retentionDays: 14
+  # Dump staging goes on ceph-rbd, NOT the local-path class postgres uses above.
+  # The chart falls back to postgres.persistence.storageClass when this is
+  # unset, and inheriting local-path here would stage the whole dump on the
+  # worker's NVMe — the node-filling failure mode the scratch volume exists to
+  # avoid. Staging's DB is small, so 20Gi is ample.
+  scratchSize: 20Gi
+  scratchStorageClass: ceph-rbd
   s3:
     endpoint: https://s3.talos.ripley.cloud
     region: us-east-1

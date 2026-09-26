@@ -16,6 +16,7 @@ import { establishSupabaseSession, resolveLaunchRedirect, LtiSessionError } from
 import { toolBaseUrl } from "@/lib/lti/url";
 import { STATE_COOKIE } from "../login/route";
 import * as Sentry from "@sentry/nextjs";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +36,7 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
   let form: FormData;
   try {
     form = await request.formData();
@@ -125,3 +126,7 @@ export async function POST(request: Request) {
     return errorPage(`Unexpected error during launch: ${(e as Error).message}`, 500);
   }
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const POST = withRouteMetrics("/api/lti/launch", postHandler);
