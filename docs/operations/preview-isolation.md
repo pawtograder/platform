@@ -1,13 +1,32 @@
 # Preview isolation on ripley
 
-A preview runs a helm chart taken from the PR, deployed with a credential that
-holds `*` on most API groups inside the preview namespace. RBAC stops at the
-namespace boundary, but several things on the cluster do not: the External
-Secrets Operator, ingress-nginx and the pod network are shared with every other
-workload on ripley. This page covers the cluster-side controls that keep a
-previewed PR inside its namespace. They key on the namespace label
-`pawtograder.net/preview=true`, which the `secrets` job in `preview.yml` sets
-and the deploy credential cannot change.
+A preview runs a helm chart taken from the PR. Whatever the deploy credential
+may write, the PR may write, and RBAC stops at the namespace boundary while
+several things on the cluster do not: the External Secrets Operator,
+ingress-nginx, Reflector, the Grafana sidecar, the Prometheus Operator, the
+scheduler and the pod network are shared with every other workload on ripley.
+This page covers the controls that keep a previewed PR inside its namespace.
+Most key on the namespace label `pawtograder.net/preview=true`, which the
+`secrets` job in `preview.yml` sets and the deploy credential cannot change.
+
+## The deploy role
+
+`pawtograder-preview-deploy` (defined in
+[preview-oidc-cluster-credentials.md](./preview-oidc-cluster-credentials.md))
+grants exactly the kinds the chart renders for a preview: Deployments,
+StatefulSets, Jobs, ConfigMaps, Services, ServiceAccounts, Secrets (also helm's
+release storage), Ingresses, ExternalSecrets, ServiceMonitors and
+PrometheusRules. It also has read-only access to pods, logs, events,
+Endpoints, PVCs and ReplicaSets for `helm --wait`. It has no RBAC,
+NetworkPolicy, SecretStore, PodMonitor, DaemonSet, Endpoints-write,
+`pods/exec` or token-request rights. This is the first line: a kind the role
+cannot write is a kind no controller can be tricked with. The admission
+policies below constrain the kinds it can write, and stay in place as a second
+line if the role grows.
+
+When a chart change adds a kind, the preview fails with `forbidden` until the
+kind is reviewed and added to both `preview-deploy` and `preview-teardown-ns`.
+Check whether a cluster-wide controller acts on it before adding it.
 
 ## Secrets: `openbao-preview` store
 

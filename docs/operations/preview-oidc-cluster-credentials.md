@@ -74,15 +74,15 @@ this change exists to remove. Each run logs a notice naming the path taken.
 
 ## Roles
 
-| Job                  | Bao role                    | k8s role type | Grants                                       |
-| -------------------- | --------------------------- | ------------- | -------------------------------------------- |
-| `secrets`            | `preview-provision`         | ClusterRole   | get/create/patch Namespace                   |
-| `secrets`            | `preview-provision-secrets` | Role          | get/create/update/patch Secret               |
-| `build-web`          | `preview-read`              | Role          | **get Secret only**                          |
-| `publish-e2e-bundle` | `preview-publish`           | Role          | **get Secret only**                          |
-| `deploy`             | `preview-deploy`            | Role          | broad, but only inside the preview namespace |
-| `destroy`            | `preview-teardown`          | ClusterRole   | **get/delete Namespace only**                |
-| `destroy`            | `preview-teardown-ns`       | Role          | delete workloads/PVCs/Secrets in the preview |
+| Job                  | Bao role                    | k8s role type | Grants                                           |
+| -------------------- | --------------------------- | ------------- | ------------------------------------------------ |
+| `secrets`            | `preview-provision`         | ClusterRole   | get/create/patch Namespace                       |
+| `secrets`            | `preview-provision-secrets` | Role          | get/create/update/patch Secret                   |
+| `build-web`          | `preview-read`              | Role          | **get Secret only**                              |
+| `publish-e2e-bundle` | `preview-publish`           | Role          | **get Secret only**                              |
+| `deploy`             | `preview-deploy`            | Role          | the chart's kinds only, in the preview namespace |
+| `destroy`            | `preview-teardown`          | ClusterRole   | **get/delete Namespace only**                    |
+| `destroy`            | `preview-teardown-ns`       | Role          | delete workloads/PVCs/Secrets in the preview     |
 
 `secrets` mints two credentials because the Secret rule cannot ride on the
 ClusterRole: a ClusterRole is bound cluster-wide, so it would grant Secret
@@ -108,10 +108,10 @@ cluster-scoped token. The two live in different files (`$HOME/.kube/config` and
 `$RUNNER_TEMP/kubeconfig-preview-ns`) so neither has to be minted twice.
 
 `preview-teardown-ns` grants `update` on Secrets on top of get/list/delete, and
-covers the same apiGroups as `preview-deploy` rather than just core and
-apps/batch. Both are for helm: uninstall writes the release Secret back as
-"uninstalling" before it deletes anything, and it deletes every kind the chart
-rendered. Without them `helm uninstall` 403s — invisibly, because the job runs
+covers every kind `preview-deploy` can create. Both are for helm: uninstall
+writes the release Secret back as "uninstalling" before it deletes anything,
+and it deletes every kind the chart rendered. Add a kind to both roles
+together. Without them `helm uninstall` 403s — invisibly, because the job runs
 it with `|| true` and the namespace delete afterwards cleans up regardless.
 
 `build-web` runs the most untrusted code in the workflow — a full `next build`
@@ -206,21 +206,42 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: pawtograder-preview-deploy # helm, inside one preview namespace
+# Exactly the kinds the chart renders for a preview, plus what helm itself
+# needs. This role applies a chart taken from the PR, so every kind it may
+# write is a kind a PR can write. It used to be `*` on nine API groups, and
+# each cluster-wide controller that acts on one of those kinds (ESO stores,
+# Reflector, the Grafana sidecar, Prometheus CRs, RBAC grants to outside
+# identities, Endpoints) became a way out of the namespace. A PR that adds a
+# new kind to the chart fails its preview with a clear `forbidden` until the
+# kind is reviewed and added here. See docs/operations/preview-isolation.md.
 rules:
-  - apiGroups:
-      [
-        "",
-        "apps",
-        "batch",
-        "networking.k8s.io",
-        "policy",
-        "autoscaling",
-        "monitoring.coreos.com",
-        "external-secrets.io",
-        "rbac.authorization.k8s.io"
-      ]
-    resources: ["*"]
-    verbs: ["*"]
+  # Rendered by the chart. Secrets are also helm's release storage.
+  - apiGroups: [""]
+    resources: ["configmaps", "services", "serviceaccounts", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["servicemonitors", "prometheusrules"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read-only, for `helm --wait`, the hook-log follower and the failure
+  # snapshot. No pods/exec, pods/portforward or serviceaccounts/token.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "endpoints", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "controllerrevisions"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -253,20 +274,26 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: pawtograder-preview-teardown-ns # empty one namespace before deleting
+# The kinds preview-deploy can create, plus PVCs (made by the StatefulSet
+# controller). Deleting the Namespace afterwards collects anything else.
 rules:
-  - apiGroups:
-      [
-        "",
-        "apps",
-        "batch",
-        "networking.k8s.io",
-        "policy",
-        "autoscaling",
-        "monitoring.coreos.com",
-        "external-secrets.io",
-        "rbac.authorization.k8s.io"
-      ]
-    resources: ["*"]
+  - apiGroups: [""]
+    resources: ["configmaps", "services", "serviceaccounts", "secrets", "pods", "persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["servicemonitors", "prometheusrules"]
     verbs: ["get", "list", "delete"]
   # helm writes the release Secret back as "uninstalling" before it deletes
   # anything; get/list/delete alone makes it 403 at the first step.

@@ -522,8 +522,8 @@ jobs:
           # `pawtograder-preview-*` glob, so the label is how per-PR namespaces
           # are matched without granting `*`.
           kubectl label namespace "$NS" pawtograder.net/preview=true --overwrite
-          # Pod Security: `preview-deploy` holds `*/*` inside this namespace and
-          # applies the PR's own chart, so without an enforce level a chart
+          # Pod Security: `preview-deploy` creates Deployments, StatefulSets
+          # and Jobs from the PR's own chart, so without an enforce level a chart
           # could run a privileged or hostPath pod and step off the namespace
           # onto the node — RBAC alone does not bound that. The chart passes
           # `baseline` today (checked with a server-side dry run against a live
