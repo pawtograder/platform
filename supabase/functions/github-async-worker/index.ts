@@ -36,7 +36,7 @@ import {
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
-import { shouldSendOrgInvitation } from "../_shared/orgInviteWindow.ts";
+import { shouldSendOrgInvitation, siblingInviteTeamSlugs } from "../_shared/orgInviteWindow.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 import { notReadyRequeuePatch, planRepoNotReadyWait } from "../_shared/repoNotReadyPlan.ts";
@@ -705,6 +705,75 @@ async function checkAndTripErrorCircuitBreaker(
 const PGMQ_MAX_READ_CT = 10;
 
 /**
+ * `onInvitationStillPending` for reinviteToOrgTeam: move this enrollment's `invitation_date` back to
+ * the invitation GitHub actually holds.
+ *
+ * The membership sweep stamps `invitation_date` at enqueue time and reconsiders the role only once
+ * that stamp is a staleness period old. When the worker then finds an older invitation still
+ * pending and sends nothing, the stamp is a week later than the invitation the student holds, so
+ * the sweep would come back a week after that invitation expired. Rewinding it makes the sweep
+ * return on the next hourly pass after the real invitation lapses.
+ *
+ * Only ever moves the date EARLIER (`gt`), so it cannot undo a newer invitation's stamp from the
+ * `member_invited` webhook. A failed write is reported and swallowed: the team sync this envelope
+ * exists for must still run, and the cost of a miss is the old one-week delay.
+ */
+function rewindInvitationDate(
+  adminSupabase: SupabaseClient<Database>,
+  classId: number,
+  userId: string,
+  roles: Database["public"]["Enums"]["app_role"][],
+  scope: Sentry.Scope
+): (createdAt: string) => Promise<void> {
+  return async (createdAt: string) => {
+    const { error } = await adminSupabase
+      .from("user_roles")
+      .update({ invitation_date: createdAt })
+      .eq("class_id", classId)
+      .eq("user_id", userId)
+      .in("role", roles)
+      .gt("invitation_date", createdAt);
+    if (error) {
+      scope.setContext("invitation_date_rewind", { class_id: classId, user_id: userId, created_at: createdAt });
+      Sentry.captureException(error, scope);
+    }
+  };
+}
+
+/**
+ * `additionalTeamSlugs` for reinviteToOrgTeam: the teams of this user's other live, unconfirmed
+ * enrollments in classes sharing `org`, so a fresh invitation (notably one replacing a lapsed
+ * invitation that carried them) does not strand those enrollments. See siblingInviteTeamSlugs.
+ *
+ * A failed read THROWS, so the envelope retries. Answering "no siblings" would send a partial
+ * invitation, and its `member_invited` webhook stamps invitation_date for every class in the org,
+ * hiding the omitted enrollments from the sweep for a week.
+ *
+ * The org is matched case-insensitively, like classes_unique_github_org_slug: GitHub org names are.
+ */
+function siblingTeamSlugs(
+  adminSupabase: SupabaseClient<Database>,
+  org: string,
+  classId: number,
+  userId: string,
+  scope: Sentry.Scope
+): () => Promise<string[]> {
+  return async () => {
+    const { data, error } = await adminSupabase
+      .from("user_roles")
+      .select(
+        "role, disabled, github_org_confirmed, classes!inner(id, slug, github_org, is_demo, archived, start_date, end_date)"
+      )
+      .eq("user_id", userId)
+      .eq("disabled", false)
+      .ilike("classes.github_org", org)
+      .neq("class_id", classId);
+    if (error) throw error;
+    return siblingInviteTeamSlugs(data ?? [], org, classId);
+  };
+}
+
+/**
  * The GitHub usernames that should be on a class's student or staff team.
  *
  * One RPC, deliberately, because syncTeam is SUBTRACTIVE — it removes every current team member
@@ -956,7 +1025,24 @@ export async function processEnvelope(
               data.users.github_username,
               scope,
               // Automation: never mail a second invitation when GitHub already has one pending.
-              { userId: args.userId, skipIfInvitationPending: true }
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["student"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  data.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
             invitedThisRun = true;
           }
@@ -1002,7 +1088,24 @@ export async function processEnvelope(
               ur.users.github_username,
               scope,
               // Automation: never mail a second invitation when GitHub already has one pending.
-              { userId: args.userId, skipIfInvitationPending: true }
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["student"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  ur.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
           }
         }
@@ -1066,7 +1169,24 @@ export async function processEnvelope(
               data.users.github_username,
               scope,
               // Automation: never mail a second invitation when GitHub already has one pending.
-              { userId: args.userId, skipIfInvitationPending: true }
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["instructor", "grader", "admin"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  data.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
             invitedThisRun = true;
           }
@@ -1108,7 +1228,24 @@ export async function processEnvelope(
               ur.users.github_username,
               scope,
               // Automation: never mail a second invitation when GitHub already has one pending.
-              { userId: args.userId, skipIfInvitationPending: true }
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["instructor", "grader", "admin"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  ur.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
           }
         }

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
 import { useColorMode } from "@/components/ui/color-mode";
@@ -26,34 +26,43 @@ export default function ViewSurveyResponse({
   // Get color mode to determine theme
   const { colorMode } = useColorMode();
 
-  // Create survey model from JSON
-  const survey = new Model(surveyJson);
+  // Callers pass inline arrow functions, so the handler identities change on every
+  // render. Keep them in refs and register one stable listener per model: re-registering
+  // on each render would stack duplicate listeners on a memoized model, and including the
+  // handlers in the memo dependencies would rebuild the model on every render and throw
+  // away whatever state the respondent had built up.
+  const onCompleteRef = useRef(onComplete);
+  const onValueChangedRef = useRef(onValueChanged);
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+    onValueChangedRef.current = onValueChanged;
+  }, [onComplete, onValueChanged]);
 
-  // Apply SurveyJS theme based on color mode
-  if (colorMode === "dark") {
-    survey.applyTheme(DefaultDark);
-  } else {
-    survey.applyTheme(DefaultLight);
-  }
+  // A `Model` is expensive and stateful, so build it once per (json, data, theme,
+  // read-only) combination rather than on every render. Stacking one of these per group
+  // member on the submission survey tab makes the difference visible.
+  const survey = useMemo(() => {
+    const model = new Model(surveyJson);
 
-  // Set initial data FIRST, before setting other properties
-  if (responseData) {
-    survey.data = responseData;
-  }
+    // Apply SurveyJS theme based on color mode
+    model.applyTheme(colorMode === "dark" ? DefaultDark : DefaultLight);
 
-  // Set read-only mode if specified
-  if (readOnly) {
-    survey.readOnly = true;
-  }
+    // Set initial data FIRST, before setting other properties
+    if (responseData) {
+      model.data = responseData;
+    }
 
-  // Set up event handlers AFTER setting data and read-only mode
-  if (onComplete) {
-    survey.onComplete.add(onComplete);
-  }
+    // Set read-only mode if specified
+    if (readOnly) {
+      model.readOnly = true;
+    }
 
-  if (onValueChanged) {
-    survey.onValueChanged.add(onValueChanged);
-  }
+    // Set up event handlers AFTER setting data and read-only mode
+    model.onComplete.add((sender, options) => onCompleteRef.current?.(sender, options));
+    model.onValueChanged.add((sender, options) => onValueChangedRef.current?.(sender, options));
+
+    return model;
+  }, [surveyJson, responseData, colorMode, readOnly]);
 
   return <Survey model={survey} />;
 }

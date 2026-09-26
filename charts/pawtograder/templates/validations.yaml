@@ -14,7 +14,9 @@ keyed off global.environment (dev | preview | staging | production):
                  ServiceMonitor is switched off (same empty panels, because the
                  refresh only runs during a scrape — cleared with
                  monitoring.allowUnscrapedMetricsLeader); Studio ingress
-                 without an auth layer (full DB control behind a bare URL).
+                 without an auth layer (full DB control behind a bare URL);
+                 maintenance.active without the page it routes to, or in a
+                 layout maintenance.sh cannot agree with.
   staging+prod — secrets.create (plaintext key material in helm release
                  history); migrations.resetOnDrift (wipes schema public +
                  auth.users + vault.secrets and replays from scratch —
@@ -138,6 +140,187 @@ cannot detect.
 
 {{- if and .Values.postgres.replica.enabled (not .Values.postgres.walg.enabled) -}}
 {{- fail "postgres.replica.enabled=true requires postgres.walg.enabled=true — the standby uses `wal-g wal-fetch` as its archive fallback when it falls behind the primary's retained pg_wal, and shares the WAL-G config. Enable postgres.walg first." -}}
+{{- end -}}
+
+{{- /*
+maintenance.active: the release carries the maintenance posture that
+scripts/maintenance.sh `down` produces (web host on the page, writers at 0, the
+functions HPA gone, write-capable CronJobs suspended), so a Postgres-restarting
+`helm upgrade` can run inside the window without lifting the fence. See
+docs/operations/planned-maintenance.md.
+
+Three combinations render a posture that does not match the script, and each
+fails at render time rather than in the middle of a window:
+
+  1. active without maintenance.enabled. The web host would point at a
+     maintenance Service this same render deletes: users get the ingress
+     controller's bare 503 instead of the page, and the upgrade removes the page
+     `down` checked was Ready.
+  2. active without global.apiOnSeparateHost. The script repoints
+     rules[0].paths[0], which is the web host's "/" only when the API has its
+     own host. With the API paths on the web host, paths[0] is an API path: the
+     script and the chart would each fence a different path, and whichever
+     applies second reverts or conflicts with the other.
+  3. active with maintenance.service.port other than 8080. maintenance.sh
+     hard-codes MAINT_PORT=8080 in the backend it patches in. A chart backend on
+     any other port is a different value in a field kubectl owns, which is a
+     server-side apply conflict on the window's own upgrade.
+
+Any environment: all three are wrong everywhere, and none can be reached by
+accident, because maintenance.active defaults to false.
+*/ -}}
+{{- if .Values.maintenance.active -}}
+{{- if not .Values.maintenance.enabled -}}
+{{- fail "maintenance.active=true requires maintenance.enabled=true — the posture routes the web host to the maintenance Service, and maintenance.enabled=false removes that Service in the same render, so users would get the ingress controller's bare 503 and the page maintenance.sh `down` checked would be deleted mid-window. Set maintenance.enabled=true alongside maintenance.active=true (and keep both on the upgrade that runs inside the window)." -}}
+{{- end -}}
+{{- if not .Values.global.apiOnSeparateHost -}}
+{{- fail "maintenance.active=true requires global.apiOnSeparateHost=true — maintenance.sh repoints the primary Ingress's rules[0].paths[0], which is the web host's \"/\" path only when the API is on its own host. With the API paths on the web host, paths[0] is an API path, so the script and the chart would fence different paths and the window's upgrade would revert or conflict with the script's patch." -}}
+{{- end -}}
+{{- if ne (int .Values.maintenance.service.port) 8080 -}}
+{{- fail (printf "maintenance.active=true requires maintenance.service.port=8080 (got %v) — maintenance.sh patches the web host's backend to port 8080 (MAINT_PORT), so a chart backend on any other port is a different value in a field kubectl owns, and the window's own server-side upgrade fails on the conflict." .Values.maintenance.service.port) -}}
+{{- end -}}
+{{- if not .Values.ingress.enabled -}}
+{{- fail "maintenance.active=true requires ingress.enabled=true — with no chart Ingress the posture still scales every writer to 0 and drops the functions HPA, but renders no maintenance route and no pawtograder.io/maintenance-active marker: the app goes dark with no page, and maintenance.sh cannot tell the release holds the posture." -}}
+{{- end -}}
+{{- if not .Values.web.enabled -}}
+{{- fail "maintenance.active=true requires web.enabled=true — the posture's exit restores the web backend maintenance.sh recorded; with web disabled the upgrade deletes that Service, and `up` would take the page down onto a deleted backend. Disable web in a routine deploy, outside the window." -}}
+{{- end -}}
+{{- if .Values.seed.enabled -}}
+{{- fail "maintenance.active=true is refused with seed.enabled=true — the seed Job is a post-upgrade hook that waits for auth's health endpoint, and the posture scales auth to 0, so the window's upgrade would hang on the hook and then fail. Seed outside the window." -}}
+{{- end -}}
+{{- if .Values.ingress.extraHosts -}}
+{{- fail "maintenance.active=true is refused while ingress.extraHosts is set — neither the posture nor maintenance.sh reroutes those aliases, so with web at 0 they would serve the ingress controller's bare 503 instead of the page. Neither staging nor production uses extraHosts today; routing them to the page is follow-up work." -}}
+{{- end -}}
+{{- /* Functions with autoscaling on: the posture leaves spec.replicas
+     unrendered and relies on the 0 that `down` set (see edge-functions.yaml).
+     That holds only if the DEPLOYED release also left it unrendered, i.e.
+     already autoscaled. If the window's upgrade is the one that turns
+     autoscaling on, or creates the functions Deployment, the field is dropped
+     or never set and the API defaults it to 1 -- a writer back while Postgres
+     rolls. Detected from the live cluster: maintenance.sh `down` records the
+     functions HPA it deleted in its state ConfigMap, empty when there was
+     none. lookup returns nothing under `helm template` or when `down` has not
+     run, and then this check stays quiet; the doc's procedure runs `down`
+     first. */ -}}
+{{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.autoscaling.enabled -}}
+{{- $state := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-maintenance-state" .Release.Name) -}}
+{{- if $state -}}
+{{- $fnName := include "pawtograder.componentName" (dict "ctx" . "component" "functions") -}}
+{{- if not (lookup "apps/v1" "Deployment" .Release.Namespace $fnName) -}}
+{{- fail (printf "maintenance.active=true with edgeFunctions.autoscaling.enabled: Deployment %s does not exist yet, so this upgrade would create it with no replicas field and it would start at 1 pod inside the fence. Create the functions tier in a routine deploy, outside the window." $fnName) -}}
+{{- end -}}
+{{- if eq (dig "data" "functions_hpa" "" $state | trim) "" -}}
+{{- fail "maintenance.active=true with edgeFunctions.autoscaling.enabled, but the deployed release had no functions HPA (maintenance.sh recorded none). Turning autoscaling on in this upgrade drops spec.replicas from the functions Deployment, which the API then defaults to 1 pod inside the fence. Turn autoscaling on in a routine deploy, before or after the window." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* New writers. A writer the window's own upgrade adds -- a stable tier it
+     enables or a new deployment channel -- is created at 0 behind the page,
+     but `down` never recorded it, so `up` would drop the page without starting
+     it and the exit upgrade would route to pods still starting. Refused at
+     upgrade time, like the functions check above: every enabled writer must
+     already exist.
+
+     The web backend, likewise: `up` restores the ingress backend `down`
+     recorded, before the posture-off upgrade renders the target's. If the
+     target moves the web Service (name or port), that restore points the web
+     host at a port that no longer exists just as the page comes down. */ -}}
+{{- $stateCM := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-maintenance-state" .Release.Name) -}}
+{{- /* Proof that `down` got as far as SAFE TO BOUNCE. Every guard in this block
+     keys off the state ConfigMap, but `down` creates it while capturing, before
+     pg_cron is paused or any writer is fenced, and without it they are all
+     skipped. So on a real cluster the posture needs the fence_complete marker
+     that `down` writes only with its SAFE TO BOUNCE verdict.
+
+     "A real cluster" = the release's Postgres primary exists, whatever the
+     target's postgres.enabled says (a target that disables Postgres is
+     refused outright). lookup returns nothing under `helm template` (the
+     doc's step 0 preflight must keep working), and a fresh install has no
+     database to protect. `up` withdraws the marker before it restores
+     anything, so an interrupted `up` cannot leave a stale clearance. */ -}}
+{{- /* Found by LABEL, not by the name this render would give it: a target that
+     renames the primary (an identity change the restart gate reports) would
+     otherwise look up the new name, find nothing, and skip every check below
+     while it replaces the database. */ -}}
+{{- $livePrimary := "" -}}
+{{- range $sts := (lookup "apps/v1" "StatefulSet" .Release.Namespace "").items | default list -}}
+{{- $l := $sts.metadata.labels | default dict -}}
+{{- if and (eq (index $l "app.kubernetes.io/component" | default "") "postgres") (eq (index $l "app.kubernetes.io/instance" | default "") $.Release.Name) -}}
+{{- $livePrimary = $sts.metadata.name -}}
+{{- end -}}
+{{- end -}}
+{{- if $livePrimary -}}
+{{- $targetPrimary := include "pawtograder.componentName" (dict "ctx" . "component" "postgres") -}}
+{{- if and .Values.postgres.enabled (ne $livePrimary $targetPrimary) -}}
+{{- fail (printf "maintenance.active=true: the live Postgres primary is %s but this release renders %s. Renaming the primary replaces the database workload (a new StatefulSet and PVC); that is a migration, not a maintenance-window upgrade." $livePrimary $targetPrimary) -}}
+{{- end -}}
+{{- if not .Values.postgres.enabled -}}
+{{- fail "maintenance.active=true with postgres.enabled=false while the release's Postgres primary still exists: this upgrade would DELETE the database StatefulSet. Decommissioning Postgres is not a maintenance-window upgrade; do it deliberately, outside this path." -}}
+{{- end -}}
+{{- if not (dig "data" "fence_complete" "" $stateCM) -}}
+{{- fail (printf "maintenance.active=true, but %s-maintenance-state has no fence_complete marker: maintenance.sh down has not reported SAFE TO BOUNCE in this namespace (not run, still running, or it stopped at NOT READY). Upgrading now would roll Postgres outside a verified fence. Run down until SAFE TO BOUNCE first." .Release.Name) -}}
+{{- end -}}
+{{- end -}}
+{{- if $stateCM -}}
+{{- $stable := list
+      (dict "on" .Values.web.enabled "kind" "Deployment" "component" "web")
+      (dict "on" .Values.rest.enabled "kind" "Deployment" "component" "rest")
+      (dict "on" .Values.auth.enabled "kind" "Deployment" "component" "auth")
+      (dict "on" .Values.storage.enabled "kind" "Deployment" "component" "storage")
+      (dict "on" .Values.realtime.enabled "kind" "StatefulSet" "component" "realtime")
+      (dict "on" .Values.edgeFunctions.enabled "kind" "Deployment" "component" "functions") -}}
+{{- range $w := $stable -}}
+{{- if $w.on -}}
+{{- $n := include "pawtograder.componentName" (dict "ctx" $ "component" $w.component) -}}
+{{- if not (lookup "apps/v1" $w.kind $.Release.Namespace $n) -}}
+{{- fail (printf "maintenance.active=true: this upgrade would create %s %s inside the fence. maintenance.sh did not record it, so `up` would drop the page before it runs. Enable new tiers in a routine deploy, outside the window." $w.kind $n) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* The standby must survive the primary's rollout: it is the failover
+     target if the new primary does not come back. The procedure's partition
+     only holds existing ordinals, so an upgrade that disables the standby or
+     lowers its replica count would still delete it while the primary rolls. */ -}}
+{{- $sbName := include "pawtograder.componentName" (dict "ctx" . "component" "postgres-replica") -}}
+{{- $sb := lookup "apps/v1" "StatefulSet" .Release.Namespace $sbName -}}
+{{- if $sb -}}
+{{- $live := int (dig "spec" "replicas" 1 $sb) -}}
+{{- $want := ternary (int .Values.postgres.replica.replicas) 0 (and .Values.postgres.enabled .Values.postgres.replica.enabled) -}}
+{{- if lt $want $live -}}
+{{- fail (printf "maintenance.active=true: this upgrade would take the Postgres standby %s from %d to %d replica(s) while the primary rolls, removing the failover target the window relies on. Reduce or disable the standby in a routine deploy, after the window." $sbName $live $want) -}}
+{{- end -}}
+{{- end -}}
+{{- $recorded := dig "data" "ingress_backend" "" $stateCM | trim -}}
+{{- if not $recorded -}}
+{{- fail (printf "maintenance.active=true: the maintenance state ConfigMap %s-maintenance-state has no recorded web backend (ingress_backend is empty; `down` could not read it). `up` would fall back to a hard-coded backend, so this guard cannot vouch for the web host. Re-run maintenance.sh up then down, or record the backend by hand, before this upgrade." .Release.Name) -}}
+{{- end -}}
+{{- if $recorded -}}
+{{- $rb := fromJson $recorded -}}
+{{- $wantName := include "pawtograder.web.host" . -}}
+{{- $wantPort := int .Values.web.service.port -}}
+{{- if or (ne (toString (dig "name" "" $rb)) $wantName) (ne (int (dig "port" "number" 0 $rb)) $wantPort) -}}
+{{- fail (printf "maintenance.active=true: maintenance.sh recorded the web backend as %s, but this release renders %s:%d. `up` would restore the recorded backend and point the web host at a Service port that no longer exists as the page comes down. Change the web Service in a routine deploy, outside the window." $recorded $wantName $wantPort) -}}
+{{- end -}}
+{{- end -}}
+{{- range $c := .Values.channels -}}
+{{- /* channels[] names the blocks `web` and `edgeFunctions`; the workloads
+     they create are web-<name> and functions-<name>. */ -}}
+{{- range $w := list (dict "key" "web" "component" "web") (dict "key" "edgeFunctions" "component" "functions") -}}
+{{- if index $c $w.key -}}
+{{- $n := include "pawtograder.componentName" (dict "ctx" $ "component" (printf "%s-%s" $w.component $c.name)) -}}
+{{- if not (lookup "apps/v1" "Deployment" $.Release.Namespace $n) -}}
+{{- fail (printf "maintenance.active=true: channel %q would create Deployment %s inside the fence. maintenance.sh did not record it, so `up` would drop the page before it runs. Add channels in a routine deploy, outside the window." $c.name $n) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* The posture marker is chart-managed. A user-supplied copy in
+     ingress.annotations would be emitted as a second key after the chart's,
+     leaving the marker maintenance.sh relies on ambiguous or overridden. */ -}}
+{{- if hasKey (.Values.ingress.annotations | default dict) "pawtograder.io/maintenance-active" -}}
+{{- fail "ingress.annotations must not set pawtograder.io/maintenance-active — the chart manages that marker from maintenance.active, and maintenance.sh reads it to decide whether `down` may capture prior state. Set maintenance.active instead." -}}
 {{- end -}}
 
 {{- if has $env (list "staging" "production") -}}
@@ -520,11 +703,32 @@ PrometheusRule must not fail a render over numbers that have no effect.
      anyway -- but a large value on any threshold that is NOT cast would reach
      the expression in that form, so the check has to allow what PromQL allows
      rather than what looks tidy in values.yaml. */ -}}
-{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "replicationLagBytesWarning" "queueMsgIdWarning" "queueMsgIdCritical") -}}
+{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "postgrestSchemaCacheLoadsPerHour" "replicationLagBytesWarning" "queueMsgIdWarning" "queueMsgIdCritical") -}}
 {{- $raw := "" -}}
 {{- if hasKey $pr $k -}}{{- $raw = (index $pr $k) | toString -}}{{- end -}}
 {{- if and (ne $raw "") (not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $raw)) -}}
 {{- fail (printf "monitoring.prometheusRules.%s must be a plain non-negative number (got %q). It is interpolated straight into a PromQL expression in templates/prometheus-rules.yaml, so a word or a leading sign produces an expression Prometheus cannot parse -- and Prometheus rejects the whole RULE GROUP, silently taking every other alert in it off duty. A suffixed unit (100MiB, 30s) is worse still: sprig casts it to 0 rather than failing, the chart renders, and the alert fires permanently instead of never. Write the bare number in the unit the values.yaml comment names." $k $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- /* Non-EMPTY, for the threshold this chart added in #1021.
+     The loop above deliberately skips an empty value -- see the ne $raw ""
+     guard, which the queueMsgId* checks below rely on -- but empty is not
+     survivable here, verified by rendering:
+
+       postgrestSchemaCacheLoadsPerHour: ""  ->  `... ) > ` with no right-hand
+         operand. Prometheus rejects the whole pawtograder.rest group, taking
+         BOTH PostgREST alerts off duty silently.
+
+     Kept as a list: the /dev/shm thresholds that 0.4.0 adds belong here too
+     (an empty one is cast to 0 and the alert fires permanently).
+
+     Scoped to the keys #1021 introduced rather than widened to all of them:
+     the existing `ne $raw ""` guard is load-bearing for the queueMsgId* checks
+     further down, so tightening it globally is a separate decision.
+     (Raised in review on #1021.) */ -}}
+{{- range $k := (list "postgrestSchemaCacheLoadsPerHour") -}}
+{{- if or (not (hasKey $pr $k)) (eq ((index $pr $k) | toString | trim) "") -}}
+{{- fail (printf "monitoring.prometheusRules.%s must be set to a number when monitoring.prometheusRules.enabled=true; it is interpolated directly into a PromQL comparison. Empty does not disable the alert, it breaks it: `> ` with no operand makes Prometheus reject the ENTIRE pawtograder.rest group (both PostgREST alerts, silently). To switch these alerts off, set monitoring.prometheusRules.enabled=false or rest.adminServer.enabled=false rather than blanking the threshold." $k) -}}
 {{- end -}}
 {{- end -}}
 {{- /* Prometheus durations. Same failure, different grammar: these land in
@@ -592,3 +796,4 @@ neither is visible from the rendered rule.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+

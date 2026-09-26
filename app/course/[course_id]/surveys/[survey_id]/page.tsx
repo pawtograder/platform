@@ -11,6 +11,12 @@ import { SurveyResponse, ResponseData } from "@/types/survey";
 import { Model, ValueChangedEvent } from "survey-core";
 import { useCourseController, useSurvey } from "@/hooks/useCourseController";
 import { useIsTableControllerReady } from "@/lib/TableController";
+import {
+  isSurveyResponseReadOnly,
+  resolveResponseWriteFlags,
+  responseStateFromLoad,
+  type LoadedResponseState
+} from "@/lib/surveyResponseState";
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -45,7 +51,14 @@ export default function SurveyTakingPage() {
   // refs (not state) are needed because the guards must be visible synchronously
   // inside the SurveyJS event callbacks.
   const isSubmittingRef = useRef(false);
-  const hasSubmittedRef = useRef(false);
+  // State of the response row as it exists on the server. Hydrated from the loaded row (not
+  // just set by a submit made in this session), because without that a reload of an
+  // already-submitted response leaves autosave thinking it is editing a draft, and the first
+  // keystroke writes is_submitted:false over the submission.
+  const responseStateRef = useRef<LoadedResponseState>("unknown");
+  // Which (survey, profile) pair responseStateRef describes, so a re-run of the loader effect
+  // for the same response cannot silently discard what it learned.
+  const responseStateKeyRef = useRef<string | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autosaveInFlightRef = useRef<Promise<unknown> | null>(null);
   // Fires the pending autosave immediately. Held in a ref so the unmount
@@ -88,6 +101,16 @@ export default function SurveyTakingPage() {
       return;
     }
 
+    // responseStateRef describes one specific response. Discard it only when the identity of
+    // that response changes (client-side navigation to another survey, or a different
+    // profile); a re-run for the same response -- a new controller.client identity, say --
+    // must not forget that it is already submitted.
+    const responseKey = `${surveyId}:${private_profile_id}`;
+    if (responseStateKeyRef.current !== responseKey) {
+      responseStateKeyRef.current = responseKey;
+      responseStateRef.current = "unknown";
+    }
+
     let cancelled = false;
     setIsLoading(true);
 
@@ -113,9 +136,16 @@ export default function SurveyTakingPage() {
           });
         }
 
+        // Classify the row before the form can be edited, so autosave knows whether it is
+        // updating a draft or an already-submitted response. Without this every page load
+        // starts out believing it holds a draft.
+        responseStateRef.current = responseStateFromLoad({ data, error });
+
         setExistingResponse(data || null);
       } catch (error) {
         console.error("Error loading existing response:", error);
+        // The row could not be read, so neither is_submitted value is safe to write.
+        if (!cancelled) responseStateRef.current = "unknown";
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -144,8 +174,12 @@ export default function SurveyTakingPage() {
   const saveResponseToDb = useCallback(
     async (responseData: ResponseData, isSubmitted: boolean) => {
       if (!surveyId || !private_profile_id) return;
-      // Never downgrade a submitted response back to a draft.
-      if (!isSubmitted && hasSubmittedRef.current) return;
+
+      // An autosave never downgrades a submitted response: on an editable survey it persists
+      // the edit as still-submitted and omits submitted_at, so the upsert leaves the original
+      // submission time in place. A write against a row we could not read is dropped.
+      const flags = resolveResponseWriteFlags({ isSubmitted, loadedState: responseStateRef.current });
+      if (flags.skip) return;
 
       const upsertData: {
         survey_id: string;
@@ -157,10 +191,10 @@ export default function SurveyTakingPage() {
         survey_id: surveyId,
         profile_id: private_profile_id,
         response: responseData,
-        is_submitted: isSubmitted
+        is_submitted: flags.isSubmitted
       };
 
-      if (isSubmitted) {
+      if (flags.stampSubmittedAt) {
         upsertData.submitted_at = new Date().toISOString();
       }
 
@@ -205,7 +239,9 @@ export default function SurveyTakingPage() {
           await autosaveInFlightRef.current.catch(() => {});
         }
         await saveResponseToDb(surveyData, true);
-        hasSubmittedRef.current = true;
+        // Set before isSubmittingRef is cleared, so any autosave that fires after the submit
+        // writes is_submitted:true rather than reverting the row.
+        responseStateRef.current = "submitted";
 
         toaster.create({
           title: "Survey Submitted",
@@ -236,7 +272,10 @@ export default function SurveyTakingPage() {
     (surveyModel: Model, options?: ValueChangedEvent) => {
       void options;
       if (!private_profile_id || !surveyId || !allowResponseEditing) return;
-      if (isSubmittingRef.current || hasSubmittedRef.current) return;
+      // Only a submit in flight blocks autosave outright. An already-submitted response does
+      // not: on an editable survey the student may still be changing answers, and
+      // saveResponseToDb keeps that write in the submitted state rather than dropping it.
+      if (isSubmittingRef.current) return;
 
       // Extract only the survey data from the model, not the entire model object
       const surveyData = surveyModel.data;
@@ -246,7 +285,7 @@ export default function SurveyTakingPage() {
       const runAutosave = () => {
         autosaveTimerRef.current = null;
         flushAutosaveRef.current = null;
-        if (isSubmittingRef.current || hasSubmittedRef.current) return;
+        if (isSubmittingRef.current) return;
         const inFlight = saveResponseToDb(surveyData, false).catch((error) => {
           console.error("Error auto-saving response:", error);
           // Don't show error toast for auto-save failures to avoid spam
@@ -311,7 +350,11 @@ export default function SurveyTakingPage() {
   // Check if survey is read-only (submitted and editing not allowed). An instructor
   // viewing as a student is also read-only and must not submit/overwrite the student's response.
   const surveyAlreadySubmitted = existingResponse?.is_submitted && !survey.allow_response_editing;
-  const isReadOnly = surveyAlreadySubmitted || isViewingAsStudent;
+  const isReadOnly = isSurveyResponseReadOnly({
+    responseIsSubmitted: Boolean(existingResponse?.is_submitted),
+    allowResponseEditing: survey.allow_response_editing,
+    isViewingAsStudent
+  });
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">

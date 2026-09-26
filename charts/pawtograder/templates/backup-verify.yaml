@@ -20,6 +20,12 @@ metadata:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-verify") | nindent 4 }}
 spec:
   schedule: {{ .Values.backup.verify.schedule | quote }}
+  {{- /* maintenance.active: suspended, the state maintenance.sh `down` leaves
+     this write-capable CronJob in (SUSPEND_CRONJOBS). Off, nothing is rendered
+     and the API default (false) applies, as before. */}}
+  {{- if .Values.maintenance.active }}
+  suspend: true
+  {{- end }}
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: {{ .Values.backup.verify.startingDeadlineSeconds | default 1800 }}
   # Each retained pod holds its scratch PVC until the pod is deleted, so these

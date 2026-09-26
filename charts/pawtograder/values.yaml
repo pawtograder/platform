@@ -472,6 +472,39 @@ postgres:
 # -----------------------------------------------------------------------------
 maintenance:
   enabled: false
+  # The maintenance POSTURE, distinct from `enabled` (which only deploys the
+  # page). true renders the state `scripts/maintenance.sh down` leaves behind:
+  #   - the web host's "/" backend (and each channel host's "/") -> this page's
+  #     Service, byte-for-byte what the script patches in (name + port 8080)
+  #   - every writer the script scales to 0 -> replicas: 0 (web, rest, auth,
+  #     storage, the realtime StatefulSet, every web-/functions-<channel>
+  #     Deployment, and functions when edgeFunctions.autoscaling is off)
+  #   - the edge-functions HPA -> not rendered. With autoscaling on, functions
+  #     replicas stays unrendered and the script's live 0 holds; rendering 0
+  #     there would make the EXIT upgrade reset the tier to 1 pod under a
+  #     client-side 3-way merge (templates/edge-functions.yaml has the detail)
+  #   - the write-capable CronJobs the script suspends -> suspend: true
+  #   - the primary Ingress -> annotation pawtograder.io/maintenance-active
+  # pg_cron is paused in the database, survives any upgrade, and stays the
+  # script's job. So do state capture and the SAFE TO BOUNCE gate.
+  #
+  # Purpose: a chart release that RESTARTS Postgres, applied inside a window.
+  # Without this, that upgrade re-renders the fence away. Client-side, it puts
+  # the writers, HPA and web backend back while the primary is rolling;
+  # server-side, it fails on the fields kubectl took over. With it, the release
+  # and the live objects agree field for field, so neither apply mode has
+  # anything to change. Entry is still `maintenance.sh down`; the posture only
+  # makes the upgrade agree with it. Exit is `maintenance.sh up` FIRST (writable
+  # preflight, restore, page down last), then `helm upgrade` with this back to
+  # false. Full procedure: docs/operations/planned-maintenance.md, "Deploying a
+  # Postgres-restarting release in a window".
+  #
+  # Leaves Postgres alone: neither StatefulSet reads this value. Requires
+  # enabled=true, global.apiOnSeparateHost=true and service.port=8080
+  # (templates/validations.yaml says why). Set it on the command line for the
+  # one upgrade, never in a values file, and don't carry it with --reuse-values:
+  # any later upgrade that keeps it re-fences the environment.
+  active: false
   # Copy shown on the page. eta is optional (omitted from the page when empty).
   title: "We'll be right back"
   message: "Pawtograder is down for a short scheduled maintenance window. Your work is safe — the pack is tidying up and we'll be back shortly. This page refreshes on its own."
@@ -796,6 +829,28 @@ rest:
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
     limits: { cpu: "1", memory: "512Mi" }
+  # PostgREST admin server (admin-server-port). Serves /metrics, /live and
+  # /ready on a SEPARATE port from the API.
+  #
+  # This is the only place pool health is observable. PostgREST reacts to a
+  # fatal connection error (for example SQLSTATE 53100 from a full /dev/shm)
+  # by rebuilding its whole pool and reloading the schema cache, 503ing every
+  # request in flight -- and the only evidence is a line in the pod log.
+  # pgrst_schema_cache_loads_total turns that into a countable series; see
+  # PawtograderPostgrestSchemaCacheChurn.
+  #
+  # Metric names verified against postgrest/postgrest:v14.8 (2026-09-22):
+  # pgrst_schema_cache_loads_total{status}, pgrst_schema_cache_query_time_seconds,
+  # pgrst_db_pool_{max,waiting,available}, pgrst_db_pool_timeouts_total,
+  # pgrst_jwt_cache_{requests,hits,evictions}_total.
+  #
+  # The admin server is UNAUTHENTICATED. It is exposed only through the
+  # metrics-only Service in monitoring.yaml, never through the Kong-routed
+  # rest Service.
+  adminServer:
+    enabled: true
+    port: 3001
+
   service:
     port: 3000
   terminationGracePeriodSeconds: 30
@@ -2433,6 +2488,17 @@ monitoring:
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
+    # Schema-cache reloads per PostgREST pod per hour above which
+    # PawtograderPostgrestSchemaCacheChurn fires. A reload means EITHER the pool
+    # was rebuilt after a fatal connection error (everything in flight on that
+    # pod got a 503) or a `NOTIFY pgrst, 'reload schema'` arrived (harmless);
+    # the counter cannot separate them, so the alert reports churn and the
+    # description says how to tell. A healthy long-lived pod sits at 0; prod
+    # during the /dev/shm incident ran ~3/hour.
+    # The rule pairs this low threshold with a 2h `for:`, because bootstrap and
+    # migration bursts are large but short-lived (a fresh preview pod hit 37 in
+    # three minutes) while real churn never decays.
+    postgrestSchemaCacheLoadsPerHour: 2
     # Streaming-standby replay lag (bytes) above which PawtograderReplicaLagHigh
     # fires (only when postgres.replica.enabled). Primary current LSN − standby
     # replay_lsn; ~0 on a healthy standby. 100 MiB tolerates a bulk write/migration
