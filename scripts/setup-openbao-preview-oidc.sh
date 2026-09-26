@@ -261,6 +261,25 @@ EOF
 # and "*" would mean every namespace including prod. So per-PR namespaces are
 # matched by LABEL: the secrets job labels each namespace on creation and these
 # roles select on it.
+#
+# BIND BY NAME, NOT generated_role_rules. Every role below names a ClusterRole
+# that an operator applied from the runbook; the engine only creates a
+# ServiceAccount and a binding to it. The alternative — having the engine
+# author the rules — is what forced OpenBao's own ServiceAccount to hold
+# `escalate` plus create/update on roles AND clusterroles cluster-wide, since
+# Kubernetes refuses to let a principal create rules exceeding its own. That
+# grant let anyone holding Bao's token mint arbitrary cluster permissions,
+# production included, and no admission policy here constrained it.
+#
+# The trade is that role RULES are now cluster state rather than script
+# arguments: change a role and you must apply the runbook's ClusterRole block
+# before re-running this script. That is the better failure mode — the rules
+# are reviewable in git and a drifted one fails loudly at mint time instead of
+# silently widening what CI can do.
+#
+# Names are prefixed `pawtograder-preview-` because they are cluster-scoped
+# objects sharing a namespace with everything else on the cluster; the Bao
+# role names below stay unprefixed.
 # ---------------------------------------------------------------------------
 echo "==> kubernetes roles"
 
@@ -268,9 +287,9 @@ echo "==> kubernetes roles"
 # else. Used by build-web, which builds untrusted PR code.
 $CLI write kubernetes/roles/preview-read \
   allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
-  kubernetes_role_type=Role \
+  kubernetes_role_type=ClusterRole \
   token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
-  generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["secrets"],"verbs":["get"]}]}'
+  kubernetes_role_name="pawtograder-preview-read"
 
 # publish: identical grant to preview-read, but a separate role so the
 # publish-e2e-bundle job can keep its own `environment: preview-publish`
@@ -279,9 +298,9 @@ $CLI write kubernetes/roles/preview-read \
 # auth/jwt/login by the role bound to preview-build.
 $CLI write kubernetes/roles/preview-publish \
   allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
-  kubernetes_role_type=Role \
+  kubernetes_role_type=ClusterRole \
   token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
-  generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["secrets"],"verbs":["get"]}]}'
+  kubernetes_role_name="pawtograder-preview-publish"
 
 # deploy: helm needs broad verbs, but only INSIDE the preview namespace.
 #
@@ -290,15 +309,15 @@ $CLI write kubernetes/roles/preview-publish \
 # preview passes `--set secrets.autogenerate=false`, which is the `if` guarding
 # that template, so nothing in that group is rendered — but the group belongs
 # here rather than being rediscovered as a 403 the first time someone enables
-# the bootstrap Job for a preview. If that day comes, check whether the
-# generated SA also needs `bind`/`escalate`: creating a RoleBinding for rules
-# it does not itself hold is refused by escalation prevention, the same rule
-# that governs OpenBao's own ServiceAccount in the runbook.
+# the bootstrap Job for a preview. If that day comes, note that the minted SA
+# would need `bind` to attach a Role it does not itself hold — escalation
+# prevention again — and that the rules live in the runbook's
+# pawtograder-preview-deploy ClusterRole now, not in this file.
 $CLI write kubernetes/roles/preview-deploy \
   allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
-  kubernetes_role_type=Role \
+  kubernetes_role_type=ClusterRole \
   token_default_ttl="50m" token_max_ttl="${TOKEN_MAX_TTL}" \
-  generated_role_rules='{"rules":[{"apiGroups":["","apps","batch","networking.k8s.io","policy","autoscaling","monitoring.coreos.com","external-secrets.io","rbac.authorization.k8s.io"],"resources":["*"],"verbs":["*"]}]}'
+  kubernetes_role_name="pawtograder-preview-deploy"
 
 # provision / teardown: these need CLUSTER-scoped verbs (create and delete
 # Namespace), which RBAC cannot restrict by name prefix. The name bound is
@@ -309,15 +328,15 @@ $CLI write kubernetes/roles/preview-provision \
   allowed_kubernetes_namespaces="${CI_NS}" \
   kubernetes_role_type=ClusterRole \
   token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
-  generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["namespaces"],"verbs":["get","create","patch"]}]}'
+  kubernetes_role_name="pawtograder-preview-provision"
 
 # Namespaced counterpart to preview-provision: writes the chart's Secrets into
 # one labeled preview namespace and can reach no other.
 $CLI write kubernetes/roles/preview-provision-secrets \
   allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
-  kubernetes_role_type=Role \
+  kubernetes_role_type=ClusterRole \
   token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
-  generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["secrets"],"verbs":["get","create","update","patch"]}]}'
+  kubernetes_role_name="pawtograder-preview-provision-secrets"
 
 # Cluster-scoped half: Namespace get/delete and NOTHING else. The namespaced
 # rules that used to live here (Secrets, PVCs, ConfigMaps, Pods, Services,
@@ -334,7 +353,7 @@ $CLI write kubernetes/roles/preview-teardown \
   allowed_kubernetes_namespaces="${CI_NS}" \
   kubernetes_role_type=ClusterRole \
   token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
-  generated_role_rules='{"rules":[{"apiGroups":[""],"resources":["namespaces"],"verbs":["get","delete"]}]}'
+  kubernetes_role_name="pawtograder-preview-teardown"
 
 # Namespaced half: empty one labeled preview namespace before it is deleted.
 # PVCs must go explicitly because helm does not remove them.
@@ -356,9 +375,9 @@ $CLI write kubernetes/roles/preview-teardown \
 # so the failure is silent and the release looks cleanly uninstalled.
 $CLI write kubernetes/roles/preview-teardown-ns \
   allowed_kubernetes_namespace_selector="{\"matchLabels\":{\"${PREVIEW_LABEL_KEY}\":\"true\"}}" \
-  kubernetes_role_type=Role \
+  kubernetes_role_type=ClusterRole \
   token_default_ttl="20m" token_max_ttl="${TOKEN_MAX_TTL}" \
-  generated_role_rules='{"rules":[{"apiGroups":["","apps","batch","networking.k8s.io","policy","autoscaling","monitoring.coreos.com","external-secrets.io","rbac.authorization.k8s.io"],"resources":["*"],"verbs":["get","list","delete"]},{"apiGroups":[""],"resources":["secrets"],"verbs":["update"]}]}'
+  kubernetes_role_name="pawtograder-preview-teardown-ns"
 
 cat <<EOF
 

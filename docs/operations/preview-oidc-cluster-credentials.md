@@ -13,7 +13,7 @@ OpenBao  auth/jwt/login  (bound_audiences + bound_claims)
   │  short-lived Bao token carrying one policy
   ▼
 OpenBao  kubernetes/creds/<role>
-  │  TokenRequest -> ServiceAccount token, RBAC from generated_role_rules
+  │  TokenRequest -> SA token, RBAC from a pre-created ClusterRole (§1)
   ▼
 $HOME/.kube/config   — expires with the job
 ```
@@ -160,19 +160,120 @@ whole reason it is a separate environment from `preview-deploy`.
 ## 1. RBAC for OpenBao's ServiceAccount
 
 The engine impersonates nothing; it calls TokenRequest and creates the
-SA/Role/RoleBinding itself, so it needs those rights.
+ServiceAccount and its binding itself, so it needs those rights.
 
-`bind` and `escalate` are the two that are easy to leave out and that fail
-100% of the time once they are. Kubernetes' privilege-escalation prevention
-refuses to let a principal create a Role whose rules exceed its own, or bind a
-Role it does not itself hold, and every role this setup generates does exactly
-that: `preview-deploy` grants `resources: ["*"], verbs: ["*"]` across eight API
-groups, and `preview-provision` grants `create` on namespaces, neither of which
-Bao's own ServiceAccount holds. `escalate` waives the first check and `bind`
-the second. Without them every `kubernetes/creds/...` mint fails with
-`attempt to grant extra privileges`, which reads like a Bao misconfiguration
-rather than missing cluster RBAC. `update` is needed because the engine writes
-these objects back rather than only creating them.
+**It does not author RBAC rules.** Every Bao role in
+`scripts/setup-openbao-preview-oidc.sh` names one of the ClusterRoles below
+(`kubernetes_role_name`) rather than passing `generated_role_rules`, which is
+what keeps this identity from being the most dangerous thing on the cluster.
+Letting the engine generate rules requires giving it `escalate` plus
+create/update on `roles` AND `clusterroles` cluster-wide — Kubernetes refuses
+to let a principal create rules exceeding its own, and `escalate` waives that
+check. Anyone holding Bao's token could then mint arbitrary cluster
+permissions, including into production namespaces, and nothing in this runbook
+constrained it.
+
+Binding by name keeps `bind` — Kubernetes still refuses to let a principal
+bind a role it does not itself hold — but `bind` is scoped by `resourceNames`
+to these seven roles. The worst an attacker with Bao's token can do is bind a
+role you have reviewed; §2b then bounds _where_ they can bind it.
+
+Apply these first; the engine fails at mint time with `clusterroles.rbac...
+"pawtograder-preview-read" not found` if a role is missing, which is the
+loud failure you want.
+
+```yaml
+# The rules that used to live in generated_role_rules, now reviewable objects.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pawtograder-preview-read # build-web: one Secret, read-only
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pawtograder-preview-publish # publish-e2e-bundle; same grant, own tier
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pawtograder-preview-deploy # helm, inside one preview namespace
+rules:
+  - apiGroups:
+      [
+        "",
+        "apps",
+        "batch",
+        "networking.k8s.io",
+        "policy",
+        "autoscaling",
+        "monitoring.coreos.com",
+        "external-secrets.io",
+        "rbac.authorization.k8s.io"
+      ]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pawtograder-preview-provision # cluster-scoped: create the namespace
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pawtograder-preview-provision-secrets # namespaced half of provision
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pawtograder-preview-teardown # cluster-scoped: delete the namespace
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pawtograder-preview-teardown-ns # empty one namespace before deleting
+rules:
+  - apiGroups:
+      [
+        "",
+        "apps",
+        "batch",
+        "networking.k8s.io",
+        "policy",
+        "autoscaling",
+        "monitoring.coreos.com",
+        "external-secrets.io",
+        "rbac.authorization.k8s.io"
+      ]
+    resources: ["*"]
+    verbs: ["get", "list", "delete"]
+  # helm writes the release Secret back as "uninstalling" before it deletes
+  # anything; get/list/delete alone makes it 403 at the first step.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["update"]
+```
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -189,11 +290,25 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings", "clusterrolebindings"]
     verbs: ["get", "create", "update", "delete"]
-  # bind + escalate: see above. Without these the engine can create the
-  # SA and then fails on the Role it is supposed to attach to it.
+  # NO create/update/delete on roles or clusterroles, and NO escalate: the
+  # engine binds the reviewed roles above, it does not author rules. `bind`
+  # is still required — Kubernetes refuses to let a principal bind a role it
+  # does not hold — but resourceNames pins it to exactly these seven, so a
+  # compromised Bao token cannot grant permissions nobody reviewed.
+  #
+  # resourceNames does not apply to `list`/`watch`, which is fine: the engine
+  # only needs `get` on a role it is about to bind.
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["roles", "clusterroles"]
-    verbs: ["get", "create", "update", "delete", "bind", "escalate"]
+    resources: ["clusterroles"]
+    verbs: ["get", "bind"]
+    resourceNames:
+      - pawtograder-preview-read
+      - pawtograder-preview-publish
+      - pawtograder-preview-deploy
+      - pawtograder-preview-provision
+      - pawtograder-preview-provision-secrets
+      - pawtograder-preview-teardown
+      - pawtograder-preview-teardown-ns
   # Needed to evaluate allowed_kubernetes_namespace_selector.
   - apiGroups: [""]
     resources: ["namespaces"]
@@ -213,36 +328,25 @@ roleRef:
   name: openbao-kubernetes-secrets-engine
 ```
 
-> **This is the most powerful identity in the design — treat it accordingly.**
-> The engine needs `create`/`update` on `roles` and `clusterroles` plus `bind`
-> and `escalate`, because it generates a Role per credential and attaches it.
-> Kubernetes documents `bind` and `escalate` as deliberate bypasses of its
-> privilege-escalation protections, so an actor holding this ServiceAccount's
-> token can mint arbitrary cluster permissions — production namespaces
-> included. The namespace-name admission policy in §2 does **not** constrain
-> RBAC objects; it only bounds Namespace names.
+> **Still the most powerful identity in the design — treat it accordingly.**
+> It can create a ServiceAccount anywhere and bind any of the seven reviewed
+> ClusterRoles to it. §2b bounds that to the preview namespaces, and to
+> `preview-provision`/`preview-teardown` for cluster-scoped bindings; apply it,
+> or this identity reaches production by binding `pawtograder-preview-deploy`
+> into a production namespace.
 >
-> Nothing else in this runbook reduces that, so decide about it explicitly:
+> What it can no longer do — and could, when the engine authored its own rules
+> — is invent permissions. No `escalate`, no `create` on `roles` or
+> `clusterroles`, so the ceiling is the union of seven roles you reviewed in
+> git rather than anything expressible in RBAC.
 >
-> - **Preferred: isolate the identity.** Run the preview previews on their own
->   cluster, or give OpenBao a second ServiceAccount used only by this engine,
->   so a compromise does not reach production workloads.
-> - **If it must share a production cluster**, add an admission policy that
->   constrains the RBAC objects this SA may create — for example, requiring
->   generated `roles`/`rolebindings` to live in `pawtograder-preview-pr-*` and
->   refusing `clusterroles`/`clusterrolebindings` from this principal
->   altogether. The `matchConditions` form in §2 is the pattern to copy;
->   `request.userInfo.username` is the same discriminator.
-> - **At minimum**, alert on `create`/`update` of `clusterroles` and
->   `clusterrolebindings` by this ServiceAccount in the API server audit log.
->   The engine's legitimate traffic is namespaced Roles, so cluster-scoped
->   writes from it are worth a page.
+> Two things worth doing anyway, neither of which this runbook can do for you:
 >
-> The narrower alternative — dropping `clusterroles`/`clusterrolebindings` from
-> the list — costs you `preview-provision` and `preview-teardown`, which are
-> `kubernetes_role_type: ClusterRole` by necessity (creating and deleting a
-> Namespace is cluster-scoped). You would have to provision those two
-> namespaces by another route.
+> - **Isolate the identity** if you can: a preview-only cluster, or at least a
+>   ServiceAccount used by nothing but this engine.
+> - **Alert on `clusterrolebindings` writes by this ServiceAccount** in the API
+>   server audit log. Legitimate traffic is namespaced RoleBindings plus the
+>   two cluster-scoped tiers; anything else is worth a page.
 
 This makes OpenBao able to grant anything it can create a ClusterRole for — it
 is, by construction, a privileged component. That is the trade for not
@@ -352,6 +456,69 @@ than at the first teardown:
 ```bash
 kubectl apply --dry-run=server -f preview-namespace-names.yaml
 ```
+
+## 2b. Bound where preview RBAC may be attached
+
+§1 stops OpenBao authoring rules; this stops it attaching the reviewed ones
+where they do not belong. Without it the engine can still create a RoleBinding
+in **any** namespace — so a compromised Bao token could bind
+`pawtograder-preview-deploy` (`resources: ["*"], verbs: ["*"]`) into
+production, having never created a Role at all.
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-rbac-placement
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["rolebindings", "clusterrolebindings"]
+  # The OpenBao pod's own ServiceAccount — NOT the per-credential SAs the
+  # engine generates, which live in the preview namespaces. Confirm it before
+  # applying; a matchConditions that matches nothing disables the policy
+  # silently.
+  matchConditions:
+    - name: only-openbao
+      expression: "request.userInfo.username == 'system:serviceaccount:openbao:openbao'"
+  validations:
+    # RoleBindings: preview namespaces and the CI namespace only.
+    - expression: >-
+        request.resource.resource != 'rolebindings' ||
+        (object == null ? oldObject : object).metadata.namespace.startsWith('pawtograder-preview-pr-') ||
+        (object == null ? oldObject : object).metadata.namespace == 'pawtograder-preview-ci'
+      message: "preview CI may only bind roles inside pawtograder-preview-pr-* or pawtograder-preview-ci"
+    # ClusterRoleBindings: only the two tiers that are cluster-scoped by
+    # necessity. Binding preview-deploy or preview-teardown-ns cluster-wide
+    # would hand every namespace to CI.
+    - expression: >-
+        request.resource.resource != 'clusterrolebindings' ||
+        (object == null ? oldObject : object).roleRef.name in ['pawtograder-preview-provision', 'pawtograder-preview-teardown']
+      message: "preview CI may only create ClusterRoleBindings for preview-provision or preview-teardown"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-rbac-placement
+spec:
+  policyName: preview-rbac-placement
+  validationActions: ["Deny"]
+```
+
+Same two failure modes as §2, and the same dry run applies:
+
+```bash
+kubectl apply --dry-run=server -f preview-rbac-placement.yaml
+```
+
+With §1 and §2b together, a compromised OpenBao token can bind seven reviewed
+roles, in preview namespaces only, plus two of them cluster-scoped. That is a
+bounded, enumerable blast radius rather than "arbitrary cluster permissions",
+which is what it was when the engine authored its own rules.
 
 ## 3. Configure OpenBao
 
