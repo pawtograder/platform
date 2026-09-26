@@ -1,0 +1,304 @@
+name: Cluster credentials
+description: >-
+  Write $HOME/.kube/config for the preview cluster, either from a short-lived
+  OIDC-federated ServiceAccount token minted through OpenBao, or from the
+  legacy static kubeconfig secret.
+
+# Two paths, selected by the PREVIEW_CLUSTER_AUTH repo variable:
+#
+#   oidc   — the job mints a GitHub OIDC JWT, exchanges it at OpenBao's JWT
+#            auth endpoint for a Bao token, and uses that to mint a Kubernetes
+#            ServiceAccount token from the Kubernetes secrets engine. Nothing
+#            long-lived exists: the token dies with the job, and authority is
+#            derived from verified OIDC claims (repository, environment,
+#            job_workflow_ref) rather than from a value in repo settings.
+#
+#   static — decode KUBECONFIG_BASE64 (or the read-only variant). What we did
+#            before OIDC, kept so this lands inert and flips with one variable.
+#
+# The switch is DELIBERATELY explicit rather than "try OIDC, fall back on
+# error". A silent fallback would turn any OpenBao misconfiguration into a
+# quiet downgrade to the long-lived credential, which is the failure mode this
+# whole change exists to remove — and it would look identical to success.
+# See docs/operations/preview-oidc-cluster-credentials.md.
+
+inputs:
+  mode:
+    description: "oidc | static. Pass vars.PREVIEW_CLUSTER_AUTH; empty means static."
+    required: false
+    default: ""
+  bao_addr:
+    description: "OpenBao address (vars.BAO_ADDR). Required for mode=oidc."
+    required: false
+    default: ""
+  bao_role:
+    description: "OpenBao JWT auth role to log in as (mode=oidc)."
+    required: false
+    default: ""
+  k8s_role:
+    description: "OpenBao Kubernetes secrets engine role to mint from (mode=oidc)."
+    required: false
+    default: ""
+  namespace:
+    description: "Namespace the minted token should be scoped to (mode=oidc)."
+    required: false
+    default: ""
+  ttl:
+    description: >-
+      Lifetime of the minted ServiceAccount token. Must outlast the longest
+      operation in the job — the deploy job runs `helm --wait --timeout 20m`,
+      so its floor is well above 20m, and it passes 50m explicitly. It must
+      also NOT exceed the JWT auth role's `token_ttl` in
+      scripts/setup-openbao-preview-oidc.sh: the lease is a child of the login
+      token, so a longer value here is silently truncated to that.
+      Every call site sets this explicitly. The default matches the LONGEST
+      any of them asks for, because the two ways of being wrong are not
+      symmetric: too long is a credential that outlives its job by minutes,
+      while too short is a mid-apply `Unauthorized` from helm that reads as a
+      cluster fault. A previous default of "20m" contradicted the sentence
+      above it — it was the deploy job's floor, not a safe value for a call
+      site that omits this.
+    required: false
+    default: "50m"
+  cluster_scoped:
+    description: >-
+      "true" to have the secrets engine bind the role with a ClusterRoleBinding
+      instead of a RoleBinding in `namespace` (mode=oidc). The engine's default
+      is a RoleBinding, which cannot grant cluster-scoped resources, so the
+      provision and teardown roles — which create, read and delete
+      `namespaces` — need this. The namespaced tiers must NOT set it, and the
+      Bao policies in scripts/setup-openbao-preview-oidc.sh deny the parameter
+      to them so a token for those tiers cannot ask for it either.
+    required: false
+    default: "false"
+  api_server:
+    description: >-
+      Cluster API server URL (vars.PREVIEW_CLUSTER_API_SERVER). Not a secret.
+      Falls back to the in-cluster endpoint when the runner has a mounted
+      ServiceAccount.
+    required: false
+    default: ""
+  ca_base64:
+    description: >-
+      base64 cluster CA bundle (vars.PREVIEW_CLUSTER_CA_BASE64). Not a secret —
+      it is a public certificate. Falls back to the runner's mounted CA.
+    required: false
+    default: ""
+  kubeconfig_base64:
+    description: "Static kubeconfig, base64 (mode=static)."
+    required: false
+    default: ""
+  bao_version:
+    description: "OpenBao CLI version to fetch when not already present."
+    required: false
+    default: "2.2.0"
+  kubeconfig_path:
+    description: >-
+      Where to write the kubeconfig. Defaults to $HOME/.kube/config, which
+      kubectl and helm pick up with no further configuration. Set this when a
+      job needs TWO credentials at once — the teardown job mints a
+      cluster-scoped one and a namespaced one — and point $KUBECONFIG at the
+      right file per step, rather than minting the same credential twice.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Write kubeconfig
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        BAO_ADDR: ${{ inputs.bao_addr }}
+        BAO_ROLE: ${{ inputs.bao_role }}
+        K8S_ROLE: ${{ inputs.k8s_role }}
+        NS: ${{ inputs.namespace }}
+        TTL: ${{ inputs.ttl }}
+        CLUSTER_SCOPED: ${{ inputs.cluster_scoped }}
+        API_SERVER: ${{ inputs.api_server }}
+        CA_B64: ${{ inputs.ca_base64 }}
+        KUBECONFIG_B64: ${{ inputs.kubeconfig_base64 }}
+        BAO_VERSION: ${{ inputs.bao_version }}
+        KUBECONFIG_PATH: ${{ inputs.kubeconfig_path }}
+      run: |
+        set -euo pipefail
+        # Before either branch writes anything. The static path used to create
+        # the file under the ambient umask and chmod it afterwards, leaving a
+        # world-readable cluster credential on disk for the window in between;
+        # only the OIDC path set this. A umask cannot be raced the way a
+        # post-hoc chmod can.
+        umask 077
+        KUBECONFIG_PATH="${KUBECONFIG_PATH:-$HOME/.kube/config}"
+        mkdir -p "$(dirname "$KUBECONFIG_PATH")"
+
+        # Validate the mode before branching. Previously anything that was not
+        # exactly "oidc" took the static path, so `OIDC`, `odic` or a stray
+        # space silently restored the long-lived kubeconfig while looking like
+        # a successful cutover — the precise failure the explicit-switch design
+        # was meant to prevent.
+        case "${MODE:-}" in
+          "" | static | oidc) ;;
+          *)
+            echo "::error title=Invalid PREVIEW_CLUSTER_AUTH::'${MODE}' is not a valid mode. Use 'oidc', or 'static'/empty for the legacy kubeconfig." >&2
+            exit 1
+            ;;
+        esac
+
+        if [ "${MODE:-static}" != "oidc" ]; then
+          # ---------------- static path ----------------
+          if [ -z "${KUBECONFIG_B64:-}" ]; then
+            echo "::error title=No cluster credential::PREVIEW_CLUSTER_AUTH is not 'oidc' and no static kubeconfig was supplied." >&2
+            exit 1
+          fi
+          echo "$KUBECONFIG_B64" | base64 -d > "$KUBECONFIG_PATH"
+          chmod 600 "$KUBECONFIG_PATH"
+          # The base64 form is a repo secret and masked automatically; the
+          # DECODED credential is not, so a later `kubectl --v=8`, a `helm
+          # --debug`, or a stray cat would print a working cluster credential
+          # into a public log. Mask the fields that actually authenticate. The
+          # OIDC path already masks each of its three secrets.
+          while IFS= read -r secret_value; do
+            [ -n "$secret_value" ] && echo "::add-mask::$secret_value"
+          done < <(grep -oE '(token|client-key-data|client-certificate-data|password):[[:space:]]*[^[:space:]]+' "$KUBECONFIG_PATH" | sed -E 's/^[^:]+:[[:space:]]*//')
+          echo "::notice title=Cluster auth::static kubeconfig (long-lived). Set the PREVIEW_CLUSTER_AUTH variable to 'oidc' to use short-lived federated credentials."
+          exit 0
+        fi
+
+        # ---------------- OIDC path ----------------
+        # Fail loudly on missing config. This path must never degrade to the
+        # static credential on its own.
+        for v in BAO_ADDR BAO_ROLE K8S_ROLE NS TTL; do
+          if [ -z "${!v:-}" ]; then
+            echo "::error title=OIDC misconfigured::PREVIEW_CLUSTER_AUTH=oidc but '$v' is empty." >&2
+            exit 1
+          fi
+        done
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+          echo "::error title=Missing id-token permission::This job needs 'permissions: id-token: write' to mint an OIDC token." >&2
+          exit 1
+        fi
+
+        # jq is an unguarded hard dependency below. It is present on
+        # ubuntu-latest but this action also runs on the self-hosted
+        # `pawtograder-ci` pool, where the image is ours to change. Without
+        # this, a missing jq surfaces as `jq: command not found` inside a
+        # pipeline whose failure `set -o pipefail` turns into a bare non-zero
+        # exit, naming neither jq nor this action.
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "::error title=jq not installed::The OIDC path needs jq to read the GitHub token response. Install it on the runner image, or use PREVIEW_CLUSTER_AUTH=static." >&2
+          exit 1
+        fi
+
+        if ! command -v bao >/dev/null 2>&1; then
+          # Its own directory rather than $RUNNER_TEMP itself. $GITHUB_PATH
+          # PREPENDS, and $RUNNER_TEMP is the shared scratch dir every other
+          # step in the job writes to — putting it first on PATH for the rest
+          # of the job means anything that later drops a file named `kubectl`,
+          # `helm` or `npm` there shadows the real binary. A directory that
+          # holds only this download cannot.
+          bao_bin="$RUNNER_TEMP/bao-bin"
+          mkdir -p "$bao_bin"
+          curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz -C "$bao_bin" bao
+          chmod +x "$bao_bin/bao"
+          # Both are needed: `export` covers the rest of THIS step, and
+          # $GITHUB_PATH covers later steps in the calling job. Without the
+          # second line the binary is on disk but invisible, so the `secrets`
+          # job's second credential step and the inline bao blocks in
+          # publish-e2e-bundle and destroy each re-download the same 64 MiB
+          # tarball.
+          export PATH="$bao_bin:$PATH"
+          echo "$bao_bin" >> "$GITHUB_PATH"
+        fi
+
+        # Audience is the Bao address, and the JWT role pins bound_audiences to
+        # the same string. The default audience is the repo URL, which every
+        # workflow in the repo would share.
+        # curl and jq are separate statements on purpose. As a single
+        # pipeline, `set -o pipefail` aborts the step the moment curl fails,
+        # so the explicit error below could only ever fire for a well-formed
+        # response with no `.value` — the least likely of the two failures,
+        # and the one whose bare exit is least self-explanatory.
+        if ! jwt_response=$(curl -sSf \
+          -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${BAO_ADDR}"); then
+          echo "::error title=OIDC token request failed::GitHub's token endpoint did not return a token. Check that this job has 'permissions: id-token: write'." >&2
+          exit 1
+        fi
+        JWT=$(printf '%s' "$jwt_response" | jq -r '.value // empty')
+        [ -n "$JWT" ] || { echo "::error::failed to mint a GitHub OIDC token (no .value in the response)" >&2; exit 1; }
+        echo "::add-mask::$JWT"
+
+        export BAO_ADDR
+        # Every mint below is checked for an EMPTY result, not just a non-zero
+        # exit. `bao write -field=X` can exit 0 having printed nothing when the
+        # response lacks that field, and an empty token flows straight into a
+        # syntactically valid kubeconfig — so the step would print its
+        # "No long-lived credential was used" success notice and the failure
+        # would not surface until some later step got a 401 it could not
+        # explain.
+        BAO_TOKEN=$(bao write -field=token "auth/jwt/login" role="$BAO_ROLE" jwt="$JWT")
+        echo "::add-mask::$BAO_TOKEN"
+        if [ -z "$BAO_TOKEN" ]; then
+          echo "::error title=OpenBao login returned no token::auth/jwt/login succeeded for role '${BAO_ROLE}' but returned an empty token field." >&2
+          exit 1
+        fi
+        export BAO_TOKEN
+
+        # Sent only when true: the namespaced tiers' policies deny the
+        # parameter outright, so passing cluster_role_binding=false to them
+        # would be refused too.
+        crb=()
+        [ "$CLUSTER_SCOPED" = "true" ] && crb=(cluster_role_binding=true)
+        SA_TOKEN=$(bao write -field=service_account_token \
+          "kubernetes/creds/${K8S_ROLE}" \
+          kubernetes_namespace="$NS" ttl="$TTL" ${crb[@]+"${crb[@]}"})
+        echo "::add-mask::$SA_TOKEN"
+        if [ -z "$SA_TOKEN" ]; then
+          echo "::error title=No ServiceAccount token::kubernetes/creds/${K8S_ROLE} returned an empty service_account_token for namespace '${NS}'." >&2
+          exit 1
+        fi
+
+        # Server + CA are not secrets. Prefer explicit variables; fall back to
+        # the runner pod's own mounted ServiceAccount, which exists when ARC
+        # leaves automountServiceAccountToken on.
+        sa_dir=/var/run/secrets/kubernetes.io/serviceaccount
+        if [ -z "${API_SERVER:-}" ]; then
+          if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
+            API_SERVER="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT:-443}"
+          else
+            echo "::error title=No API server::set the PREVIEW_CLUSTER_API_SERVER variable (the runner has no in-cluster endpoint)." >&2
+            exit 1
+          fi
+        fi
+        if [ -z "${CA_B64:-}" ]; then
+          if [ -r "$sa_dir/ca.crt" ]; then
+            CA_B64=$(base64 -w0 < "$sa_dir/ca.crt")
+          else
+            echo "::error title=No cluster CA::set the PREVIEW_CLUSTER_CA_BASE64 variable (the runner has no mounted CA)." >&2
+            exit 1
+          fi
+        fi
+
+        cat > "$KUBECONFIG_PATH" <<EOF
+        apiVersion: v1
+        kind: Config
+        clusters:
+          - name: preview
+            cluster:
+              server: ${API_SERVER}
+              certificate-authority-data: ${CA_B64}
+        users:
+          - name: oidc-federated
+            user:
+              token: ${SA_TOKEN}
+        contexts:
+          - name: preview
+            context:
+              cluster: preview
+              user: oidc-federated
+              namespace: ${NS}
+        current-context: preview
+        EOF
+        chmod 600 "$KUBECONFIG_PATH"
+        echo "::notice title=Cluster auth::OIDC-federated ServiceAccount token (ttl ${TTL}, role ${K8S_ROLE}, ns ${NS}). No long-lived credential was used."
