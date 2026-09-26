@@ -151,11 +151,17 @@ spec:
   policyName: preview-service-surface
   validationActions: [Deny]
 ---
-# Endpoints are written by the endpoints controller. Anything running as a
-# preview-namespace identity (the deploy credential, or a ServiceAccount the
-# chart grants rights to) may not write them by hand. EndpointSlices are not
-# in the deploy role's API groups, so they are covered by RBAC already; they
-# are listed here so that stays true if the role grows.
+# Endpoints in a preview namespace are written by the endpoint controllers and
+# nobody else. The check is on WHO writes, not where the writer comes from: the
+# chart holds rbac.authorization.k8s.io/* in its namespace, so it can grant
+# `endpoints` to a ServiceAccount in any other namespace (an ARC runner, say),
+# and a hand-written Endpoints object routes the preview's Ingress to any IP.
+# kube-controller-manager runs with --use-service-account-credentials, so its
+# controllers appear as these three ServiceAccounts. Cluster admins
+# (system:masters) are allowed for break-glass repair.
+#
+# EndpointSlices are not in the deploy role's API groups, so RBAC covers them
+# already; they are listed so that stays true if the role grows.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -175,12 +181,14 @@ spec:
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
         resources: ["endpointslices"]
-  matchConditions:
-    - name: preview-identities
-      expression: "request.userInfo.username.startsWith('system:serviceaccount:pawtograder-preview-')"
   validations:
-    - expression: "false"
-      message: "preview identities may not write Endpoints or EndpointSlices"
+    - expression: >-
+        request.userInfo.username in [
+          'system:serviceaccount:kube-system:endpoint-controller',
+          'system:serviceaccount:kube-system:endpointslice-controller',
+          'system:serviceaccount:kube-system:endpointslicemirroring-controller'] ||
+        'system:masters' in request.userInfo.?groups.orValue([])
+      message: "only the endpoint controllers may write Endpoints or EndpointSlices in a preview namespace"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -197,6 +205,14 @@ spec:
 # openbao, minio, monitoring, kube-apiserver, kubelets) and on the LAN is
 # dropped. The chart's own NetworkPolicy cannot provide this: the PR controls
 # the chart, and the deploy role can delete NetworkPolicies.
+#
+# The allow-list alone is NOT an upper bound. Cilium unions the allows of every
+# policy that selects an endpoint, and the deploy role can create ordinary
+# NetworkPolicies, so a chart could add an allow-all egress policy and undo
+# everything above. `egressDeny` is what makes the bound hold: a deny wins over
+# any allow from any policy. The allow rules then define what is reachable,
+# and the deny rules below repeat the forbidden set so no other policy can
+# reopen it.
 #
 # Observed traffic from idle previews before this was written: kube-dns:53,
 # pawtograder-shared-redis:6379, and the preview's own pods. The rest comes
@@ -252,6 +268,48 @@ spec:
             - 192.168.0.0/16
             - 100.64.0.0/10
             - 169.254.0.0/16
+  egressDeny:
+    # Pods outside previews, kube-dns and shared Redis.
+    - toEndpoints:
+        - matchExpressions:
+            - key: k8s:io.cilium.k8s.namespace.labels.pawtograder.net/preview
+              operator: DoesNotExist
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: NotIn
+              values: [kube-system, pawtograder-shared-redis]
+    - toEndpoints:
+        - matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: In
+              values: [kube-system]
+            - key: k8s:k8s-app
+              operator: NotIn
+              values: [kube-dns]
+    # Every node port except ingress-nginx's 80 and 443. This covers the
+    # kube-apiserver (6443, also reachable as the `kube-apiserver` entity),
+    # the kubelet, etcd and Talos apid.
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports:
+            - port: "1"
+              endPort: 79
+              protocol: TCP
+            - port: "81"
+              endPort: 442
+              protocol: TCP
+            - port: "444"
+              endPort: 65535
+              protocol: TCP
+            - port: "1"
+              endPort: 65535
+              protocol: UDP
+    # The LAN and link-local, including cloud-style metadata addresses.
+    - toCIDRSet:
+        - cidr: 10.0.0.0/8
+        - cidr: 172.16.0.0/12
+        - cidr: 192.168.0.0/16
+        - cidr: 100.64.0.0/10
+        - cidr: 169.254.0.0/16
 ---
 # ---------------------------------------------------------------------------
 # Network: the pawtograder ARC pool (pawtograder-ci, pawtograder-e2e).

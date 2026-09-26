@@ -44,8 +44,10 @@ bound to preview namespaces:
 - `preview-service-surface`: Services must be ClusterIP with a selector and no
   `externalIPs`. This refuses NodePort, LoadBalancer, ExternalName and
   selectorless Services.
-- `preview-endpoints-managed`: identities from preview namespaces may not write
-  Endpoints or EndpointSlices.
+- `preview-endpoints-managed`: in a preview namespace, only the endpoint
+  controllers (and `system:masters`) may write Endpoints or EndpointSlices. The
+  check is on the writer, not its namespace: the chart can grant `endpoints` to
+  a ServiceAccount anywhere on the cluster.
 
 ## Network: Cilium policies
 
@@ -54,7 +56,11 @@ The same file holds two Cilium policies:
 - `pawtograder-preview-egress` (clusterwide) is an egress allow-list for
   preview pods: other preview pods, kube-dns, `pawtograder-shared-redis:6379`,
   nodes on 80/443 (ingress-nginx runs on the host network) and non-RFC1918
-  addresses. Everything else in the cluster and on the LAN is dropped.
+  addresses. Everything else in the cluster and on the LAN is dropped. The
+  forbidden set is repeated as `egressDeny` rules. Cilium unions the allows of
+  every policy that selects a pod, and the deploy role can create
+  NetworkPolicies, so without the denies a chart could add an allow-all egress
+  policy and reopen everything. A deny wins over any allow.
 - `pawtograder-ci-egress-deny` (in `arc-runners-pawtograder`) is a deny-list
   for the CI runner pool: pods in other namespaces except kube-dns, node
   management ports (kubelet, etcd, Talos apid/trustd) and RFC1918 addresses
@@ -88,6 +94,8 @@ kubectl get validatingadmissionpolicy preview-ingress-surface \
 - From a preview pod, `pawtograder-postgres.pawtograder-staging:5432`,
   `openbao.openbao:8200` and `kubernetes.default:443` time out;
   `s3.talos.ripley.cloud:443`, shared Redis and `api.github.com:443` connect.
+- The same probes give the same results with an allow-all egress
+  NetworkPolicy added to the preview namespace.
 - `hubble observe --verdict DROPPED --from-namespace <preview ns>` shows only
   the probes above.
 
