@@ -99,6 +99,22 @@ those objects, so each gets an admission policy:
   Kubernetes' own `node.kubernetes.io/*`, refuses `spec.nodeName` on create
   (which would skip the scheduler), and refuses any `priorityClassName`.
 
+## List sizes and reconcile rates
+
+Quotas count objects, not what is inside them. The admission policies also cap
+list sizes and rates that land on shared controllers, each a few times above
+what the chart renders:
+
+- Ingress: at most 5 rules, 10 paths per rule and 2 TLS entries of 5 hosts
+  (ingress-nginx renders and reloads all of it).
+- Service: at most 8 ports (Cilium programs each one on every node).
+- ExternalSecret: at most 20 `data` and 5 `dataFrom` entries, refreshed no
+  more often than every 5 minutes (the shared ESO controller and OpenBao).
+- PrometheusRule: at most 20 groups and 100 rules, evaluated no more often
+  than every 30s.
+- ServiceMonitor: a required `bodySizeLimit` of at most 16MiB (Kyverno fills
+  in 10MiB), on top of the sample, target and interval bounds below.
+
 ## Resource ceilings
 
 Kyverno policy `preview-resource-ceilings` generates a ResourceQuota
@@ -106,7 +122,10 @@ Kyverno policy `preview-resource-ceilings` generates a ResourceQuota
 and puts them back if they change. `preview-ceilings-managed` lets only
 Kyverno's background controller and the namespace controller write them; the
 deploy role holds core `*` and RBAC in the namespace, so without it the chart
-could delete the quota or grant that right elsewhere. Besides CPU, memory,
+could delete the quota or grant that right elsewhere. Kyverno generates them
+asynchronously, so the `secrets` job in `preview.yml` waits for both to exist
+before any build or deploy job starts, and fails the preview if they do not
+appear. Besides CPU, memory,
 storage and pods, the quota counts every namespaced type the deploy role can
 create (Deployments, ReplicaSets, RBAC, ServiceAccounts, ExternalSecrets,
 monitoring CRs and so on), so a chart cannot pile up objects that cost

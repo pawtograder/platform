@@ -65,6 +65,15 @@ spec:
          'nginx.ingress.kubernetes.io/ssl-redirect',
          'nginx.ingress.kubernetes.io/force-ssl-redirect']
   validations:
+    # List sizes. ingress-nginx renders every host and path into its shared
+    # configuration and reloads for all hosts; the chart uses 2 rules with
+    # 1 path each and one TLS entry with 2 hosts.
+    - expression: >-
+        size(object.spec.?rules.orValue([])) <= 5 &&
+        object.spec.?rules.orValue([]).all(r, size(r.?http.?paths.orValue([])) <= 10) &&
+        size(object.spec.?tls.orValue([])) <= 2 &&
+        object.spec.?tls.orValue([]).all(t, size(t.?hosts.orValue([])) <= 5)
+      message: "a preview Ingress may have at most 5 rules, 10 paths per rule, 2 TLS entries and 5 hosts per TLS entry"
     - expression: variables.id.startsWith('pr-')
       message: "preview Ingresses must live in a pawtograder-preview-pr-* namespace"
     # Host must be <id>.preview.pawtograder.net or <id>-<x>.preview.pawtograder.net,
@@ -178,6 +187,10 @@ spec:
         operations: ["CREATE", "UPDATE"]
         resources: ["services"]
   validations:
+    # Each port is routing state Cilium programs on every node; the chart's
+    # Services have at most 2.
+    - expression: "size(object.spec.?ports.orValue([])) <= 8"
+      message: "a preview Service may have at most 8 ports"
     - expression: "object.spec.?type.orValue('ClusterIP') == 'ClusterIP'"
       message: "preview Services must be type ClusterIP"
     - expression: "size(object.spec.?externalIPs.orValue([])) == 0"
@@ -268,6 +281,17 @@ spec:
         operations: ["CREATE", "UPDATE"]
         resources: ["*"]
   validations:
+    # Reconcile load on the shared ESO controller and OpenBao. The chart uses
+    # one dataFrom entry per ExternalSecret and refreshes hourly. A
+    # refreshInterval of 0 means sync once, which is allowed.
+    - expression: >-
+        request.resource.resource != 'externalsecrets' || (
+          size(object.spec.?data.orValue([])) <= 20 &&
+          size(object.spec.?dataFrom.orValue([])) <= 5 &&
+          (!has(object.spec.refreshInterval) ||
+           duration(object.spec.refreshInterval) == duration('0s') ||
+           duration(object.spec.refreshInterval) >= duration('5m')))
+      message: "preview ExternalSecrets may have at most 20 data and 5 dataFrom entries, and refresh no more often than every 5m"
     - expression: "request.resource.resource == 'externalsecrets'"
       messageExpression: >-
         'preview namespaces may not create ' + request.resource.resource +
@@ -606,6 +630,12 @@ spec:
         object.spec.?sampleLimit.orValue(0) > 0 && object.spec.sampleLimit <= 50000 &&
         object.spec.?targetLimit.orValue(0) > 0 && object.spec.targetLimit <= 100
       message: "preview ServiceMonitors need sampleLimit <= 50000 and targetLimit <= 100"
+    # Sample counts do not bound bytes: one enormous sample or non-sample text
+    # still has to be read and parsed. Required, at most 16MiB; the largest
+    # preview target returns about 1MB.
+    - expression: >-
+        object.spec.?bodySizeLimit.orValue('').matches('^([1-9][0-9]{0,4}(KiB|KB)|([1-9]|1[0-6])(MiB|MB))$')
+      message: "preview ServiceMonitors need a bodySizeLimit between 1KiB and 16MiB"
     - expression: >-
         ['labelLimit', 'labelNameLengthLimit', 'labelValueLengthLimit'].all(k,
           !(k in object.spec) || (object.spec[k] > 0 && object.spec[k] <= 1000))
@@ -635,6 +665,14 @@ spec:
         operations: ["CREATE", "UPDATE"]
         resources: ["prometheusrules"]
   validations:
+    # Evaluation load on the shared Prometheus. The chart ships 7 groups and
+    # 26 rules at the default interval.
+    - expression: >-
+        size(object.spec.?groups.orValue([])) <= 20 &&
+        object.spec.?groups.orValue([]).map(g, size(g.?rules.orValue([]))).sum() <= 100 &&
+        object.spec.?groups.orValue([]).all(g,
+          !has(g.interval) || duration(g.interval) >= duration('30s'))
+      message: "a preview PrometheusRule may have at most 20 groups and 100 rules, evaluated no more often than every 30s"
     # Alerting rules only. A recording rule writes new series into the shared
     # Prometheus with any name and labels, e.g. a fake series for staging.
     - expression: >-
@@ -733,6 +771,7 @@ spec:
           spec:
             +(sampleLimit): 20000
             +(targetLimit): 50
+            +(bodySizeLimit): 10MiB
 ---
 # ---------------------------------------------------------------------------
 # Network: preview pods reach the internet, their own stack and shared Redis.

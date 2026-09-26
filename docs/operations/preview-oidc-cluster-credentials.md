@@ -40,9 +40,9 @@ Only `preview.yml` moved to OIDC. `release-images.yml`'s `deploy-staging` job
 still decodes `KUBECONFIG_BASE64` and exits with
 `KUBECONFIG_BASE64 secret is required to deploy staging` when it is empty, and
 its `build-web` job reads the staging anon key the same way. Deleting the
-secret stops every push to `main` and `staging` from deploying. It is also
-still the `static` fallback that `preview.yml` passes at five call sites, which
-is the path in use until `PREVIEW_CLUSTER_AUTH` is flipped.
+secret stops every push to `main` and `staging` from deploying. It lives only
+in the `release-build` and `staging` environments; `preview.yml` no longer
+references it, and it has been removed from the `preview-*` environments.
 
 Migrating `release-images.yml` to the same action is the follow-up. Until then,
 keep the secret.
@@ -63,9 +63,14 @@ the AppRole login in that step. Until then, keep both secrets.
 
 ## The switch
 
-`.github/actions/cluster-credentials` has two paths, selected by the
-`PREVIEW_CLUSTER_AUTH` repo variable: unset/`static` decodes the kubeconfig
-secret, `oidc` does the exchange above.
+`.github/actions/cluster-credentials` has two paths, selected by its `mode`
+input: `static` decodes a kubeconfig secret, `oidc` does the exchange above.
+`preview.yml` passes `mode: oidc` at every call site and supplies no
+kubeconfig, so previews have no static path at all. The deploy job applies the
+PR's own chart, and helm's `lookup` reads anything its credential can read, so
+a cluster-admin kubeconfig must never reach that job. The
+`PREVIEW_CLUSTER_AUTH` variable now only switches fork previews on or off (the
+trust gate's `forks_allowed`).
 
 It is an explicit switch, **not** "try OIDC and fall back on error". A silent
 fallback would turn any OpenBao misconfiguration into a quiet downgrade to the
@@ -260,6 +265,11 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "create", "update", "patch"]
+  # Read-only: the secrets job waits for Kyverno to generate the namespace's
+  # ResourceQuota and LimitRange before any build or deploy job can start.
+  - apiGroups: [""]
+    resources: ["resourcequotas", "limitranges"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -616,11 +626,19 @@ Do not delete any secret at this point. Per the table above,
 this change makes unnecessary is `KUBECONFIG_PREVIEW_RO_BASE64`, which was
 never created.
 
-**Rollback** is one variable: `gh variable set PREVIEW_CLUSTER_AUTH --body static`.
-That only works while `KUBECONFIG_BASE64` still exists, which is one more
-reason to keep it. Confirm at least one full preview deploy _and_ one teardown
-have run green on OIDC before relying on the new path: teardown is the least
-likely to be exercised by accident and the most expensive to have broken.
+**There is no static rollback.** Setting `PREVIEW_CLUSTER_AUTH=static` does not
+bring back the kubeconfig path; it only turns fork previews off, and every
+preview job still tries OIDC. That is deliberate: the static path handed the
+PR's chart a cluster-admin credential.
+
+If OpenBao is down, previews are down, deploy and teardown alike. Once it
+recovers, re-run the failed workflow runs. If a namespace has to go before
+then, an administrator tears it down by hand:
+
+```bash
+kubectl delete namespace pawtograder-preview-pr-<id>
+bao kv metadata delete -mount=kv apps/pawtograder/preview-e2e/pr-<id>
+```
 
 ## Token lifetimes
 

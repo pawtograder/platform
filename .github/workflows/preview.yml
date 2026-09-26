@@ -560,6 +560,27 @@ jobs:
           ttl: 20m
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
+      # Kyverno generates preview-quota and preview-limits when the namespace
+      # gets its pawtograder.net/preview label (above), but asynchronously, in
+      # its background controller. Every build and deploy job depends on this
+      # one, so waiting here means the PR's chart is never applied to a
+      # namespace without its ceilings. Fails closed: if Kyverno is down, no
+      # preview. See docs/operations/preview-isolation.md.
+      - name: Wait for resource ceilings
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if kubectl -n "$NS" get resourcequota preview-quota >/dev/null 2>&1 &&
+               kubectl -n "$NS" get limitrange preview-limits >/dev/null 2>&1; then
+              echo "preview-quota and preview-limits present in ${NS}"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error title=No resource ceilings::Kyverno did not generate preview-quota and preview-limits in ${NS} within 2 minutes. Check 'kubectl -n kyverno get pods' and 'kubectl get clusterpolicy preview-resource-ceilings'. Refusing to deploy an unbounded namespace." >&2
+          exit 1
       - name: Ensure secrets in namespace
         env:
           NS: ${{ needs.meta.outputs.namespace }}
