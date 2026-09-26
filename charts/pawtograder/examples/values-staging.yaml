@@ -269,6 +269,23 @@ edgeFunctions:
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits:   { cpu: "2",    memory: "4Gi"   }
+  # Cap glibc's native-memory growth in edge-runtime, matching Khoury prod
+  # (2026-09-25). Pods grow at idle CPU until restarted: edge-runtime v1.74.0
+  # keeps host memory after each retired user worker (supabase/edge-runtime#719),
+  # and per_request retires one per request and per pg_cron poke. The process
+  # uses plain glibc malloc with no arena cap (up to 8 x cores), and each worker
+  # copies its 5-43Mi eszip into arena heaps once glibc's dynamic mmap threshold
+  # has climbed. In prod this took the fleet mean from ~1.1Gi at 1.5h (and 1.9Gi
+  # by 3 days) to a flat ~750-900Mi that tracks load, not age.
+  #   MALLOC_ARENA_MAX=2             bound the arena count
+  #   MALLOC_MMAP_THRESHOLD_=131072  fixed 128Ki threshold (also disables the
+  #                                  dynamic one), so eszip copies are mmapped
+  #                                  and returned to the OS on free
+  extraEnv:
+    - name: MALLOC_ARENA_MAX
+      value: "2"
+    - name: MALLOC_MMAP_THRESHOLD_
+      value: "131072"
   envFromSecrets:
     - pawtograder-github-app
     - pawtograder-discord

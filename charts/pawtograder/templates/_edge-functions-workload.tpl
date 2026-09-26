@@ -415,6 +415,9 @@ spec:
             - name: E2E_MOCK_GITHUB
               value: "true"
             {{- end }}
+            {{- with $ctx.Values.edgeFunctions.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ $ctx.Values.secrets.names.edgeFunctions }}
