@@ -105,6 +105,45 @@ spec:
         !('nginx.ingress.kubernetes.io/auth-secret' in variables.annotations) ||
         !variables.annotations['nginx.ingress.kubernetes.io/auth-secret'].contains('/')
       message: "auth-secret must name a Secret in the preview's own namespace"
+    # Values, not just names. ingress-nginx is shared with staging and every
+    # internal host, so a preview must not lift its request-size, buffer or
+    # timeout ceilings: proxy-body-size "0" means unlimited, and huge buffers
+    # or timeouts let public requests to a preview hold the controller's
+    # memory, disk and connections. Bounds sit just above what the chart sets
+    # (55m, 16k, 8, 3600).
+    - expression: >-
+        !('nginx.ingress.kubernetes.io/proxy-body-size' in variables.annotations) ||
+        (variables.annotations['nginx.ingress.kubernetes.io/proxy-body-size'].matches('^[1-9][0-9]{0,2}[mM]$') &&
+         int(variables.annotations['nginx.ingress.kubernetes.io/proxy-body-size'].replace('M', '').replace('m', '')) <= 100)
+      message: "proxy-body-size must be between 1m and 100m"
+    - expression: >-
+        !('nginx.ingress.kubernetes.io/proxy-buffer-size' in variables.annotations) ||
+        (variables.annotations['nginx.ingress.kubernetes.io/proxy-buffer-size'].matches('^[1-9][0-9]{0,1}[kK]$') &&
+         int(variables.annotations['nginx.ingress.kubernetes.io/proxy-buffer-size'].replace('K', '').replace('k', '')) <= 64)
+      message: "proxy-buffer-size must be between 1k and 64k"
+    - expression: >-
+        !('nginx.ingress.kubernetes.io/proxy-buffers-number' in variables.annotations) ||
+        (variables.annotations['nginx.ingress.kubernetes.io/proxy-buffers-number'].matches('^[1-9][0-9]?$') &&
+         int(variables.annotations['nginx.ingress.kubernetes.io/proxy-buffers-number']) <= 16)
+      message: "proxy-buffers-number must be between 1 and 16"
+    - expression: >-
+        ['nginx.ingress.kubernetes.io/proxy-read-timeout',
+         'nginx.ingress.kubernetes.io/proxy-send-timeout'].all(k,
+          !(k in variables.annotations) ||
+          (variables.annotations[k].matches('^[1-9][0-9]{0,3}$') &&
+           int(variables.annotations[k]) <= 3600))
+      message: "proxy-read-timeout and proxy-send-timeout must be 1-3600 seconds"
+    - expression: >-
+        !('nginx.ingress.kubernetes.io/proxy-connect-timeout' in variables.annotations) ||
+        (variables.annotations['nginx.ingress.kubernetes.io/proxy-connect-timeout'].matches('^[1-9][0-9]?$') &&
+         int(variables.annotations['nginx.ingress.kubernetes.io/proxy-connect-timeout']) <= 60)
+      message: "proxy-connect-timeout must be 1-60 seconds"
+    - expression: >-
+        ['nginx.ingress.kubernetes.io/limit-rps',
+         'nginx.ingress.kubernetes.io/limit-connections'].all(k,
+          !(k in variables.annotations) ||
+          variables.annotations[k].matches('^[1-9][0-9]{0,3}$'))
+      message: "limit-rps and limit-connections must be integers from 1 to 9999"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -300,9 +339,10 @@ spec:
   policyName: preview-controller-keys
   validationActions: [Deny]
 ---
-# Pods: no OpenTelemetry operator injection. Its annotations accept
+# Pods: no OpenTelemetry operator injection (its annotations accept
 # <namespace>/<name> references, which would copy another namespace's
-# Instrumentation (endpoints, headers, env) into a preview pod.
+# Instrumentation into a preview pod), and no way onto nodes reserved for
+# staging or the control plane.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -324,6 +364,23 @@ spec:
           !k.startsWith('instrumentation.opentelemetry.io/') &&
           !k.startsWith('sidecar.opentelemetry.io/'))
       message: "OpenTelemetry injection annotations are not allowed in a preview namespace"
+    # Placement. The staging workers are tainted tier=prod-staging:NoSchedule,
+    # as are the control plane and the interLink virtual node, so refusing
+    # every toleration except Kubernetes' own node.kubernetes.io/* conditions
+    # (added by admission and the DaemonSet controller) keeps preview pods on
+    # the general pool whatever nodeSelector or affinity they ask for.
+    # nodeName on CREATE would skip the scheduler, and taints with it; the
+    # scheduler sets it later through pods/binding, which is not matched here.
+    - expression: "request.operation != 'CREATE' || !has(object.spec.nodeName)"
+      message: "preview pods may not set spec.nodeName"
+    - expression: >-
+        object.spec.?tolerations.orValue([]).all(t,
+          t.?key.orValue('').startsWith('node.kubernetes.io/'))
+      message: "preview pods may only tolerate node.kubernetes.io/* conditions"
+    # Only system-* PriorityClasses exist; a preview needs none, and one would
+    # let it preempt staging.
+    - expression: "object.spec.?priorityClassName.orValue('') == ''"
+      message: "preview pods may not set a priorityClassName"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -385,6 +442,26 @@ spec:
               configmaps: "60"
               secrets: "60"
               count/ingresses.networking.k8s.io: "5"
+              # Every other namespaced type the deploy role can create, so a
+              # chart cannot pile up objects that cost apiserver, controller,
+              # Cilium or operator capacity outside the namespace. Measured
+              # maxima across live previews in comments.
+              count/deployments.apps: "30" # 9
+              count/statefulsets.apps: "10" # 2
+              count/daemonsets.apps: "2" # 0
+              count/replicasets.apps: "200" # 39; revision history accumulates
+              count/cronjobs.batch: "5" # 0
+              count/roles.rbac.authorization.k8s.io: "10" # 0
+              count/rolebindings.rbac.authorization.k8s.io: "50" # 7; OpenBao mints one per credential
+              count/serviceaccounts: "50" # 9; likewise
+              count/networkpolicies.networking.k8s.io: "10" # 0
+              count/poddisruptionbudgets.policy: "10" # 0
+              count/horizontalpodautoscalers.autoscaling: "10" # 0
+              count/externalsecrets.external-secrets.io: "10" # 2
+              count/servicemonitors.monitoring.coreos.com: "20" # 7
+              count/prometheusrules.monitoring.coreos.com: "5" # 1
+              count/podmonitors.monitoring.coreos.com: "0"
+              count/endpoints: "60"
     - name: limits
       match:
         any:
@@ -514,6 +591,25 @@ spec:
     - expression: >-
         variables.endpoints.all(e, e.?followRedirects.orValue(true) == false)
       message: "preview ServiceMonitor endpoints must set followRedirects: false"
+    # Load ceilings on the shared scraper. sampleLimit and targetLimit are
+    # filled in by the Kyverno mutation below when the chart omits them; the
+    # largest preview target (postgres-exporter) returns about 7.5k samples.
+    # The number of ServiceMonitors is bounded by the namespace ResourceQuota.
+    - expression: "size(variables.endpoints) <= 4"
+      message: "a preview ServiceMonitor may have at most 4 endpoints"
+    - expression: >-
+        variables.endpoints.all(e,
+          (!has(e.interval) || duration(e.interval) >= duration('15s')) &&
+          (!has(e.scrapeTimeout) || duration(e.scrapeTimeout) <= duration('30s')))
+      message: "preview scrape interval must be at least 15s and scrapeTimeout at most 30s"
+    - expression: >-
+        object.spec.?sampleLimit.orValue(0) > 0 && object.spec.sampleLimit <= 50000 &&
+        object.spec.?targetLimit.orValue(0) > 0 && object.spec.targetLimit <= 100
+      message: "preview ServiceMonitors need sampleLimit <= 50000 and targetLimit <= 100"
+    - expression: >-
+        ['labelLimit', 'labelNameLengthLimit', 'labelValueLengthLimit'].all(k,
+          !(k in object.spec) || (object.spec[k] > 0 && object.spec[k] <= 1000))
+      message: "preview ServiceMonitor label limits must be between 1 and 1000"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -621,6 +717,22 @@ spec:
               - op: add
                 path: "/spec/endpoints/{{elementIndex}}/followRedirects"
                 value: false
+    - name: default-scrape-limits
+      match:
+        any:
+          - resources:
+              kinds: ["monitoring.coreos.com/v1/ServiceMonitor"]
+              operations: ["CREATE", "UPDATE"]
+              namespaceSelector:
+                matchLabels:
+                  pawtograder.net/preview: "true"
+      mutate:
+        # Defaults only (+() adds a field when absent); the VAP caps any
+        # value the chart sets itself.
+        patchStrategicMerge:
+          spec:
+            +(sampleLimit): 20000
+            +(targetLimit): 50
 ---
 # ---------------------------------------------------------------------------
 # Network: preview pods reach the internet, their own stack and shared Redis.

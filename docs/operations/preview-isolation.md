@@ -40,8 +40,10 @@ bound to preview namespaces:
   annotation must be on an allow-list (the nginx annotations the chart uses,
   plus helm and kubectl bookkeeping), because other controllers read Ingress
   annotations too: cert-manager's ingress-shim would issue a certificate from
-  the DNS-01 issuer for the whole `pawtograder.net` zone. `auth-secret` may not
-  name another namespace. ingress-nginx merges every Ingress for a host into one
+  the DNS-01 issuer for the whole `pawtograder.net` zone. Values are bounded
+  too, because ingress-nginx is shared with staging: `proxy-body-size` at most
+  `100m` (never `0`, which means unlimited), buffers at most 16 × 64k, and
+  timeouts at most an hour. `auth-secret` may not name another namespace. ingress-nginx merges every Ingress for a host into one
   server block, so without this a preview could publish paths on any hostname
   on the cluster.
 - `preview-service-surface`: Services must be ClusterIP with a selector and no
@@ -72,7 +74,11 @@ those objects, so each gets an admission policy:
   so preview dashboards were replacing staging's; `preview.yml` now renders
   none.
 - `preview-pod-injection`: no OpenTelemetry operator injection annotations,
-  which accept references to another namespace's Instrumentation.
+  which accept references to another namespace's Instrumentation. It also
+  keeps preview pods off nodes reserved for staging and the control plane.
+  Those nodes are tainted, so the policy refuses every toleration except
+  Kubernetes' own `node.kubernetes.io/*`, refuses `spec.nodeName` on create
+  (which would skip the scheduler), and refuses any `priorityClassName`.
 
 ## Resource ceilings
 
@@ -81,9 +87,12 @@ Kyverno policy `preview-resource-ceilings` generates a ResourceQuota
 and puts them back if they change. `preview-ceilings-managed` lets only
 Kyverno's background controller and the namespace controller write them; the
 deploy role holds core `*` and RBAC in the namespace, so without it the chart
-could delete the quota or grant that right elsewhere. The quota is sized from a
-measured preview with headroom for a rolling deploy; see the manifest for the
-numbers.
+could delete the quota or grant that right elsewhere. Besides CPU, memory,
+storage and pods, the quota counts every namespaced type the deploy role can
+create (Deployments, ReplicaSets, RBAC, ServiceAccounts, ExternalSecrets,
+monitoring CRs and so on), so a chart cannot pile up objects that cost
+apiserver, controller or operator capacity. It is sized from measured previews
+with headroom for a rolling deploy; the manifest records the measurements.
 
 ## Monitoring: admission policies and a Kyverno mutation
 
@@ -103,7 +112,11 @@ and one alert-only PrometheusRule, so these kinds are constrained, not removed:
   `followRedirects: false` on every preview ServiceMonitor endpoint. Prometheus
   follows redirects by default, so without this a preview pod could redirect
   the scraper to any internal URL. Mutation runs before validation, so charts
-  need no change, and the policy above fails closed if Kyverno is down.
+  need no change, and the policy above fails closed if Kyverno is down. The
+  same policy fills in `sampleLimit: 20000` and `targetLimit: 50` when a
+  chart omits them; the VAP caps them at 50000 and 100, requires a scrape
+  interval of at least 15s, and allows at most 4 endpoints per
+  ServiceMonitor.
 - `preview-prometheusrule-surface`: alerting rules only. A recording rule could
   write arbitrary series into the shared Prometheus.
 - `preview-monitoring-kinds`: every other monitoring kind (PodMonitor, Probe,
