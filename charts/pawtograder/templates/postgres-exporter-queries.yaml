@@ -167,10 +167,22 @@ data:
     # all; a rule that hardcoded the intended ceiling would have drawn a
     # reassuring 10% utilisation through the entire outage.
     #
-    # db_pool_in_use counts realtime_connect backends — the single pool that
-    # carries every private-channel authorization transaction and every
-    # realtime.messages read/write for the deployment. Only one node holds it
-    # at a time, so this is a whole-deployment number, not a per-replica one.
+    # realtime_connect is the single pool that carries every private-channel
+    # authorization transaction and every realtime.messages read/write for the
+    # deployment. Only one node holds it at a time, so these are
+    # whole-deployment numbers, not per-replica ones.
+    #
+    # db_pool_open vs db_pool_in_use: DBConnection opens all db_pool
+    # connections when the pool starts and keeps them open while idle, so the
+    # open count sits at db_pool on a healthy deployment and says nothing about
+    # pressure. db_pool_in_use counts only backends that are not idle (running
+    # a statement or inside a transaction), which is the closest database-side
+    # proxy for checked-out connections. Realtime exports no checkout or
+    # queue-time metric of its own. This is a point sample every cache_seconds,
+    # so it misses sub-minute bursts; the read-authorization latency panel on
+    # the realtime dashboard is the faster queueing signal. Reading `state` for
+    # other roles' backends needs superuser or pg_read_all_stats, which the
+    # exporter has (it connects as supabase_admin).
     pawtograder_realtime_tenant:
       query: |
         SELECT t.external_id,
@@ -181,7 +193,10 @@ data:
                t.max_channels_per_client::float AS max_channels_per_client,
                COALESCE(MAX((e.settings->>'db_pool')::float), 1) AS db_pool,
                (SELECT COUNT(*) FROM pg_stat_activity
-                 WHERE application_name = 'realtime_connect')::float AS db_pool_in_use,
+                 WHERE application_name = 'realtime_connect')::float AS db_pool_open,
+               (SELECT COUNT(*) FROM pg_stat_activity
+                 WHERE application_name = 'realtime_connect'
+                   AND state <> 'idle')::float AS db_pool_in_use,
                (CASE WHEN t.suspend THEN 1 ELSE 0 END)::float AS suspended
           FROM realtime.tenants t
           LEFT JOIN realtime.extensions e ON e.tenant_external_id = t.external_id
@@ -212,9 +227,12 @@ data:
         - db_pool:
             usage: "GAUGE"
             description: "Configured size of the tenant's realtime_connect Postgrex pool (extensions.settings db_pool; upstream default 1)"
+        - db_pool_open:
+            usage: "GAUGE"
+            description: "realtime_connect backends currently open, idle or not. Normally equals db_pool; below it means the pool is reconnecting"
         - db_pool_in_use:
             usage: "GAUGE"
-            description: "realtime_connect backends currently open — saturation against db_pool precedes the tenant-connection kill"
+            description: "realtime_connect backends that are not idle (in a statement or transaction). Saturation against db_pool precedes the tenant-connection kill"
         - suspended:
             usage: "GAUGE"
             description: "1 when the tenant is suspended and refusing all connections"

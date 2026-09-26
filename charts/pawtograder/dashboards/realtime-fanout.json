@@ -62,7 +62,7 @@
       "id": 103,
       "type": "stat",
       "title": "Tenant DB pool in use",
-      "description": "realtime_connect backends open against the configured db_pool. One node owns this pool for the WHOLE deployment; every private-channel authorization transaction and every realtime.messages read/write serialises through it. Saturation here precedes a tenant-connection kill.",
+      "description": "Non-idle realtime_connect backends (running a statement or inside a transaction) against the configured db_pool. Not open backends: the pool keeps all db_pool connections open while idle, so that count always reads full. One node owns this pool for the WHOLE deployment; every private-channel authorization transaction and every realtime.messages read/write serialises through it. Saturation here precedes a tenant-connection kill.",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
@@ -87,11 +87,11 @@
       "id": 120,
       "type": "timeseries",
       "title": "Channel joins/s vs cap",
-      "description": "Cluster join rate against max_joins_per_second. sum(rate(...)) here — unlike the connection gauge, joins are a per-replica counter. A reconnect storm after a pod restart spikes this, which is why the join cap must be raised whenever the connection cap is.",
+      "description": "Cluster join rate against max_joins_per_second. Joins are a per-node counter, so this sums across nodes, after max by (host) collapses the duplicate copies of each node's series (every /metrics response carries the whole cluster; see the dashboard description). A reconnect storm after a pod restart spikes this, which is why the join cap must be raised whenever the connection cap is.",
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 12 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(realtime_channel_joins{job=\"pawtograder-realtime\"}[5m]))", "legendFormat": "joins/s" },
+        { "refId": "A", "expr": "sum(max by (host) (rate(realtime_channel_joins{job=\"pawtograder-realtime\"}[5m])))", "legendFormat": "joins/s" },
         { "refId": "B", "expr": "max(pawtograder_realtime_tenant_max_joins_per_second)", "legendFormat": "max_joins_per_second" }
       ],
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 8 } } }
@@ -104,7 +104,7 @@
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 12 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(realtime_channel_events{job=\"pawtograder-realtime\"}[5m]))", "legendFormat": "events/s" },
+        { "refId": "A", "expr": "sum(max by (host) (rate(realtime_channel_events{job=\"pawtograder-realtime\"}[5m])))", "legendFormat": "events/s" },
         { "refId": "B", "expr": "max(pawtograder_realtime_tenant_max_events_per_second)", "legendFormat": "max_events_per_second" }
       ],
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 8 } } }
@@ -117,8 +117,8 @@
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 19 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(realtime_channel_output_bytes{job=\"pawtograder-realtime\"}[5m]))", "legendFormat": "output" },
-        { "refId": "B", "expr": "sum(rate(realtime_channel_input_bytes{job=\"pawtograder-realtime\"}[5m]))", "legendFormat": "input" },
+        { "refId": "A", "expr": "sum(max by (host) (rate(realtime_channel_output_bytes{job=\"pawtograder-realtime\"}[5m])))", "legendFormat": "output" },
+        { "refId": "B", "expr": "sum(max by (host) (rate(realtime_channel_input_bytes{job=\"pawtograder-realtime\"}[5m])))", "legendFormat": "input" },
         { "refId": "C", "expr": "max(pawtograder_realtime_tenant_max_bytes_per_second)", "legendFormat": "max_bytes_per_second" }
       ],
       "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "fillOpacity": 8 } } }
@@ -127,12 +127,13 @@
       "id": 131,
       "type": "timeseries",
       "title": "realtime_connect pool: in use vs size",
-      "description": "The single tenant pool. Upstream defaults this to 1 connection, which is what let a burst queue past DBConnection's 5s queue_target on 2026-09-22 — Realtime counts those as database timeouts and answers by killing the tenant connection, tearing down Broadcast Changes replication for every user on every pod.",
+      "description": "The single tenant pool. Upstream defaults this to 1 connection, which is what let a burst queue past DBConnection's 5s queue_target on 2026-09-22 — Realtime counts those as database timeouts and answers by killing the tenant connection, tearing down Broadcast Changes replication for every user on every pod. \"in use\" counts non-idle backends; \"open\" normally equals db_pool and dips only while the pool reconnects.",
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 19 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
         { "refId": "A", "expr": "max(pawtograder_realtime_tenant_db_pool_in_use)", "legendFormat": "in use" },
-        { "refId": "B", "expr": "max(pawtograder_realtime_tenant_db_pool)", "legendFormat": "db_pool" }
+        { "refId": "B", "expr": "max(pawtograder_realtime_tenant_db_pool)", "legendFormat": "db_pool" },
+        { "refId": "C", "expr": "max(pawtograder_realtime_tenant_db_pool_open)", "legendFormat": "open" }
       ],
       "fieldConfig": { "defaults": { "unit": "none", "custom": { "fillOpacity": 8 } } }
     },
@@ -144,7 +145,7 @@
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 26 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
-        { "refId": "A", "expr": "1 - (sum(rate(realtime_tenants_read_authorization_check_bucket{job=\"pawtograder-realtime\",le=\"250.0\"}[5m])) / clamp_min(sum(rate(realtime_tenants_read_authorization_check_count{job=\"pawtograder-realtime\"}[5m])), 1e-9))", "legendFormat": "fraction over 250" }
+        { "refId": "A", "expr": "1 - (sum(max by (host) (rate(realtime_tenants_read_authorization_check_bucket{job=\"pawtograder-realtime\",le=\"250.0\"}[5m]))) / clamp_min(sum(max by (host) (rate(realtime_tenants_read_authorization_check_count{job=\"pawtograder-realtime\"}[5m]))), 1e-9))", "legendFormat": "fraction over 250" }
       ],
       "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "fillOpacity": 8 } } }
     },
@@ -156,7 +157,7 @@
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 26 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
-        { "refId": "A", "expr": "realtime_tenants_connected{job=\"pawtograder-realtime\"}", "legendFormat": "{{pod}}" }
+        { "refId": "A", "expr": "max by (host) (realtime_tenants_connected{job=\"pawtograder-realtime\"})", "legendFormat": "{{host}}" }
       ],
       "fieldConfig": { "defaults": { "unit": "none", "custom": { "fillOpacity": 8 } } }
     },
@@ -168,7 +169,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 33 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
-        { "refId": "A", "expr": "sum(phoenix_connections_total{job=\"pawtograder-realtime\"})" }
+        { "refId": "A", "expr": "sum(max by (host) (phoenix_connections_total{job=\"pawtograder-realtime\"}))" }
       ],
       "fieldConfig": { "defaults": { "unit": "none" } }
     },
@@ -180,7 +181,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 33 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
-        { "refId": "A", "expr": "sum(realtime_tenants_connected{job=\"pawtograder-realtime\"})" }
+        { "refId": "A", "expr": "sum(max by (host) (realtime_tenants_connected{job=\"pawtograder-realtime\"}))" }
       ],
       "fieldConfig": { "defaults": { "unit": "none" } }
     },
@@ -192,7 +193,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 16, "y": 33 },
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(beam_stats_reduction_count{job=\"pawtograder-realtime\"}[1m]))" }
+        { "refId": "A", "expr": "sum(max by (host) (rate(beam_stats_reduction_count{job=\"pawtograder-realtime\"}[1m])))" }
       ],
       "fieldConfig": { "defaults": { "unit": "ops" } }
     },
@@ -205,8 +206,8 @@
       "targets": [
         {
           "refId": "A",
-          "legendFormat": "{{pod}}",
-          "expr": "phoenix_connections_total{job=\"pawtograder-realtime\"}"
+          "legendFormat": "{{host}}",
+          "expr": "max by (host) (phoenix_connections_total{job=\"pawtograder-realtime\"})"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "none", "min": 0 } }
@@ -221,18 +222,18 @@
       "targets": [
         {
           "refId": "proc",
-          "legendFormat": "{{pod}} processes",
-          "expr": "beam_memory_processes_total_bytes{job=\"pawtograder-realtime\"}"
+          "legendFormat": "{{host}} processes",
+          "expr": "max by (host) (beam_memory_processes_total_bytes{job=\"pawtograder-realtime\"})"
         },
         {
           "refId": "bin",
-          "legendFormat": "{{pod}} binary",
-          "expr": "beam_memory_binary_total_bytes{job=\"pawtograder-realtime\"}"
+          "legendFormat": "{{host}} binary",
+          "expr": "max by (host) (beam_memory_binary_total_bytes{job=\"pawtograder-realtime\"})"
         },
         {
           "refId": "ets",
-          "legendFormat": "{{pod}} ets",
-          "expr": "beam_memory_ets_total_bytes{job=\"pawtograder-realtime\"}"
+          "legendFormat": "{{host}} ets",
+          "expr": "max by (host) (beam_memory_ets_total_bytes{job=\"pawtograder-realtime\"})"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "bytes" } }
@@ -247,18 +248,18 @@
       "targets": [
         {
           "refId": "proc",
-          "legendFormat": "{{pod}} processes",
-          "expr": "beam_stats_process_count{job=\"pawtograder-realtime\"}"
+          "legendFormat": "{{host}} processes",
+          "expr": "max by (host) (beam_stats_process_count{job=\"pawtograder-realtime\"})"
         },
         {
           "refId": "port",
-          "legendFormat": "{{pod}} ports",
-          "expr": "beam_stats_port_count{job=\"pawtograder-realtime\"}"
+          "legendFormat": "{{host}} ports",
+          "expr": "max by (host) (beam_stats_port_count{job=\"pawtograder-realtime\"})"
         },
         {
           "refId": "rq",
-          "legendFormat": "{{pod}} run queue",
-          "expr": "beam_stats_run_queue_count{job=\"pawtograder-realtime\"}"
+          "legendFormat": "{{host}} run queue",
+          "expr": "max by (host) (beam_stats_run_queue_count{job=\"pawtograder-realtime\"})"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "none", "min": 0 } }
@@ -273,8 +274,8 @@
       "targets": [
         {
           "refId": "cpu",
-          "legendFormat": "{{pod}} cpu",
-          "expr": "osmon_cpu_util{job=\"pawtograder-realtime\"}"
+          "legendFormat": "{{host}} cpu",
+          "expr": "max by (host) (osmon_cpu_util{job=\"pawtograder-realtime\"})"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
@@ -289,12 +290,12 @@
       "targets": [
         {
           "refId": "gc",
-          "legendFormat": "{{pod}}",
-          "expr": "rate(beam_stats_gc_reclaimed_bytes{job=\"pawtograder-realtime\"}[1m])"
+          "legendFormat": "{{host}}",
+          "expr": "max by (host) (rate(beam_stats_gc_reclaimed_bytes{job=\"pawtograder-realtime\"}[1m]))"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "Bps" } }
     }
   ],
-  "description": "Tenant quota + capacity panels (ids 100-141) added 2026-09-22 after two incidents this dashboard could not have shown: a 47-minute outage at max_concurrent_users=200 (ConnectionRateLimitReached), and a tenant-connection kill caused by a realtime_connect pool of 1 (IncreaseConnectionPool). The ceilings come from postgres_exporter's pawtograder_realtime_tenant collector reading realtime.tenants directly, NOT from chart values — a hardcoded denominator would have drawn reassuring headroom through both. PRIOR NOTE: DELETED 2026-09-04 (WS-APP): the two web_realtime_broadcast_total panels (\"Server broadcasts / s\" and \"Server-initiated broadcasts by channel class\") are gone rather than retargeted at a postgres_exporter query. Three reasons, in order. (1) The only trigger-side row a broadcast produces is an insert into realtime.messages, which is DAILY-PARTITIONED with short retention \u2014 a COUNT over it falls every time a partition is dropped, and Prometheus reads a falling counter as a reset, so it cannot back a rate() panel at all. (2) The windowed-gauge alternative means scanning the highest-write table in the database on every scrape, which is precisely the database_ram_metrics() pathology that cost 77.7% of production DB execution time (see the SCOPE block in supabase/functions/metrics/index.ts). (3) channel_class would have to be reconstructed by parsing realtime.messages.topic, which embeds class and resource ids, so the label would be loosely bounded by user-controlled data. Everything else on this dashboard comes from the realtime container's own /metrics endpoint (job=\"pawtograder-realtime\"); if broadcast counts are wanted back, that is where they belong, not in a database scan."
+  "description": "DEDUP: Realtime's /metrics returns EVERY node's metrics on every request (MetricsController gathers the whole cluster over RPC), and the ServiceMonitor scrapes every pod, so each node's series arrives once per replica, differing only in the pod/instance target labels. Every query here collapses those copies with max by (host) first; host is the source node's own tag (its pod IP), which is also why per-node panels are labelled by host rather than pod. A bare sum() over these metrics multiplies by the replica count. Tenant quota + capacity panels (ids 100-141) added 2026-09-22 after two incidents this dashboard could not have shown: a 47-minute outage at max_concurrent_users=200 (ConnectionRateLimitReached), and a tenant-connection kill caused by a realtime_connect pool of 1 (IncreaseConnectionPool). The ceilings come from postgres_exporter's pawtograder_realtime_tenant collector reading realtime.tenants directly, NOT from chart values — a hardcoded denominator would have drawn reassuring headroom through both. PRIOR NOTE: DELETED 2026-09-04 (WS-APP): the two web_realtime_broadcast_total panels (\"Server broadcasts / s\" and \"Server-initiated broadcasts by channel class\") are gone rather than retargeted at a postgres_exporter query. Three reasons, in order. (1) The only trigger-side row a broadcast produces is an insert into realtime.messages, which is DAILY-PARTITIONED with short retention \u2014 a COUNT over it falls every time a partition is dropped, and Prometheus reads a falling counter as a reset, so it cannot back a rate() panel at all. (2) The windowed-gauge alternative means scanning the highest-write table in the database on every scrape, which is precisely the database_ram_metrics() pathology that cost 77.7% of production DB execution time (see the SCOPE block in supabase/functions/metrics/index.ts). (3) channel_class would have to be reconstructed by parsing realtime.messages.topic, which embeds class and resource ids, so the label would be loosely bounded by user-controlled data. Everything else on this dashboard comes from the realtime container's own /metrics endpoint (job=\"pawtograder-realtime\"); if broadcast counts are wanted back, that is where they belong, not in a database scan."
 }

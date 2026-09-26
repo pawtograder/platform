@@ -361,3 +361,76 @@ tests:
       - eval_time: 15m
         alertname: PawtograderRealtimeConnectionsHigh
         exp_alerts: []
+
+  # 8. ONE NORMAL TENANT HANDOFF, SEEN THROUGH THREE SCRAPES — must stay quiet.
+  # Realtime's /metrics returns every node's series on every request, so each
+  # of the three pods reports all three nodes (distinguished by `host`, the
+  # source node's tag). Node 10.0.0.1 hands the tenant to 10.0.0.2 at 10m: two
+  # real changes. A bare sum(changes(...)) counts each change once per scrape
+  # target, 2 x 3 = 6 > 4, and pages on a routine recycle. max by (host)
+  # first counts it as 2.
+  - interval: 1m
+    name: a single realtime tenant handoff does not page as flapping
+    input_series:
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-0",host="10.0.0.1"}'
+        values: "1x9 0x20"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-1",host="10.0.0.1"}'
+        values: "1x9 0x20"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-2",host="10.0.0.1"}'
+        values: "1x9 0x20"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-0",host="10.0.0.2"}'
+        values: "0x9 1x20"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-1",host="10.0.0.2"}'
+        values: "0x9 1x20"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-2",host="10.0.0.2"}'
+        values: "0x9 1x20"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-0",host="10.0.0.3"}'
+        values: "0x29"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-1",host="10.0.0.3"}'
+        values: "0x29"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-2",host="10.0.0.3"}'
+        values: "0x29"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PawtograderRealtimeTenantFlapping
+        exp_alerts: []
+
+  # 9. REAL FLAPPING — must page. Three handoffs between two nodes in 15m:
+  # three changes per node, six in total after dedup, above the threshold.
+  - interval: 1m
+    name: repeated realtime tenant handoffs page as flapping
+    input_series:
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-0",host="10.0.0.1"}'
+        values: "1x4 0x4 1x4 0x14"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-1",host="10.0.0.1"}'
+        values: "1x4 0x4 1x4 0x14"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-2",host="10.0.0.1"}'
+        values: "1x4 0x4 1x4 0x14"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-0",host="10.0.0.2"}'
+        values: "0x4 1x4 0x4 1x14"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-1",host="10.0.0.2"}'
+        values: "0x4 1x4 0x4 1x14"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-2",host="10.0.0.2"}'
+        values: "0x4 1x4 0x4 1x14"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-0",host="10.0.0.3"}'
+        values: "0x29"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-1",host="10.0.0.3"}'
+        values: "0x29"
+      - series: 'realtime_tenants_connected{namespace="pawtograder",pod="pawtograder-realtime-2",host="10.0.0.3"}'
+        values: "0x29"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: PawtograderRealtimeTenantFlapping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Pawtograder Realtime tenant connection is flapping"
+              description: >-
+                The tenant database connection in pawtograder has changed owner more
+                than twice in 30m (a normal recycle is roughly 4-hourly). Each
+                cycle tears down the Broadcast Changes replication stream and
+                drops live updates for every user until it re-initialises, logging
+                a burst of IncreaseConnectionPool. Usually means the
+                realtime_connect pool is too small for the join rate. Runbook:
+                docs/operations/monitoring-alerting.md.

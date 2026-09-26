@@ -485,6 +485,9 @@ spec:
         # indicator: once checkouts queue past DBConnection's 5s queue_target,
         # Realtime counts them as database timeouts and kills the tenant
         # connection, which drops Broadcast Changes for EVERY user on EVERY pod.
+        # db_pool_in_use counts NON-IDLE backends. The pool keeps every
+        # connection open while idle, so an open-backend count would sit at
+        # db_pool permanently and this rule would never stop warning.
         - alert: PawtograderRealtimeConnectPoolSaturated
           expr: |
             max(pawtograder_realtime_tenant_db_pool_in_use{namespace="{{ $ns }}"})
@@ -505,9 +508,18 @@ spec:
         # Tenant connection flapping. Exactly one replica should own the tenant
         # connection. A graceful recycle happens roughly every 4h, so this only
         # fires on repeated churn — the shape of a timeout-driven kill.
+        #
+        # max by (host) before the sum: Realtime's /metrics returns EVERY
+        # node's metrics on every request (MetricsController collects the
+        # whole cluster over RPC), and the ServiceMonitor scrapes every pod, so
+        # each node's series arrives once per replica, differing only in the
+        # pod/instance target labels. `host` is the source node's own tag (its
+        # pod IP). Without the dedup, one owner handoff (two changes: old owner
+        # 1->0, new owner 0->1) counts as 2 x replicas = 6 at three replicas
+        # and trips the > 4 threshold on its own.
         - alert: PawtograderRealtimeTenantFlapping
           expr: |
-            sum(changes(realtime_tenants_connected{namespace="{{ $ns }}"}[30m])) > 4
+            sum(max by (host) (changes(realtime_tenants_connected{namespace="{{ $ns }}"}[30m]))) > 4
           for: 5m
           labels:
             severity: warning
