@@ -8,6 +8,8 @@ on:
 jobs:
   update-docs:
     runs-on: ubuntu-latest
+    # MINTLIFY_* live here, restricted to the staging branch.
+    environment: docs
     permissions:
       contents: read
     steps:
