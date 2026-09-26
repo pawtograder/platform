@@ -70,6 +70,54 @@ export function requestsNoBranchProtection(cfg: BranchProtectionConfig): boolean
 }
 
 /**
+ * True when a GitHub error says repository rulesets are unavailable on this
+ * account's plan rather than that something went wrong. Private repos in a free
+ * org get a 403 "Upgrade to GitHub Pro or make this repository public to enable
+ * this feature" from every rulesets endpoint — list included, so this must be
+ * consulted on the read path as well as on create/update/delete.
+ *
+ * We run some courses in non-paid orgs, where this is the expected steady state:
+ * callers should skip branch protection and carry on, not report a failure.
+ *
+ * Duck-typed rather than typed against Octokit's RequestError so it stays a pure
+ * helper: the message can arrive on the error itself, on the response body, or
+ * inside the body's `errors` array.
+ */
+export function isBranchProtectionUnsupportedError(err: unknown): boolean {
+  const candidates: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value === "string") {
+      candidates.push(value.toLowerCase());
+    }
+  };
+
+  const e = err as {
+    message?: unknown;
+    response?: { data?: { message?: unknown; errors?: unknown } };
+  } | null;
+  push(e?.message);
+  push(e?.response?.data?.message);
+  const errors = e?.response?.data?.errors;
+  if (Array.isArray(errors)) {
+    for (const entry of errors) {
+      if (typeof entry === "string") {
+        push(entry);
+      } else {
+        push((entry as { message?: unknown })?.message);
+      }
+    }
+  }
+
+  return candidates.some(
+    (text) =>
+      text.includes("upgrade to github") ||
+      text.includes("upgrade your github plan") ||
+      text.includes("upgrade your account") ||
+      (text.includes("upgrade") && text.includes("to enable this feature"))
+  );
+}
+
+/**
  * Normalised form used for ordering-insensitive equality. Sorting by `type`
  * gives a stable canonical form; parameter objects are stringified after sort.
  */

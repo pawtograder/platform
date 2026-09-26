@@ -1,21 +1,12 @@
 import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.19.2";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { Database } from "./SupabaseTypes.d.ts";
-import { normalizeEventFingerprint } from "./SentryFingerprint.ts";
-import { sentryIdentity } from "./SentryContext.ts";
-
-if (Deno.env.get("SENTRY_DSN")) {
-  Sentry.init({
-    beforeSend: normalizeEventFingerprint,
-    ...sentryIdentity(),
-    dsn: Deno.env.get("SENTRY_DSN")!,
-    sendDefaultPii: true,
-    integrations: [],
-    tracesSampleRate: 0,
-    ignoreErrors: ["Deno.core.runMicrotasks() is not supported in this environment"]
-  });
-}
+// Import for side effect. Module evaluation order guarantees this runs to completion before any
+// code in this file, so the ~50 functions that rely on importing HandlerUtils to get Sentry keep
+// exactly the behavior they had when the init lived here.
+import "./SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "./requestScopedAuthOptions.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -101,6 +92,7 @@ export function isServiceRoleRequest(authHeader: string | null): boolean {
 
 export async function assertUserIsInstructor(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }
@@ -157,7 +149,8 @@ export async function assertUserIsInstructorOrServiceRole(courseId: number, auth
   if (isServiceRoleRequest(authHeader)) {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     return { supabase: adminSupabase, enrollment: null, isServiceRole: true };
   }
@@ -211,11 +204,13 @@ export async function assertUserIsAdmin(authHeader: string | null) {
   if (isServiceRoleRequest(authHeader)) {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     return { supabase: adminSupabase, isServiceRole: true as const };
   }
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }
@@ -244,6 +239,7 @@ export async function assertUserIsAdmin(authHeader: string | null) {
 }
 export async function assertUserIsInstructorOrGrader(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }
@@ -275,6 +271,7 @@ export async function assertUserIsInstructorOrGrader(courseId: number, authHeade
 }
 export async function assertUserIsInCourse(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }
@@ -297,6 +294,36 @@ export async function assertUserIsInCourse(courseId: number, authHeader: string)
     throw new SecurityError("User is not enrolled in this course");
   }
   return { supabase, enrollment };
+}
+
+/**
+ * Read a request body as a JSON object, or fail with a 400 the caller can act on.
+ *
+ * `await req.json()` throws a SyntaxError on a malformed body, and destructuring its result throws
+ * a TypeError when the body is JSON `null` or a bare scalar. Neither is one of the typed errors
+ * {@link wrapRequestHandler} classifies, so both came back as a 500 "Internal Server Error" AND
+ * were captured to Sentry: a caller sending a bad body paged us and learned nothing about what was
+ * wrong with their request.
+ *
+ * Arrays are rejected alongside `null`, because every handler here destructures named fields off
+ * this value and an array would quietly produce `undefined` for all of them — the same shape as a
+ * body that omitted everything, reported as if it were a missing-field problem.
+ *
+ * Returns `Record<string, unknown>` deliberately: the body is a claim about the caller, so the
+ * fields still have to be checked one by one. This only establishes that there is an object to
+ * check them on.
+ */
+export async function readJsonObjectBody(req: Request): Promise<Record<string, unknown>> {
+  let parsed: unknown;
+  try {
+    parsed = await req.json();
+  } catch {
+    throw new UserVisibleError("Request body must be valid JSON", 400);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new UserVisibleError("Request body must be a JSON object", 400);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 export async function wrapRequestHandler(
@@ -429,9 +456,27 @@ export async function wrapRequestHandler(
         }
       }),
       {
-        headers: genericErrorHeaders
+        headers: genericErrorHeaders,
+        // Every typed branch above sets a status; this catch-all did not, and Response defaults to
+        // 200. So an unclassified throw — a TypeError, an OOM, anything not one of our error types —
+        // was reported to the caller as a SUCCESSFUL request with an error object in the body.
+        // Latent in most functions, since only a caller that inspects the body would notice.
+        status: 500
       }
     );
+  } finally {
+    // Under `policy: per_request` the isolate is torn down as soon as this
+    // response is returned, taking Sentry's in-memory transport queue with it.
+    // Without an explicit flush, everything captured above — and every
+    // captureException/captureMessage a handler made — is silently discarded.
+    // Before this, `Sentry.flush()` was called in exactly one function of 55,
+    // so error reporting from the edge tier was mostly fiction.
+    //
+    // Flushed unconditionally rather than only on the error path: handlers
+    // capture directly too, and with an empty queue this resolves immediately.
+    // The 2s ceiling bounds the worst case — losing an event is better than
+    // holding an isolate (and one of `maxParallelism` admission slots) open.
+    await Sentry.flush(2000);
   }
 }
 export class SecurityError extends Error {

@@ -11,11 +11,12 @@ import { ltiAdminClient } from "@/lib/lti/db";
 import { isInstructorOfClass, isSiteAdmin } from "@/lib/lti/auth";
 import { fetchMemberships, extractSectionNames } from "@/lib/lti/nrps";
 import * as Sentry from "@sentry/nextjs";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
   let body: { context_link_id?: number } = {};
   try {
     body = await request.json();
@@ -62,3 +63,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Failed to discover sections" }, { status: 500 });
   }
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const POST = withRouteMetrics("/api/lti/context-sections", postHandler);

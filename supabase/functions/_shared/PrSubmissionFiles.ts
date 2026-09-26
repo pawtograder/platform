@@ -23,7 +23,7 @@
  * Idempotent: if the submission already has files (webhook re-delivery, or
  * ingest_pr_submission returned an existing version), this is a no-op.
  */
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { END_TO_END_REPO_PREFIX } from "./GitHubWrapper.ts";
 import { ingestSubmissionFilesFromRepo } from "./SubmissionIngestion.ts";

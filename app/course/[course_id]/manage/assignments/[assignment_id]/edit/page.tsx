@@ -2,7 +2,7 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
-import { revalidateCourseDerivedCachesClient } from "@/lib/revalidateCourseDerivedCachesClient";
+import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading } from "@chakra-ui/react";
@@ -55,6 +55,8 @@ export default function EditAssignment() {
     selfReviewSetting?.data?.enabled,
     selfReviewSetting?.data?.release_at
   ]);
+
+  const revalidateServerCaches = useRevalidateServerCaches(Number.parseInt(course_id as string, 10));
 
   const onFinish = useCallback(
     async (values: FieldValues) => {
@@ -314,7 +316,10 @@ export default function EditAssignment() {
           }
           throw saveError;
         }
-        await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
+        // Also drops the Router Cache: the edited title/due date is rendered by the server
+        // components behind the assignments list and the manage-assignment header, so without
+        // this a back-nav within `staleTimes.dynamic` replays the pre-edit values (#937).
+        await revalidateServerCaches({ tables: ["assignments"] });
         // The assignment is already saved at this point. Re-pointing the handout repo is a follow-up
         // that reaches GitHub, so it can fail on its own (e.g. missing app credentials, a repo that
         // no longer exists, GitHub being down) long after the edit succeeded. Reporting that as
@@ -611,7 +616,16 @@ export default function EditAssignment() {
         });
       }
     },
-    [form.refineCore, assignment_id, course_id, selfReviewSettingId, update, updateAsync, queryData?.has_autograder]
+    [
+      form.refineCore,
+      assignment_id,
+      course_id,
+      selfReviewSettingId,
+      update,
+      updateAsync,
+      queryData?.has_autograder,
+      revalidateServerCaches
+    ]
   );
 
   if (form.refineCore.query?.error) {

@@ -28,7 +28,8 @@ import { cloneRepository, END_TO_END_REPO_PREFIX, getRepoToCloneConsideringE2E }
 import { assertUserIsInCourse, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { collectTextFilesFromZipBuffer } from "../_shared/SubmissionIngestion.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 type RequestBody = { submission_id: number };
 
@@ -47,7 +48,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GetPrBa
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Resolve the submission and its assignment's upstream repo / base sha.

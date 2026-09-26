@@ -1,7 +1,7 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "./SupabaseTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import Bottleneck from "npm:bottleneck@2.19.5";
 import { normalizeEventFingerprint } from "./SentryFingerprint.ts";
 import { sentryIdentity } from "./SentryContext.ts";

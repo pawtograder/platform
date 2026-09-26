@@ -1,5 +1,5 @@
 /**
- * One-line descriptions of thrown values, for error messages that a human has to act on.
+ * Reading structured Postgres/PostgREST errors: describing them, and classifying the benign ones.
  *
  * PostgREST and GoTrue hand back plain structured objects rather than `Error` instances, so the
  * reflexive `cause instanceof Error ? cause.message : String(cause)` yields `[object Object]` — which
@@ -27,4 +27,20 @@ export function describeCause(cause: unknown): string {
     }
   }
   return String(cause);
+}
+
+/** Postgres `unique_violation`. */
+export const UNIQUE_VIOLATION = "23505";
+
+/**
+ * True when `error` is a Postgres unique-constraint violation.
+ *
+ * Useful where an insert is really an assertion that a row exists: for an idempotent write, 23505 is
+ * the success case arriving late, not a fault. Callers should still scope this narrowly — swallow it
+ * for the specific insert whose duplicate is harmless, never as a blanket ignore, since the same code
+ * on a different table can mean genuinely conflicting data.
+ */
+export function isDuplicateKey(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  return (error as { code?: unknown }).code === UNIQUE_VIOLATION;
 }

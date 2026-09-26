@@ -4,7 +4,8 @@ import { TZDate } from "npm:@date-fns/tz";
 import { enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, assertUserIsInCourse, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function handleAssignmentGroupApproveRequest(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   const { join_request_id, course_id } = (await req.json()) as { join_request_id: number; course_id: number };
@@ -15,7 +16,8 @@ async function handleAssignmentGroupApproveRequest(req: Request, scope: Sentry.S
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data, error } = await adminSupabase
     .from("assignment_group_join_request")

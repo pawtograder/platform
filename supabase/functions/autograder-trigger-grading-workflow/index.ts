@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AutograderTriggerGradingWorkflowRequest, CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import { GetCommitResponse, getCommit, repoHasFileAtRef, triggerWorkflow } from "../_shared/GitHubWrapper.ts";
 import {
@@ -10,6 +10,7 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 type RepositoryCheckRunRow = Database["public"]["Tables"]["repository_check_runs"]["Row"];
 
@@ -159,7 +160,8 @@ export async function handleRequest(
   }
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Resolve any abbreviated / mixed-case sha to the canonical full lowercase

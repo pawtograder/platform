@@ -1,6 +1,4 @@
-import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
-import AssignmentGradingToolbar from "@/components/ui/assignment-grading-toolbar";
-import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
+import { SubmissionHeaderChrome } from "./submissionHeaderChrome";
 import { getEffectiveCourseIdentity } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Heading, HStack, VStack } from "@chakra-ui/react";
@@ -36,9 +34,6 @@ export default async function SubmissionsLayout({
     return <div>Assignment not found</div>;
   }
 
-  const instructorOrGrader = role.role === "instructor" || role.role === "grader";
-  const isStudent = role.role === "student";
-
   return (
     <VStack w="100%" gap={0} alignItems="flex-start">
       <HStack
@@ -51,12 +46,19 @@ export default async function SubmissionsLayout({
         borderBottomRadius={0}
       >
         <Heading size="lg">{assignment?.title}</Heading>
-        {!instructorOrGrader && (
-          <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} showDue={true} />
-        )}
+        <SubmissionHeaderChrome
+          assignment={assignment}
+          courseId={Number(course_id)}
+          assignmentId={Number(assignment_id)}
+          slot="due-date"
+        />
       </HStack>
-      {instructorOrGrader && <AssignmentGradingToolbar />}
-      {isStudent && <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />}
+      <SubmissionHeaderChrome
+        assignment={assignment}
+        courseId={Number(course_id)}
+        assignmentId={Number(assignment_id)}
+        slot="below-header"
+      />
 
       <Box borderColor="border.muted" borderWidth="2px" w="100%" borderTopRadius={0} borderBottomRadius="md">
         {children}

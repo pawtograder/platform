@@ -4,8 +4,19 @@ Render-time guard rails. This template emits no resources — it exists to
 keyed off global.environment (dev | preview | staging | production):
 
   any env      — workflowMetricsLeader on multi-replica web (over-counts
-                 gauges + multiplies DB load); Studio ingress without an
-                 auth layer (full DB control behind a bare URL).
+                 gauges + multiplies DB load); the two metrics-leader
+                 mechanisms enabled at once, or the dedicated leader
+                 without monitoring/web (a pod that can export nothing);
+                 monitoring on an enabled web tier with NO leader of either
+                 kind, at any replica count (nine permanently empty
+                 app-business panels — cleared with
+                 monitoring.allowMissingWorkflowMetrics); a leader whose
+                 ServiceMonitor is switched off (same empty panels, because the
+                 refresh only runs during a scrape — cleared with
+                 monitoring.allowUnscrapedMetricsLeader); Studio ingress
+                 without an auth layer (full DB control behind a bare URL);
+                 maintenance.active without the page it routes to, or in a
+                 layout maintenance.sh cannot agree with.
   staging+prod — secrets.create (plaintext key material in helm release
                  history); migrations.resetOnDrift (wipes schema public +
                  auth.users + vault.secrets and replays from scratch —
@@ -26,12 +37,290 @@ keyed off global.environment (dev | preview | staging | production):
 {{- fail "web.workflowMetricsLeader requires web.replicas=1 — every leader replica refreshes the DB-backed workflow gauges on each scrape, multiplying DB load and over-counting. Run a dedicated 1-replica metrics leader instead (see values.yaml)." -}}
 {{- end -}}
 
+{{- /*
+The two leader mechanisms are mutually exclusive. web.workflowMetricsLeader sets
+METRICS_WORKFLOW_REFRESH_LEADER on the web pod itself; web.metricsLeader.enabled
+renders a separate 1-replica Deployment with the same variable. Both on means two
+workloads refresh the same metrics_workflow_* RPCs against the same rows and
+export the same global gauges, so every panel that sums the family reads double.
+*/ -}}
+{{- if and .Values.web.metricsLeader.enabled .Values.web.workflowMetricsLeader -}}
+{{- fail "web.metricsLeader.enabled=true and web.workflowMetricsLeader=true are mutually exclusive — both would refresh the same metrics_workflow_* RPCs and export the same global gauges, so sum() over web_workflow_runs_recent / web_workflow_queue_seconds / web_workflow_run_seconds / web_workflow_errors_recent double-counts every value. Pick one: set web.workflowMetricsLeader=false and keep the dedicated leader (correct for web.replicas > 1), or set web.metricsLeader.enabled=false and keep the flag (correct, and cheaper, for a single-replica install)." -}}
+{{- end -}}
+
+{{- /*
+The leader is useless without monitoring. METRICS_SCRAPE_TOKEN is only injected
+into the pod when monitoring.enabled (see templates/_web-workload.tpl), and
+app/api/metrics/route.ts returns 503 when that env var is absent — so the leader
+would never be scraped, never refresh, and simply cost a pod's worth of memory.
+*/ -}}
+{{- if and .Values.web.metricsLeader.enabled (not .Values.monitoring.enabled) -}}
+{{- fail "web.metricsLeader.enabled=true requires monitoring.enabled=true — METRICS_SCRAPE_TOKEN is only injected when monitoring is on, and /api/metrics returns 503 without it, so the leader would refresh nothing and export nothing while still costing a pod. Set monitoring.enabled=true, or set web.metricsLeader.enabled=false." -}}
+{{- end -}}
+
+{{- if and .Values.web.metricsLeader.enabled (not .Values.web.enabled) -}}
+{{- fail "web.metricsLeader.enabled=true requires web.enabled=true — the leader runs the web image and reuses the web pod shape (templates/web-metrics-leader.yaml includes pawtograder.web.workload). Set web.enabled=true, or set web.metricsLeader.enabled=false." -}}
+{{- end -}}
+
+{{- /*
+Monitoring on + web enabled + NO leader of either kind = the `app-business`
+dashboard ships with nine permanently empty panels. Nothing populates the
+web_workflow_* families in that configuration, because nothing sets
+METRICS_WORKFLOW_REFRESH_LEADER on any workload.
+
+NOT gated on replicas > 1, deliberately. It was, and that left the most ordinary
+install of all silently broken: monitoring.enabled=true, web.replicas=1, both
+leader settings at their default false. The predicate was skipped, the web
+ServiceMonitor scraped happily, and every workflow family stayed empty without
+anyone having to acknowledge anything. The replica count is what decides WHICH
+leader mechanism is correct (workflowMetricsLeader at 1 replica, the dedicated
+Deployment above that) — it was never what decided whether one is needed.
+
+This is a BREAKING upgrade for any install already in that state (Khoury
+production is), which is why it ships with an explicit acknowledgement rather
+than silently. It follows the studio.allowUnauthenticatedIngress /
+monitoring.externalPostgresExporter precedent above: the chart cannot tell "we
+don't want workflow metrics" from "we thought we had them", so it asks.
+
+There is no "deploy inert" for a render-time fail — the deploy is REFUSED, not
+degraded, and that includes a rollback deploy. The message therefore names both
+values verbatim.
+*/ -}}
+{{- if and .Values.monitoring.enabled .Values.web.enabled (not .Values.web.metricsLeader.enabled) (not .Values.web.workflowMetricsLeader) (not .Values.monitoring.allowMissingWorkflowMetrics) -}}
+{{- fail "monitoring.enabled=true with no metrics leader exports NO workflow metrics: web_workflow_runs_recent, web_workflow_queue_seconds, web_workflow_run_seconds and web_workflow_errors_recent are populated only by the pod holding METRICS_WORKFLOW_REFRESH_LEADER, and nothing here sets it. The nine workflow panels on the `app-business` Grafana dashboard will render permanently empty, which reads identically to \"no workflow runs happened\". FIX: at web.replicas=1, set `web.workflowMetricsLeader: true` (no extra pod). Above 1 replica that flag is refused, so set `web.metricsLeader.enabled: true` to run the dedicated 1-replica leader. OR, to ship without workflow metrics on purpose, set `monitoring.allowMissingWorkflowMetrics: true`." -}}
+{{- end -}}
+
+{{- /*
+The leader enabled but its ServiceMonitor switched off. Rule 4 above covers
+"no leader at all"; this is the same outcome one setting further along.
+
+refreshWorkflowMetrics() runs only while /api/metrics is being served — there is
+no background timer anywhere in lib/metrics.ts. With
+monitoring.serviceMonitors.metricsLeader=false the leader's ServiceMonitor is
+not rendered (templates/monitoring.yaml), so nothing ever calls that route on
+the leader, so the gauges are never populated. The pod is running and healthy
+and the dashboard is empty, which is the hardest version of this failure to
+diagnose.
+
+Acknowledgement rather than a hard fail, following
+monitoring.externalPostgresExporter: scraping the leader from a scrape config
+this chart does not own is a legitimate setup the chart cannot detect.
+*/ -}}
+{{- if and .Values.web.metricsLeader.enabled .Values.monitoring.enabled (not (dig "serviceMonitors" "metricsLeader" true .Values.monitoring)) (not .Values.monitoring.allowUnscrapedMetricsLeader) -}}
+{{- fail "web.metricsLeader.enabled=true with monitoring.serviceMonitors.metricsLeader=false renders a metrics leader that NOTHING SCRAPES. refreshWorkflowMetrics() only runs while /api/metrics is being served (there is no background timer), so with no ServiceMonitor the leader pod runs, costs memory and exports nothing — the same permanently empty app-business workflow panels that monitoring.allowMissingWorkflowMetrics guards, reached a different way. FIX: set `monitoring.serviceMonitors.metricsLeader: true`. OR, if your own scrape config (a hand-written ServiceMonitor, a PodMonitor, or a static target with the METRICS_SCRAPE_TOKEN bearer) already points at the leader Service, set `monitoring.allowUnscrapedMetricsLeader: true` to confirm." -}}
+{{- end -}}
+
 {{- if and .Values.studio.enabled .Values.studio.ingressEnabled (not .Values.studio.basicAuth.enabled) (not .Values.studio.allowUnauthenticatedIngress) -}}
 {{- fail "studio.ingressEnabled=true without studio.basicAuth.enabled exposes full database control to anyone with the URL. Enable basic-auth, or set studio.allowUnauthenticatedIngress=true to confirm another auth layer (VPN / oauth2-proxy / IP allowlist) fronts this host." -}}
 {{- end -}}
 
+{{- /*
+Monitoring with an externally managed database. Every DB-derived series the chart
+ships comes from the postgres_exporter SIDECAR in the chart-managed Postgres
+StatefulSet, so postgres.enabled=false leaves no collector at all — and the
+`metrics` edge function no longer gathers them, because scraping it once per
+functions pod (32 replicas in prod) cost 77.7% of all database execution time.
+The PawtograderPostgresExporter* self-health rules are gated on postgres.enabled
+too, so nothing would even report the absence. Fail loudly here rather than
+degrade silently.
+
+Guarded any-environment, not just staging/production: this is a configuration
+that does not WORK, like postgres.replica without walg above, rather than one
+that is merely risky in a durable tier. It also cannot fire by accident — it
+needs monitoring.enabled=true (default false) AND postgres.enabled=false
+(default true), both deliberate.
+
+Acknowledgement rather than a hard fail, following studio.allowUnauthenticatedIngress:
+running your own exporter against the external DB is a legitimate setup the chart
+cannot detect.
+*/ -}}
+{{- if and .Values.monitoring.enabled (not .Values.postgres.enabled) (not .Values.monitoring.externalPostgresExporter) -}}
+{{- fail "monitoring.enabled=true with postgres.enabled=false ships NO database metrics collector. pawtograder_vacuum_alert, pawtograder_db_buffer_cache*, pawtograder_db_dead_tuples, pawtograder_db_connections_*, pawtograder_table_sizes_*, pawtograder_replication_*, pawtograder_wal_archiving_* and pg_stat_statements_top all come from the postgres_exporter sidecar inside the chart-managed Postgres StatefulSet, which this mode does not deploy; the metrics edge function no longer collects them either. The PawtograderPostgresExporterQueryFailing/Down alerts are skipped under the same condition, so the absence would be silent. Point your own postgres_exporter at the external database (the queries.yaml ConfigMap still renders, so you can mount it and keep the same metric names), add a ServiceMonitor for it, then set monitoring.externalPostgresExporter=true to confirm. Set monitoring.enabled=false if you do not want DB metrics." -}}
+{{- end -}}
+
 {{- if and .Values.postgres.replica.enabled (not .Values.postgres.walg.enabled) -}}
 {{- fail "postgres.replica.enabled=true requires postgres.walg.enabled=true — the standby uses `wal-g wal-fetch` as its archive fallback when it falls behind the primary's retained pg_wal, and shares the WAL-G config. Enable postgres.walg first." -}}
+{{- end -}}
+
+{{- /*
+maintenance.active: the release carries the maintenance posture that
+scripts/maintenance.sh `down` produces (web host on the page, writers at 0, the
+functions HPA gone, write-capable CronJobs suspended), so a Postgres-restarting
+`helm upgrade` can run inside the window without lifting the fence. See
+docs/operations/planned-maintenance.md.
+
+Three combinations render a posture that does not match the script, and each
+fails at render time rather than in the middle of a window:
+
+  1. active without maintenance.enabled. The web host would point at a
+     maintenance Service this same render deletes: users get the ingress
+     controller's bare 503 instead of the page, and the upgrade removes the page
+     `down` checked was Ready.
+  2. active without global.apiOnSeparateHost. The script repoints
+     rules[0].paths[0], which is the web host's "/" only when the API has its
+     own host. With the API paths on the web host, paths[0] is an API path: the
+     script and the chart would each fence a different path, and whichever
+     applies second reverts or conflicts with the other.
+  3. active with maintenance.service.port other than 8080. maintenance.sh
+     hard-codes MAINT_PORT=8080 in the backend it patches in. A chart backend on
+     any other port is a different value in a field kubectl owns, which is a
+     server-side apply conflict on the window's own upgrade.
+
+Any environment: all three are wrong everywhere, and none can be reached by
+accident, because maintenance.active defaults to false.
+*/ -}}
+{{- if .Values.maintenance.active -}}
+{{- if not .Values.maintenance.enabled -}}
+{{- fail "maintenance.active=true requires maintenance.enabled=true — the posture routes the web host to the maintenance Service, and maintenance.enabled=false removes that Service in the same render, so users would get the ingress controller's bare 503 and the page maintenance.sh `down` checked would be deleted mid-window. Set maintenance.enabled=true alongside maintenance.active=true (and keep both on the upgrade that runs inside the window)." -}}
+{{- end -}}
+{{- if not .Values.global.apiOnSeparateHost -}}
+{{- fail "maintenance.active=true requires global.apiOnSeparateHost=true — maintenance.sh repoints the primary Ingress's rules[0].paths[0], which is the web host's \"/\" path only when the API is on its own host. With the API paths on the web host, paths[0] is an API path, so the script and the chart would fence different paths and the window's upgrade would revert or conflict with the script's patch." -}}
+{{- end -}}
+{{- if ne (int .Values.maintenance.service.port) 8080 -}}
+{{- fail (printf "maintenance.active=true requires maintenance.service.port=8080 (got %v) — maintenance.sh patches the web host's backend to port 8080 (MAINT_PORT), so a chart backend on any other port is a different value in a field kubectl owns, and the window's own server-side upgrade fails on the conflict." .Values.maintenance.service.port) -}}
+{{- end -}}
+{{- if not .Values.ingress.enabled -}}
+{{- fail "maintenance.active=true requires ingress.enabled=true — with no chart Ingress the posture still scales every writer to 0 and drops the functions HPA, but renders no maintenance route and no pawtograder.io/maintenance-active marker: the app goes dark with no page, and maintenance.sh cannot tell the release holds the posture." -}}
+{{- end -}}
+{{- if not .Values.web.enabled -}}
+{{- fail "maintenance.active=true requires web.enabled=true — the posture's exit restores the web backend maintenance.sh recorded; with web disabled the upgrade deletes that Service, and `up` would take the page down onto a deleted backend. Disable web in a routine deploy, outside the window." -}}
+{{- end -}}
+{{- if .Values.seed.enabled -}}
+{{- fail "maintenance.active=true is refused with seed.enabled=true — the seed Job is a post-upgrade hook that waits for auth's health endpoint, and the posture scales auth to 0, so the window's upgrade would hang on the hook and then fail. Seed outside the window." -}}
+{{- end -}}
+{{- if .Values.ingress.extraHosts -}}
+{{- fail "maintenance.active=true is refused while ingress.extraHosts is set — neither the posture nor maintenance.sh reroutes those aliases, so with web at 0 they would serve the ingress controller's bare 503 instead of the page. Neither staging nor production uses extraHosts today; routing them to the page is follow-up work." -}}
+{{- end -}}
+{{- /* Functions with autoscaling on: the posture leaves spec.replicas
+     unrendered and relies on the 0 that `down` set (see edge-functions.yaml).
+     That holds only if the DEPLOYED release also left it unrendered, i.e.
+     already autoscaled. If the window's upgrade is the one that turns
+     autoscaling on, or creates the functions Deployment, the field is dropped
+     or never set and the API defaults it to 1 -- a writer back while Postgres
+     rolls. Detected from the live cluster: maintenance.sh `down` records the
+     functions HPA it deleted in its state ConfigMap, empty when there was
+     none. lookup returns nothing under `helm template` or when `down` has not
+     run, and then this check stays quiet; the doc's procedure runs `down`
+     first. */ -}}
+{{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.autoscaling.enabled -}}
+{{- $state := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-maintenance-state" .Release.Name) -}}
+{{- if $state -}}
+{{- $fnName := include "pawtograder.componentName" (dict "ctx" . "component" "functions") -}}
+{{- if not (lookup "apps/v1" "Deployment" .Release.Namespace $fnName) -}}
+{{- fail (printf "maintenance.active=true with edgeFunctions.autoscaling.enabled: Deployment %s does not exist yet, so this upgrade would create it with no replicas field and it would start at 1 pod inside the fence. Create the functions tier in a routine deploy, outside the window." $fnName) -}}
+{{- end -}}
+{{- if eq (dig "data" "functions_hpa" "" $state | trim) "" -}}
+{{- fail "maintenance.active=true with edgeFunctions.autoscaling.enabled, but the deployed release had no functions HPA (maintenance.sh recorded none). Turning autoscaling on in this upgrade drops spec.replicas from the functions Deployment, which the API then defaults to 1 pod inside the fence. Turn autoscaling on in a routine deploy, before or after the window." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* New writers. A writer the window's own upgrade adds -- a stable tier it
+     enables or a new deployment channel -- is created at 0 behind the page,
+     but `down` never recorded it, so `up` would drop the page without starting
+     it and the exit upgrade would route to pods still starting. Refused at
+     upgrade time, like the functions check above: every enabled writer must
+     already exist.
+
+     The web backend, likewise: `up` restores the ingress backend `down`
+     recorded, before the posture-off upgrade renders the target's. If the
+     target moves the web Service (name or port), that restore points the web
+     host at a port that no longer exists just as the page comes down. */ -}}
+{{- $stateCM := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-maintenance-state" .Release.Name) -}}
+{{- /* Proof that `down` got as far as SAFE TO BOUNCE. Every guard in this block
+     keys off the state ConfigMap, but `down` creates it while capturing, before
+     pg_cron is paused or any writer is fenced, and without it they are all
+     skipped. So on a real cluster the posture needs the fence_complete marker
+     that `down` writes only with its SAFE TO BOUNCE verdict.
+
+     "A real cluster" = the release's Postgres primary exists, whatever the
+     target's postgres.enabled says (a target that disables Postgres is
+     refused outright). lookup returns nothing under `helm template` (the
+     doc's step 0 preflight must keep working), and a fresh install has no
+     database to protect. `up` withdraws the marker before it restores
+     anything, so an interrupted `up` cannot leave a stale clearance. */ -}}
+{{- /* Found by LABEL, not by the name this render would give it: a target that
+     renames the primary (an identity change the restart gate reports) would
+     otherwise look up the new name, find nothing, and skip every check below
+     while it replaces the database. */ -}}
+{{- $livePrimary := "" -}}
+{{- range $sts := (lookup "apps/v1" "StatefulSet" .Release.Namespace "").items | default list -}}
+{{- $l := $sts.metadata.labels | default dict -}}
+{{- if and (eq (index $l "app.kubernetes.io/component" | default "") "postgres") (eq (index $l "app.kubernetes.io/instance" | default "") $.Release.Name) -}}
+{{- $livePrimary = $sts.metadata.name -}}
+{{- end -}}
+{{- end -}}
+{{- if $livePrimary -}}
+{{- $targetPrimary := include "pawtograder.componentName" (dict "ctx" . "component" "postgres") -}}
+{{- if and .Values.postgres.enabled (ne $livePrimary $targetPrimary) -}}
+{{- fail (printf "maintenance.active=true: the live Postgres primary is %s but this release renders %s. Renaming the primary replaces the database workload (a new StatefulSet and PVC); that is a migration, not a maintenance-window upgrade." $livePrimary $targetPrimary) -}}
+{{- end -}}
+{{- if not .Values.postgres.enabled -}}
+{{- fail "maintenance.active=true with postgres.enabled=false while the release's Postgres primary still exists: this upgrade would DELETE the database StatefulSet. Decommissioning Postgres is not a maintenance-window upgrade; do it deliberately, outside this path." -}}
+{{- end -}}
+{{- if not (dig "data" "fence_complete" "" $stateCM) -}}
+{{- fail (printf "maintenance.active=true, but %s-maintenance-state has no fence_complete marker: maintenance.sh down has not reported SAFE TO BOUNCE in this namespace (not run, still running, or it stopped at NOT READY). Upgrading now would roll Postgres outside a verified fence. Run down until SAFE TO BOUNCE first." .Release.Name) -}}
+{{- end -}}
+{{- end -}}
+{{- if $stateCM -}}
+{{- $stable := list
+      (dict "on" .Values.web.enabled "kind" "Deployment" "component" "web")
+      (dict "on" .Values.rest.enabled "kind" "Deployment" "component" "rest")
+      (dict "on" .Values.auth.enabled "kind" "Deployment" "component" "auth")
+      (dict "on" .Values.storage.enabled "kind" "Deployment" "component" "storage")
+      (dict "on" .Values.realtime.enabled "kind" "StatefulSet" "component" "realtime")
+      (dict "on" .Values.edgeFunctions.enabled "kind" "Deployment" "component" "functions") -}}
+{{- range $w := $stable -}}
+{{- if $w.on -}}
+{{- $n := include "pawtograder.componentName" (dict "ctx" $ "component" $w.component) -}}
+{{- if not (lookup "apps/v1" $w.kind $.Release.Namespace $n) -}}
+{{- fail (printf "maintenance.active=true: this upgrade would create %s %s inside the fence. maintenance.sh did not record it, so `up` would drop the page before it runs. Enable new tiers in a routine deploy, outside the window." $w.kind $n) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* The standby must survive the primary's rollout: it is the failover
+     target if the new primary does not come back. The procedure's partition
+     only holds existing ordinals, so an upgrade that disables the standby or
+     lowers its replica count would still delete it while the primary rolls. */ -}}
+{{- $sbName := include "pawtograder.componentName" (dict "ctx" . "component" "postgres-replica") -}}
+{{- $sb := lookup "apps/v1" "StatefulSet" .Release.Namespace $sbName -}}
+{{- if $sb -}}
+{{- $live := int (dig "spec" "replicas" 1 $sb) -}}
+{{- $want := ternary (int .Values.postgres.replica.replicas) 0 (and .Values.postgres.enabled .Values.postgres.replica.enabled) -}}
+{{- if lt $want $live -}}
+{{- fail (printf "maintenance.active=true: this upgrade would take the Postgres standby %s from %d to %d replica(s) while the primary rolls, removing the failover target the window relies on. Reduce or disable the standby in a routine deploy, after the window." $sbName $live $want) -}}
+{{- end -}}
+{{- end -}}
+{{- $recorded := dig "data" "ingress_backend" "" $stateCM | trim -}}
+{{- if not $recorded -}}
+{{- fail (printf "maintenance.active=true: the maintenance state ConfigMap %s-maintenance-state has no recorded web backend (ingress_backend is empty; `down` could not read it). `up` would fall back to a hard-coded backend, so this guard cannot vouch for the web host. Re-run maintenance.sh up then down, or record the backend by hand, before this upgrade." .Release.Name) -}}
+{{- end -}}
+{{- if $recorded -}}
+{{- $rb := fromJson $recorded -}}
+{{- $wantName := include "pawtograder.web.host" . -}}
+{{- $wantPort := int .Values.web.service.port -}}
+{{- if or (ne (toString (dig "name" "" $rb)) $wantName) (ne (int (dig "port" "number" 0 $rb)) $wantPort) -}}
+{{- fail (printf "maintenance.active=true: maintenance.sh recorded the web backend as %s, but this release renders %s:%d. `up` would restore the recorded backend and point the web host at a Service port that no longer exists as the page comes down. Change the web Service in a routine deploy, outside the window." $recorded $wantName $wantPort) -}}
+{{- end -}}
+{{- end -}}
+{{- range $c := .Values.channels -}}
+{{- /* channels[] names the blocks `web` and `edgeFunctions`; the workloads
+     they create are web-<name> and functions-<name>. */ -}}
+{{- range $w := list (dict "key" "web" "component" "web") (dict "key" "edgeFunctions" "component" "functions") -}}
+{{- if index $c $w.key -}}
+{{- $n := include "pawtograder.componentName" (dict "ctx" $ "component" (printf "%s-%s" $w.component $c.name)) -}}
+{{- if not (lookup "apps/v1" "Deployment" $.Release.Namespace $n) -}}
+{{- fail (printf "maintenance.active=true: channel %q would create Deployment %s inside the fence. maintenance.sh did not record it, so `up` would drop the page before it runs. Add channels in a routine deploy, outside the window." $c.name $n) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* The posture marker is chart-managed. A user-supplied copy in
+     ingress.annotations would be emitted as a second key after the chart's,
+     leaving the marker maintenance.sh relies on ambiguous or overridden. */ -}}
+{{- if hasKey (.Values.ingress.annotations | default dict) "pawtograder.io/maintenance-active" -}}
+{{- fail "ingress.annotations must not set pawtograder.io/maintenance-active — the chart manages that marker from maintenance.active, and maintenance.sh reads it to decide whether `down` may capture prior state. Set maintenance.active instead." -}}
 {{- end -}}
 
 {{- if has $env (list "staging" "production") -}}
@@ -66,7 +355,11 @@ keyed off global.environment (dev | preview | staging | production):
 {{- if .Values.seed.enabled -}}
 {{- fail "seed.enabled=true loads demo classes and canned auth users — never in production." -}}
 {{- end -}}
-{{- range $name, $img := dict "web" .Values.web.image "edgeFunctions" .Values.edgeFunctions.image "migrations" .Values.migrations.image -}}
+{{- /* backup is in here too: it is only pulled on the nightly run, so an
+       unpinned tag fails at 04:00 rather than at deploy time. Its default
+       (supabase/postgres:17.4.1.075) is already pinned, so this only bites an
+       install that repoints backup.image and forgets the tag. */ -}}
+{{- range $name, $img := dict "web" .Values.web.image "edgeFunctions" .Values.edgeFunctions.image "migrations" .Values.migrations.image "backup" .Values.backup.image -}}
 {{- $tag := $img.tag | default "" -}}
 {{- if or (eq $tag "latest") (hasSuffix "-latest" $tag) -}}
 {{- fail (printf "%s.image.tag=%q is a floating tag — production deploys must pin an immutable tag (vX.Y.Z or <branch>-<sha>) for traceability and rollback." $name $tag) -}}
@@ -79,3 +372,428 @@ keyed off global.environment (dev | preview | staging | production):
 {{- fail "postgres.persistence.storageClass is empty — it would bind the database PVC to the cluster's DEFAULT StorageClass, which may be node-local (local-path): node loss = data loss. Production must name a replicated storage class explicitly (Ceph RBD, EBS, ...)." -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+github-async-worker drain tuning. Any environment.
+
+These two values are COUPLED, and the coupling is the whole reason there is a
+render-time rule: edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds is
+the pgmq visibility timeout, and it has to cover the worst case for a WHOLE
+BATCH of drainConcurrency messages, not for one message. On 2026-09-07 a
+58-message create_repo burst drained in 88 minutes at 2-4 messages per ~7 min
+iteration, and 20 of the 58 came back with read_ct > 1 because a ~420s batch
+outlived the hardcoded 300s timeout — pgmq re-served messages that were still
+in flight. Raising concurrency lengthens the batch (the handlers' GitHub calls
+serialize through the shared Bottleneck limiters), so raising it against an
+unraised timeout makes that worse, not better, and would push read_ct toward
+the worker's poison-pill threshold with LEGITIMATE provisioning work.
+
+THERE ARE TWO CEILINGS, not one, and both have to cover the batch:
+
+  visibilityTimeoutSeconds  >= drainConcurrency x 120
+  worker.timeoutMs / 1000   >= drainConcurrency x 120
+
+The second one is the isolate lifetime handed to EdgeRuntime as workerTimeoutMs
+(charts/pawtograder/images/edge-functions/main.ts). It is a CONFIG-COHERENCE
+rule: budgeting a batch longer than the isolate that runs it is incoherent
+advice, because if the batch ever did overrun, Promise.allSettled would not
+reach the archive calls and successful work would redeliver. Under n x 120
+against the 400s default the largest coherent concurrency is THREE, which is
+why the exact legacy pair below is exempt and everything else is checked.
+(beforeUnload.wallClockRatio=50 also asks the isolate to retire at HALF the
+lifetime, ~200s at 400s; workerRun.ts's bounded-mode budget comment cites that
+number.) This rule asserts nothing about live behaviour — the claim that
+isolates are currently truncated mid-batch was measured and retracted; the
+runtime's wall-clock recycle count is flat at ~200/hour regardless of burst.
+
+GRANDFATHERING IS NARROW ON PURPOSE: only the EXACT legacy pair (4, 300) is
+exempt, because that is the configuration that was hardcoded in the worker and
+is therefore already running everywhere — refusing it would refuse every
+existing install and break the "a chart upgrade changes nothing" contract. Any
+other combination is a deliberate act and gets both invariants enforced. An
+earlier version of this rule was gated on `n > 4`, which let 4/60 and 1/60
+through: a 60s timeout re-serves a create_repo (~280s, measured) four times over
+while it is still in flight, which is strictly worse than the status quo.
+
+Bounds are refused rather than clamped here so a typo is visible at deploy time.
+These chart values are the ONLY supported way to set the two variables:
+_edge-functions-workload.tpl renders them as explicit `env` entries, and an `env`
+entry beats anything from `envFrom`, so edgeFunctions.envFromSecrets cannot
+override them. asyncWorkerTuning.ts clamps the same bounds at runtime anyway, as
+defence in depth against the chart being bypassed (a hand-edited Deployment,
+`kubectl set env`, a local `supabase functions serve`).
+*/ -}}
+{{- if .Values.edgeFunctions.enabled -}}
+{{- $gaw := .Values.edgeFunctions.githubAsyncWorker -}}
+{{- $nRaw := $gaw.drainConcurrency | toString -}}
+{{- $vtRaw := $gaw.visibilityTimeoutSeconds | toString -}}
+{{- if not (regexMatch "^[0-9]+$" $nRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency must be an integer 1-8 (got %q). This is the pgmq read fan-out AND the worker's concurrency ceiling; a non-numeric value would be clamped back to the default 4 at runtime, so the deploy would not do what it says." $nRaw) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $vtRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds must be an integer 60-1800 (got %q). This is the pgmq visibility timeout; a non-numeric value would be clamped back to the default 300s at runtime." $vtRaw) -}}
+{{- end -}}
+{{- $n := int $nRaw -}}
+{{- $vt := int $vtRaw -}}
+{{- if or (lt $n 1) (gt $n 8) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency=%d is outside 1-8. 0 would drain NOTHING while every liveness signal stayed green (indistinguishable from a hung queue). Above 8: every in-flight create_repo holds one of the 40 slots in the FLEET-WIDE per-org Bottleneck content limiter for ~280s (measured p50 279.5s, 2026-09-07), and that same pool serves org invitations and handout syncs — so a high concurrency starves students' org invitations behind a convoy of repo creations. All those handlers also share ONE 256MiB leaseholder isolate (worker.memoryLimitMb) on a tier that OOM-killed PID 1 twice in 2026-08. Past 8 needs more than one concurrent leaseholder, not a bigger number." $n) -}}
+{{- end -}}
+{{- if or (lt $vt 60) (gt $vt 1800) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=%d is outside 60-1800. Below 60s a single create_repo (~105s of serialized GitHub work, measured 2026-09-07) is guaranteed to be re-served while still in flight; above 1800s the timeout becomes the RECOVERY LATENCY for a message whose isolate really died, and 1800s is already 1.5x the PawtograderQueueOldestMessageAging window so a genuinely stuck message still pages someone." $vt) -}}
+{{- end -}}
+{{- /*
+Per-org leaseholder rules. These bound a DIFFERENT axis from the two above:
+drainConcurrency sizes one leaseholder's batch inside a single isolate, these
+size how many leaseholders exist. They are checked whenever the values parse,
+but the COHERENCE rules only fire when orgSlotGlobalCap > 0 — a disabled
+deployment must not fail a render over numbers that have no effect, the same
+reason resolveAsyncWorkerTuning only records these issues when the feature is on.
+*/ -}}
+{{- $capRaw := $gaw.orgSlotGlobalCap | toString -}}
+{{- $mpoRaw := $gaw.orgSlotMaxPerOrg | toString -}}
+{{- $ttlRaw := $gaw.orgSlotLeaseTtlSeconds | toString -}}
+{{- if not (regexMatch "^[0-9]+$" $capRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotGlobalCap must be an integer 0-8 (got %q). 0 disables per-org leaseholders; a non-numeric value would be clamped back to 0 at runtime, so the deploy would silently keep the single-leaseholder path it was meant to replace." $capRaw) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $mpoRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg must be an integer 1-4 (got %q)." $mpoRaw) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $ttlRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds must be an integer 45-300 (got %q)." $ttlRaw) -}}
+{{- end -}}
+{{- $refillRaw := $gaw.orgSlotContinuousRefill | toString -}}
+{{- if not (regexMatch "^[0-9]+$" $refillRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill must be the integer 0 or 1 (got %q). It is deliberately an INTEGER and not a true/false string: Boolean(\"false\") is true in JS, so a string-valued kill switch turns a typo into silent truthiness. This rule refuses the render so a chart user never reaches that; on the Helm-bypass paths this rule cannot see, resolveAsyncWorkerTuning FAILS SAFE to 0 (off) for a value that is present but unusable, while an ABSENT value still resolves to 1 (on)." $refillRaw) -}}
+{{- end -}}
+{{- $refill := int $refillRaw -}}
+{{- if or (lt $refill 0) (gt $refill 1) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill=%d is outside 0-1. 1 (the default) keeps drainConcurrency messages in flight and claims the shortfall as each settles; 0 restores the batch-and-re-claim shape, which measured 5.20 effective concurrency of a possible 8 on the 2026-09-13 burst because every batch waits on its straggler. This is a KILL SWITCH, so the range is binary on purpose — there is no low-water-mark parameter in drainWithContinuousRefill for an intermediate value to mean, and a number a values file renders but nothing reads is worse than no knob." $refill) -}}
+{{- end -}}
+{{- /*
+The org-leased WALL-CLOCK RUN BUDGET, and the one rule in this block whose
+ACCEPTED RANGE IS NOT A PAIR OF CONSTANTS.
+
+GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS is when a leaseholder stops
+claiming new messages and lets the ones in flight finish, so that the isolate is
+not killed mid-message by EDGE_WORKER_TIMEOUT_MS and the work handed back to
+pgmq as a redelivery. Its ceiling AND its default are the same derived number:
+
+  max(120, worker.timeoutMs/1000 - 120 - 30)
+
+250s at the chart default and 330s at the 480000 production runs, which is
+exactly why this is checked as a COMBINATION and not as a field. A rule spelling
+`0-330` would pass a 330s budget into a 400s isolate — 70s of drain-out for a
+message modelled at 120s — and would have to be rewritten the day anybody moves
+the lifetime. Same shape as the drainConcurrency/worker.timeoutMs rule further
+down: the value is not wrong, the pairing is, and the remedy names both.
+
+THIS RULE IS NOT GATED ON orgSlotGlobalCap > 0, unlike the coherence rules
+below, and it does not need to be. Those are gated because their values are
+always present — a disabled deployment would fail a render over an
+orgSlotMaxPerOrg it is not using. This one ships EMPTY, so no untouched
+deployment can trip it; any value here is a deliberate act and is worth checking
+whether or not the feature is on, which is also how resolveOrgSlotTuning treats
+it (the budget is resolved and reported before the `enabled` early return).
+
+REFUSED AND NOT CLAMPED, for the usual reason plus one specific to this knob:
+the ceiling IS the default, so clamping a too-large value to it would leave an
+operator who typed 600 with precisely the behaviour they get by not setting the
+variable at all — an edit that is reported and inert. On the Helm-bypass paths
+this rule cannot see, asyncWorkerTuning.ts resolves an unusable value DOWN to
+the 120s floor instead. Down is safe here; up is the defect.
+*/ -}}
+{{- $runBudgetRaw := include "pawtograder.asyncWorker.runBudgetRaw" . -}}
+{{- if ne $runBudgetRaw "" -}}
+{{- if not (regexMatch "^[0-9]+$" $runBudgetRaw) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds must be an integer number of seconds or empty (got %q). Empty is the shipped default and means the worker derives the budget from edgeFunctions.worker.timeoutMs; it is rendered as NO env entry at all, because GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS set but empty is read as a botched edit and fails safe to the 120s floor, which would cut every org-leased drain to two minutes on a deployment that never touched this knob." $runBudgetRaw) -}}
+{{- end -}}
+{{- $runBudget := int $runBudgetRaw -}}
+{{- $runBudgetCeiling := int (include "pawtograder.asyncWorker.runBudgetCeiling" .) -}}
+{{- $runBudgetLifeS := div (.Values.edgeFunctions.worker.timeoutMs | int) 1000 -}}
+{{- if lt $runBudget 120 -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=%d is below the 120s floor. 120s is PER_MESSAGE_VT_BUDGET_SECONDS, the cost one create_repo is modelled at, and a budget under it is a leaseholder that can be past its deadline before it has claimed anything: the queue stops draining while the lease, the heartbeats and the error count all stay green. That is the same silent-stall failure the drainConcurrency floor exists for, arriving through the clock instead of through n. Leave this empty to get the derived default (%ds at edgeFunctions.worker.timeoutMs=%d), or set an integer in 120-%d." $runBudget $runBudgetCeiling (.Values.edgeFunctions.worker.timeoutMs | int) $runBudgetCeiling) -}}
+{{- end -}}
+{{- if gt $runBudget $runBudgetCeiling -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=%d exceeds the %ds ceiling derived from edgeFunctions.worker.timeoutMs=%d (%ds): %ds of isolate, minus 120s of drain-out reserve for the messages still in flight when claiming stops, minus 30s of margin before the runtime kills the isolate. The budget is NOT a constant range and this pairing is what is wrong, not the number on its own — a budget that intends to still be claiming when EDGE_WORKER_TIMEOUT_MS fires is the defect it was added to prevent: Promise.allSettled never reaches the archive calls, so repos that were created successfully are provisioned again on redelivery. Either lower it to <= %d, or raise edgeFunctions.worker.timeoutMs to >= %d (%ds) and carry gracefulExitTimeoutSeconds / terminationGracePeriodSeconds up with it — the accepted range then moves on its own. Note this ceiling is also the DEFAULT you get by leaving the value empty, so there is nothing above it to ask for." $runBudget $runBudgetCeiling (.Values.edgeFunctions.worker.timeoutMs | int) $runBudgetLifeS $runBudgetLifeS $runBudgetCeiling (mul (add $runBudget 150) 1000) (add $runBudget 150)) -}}
+{{- end -}}
+{{- end -}}
+{{- $cap := int $capRaw -}}
+{{- $mpo := int $mpoRaw -}}
+{{- $ttl := int $ttlRaw -}}
+{{- if gt $cap 8 -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=%d is above 8. Each leaseholder is a RESIDENT isolate holding one admission slot and one worker.memoryLimitMb heap, and the pod memory budget is written as (maxParallelism x worker.memoryLimitMb); the cap is fleet-wide while maxParallelism (%d) is per-pod, so 8 is the worst-case-colocation number. Note also the slot POOL is seeded by migration (async_calls 64, async_calls_low_priority 16) — raising the cap past a pool would silently cap the budget at the pool size instead." $cap (int .Values.edgeFunctions.maxParallelism)) -}}
+{{- end -}}
+{{- if or (lt $mpo 1) (gt $mpo 4) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=%d is outside 1-4. In-flight per org is orgSlotMaxPerOrg x drainConcurrency against ONE org's content limiter (reservoir 40 / maxConcurrent 40 / refresh 40 per 60s). The RESERVOIR binds before the concurrency pool does: with c creations in flight at d seconds each the start rate is 60c/d per minute, and measured create_repo p50 over the 3 days to 2026-09-14 on Khoury prod runs 23.1s (neu-cs2000) to 46.0s (Khoury-CS3650) — so 16 in flight is 41.6/min for the fast org, OVER the 40/min refresh, and 20.9/min for the slow one. The ceiling is 4 so the slow-org case is expressible; it is NOT a recommendation, because this knob has no per-org dimension and one setting applies to both. Recommended is 2 (8 in flight), which is also the already-argued 20%% of the 40-slot pool that leaves org invitations and handout syncs their headroom." $mpo) -}}
+{{- end -}}
+{{- if or (lt $ttl 45) (gt $ttl 300) -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=%d is outside 45-300. Below 45s an EVENT-LOOP STALL can let the lease lapse while the leaseholder is still working, after which a second leaseholder enters the same org and the per-org cap is breached. Note this floor is NOT about message duration (it used to be argued that way, from a 32.2s figure that was one org on one day): renewal is an independent setInterval at TTL/3 and the handlers await on GitHub I/O, so the real longest message — 97.7s create_repo over 489 samples from 2026-09-11, and 1.5%% of all messages exceed the shipped 60s TTL — renews through fine. 45s tolerates a 45s unyielding stall and leaves a 15s renewal interval against a millisecond Postgres round trip. Above 300s the TTL becomes the slot-recovery latency for a leaseholder that really died, and it must not outlive the messages it is holding." $ttl) -}}
+{{- end -}}
+{{- if gt $cap 0 -}}
+{{- if gt (mul $mpo $n) 16 -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=%d x drainConcurrency=%d is %d in flight for a SINGLE org, above the 16 ceiling. That ceiling is about the fleet-wide per-org content limiter (40 concurrent AND 40 starts per 60s, shared with org invitations and handout syncs), and the RESERVOIR is the tighter of the two: at the fastest measured create_repo p50 (23.1s, neu-cs2000, 2026-09-14) even 16 in flight is 41.6 starts/min against a 40/min refresh, so 16 is already the edge and not headroom. Lower orgSlotMaxPerOrg rather than drainConcurrency — drainConcurrency is already coherent with visibilityTimeoutSeconds and worker.timeoutMs, and lowering it would break that pairing to fix a different budget. This ceiling is deliberately NOT edgeFunctions.githubAsyncWorker.drainConcurrency's own maximum of 8: that one bounds one isolate's batch (heap, and the n x 120 visibility-timeout model), this one bounds one org's share of a GitHub rate limit." $mpo $n (mul $mpo $n)) -}}
+{{- end -}}
+{{- if gt $mpo $cap -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=%d exceeds orgSlotGlobalCap=%d, so the per-org ceiling can never be reached and the value is a lie about what this deploy does. Set orgSlotGlobalCap >= orgSlotMaxPerOrg." $mpo $cap) -}}
+{{- end -}}
+{{- $ttlLifetimeS := div (.Values.edgeFunctions.worker.timeoutMs | int) 1000 -}}
+{{- if gt $ttl $vt -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=%d exceeds visibilityTimeoutSeconds=%d. The lease must not outlive the messages it holds: pgmq would re-serve the batch to someone else while this leaseholder still believes it owns the org's slot, which is the redelivery failure the visibility timeout exists to prevent, with a slot pinned on top of it." $ttl $vt) -}}
+{{- end -}}
+{{- if gt $ttl $ttlLifetimeS -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds=%d exceeds the isolate lifetime edgeFunctions.worker.timeoutMs=%ds. A lease that outlives the isolate holding it pins an org's slot for the remainder of the TTL after the isolate is already gone, and since beforeUnload.wallClockRatio=%v retires isolates at HALF the lifetime, the real exposure is larger than this comparison suggests." $ttl $ttlLifetimeS .Values.edgeFunctions.beforeUnload.wallClockRatio) -}}
+{{- end -}}
+{{- end -}}
+{{- $need := mul $n 120 -}}
+{{- $isLegacyPair := and (eq $n 4) (eq $vt 300) -}}
+{{- if not $isLegacyPair -}}
+{{- if lt $vt $need -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency=%d requires visibilityTimeoutSeconds >= %d (%d x 120s/message), but it is %d. The visibility timeout must cover the whole batch (%d concurrent messages), not a single message: the batch runs concurrently but its GitHub calls serialize through the fleet-wide per-org Bottleneck content limiter, so batch wall clock grows with concurrency (measured 2026-09-07: ~420s for a batch of 4, create_repo p50 279.5s, which already re-read 20 of 58 messages against a 300s timeout). A timeout below the batch re-serves messages that are still in flight, multiplying duplicate GitHub work and walking read_ct toward the poison-pill DLQ with legitimate provisioning work. Set visibilityTimeoutSeconds: %d. (Only the exact legacy pair 4/300 is exempt from this rule, because that is what every install is already running.)" $n $need $n $vt $n $need) -}}
+{{- end -}}
+{{- $lifetimeMs := .Values.edgeFunctions.worker.timeoutMs | int -}}
+{{- if lt (div $lifetimeMs 1000) $need -}}
+{{- fail (printf "edgeFunctions.githubAsyncWorker.drainConcurrency=%d requires edgeFunctions.worker.timeoutMs >= %d (%ds = %d x 120s/message), but it is %d (%ds). worker.timeoutMs is the ISOLATE LIFETIME (main.ts passes it to EdgeRuntime as workerTimeoutMs), and the whole batch runs inside ONE leaseholder isolate: if the batch outlives it the isolate is killed before Promise.allSettled reaches the archive calls, so every message in flight is re-provisioned from scratch on redelivery. Note beforeUnload.wallClockRatio=%v asks the isolate to retire at half the lifetime, so treat the lifetime as the hard cap and not the budget. Raising it lengthens EVERY function's isolate lifetime in this pod, and gracefulExitTimeoutSeconds (%v) / terminationGracePeriodSeconds (%v) must stay above it or a rollout cuts the drain off anyway — so the concurrency bump is a coupled change, not a one-line one." $n (mul $need 1000) $need $n $lifetimeMs (div $lifetimeMs 1000) .Values.edgeFunctions.beforeUnload.wallClockRatio .Values.edgeFunctions.gracefulExitTimeoutSeconds .Values.edgeFunctions.terminationGracePeriodSeconds) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+The drain-coherence rules above are useless on their own if a ROLLOUT can cut
+the batch shorter than the isolate lifetime does, so the same arithmetic has to
+hold across the shutdown path. Two rules, both unconditional because they are
+properties of the edge tier and not of this worker:
+
+  gracefulExitTimeoutSeconds        >= worker.timeoutMs / 1000
+  terminationGracePeriodSeconds     >= preStopSleepSeconds + gracefulExitTimeoutSeconds
+
+edge-runtime intercepts SIGTERM and lets in-flight handlers finish for up to
+--graceful-exit-timeout; past that they are cut off. So a graceful-exit shorter
+than the isolate lifetime means a rollout terminates a batch that the isolate
+itself would have allowed to finish — the archive calls never run, and work
+GitHub has already done is redelivered. terminationGracePeriodSeconds is the
+kubelet's SIGKILL backstop and has to sit above preStop + graceful exit or the
+kubelet kills the pod mid-drain regardless of what the runtime intended.
+
+These were previously documented in values.yaml ("Sizing:
+gracefulExitTimeoutSeconds >= worker.timeoutMs") and asserted nowhere, which is
+why 8 / 960 / 960000 with the default 410s graceful exit rendered clean and the
+guard-rail suite blessed it. The chart defaults satisfy both (410 >= 400;
+430 >= 10 + 410), so this refuses nothing that exists today — it only refuses
+raising worker.timeoutMs without carrying the drain settings with it.
+*/ -}}
+{{- if .Values.edgeFunctions.enabled -}}
+{{- $lifeSec := div (.Values.edgeFunctions.worker.timeoutMs | int) 1000 -}}
+{{- $graceful := .Values.edgeFunctions.gracefulExitTimeoutSeconds | int -}}
+{{- $preStop := .Values.edgeFunctions.preStopSleepSeconds | int -}}
+{{- $termGrace := .Values.edgeFunctions.terminationGracePeriodSeconds | int -}}
+{{- if lt $graceful $lifeSec -}}
+{{- fail (printf "edgeFunctions.gracefulExitTimeoutSeconds=%d is below edgeFunctions.worker.timeoutMs (%dms = %ds). edge-runtime's --graceful-exit-timeout is how long in-flight handlers get to finish after SIGTERM, so a value below the isolate lifetime means a ROLLOUT cuts off work the isolate itself would have let finish. For the github-async-worker that means a batch killed before its pgmq archive calls, so repos that were created successfully are provisioned again on redelivery. Set gracefulExitTimeoutSeconds >= %d (the chart default leaves 10s of headroom: 410 for a 400s lifetime), and keep terminationGracePeriodSeconds above preStopSleepSeconds + this value." $graceful (.Values.edgeFunctions.worker.timeoutMs | int) $lifeSec $lifeSec) -}}
+{{- end -}}
+{{- if lt $termGrace (add $preStop $graceful) -}}
+{{- fail (printf "edgeFunctions.terminationGracePeriodSeconds=%d is below preStopSleepSeconds (%d) + gracefulExitTimeoutSeconds (%d) = %d. terminationGracePeriodSeconds is the kubelet's SIGKILL backstop: below that sum the pod is killed mid-drain no matter what --graceful-exit-timeout was set to, so the graceful exit is decorative and in-flight batches die without archiving. Set terminationGracePeriodSeconds >= %d." $termGrace $preStop $graceful (add $preStop $graceful) (add $preStop $graceful)) -}}
+{{- end -}}
+{{- /*
+And the metrics coupling, which is the other thing a raised worker.timeoutMs
+silently breaks: the top FINITE latency bucket must still reach the worker
+lifetime, or everything between the old bucket and the new lifetime lands in
++Inf and the upper quantiles become an extrapolation off the last finite bound
+-- precisely for the long batches the timeout was raised to accommodate.
+values.yaml says "raise it alongside any timeout increase"; render-guardrails.sh
+asserts it for the renders it happens to exercise. Neither can catch an
+operator's own values file, which is what this rule is for. Only checked when
+metrics are on, because the buckets are inert otherwise.
+
+CHECKING ONLY THE LAST ELEMENT WAS NOT ENOUGH, and the gap re-opened the exact
+hole this rule was added to close. The runtime does not merely read the last
+bound: histogramBuckets (images/edge-functions/main.ts) REJECTS a list with a
+non-finite or non-positive element, or one that is not strictly increasing, and
+SILENTLY falls back to DEFAULT_EDGE_BUCKETS -- which ends at 400. So
+[0.05, 1, 0.5, 960] satisfied "last >= lifetime" here, was thrown away at boot,
+and left a 960s lifetime being measured with 400s buckets. Validate the same
+three properties main.ts does, in the same order, before trusting the last
+element to mean anything.
+*/ -}}
+{{- if .Values.edgeFunctions.metrics.enabled -}}
+{{- $buckets := .Values.edgeFunctions.metrics.buckets -}}
+{{- if not $buckets -}}
+{{- fail "edgeFunctions.metrics.buckets is empty while edgeFunctions.metrics.enabled=true. main.ts would fall back to its own default list (ending at 400s), so the rendered configuration would not be the one in force. Set an explicit ascending list whose last element reaches worker.timeoutMs/1000." -}}
+{{- end -}}
+{{- $prev := 0.0 -}}
+{{- range $i, $b := $buckets -}}
+{{- $cur := $b | float64 -}}
+{{- if le $cur 0.0 -}}
+{{- fail (printf "edgeFunctions.metrics.buckets[%d]=%v is not positive. main.ts's histogramBuckets rejects a non-positive or non-finite bound and silently falls back to its default list (ending at 400s), so this list would never reach the runtime and the top-bucket check below would be meaningless." $i $b) -}}
+{{- end -}}
+{{- if and (gt $i 0) (le $cur $prev) -}}
+{{- fail (printf "edgeFunctions.metrics.buckets is not strictly increasing: element %d (%v) is not greater than the previous (%v). main.ts's histogramBuckets rejects that and silently falls back to its default list (ending at 400s) -- so a list that merely ENDS high, e.g. [0.05, 1, 0.5, 960], would be discarded at boot and every request past 400s would land in +Inf anyway." $i $b $prev) -}}
+{{- end -}}
+{{- $prev = $cur -}}
+{{- end -}}
+{{- $top := last $buckets | float64 -}}
+{{- if lt $top (float64 $lifeSec) -}}
+{{- fail (printf "edgeFunctions.metrics.buckets ends at %v seconds, below edgeFunctions.worker.timeoutMs (%ds). Every request that runs to the worker lifetime would land in +Inf, so p95/p99 stop meaning anything at exactly the moment this tier is in trouble. Extend the list so its last element is >= %d (keep it strictly increasing; the default list ends ON the default 400s lifetime)." $top $lifeSec $lifeSec) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+Floating backup image tag + a caching pull policy = a stale nightly dump.
+
+Kubernetes only defaults imagePullPolicy to Always for a tag that is literally
+`:latest`. Anything else that floats — `staging-latest`, `main-latest`,
+`<channel>-latest` — defaults to IfNotPresent, so once a node has pulled it, it
+keeps serving that cached layer after the registry alias moves. For most
+workloads a rollout re-pulls soon enough to hide this; the backup image is
+pulled only when the CronJob fires, so the failure mode is a nightly dump that
+silently runs a months-old image. Any environment, because floating tags are
+legitimate outside production (production refuses them outright above).
+*/ -}}
+{{- if .Values.backup.enabled -}}
+{{- $btag := .Values.backup.image.tag | default "" -}}
+{{- $bpol := .Values.backup.image.pullPolicy | default "" -}}
+{{- if or (eq $btag "latest") (hasSuffix "-latest" $btag) -}}
+{{- if ne $bpol "Always" -}}
+{{- fail (printf "backup.image.tag=%q floats but backup.image.pullPolicy=%q. Kubernetes only defaults to Always for a literal \":latest\", so this resolves to IfNotPresent and a node will keep its cached copy after the registry alias moves — the nightly dump then silently runs a stale image, and because the image is pulled only when the CronJob fires you would not find out at deploy time. Set backup.image.pullPolicy=Always, or pin an immutable tag." $btag $bpol) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+PROMETHEUS RULE THRESHOLDS.
+
+Every value below is interpolated VERBATIM into a PromQL expression or a `for:`
+duration in templates/prometheus-rules.yaml. Nothing between here and Prometheus
+type-checks it: helm renders, the PrometheusRule CRD accepts it (its schema says
+`expr` is a string), `kubectl apply` succeeds, and the failure lands in the one
+place nobody is watching. A rule group whose expression will not parse is
+rejected AS A GROUP, so every alert in that group stops evaluating. The result is
+a critical alert that no longer pages, with no symptom anywhere except the
+Prometheus operator's log.
+
+That is the same silent-loss shape PawtograderQueueOldestMessageAging's `unless`
+was chosen to avoid, reached through the values file instead of the expression.
+A threshold that cannot page is worse than no threshold, because the dashboard
+still looks monitored.
+
+Three ways a plain typo gets there, all of which render cleanly today:
+
+  queueDrainMessagesPerMinute: fast   ->  `... * 60 < -fast`   unparseable
+  queueDrainMessagesPerMinute: -2     ->  `... * 60 < --2`     unparseable
+  replicationLagBytesWarning: 100MiB  ->  int64 CASTS it to 0, so the rule
+    renders as `> 0` and pages permanently instead of never -- the quiet one,
+    because sprig coerces rather than fails and the render looks fine.
+
+SHAPE ONLY for the pre-existing thresholds. Each of those has its argument in
+values.yaml, and inventing numeric bounds here without a measurement behind them
+would be worse than leaving them open -- every other bound in this file is
+defended with a date and a number. The one value whose range IS argued from
+measurements is range-checked below.
+
+Gated on the rules actually rendering, for the same reason the org-slot
+coherence rules are gated on the feature being on: a deployment that emits no
+PrometheusRule must not fail a render over numbers that have no effect.
+*/ -}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled -}}
+{{- $pr := .Values.monitoring.prometheusRules -}}
+{{- /* Plain numbers. A leading sign is rejected on purpose: every one of these
+     is a magnitude, and a negative reaches PromQL as a double operator.
+     Scientific notation IS accepted, and has to be: Helm parses YAML numbers as
+     float64, so the shipped replicationLagBytesWarning: 104857600 stringifies as
+     1.048576e+08. PromQL accepts that literal, and the rule casts with int64
+     anyway -- but a large value on any threshold that is NOT cast would reach
+     the expression in that form, so the check has to allow what PromQL allows
+     rather than what looks tidy in values.yaml. */ -}}
+{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "postgrestSchemaCacheLoadsPerHour" "replicationLagBytesWarning" "queueMsgIdWarning" "queueMsgIdCritical") -}}
+{{- $raw := "" -}}
+{{- if hasKey $pr $k -}}{{- $raw = (index $pr $k) | toString -}}{{- end -}}
+{{- if and (ne $raw "") (not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $raw)) -}}
+{{- fail (printf "monitoring.prometheusRules.%s must be a plain non-negative number (got %q). It is interpolated straight into a PromQL expression in templates/prometheus-rules.yaml, so a word or a leading sign produces an expression Prometheus cannot parse -- and Prometheus rejects the whole RULE GROUP, silently taking every other alert in it off duty. A suffixed unit (100MiB, 30s) is worse still: sprig casts it to 0 rather than failing, the chart renders, and the alert fires permanently instead of never. Write the bare number in the unit the values.yaml comment names." $k $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- /* Non-EMPTY, for the threshold this chart added in #1021.
+     The loop above deliberately skips an empty value -- see the ne $raw ""
+     guard, which the queueMsgId* checks below rely on -- but empty is not
+     survivable here, verified by rendering:
+
+       postgrestSchemaCacheLoadsPerHour: ""  ->  `... ) > ` with no right-hand
+         operand. Prometheus rejects the whole pawtograder.rest group, taking
+         BOTH PostgREST alerts off duty silently.
+
+     Kept as a list: the /dev/shm thresholds that 0.4.0 adds belong here too
+     (an empty one is cast to 0 and the alert fires permanently).
+
+     Scoped to the keys #1021 introduced rather than widened to all of them:
+     the existing `ne $raw ""` guard is load-bearing for the queueMsgId* checks
+     further down, so tightening it globally is a separate decision.
+     (Raised in review on #1021.) */ -}}
+{{- range $k := (list "postgrestSchemaCacheLoadsPerHour") -}}
+{{- if or (not (hasKey $pr $k)) (eq ((index $pr $k) | toString | trim) "") -}}
+{{- fail (printf "monitoring.prometheusRules.%s must be set to a number when monitoring.prometheusRules.enabled=true; it is interpolated directly into a PromQL comparison. Empty does not disable the alert, it breaks it: `> ` with no operand makes Prometheus reject the ENTIRE pawtograder.rest group (both PostgREST alerts, silently). To switch these alerts off, set monitoring.prometheusRules.enabled=false or rest.adminServer.enabled=false rather than blanking the threshold." $k) -}}
+{{- end -}}
+{{- end -}}
+{{- /* Prometheus durations. Same failure, different grammar: these land in
+     `for:`, which the operator's admission webhook parses with model.ParseDuration
+     -- a bare integer is NOT a valid duration there. */ -}}
+{{- range $k := (list "discordCircuitOpenFor" "postgresUnavailableFor" "workflowMetricsAbsentFor") -}}
+{{- $raw := "" -}}
+{{- if hasKey $pr $k -}}{{- $raw = (index $pr $k) | toString -}}{{- end -}}
+{{- if and (ne $raw "") (not (regexMatch "^([0-9]+(ms|[smhdwy]))+$" $raw)) -}}
+{{- fail (printf "monitoring.prometheusRules.%s must be a Prometheus duration such as 30s, 10m or 1h30m (got %q). It is interpolated into a rule's `for:` field; a bare number or an unknown unit is not a valid duration and the rule group is refused, which takes every alert in that group with it. Note YAML: an unquoted 10m is the string you want, but an unquoted 10 is an integer and will NOT parse as a duration." $k $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+THE DRAIN FLOOR HAS A RANGE, not just a shape.
+
+This is the rate below which a queue counts as STALLED rather than busy, and it
+is the only thing standing between PawtograderQueueOldestMessageAging /
+PawtograderAsyncQueueStuck and paging on every assignment release. Both bounds
+are failures of the same kind -- the guard stops discriminating -- in opposite
+directions, and neither is visible from the rendered rule.
+*/ -}}
+{{- $drainRaw := "" -}}
+{{- if hasKey $pr "queueDrainMessagesPerMinute" -}}{{- $drainRaw = $pr.queueDrainMessagesPerMinute | toString -}}{{- end -}}
+{{- if ne $drainRaw "" -}}
+{{- $drain := $drainRaw | float64 -}}
+{{- if or (lt $drain 1.0) (gt $drain 7.0) -}}
+{{- fail (printf "monitoring.prometheusRules.queueDrainMessagesPerMinute=%v is outside 1-7 messages/minute. BELOW 1 the floor closes on the 0.66 msg/min of the 2026-09-07 stall (CS 4530, 58 messages over 88 minutes, a confirmed true positive) and the guard starts suppressing genuine stalls; at 0 it suppresses every queue that is moving at all, which is every queue. ABOVE 7 it is above every drain a real release produces -- the slowest rolling 15m window of the healthy 2026-09-13 release was 7.27 msg/min -- so the guard matches nothing, suppresses nothing, and silently restores the release pages it was added to stop. There is a hard ceiling behind that measurement: one class is one GitHub org, and that org's Bottleneck content limiter refreshes 40 per 60s, so no release can drain faster than 40 msg/min however much worker capacity is added. If throughput has genuinely risen, re-measure the drain and move this bound WITH the number -- charts/pawtograder/tests/promrules-unit.sh has a scenario at the ceiling that will go red if you move it without doing so." $drainRaw) -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+THE MSG_ID THRESHOLDS HAVE A RANGE AND AN ORDER.
+
+These two are the easiest numbers in this file to get wrong in a way that still
+renders, because the obvious way to pick them -- a fraction of the 2^53 ceiling
+-- is the wrong reasoning. Nothing organic approaches that ceiling: the busiest
+prod sequence was at 137,603 on 2026-09-13 moving ~7 msg/h, which is order 10^11
+years from it. The alerts exist for a sequence that was SET (a restore, a
+migration, a backfill, a manual RESTART WITH), so the thresholds have to sit in
+the band no traffic can reach and every accident lands in.
+
+Both bounds are the alert losing its meaning, in opposite directions, and
+neither is visible from the rendered rule.
+*/ -}}
+{{- $msgIdCliff := 9007199254740992.0 -}}
+{{- $msgWarnRaw := "" -}}
+{{- if hasKey $pr "queueMsgIdWarning" -}}{{- $msgWarnRaw = $pr.queueMsgIdWarning | toString -}}{{- end -}}
+{{- if ne $msgWarnRaw "" -}}
+{{- $msgWarn := $msgWarnRaw | float64 -}}
+{{- if lt $msgWarn 1000000000.0 -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdWarning=%v is below 1e9, which turns a corruption alarm into a capacity threshold. The busiest pgmq sequence on prod was at 137,603 on 2026-09-13 and advances ~7 messages/hour, so 1e9 is already ~7,000x the largest value the platform has ever held and thousands of years of the measured rate. Set it lower and normal enqueueing eventually crosses it, at which point the alert reports growth -- which is harmless, since 2^53 is ~9,000x further on -- and gets silenced or raised, leaving nothing watching for the thing it was built for: a sequence SET past the cliff by a restore, a migration, a backfill or a manual ALTER SEQUENCE ... RESTART WITH. The threshold must be unreachable by traffic and reachable only by accident." $msgWarnRaw) -}}
+{{- end -}}
+{{- if ge $msgWarn $msgIdCliff -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdWarning=%v is at or above 2^53 (9007199254740992), so it can only fire AFTER msg_ids have stopped round-tripping. PostgREST emits msg_id exactly, but JSON.parse in the workers rounds anything above 2^53 -- 9007199254740993 becomes ...992 -- and they then archive or delete a different message than the one they processed. A warning with no lead time on the damage it describes is not a warning. Keep it well below the cliff; the shipped 1e12 sits ~9,000x under it." $msgWarnRaw) -}}
+{{- end -}}
+{{- end -}}
+{{- $msgCritRaw := "" -}}
+{{- if hasKey $pr "queueMsgIdCritical" -}}{{- $msgCritRaw = $pr.queueMsgIdCritical | toString -}}{{- end -}}
+{{- if ne $msgCritRaw "" -}}
+{{- $msgCrit := $msgCritRaw | float64 -}}
+{{- if gt $msgCrit $msgIdCliff -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdCritical=%v is above 2^53 (9007199254740992). Past that value the workers are already archiving and deleting msg_ids they never read, so a critical placed there pages about a loss that has happened rather than one that is about to. The shipped 2^52 (4503599627370496) is the last doubling before the cliff." $msgCritRaw) -}}
+{{- end -}}
+{{- if and (ne $msgWarnRaw "") (le $msgCrit ($msgWarnRaw | float64)) -}}
+{{- fail (printf "monitoring.prometheusRules.queueMsgIdCritical=%v is not above queueMsgIdWarning=%v, so the warning tier cannot exist on its own: every value that trips the warning also pages. The two tiers are severity ROUTING -- a ticket at a value only an accident can produce, a page at a value one more accident puts past the 2^53 cliff -- and collapsing them discards the ticket." $msgCritRaw $msgWarnRaw) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+

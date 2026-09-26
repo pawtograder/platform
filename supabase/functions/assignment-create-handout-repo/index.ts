@@ -1,6 +1,6 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import {
   createRepo,
@@ -15,7 +15,8 @@ import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandl
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
-import { seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
+import { describeHandoutSeedResult, seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -28,7 +29,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // `*` rather than an explicit column list: the long list this used to carry
@@ -328,7 +330,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   });
   scope.setTag("handout_hashes_seeded", String(seedResult.seeded));
   if (!seedResult.seeded) {
-    console.log(`Not seeding handout file hashes for ${handoutFullName}: ${seedResult.reason}`);
+    console.log(`Not seeding handout file hashes for ${handoutFullName}: ${describeHandoutSeedResult(seedResult)}`);
   }
 
   return {

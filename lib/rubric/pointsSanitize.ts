@@ -10,8 +10,39 @@ export type PointsValidationWarning = {
   message: string;
 };
 
+/**
+ * Thrown by the rubric editor's save path when the YAML holds negative points.
+ *
+ * Blocking rather than silently absolutizing, matching the server-side validator in
+ * supabase/functions/_shared/rubricYaml.ts, whose comment names the web sanitizer as the
+ * behavior it refuses to copy: update_rubric_full cascades a points change into every existing
+ * grading comment, so quietly turning -5 into +5 rewrites grades that have already been issued.
+ * The two write paths had disagreed about the same rubric, and the web one was the lenient one.
+ */
+export class NegativePointsError extends Error {
+  constructor(readonly warnings: PointsValidationWarning[]) {
+    super(
+      "Point values cannot be negative. Fix these before saving:\n" +
+        warnings.map((w) => `  \u2022 ${w.path}`).join("\n") +
+        "\nFor deductions, set the criterion scoring mode to deduct-from-total or deduction-only."
+    );
+    this.name = "NegativePointsError";
+  }
+}
+
 export const NEGATIVE_POINTS_WARNING_MESSAGE =
   "Points cannot be negative; converted to the absolute value. For deductions, set the criterion scoring mode to deduct-from-total or deduction-only instead of using negative points.";
+
+/**
+ * Source (YAML) mode counterpart to {@link NEGATIVE_POINTS_WARNING_MESSAGE}.
+ *
+ * The tree editor absolutizes as it goes, so "converted to the absolute value" is true there. The
+ * source editor deliberately does not rewrite the buffer -- it reports and then refuses the save
+ * with a NegativePointsError -- so reusing the tree's wording told an author their value had been
+ * fixed and then failed the save on the same value.
+ */
+export const NEGATIVE_POINTS_REJECTED_MESSAGE =
+  "Points cannot be negative. This value is left exactly as you typed it and the save will be refused until you change it. For deductions, set the criterion scoring mode to deduct-from-total or deduction-only instead of using negative points.";
 
 /** Coerce a single numeric points field to a non-negative value. */
 export function normalizePointValue(points: number): { points: number; wasNegative: boolean } {

@@ -11,6 +11,8 @@
 import { create, verify, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "./SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "./requestScopedAuthOptions.ts";
 
 // Environment variable names.
 //
@@ -211,7 +213,7 @@ export async function isTokenRevoked(tokenId: string): Promise<boolean> {
     throw new MCPConfigError("Server configuration error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
   }
 
-  const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey);
+  const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   const { data, error } = await adminSupabase
     .from("revoked_token_ids")
@@ -286,10 +288,7 @@ export async function createAuthenticatedSupabaseClient(userId: string): Promise
         Authorization: `Bearer ${jwt}`
       }
     },
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false
-    }
+    auth: REQUEST_SCOPED_AUTH_OPTIONS
   });
 }
 
@@ -334,7 +333,7 @@ export async function authenticateMCPRequest(authHeader: string | null): Promise
   }
 
   // Check that user has instructor/grader role somewhere
-  const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey);
+  const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   const { data: roles, error: rolesError } = await adminSupabase
     .from("user_roles")
@@ -425,11 +424,27 @@ export async function updateTokenLastUsed(tokenId: string): Promise<void> {
   try {
     const adminSupabase = createClient<Database>(
       Deno.env.get(SUPABASE_URL_ENV)!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
-    await adminSupabase.from("api_tokens").update({ last_used_at: new Date().toISOString() }).eq("token_id", tokenId);
-  } catch {
-    // Non-critical, silently ignore
+    const { error } = await adminSupabase
+      .from("api_tokens")
+      .update({ last_used_at: new Date().toISOString() })
+      .eq("token_id", tokenId);
+    // supabase-js RESOLVES with an { error } instead of throwing, so the previous
+    // bare await could not fail and the catch below could not fire. Callers had a
+    // `.catch()` that captured to Sentry and was therefore dead code: a token
+    // whose last_used_at silently stopped updating looked identical to one that
+    // was never used, which is exactly the signal this column exists to provide.
+    if (error) {
+      Sentry.captureException(error, {
+        tags: { operation: "update_token_last_used", tokenId }
+      });
+    }
+  } catch (e) {
+    // Still non-fatal for the request — the caller has already responded — but no
+    // longer invisible.
+    Sentry.captureException(e, { tags: { operation: "update_token_last_used", tokenId } });
   }
 }

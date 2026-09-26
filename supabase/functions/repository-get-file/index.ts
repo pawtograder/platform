@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, NotFoundError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import * as FunctionTypes from "../_shared/FunctionTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 // Rate limiting storage: Map<fileKey, timestamp[]>
 const rateLimitStore = new Map<string, number[]>();
 const RATE_LIMIT_MAX_REQUESTS = 3;

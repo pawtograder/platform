@@ -14,6 +14,11 @@ import {
   assignmentGroupLeave,
   EdgeFunctionError
 } from "@/lib/edgeFunctions";
+import {
+  assignmentProvisionsRepositories,
+  groupNameRequirementsText,
+  isValidGroupName
+} from "@/lib/groupNameValidation";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { createClient } from "@/utils/supabase/client";
@@ -103,17 +108,14 @@ function CreateGroupButton({
               <Dialog.Title>Create a new group</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
-              <Field.Root invalid={name.length > 0 && !/^[a-zA-Z0-9_-]{1,36}$/.test(name)}>
+              <Field.Root invalid={name.length > 0 && !isValidGroupName(name, assignment.repo_mode)}>
                 <Field.Label>Choose a name for your group</Field.Label>
                 <Input name="name" value={name} onChange={(e) => setName(e.target.value)} />
                 <Field.HelperText>
                   Other students will use this name to find your group, and instructors will use this name to identify
-                  the group. The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36
-                  characters.
+                  the group. {groupNameRequirementsText(assignment.repo_mode)}
                 </Field.HelperText>
-                <Field.ErrorText>
-                  The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters.
-                </Field.ErrorText>
+                <Field.ErrorText>{groupNameRequirementsText(assignment.repo_mode)}</Field.ErrorText>
               </Field.Root>
               <Field.Root>
                 <Field.Label>Invite other students to join your group</Field.Label>
@@ -133,6 +135,7 @@ function CreateGroupButton({
               </Dialog.ActionTrigger>
               <Button
                 loading={isLoading}
+                disabled={!isValidGroupName(name, assignment.repo_mode)}
                 colorPalette="green"
                 onClick={() => {
                   setIsLoading(true);
@@ -147,7 +150,15 @@ function CreateGroupButton({
                   )
                     .then(() => {
                       repositories.refetchAll().then(() => {
-                        toaster.create({ title: "Repositories created", description: "", type: "success" });
+                        toaster.create({
+                          //An assignment that provisions no repository still creates the group; saying otherwise
+                          //promises the student a repo that is never coming
+                          title: assignmentProvisionsRepositories(assignment.repo_mode)
+                            ? "Repositories created"
+                            : "Group created",
+                          description: "",
+                          type: "success"
+                        });
                         setOpen(false);
                         setName("");
                         setSelectedInvitees([]);

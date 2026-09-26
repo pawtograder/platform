@@ -636,6 +636,20 @@ export function validateRubricYaml(input: unknown): ValidateResult {
       checkBoolean(rawCriteria.is_additive, critPath, "is_additive", errors);
       checkBoolean(rawCriteria.is_deduction_only, critPath, "is_deduction_only", errors);
       checkInteger(rawCriteria.total_points, critPath, "total_points", errors, "total_points is stored as an integer");
+
+      // Same reason the negative check-points rule below exists, one level up. Every
+      // scoring mode in _submission_review_recompute_scores treats total_points as a
+      // magnitude: additive caps at it, the default subtracts the applied checks from it,
+      // and deduction-only floors at -total_points. A negative value flips the mode's
+      // intent, turning a deduction into a credit. chk_rubric_criteria_total_points_non_negative
+      // now rejects it in the DB too; catching it here names the criterion.
+      if (typeof rawCriteria.total_points === "number" && rawCriteria.total_points < 0) {
+        errors.push({
+          path: `${critPath}.total_points`,
+          message: `${rawCriteria.total_points} is negative; total_points is the criterion's magnitude in every scoring mode, so set is_deduction_only or leave is_additive off instead`
+        });
+      }
+
       checkInteger(
         rawCriteria.min_checks_per_submission,
         critPath,
@@ -739,6 +753,32 @@ export function validateRubricYaml(input: unknown): ValidateResult {
               message: `${rawCheck.points} is negative; fix the value rather than relying on it being made positive`
             });
           }
+        }
+
+        // Option points get the same treatment as the check's own points. `data` rides the YAML
+        // round-trip opaquely, so without this an option holding -3 reached update_rubric_full
+        // unexamined -- and an option's points become a comment's points the moment a grader
+        // selects it, which inverts the sign the criterion's scoring mode intends.
+        const rawCheckData = rawCheck.data;
+        if (isPlainObject(rawCheckData) && Array.isArray((rawCheckData as { options?: unknown }).options)) {
+          const rawOptions = (rawCheckData as { options: unknown[] }).options;
+          rawOptions.forEach((rawOption, optIdx) => {
+            if (!isPlainObject(rawOption)) return;
+            const optionPoints = (rawOption as { points?: unknown }).points;
+            if (optionPoints === undefined || optionPoints === null) return;
+            const optionPath = `${checkPath}.data.options[${optIdx}].points`;
+            if (typeof optionPoints !== "number" || !Number.isFinite(optionPoints)) {
+              errors.push({
+                path: optionPath,
+                message: `${String(optionPoints)} is not a finite number`
+              });
+            } else if (optionPoints < 0) {
+              errors.push({
+                path: optionPath,
+                message: `${optionPoints} is negative; fix the value rather than relying on it being made positive`
+              });
+            }
+          });
         }
 
         if (rawCheck.student_visibility !== undefined && rawCheck.student_visibility !== null) {

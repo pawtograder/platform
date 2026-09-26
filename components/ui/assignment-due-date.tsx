@@ -1,6 +1,6 @@
 "use client";
 
-import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
+import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/studentAssignmentsList";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {

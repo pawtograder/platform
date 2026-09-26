@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { SERVICE_CLIENT_AUTH_OPTIONS } from "@/utils/supabase/serviceClientOptions";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { generateICS, ICSEvent } from "@/lib/ics-generator";
 import { TZDate } from "@date-fns/tz";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 /**
  * Parse class section meeting times string (e.g., "MWF 10:00-11:00" or "T/R 2:30pm-3:30pm")
@@ -155,7 +157,7 @@ function parseClassSectionMeetingTimes(meetingTimes: string): {
 /**
  * Handle CORS preflight requests
  */
-export async function OPTIONS() {
+async function optionsHandler() {
   return new NextResponse(null, {
     status: 204,
     headers: {
@@ -170,7 +172,7 @@ export async function OPTIONS() {
  * Generate ICS calendar feed for a course
  * GET /api/calendar/[course_id]?classSection={id}&labSection={id}
  */
-export async function GET(request: NextRequest, { params }: { params: Promise<{ course_id: string }> }) {
+async function getHandler(request: NextRequest, { params }: { params: Promise<{ course_id: string }> }) {
   try {
     const { course_id } = await params;
     const courseId = parseInt(course_id);
@@ -188,7 +190,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     // Create service role client for public access (bypasses RLS)
     const supabase = createClient<Database>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: SERVICE_CLIENT_AUTH_OPTIONS }
     );
 
     // Fetch course to get timezone and dates
@@ -456,3 +459,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const OPTIONS = withRouteMetrics("/api/calendar/[course_id]", optionsHandler, "OPTIONS");
+export const GET = withRouteMetrics("/api/calendar/[course_id]", getHandler);

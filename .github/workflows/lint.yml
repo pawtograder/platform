@@ -2,57 +2,531 @@ name: Lint
 permissions:
   contents: read
 on:
+  # main and staging ONLY, deliberately. With `branches: ["**"]` every push to
+  # a PR's own branch produced a SECOND run of these jobs, publishing check
+  # runs with the same names — `lint (22.x)`, `jest-unit-tests (22.x)`,
+  # `deno-unit-tests`, all of them required contexts — on the same head SHA as
+  # the pull_request_target run. Confirmed on live PR heads: two of each, from
+  # `Lint / push` and `Lint / pull_request`. That was harmless while both
+  # triggers read the same branch-controlled file, but the whole point of
+  # pull_request_target is that the PR run reads STAGING's copy; the push run
+  # still reads the branch's. Branch protection resolves a required context to
+  # the most recent check run of that name, so anyone with push access could
+  # no-op these jobs in their branch's lint.yml and have the fast green push
+  # run land last and set the verdict — for exactly the population
+  # `pawtograder-contributors` exists to widen.
   push:
     branches:
-      - "**"
-  pull_request:
+      - main
+      - staging
+  # pull_request_target, NOT pull_request. These jobs run on `pawtograder-ci`
+  # — the in-cluster ARC pool, whose runner pods carry the in-cluster registry
+  # credential in ~/.docker/config.json — and they execute PR-supplied code:
+  # `npm ci` runs lockfile lifecycle scripts, and jest/deno test sources and
+  # config files are all attacker-controlled on a fork PR.
+  #
+  # Under `pull_request` the workflow file itself comes from the PR head, so a
+  # fork could delete the gate below in the same commit that abuses it. Under
+  # `pull_request_target` the file always comes from the repository's DEFAULT
+  # branch (`staging`) — not the PR's base branch; see _trust-gate.yml.
+  #
+  # Consequence to remember: edits to THIS file in a PR do not take effect
+  # until merged, and there is deliberately no way around that — a trigger
+  # that ran a branch's own copy of this file would also be able to claim the
+  # required contexts with it. Try changes on a scratch repo, or on a branch
+  # whose workflow jobs are RENAMED so they cannot collide with a required
+  # context.
+  pull_request_target:
     branches:
       - "**"
+  # No workflow_dispatch: it is another privileged trigger reaching the cache
+  # steps, and `_trust-gate.yml` allow-lists it as trusted-by-ref, so it is a
+  # second way to run these jobs that branch protection never sees.
+
+# Cache namespace, and the reason it exists is the restore side rather than
+# the write side. Every cache entry a run can see lives in ONE scope — the ref
+# the run is on, which under pull_request_target is the DEFAULT BRANCH — and
+# that is not configurable. So isolation has to come from the key: a restore
+# whose fallback prefix is `nextjs-Linux-` matches any entry in that scope,
+# including one written by a run that built PR code.
+#
+# Writes from a trusted push land under `trunk`; anything else lands under
+# `pr-<number>`, and no trusted run carries a restore-key prefix that can
+# reach it. PR runs still read `trunk` (that is the speed-up) — the trust
+# flows one way. This holds by key construction rather than by an `if:`, and
+# the literals come from this file, which under pull_request_target is read
+# from the default branch and cannot be edited by the PR.
+env:
+  CACHE_SCOPE: ${{ github.event_name == 'push' && 'trunk' || github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || 'untrusted' }}
+
+concurrency:
+  group: lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Decides whether this ref may run on the self-hosted pool at all. See
+  # _trust-gate.yml for what "trusted" means and why it is not
+  # author_association or bare org membership.
+  gate:
+    # Granted explicitly: a reusable workflow can only intersect with the
+    # caller's token, and this workflow's top-level grant is `contents: read`.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: ./.github/workflows/_trust-gate.yml
+    # Forwarded unconditionally: a called workflow gets no secrets otherwise,
+    # which made the gate's "set CI_TRUST_TOKEN" advice inert. Undefined
+    # resolves to an empty string and the gate falls back to GITHUB_TOKEN.
+    secrets:
+      trust_token: ${{ secrets.CI_TRUST_TOKEN }}
+
   lint:
-    runs-on: pawtograder-ci
+    needs: gate
+    # NOT `if: needs.gate.outputs.trusted == 'true'`, and this is the whole
+    # shape of the gate. This job's name is a REQUIRED status context and
+    # GitHub reports a SKIPPED job as Success, so gating the job made an
+    # untrusted PR satisfy every required check having run nothing — strictly
+    # worse than before this lane was gated at all, when lint/jest/deno ran
+    # unconditionally on fork PRs and only e2e-local was refused.
+    #
+    # So the job always runs and fails on its first step instead, which is a
+    # RED required check. `!cancelled()` rather than a bare condition so that a
+    # gate job which FAILED (an API it could not resolve) is also red, not
+    # skipped-green.
+    if: ${{ !cancelled() }}
+    # Untrusted refs never touch the in-cluster pool: they get a throwaway
+    # GitHub-hosted VM, fail on the step below, and never reach a checkout.
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-ci' || 'ubuntu-latest' }}
     strategy:
       matrix:
         node-version: [22.x]
     steps:
+      # First, before any checkout: an untrusted ref must not reach the code.
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::This check cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
       - uses: actions/checkout@v4
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
+        with:
+          # The MERGE ref, not the bare head. Explicit either way, because
+          # under pull_request_target the default checkout is the BASE branch,
+          # which would lint the wrong code and pass silently — but the head
+          # alone is the other half of that mistake: these four jobs are
+          # required contexts, neither ruleset sets
+          # strict_required_status_checks_policy, so a PR opened last week
+          # against an API staging has since changed passes every check on a
+          # stale head and breaks staging on merge. refs/pull/N/merge is the
+          # same PR-authored code the gate has already vetted, combined with
+          # the current base. A PR with merge conflicts has no merge ref and
+          # fails loudly here, which is the correct answer for something that
+          # cannot be merged.
+          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          persist-credentials: false
+      # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
+      # after every push, so resolving it at checkout time is not the same as
+      # resolving the head SHA the gate vetted. Two ways that bites — a stale
+      # ref right after `synchronize`, where the required contexts would go
+      # green on a head nobody tested; and a ref that moved between the gate
+      # and here, which would run a commit whose pusher was never checked, on
+      # the self-hosted pool. That is exactly the check-then-use window
+      # _trust-gate.yml claims not to have, so close it here rather than
+      # weaken the claim.
+      #
+      # `git cat-file` rather than HEAD^2: the checkout is shallow, so the
+      # parent objects are absent even though the commit records their hashes.
+      - name: Verify the merge ref contains the vetted head
+        if: github.event.pull_request.number
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged_head=$(git cat-file -p HEAD | awk '/^parent /{print $2}' | sed -n 2p)
+          if [ -z "$merged_head" ]; then
+            echo "::error title=Not a merge commit::refs/pull/${{ github.event.pull_request.number }}/merge resolved to a commit with fewer than two parents, so the PR head it contains cannot be confirmed." >&2
+            exit 1
+          fi
+          if [ "$merged_head" != "$HEAD_SHA" ]; then
+            echo "::error title=Merge ref does not match the vetted head::This checkout contains ${merged_head}, but the trust gate approved ${HEAD_SHA}. The merge ref moved or is stale; re-run this job." >&2
+            exit 1
+          fi
+          echo "merge ref contains the vetted head ${HEAD_SHA}"
+      # Restore-only, with a separate conditional save below, so that no PR
+      # run writes a cache a later trusted build would restore — CodeQL
+      # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
+      # cache was isolated to the `refs/pull/N/merge` scope; under
+      # pull_request_target a run resolves to the DEFAULT branch instead, which
+      # is where the concern comes from.
+      #
+      # Belt and braces, deliberately: GitHub already refuses this write.
+      # `pull_request_target` is not in the set of triggers permitted to create
+      # or overwrite caches in the default branch's scope (only push,
+      # workflow_dispatch, repository_dispatch, delete, registry_package,
+      # page_build and schedule are), so PR runs get read-only cache access and
+      # a save attempt "fails but the step and the job do not" — it is a
+      # warning in the log. In practice only the `push` trigger populates these
+      # caches now; PRs restore and keep the speed-up. Keep the guard: it costs
+      # nothing and does not depend on GitHub keeping that restriction.
+      - name: Restore npm dependencies
+        id: npm-cache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
+          # Own namespace first, then trunk. A push run's CACHE_SCOPE is
+          # `trunk`, so its list is trunk-only and cannot reach a `pr-*` entry.
           restore-keys: |
-            npm-${{ runner.os }}-node-22-
+            npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-
+            npm-${{ runner.os }}-trunk-node-22-
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+      # `npm ci` rather than `npm install`: install must not silently drift off
+      # package-lock.json, which is what bit jest below. This is a
+      # reproducibility fix and NOT a security boundary — `npm ci` still runs
+      # lifecycle scripts from the PR's lockfile. The gate above is the only
+      # thing standing between fork code and this runner.
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+      # Two conditions, both load-bearing.
+      #
+      # `github.event_name == 'push'` is a POSITIVE test for the only trigger
+      # that may write here, replacing `head.repo.fork != true` — the exact
+      # null-coercion _trust-gate.yml documents as a bug it is fixing. When a
+      # fork is deleted the payload's `head.repo` is null, `null != true` is
+      # true, and a fork PR took the same-repo branch.
+      #
+      # `cache-hit != 'true'` because `actions/cache/save` is NOT the post
+      # step of `actions/cache`: it uses a NullStateProvider, so its
+      # isExactKeyMatch check is a documented no-op and it always attempts an
+      # upload. The npm key only changes when package-lock.json does, so the
+      # exact hit is the normal case and every push was uploading an archive
+      # for GitHub to reject as a duplicate.
+      - name: Save npm dependencies
+        if: github.event_name == 'push' && steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
       - name: Run linting check
         run: npm run lint
+
+  # Jest unit tests (tests/unit).
+  #
+  # These were previously UNGATED. CI's only Jest invocation was in deploy.yml:
+  #   npx jest --runInBand --testPathPatterns "tests/unit/issue"
+  # which matches `tests/unit/issue*` only — so every other file under tests/unit
+  # ran nowhere. That was discovered on PR #956 when a stale expectation
+  # (`Expected: 8, Received: 3`, after the isolate-lifetime fallback landed) sat
+  # failing while CI stayed green, and ~117 tests across two PRs turned out to be
+  # green-by-omission. Widening the deploy.yml pattern was the other option, but
+  # that job needs a live Supabase and takes ~30 min; these are pure-logic tests
+  # that want fast feedback, so they get their own lane next to deno-unit-tests.
+  #
+  # No RUN_SUPABASE_INTEGRATION_TESTS here on purpose: the Supabase-backed files
+  # under tests/unit gate themselves on that flag and self-skip without it, so
+  # they stay in deploy.yml where a database actually exists.
+  jest-unit-tests:
+    needs: gate
+    # Runs and fails on an untrusted ref rather than skipping; see the `lint`
+    # job above for why a skip is not safe for a required context.
+    if: ${{ !cancelled() }}
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-ci' || 'ubuntu-latest' }}
+    strategy:
+      matrix:
+        node-version: [22.x]
+    steps:
+      # First, before any checkout: an untrusted ref must not reach the code.
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::This check cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          # MERGE ref; see the `lint` job's checkout for why.
+          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          persist-credentials: false
+      # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
+      # after every push, so resolving it at checkout time is not the same as
+      # resolving the head SHA the gate vetted. Two ways that bites — a stale
+      # ref right after `synchronize`, where the required contexts would go
+      # green on a head nobody tested; and a ref that moved between the gate
+      # and here, which would run a commit whose pusher was never checked, on
+      # the self-hosted pool. That is exactly the check-then-use window
+      # _trust-gate.yml claims not to have, so close it here rather than
+      # weaken the claim.
+      #
+      # `git cat-file` rather than HEAD^2: the checkout is shallow, so the
+      # parent objects are absent even though the commit records their hashes.
+      - name: Verify the merge ref contains the vetted head
+        if: github.event.pull_request.number
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged_head=$(git cat-file -p HEAD | awk '/^parent /{print $2}' | sed -n 2p)
+          if [ -z "$merged_head" ]; then
+            echo "::error title=Not a merge commit::refs/pull/${{ github.event.pull_request.number }}/merge resolved to a commit with fewer than two parents, so the PR head it contains cannot be confirmed." >&2
+            exit 1
+          fi
+          if [ "$merged_head" != "$HEAD_SHA" ]; then
+            echo "::error title=Merge ref does not match the vetted head::This checkout contains ${merged_head}, but the trust gate approved ${HEAD_SHA}. The merge ref moved or is stale; re-run this job." >&2
+            exit 1
+          fi
+          echo "merge ref contains the vetted head ${HEAD_SHA}"
+      # Restore-only, with a separate conditional save below, so that no PR
+      # run writes a cache a later trusted build would restore — CodeQL
+      # actions/cache-poisoning. Under the old `pull_request` trigger a fork's
+      # cache was isolated to the `refs/pull/N/merge` scope; under
+      # pull_request_target a run resolves to the DEFAULT branch instead, which
+      # is where the concern comes from.
+      #
+      # Belt and braces, deliberately: GitHub already refuses this write.
+      # `pull_request_target` is not in the set of triggers permitted to create
+      # or overwrite caches in the default branch's scope (only push,
+      # workflow_dispatch, repository_dispatch, delete, registry_package,
+      # page_build and schedule are), so PR runs get read-only cache access and
+      # a save attempt "fails but the step and the job do not" — it is a
+      # warning in the log. In practice only the `push` trigger populates these
+      # caches now; PRs restore and keep the speed-up. Keep the guard: it costs
+      # nothing and does not depend on GitHub keeping that restriction.
+      - name: Restore npm dependencies
+        id: npm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
+          # Own namespace first, then trunk. A push run's CACHE_SCOPE is
+          # `trunk`, so its list is trunk-only and cannot reach a `pr-*` entry.
+          restore-keys: |
+            npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-
+            npm-${{ runner.os }}-trunk-node-22-
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      # `npm ci`, NOT `npm install`, and this is load-bearing. package.json has
+      # `jest: ^30.1.2`, so `npm install` drifts to 30.4.x while package-lock.json
+      # still pins a single hoisted `jest-mock@30.0.5`. jest-runtime@30.4.2 calls
+      # `moduleMocker.clearMocksOnScope()`, which 30.0.5 does not have, so every
+      # suite carrying `@jest-environment node` dies with
+      # "TypeError: this._moduleMocker.clearMocksOnScope is not a function"
+      # before running a single test — 43 suites locally. jest-runtime@30.1.2, the
+      # locked version, never calls it, so the locked pair is self-consistent.
+      # Verified by unpacking both versions. Refreshing the lockfile's jest deps
+      # would fix it at the source and is worth doing separately.
+      - name: Install dependencies
+        run: npm ci
+      # Two conditions, both load-bearing.
+      #
+      # `github.event_name == 'push'` is a POSITIVE test for the only trigger
+      # that may write here, replacing `head.repo.fork != true` — the exact
+      # null-coercion _trust-gate.yml documents as a bug it is fixing. When a
+      # fork is deleted the payload's `head.repo` is null, `null != true` is
+      # true, and a fork PR took the same-repo branch.
+      #
+      # `cache-hit != 'true'` because `actions/cache/save` is NOT the post
+      # step of `actions/cache`: it uses a NullStateProvider, so its
+      # isExactKeyMatch check is a documented no-op and it always attempts an
+      # upload. The npm key only changes when package-lock.json does, so the
+      # exact hit is the normal case and every push was uploading an archive
+      # for GitHub to reject as a duplicate.
+      - name: Save npm dependencies
+        if: github.event_name == 'push' && steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
+      # SCOPED to the suites this PR added, deliberately, rather than all of
+      # tests/unit. A repo-wide gate is the right end state but I could not
+      # verify it would be green: under the locked jest pair 11 of 101 suites
+      # still fail locally, and I could not attribute those without the repo's
+      # own jest.config.js dependencies, so turning it on repo-wide risks
+      # blocking unrelated PRs on pre-existing red. Widening it, and refreshing
+      # the lockfile's jest deps so `npm install` stops drifting, is the
+      # follow-up. Adding a file here is one line; that is the point.
+      #
+      # prom-client-bundle was added later for a different reason: it already
+      # existed and ran nowhere. It shipped in #952 with a header claiming it
+      # "runs on every PR in milliseconds", but this list did not include it
+      # and deploy.yml's `--testPathPatterns "tests/unit/issue"` matches only
+      # tests/unit/issue*, so it was green-by-omission — the same pathology
+      # this job was created to fix. Its slow counterpart
+      # (scripts/check-prom-client-bundle.sh) does run, but only in
+      # deploy.yml after a production build, which is now behind the trust
+      # gate and so does not run at all for an untrusted PR. This is the
+      # cheap guard that catches the regression before the expensive one.
+      - name: Run Jest unit tests
+        run: |
+          npx jest --runInBand \
+            tests/unit/async-worker-tuning.test.ts \
+            tests/unit/create-repo-step-timings.test.ts \
+            tests/unit/repo-not-ready-plan.test.ts \
+            tests/unit/prom-client-bundle.test.ts
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
   # dangerous production values combination (e2e bypasses, plaintext/
   # non-recoverable secrets, seeding, resetOnDrift, floating image tags,
   # unauthenticated Studio). See charts/pawtograder/PRODUCTION-READINESS.md §4.
   chart-guardrails:
-    runs-on: pawtograder-ci
+    needs: gate
+    # Runs and fails on an untrusted ref rather than skipping; see the `lint`
+    # job above for why a skip is not safe for a required context.
+    if: ${{ !cancelled() }}
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-ci' || 'ubuntu-latest' }}
     steps:
+      # First, before any checkout: an untrusted ref must not reach the code.
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::This check cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
       - uses: actions/checkout@v4
+        with:
+          # MERGE ref; see the `lint` job's checkout for why.
+          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          persist-credentials: false
+      # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
+      # after every push, so resolving it at checkout time is not the same as
+      # resolving the head SHA the gate vetted. Two ways that bites — a stale
+      # ref right after `synchronize`, where the required contexts would go
+      # green on a head nobody tested; and a ref that moved between the gate
+      # and here, which would run a commit whose pusher was never checked, on
+      # the self-hosted pool. That is exactly the check-then-use window
+      # _trust-gate.yml claims not to have, so close it here rather than
+      # weaken the claim.
+      #
+      # `git cat-file` rather than HEAD^2: the checkout is shallow, so the
+      # parent objects are absent even though the commit records their hashes.
+      - name: Verify the merge ref contains the vetted head
+        if: github.event.pull_request.number
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged_head=$(git cat-file -p HEAD | awk '/^parent /{print $2}' | sed -n 2p)
+          if [ -z "$merged_head" ]; then
+            echo "::error title=Not a merge commit::refs/pull/${{ github.event.pull_request.number }}/merge resolved to a commit with fewer than two parents, so the PR head it contains cannot be confirmed." >&2
+            exit 1
+          fi
+          if [ "$merged_head" != "$HEAD_SHA" ]; then
+            echo "::error title=Merge ref does not match the vetted head::This checkout contains ${merged_head}, but the trust gate approved ${HEAD_SHA}. The merge ref moved or is stale; re-run this job." >&2
+            exit 1
+          fi
+          echo "merge ref contains the vetted head ${HEAD_SHA}"
       - uses: azure/setup-helm@v4
         with:
           version: v3.20.2
       - name: Run chart guard-rail render tests
         run: charts/pawtograder/tests/render-guardrails.sh
 
+      # render-guardrails.sh pins the TEXT of the alerting rules; this pins their
+      # BEHAVIOUR through promtool. The two are not interchangeable: the queue
+      # alerts turn on `unless` rather than `and` so that an absent
+      # pawtograder_queue_depth series degrades to the old, louder rule instead of
+      # silently suppressing the alert, and only a behavioural test can show that
+      # property still holds. The runner SKIPs with exit 0 when neither promtool
+      # nor a container runtime is available, so check the step log rather than
+      # assuming a green tick means the suite ran.
+      - name: Run Prometheus rule behaviour tests
+        run: charts/pawtograder/tests/promrules-unit.sh
+
+  # A chart change that restarts Postgres (pod template, checksum/config, volume
+  # claim templates) must bump at least the chart MINOR version, so the deploy
+  # is planned as a maintenance window rather than shipped as a routine patch.
+  # See docs/operations/planned-maintenance.md. Compares against main -- what
+  # production deploys from -- rather than the PR's base branch; the script
+  # header says why. Its own job, not a step in chart-guardrails, so a failing
+  # step there cannot skip it. PR-only, so it does not double up on pushes.
+  postgres-restart-gate:
+    needs: gate
+    # PR-only, as before; `pull_request_target` because that is the only PR
+    # trigger this file has (a bare `pull_request` test here never matches).
+    # Gated like chart-guardrails: fails red on an untrusted ref rather than
+    # running its code on pawtograder-ci.
+    if: ${{ !cancelled() && github.event_name == 'pull_request_target' }}
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-ci' || 'ubuntu-latest' }}
+    steps:
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::This check cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          # MERGE ref; see the `lint` job's checkout. Full depth so the
+          # script can resolve origin/main.
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the merge ref contains the vetted head
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged_head=$(git rev-parse HEAD^2 2>/dev/null || true)
+          if [ "$merged_head" != "$HEAD_SHA" ]; then
+            echo "::error title=Merge ref does not match the vetted head::This checkout contains '${merged_head}', but the trust gate approved ${HEAD_SHA}. The merge ref moved or is stale; re-run this job." >&2
+            exit 1
+          fi
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.20.2
+      - name: Postgres restart needs a minor version bump
+        run: charts/pawtograder/tests/postgres-restart-gate.sh origin/main
+
   # Fast, deterministic unit tests for the gradebook recalc computation (the math the
   # gradebook-calculations e2e fixtures exercise end-to-end through the async pipeline).
   # These run the real edge-function expression functions directly — no DB, no pipeline.
   deno-unit-tests:
-    runs-on: pawtograder-ci
+    needs: gate
+    # Runs and fails on an untrusted ref rather than skipping; see the `lint`
+    # job above for why a skip is not safe for a required context.
+    if: ${{ !cancelled() }}
+    runs-on: ${{ needs.gate.outputs.trusted == 'true' && 'pawtograder-ci' || 'ubuntu-latest' }}
     steps:
+      # First, before any checkout: an untrusted ref must not reach the code.
+      - name: Require a trusted ref
+        if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
+        run: |
+          echo "::error title=Untrusted ref::This check cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          exit 1
       - uses: actions/checkout@v4
+        with:
+          # MERGE ref; see the `lint` job's checkout for why.
+          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          persist-credentials: false
+      # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
+      # after every push, so resolving it at checkout time is not the same as
+      # resolving the head SHA the gate vetted. Two ways that bites — a stale
+      # ref right after `synchronize`, where the required contexts would go
+      # green on a head nobody tested; and a ref that moved between the gate
+      # and here, which would run a commit whose pusher was never checked, on
+      # the self-hosted pool. That is exactly the check-then-use window
+      # _trust-gate.yml claims not to have, so close it here rather than
+      # weaken the claim.
+      #
+      # `git cat-file` rather than HEAD^2: the checkout is shallow, so the
+      # parent objects are absent even though the commit records their hashes.
+      - name: Verify the merge ref contains the vetted head
+        if: github.event.pull_request.number
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged_head=$(git cat-file -p HEAD | awk '/^parent /{print $2}' | sed -n 2p)
+          if [ -z "$merged_head" ]; then
+            echo "::error title=Not a merge commit::refs/pull/${{ github.event.pull_request.number }}/merge resolved to a commit with fewer than two parents, so the PR head it contains cannot be confirmed." >&2
+            exit 1
+          fi
+          if [ "$merged_head" != "$HEAD_SHA" ]; then
+            echo "::error title=Merge ref does not match the vetted head::This checkout contains ${merged_head}, but the trust gate approved ${HEAD_SHA}. The merge ref moved or is stale; re-run this job." >&2
+            exit 1
+          fi
+          echo "merge ref contains the vetted head ${HEAD_SHA}"
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

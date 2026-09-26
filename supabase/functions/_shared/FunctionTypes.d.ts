@@ -175,6 +175,23 @@ export type ListGitHubOrgsResponse = {
   installUrl: string;
 };
 
+/** A Discord server the bot is currently a member of. */
+export type DiscordGuild = {
+  id: string;
+  name: string;
+};
+
+/**
+ * Servers the Discord bot is in, plus the URL to add it to a new one.
+ *
+ * Admin-only: the bot is a single shared account, so this list spans every course on the
+ * deployment. See discord-list-guilds.
+ */
+export type ListDiscordGuildsResponse = {
+  guilds: DiscordGuild[];
+  installUrl: string;
+};
+
 /** Request to (re)build the code-symbol index for a submission's source files. */
 export type IndexSubmissionRequest = {
   submission_id: number;

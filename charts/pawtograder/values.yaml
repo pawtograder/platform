@@ -222,7 +222,14 @@ secrets:
     # Backward-compatible alias for edgeFunctionsBundles. Prefer setting
     # edgeFunctionsBundles explicitly in new overlays.
     bundles: []
-    webBundles: []                # usually: web
+    webBundles: []                # usually: web, llm, discord
+                                  #   `discord` belongs here as well as in
+                                  #   edgeFunctionsBundles: DISCORD_APPLICATION_ID
+                                  #   and DISCORD_BOT_TOKEN are read by the Next.js
+                                  #   bot-install routes (app/api/discord/install
+                                  #   and .../install/callback), not only by the
+                                  #   worker. Omitting it makes the install button
+                                  #   answer 500.
     edgeFunctionsBundles: []      # subset of: github-app, aws-chime, discord,
                                   #   canvas, sis, smtp, mcp, redis, sentry, misc
     storeName: openbao            # ClusterSecretStore name
@@ -465,6 +472,39 @@ postgres:
 # -----------------------------------------------------------------------------
 maintenance:
   enabled: false
+  # The maintenance POSTURE, distinct from `enabled` (which only deploys the
+  # page). true renders the state `scripts/maintenance.sh down` leaves behind:
+  #   - the web host's "/" backend (and each channel host's "/") -> this page's
+  #     Service, byte-for-byte what the script patches in (name + port 8080)
+  #   - every writer the script scales to 0 -> replicas: 0 (web, rest, auth,
+  #     storage, the realtime StatefulSet, every web-/functions-<channel>
+  #     Deployment, and functions when edgeFunctions.autoscaling is off)
+  #   - the edge-functions HPA -> not rendered. With autoscaling on, functions
+  #     replicas stays unrendered and the script's live 0 holds; rendering 0
+  #     there would make the EXIT upgrade reset the tier to 1 pod under a
+  #     client-side 3-way merge (templates/edge-functions.yaml has the detail)
+  #   - the write-capable CronJobs the script suspends -> suspend: true
+  #   - the primary Ingress -> annotation pawtograder.io/maintenance-active
+  # pg_cron is paused in the database, survives any upgrade, and stays the
+  # script's job. So do state capture and the SAFE TO BOUNCE gate.
+  #
+  # Purpose: a chart release that RESTARTS Postgres, applied inside a window.
+  # Without this, that upgrade re-renders the fence away. Client-side, it puts
+  # the writers, HPA and web backend back while the primary is rolling;
+  # server-side, it fails on the fields kubectl took over. With it, the release
+  # and the live objects agree field for field, so neither apply mode has
+  # anything to change. Entry is still `maintenance.sh down`; the posture only
+  # makes the upgrade agree with it. Exit is `maintenance.sh up` FIRST (writable
+  # preflight, restore, page down last), then `helm upgrade` with this back to
+  # false. Full procedure: docs/operations/planned-maintenance.md, "Deploying a
+  # Postgres-restarting release in a window".
+  #
+  # Leaves Postgres alone: neither StatefulSet reads this value. Requires
+  # enabled=true, global.apiOnSeparateHost=true and service.port=8080
+  # (templates/validations.yaml says why). Set it on the command line for the
+  # one upgrade, never in a values file, and don't carry it with --reuse-values:
+  # any later upgrade that keeps it re-fences the environment.
+  active: false
   # Copy shown on the page. eta is optional (omitted from the page when empty).
   title: "We'll be right back"
   message: "Pawtograder is down for a short scheduled maintenance window. Your work is safe — the pack is tidying up and we'll be back shortly. This page refreshes on its own."
@@ -648,8 +688,18 @@ auth:
     github:
       enabled: false
       redirectUri: "" # default: https://<hostname>/auth/v1/callback
+    # Microsoft / Entra ID. Reads AZURE_OAUTH_CLIENT_ID / _CLIENT_SECRET from
+    # the web Secret.
     azure:
       enabled: false
+      redirectUri: "" # default: https://api.<hostname>/auth/v1/callback
+      # Tenant pinning. Empty = login.microsoftonline.com/common: any Microsoft
+      # account signs in, including personal (outlook.com) ones. Set to
+      # https://login.microsoftonline.com/<tenant-id> to restrict sign-in to a
+      # single directory — GoTrue then also verifies the ID token's issuer
+      # against it. Required if your Entra app registration is single-tenant
+      # AND you want that enforced on our side rather than only Microsoft's.
+      url: ""
     discord:
       enabled: false
       redirectUri: "" # default: https://<hostname>/auth/v1/callback
@@ -779,6 +829,28 @@ rest:
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
     limits: { cpu: "1", memory: "512Mi" }
+  # PostgREST admin server (admin-server-port). Serves /metrics, /live and
+  # /ready on a SEPARATE port from the API.
+  #
+  # This is the only place pool health is observable. PostgREST reacts to a
+  # fatal connection error (for example SQLSTATE 53100 from a full /dev/shm)
+  # by rebuilding its whole pool and reloading the schema cache, 503ing every
+  # request in flight -- and the only evidence is a line in the pod log.
+  # pgrst_schema_cache_loads_total turns that into a countable series; see
+  # PawtograderPostgrestSchemaCacheChurn.
+  #
+  # Metric names verified against postgrest/postgrest:v14.8 (2026-09-22):
+  # pgrst_schema_cache_loads_total{status}, pgrst_schema_cache_query_time_seconds,
+  # pgrst_db_pool_{max,waiting,available}, pgrst_db_pool_timeouts_total,
+  # pgrst_jwt_cache_{requests,hits,evictions}_total.
+  #
+  # The admin server is UNAUTHENTICATED. It is exposed only through the
+  # metrics-only Service in monitoring.yaml, never through the Kong-routed
+  # rest Service.
+  adminServer:
+    enabled: true
+    port: 3001
+
   service:
     port: 3000
   terminationGracePeriodSeconds: 30
@@ -1067,10 +1139,24 @@ edgeFunctions:
   e2e:
     enabled: false
     mockGitHub: false
-  # Names of additional Secrets to envFrom into the edge-runtime pod
-  # (each marked optional, so absent secrets don't block startup). Use for
-  # integration credentials managed by ESO in your overlay.
+  # Names of additional Secrets to envFrom into the edge-runtime pod. Use for
+  # integration credentials managed by ESO in your overlay. Each is mounted
+  # optional: true — a Secret that is missing at pod start is skipped rather
+  # than blocking startup, because envFrom is one-shot and all-or-nothing: one
+  # absent Secret would otherwise put the whole edge tier in
+  # CreateContainerConfigError with no self-heal. A pod that boots before a
+  # Secret has synced therefore runs without those variables until it is
+  # rolled, so keep edgeFunctions.reloader enabled and rely on the consuming
+  # function to report missing config loudly (see edgeFunctions.email.enabled).
   envFromSecrets: []
+  email:
+    # "true" | "false" | "" (unset). Rendered as EMAIL_ENABLED, consumed by
+    # supabase/functions/_shared/emailTransportConfig.ts.
+    #
+    # Unset infers from SMTP_HOST, preserving today's behavior everywhere. "true" makes missing
+    # SMTP config a hard, reported failure instead of an indefinite silent deferral, so set it
+    # wherever email is supposed to work. "false" archives notifications without sending.
+    enabled: ""
   image:
     repository: ghcr.io/pawtograder/edge-functions
     tag: "" # default: chart appVersion
@@ -1078,11 +1164,28 @@ edgeFunctions:
   policy: per_worker # per_worker | per_request | oneshot. per_request gives each
                      # request its own isolate (no concurrent co-location → no shared-heap
                      # memory pile-up under bursts); per_worker co-locates for efficiency.
-  # Cap on simultaneous worker isolates (--max-parallelism). Unset, the runtime
-  # derives it from CPU cores, which is low on small pods and forces co-location.
-  # Under per_request this is effectively the max concurrent requests per pod
-  # (excess queue up to request-wait-timeout). Empty = runtime default.
-  maxParallelism: ""
+  # NOTE for the pg_cron-poked background workers (notification-queue-processor,
+  # github/discord-async-worker, gradebook-column-recalculate): they must NOT rely on
+  # module-level state to keep one poll loop per pod, because `per_request` gives every
+  # poke a fresh isolate and resets it. They bound themselves instead — a Redis lease
+  # when REDIS_URL / UPSTASH_* are set, and a wall-clock-bounded drain-and-exit when they
+  # are not. See supabase/functions/_shared/workerRun.ts. Consequences worth knowing:
+  #   * With Redis, ONE pod holds each worker's lease and keeps a resident loop, so that
+  #     pod carries one admission slot per worker for the isolate's life. Latency is the
+  #     loop's own idle interval (10–15s).
+  #   * Without Redis, each poke drains and exits, holding no slot between pokes, and new
+  #     work waits for the next cron tick instead. Safer, slower.
+  # Raising maxParallelism does not substitute for either: an unbounded loop consumes
+  # whatever you give it.
+  # Cap on simultaneous worker isolates (--max-parallelism). Under per_request this
+  # is effectively the max concurrent requests per pod (excess queue up to
+  # request-wait-timeout).
+  #
+  # REQUIRED, and validated by pawtograder.edgeFunctions.assertMemoryBudget: this
+  # is a term in the container memory budget, and unset means "whatever the runtime
+  # infers from CPU count", which cannot be checked at render time. 8 is what
+  # production runs; 8 x worker.memoryLimitMb is the isolate half of the budget.
+  maxParallelism: 8
   verifyJwt: false # all functions in pawtograder set this; auth handled in-function
   # "beforeunload" / EarlyDrop thresholds (% of each per-worker resource limit).
   # When a per_worker isolate crosses the ratio the runtime tells it to finish
@@ -1106,6 +1209,459 @@ edgeFunctions:
   # accumulates toward the 256MB cap. cpuHardMs keeps headroom above soft so an
   # in-flight request that crosses 2s can finish rather than being force-cancelled
   # (CPU time excludes async I/O, so 2s of real compute is ample here).
+  # Byte budget for the eszip cache the main.ts demuxer keeps of the bundles it
+  # has served. This is a real term in the container memory budget and it is the
+  # one that is easy to forget: a pod holds one bundle per DISTINCT FUNCTION it
+  # has ever been asked for. Unbounded, that alone exceeded the container limit
+  # and OOM-killed pods after a few days' uptime (2026-08-19).
+  #
+  # Bundle inventory, measured 2026-08-28 from /home/deno/eszips in a running
+  # pod (the earlier "55 bundles, ~2.2GB, 19-59MB" here was stale — it came from
+  # the Dockerfile bundler's own log line, which main.ts still quotes):
+  #   58 bundles, 1390MiB total; min 5.5MiB / median 30.7MiB / max 43.2MiB.
+  # Averaging these is how you get surprised, so size the cache off the MEDIAN:
+  # 512Mi holds ~16 of 58, 256Mi holds ~8.
+  #
+  # The container budget is four terms that must be reconciled together:
+  #   eszipCacheMaxMb + eszipColdLoadHeadroomMb
+  #     + (maxParallelism x worker.memoryLimitMb) + ~90Mi host
+  # At these defaults: 256Mi + 256Mi + (8 x 256Mi) + 90Mi = 2650Mi (~2.6Gi),
+  # which is why the edge tier wants a limit at or above 4Gi. Raise this only
+  # alongside that sum.
+  #
+  # 2026-08-28: 512 -> 256, to make the memory metric mean something again.
+  #
+  # The edge HPA had been pinned at maxReplicas 32 with memory 106% against a
+  # 100% target while CPU sat at 5% of a 200% target — an autoscaler that can
+  # only ever say "already at max" is not autoscaling, and it left no burst
+  # headroom ahead of a ~2k WAU ramp. The cause is a per-pod memory FLOOR that
+  # is load-INDEPENDENT and dominated by this cache:
+  #   ~320Mi Deno host baseline (measured, see resources notes)
+  #    512Mi eszip cache at its cap
+  #   -------
+  #   ~832Mi against prod's 1Gi request  => ~81% before a request is served,
+  #          and measured idle sat higher still (~98%) because a pod keeps
+  #          some isolates resident between requests.
+  #
+  # Confirmed by a natural experiment during the 2026-08-28 deploy: the pods
+  # were recreated, and the SAME fleet under the SAME load went from mean
+  # 1094Mi / 32 replicas pinned (pods aged 8h-2d5h) to mean 504Mi / 12 replicas
+  # (pods <1h). Nothing about traffic changed — only cache warmth. The floor
+  # climbs after every deploy until it crosses the target, then sticks there.
+  #
+  # Halving the cache takes ~256Mi off that floor, so utilization tracks isolate
+  # load rather than cache occupancy. The trade is explicit and cheap: a pod
+  # caches ~8 distinct functions instead of ~16, out of 58. A miss is a LOCAL
+  # read from the image layer at /home/deno/eszips plus an eszip parse — not a
+  # network fetch and not a transpile. main.ts falls back to raw servicePath
+  # (the slow, memory-heavy path) only when a bundle is MISSING from the image,
+  # which is not what eviction causes.
+  #
+  # Isolate sizing, corrected 2026-08-28: an earlier version of this note put the
+  # load-dependent term at 8 x ~20Mi = ~160Mi, reading the "~16-20MB marginal"
+  # figure out of main.ts. That figure describes the marginal cost of an ADDITIONAL
+  # isolate for the SAME function once its module graph is loaded; a real isolate
+  # under production load measures ~116Mi. So the load-dependent band is
+  # 8 x ~116Mi = ~900Mi, and with the cache at 256 a pod runs a ~576Mi floor
+  # (56% of prod's 1Gi request) up to a ~1500Mi loaded peak (146%).
+  #
+  # That makes memory a STRONG scaling signal here — ~900Mi of swing on a ~576Mi
+  # floor. An earlier version of this note concluded the opposite ("structurally
+  # weak signal at any request value") and pointed at pgmq queue depth as the real
+  # fix; that conclusion rested on the ~160Mi figure and is retracted. The problem
+  # was never signal strength. It was that the floor sat inside the HPA's default
+  # 90-110% dead band, which is what autoscaling.targetMemoryUtilizationPercentage
+  # below now addresses.
+  #
+  # NOT changed here: resources.requests.memory. Note the corrected numbers also
+  # retire the argument the earlier note gave for leaving it alone (that a 1.5Gi
+  # request would strand a loaded pod near 48%) — at a ~1500Mi loaded peak, 1.5Gi
+  # would read ~98%, not 48%. The request is simply out of scope for this change:
+  # the target bump below is what was measured and confirmed live, and the request
+  # should be re-set from the idle-vs-loaded band observed on pods that have been
+  # up ~24h on these settings rather than from either version of this arithmetic.
+  # The two are coupled — the target is a percentage OF the request, so moving one
+  # without redoing the band calculation re-wedges the dead band.
+  #
+  # In MiB, matching worker.memoryLimitMb below. (Kept in MiB rather than bytes
+  # because YAML renders a bare 536870912 as 5.36870912e+08 through Helm.)
+  eszipCacheMaxMb: 256
+  # Headroom for bundle bytes the cache accounting does NOT see: a bundle being
+  # read on a cache miss, and one the LRU evicted (or refused as oversized) while
+  # a worker creation still holds a reference to it. Those buffers are real and
+  # concurrent with the cache, so the container budget has to carry them.
+  #
+  # main.ts holds such a reference only for the duration of
+  # EdgeRuntime.userWorkers.create() rather than for the whole request, which is
+  # what keeps this term small — but it is not zero, and a burst of cold requests
+  # for DISTINCT functions right after a pod starts is when it peaks. 256Mi is
+  # roughly four of the largest bundle in the image (58.4MiB when this was
+  # written; re-measured 43.2MiB on 2026-08-28, so the render-time floor of
+  # 64Mi is now conservative — left alone deliberately, it costs nothing).
+  # After warmup the working set is resident and this is not touched at all.
+  # Deliberately NOT reduced alongside eszipCacheMaxMb above: this term covers
+  # COLD reads, and halving the cache makes cold reads more frequent, not less.
+  eszipColdLoadHeadroomMb: 256
+  # Per-request edge-tier metrics (pawtograder_edge_*), collected by the main.ts
+  # demuxer and appended to the `metrics` function's /metrics response. No new
+  # port, probe or scrape target: the existing edge-functions ServiceMonitor
+  # already scrapes that path, and METRICS_TOKEN keeps guarding it because the
+  # demuxer only appends to a 200 the user worker already authorized.
+  #
+  # DEFAULT false, deliberately. The rollout plan ships this dark to production
+  # and turns it on in a LATER, SEPARATE deploy, so the cardinality delta and any
+  # memory movement have exactly one attributable cause. Staging enables it (see
+  # examples/values-staging.yaml) because that is where it gets exercised.
+  #
+  # Cardinality, because this is the number that decides whether it is safe:
+  # every series is PER POD, since each pod is its own scrape target.
+  #
+  #   requests_total          ~55 functions x ~4 observed status codes = ~220
+  #   function_seconds_total  ~55
+  #   worker_errors_total     ~55 x 3 kinds, sparse in practice           = ~10
+  #   duration_seconds        14 buckets + _sum + _count                  = ~16
+  #   eszip + runtime gauges                                              = ~12
+  #                                                                  ~270 / pod
+  #
+  # At the 32 replicas production pins the edge HPA to, that is ~8.6k series
+  # typical. The ceiling -- every function invoked on every pod with a wider
+  # spread of status codes -- is ~22k.
+  #
+  # THAT NUMBER DOUBLES WHEN THE HPA DOUBLES. It is per-pod, so an excursion to
+  # 64 replicas doubles the edge tier's contribution at exactly the moment the
+  # fleet is under load. Budget against maxReplicas, not against the steady-state
+  # replica count.
+  #
+  # The `function` label domain is closed at IMAGE BUILD time (main.ts reads the
+  # eszip and function directories once at boot; anything else records as
+  # "_unknown"), so no request can grow it. The `status` domain is capped at 32
+  # per function. Both bounds exist because /functions/v1/* is publicly routed
+  # and the path segment is attacker-controlled -- see the long note in main.ts.
+  metrics:
+    enabled: false
+    # Latency histogram bounds, in seconds. NOT Prometheus' defaults: those top
+    # out at 10s while worker.timeoutMs is 400s, which would put this tier's
+    # entire tail in +Inf. The top finite bucket sits ON the worker lifetime so
+    # "hit the worker timeout" reads as (+Inf - le=400) instead of smearing.
+    # render-guardrails.sh asserts monotonicity and that the top bucket is
+    # >= worker.timeoutMs/1000; raise it alongside any timeout increase.
+    buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 400]
+  # ---------------------------------------------------------------------------
+  # github-async-worker drain tuning (pgmq `async_calls` / `..._low_priority`)
+  # ---------------------------------------------------------------------------
+  # Rendered as GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY and
+  # GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS and consumed by
+  # supabase/functions/_shared/asyncWorkerTuning.ts, which holds the bounds and
+  # the full narrative. Both were HARDCODED (4 / 300) in the worker until
+  # 2026-09-07; the defaults here reproduce that exactly, so upgrading this
+  # chart changes nothing until you set a value.
+  #
+  # WHAT WAS MEASURED (Khoury prod, 2026-09-07). CS 4530 released an assignment
+  # and enqueued 58 `create_repo` messages at once at 04:01:00 UTC. The last one
+  # drained at 05:37:28 UTC — 88 MINUTES for 58 messages, mean time-in-queue
+  # 3,230s, worst 5,788s, with 2-4 messages completing every ~7 minutes.
+  # PawtograderQueueOldestMessageAging (1200s for 10m, critical) fired for over
+  # an hour and was a TRUE POSITIVE. 20 of the 58 messages came back with
+  # read_ct > 1 (max 3) because a ~420s batch outlives a 300s visibility
+  # timeout, so pgmq re-served messages that were still being processed.
+  # Everything still ended up correct (58/58 repos, no duplicates, empty DLQ) —
+  # this is a throughput and redelivery problem, not a correctness one.
+  #
+  # HOW THE KNOBS RELATE — TWO CEILINGS, not one, and a batch must fit under
+  # BOTH (do not break either):
+  #
+  #   visibilityTimeoutSeconds >= drainConcurrency x 120
+  #   worker.timeoutMs / 1000  >= drainConcurrency x 120
+  #
+  # Both are about a WHOLE BATCH of `drainConcurrency`, never about one message:
+  # all of them run concurrently in ONE isolate, but their GitHub calls
+  # serialize through the fleet-wide content limiter (below), so batch wall
+  # clock grows with concurrency. 120s/message is calibrated from the incident
+  # (420s for a batch of 4 ≈ 105s/message, rounded up; create_repo p50 279.5s).
+  #
+  # The second ceiling is the ISOLATE LIFETIME. worker.timeoutMs is handed to
+  # EdgeRuntime as workerTimeoutMs, and a batch that outlives it is killed
+  # BEFORE its archive calls run — so the repos exist, the messages were never
+  # archived, and pgmq redelivers work that already succeeded. That is strictly
+  # worse than a duplicate read. beforeUnload.wallClockRatio (50) asks the
+  # isolate to retire at HALF the lifetime, so treat worker.timeoutMs as the
+  # hard cap rather than the budget.
+  #
+  # The second ceiling is a CONFIG-COHERENCE rule, not a claim about what the
+  # runtime is doing right now. Under n x 120 against the 400s default lifetime
+  # the largest coherent concurrency is THREE (3 x 120 = 360; 4 x 120 = 480 >
+  # 400), so even the shipped default of 4 sits just outside the conservative
+  # model — which is why only the EXACT legacy pair (4, 300) is grandfathered.
+  # The practical consequence: you cannot raise the visibility timeout without
+  # raising worker.timeoutMs, and the worked example below therefore moves THREE
+  # values, not two.
+  #
+  # DO NOT read this as "isolates are being killed mid-batch". That was asserted
+  # here in an earlier draft and then MEASURED AND RETRACTED (2026-09-07): the
+  # runtime's `wall clock duraiton reached` log (its typo) was FLAT at ~200/hour
+  # across the functions pods before, during and after the 58-repo burst (197 at
+  # 03:00, 242 at 04:00, 225 at 05:00, 192 idle at 12:00). That is baseline
+  # churn — leased mode keeps a resident isolate polling, so it reaches the 400s
+  # wall clock and recycles about every 3.5 min per pod — and nothing in it ties
+  # a termination to an unarchived message. The 300s visibility timeout remains
+  # the established cause of the 20-of-58 re-reads. Note too that n x 120 is a
+  # conservative upper bound: the ~420s figure is a completion cadence including
+  # poll and re-poke latency, and a fully parallel batch of 4 at p50 279.5s
+  # would be ~280-300s.
+  #
+  # validations.yaml refuses any combination that breaks either ceiling. Only
+  # the EXACT legacy pair (4, 300) is exempt, because that is what was hardcoded
+  # in the worker and is therefore already running everywhere; anything else is
+  # a deliberate act and is checked. (4/60 and 1/60 are refused for the same
+  # reason 8/300 is — a 60s timeout re-serves a ~280s create_repo four times
+  # over while it is still in flight.)
+  #
+  # A worked example, for the CS 2000-shaped burst this exists for. Note it is a
+  # COUPLED change and its blast radius is wider than this worker: raising
+  # worker.timeoutMs lengthens EVERY function's isolate lifetime in the pod
+  # (longer-lived isolates accumulate more heap, which is what cpuSoftMs and
+  # beforeUnload exist to bound), and the graceful-drain trio has to move with
+  # it or a rollout truncates the batch anyway.
+  #
+  #   githubAsyncWorker:
+  #     drainConcurrency: 8
+  #     visibilityTimeoutSeconds: 960   # 8 x 120
+  #   worker:
+  #     timeoutMs: 960000               # 8 x 120s: the isolate must outlive the batch
+  #   gracefulExitTimeoutSeconds: 970   # >= worker.timeoutMs, or a ROLLOUT truncates the batch
+  #   terminationGracePeriodSeconds: 990 # >= preStop + gracefulExitTimeout
+  #   metrics:
+  #     buckets: [..., 300, 400, 960]   # top finite bucket >= the new lifetime
+  #
+  # All five are enforced by templates/validations.yaml, so a partial bundle is
+  # refused at render time rather than deployed: a graceful exit shorter than the
+  # isolate lifetime lets a rollout kill a batch before its archive calls, and a
+  # bucket list that stops at 400 puts everything in the newly-permitted range
+  # into +Inf.
+  #
+  # If that blast radius is unacceptable, the cheaper and better-scoped first
+  # move is to leave drainConcurrency at 4 and lift the timeouts to cover the
+  # batch that is ALREADY running (480s VT / 480000ms lifetime / 490 graceful /
+  # 510 termination grace / buckets ending at 480). That fixes the
+  # redeliveries without changing GitHub concurrency at all, and it is the
+  # change with the shortest argument behind it.
+  #
+  # Why the range is 1..8 rather than "as high as you like":
+  #   * THE BINDING CONSTRAINT IS A SHARED GITHUB LIMITER, not this pod.
+  #     `create_repo` wraps the whole github.createRepo() call in the
+  #     Redis-backed (therefore FLEET-WIDE, per-org) content limiter
+  #     `create_content:<org>:<GITHUB_APP_ID>`, which is
+  #     { reservoir: 40, maxConcurrent: 40, refresh 40/60s }. A create_repo
+  #     measured p50 279.5s on 2026-09-07, so every in-flight repo creation
+  #     holds one of those 40 slots and one reservoir token for ~4.7 MINUTES.
+  #     The same pool serves org INVITATIONS (POST /orgs/{org}/invitations) and
+  #     sync_repo_to_handout, so as concurrency rises toward 40 the minutes-long
+  #     repo creations form a convoy and invitations queue behind them —
+  #     students unable to join the org, which is a worse symptom than a slow
+  #     queue. Concurrency is per leaseholder while the limiter is per org and
+  #     fleet-wide, so several classes releasing into the same org compound it,
+  #     and the reservoir caps starts at 40/min per org regardless. 8 is 20% of
+  #     the pool: even with all 8 held for the full ~280s, 32 slots remain for
+  #     invitations and syncs.
+  #   * every message in a batch is processed inside the SINGLE leaseholder
+  #     isolate, which is capped at worker.memoryLimitMb (256MiB) and
+  #     early-drops at half that. Concurrency multiplies envelopes, Octokit
+  #     responses and file contents inside that one box, and an isolate killed
+  #     at the cap mid-handler is exactly the read_ct-climbing failure the
+  #     worker's poison-pill guard exists for. This tier OOM-killed PID 1 twice
+  #     in 2026-08 (see the eszipCacheMaxMb note above and the maxParallelism
+  #     note in examples/values-prod.yaml) and its container budget already sits
+  #     at ~2650Mi against a 4Gi limit, so there is no room to grow the isolate.
+  #   * concurrency multiplies concurrent GitHub API calls against ONE shared
+  #     App installation quota per org. The Bottleneck limiters in
+  #     supabase/functions/_shared/ and the github_circuit_breakers table are
+  #     the only backstops, so past the limiters' own concurrency the extra
+  #     parallelism becomes queueing inside Bottleneck, not throughput.
+  # 8 (a doubling of the measured configuration, and the same number as
+  # maxParallelism) is the largest step worth taking without re-measuring
+  # isolate memory, content-limiter occupancy and secondary-rate-limit
+  # behaviour under a real burst. Note
+  # that 8 is ~1.2 msg/min, i.e. ~8h for a 585-message burst: going materially
+  # faster needs MORE THAN ONE concurrent leaseholder (see workerRun.ts), which
+  # is a separate design change, not a bigger number here.
+  #
+  # visibilityTimeoutSeconds is bounded 60..1800. The timeout is also the
+  # RECOVERY LATENCY for a message whose isolate really died (memory cap,
+  # worker.timeoutMs, eviction): nothing retries it until the timeout expires.
+  # 1800s is 1.5x the queue-aging alert window, so a genuinely stuck message
+  # still pages a human instead of sitting invisible for hours. Out-of-range
+  # values are refused at render time and, if they reach the pod some other way
+  # (a hand-edited Deployment, `kubectl set env`), fixed up at runtime rather
+  # than taking the worker down — a `0` would drain nothing while every liveness
+  # signal stayed green. The runtime fix-up ENFORCES the two ceilings by
+  # degrading concurrency, so on a bypass path a lone drainConcurrency=8 with the
+  # timeouts left alone actually runs at 2 (floor(300/120)) and says so in the
+  # log and in Sentry. Two details of that fix-up worth knowing: an absent or
+  # malformed EDGE_WORKER_TIMEOUT_MS is treated as 400s rather than "unknown",
+  # because that is what main.ts falls back to for the same input, so the
+  # lifetime ceiling caps concurrency at 3 unless worker.timeoutMs is really
+  # raised; and if the timeout cannot cover even ONE message the worker floors
+  # concurrency at 1 AND raises its own sleep_seconds to the 120s one-message
+  # budget, since it passes that value on every pgmq read and a floored-but-
+  # incoherent pair would just re-read a multi-minute create_repo. Set them here
+  # and the render-time rules make all of that impossible in the first place. Note these are rendered as explicit `env` entries, and
+  # an `env` entry beats `envFrom`, so edgeFunctions.envFromSecrets CANNOT be
+  # used to override them: set them here.
+  # ---------------------------------------------------------------------------
+  # PER-ORG LEASEHOLDERS (orgSlot*) — a SECOND, independent scaling axis
+  # ---------------------------------------------------------------------------
+  # drainConcurrency above buys concurrency by making ONE leaseholder's batch
+  # bigger, and it is capped at 8 because all of those handlers share a single
+  # 256MiB isolate and one visibility-timeout budget. These three knobs buy it
+  # by running MORE leaseholders, each its own isolate, each claiming a slot for
+  # ONE GitHub org. So the memory cap and the `n x 120` ceiling apply PER
+  # LEASEHOLDER and stop binding the aggregate — which is why enabling this
+  # needs no change to drainConcurrency, visibilityTimeoutSeconds or
+  # worker.timeoutMs.
+  #
+  # WHY IT EXISTS. The Bottleneck content limiter is per ORG (reservoir 40 /
+  # maxConcurrent 40 / refresh 40 per 60s, keyed create_content:<org>:<app id>),
+  # but the worker's concurrency was GLOBAL. Measured on Khoury prod 2026-09-13:
+  # CS 2000 released Project 1 at 04:00:00 UTC, 242 create_repo messages in one
+  # transaction, drained 04:00:00 -> 04:30:51 at ~8 msg/min. With four classes
+  # in four DIFFERENT orgs releasing at once there are 4 x 40 = 160 concurrent
+  # GitHub slots available and the worker would use 4 — ~2.5% — while all four
+  # classes queue behind one FIFO drain.
+  #
+  # Peak simultaneous activity observed over 7 days was 8 distinct orgs in one
+  # hour (2026-09-11, 377 messages), against 15 distinct github_org values in
+  # public.classes total.
+  #
+  # DEFAULTS ARE OFF, deliberately, exactly like drainConcurrency's defaults
+  # reproduce the old hardcoded pair: globalCap 0 selects the single-leaseholder
+  # path that shipped before this, so upgrading the chart changes nothing until
+  # an operator opts in. RECOMMENDED once you do: globalCap 8, maxPerOrg 2.
+  #
+  #   orgSlotGlobalCap: 8        # fleet-wide leaseholders; 8 = edgeFunctions.maxParallelism
+  #   orgSlotMaxPerOrg: 2        # 2 x drainConcurrency 4 = 8 in flight per org
+  #
+  # maxPerOrg 2 (8 in flight) is bounded by the RESERVOIR, not the concurrency
+  # pool. The limiter is 40 concurrent AND 40 starts per 60s, and with `c`
+  # creations in flight at `d` seconds each the start rate is 60c/d per minute.
+  # Measured create_repo p50 on Khoury prod over the 3 days to 2026-09-14
+  # (pgmq.a_async_calls, duration = archived_at - (vt - 480s)):
+  #
+  #   org             d       c=8 (maxPerOrg 2)   c=16 (maxPerOrg 4)
+  #   neu-cs2000      23.1s   20.8/min  (52%)     41.6/min  OVER the 40/min refresh
+  #   Khoury-CS3650   46.0s   10.4/min  (26%)     20.9/min  (52%)
+  #   neu-cs5004      25.7s   18.7/min  (47%)     37.4/min  (93%)
+  #   neu-cs4530      30.4s   15.8/min  (39%)     31.6/min  (79%)
+  #
+  # (Sample sizes 241 / 187 / 12 / 4 — the bottom two rows are illustrative.)
+  #
+  # SO 16 IN FLIGHT IS SAFE FOR A SLOW ORG AND SATURATES A FAST ONE, and
+  # orgSlotMaxPerOrg is a SINGLE GLOBAL KNOB with no per-org dimension: raising
+  # it for Khoury-CS3650 also raises it for neu-cs2000. That is why the ceiling
+  # is 4 (raised from 2 on 2026-09-14, to make the slow-org case expressible)
+  # while the RECOMMENDATION stays 2 and the DEFAULT stays 1. 8 in flight is
+  # also the already-argued 20% of the 40-slot concurrency pool, which is what
+  # leaves org invitations and handout syncs their headroom; past it they convoy
+  # behind repo creations inside Bottleneck, where this worker cannot see it.
+  # Do not raise orgSlotMaxPerOrg above 2 without measuring create_repo p50 for
+  # YOUR orgs and checking 60 x (maxPerOrg x drainConcurrency) / p50 < 40.
+  #
+  # Slot pools are seeded by migration (async_calls 64, async_calls_low_priority
+  # 16), so globalCap can be raised as config but the POOL needs a migration.
+  # claim_org_slot_and_read RAISES on a queue with no pool rather than returning
+  # zero rows, because "no pool" and "empty queue" are otherwise indistinguish-
+  # able — the same silence this whole design exists to avoid.
+  githubAsyncWorker:
+    drainConcurrency: 4
+    visibilityTimeoutSeconds: 300
+    # 0 disables per-org leaseholders entirely (the pre-2026-09-13 path). 1-8 to enable.
+    orgSlotGlobalCap: 0
+    # 1-4. In-flight per org is orgSlotMaxPerOrg x drainConcurrency; must be
+    # <= 16 and <= orgSlotGlobalCap. 2 (8 in flight) is the recommended value and
+    # the only one derived from a measurement; 3 and 4 exist for deployments with
+    # a SLOW create_repo — see the reservoir table above before using them.
+    orgSlotMaxPerOrg: 1
+    # 45-300. Slot-recovery latency for a leaseholder that dies: must not outlive
+    # the messages (visibilityTimeoutSeconds) or the isolate (worker.timeoutMs).
+    #
+    # THE FLOOR IS NOT ABOUT MESSAGE DURATION (corrected 2026-09-14; it used to
+    # say "must exceed the longest single message, 32.2s"). Renewal is an
+    # independent setInterval at TTL/3, not something the drain loop drives, and
+    # the handlers are await-driven GitHub I/O — so a lease lapses only if the
+    # EVENT LOOP goes unyielding for a whole TTL, not if a message runs long.
+    # The real longest message is 97.7s (create_repo, 489 samples, 2026-09-11
+    # onward) and 1.5% of all messages exceed this 60s value; they renew through
+    # fine, and prod has had no cap breach or lease lapse since going live.
+    orgSlotLeaseTtlSeconds: 60
+    # CONTINUOUS REFILL: 1 = on (shipped), 0 = off. A KILL SWITCH, not a tuning
+    # knob — the expected number of deployments that ever set it to 0 is zero.
+    #
+    # On, the org-leased drain keeps drainConcurrency messages in flight and
+    # claims the shortfall as each settles. Off, it drains a whole batch and then
+    # re-claims, which wastes the tail of every batch waiting on its straggler:
+    # measured on the 2026-09-13 burst, mean message 48.4s against mean batch
+    # 68.4s, so ~27% of every slot-second was a claimed slot idling and effective
+    # concurrency was 5.20 of a possible 8.
+    #
+    # IT EXISTS BECAUSE THE ONLY OTHER WAY TO ROLL THE DRAIN SHAPE BACK IS
+    # orgSlotGlobalCap: 0, which also switches off per-org leaseholders and gives
+    # up the cross-org throughput that is already working. Set this to 0 to undo
+    # the drain shape while keeping the feature, then open a bug — a values
+    # change is a rollback, not a fix.
+    #
+    # Ignored when orgSlotGlobalCap is 0 (there is no org-leased drain to shape).
+    #
+    # MUST BE 0 OR 1, NOT true/false. The render-time rule below refuses a
+    # non-integer here, so a chart user cannot get this wrong. On the Helm-bypass
+    # paths the chart cannot see (a hand-edited Deployment, `kubectl set env`, a
+    # local `supabase functions serve`) the runtime FAILS SAFE instead: a value
+    # that is present but unusable resolves to 0 (off), while an ABSENT value
+    # still resolves to 1. That asymmetry is deliberate — absence is an older
+    # chart, a malformed value is an edit that went wrong, and the only reason to
+    # edit this knob is to turn refill off. It is the one knob in
+    # asyncWorkerTuning.ts with that rule, because it is the only one whose
+    # default sits at the permissive end of its range.
+    orgSlotContinuousRefill: 1
+    # WALL-CLOCK RUN BUDGET for one org-leased drain, in seconds. EMPTY (the
+    # shipped default) means "let the worker derive it from the isolate
+    # lifetime", which is what it does:
+    #
+    #   ceiling = worker.timeoutMs / 1000 - 120 - 30
+    #
+    # i.e. 250s against the 400000 below, 330s on a deployment running 480000.
+    # Set an integer here ONLY to make a leaseholder stop claiming EARLIER than
+    # that; there is nothing above the ceiling to ask for.
+    #
+    # WHAT THE BUDGET IS. It is the point at which a leaseholder stops claiming
+    # new messages and lets the ones already in flight finish, so that
+    # EDGE_WORKER_TIMEOUT_MS does not kill the isolate mid-message and hand the
+    # work back to pgmq as a redelivery. The 120s subtracted is the drain-out
+    # reserve one in-flight message is modelled at, the 30s is slack before the
+    # runtime's kill; both are constants in asyncWorkerTuning.ts, not knobs.
+    #
+    # THE RANGE MOVES WITH worker.timeoutMs — it is 120 .. 250 at the lifetime
+    # below, and 120 .. 330 at 480000 — so the render-time rule refuses the
+    # COMBINATION rather than the field, the same way drainConcurrency's two
+    # ceilings are enforced against the timeouts rather than on their own. A
+    # longer budget is a coupled change: raise worker.timeoutMs (and with it
+    # gracefulExitTimeoutSeconds / terminationGracePeriodSeconds) and the
+    # accepted range moves up on its own.
+    #
+    # ONLY DOWN IS USEFUL, and an unusable value is NOT clamped up to the
+    # nearest bound the way orgSlotMaxPerOrg is. On the Helm-bypass paths this
+    # chart cannot see (a hand-edited Deployment, `kubectl set env`, a local
+    # `supabase functions serve`), a value that is present but unusable
+    # resolves DOWN to the 120s floor: stopping earlier is always safe, while
+    # stopping later is the defect this budget exists to prevent. It is the
+    # opposite direction from orgSlotContinuousRefill's fail-safe above only in
+    # form — both mean "an edit that went wrong must not buy more".
+    #
+    # THAT IS ALSO WHY EMPTY RENDERS NO ENV ENTRY AT ALL. A rendered "" is an
+    # edit, not an absence, and the worker would fail it safe to 120s on every
+    # pod — a drain that stops claiming after two minutes on a deployment that
+    # never touched this knob. Leave it empty to get the derived default.
+    #
+    # Ignored when orgSlotGlobalCap is 0 (there is no org-leased drain to bound).
+    orgSlotRunBudgetSeconds: ""
   worker:
     memoryLimitMb: 256
     timeoutMs: 400000 # 400s worker lifetime (hosted paid-plan default)
@@ -1116,9 +1672,25 @@ edgeFunctions:
     # hosted "50% of any resource" rule (~128MB at 256MB). This lets a memory-heavy
     # request finish + return instead of being force-killed at the hard cap.
     lowMemoryMultiplier: 2
+  # The memory LIMIT has to hold the whole budget documented above
+  # (eszipCacheMaxMb + eszipColdLoadHeadroomMb
+  #   + maxParallelism x worker.memoryLimitMb + ~90Mi host), which is asserted at
+  # render time by pawtograder.edgeFunctions.assertMemoryBudget.
+  # 4Gi rather than 2Gi because the documented working configuration does not fit
+  # 2Gi, so the old default was a combination the guardrail now rejects outright.
+  # That was 2906Mi (~2.8Gi) when the cache was 512Mi; at the current 256Mi cache
+  # it is 2650Mi (~2.6Gi), still well past 2Gi. The limit is deliberately NOT
+  # lowered to track the cache: it is the backstop described below, and the slack
+  # is the point.
+  #
+  # This is a backstop, not a target: with the cache bounded, a pod's steady state
+  # is the cache plus admitted isolates, and the headroom exists so the runtime
+  # retires an isolate rather than the kernel killing PID 1 and every request on
+  # it. Limits are not scheduled (requests are), so raising it does not change
+  # placement.
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
-    limits: { cpu: "2", memory: "2Gi" }
+    limits: { cpu: "2", memory: "4Gi" }
   # Horizontal autoscaling. When enabled, a HorizontalPodAutoscaler manages the
   # replica count (and the Deployment's static `replicas` is omitted so the two
   # don't fight). minReplicas should be high enough that a sudden burst spreads
@@ -1127,7 +1699,33 @@ edgeFunctions:
     enabled: false
     minReplicas: 2
     maxReplicas: 10
-    targetMemoryUtilizationPercentage: 100
+    # 2026-08-28: 100 -> 80. This is the number that actually explains the
+    # pinning, and it is not "the target was too low".
+    #
+    # The HPA controller applies a default 10% TOLERANCE before acting, so a
+    # target of 100 is really a DEAD BAND of 90-110%, not "above 100 scales up".
+    # Anything landing inside that band moves nothing in either direction. With
+    # the per-pod floor at ~98% of the request, the fleet could never scale DOWN
+    # (that needs <90%), so once an earlier spike had driven it to maxReplicas it
+    # stayed there permanently; and at 109% under load it still would not scale
+    # UP (that needs >110%). Both directions were wedged by the same band.
+    #
+    # Measured band with eszipCacheMaxMb at 256 (see the note on that value):
+    # floor ~576Mi = 56% of prod's 1Gi request, loaded peak ~1500Mi = 146%.
+    # A target of 80 puts the dead band at 72-88%, which sits cleanly BETWEEN
+    # those two -- the floor is below it, so a quiet fleet can scale down; a
+    # loaded pod is above it, so a busy fleet can scale up.
+    #
+    # Confirmed live on the prod fleet, cache already at 256Mi:
+    #   18:46   109%/100%   12 replicas   pinned
+    #   18:48   109%/80%    12 replicas   target changed
+    #   18:49    78%/80%    20 replicas   scaled, then settled at equilibrium
+    #
+    # Changing the target is not a substitute for sizing the request from
+    # measured data -- see the resources note above. The two interact: this
+    # target is expressed as a percentage OF the request, so re-setting the
+    # request without redoing this arithmetic re-wedges the band.
+    targetMemoryUtilizationPercentage: 80
     targetCPUUtilizationPercentage: 200
   service:
     port: 9000
@@ -1209,10 +1807,136 @@ web:
   # When true, /api/metrics refreshes the DB-backed workflow gauges
   # (workflow runs, queue/run percentiles, recent errors) on every
   # scrape. Set on AT MOST ONE pod across the deploy — multiple replicas
-  # with this on multiply DB load and over-count gauges. Safe to enable
-  # for single-replica installs (previews); for multi-replica prod
-  # leave off here and run a dedicated 1-replica metrics-leader.
+  # with this on multiply DB load and over-count gauges.
+  #
+  # Which of the two leader mechanisms to use:
+  #
+  #   web.replicas == 1  -> use THIS flag. It is strictly better than the
+  #     dedicated leader on a single-replica install: no extra pod, no extra
+  #     memory, and templates/validations.yaml already refuses it above 1
+  #     replica, so it cannot silently start double-counting. This is the
+  #     right answer for previews and small single-replica production
+  #     installs, and it is NOT deprecated.
+  #
+  #   web.replicas > 1   -> leave this false and set metricsLeader.enabled
+  #     below. validations.yaml hard-fails this flag with replicas > 1.
+  #
+  # The two are mutually exclusive; enabling both is refused (both would
+  # refresh the same RPCs and export the same global gauges, so sum() over
+  # the family double-counts every value).
+  #
+  # SWITCHING BETWEEN THE TWO MECHANISMS IS A TWO-STAGE UPGRADE. Doing it in one
+  # values change (workflowMetricsLeader: false + metricsLeader.enabled: true,
+  # deployed together) is legal at render time and momentarily WRONG at runtime:
+  # they are separate Deployments reconciled independently, so the new leader can
+  # start answering scrapes while the web rolling update has not yet terminated
+  # the old pod that still carries METRICS_WORKFLOW_REFRESH_LEADER. For the
+  # length of that overlap both run the aggregate RPCs and Prometheus scrapes two
+  # copies of every global gauge, so every workflow panel reads DOUBLE and the DB
+  # load is doubled with it. No render-time rule can catch this — each individual
+  # state is legal, and the illegal state exists only between two reconciles.
+  #
+  #   Stage 1: set workflowMetricsLeader: false (or metricsLeader.enabled: false,
+  #            going the other way), deploy, wait for the rollout to complete.
+  #   Stage 2: enable the other one, deploy.
+  #
+  # Stage 1 leaves a window with NO leader and empty workflow panels, which is
+  # the correct direction to fail — under-reporting reads as an outage, whereas
+  # a 2x over-report reads as a real traffic spike. Note that stage 1 will be
+  # refused by validations.yaml unless you also set
+  # monitoring.allowMissingWorkflowMetrics: true for that one deploy.
+  #
+  # If it does happen: the doubling is TRANSIENT and self-healing — it ends the
+  # moment the old pod terminates, and nothing is corrupted, because these are
+  # gauges reset on every refresh rather than counters. Do not go looking for a
+  # traffic event. The acceptance check that detects it after the fact is
+  # `count(count by (pod)(web_workflow_runs_recent)) == 1` sustained over 10
+  # minutes (docs/operations/metrics-gap-remediation.md §8.1).
   workflowMetricsLeader: false
+
+  # ---------------------------------------------------------------------------
+  # Dedicated metrics-leader Deployment (templates/web-metrics-leader.yaml)
+  # ---------------------------------------------------------------------------
+  # A 1-replica Deployment running the SAME web image with
+  # METRICS_WORKFLOW_REFRESH_LEADER=true, under its own component label
+  # (`metrics-leader`) and its own Service + ServiceMonitor. It exists so a
+  # multi-replica web tier can still export the workflow gauges without any web
+  # replica becoming a leader.
+  #
+  # The distinct component label is what keeps it off every user-traffic path:
+  # the web Service selects component=web, the Ingress backend resolves to the
+  # web Service, the web ServiceMonitor selects component=web, the
+  # allow-ingress-controller NetworkPolicy allows only web/kong/studio/
+  # maintenance, the PDB and web pod anti-affinity are both keyed on
+  # component=web, and the `helm test` smoke job hits the web Service by name.
+  # The allow-monitoring NetworkPolicy is release-wide, so the leader IS
+  # scrapeable. Do not "simplify" the component label back to `web`.
+  #
+  # No metric relabeling is configured or needed: a prom-client labelled gauge
+  # that was never .set() emits zero samples, so ordinary web pods contribute
+  # nothing to a sum() over the workflow families by construction.
+  #
+  # Requires monitoring.enabled (that is what injects METRICS_SCRAPE_TOKEN;
+  # without it /api/metrics returns 503 and the leader is a pod that costs
+  # memory and does nothing). validations.yaml refuses the combination.
+  #
+  # Switching to or from web.workflowMetricsLeader is a TWO-STAGE upgrade — see
+  # the note next to that flag above. One values change flipping both at once
+  # renders fine and transiently runs two leaders, which doubles every workflow
+  # panel and the DB load behind it.
+  metricsLeader:
+    enabled: false
+
+    # Merged OVER web.image. Omit (or leave {}) to track the web image exactly,
+    # which is almost always what you want — the leader is the same app.
+    image: {}
+    #   repository: ghcr.io/pawtograder/web
+    #   tag: ""
+    #   pullPolicy: IfNotPresent
+
+    # Floor on how often refreshWorkflowMetrics() actually queries the DB,
+    # independent of how often anything scrapes /api/metrics. Rendered as
+    # METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS. The gauges are .set()-persisted
+    # between scrapes, so serving a value up to this old is correct, not stale
+    # data. 0 disables the throttle (tests only — it removes the only bound that
+    # survives a second Prometheus or a curl loop against /api/metrics).
+    refreshIntervalSeconds: 300
+
+    # ServiceMonitor scrape cadence for the leader. "" => monitoring.scrapeInterval
+    # / monitoring.scrapeTimeout. There is little point scraping much faster than
+    # refreshIntervalSeconds: the gauges will not have changed.
+    scrapeInterval: ""
+    scrapeTimeout: ""
+
+    # Deliberately smaller than web.resources: this pod serves no user traffic.
+    # It runs one Next.js process that answers /api/metrics and nothing else.
+    resources:
+      requests: { cpu: "50m", memory: "512Mi" }
+      limits: { cpu: "500m", memory: "1Gi" }
+
+    # Recreate, NOT RollingUpdate, and this is not a default worth changing:
+    # RollingUpdate stands the new leader up before tearing the old one down, so
+    # for those seconds TWO pods hold the leader env var, both refresh the same
+    # RPCs, and both export the same global gauges — the exact double-count the
+    # single-leader design exists to prevent. Recreate trades a few seconds of
+    # gauge staleness for that, which is free against a 300s refresh interval.
+    updateStrategy:
+      type: Recreate
+
+    # Placement / priority. Anything left empty inherits the corresponding
+    # web.* value (and then global.*), so the leader lands wherever web lands
+    # unless you say otherwise.
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    priorityClassName: ""
+
+    # Extra env vars for the leader pod only. Replaces web.extraEnv when
+    # non-empty; leave [] to inherit it.
+    extraEnv: []
+
+    # NOTE: `replicas` is deliberately NOT a value here. See the header comment
+    # in templates/web-metrics-leader.yaml.
   replicas: 2
   image:
     repository: ghcr.io/pawtograder/web
@@ -1355,9 +2079,56 @@ backup:
   # a run that exceeds this fails LOUDLY rather than hanging forever.
   activeDeadlineSeconds: 3600
   startingDeadlineSeconds: 1800
+  # Point this at the image built from
+  # charts/pawtograder/images/backup/Dockerfile — supabase/postgres with a
+  # pinned mc baked in. That is the supported configuration: it removes a
+  # third-party download from the one run that has to work. The default below
+  # is plain supabase/postgres, which still works via the runtime-install
+  # fallback in the job scripts — but that fallback is exactly what broke
+  # production on 2026-09-12, when MinIO archived the open-source mc project
+  # and dl.min.io began returning 410 for every binary.
+  #
+  # Tag it like the other Pawtograder images (release version or
+  # <branch>-<sha>), NOT with the Postgres version: release-images.yml
+  # publishes this repo as backup:<version>. What tracks postgres.image.tag is
+  # the Dockerfile's FROM, so pg_dump still matches the server it dumps.
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"
+    # MUST be Always if the tag above floats (anything ending -latest). A
+    # floating tag that is not literally ":latest" defaults to IfNotPresent, so
+    # a node keeps serving its cached copy after the alias moves and the nightly
+    # job silently runs a stale image. Pinned tags want IfNotPresent.
+    pullPolicy: IfNotPresent
+  # Staging space for the dump before it is uploaded. This is a per-pod GENERIC
+  # EPHEMERAL VOLUME (created with the pod, deleted with it) — NOT the node's
+  # ephemeral storage. It has to be a real volume: the dump is the size of the
+  # compressed database (~7 GB on a large install and growing), and staging that
+  # on the container's writable layer is unaccounted node disk that the
+  # scheduler cannot see. When it runs out, pg_dump dies part-written and every
+  # other pod on that node gets DiskPressure. An emptyDir would not fix it —
+  # sizeLimit only turns the disk-full into a faster eviction.
+  #
+  # Size for your DB with room to grow: the dump must fit whole, since the
+  # archive's TOC is verified locally before upload. Empty storageClass inherits
+  # postgres.persistence.storageClass; point it at a cheap/slow tier (this is
+  # write-once-read-once, it does not need the primary's fast tier).
+  # NOTE: point this at NETWORK storage. It falls back to
+  # postgres.persistence.storageClass, which on some installs is a node-local
+  # class (local-path) — staging the dump there puts it back on the node
+  # filesystem, defeating the point, and worse than /tmp in one way: a
+  # local-path PVC is not charged to the pod's ephemeral storage, so kubelet
+  # will not evict the pod before the node fills.
+  scratchSize: 30Gi
+  scratchStorageClass: ""
+  # Retained Jobs each keep their pod, and each pod keeps its scratch PVC, so
+  # these are the retained-storage lever as well as the log-retention one.
+  # Worst case is (successful + failed x attempts) x scratchSize of REQUESTED
+  # capacity — 30Gi x 1 successful + 30Gi x 3 failed x 3 attempts here. `rm`
+  # frees the bytes after upload but not the claim, so under a namespace
+  # storage quota or a capacity-bound provisioner, turn these down.
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
   s3:
     endpoint: ""
     region: "us-east-1"
@@ -1373,6 +2144,12 @@ backup:
     schedule: "0 6 * * 1" # weekly, after Monday's backup
     activeDeadlineSeconds: 1800
     startingDeadlineSeconds: 1800
+    # Verify downloads the whole newest dump, so it needs the same staging space
+    # as the backup itself. Empty → inherit backup.scratchSize/StorageClass.
+    scratchSize: ""
+    scratchStorageClass: ""
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
   # Restore DRILL: the full-restore rehearsal `verify` stops short of. It
   # restores the newest dump into a throwaway database on the LIVE postgres,
   # asserts a core table has a plausible row count, then drops the scratch DB.
@@ -1434,8 +2211,18 @@ backup:
   # supabase/postgres image doesn't include it. Pin both URL and
   # SHA256 together; any mismatch fails the job before secrets are
   # used. Update both when bumping the version.
+  # FALLBACK ONLY — used when backup.image has no mc on PATH. Prefer baking it
+  # in (see backup.image above).
+  #
+  # No longer dl.min.io: MinIO archived the open-source mc project around
+  # 2026-09-12 and pulled every binary, so that host returns "410 Gone" for
+  # the pinned archive build AND the rolling release URL. This is the GitHub
+  # release asset for the same RELEASE tag — a byte-identical binary, hence
+  # the unchanged checksum (verified against upstream's own .sha256sum).
+  # Upstream is archived, so treat this as a frozen artifact that will get no
+  # security updates. Change both fields together.
   mc:
-    url: "https://dl.min.io/client/mc/release/linux-amd64/archive/mc.RELEASE.2025-08-13T08-35-41Z"
+    url: "https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z"
     sha256: "01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
 
 # -----------------------------------------------------------------------------
@@ -1472,11 +2259,101 @@ monitoring:
 
   # Per-component ServiceMonitor toggles (all default on). Set one false when a
   # component doesn't expose a scrapeable /metrics endpoint in your topology, so
-  # Prometheus doesn't flag it perpetually "down". e.g. storage-api serves
-  # /metrics only on its admin app / in multitenant mode; disable it on a
-  # single-tenant deploy.
+  # Prometheus doesn't flag it perpetually "down".
   serviceMonitors:
-    storage: true
+    # OFF by default, and this is not a cardinality or noise decision -- it is
+    # the only safe setting on supabase/storage-api v1.48.26.
+    #
+    # /metrics on the main app is registered when PROMETHEUS_METRICS_ENABLED is
+    # set (single-tenant registers it on the main app; multitenant moves it to
+    # ADMIN_PORT). But the handler does not `return reply`, so fastify's onSend
+    # chain double-writes the response head on the first scrape:
+    #
+    #   "Reply was already sent, did you forget to \"return reply\" in the
+    #    \"/metrics\" (GET) route?"
+    #   Error [ERR_HTTP_HEADERS_SENT]: Cannot write headers after they are sent
+    #     -> uncaughtException -> PID 1 exits -> CrashLoopBackOff
+    #
+    # Enabling the flag therefore does not produce metrics, it takes the storage
+    # tier down on a ~30s scrape interval. Verified on staging 2026-09-04.
+    #
+    # AND, independently: /metrics on the main app is PUBLICLY REACHABLE. Kong's
+    # storage-v1 service routes /storage/v1/ to storage:5000/ with
+    # strip_path: true and a cors plugin only -- no auth -- and the API-host
+    # ingress sends every path to Kong. So the endpoint would answer at
+    # https://<api host>/storage/v1/metrics from the internet, unauthenticated.
+    # Confirmed against staging: that URL reaches storage-api's own router (it
+    # returns storage-api's 404 JSON, not Kong's) while /storage/v1/status
+    # returns 200. Anyone "fixing" the crashloop by patching storage-api would
+    # still be publishing internal telemetry.
+    #
+    # So we ship neither the flag nor the ServiceMonitor. Leaving the
+    # ServiceMonitor on without the flag is merely a permanently-DOWN target (a
+    # 404), which is what shipped before and what this default fixes: a target
+    # that cannot succeed is worse than no target, because it trains everyone to
+    # ignore a DOWN storage row.
+    #
+    # To actually collect these, the route to try is the ADMIN app on ADMIN_PORT
+    # (default 5001), which registers the same handler but a different hook
+    # chain. That needs its own container port, Service port and ServiceMonitor,
+    # and the admin app also exposes tenant/migration/s3-credential routes, so
+    # exposing it even cluster-internally is a deliberate tradeoff -- not
+    # something to switch on as a side effect of monitoring.enabled.
+    storage: false
+    # ServiceMonitor for the dedicated metrics-leader Deployment. Only rendered
+    # when web.metricsLeader.enabled is also true, so leaving this on costs
+    # nothing on installs that do not run a leader.
+    metricsLeader: true
+
+  # Acknowledge that a postgres_exporter you manage is pointed at an externally
+  # managed database. ONLY relevant with postgres.enabled=false.
+  #
+  # Every DB-derived series this chart ships comes from the postgres_exporter
+  # SIDECAR inside the chart-managed Postgres StatefulSet (see
+  # templates/postgres-statefulset.yaml). With postgres.enabled=false that pod
+  # does not exist, so there is no collector — and the `metrics` edge function
+  # no longer gathers them either, because doing so cost 77.7% of all database
+  # execution time when Prometheus scraped it once per functions pod (32 in
+  # prod). templates/validations.yaml therefore REFUSES
+  # monitoring.enabled=true + postgres.enabled=false unless you set this,
+  # rather than letting vacuum/buffer-cache/dead-tuple metrics vanish silently.
+  #
+  # Setting this true asserts you run your own exporter against the external
+  # database. The queries.yaml ConfigMap still renders, so you can mount it into
+  # your exporter and keep the same metric names the dashboards and alert rules
+  # expect. The chart's own postgres-exporter Service and ServiceMonitor are NOT
+  # rendered when postgres.enabled=false (they would select no pods and sit
+  # permanently "down"), so supply your own ServiceMonitor for your exporter.
+  externalPostgresExporter: false
+
+  # Acknowledge that this install exports NO workflow metrics.
+  #
+  # With monitoring.enabled=true and web.replicas > 1 and neither leader
+  # mechanism on (web.workflowMetricsLeader / web.metricsLeader.enabled),
+  # nothing populates web_workflow_runs_recent, web_workflow_queue_seconds,
+  # web_workflow_run_seconds or web_workflow_errors_recent, and the nine
+  # workflow panels on the `app-business` Grafana dashboard render permanently
+  # empty — indistinguishable from "no workflow runs happened".
+  #
+  # templates/validations.yaml REFUSES that combination rather than shipping a
+  # dashboard that lies. Set this true to say you know and do not want the
+  # metrics; set web.metricsLeader.enabled=true to actually get them.
+  allowMissingWorkflowMetrics: false
+
+  # Acknowledge that something OUTSIDE this chart scrapes the metrics leader.
+  # ONLY relevant with web.metricsLeader.enabled=true and
+  # monitoring.serviceMonitors.metricsLeader=false.
+  #
+  # The leader refreshes the workflow gauges ONLY while serving a scrape of
+  # /api/metrics (app/api/metrics/route.ts calls refreshWorkflowMetrics()).
+  # There is no background timer. With its ServiceMonitor switched off, nothing
+  # ever calls it, so the pod runs, costs memory, and produces exactly nothing —
+  # the same silent blindness allowMissingWorkflowMetrics exists to prevent,
+  # reached through a different door. templates/validations.yaml refuses that
+  # combination unless you set this to confirm you have your own scrape config
+  # (a hand-written ServiceMonitor, a PodMonitor, or a static scrape target)
+  # pointed at the leader Service with the METRICS_SCRAPE_TOKEN bearer.
+  allowUnscrapedMetricsLeader: false
 
   # Alerting rules (Prometheus Operator PrometheusRule) for backup failure /
   # staleness, ExternalSecret sync failure, and TLS cert expiry — the
@@ -1495,9 +2372,133 @@ monitoring:
     allowUnselectedRules: false
     backupMaxAgeHours: 36
     certExpiryWarningDays: 14
+    # Namespaces to watch for expiring cert-manager Certificates. Defaults to the release
+    # namespace, which is what the rule used to hardcode — and why it could never match: the
+    # wildcard TLS Certificate lives in the ingress controller's namespace, so the shipped expiry
+    # alert watched a set containing no certificates at all. Add the ingress namespace here.
+    certNamespaces: []
+    # Notification email queue depth (messages) above which PawtograderNotificationEmailBacklog fires.
+    notificationEmailBacklog: 500
+    # Oldest-message age (seconds) above which PawtograderQueueOldestMessageAging fires, for any
+    # queue. Independent of enrollment, unlike the depth thresholds above, so it needs no per-term
+    # retuning — but it is NOT independent of batch size, which is what the floor below corrects.
+    queueOldestSeconds: 1200
+    # Drain rate (messages/minute) at or below which a queue counts as stalled. Both
+    # PawtograderQueueOldestMessageAging and PawtograderAsyncQueueStuck are suppressed while a queue
+    # is emptying faster than this, because a bulk enqueue (an assignment release) drives depth and
+    # oldest-message age past any threshold on a completely healthy system: 242 create_repo messages
+    # released in one transaction on 2026-09-13 took 30m51s to drain at ~8 msg/min and paged, with
+    # 242/242 repos created and an empty DLQ. The genuine stall on 2026-09-07 drained at
+    # ~0.66 msg/min. 2 msg/min sits 4x above that stall and 4x below a healthy release.
+    #
+    # Checked against the real series rather than against the average: per-minute depth was
+    # reconstructed from pgmq.a_async_calls for the 2026-09-13 burst and every rolling 15m slope
+    # computed. The worst genuine drain window was 7.27 msg/min (04:11-04:26), 3.6x above this floor,
+    # and the drain was near-linear — there is no flat stretch inside a release for the guard to miss.
+    # The only negative slope is at 04:00:00, where depth goes 0 to 128 as the burst lands, and the
+    # age alert is not eligible there because the oldest message is still far under queueOldestSeconds.
+    #
+    # Raise it only if a real stall is drifting faster than 2 msg/min; lowering it re-admits the
+    # release pages. charts/pawtograder/tests/promrules-unit.sh fails if the change inverts the guard.
+    queueDrainMessagesPerMinute: 2
+    # Growth in the Discord DLQ over an hour above which PawtograderDiscordDLQGrowing fires.
+    # A rate, not a level: a poison message sits in the DLQ forever, so a level alert would fire
+    # permanently and get silenced.
+    discordDlqGrowthPerHour: 20
+    # Growth in the gradebook row-recalculate DLQ over an hour above which
+    # PawtograderGradebookRecalcDLQGrowing fires. Much lower than the other DLQ thresholds: a message
+    # only lands here after eight backed-off recovery attempts, and each one is a gradebook row whose
+    # stored score is stale with nothing left to recompute it.
+    gradebookRecalcDlqGrowthPerHour: 5
+    # pgmq msg_id sequence position (per queue) above which the two
+    # PawtograderQueueMsgId* alerts fire. These are NOT capacity headroom, and sizing
+    # them as a fraction of the ceiling would be the wrong reasoning even where it
+    # happens to land on a workable number.
+    #
+    # The ceiling is real: msg_id is a bigint, PostgREST emits it exactly (a preview
+    # round-trip returned 9007199254740993 = 2^53+1 byte-for-byte), and V8's JSON.parse
+    # then rounds it to ...992 -- after which a worker archives or deletes a msg_id that
+    # is not the one it processed. Silent work loss, or infinite redelivery.
+    #
+    # But nothing organic goes there. Measured on prod 2026-09-13: the busiest sequence
+    # (q_discord_async_calls) is at 137,603 and advances ~7 messages/hour, steady over 14
+    # hours. Reaching 2^53 at that rate takes order 10^11 years. What CAN happen is a
+    # sequence being SET: a restore replaying a foreign setval, a migration or backfill
+    # seeding ids, a hand-run ALTER SEQUENCE ... RESTART WITH. That is a jump, not a
+    # climb, so both thresholds are placed where organic traffic cannot reach them and
+    # only a jump can.
+    #
+    # 1e12 is ~7 million times the largest value prod has ever held and still ~9,000x
+    # below 2^53, so it cannot false-positive from growth and it fires with enormous
+    # lead time. 2^52 (4503599627370496) is the critical: within a factor of two of the
+    # point where ids stop round-tripping, i.e. one more mistake of the same kind lands
+    # past the cliff. Both usually fire together on a bad restore -- the tiering buys
+    # severity routing (ticket vs page), not lead time.
+    queueMsgIdWarning: 1000000000000
+    queueMsgIdCritical: 4503599627370496
+    # How long a Discord per-guild circuit breaker may stay open before
+    # PawtograderDiscordCircuitBreakerOpen fires. Must stay comfortably BELOW the breaker's shortest
+    # window, which is the 30-minute permission_storm base in open_discord_circuit(): the gauge is
+    # is_open, which goes false as soon as open_until passes, so any value at or above 30m cannot be
+    # satisfied by a first trip and the alert is silent for the whole of the first incident. This was
+    # 45m and never fired on one. Ten minutes is ten or more consecutive scrapes (so a scrape gap
+    # cannot flap it) with 20 minutes of margin left inside the shortest window.
+    discordCircuitOpenFor: 10m
+    # How long the chart-managed Postgres StatefulSet may report ZERO ready
+    # replicas before PawtograderPostgresUnavailable pages (critical).
+    #
+    # This is the alert that covers a wedged primary. It exists because the
+    # liveness probes were removed (see postgres-statefulset.yaml): nothing
+    # restarts a wedged postmaster automatically any more, so the condition has to
+    # page instead. It is keyed on kube-state-metrics, NOT on anything produced
+    # inside the postgres pod — the exporter sidecar and the metrics edge function
+    # both die with the database, which is exactly why the pre-existing critical
+    # rules cannot detect this (they are `metric > threshold` on series that
+    # disappear, so they fail OPEN).
+    #
+    # Must outlast a NORMAL rollout or the chart pages on every deploy: the
+    # StatefulSet legitimately goes not-ready on any config change. Budget is
+    # roughly preStop fast shutdown (seconds) + a possible cold image pull of the
+    # supabase/postgres image (1-3 min) + postgres start and readiness
+    # (initialDelay 10s + up to 3x5s) — call it 3-4 min worst case on a cold node.
+    # 5m clears that with margin and matches the 5m used by
+    # PawtograderPostgresConnectionsSaturated and PawtograderAsyncQueueBacklog.
+    # Raise it if your nodes pull images slowly; lower it only if images are always
+    # warm.
+    postgresUnavailableFor: 5m
+    # Edge-function pod restarts in 30m above which PawtograderEdgeFunctionsRestarting fires.
+    edgeFunctionRestarts30m: 2
+    # Fraction of the container memory limit above which PawtograderEdgeFunctionsMemoryHigh fires.
+    edgeFunctionMemoryRatio: 0.85
+    # How long web_workflow_runs_recent may be entirely ABSENT, while
+    # web.metricsLeader.enabled is true, before PawtograderWorkflowMetricsStale
+    # fires. Generous by design: the gauge only exists once a refresh has run and
+    # .set() at least one sample, so a leader restart legitimately produces a gap
+    # of one refresh interval plus one scrape.
+    workflowMetricsAbsentFor: 30m
+    # Fraction of a node's ALLOCATABLE memory, used by this release's own pods, above which
+    # PawtograderEdgeFunctionsNodeMemoryHigh fires. Covers the axis every other rule here misses:
+    # the kernel can OOM-kill a pod that is nowhere near its own limit, because the NODE is full.
+    #
+    # Counts only this namespace's usage, so it is a floor on how full the node is, not the whole
+    # picture -- a node filled by another tenant will not fire it. In exchange the rule is scoped to
+    # nodes we actually run on, and depends only on kube-state-metrics + cadvisor, the same
+    # exporters the rest of this rule group already needs.
+    nodeMemoryRatio: 0.85
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
+    # Schema-cache reloads per PostgREST pod per hour above which
+    # PawtograderPostgrestSchemaCacheChurn fires. A reload means EITHER the pool
+    # was rebuilt after a fatal connection error (everything in flight on that
+    # pod got a 503) or a `NOTIFY pgrst, 'reload schema'` arrived (harmless);
+    # the counter cannot separate them, so the alert reports churn and the
+    # description says how to tell. A healthy long-lived pod sits at 0; prod
+    # during the /dev/shm incident ran ~3/hour.
+    # The rule pairs this low threshold with a 2h `for:`, because bootstrap and
+    # migration bursts are large but short-lived (a fresh preview pod hit 37 in
+    # three minutes) while real churn never decays.
+    postgrestSchemaCacheLoadsPerHour: 2
     # Streaming-standby replay lag (bytes) above which PawtograderReplicaLagHigh
     # fires (only when postgres.replica.enabled). Primary current LSN − standby
     # replay_lsn; ~0 on a healthy standby. 100 MiB tolerates a bulk write/migration
@@ -1546,6 +2547,9 @@ monitoring:
     appBusiness:      true
     rateLimiting:     true
     edgeSoak:         true
+    # Depth AND oldest-message age for every pgmq queue, side by side. Depth alone cannot tell a
+    # busy queue from a stalled one, and depth thresholds need retuning each term; age does not.
+    queuesAndWorkers: true
 
   # Logs are NOT deployed by this chart. Log collection (Alloy
   # DaemonSet shipping into a central Loki) is a cluster-level concern

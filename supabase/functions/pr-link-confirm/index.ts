@@ -22,7 +22,8 @@ import { assertUserIsInCourse, SecurityError, UserVisibleError, wrapRequestHandl
 import { ingestPrSubmissionFiles } from "../_shared/PrSubmissionFiles.ts";
 import { prStateFromPullRequest } from "../_shared/PrState.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 type RequestBody = { link_id: number };
 
@@ -38,7 +39,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<PrLinkC
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const { data: link } = await adminSupabase

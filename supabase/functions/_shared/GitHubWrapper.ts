@@ -5,7 +5,7 @@ import { throttling } from "npm:@octokit/plugin-throttling";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { App, Endpoints, Octokit, RequestError } from "npm:octokit";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { SecurityError } from "./HandlerUtils.ts";
 
 // Structured error used to signal Octokit secondary rate limit back to callers
@@ -54,6 +54,46 @@ export class NonRetryableRepoError extends NonRetryableGitHubError {
 }
 
 /**
+ * The repository we were asked to operate on is not on GitHub at all. Distinct from a bare 404,
+ * which on a freshly-created repo usually means read-after-create replication lag and IS worth
+ * retrying: this error is only raised once a direct `GET /repos/{owner}/{repo}` has confirmed the
+ * repo is really gone. Someone deleted it out of band, or the row was left behind when the repo was
+ * renamed. Either way the row no longer describes anything, so the worker records the reason and
+ * clears `is_github_ready` rather than retrying.
+ */
+export class RepositoryMissingError extends NonRetryableGitHubError {
+  readonly fullName: string;
+  constructor(fullName: string) {
+    super(
+      `Repository ${fullName} does not exist on GitHub. It was deleted or renamed outside Pawtograder, so there is nothing to sync.`
+    );
+    this.name = "RepositoryMissingError";
+    this.fullName = fullName;
+  }
+}
+
+/**
+ * The repo 404s and we cannot attribute it: the installation is scoped to selected repositories, so
+ * this is either a deleted repo or a live one we were never granted. Sibling of
+ * RepositoryMissingError, and the distinction is exactly what we are allowed to DO about it.
+ *
+ * Both are per-repo failures, so neither should trip the org-wide circuit breaker or spend the
+ * retry ladder — nothing about one repo says the org is unhealthy. Only RepositoryMissingError
+ * carries proof of deletion, so only it may park the row; this one leaves `repositories` untouched,
+ * because the row may be perfectly correct and the problem ours.
+ */
+export class RepositoryUnreadableError extends NonRetryableGitHubError {
+  readonly fullName: string;
+  constructor(fullName: string) {
+    super(
+      `Repository ${fullName} returned 404 and this installation is scoped to selected repositories, so it is either deleted or not granted to us. Cannot sync it, and cannot safely conclude it is gone.`
+    );
+    this.name = "RepositoryUnreadableError";
+    this.fullName = fullName;
+  }
+}
+
+/**
  * The GitHub login we have on file for a user doesn't exist, and we couldn't recover a current one
  * from the numeric account id we stored when they linked their account (see
  * `reresolveMissingGitHubLogin`). Either the account was deleted or the username was never really
@@ -74,13 +114,16 @@ import {
   BRANCH_PROTECTION_RULESET_NAME,
   type BranchProtectionConfig,
   DEFAULT_BRANCH_PROTECTION,
+  isBranchProtectionUnsupportedError,
   planBranchProtectionAction,
   requestsNoBranchProtection
 } from "./branchProtection.ts";
-
+import { isInvitationStale } from "./orgInviteWindow.ts";
 import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
+import { attachSnapshotToScope, countStep, StepTimings, type StepTimingsSnapshot, timeStep } from "./stepTimings.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "./requestScopedAuthOptions.ts";
 
 const adminsThatShouldNotBeListedAsAdmins = ["smaran-teja", "jonathantarun", "ricksva", "jondenman", "tsrats"];
 /**
@@ -204,6 +247,15 @@ function buildRedisBottleneck(
   });
 }
 
+/**
+ * Backstop for a settings key that goes missing under this limiter: rebuild it and move the cache
+ * entry over, dropping whatever was waiting on the dead one.
+ *
+ * Kept, but it should no longer fire. `installBottleneckLuaErrorNormalizer` (Redis.ts) now lets
+ * Bottleneck recognise SETTINGS_KEY_NOT_FOUND again, so the datastore re-inits and retries the
+ * script in place — no rotation, and nothing dropped. This runs only if that recovery is itself
+ * defeated, which is how it read before the reply prefix was understood.
+ */
 function withSettingsKeyRecovery(
   limiter: Bottleneck,
   id: string,
@@ -372,6 +424,21 @@ export async function getOrgId(org: string, scope?: Sentry.Scope): Promise<numbe
     orgIdCache.set(org, undefined);
     return undefined;
   }
+}
+
+/**
+ * Is this a repository name the GitHub helpers here can actually use — exactly `owner/name`?
+ *
+ * `getOctoKit`, `getFileFromRepo` and `getDefaultBranchHeadSha` all take the first two
+ * slash-separated components and pass them straight to the API, so `owner/name/extra` silently
+ * targets `owner/name`, and `/name`, `owner/` or `/` build a request with an empty owner or repo.
+ * A merely-present slash (the check this replaces at the callers) accepts all four.
+ *
+ * Same shape as the "owner/repo" validation `admin_upsert_github_org` applies to the template repo
+ * defaults, deliberately: these values come from the same kind of admin-typed form field.
+ */
+export function isValidRepoFullName(repo: unknown): repo is string {
+  return typeof repo === "string" && /^[^/\s]+\/[^/\s]+$/.test(repo);
 }
 
 export async function getOctoKitAndInstallationID(repoOrOrgName: string, scope?: Sentry.Scope) {
@@ -568,7 +635,8 @@ export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sent
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Check cache for existing signed URL (less than 55 minutes old)
@@ -745,7 +813,8 @@ export async function updateAutograderWorkflowHash(
   const hashStr = hash.digest("hex");
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   console.log("updating autograder workflow hash", hashStr, repoName);
   const { data: assignments } = await adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
@@ -901,7 +970,7 @@ export async function getDefaultBranchHeadSha(repoName: string, scope?: Sentry.S
   // getRepoToCloneConsideringE2E. Answering "what is the head of the suffixed repo" is not
   // possible and not meaningful: the head of the SHARED fixture repo says nothing about the fake
   // sha an E2E push carries. Callers already treat `undefined` as "could not determine, assume
-  // current", which is the behaviour the E2E stub above relies on — but that stub is gated on
+  // current", which is the behavior the E2E stub above relies on — but that stub is gated on
   // PAWTOGRADER_GITHUB_STUB, a different flag from the E2E_MOCK_GITHUB / END_TO_END_SECRET setup
   // the webhook-driven suites use, so without this the new pre-insert and supersede checks issued
   // a real `GET /repos/...--<suffix>` that 404s, threw, and answered 500 for every push-direct
@@ -1337,7 +1406,8 @@ async function recordE2eGithubCall(fn: string, args: unknown, scope?: Sentry.Sco
   try {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     // The Database type may not yet know about e2e_github_calls in older
     // generated bundles; cast through unknown so production/staging compiles
@@ -1414,6 +1484,132 @@ export async function assertSourceNotEmpty(
 }
 
 /**
+ * Throws NonRetryableRepoError when the fork source cannot be forked at all.
+ *
+ * WHY THIS IS A PREFLIGHT AND NOT JUST ERROR HANDLING (2026-09-09, CS 4535). A private handout in
+ * an org whose "Allow forking of private repositories" member privilege is off makes
+ * `POST /repos/{owner}/{repo}/forks` fail with 403 "The repository exists, but forking is
+ * disabled." That is a course CONFIGURATION fault, identical for every student on the assignment,
+ * and no retry can fix it. Left unclassified it fell into the worker's generic retry ladder: the
+ * repository row never got a `creation_error`, so `reconcile_stuck_repo_creations` kept treating
+ * the rows as TRANSIENT and re-enqueued them on a doubling backoff. Three repos were re-enqueued
+ * six times over 8.5 hours -- 108 doomed GitHub calls -- and three students had no repo for 17
+ * hours, until an instructor noticed and made the handout public.
+ *
+ * Checking first costs one `GET /repos` per fork-mode creation. That GET is not scheduled through
+ * the fleet-wide `create_content:<org>` limiter, whereas the doomed fork it replaces WOULD hold one
+ * of that limiter's 40 slots. On a burst (58 repos on 2026-09-07) the preflight is therefore
+ * cheaper than the failure it prevents, not just faster to diagnose.
+ *
+ * The repo-level `allow_forking` flag reflects the ORG policy, not just the repository toggle:
+ * verified 2026-09-09 against neu-cs4535, where every private repo reports `allow_forking: false`
+ * while `orgs/neu-cs4535.members_can_fork_private_repositories` is false. One GET is therefore
+ * enough; we do not also need to read the org.
+ *
+ * A 403 from the fork call itself is still classified in `createRepo` -- this preflight can race a
+ * policy change, and belt-and-braces is cheap.
+ */
+export async function assertSourceForkable(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  sourceFullName: string
+): Promise<void> {
+  let meta: { allow_forking?: boolean; private?: boolean };
+  try {
+    const resp = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    meta = resp.data as { allow_forking?: boolean; private?: boolean };
+  } catch (e) {
+    if (e instanceof RequestError && e.status === 404) {
+      throw new NonRetryableRepoError(`Source repository ${sourceFullName} was not found`);
+    }
+    // Anything else (a 5xx, a rate limit) is transient: let the caller retry rather than parking a
+    // repo because we could not read the source once.
+    throw e;
+  }
+  // Only a definitive `false` blocks. If GitHub ever stops returning the field, `undefined` must
+  // not be read as "cannot fork" -- that would park every fork-mode creation on a schema change.
+  if (meta.allow_forking === false) {
+    throw new NonRetryableRepoError(forkingDisabledMessage(sourceFullName, owner, meta.private === true));
+  }
+}
+
+/**
+ * The instructor-facing remedy for a disabled fork. Both causes produce the same GitHub error, so
+ * name the one that matches what we observed about the source and keep the other as the fallback.
+ * This string lands in `repositories.creation_error` and is shown next to the Retry button.
+ */
+function forkingDisabledMessage(sourceFullName: string, owner: string, sourceIsPrivate: boolean): string {
+  if (sourceIsPrivate) {
+    return (
+      `Cannot fork ${sourceFullName}: it is private, and the ${owner} organization does not allow ` +
+      `forking private repositories. Either make ${sourceFullName} public, or turn on ` +
+      `"Allow forking of private repositories" in the ${owner} organization settings ` +
+      `(Settings > Member privileges), then use Retry.`
+    );
+  }
+  return (
+    `Cannot fork ${sourceFullName}: forking is disabled on that repository. Turn on ` +
+    `"Allow forking" in its settings (Settings > General > Features), then use Retry.`
+  );
+}
+
+/**
+ * True when a fork request failed because forking is disabled for the source -- either the
+ * repository's own toggle is off, or it is private and the org forbids forking private repos.
+ * GitHub returns 403 and puts the phrase on the top-level message, but check `errors[]` too for the
+ * same reason `isRepoNameAlreadyExistsError` does: the shape is not contractual.
+ */
+function isForkingDisabledError(e: unknown): boolean {
+  if (!(e instanceof RequestError) || e.status !== 403) return false;
+  const haystacks: string[] = [e.message ?? ""];
+  const errors = (e.response?.data as { errors?: unknown } | undefined)?.errors;
+  if (Array.isArray(errors)) {
+    for (const err of errors) {
+      if (typeof err === "string") {
+        haystacks.push(err);
+      } else if (err && typeof err === "object") {
+        const eo = err as { message?: string };
+        haystacks.push(eo.message ?? "");
+      }
+    }
+  }
+  return haystacks.join(" ").toLowerCase().includes("forking is disabled");
+}
+
+/**
+ * True when the destination repo already exists AND has content, i.e. an earlier run already
+ * created it and this call is an idempotent re-run that should ADOPT rather than create.
+ *
+ * Only consulted when the fork preflight has already decided the source is unforkable, so the
+ * extra request is off the happy path. A 404 (nothing to adopt) and an empty repo (a half-created
+ * leftover, which the normal path REPAIRS by delete+regenerate -- impossible if we cannot fork)
+ * both mean "no", and the caller then parks the row with the preflight's error.
+ */
+export async function destinationHasContent(octokit: Octokit, org: string, repoName: string): Promise<boolean> {
+  try {
+    return !(await isRepoEmpty(octokit, org, repoName));
+  } catch (e) {
+    if (e instanceof RequestError && e.status === 404) return false;
+    throw e;
+  }
+}
+
+/**
+ * Best-effort read of a repo's visibility, used only to pick the wording of an error we are already
+ * throwing. A failure here must not mask that error, so it falls back to "not private" -- the
+ * message then names the repository toggle and keeps the org policy as the secondary remedy.
+ */
+async function isRepoPrivate(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
+  try {
+    const resp = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    return (resp.data as { private?: boolean }).private === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when a repo create/generate/fork request failed because the target name is already taken.
  * GitHub returns 422 and the human phrase ("Name already exists on this account") may live on the
  * top-level message OR inside response.data.errors[], so check both rather than a single brittle
@@ -1460,6 +1656,63 @@ export function isTeamAlreadyExistsError(e: unknown): boolean {
 }
 
 /**
+ * Attach a finished step-timings snapshot to the Sentry scope for the operation being measured.
+ *
+ * The writing itself lives in `attachSnapshotToScope` (_shared/stepTimings.ts), which documents why
+ * every write goes through this scope object and never through `Sentry.addBreadcrumb`, and why the
+ * tag keys are namespaced per operation.
+ *
+ * The scope handed to us is ALREADY per-message: `processBatch` shares one scope across the
+ * `drainConcurrency` envelopes it runs concurrently, but `processEnvelope` clones it per envelope
+ * (github-async-worker/index.ts:613) before any handler sees it, and `Sentry.Scope.clone()` copies
+ * tags and contexts by value. Attaching here — rather than to a scope this function clones for
+ * itself — is deliberate and is what makes an ESCAPING error carry its own breakdown: the worker
+ * captures that error with this same envelope scope, so the event arrives in Bugsink with this
+ * operation's steps on it. A private clone would isolate nothing extra and would drop the snapshot
+ * from precisely the event we most want it on.
+ */
+function attachStepTimingsToScope(snapshot: StepTimingsSnapshot, scope?: Sentry.Scope): void {
+  attachSnapshotToScope(snapshot, scope);
+}
+
+/**
+ * Attach the timings so far to the scope for a HANDLED failure that is about to be reported and
+ * then recovered from.
+ *
+ * Sentry applies scope data at CAPTURE time. `createRepo` attaches its finished snapshot in a
+ * `finally` at the very end, so every `Sentry.captureException` that happens mid-operation — and in
+ * this file those are exactly the interesting ones: patch_repo_settings, enable_actions, the
+ * ruleset, the rulesets-list read, the staff-roster read, each of which is deliberately
+ * log-and-continue — would otherwise arrive in Bugsink with no timing context at all. Attaching a
+ * partial snapshot first is cheap (a read of the accumulators) and cannot affect the final one:
+ * `snapshot()` does not mutate, and `finish()` remains single-shot, so the summary log line is
+ * still emitted exactly once with the complete numbers.
+ */
+function attachHandledFailureTimings(
+  timings: StepTimings | undefined,
+  scope: Sentry.Scope | undefined,
+  handledStep: string,
+  error?: unknown
+): void {
+  if (!timings || !scope) return;
+  try {
+    attachStepTimingsToScope(timings.snapshot(), scope);
+    // The step whose failure was handled here. NOT `failed_step`, which is reserved for an error
+    // that escaped the whole operation. Op-namespaced for the same reason as every other timing tag
+    // (see attachSnapshotToScope): two instrumented operations share one envelope scope.
+    //
+    // Prefer the step that actually raised THIS error over the caller's label. One catch can cover
+    // several timed steps — the rulesets try/catch below spans both the LIST and the DETAIL request
+    // — and a hardcoded label there tagged a failed DETAIL request as `ruleset_list`, contradicting
+    // the context blob beside it and sending endpoint-level filtering to the wrong place.
+    const step = timings.stepForError(error) ?? handledStep;
+    scope.setTag(`step_timings_${timings.op}_handled_failure_step`, step);
+  } catch {
+    /* diagnostics must never break the operation they describe */
+  }
+}
+
+/**
  * Shared post-create finalization: enable squash merge + template flag, enable Actions, resolve the
  * default branch's head SHA, and apply the branch-protection ruleset. Run identically for freshly
  * created, repaired, and adopted pre-existing repos so the paths never drift. Returns the head SHA.
@@ -1469,7 +1722,8 @@ async function finalizeRepo(
   org: string,
   repoName: string,
   opts: { is_template_repo?: boolean; branch_protection?: BranchProtectionConfig },
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  timings?: StepTimings
 ): Promise<string> {
   const { is_template_repo, branch_protection = DEFAULT_BRANCH_PROTECTION } = opts;
   // Enable squash merging; set template flag when applicable. These are non-essential settings on an
@@ -1478,94 +1732,154 @@ async function finalizeRepo(
   // matching the enable-Actions and ruleset steps below.
   scope?.setTag("github_operation", "patch_repo_settings");
   try {
-    await retryWithBackoff(
-      () =>
-        octokit.request("PATCH /repos/{owner}/{repo}", {
-          owner: org,
-          repo: repoName,
-          allow_squash_merge: true,
-          is_template: is_template_repo ? true : false
-        }),
-      3, // maxRetries
-      1000, // baseDelayMs
-      scope
+    await timeStep(timings, "patch_repo_settings", () =>
+      retryWithBackoff(
+        () =>
+          octokit.request("PATCH /repos/{owner}/{repo}", {
+            owner: org,
+            repo: repoName,
+            allow_squash_merge: true,
+            is_template: is_template_repo ? true : false
+          }),
+        3, // maxRetries
+        1000, // baseDelayMs
+        scope
+      )
     );
   } catch (patchErr) {
     console.error("Error patching repo settings (squash merge / template flag)", patchErr);
     scope?.setTag("patch_repo_settings_failed", "true");
+    attachHandledFailureTimings(timings, scope, "patch_repo_settings", patchErr);
     Sentry.captureException(patchErr, scope);
   }
   // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
   scope?.setTag("github_operation", "enable_actions");
   try {
-    await retryWithBackoff(
-      () =>
-        octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
-          owner: org,
-          repo: repoName,
-          enabled: true,
-          allowed_actions: "all"
-        }),
-      3,
-      1000,
-      scope
+    await timeStep(timings, "enable_actions", () =>
+      retryWithBackoff(
+        () =>
+          octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+            owner: org,
+            repo: repoName,
+            enabled: true,
+            allowed_actions: "all"
+          }),
+        3,
+        1000,
+        scope
+      )
     );
   } catch (actionsErr) {
     console.error("Error enabling GitHub Actions", actionsErr);
     scope?.setTag("enable_actions_failed", "true");
+    attachHandledFailureTimings(timings, scope, "enable_actions", actionsErr);
     Sentry.captureException(actionsErr, scope);
   }
   // Resolve the repo's actual default branch rather than assuming `main`: a FORK inherits the
   // UPSTREAM's default branch (which may be `master`), and a template-generated repo inherits the
   // template's. Hardcoding `heads/main` would 404 the ref lookup for any such repo.
   scope?.setTag("github_operation", "get_default_branch");
-  const repoMeta = await retryWithBackoff(
-    () =>
-      octokit.request("GET /repos/{owner}/{repo}", {
-        owner: org,
-        repo: repoName
-      }),
-    3, // maxRetries
-    1000, // baseDelayMs
-    scope
+  const repoMeta = await timeStep(timings, "get_default_branch", () =>
+    retryWithBackoff(
+      () =>
+        octokit.request("GET /repos/{owner}/{repo}", {
+          owner: org,
+          repo: repoName
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    )
   );
   const defaultBranch = repoMeta.data.default_branch || "main";
   scope?.setTag("default_branch", defaultBranch);
   scope?.setTag("github_operation", "get_head_sha");
   scope?.setTag("ref", `heads/${defaultBranch}`);
-  const heads = await retryWithBackoff(
-    () =>
-      octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-        owner: org,
-        repo: repoName,
-        ref: `heads/${defaultBranch}`
-      }),
-    5, // maxRetries
-    3000, // baseDelayMs
-    scope
+  // NOTE (2026-09-07 latency hunt): this is the call with the deepest retry ladder in the path —
+  // maxRetries 5 / baseDelayMs 3000 = 3+6+12+24+48 = 93s of sleep if it 404s all the way. The
+  // incident logs contain no retry lines at all, so the ladder did NOT fire; this timing exists to
+  // keep proving that from the data rather than from absence-of-logs.
+  const heads = await timeStep(timings, "get_head_sha", () =>
+    retryWithBackoff(
+      () =>
+        octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+          owner: org,
+          repo: repoName,
+          ref: `heads/${defaultBranch}`
+        }),
+      5, // maxRetries
+      3000, // baseDelayMs
+      scope
+    )
   );
   scope?.setTag("head_sha", heads.data.object.sha);
 
   // Apply branch protection ruleset per the assignment's configuration.
   scope?.setTag("github_operation", "create_branch_protection_ruleset");
   try {
-    await applyBranchProtectionRuleset(org, repoName, branch_protection, scope);
+    await applyBranchProtectionRuleset(org, repoName, branch_protection, scope, timings);
   } catch (rulesetError) {
     // Log but don't fail repo creation if ruleset creation fails
     console.error("Error applying branch protection ruleset", rulesetError);
     scope?.setTag("ruleset_creation_failed", "true");
+    // Coarse fallback only: this catch sits OUTSIDE applyBranchProtectionRuleset, so the throw may
+    // have come from any of its timed sub-steps (ruleset_get_octokit / _list / _detail / _write) or
+    // from untimed code between them. stepForError picks the exact one when it can.
+    attachHandledFailureTimings(timings, scope, "branch_protection_ruleset", rulesetError);
     Sentry.captureException(rulesetError, scope);
   }
 
   return heads.data.object.sha as string;
 }
 
+/**
+ * Step-level timing wrapper around repo creation. See _shared/stepTimings.ts for the measurement
+ * that motivated it: 58 prod `create_repo` messages on 2026-09-07 took p50 279.5s each (vs
+ * sync_student_team p50 1.0s on the same pods), with only ~5s of that explained (the template
+ * generate call, timestamped in the logs) and ~275s spent inside code that logged nothing.
+ *
+ * The body is untouched and lives in `createRepoInstrumented`; this wrapper only creates the
+ * collector and reports it from a `finally`, so the breakdown is emitted on the throw path too.
+ * Note that `total_ms` here is createRepo's OWN wall time: the async worker wraps this whole call
+ * in `getCreateContentLimiter(org).schedule(...)`, so any wait for a limiter slot happens before we
+ * are entered and is deliberately not part of this number.
+ */
 export async function createRepo(
   org: string,
   repoName: string,
   template_repo: string,
   options: CreateRepoOptions = {},
   scope?: Sentry.Scope
+): Promise<string> {
+  const timings = new StepTimings("create_repo", {
+    meta: {
+      org,
+      repo_name: repoName,
+      template_repo,
+      creation_method: options.creation_method ?? "template"
+    }
+  });
+  try {
+    return await createRepoInstrumented(org, repoName, template_repo, options, scope, timings);
+  } catch (error) {
+    // The ONLY place that knows an error was not recovered from. Individual steps throw routinely
+    // (poll misses on a freshly generated repo, the 422 that opens the duplicate-repo path, the
+    // non-essential finalize settings), and every one of those is caught downstream — so `time()`
+    // deliberately does not flag them and this catch promotes the one that actually escaped.
+    timings.noteEscapingError(error);
+    throw error;
+  } finally {
+    timings.finish((snapshot) => attachStepTimingsToScope(snapshot, scope));
+  }
+}
+
+async function createRepoInstrumented(
+  org: string,
+  repoName: string,
+  template_repo: string,
+  options: CreateRepoOptions,
+  scope: Sentry.Scope | undefined,
+  timings: StepTimings
 ): Promise<string> {
   const { is_template_repo, creation_method = "template", branch_protection = DEFAULT_BRANCH_PROTECTION } = options;
   scope?.setTag("github_operation", "create_repo");
@@ -1595,7 +1909,10 @@ export async function createRepo(
     return stubFakeSha("e2e-stub-", repoName);
   }
 
-  const octokit = await getOctoKit(org, scope);
+  // Timed because it is not free on a cold isolate: the FIRST getOctoKit in a process does
+  // `GET /app/installations` and constructs one throttled Octokit per installation. On a warm
+  // isolate this is a map lookup and should read as ~0ms — which is itself the useful signal.
+  const octokit = await timeStep(timings, "get_octokit", () => getOctoKit(org, scope));
   if (!octokit) {
     throw new UserVisibleError("No GitHub installation found for organization " + org);
   }
@@ -1611,36 +1928,46 @@ export async function createRepo(
     if (creation_method === "fork") {
       // Fork the upstream into our org with the chosen name. Forks are
       // asynchronous on GitHub's side, so we poll for size > 0 below.
-      await retryWithBackoff(
-        () =>
-          octokit.request("POST /repos/{owner}/{repo}/forks", {
-            owner,
-            repo,
-            organization: org,
-            name: repoName,
-            default_branch_only: true
-          }),
-        2, // maxRetries
-        5000, // baseDelayMs
-        scope
+      await timeStep(timings, "create_fork", () =>
+        retryWithBackoff(
+          () =>
+            octokit.request("POST /repos/{owner}/{repo}/forks", {
+              owner,
+              repo,
+              organization: org,
+              name: repoName,
+              default_branch_only: true
+            }),
+          2, // maxRetries
+          5000, // baseDelayMs
+          scope
+        )
       );
     } else {
-      const resp = await retryWithBackoff(
-        () =>
-          octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
-            template_repo: repo,
-            template_owner: owner,
-            owner: org,
-            name: repoName,
-            private: true
-          }),
-        2, // maxRetries
-        5000, // baseDelayMs
-        scope
+      // The one step whose cost we already know from the incident logs: "Creating repo ... via
+      // template" at 04:01:00.673 and its response at 04:01:05.569, i.e. ~4.9s. Timed anyway so the
+      // single summary line is self-contained and we do not have to correlate two log lines again.
+      const resp = await timeStep(timings, "template_generate", () =>
+        retryWithBackoff(
+          () =>
+            octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
+              template_repo: repo,
+              template_owner: owner,
+              owner: org,
+              name: repoName,
+              private: true
+            }),
+          2, // maxRetries
+          5000, // baseDelayMs
+          scope
+        )
       );
       console.log(JSON.stringify(resp.headers, null, 2));
     }
-    await waitForRepoReady(octokit, org, repoName, scope);
+    // On the delete+regenerate repair path this whole closure runs TWICE; StepTimings accumulates
+    // per step and reports the call count in `repeated`, so a second pass is visible rather than
+    // silently doubling a step's number.
+    await waitForRepoReady(octokit, org, repoName, scope, timings);
   };
 
   scope?.setTag("github_operation", "create_repo_request");
@@ -1650,32 +1977,73 @@ export async function createRepo(
   scope?.setTag("org", org);
   console.log("Creating repo", template_repo, owner, repoName, org, "via", creation_method);
 
+  // Preflight the fork source ONCE, before any create attempt. Hoisted out of createAndWaitReady
+  // (which runs twice on the delete+regenerate repair path) because the answer cannot change
+  // between those two passes, and because a doomed fork holds a content-limiter slot.
+  //
+  // An unforkable source is NOT automatically a failure. createRepo is idempotent: when the
+  // destination already exists with content, the create call 422s on the duplicate name and the
+  // catch below ADOPTS it. Parking on the preflight alone would break that re-run for any
+  // assignment whose repos were provisioned while forking was still allowed and whose handout was
+  // made private afterwards -- work that used to succeed would start reporting a config error.
+  // So when the source cannot be forked, ask whether there is anything to adopt before giving up.
+  let adoptWithoutCreating = false;
+  if (creation_method === "fork") {
+    try {
+      await timeStep(timings, "assert_source_forkable", () =>
+        assertSourceForkable(octokit, owner, repo, template_repo)
+      );
+    } catch (preflightErr) {
+      if (!(preflightErr instanceof NonRetryableRepoError)) throw preflightErr;
+      const adoptable = await timeStep(timings, "adoptable_destination_probe", () =>
+        destinationHasContent(octokit, org, repoName)
+      );
+      if (!adoptable) throw preflightErr;
+      scope?.setTag("adopted_despite_unforkable_source", "true");
+      timings.setMeta("adopted_despite_unforkable_source", true);
+      adoptWithoutCreating = true;
+    }
+  }
+
   try {
-    await createAndWaitReady();
+    if (adoptWithoutCreating) {
+      // Nothing to create: fall through to the shared finalize block, exactly as the
+      // duplicate-name adoption path below does.
+    } else {
+      await createAndWaitReady();
+    }
   } catch (createErr) {
     if (isRepoNameAlreadyExistsError(createErr)) {
       // A repo already exists under this name. If it has content, adopt it (idempotent re-run). If
       // it is EMPTY, a previous attempt left it half-created — REPAIR it by deleting and
       // regenerating rather than adopting a blank repo forever (the old, broken behavior).
       scope?.setTag("repo_already_exists", "true");
-      const empty = await isRepoEmpty(octokit, org, repoName);
+      timings.setMeta("repo_already_exists", true);
+      const empty = await timeStep(timings, "is_repo_empty", () => isRepoEmpty(octokit, org, repoName));
       scope?.setTag("existing_repo_empty", empty.toString());
+      timings.setMeta("existing_repo_empty", empty);
       if (empty) {
         // Diagnose the source first: a genuinely-broken template must yield a precise,
         // non-retryable error instead of an endless delete/regenerate loop.
-        await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+        await timeStep(timings, "assert_source_not_empty", () =>
+          assertSourceNotEmpty(octokit, owner, repo, template_repo)
+        );
         // Safety invariant: only ever delete a VERIFIED-EMPTY repo, and never the template/source.
         if (org === owner && repoName === repo) {
           throw new NonRetryableRepoError(`Refusing to delete ${org}/${repoName}: it is the template/source repo`);
         }
         scope?.setTag("github_operation", "delete_empty_repo_for_repair");
         try {
-          await octokit.request("DELETE /repos/{owner}/{repo}", { owner: org, repo: repoName });
+          await timeStep(timings, "delete_empty_repo_for_repair", () =>
+            octokit.request("DELETE /repos/{owner}/{repo}", { owner: org, repo: repoName })
+          );
         } catch (delErr) {
           if (!(delErr instanceof RequestError) || delErr.status !== 404) throw delErr;
         }
         // GitHub frees the name shortly after deletion; give it a moment before regenerating.
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // Timed (not changed) so this fixed 2s is attributed rather than showing up as
+        // unaccounted_ms — the whole point of the instrumentation is that nothing is unexplained.
+        await timeStep(timings, "post_delete_sleep", () => new Promise((resolve) => setTimeout(resolve, 2000)));
         try {
           await createAndWaitReady();
         } catch (repairErr) {
@@ -1686,7 +2054,9 @@ export async function createRepo(
           // dead-lettering a slow-but-fine repo on the first attempt.
           if (repairErr instanceof UserVisibleError && repairErr.message.includes("did not become ready")) {
             console.error("Repaired repo did not become ready after delete+regenerate", repairErr);
-            await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+            await timeStep(timings, "assert_source_not_empty", () =>
+              assertSourceNotEmpty(octokit, owner, repo, template_repo)
+            );
           }
           throw repairErr;
         }
@@ -1699,8 +2069,17 @@ export async function createRepo(
       // transient condition, so re-throw the original readiness error as retryable rather than
       // dead-lettering a slow-but-fine repo on the first attempt.
       console.error("Repo did not become ready after create", createErr);
-      await assertSourceNotEmpty(octokit, owner, repo, template_repo);
+      await timeStep(timings, "assert_source_not_empty", () =>
+        assertSourceNotEmpty(octokit, owner, repo, template_repo)
+      );
       throw createErr;
+    } else if (isForkingDisabledError(createErr)) {
+      // The preflight above should have caught this, so reaching here means the policy changed
+      // under us (or GitHub disagreed with `allow_forking`). Either way it is deterministic: park
+      // the row with the same remedy rather than letting it ride the generic retry ladder.
+      console.error("Error creating repo: forking disabled for source", createErr);
+      const sourceIsPrivate = await isRepoPrivate(octokit, owner, repo);
+      throw new NonRetryableRepoError(forkingDisabledMessage(template_repo, owner, sourceIsPrivate));
     } else {
       console.error("Error creating repo", createErr);
       throw createErr;
@@ -1710,7 +2089,7 @@ export async function createRepo(
   scope?.setTag("github_operation", "create_repo_request_done");
   // Shared finalize (settings, Actions, head SHA, branch protection) for fresh, repaired, and
   // adopted-pre-existing repos alike.
-  return await finalizeRepo(octokit, org, repoName, { is_template_repo, branch_protection }, scope);
+  return await finalizeRepo(octokit, org, repoName, { is_template_repo, branch_protection }, scope, timings);
 }
 
 /**
@@ -1763,7 +2142,8 @@ export async function applyBranchProtectionRuleset(
   org: string,
   repoName: string,
   cfg: BranchProtectionConfig,
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  timings?: StepTimings
 ): Promise<void> {
   scope?.setTag("github_operation", "apply_branch_protection_ruleset");
   scope?.setTag("org", org);
@@ -1791,7 +2171,7 @@ export async function applyBranchProtectionRuleset(
     return;
   }
 
-  const octokit = await getOctoKit(org, scope);
+  const octokit = await timeStep(timings, "ruleset_get_octokit", () => getOctoKit(org, scope));
   if (!octokit) {
     throw new UserVisibleError("No GitHub installation found for organization " + org);
   }
@@ -1801,19 +2181,25 @@ export async function applyBranchProtectionRuleset(
   let existingRulesetId: number | null = null;
   let existingRules: Parameters<typeof planBranchProtectionAction>[1] = null;
   try {
-    const existing = await octokit.paginate("GET /repos/{owner}/{repo}/rulesets", {
-      owner: org,
-      repo: repoName,
-      per_page: 100
-    });
+    // Broken out as its own step: this is a PAGINATED list, so it is one request per page and the
+    // count is not bounded by anything in our code.
+    const existing = await timeStep(timings, "ruleset_list", () =>
+      octokit.paginate("GET /repos/{owner}/{repo}/rulesets", {
+        owner: org,
+        repo: repoName,
+        per_page: 100
+      })
+    );
     const ours = existing.find((r) => r.name === BRANCH_PROTECTION_RULESET_NAME);
     if (ours) {
       existingRulesetId = ours.id;
-      const detail = await octokit.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
-        owner: org,
-        repo: repoName,
-        ruleset_id: ours.id
-      });
+      const detail = await timeStep(timings, "ruleset_detail", () =>
+        octokit.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
+          owner: org,
+          repo: repoName,
+          ruleset_id: ours.id
+        })
+      );
       // detail.data.rules has the same shape we build. Cast to the helper type.
       existingRules = (detail.data.rules ?? []) as NonNullable<typeof existingRules>;
     }
@@ -1822,9 +2208,20 @@ export async function applyBranchProtectionRuleset(
       // No rulesets endpoint available (very old plan tier) — treat as absent.
       existingRulesetId = null;
       existingRules = null;
+    } else if (isBranchProtectionUnsupportedError(e)) {
+      // Private repos in a free org can't use rulesets at all. Return instead of
+      // falling through: the create/update we'd attempt next is gated by the same
+      // plan and would fail identically. Expected on non-paid orgs, so it is a
+      // plain log — not a warning, and not a Sentry event.
+      scope?.setTag("ruleset_unsupported_by_plan", "true");
+      console.log(`Branch protection rulesets unavailable on this GitHub plan for ${org}/${repoName} — skipping`);
+      return;
     } else {
       // List failures shouldn't kill repo creation. Fall through assuming none.
       console.warn(`Could not list rulesets for ${org}/${repoName}:`, e);
+      // `ruleset_list` is the fallback, not the assumption: this catch also covers the ruleset
+      // DETAIL request a few lines up, and that is exactly the misattribution stepForError fixes.
+      attachHandledFailureTimings(timings, scope, "ruleset_list", e);
       Sentry.captureException(e, scope);
       existingRulesetId = null;
       existingRules = null;
@@ -1855,40 +2252,46 @@ export async function applyBranchProtectionRuleset(
 
   try {
     if (action.kind === "create") {
-      await retryWithBackoff(
-        () => octokit.request("POST /repos/{owner}/{repo}/rulesets", body(action.rules)),
-        3,
-        1000,
-        scope
+      await timeStep(timings, "ruleset_write", () =>
+        retryWithBackoff(
+          () => octokit.request("POST /repos/{owner}/{repo}/rulesets", body(action.rules)),
+          3,
+          1000,
+          scope
+        )
       );
       scope?.setTag("ruleset_created", "true");
       return;
     }
     if (action.kind === "update" && existingRulesetId != null) {
-      await retryWithBackoff(
-        () =>
-          octokit.request("PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
-            ...body(action.rules),
-            ruleset_id: existingRulesetId
-          }),
-        3,
-        1000,
-        scope
+      await timeStep(timings, "ruleset_write", () =>
+        retryWithBackoff(
+          () =>
+            octokit.request("PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
+              ...body(action.rules),
+              ruleset_id: existingRulesetId
+            }),
+          3,
+          1000,
+          scope
+        )
       );
       scope?.setTag("ruleset_updated", "true");
       return;
     }
     if (action.kind === "delete" && existingRulesetId != null) {
-      await retryWithBackoff(
-        () =>
-          octokit.request("DELETE /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
-            owner: org,
-            repo: repoName,
-            ruleset_id: existingRulesetId
-          }),
-        3,
-        1000,
-        scope
+      await timeStep(timings, "ruleset_write", () =>
+        retryWithBackoff(
+          () =>
+            octokit.request("DELETE /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
+              owner: org,
+              repo: repoName,
+              ruleset_id: existingRulesetId
+            }),
+          3,
+          1000,
+          scope
+        )
       );
       scope?.setTag("ruleset_deleted", "true");
       return;
@@ -1901,17 +2304,12 @@ export async function applyBranchProtectionRuleset(
         scope?.setTag("ruleset_already_exists", "true");
         return;
       }
-      // Free GitHub accounts can't enable branch protection on private repos.
-      const message = (e.message || "").toLowerCase();
-      if (
-        message.includes("upgrade to github pro") ||
-        message.includes("upgrade your github plan") ||
-        message.includes("upgrade your account")
-      ) {
-        scope?.setTag("ruleset_unsupported_by_plan", "true");
-        console.log(`Branch protection ruleset not supported by GitHub plan for ${org}/${repoName} — skipping`);
-        return;
-      }
+    }
+    // Free GitHub accounts can't enable branch protection on private repos.
+    if (isBranchProtectionUnsupportedError(e)) {
+      scope?.setTag("ruleset_unsupported_by_plan", "true");
+      console.log(`Branch protection ruleset not supported by GitHub plan for ${org}/${repoName} — skipping`);
+      return;
     }
     throw e;
   }
@@ -1937,15 +2335,30 @@ export async function createBranchProtectionRuleset(
  * background mirroring completes; the same pattern is already used for
  * template-generated repos in `assignment-create-all-repos`.
  */
-async function waitForRepoReady(octokit: Octokit, org: string, repoName: string, scope?: Sentry.Scope): Promise<void> {
+async function waitForRepoReady(
+  octokit: Octokit,
+  org: string,
+  repoName: string,
+  scope?: Sentry.Scope,
+  timings?: StepTimings
+): Promise<void> {
   scope?.setTag("github_operation", "wait_for_repo_ready");
   const maxAttempts = 30;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // Attempt COUNT is instrumented separately from elapsed time on purpose. The loop is capped at
+    // 30 attempts x 2000ms = 60s, so the count is what says whether this loop contributed ~0s or
+    // essentially its entire budget — elapsed time alone cannot tell "returned on attempt 1 after a
+    // slow GET" apart from "polled 29 times". Against the 2026-09-07 p50 of 279.5s, even the full
+    // 60s only covers about a fifth of the gap, so this number bounds how much of the 4.7 minutes
+    // this loop can possibly own.
+    countStep(timings, "wait_for_repo_ready_attempts");
     try {
-      const { data } = await octokit.request("GET /repos/{owner}/{repo}", {
-        owner: org,
-        repo: repoName
-      });
+      const { data } = await timeStep(timings, "wait_for_repo_ready_requests", () =>
+        octokit.request("GET /repos/{owner}/{repo}", {
+          owner: org,
+          repo: repoName
+        })
+      );
       // `size` is only refreshed by a lagging GitHub background job — on a freshly generated/forked
       // repo it can stay 0 for minutes even after the content has landed, so it is NOT a reliable
       // readiness signal on its own (a fully-populated repo would time out here). Keep it as a fast
@@ -1956,11 +2369,13 @@ async function waitForRepoReady(octokit: Octokit, org: string, repoName: string,
       }
       const defaultBranch = (data as { default_branch?: string }).default_branch || "main";
       try {
-        await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-          owner: org,
-          repo: repoName,
-          ref: `heads/${defaultBranch}`
-        });
+        await timeStep(timings, "wait_for_repo_ready_requests", () =>
+          octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+            owner: org,
+            repo: repoName,
+            ref: `heads/${defaultBranch}`
+          })
+        );
         return; // default branch ref exists → the initial commit has landed
       } catch (refErr) {
         // 404/409 → branch not created yet; anything else is a real error.
@@ -1973,7 +2388,11 @@ async function waitForRepoReady(octokit: Octokit, org: string, repoName: string,
         throw e;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    // The 2000ms sleep is timed but NOT changed: separating sleep from request time is what
+    // distinguishes "we deliberately waited" from "GitHub (or a limiter in front of it) made us
+    // wait". Together, wait_for_repo_ready_sleep + wait_for_repo_ready_requests is the full cost of
+    // this loop.
+    await timeStep(timings, "wait_for_repo_ready_sleep", () => new Promise((resolve) => setTimeout(resolve, 2000)));
   }
   throw new UserVisibleError(`Repo ${org}/${repoName} did not become ready in time`);
 }
@@ -2033,6 +2452,248 @@ function isGitHubNotFoundError(error: unknown): boolean {
     (error instanceof RequestError && error.status === 404) ||
     (error instanceof Error && error.message.includes("Not Found"))
   );
+}
+
+/**
+ * Read the org installation's repo selection ("all" | "selected") STRAIGHT FROM GitHub.
+ *
+ * Deliberately not cached, and deliberately not taken from the `installations` array: that array
+ * is filled once per isolate and only refilled while empty, so a value read from it is arbitrarily
+ * stale. An installation narrowed from "All repositories" to "Only select repositories" would keep
+ * reporting "all" for the life of the isolate, and the first live repo dropped from the selection
+ * would be read as deleted and durably parked — the exact failure the selection check exists to
+ * prevent. Proof has to be fresh to be proof.
+ *
+ * Costs one app-authenticated request, and only on the 404 path (see
+ * `listCollaboratorsOrThrowMissing`), never on the happy path.
+ *
+ * Returns `undefined` on ANY failure, meaning strictly "could not find out" — never "all" and never
+ * "selected". `classifyRepoPresence` maps that to its retryable `unknown` state, so a 5xx or rate
+ * limit from this auxiliary lookup cannot terminate a job. Reading it as "selected" would be just
+ * as wrong as reading it as "all": one discards a live sync, the other parks a live repo.
+ */
+export async function fetchRepositorySelection(org: string): Promise<"all" | "selected" | undefined> {
+  try {
+    const resp = await app.octokit.request("GET /orgs/{org}/installation", { org });
+    return resp.data.repository_selection;
+  } catch (error) {
+    // One failure must NOT be flattened into undefined: a rate limit. Swallowing it here loses the
+    // response and its Retry-After before the worker's detectRateLimitType ever sees them, so the
+    // job comes back as a generic failure — opening the org-method circuit and counting toward the
+    // eight-hour threshold — when the correct answer was "back off for N seconds and try again".
+    // Propagate it and let the worker's rate-limit handling do its job.
+    if (carriesRateLimitSignal(error)) {
+      throw error;
+    }
+    Sentry.addBreadcrumb({
+      category: "github",
+      message: `Could not read installation repo selection for ${org}; treating repo presence as unprovable`,
+      level: "warning",
+      data: { error: error instanceof Error ? error.message : String(error) }
+    });
+    return undefined;
+  }
+}
+
+/**
+ * Does this error carry the rate-limit signal the async worker keys off?
+ *
+ * Mirrors the INPUTS of github-async-worker's `detectRateLimitType` (the two rate-limit error
+ * classes, a 429, or a 403 carrying Retry-After / an exhausted x-ratelimit-remaining) rather than
+ * its decision tree, because all we need here is "is this worth preserving for that function to
+ * classify". Erring either way is survivable and neither is silent: a false positive propagates an
+ * error the worker then declines to treat as a rate limit, and a false negative just falls back to
+ * the `unknown` path, which retries.
+ *
+ * A plain 403 with no rate-limit headers is deliberately NOT a match — that is a permission
+ * problem, and propagating it would trip the org circuit over a lookup we can simply do without.
+ */
+function carriesRateLimitSignal(error: unknown): boolean {
+  if (error instanceof SecondaryRateLimitError || error instanceof PrimaryRateLimitError) return true;
+  const status = error instanceof RequestError ? error.status : undefined;
+  if (status === 429) return true;
+  if (status !== 403) return false;
+  const raw = (error as { response?: { headers?: Record<string, unknown> } })?.response?.headers;
+  if (!raw) return false;
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) headers[k.toLowerCase()] = String(v);
+  return headers["retry-after"] !== undefined || headers["x-ratelimit-remaining"] === "0";
+}
+
+/**
+ * Four states, because the caller has to make two independent decisions from one 404 — may we keep
+ * retrying, and may we write the row off — and collapsing them gets one of the two wrong:
+ *
+ *   present      — 200. The repo is there, so the collaborators 404 was replication lag. Retry.
+ *   unknown      — we learned nothing, from either input: the probe ITSELF failed (403, 5xx,
+ *                  network), or the installation scope came back undefined because THAT lookup
+ *                  failed. Says nothing about the repo and nothing about the row. Retry.
+ *   absent       — 404, AND this installation can see every repo in the org, so there was nothing
+ *                  to hide: the repo really is gone. Terminal, and provably so — safe to park.
+ *   inaccessible — 404, AND the installation is confirmed scoped to SELECTED repos, so a live repo
+ *                  we were never granted 404s identically to a deleted one. Terminal for this job
+ *                  — retrying cannot make an ungranted repo readable — but NOT proof about the row.
+ *
+ * `undefined` scope means "we could not find out", and it has to land on `unknown` rather than on
+ * `inaccessible`: a transient 5xx or rate limit from the scope lookup would otherwise be
+ * indistinguishable from a confirmed selected-repos installation, and would terminate the job —
+ * permanently discarding a permission sync, or leaving a genuinely missing row unparked, because
+ * an auxiliary lookup blipped. Ignorance is never grounds to stop.
+ *
+ * `github-check-app-installation` already reads a repo 404 as "installed in the org but not granted
+ * access to this repo". Collapsing that into "deleted" would park a LIVE repo; collapsing it into
+ * "retry" would spend the 93s ladder and then let a bare 404 escape and trip the org-wide circuit,
+ * throttling every other class over one repo. Hence two terminal states rather than one: both stop
+ * the work, only `absent` is allowed to change the database.
+ */
+export type RepoPresence = "present" | "unknown" | "absent" | "inaccessible";
+
+export async function classifyRepoPresence(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  repositorySelection: "all" | "selected" | undefined
+): Promise<RepoPresence> {
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    return "present";
+  } catch (error) {
+    // A rate-limited probe is not "unknown", it is "ask again later", and only the caller's caller
+    // knows how to wait. Flattening it here would strip the response and its Retry-After before
+    // the worker's detectRateLimitType could see them, so the job would surface as a generic
+    // failure — ladder, org-method circuit, error threshold — instead of a backoff. Same reasoning
+    // as fetchRepositorySelection; propagating still cannot classify the repo as absent, because
+    // this throws instead of returning.
+    if (carriesRateLimitSignal(error)) {
+      throw error;
+    }
+    // Status, NOT `isGitHubNotFoundError`. That helper falls back to `message.includes("Not Found")`
+    // so that callers doing benign things still recognise a 404 behind a wrapper — but here the
+    // answer can DELETE a row's readiness, and a statusless transport/proxy error or a wrapped 5xx
+    // whose body happens to carry "Not Found" would then be read as proof of deletion. This is the
+    // one place in the file where the loose check is unsafe, so require the real thing.
+    const isRealNotFound = error instanceof RequestError && error.status === 404;
+    if (!isRealNotFound) {
+      // A 5xx, transport error, or non-rate-limited 403 leaves the caller holding the original 404,
+      // which the ladder then retries — deliberately. Propagating the probe error instead would be
+      // worse, not better: retryWithBackoff only retries 404 / "git repository is empty", so a
+      // 5xx would get ZERO retries and land on the worker's generic path, opening the org-method
+      // circuit on the first transient blip. Retrying the 404 re-runs this probe too, which is the
+      // thing most likely to clear it.
+      //
+      // Rate limits are the deliberate exception above, because there the worker genuinely knows
+      // better than the ladder does: it has Retry-After and a real backoff. For a 5xx it has
+      // neither, so the ladder is the better handler. What IS lost is attribution — the escaping
+      // error says 404 when the proximate cause was a 500 — so leave the real reason behind.
+      Sentry.addBreadcrumb({
+        category: "github",
+        message: `Presence probe for ${owner}/${repo} failed; repo presence unknown, retrying the original 404`,
+        level: "warning",
+        data: {
+          probe_status: error instanceof RequestError ? error.status : "none",
+          probe_error: error instanceof Error ? error.message : String(error)
+        }
+      });
+      return "unknown";
+    }
+    if (repositorySelection === "all") return "absent";
+    if (repositorySelection === "selected") return "inaccessible";
+    return "unknown";
+  }
+}
+
+/**
+ * List a repo's collaborators, distinguishing the two things a 404 can mean.
+ *
+ * The caller wraps this in `retryWithBackoff`, whose 404 ladder exists for read-after-create lag:
+ * syncRepoPermissions runs immediately after createRepo in the same worker message, and the
+ * collaborators endpoint can 404 briefly on a repo that does exist. A repo that is GONE returns
+ * exactly the same 404, and paying the ladder for it costs 93 seconds of a worker slot and then
+ * escapes as a bare RequestError — which the async worker reads as a systemic failure and answers
+ * by opening the `<org>:sync_repo_permissions` circuit, throttling that method for every other
+ * class in the org over one dead row.
+ *
+ * So ask instead of guessing, and answer the two questions separately:
+ *
+ *   absent       -> RepositoryMissingError. Terminal AND provable: park the row.
+ *   inaccessible -> RepositoryUnreadableError. Terminal but unprovable: stop, touch nothing.
+ *   present      -> rethrow the original 404; the ladder covers the lag it was written for.
+ *   unknown      -> rethrow too. The probe failed, so we have no grounds to terminate.
+ *
+ * Both terminal cases are NonRetryableGitHubError, which is what keeps a single dead or ungranted
+ * repo out of the org-wide circuit breaker and out of the error-threshold counter. Returning a
+ * bare 404 for the inaccessible case instead would spend the full ladder and then be read as a
+ * systemic failure — the original incident, just narrowed to selected-repos installations.
+ *
+ * `resolveRepositorySelection` is a thunk, not a value, for two reasons: it is only needed on the
+ * 404 path so the happy path pays nothing for it, and passing it in keeps this function testable —
+ * an earlier version read the module-level installation cache directly, and a unit test caught that
+ * a cold cache reports `undefined`, degrades to `inaccessible`, and would have left the one branch
+ * that must be provably correct never exercised. Production passes
+ * `() => fetchRepositorySelection(owner)`, which asks GitHub rather than trusting a cache.
+ */
+export async function listCollaboratorsOrThrowMissing(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  resolveRepositorySelection: () => Promise<"all" | "selected" | undefined>,
+  options: { affiliation?: "direct" | "outside" | "all" } = {}
+) {
+  try {
+    return await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
+      owner,
+      repo,
+      per_page: 100,
+      ...(options.affiliation ? { affiliation: options.affiliation } : {})
+    });
+  } catch (error) {
+    const reinterpreted = await reinterpretRepoNotFound(octokit, owner, repo, error, resolveRepositorySelection);
+    if (reinterpreted) throw reinterpreted;
+    throw error;
+  }
+}
+
+/**
+ * Given an error from a repo-scoped call, decide whether it should be re-reported as a per-repo
+ * terminal condition, and which one. Returns undefined to mean "leave this error exactly as it is".
+ *
+ * Shared by the collaborator read and by the whole-sync backstop, so the "when may we conclude the
+ * repo is gone" rule lives in one place. Verifying rather than assuming is what makes the backstop
+ * safe to apply broadly: a 404 from
+ * `PUT /repos/{owner}/{repo}/collaborators/{username}` can mean the USERNAME does not exist, and
+ * treating that as a missing repo would park a live repo because a student deleted their GitHub
+ * account. Since this probes the repo before concluding anything, that case comes back `present`
+ * and the original error is passed through untouched.
+ */
+async function reinterpretRepoNotFound(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  error: unknown,
+  resolveRepositorySelection: () => Promise<"all" | "selected" | undefined>
+): Promise<RepositoryMissingError | RepositoryUnreadableError | undefined> {
+  if (!isGitHubNotFoundError(error)) return undefined;
+  const presence = await classifyRepoPresence(octokit, owner, repo, await resolveRepositorySelection());
+  if (presence === "inaccessible") {
+    return new RepositoryUnreadableError(`${owner}/${repo}`);
+  }
+  if (presence !== "absent") {
+    // present -> the 404 was about something else (a user, a team); unknown -> we have no grounds.
+    return undefined;
+  }
+  // `absent` rests on the scope having been "all", read BEFORE the probe. If an admin narrows the
+  // installation in between, a live repo dropped from the selection 404s and that stale "all"
+  // would write it off — the failure the fresh lookup exists to prevent, moved inside one call.
+  // So confirm the scope again, now that the 404 is in hand.
+  //
+  // Re-ordering alone would not help: reading only AFTER the probe inverts the race, since a
+  // widening between probe and read misleads us identically. Requiring "all" on BOTH sides raises
+  // the bar from one administrative change mid-request to two in opposite directions. Costs one
+  // request, and only on the path about to write to the database.
+  const confirmed = await resolveRepositorySelection();
+  if (confirmed === "all") return new RepositoryMissingError(`${owner}/${repo}`);
+  if (confirmed === "selected") return new RepositoryUnreadableError(`${owner}/${repo}`);
+  return undefined;
 }
 
 export async function archiveRepoAndLock(org: string, repo: string, scope?: Sentry.Scope) {
@@ -2146,6 +2807,28 @@ export async function syncStudentTeam(
  *     This function should be idempotent, and should not throw an error if the team already exists (or not).
  *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
  */
+/**
+ * Which of the candidate removals should actually be deleted from the team?
+ *
+ * `syncTeam` computes its removal set from a roster read taken BEFORE it adds anyone, and the add
+ * loop is one network round-trip per new member — so on a large class the set can be minutes stale
+ * by the time the DELETEs go out. Meanwhile the queue drains envelopes concurrently, and several
+ * can target the same class team at once (the membership reconciler enqueues one per stale
+ * invitation). If a sibling envelope confirms a user inside that window, this run's stale set still
+ * lists them and deletes them — a confirmed enrollment silently loses the repository access the
+ * team grants, and nothing repairs it, because every repair path skips roles that already read as
+ * confirmed.
+ *
+ * So the removal set is intersected with a roster re-read taken immediately before the destructive
+ * half. That does not make the operation atomic — nothing available here would — but it collapses
+ * the exposure from "the whole add loop" to "one RPC round-trip", and it removes the case that
+ * actually happens.
+ */
+export function confirmedRemovals(candidates: string[], intendedNow: string[]): string[] {
+  const stillIntended = new Set(intendedNow.map((u) => u.toLowerCase()));
+  return candidates.filter((u) => !stillIntended.has(u.toLowerCase()));
+}
+
 export async function syncTeam(
   team_slug: string,
   org: string,
@@ -2216,7 +2899,25 @@ export async function syncTeam(
       Sentry.captureException(e, newScope);
     }
   }
-  for (const username of removeMembers) {
+  // Re-read the roster before deleting anyone: see confirmedRemovals. The set above was computed
+  // before the add loop, which is one round-trip per new member.
+  let toRemove = removeMembers;
+  if (removeMembers.length > 0) {
+    const intendedNow = await githubUsernamesFetcher();
+    toRemove = confirmedRemovals(removeMembers, intendedNow);
+    const spared = removeMembers.filter((u) => !toRemove.includes(u));
+    if (spared.length > 0) {
+      // Worth a breadcrumb: it means a concurrent sync confirmed someone mid-run, which is exactly
+      // the case this re-read exists to catch.
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `Sparing ${spared.join(", ")} from removal in ${resolvedSlug}: confirmed since this sync began`,
+        level: "info"
+      });
+      console.log(`Sparing newly confirmed members from removal in ${resolvedSlug}: ${spared.join(", ")}`);
+    }
+  }
+  for (const username of toRemove) {
     await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
       team_slug: resolvedSlug,
@@ -2270,7 +2971,7 @@ export async function getTeamAndCreateIfNeeded(org: string, team_slug: string, o
   }
 }
 
-const teamSlugCache = new Map<string, Promise<string>>();
+const teamSlugCache = new Map<string, Promise<string | null>>();
 
 /**
  * Resolve a team's actual GitHub slug, tolerating the case where GitHub normalized the team's slug
@@ -2286,6 +2987,29 @@ const teamSlugCache = new Map<string, Promise<string>>();
  * the miss would keep every retry hitting the wrong slug until cold start.
  */
 export async function resolveExistingTeamSlug(org: string, team_slug: string, octokit: Octokit): Promise<string> {
+  return (await resolveTeamSlugIfExists(org, team_slug, octokit)) ?? team_slug;
+}
+
+/**
+ * Same resolution as {@link resolveExistingTeamSlug}, but reports ABSENCE as `null` instead of
+ * echoing back the requested slug.
+ *
+ * The fallback in `resolveExistingTeamSlug` makes "resolved to a real team" and "this team does not
+ * exist" indistinguishable to the caller, and every team endpoint below takes a slug — so a caller
+ * that only wanted a spelling correction would happily go on to PUT against a team that isn't
+ * there. That 404s, and because it happens inside `syncRepoPermissions`, it took down
+ * assignment-create-handout-repo for every brand-new course: the `<slug>-students` team is created
+ * lazily by the student-team sync, so a course with nothing enrolled yet has no students team at
+ * all, and mode-2 handout creation failed with a bare "Not Found" AFTER the repo was already made.
+ *
+ * Callers that must not create a team can now branch on the absence; the one caller that genuinely
+ * requires the team (a mode-2 handout grant) creates it explicitly.
+ */
+export async function resolveTeamSlugIfExists(
+  org: string,
+  team_slug: string,
+  octokit: Octokit
+): Promise<string | null> {
   // JSON tuple, not `org + "-" + team_slug`: string concat is ambiguous (org "a-b"/slug "c" would
   // collide with org "a"/slug "b-c") and could reuse one course's resolved slug for another.
   const cacheKey = JSON.stringify([org, team_slug]);
@@ -2294,12 +3018,10 @@ export async function resolveExistingTeamSlug(org: string, team_slug: string, oc
     return cached;
   }
   const pending = (async () => {
-    let slug = team_slug;
-    let resolved = false;
+    let slug: string | null = null;
     try {
       const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
       slug = team.data.slug ?? team_slug;
-      resolved = true;
     } catch (e) {
       if (!(e instanceof RequestError && e.status === 404)) {
         throw e;
@@ -2308,11 +3030,10 @@ export async function resolveExistingTeamSlug(org: string, team_slug: string, oc
       const match = teams.find((t) => t.slug === team_slug || t.name === team_slug);
       if (match?.slug) {
         slug = match.slug;
-        resolved = true;
       }
     }
-    // Don't retain a no-match fallback so a retry re-checks once the team exists.
-    if (!resolved) {
+    // Don't retain a no-match so a retry re-checks once the team exists.
+    if (slug === null) {
       teamSlugCache.delete(cacheKey);
     }
     return slug;
@@ -2322,6 +3043,151 @@ export async function resolveExistingTeamSlug(org: string, team_slug: string, oc
   });
   teamSlugCache.set(cacheKey, pending);
   return pending;
+}
+
+/** A user's pending org invitation, as far as the reinvite decision needs it. */
+export type PendingOrgInvitation = {
+  id: number;
+  /** When GitHub created the invitation. GitHub expires it 7 days later. */
+  createdAt: string;
+  /** Every team the invitation carries, so the caller can tell whether it already covers its own. */
+  teamIds: number[];
+};
+
+/**
+ * The user's pending org invitation, if GitHub lists one.
+ *
+ * Org invitations are org-scoped but carry a team list, and two classes can share one organization
+ * (see 20260803120000_unique_class_slug_per_github_org.sql). "This user has a pending invitation"
+ * is therefore not evidence that OUR class's invitation has been sent: the outstanding invitation
+ * may attach a sibling class's team and nothing else, and suppressing on it would leave this class's
+ * enrollment unattached, unconfirmed, and — since the sweep has already refreshed its
+ * invitation_date — untouched for another staleness period. Callers check `teamIds` for their own
+ * team: only an invitation that already includes it is a true duplicate.
+ *
+ * Fails OPEN: any error reading the invitation list is answered null, so a transient failure sends
+ * a possibly-duplicate invitation rather than skipping a repair.
+ */
+export async function findPendingOrgInvitation(
+  octokit: Octokit,
+  org: string,
+  githubUsername: string,
+  scope?: Sentry.Scope
+): Promise<PendingOrgInvitation | null> {
+  try {
+    const invitations = await octokit.paginate("GET /orgs/{org}/invitations", { org, per_page: 100 });
+    const pending = invitations.find((i) => (i.login ?? "").toLowerCase() === githubUsername.toLowerCase());
+    if (!pending) return null;
+    // An org-only invitation (no teams) needs no second request to know it carries none.
+    const teams =
+      (pending.team_count ?? 0) === 0
+        ? []
+        : await octokit.paginate("GET /orgs/{org}/invitations/{invitation_id}/teams", {
+            org,
+            invitation_id: pending.id,
+            per_page: 100
+          });
+    return { id: pending.id, createdAt: pending.created_at, teamIds: teams.map((t) => t.id) };
+  } catch (e) {
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Could not read pending invitations for ${githubUsername} in ${org}; sending the invitation anyway: ${e}`,
+      level: "warning"
+    });
+    return null;
+  }
+}
+
+/**
+ * What an automated reinvite does about the user's pending invitation.
+ *
+ *   - `replace`: GitHub created it 7 or more days ago, so it has expired even if the list still
+ *     shows it. Cancel it and send a fresh one.
+ *   - `skip`: a live invitation that already carries our team. Sending another is a duplicate.
+ *   - `attach`: no invitation carrying our team (a sibling class's, or none the list would show).
+ *     Add our team to the user's membership instead of posting a second org invitation.
+ */
+export function planPendingInvitation(
+  pending: PendingOrgInvitation | null,
+  teamId: number,
+  now: Date = new Date()
+): "replace" | "skip" | "attach" {
+  if (pending && isInvitationStale(pending.createdAt, now)) return "replace";
+  if (pending?.teamIds.includes(teamId)) return "skip";
+  return "attach";
+}
+
+/**
+ * GitHub team ids for these slugs, skipping any team that does not exist.
+ *
+ * For the extra teams an invitation carries alongside its own. A team that does not exist yet is
+ * skipped: the invitation cannot carry it, and that class's own team sync creates it. Any other
+ * failure THROWS, so the envelope retries instead of sending a partial invitation. A partial one is
+ * worse than a late one, because its `member_invited` webhook stamps invitation_date for every
+ * class in the org and so hides the omitted enrollments from the sweep for a week.
+ */
+export async function resolveTeamIds(
+  octokit: Octokit,
+  org: string,
+  slugs: string[],
+  scope?: Sentry.Scope
+): Promise<number[]> {
+  const ids: number[] = [];
+  for (const slug of new Set(slugs)) {
+    const resolved = await resolveTeamSlugIfExists(org, slug, octokit);
+    if (!resolved) {
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `Team ${slug} does not exist in ${org}; inviting without it`,
+        level: "info"
+      });
+      continue;
+    }
+    const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug: resolved });
+    ids.push(team.data.id);
+  }
+  return ids;
+}
+
+/**
+ * Cancel a pending invitation that GitHub has certainly expired but still reports as pending.
+ *
+ * GitHub expires an org invitation 7 days after it is created, but moves it out of the pending
+ * list and into failed_invitations some hours later: one observed in production was created
+ * 2026-09-08T18:23Z and marked failed at 2026-09-15T22:50Z, 4.5 hours late. The membership sweep
+ * first re-invites at 7 days plus up to an hour, which lands inside that window, so the membership
+ * probe answers "pending" for an invitation the student can no longer accept. Suppressing the send
+ * on that answer is what left students holding a dead invitation for another full week.
+ *
+ * Returns true when the invitation is gone and a fresh one may be sent. A 404 counts: GitHub
+ * finished expiring it between the list and the delete. Any other failure returns false, and the
+ * caller falls back to skipping the send.
+ */
+export async function cancelLapsedInvitation(
+  octokit: Octokit,
+  org: string,
+  githubUsername: string,
+  invitation: PendingOrgInvitation,
+  scope?: Sentry.Scope
+): Promise<boolean> {
+  try {
+    await octokit.request("DELETE /orgs/{org}/invitations/{invitation_id}", {
+      org,
+      invitation_id: invitation.id
+    });
+  } catch (e) {
+    if ((e as { status?: number })?.status !== 404) {
+      scope?.setContext("lapsed_invitation_cancel", { invitation_id: invitation.id, created_at: invitation.createdAt });
+      Sentry.captureException(e, scope);
+      return false;
+    }
+  }
+  scope?.addBreadcrumb({
+    category: "github",
+    message: `Cancelled lapsed invitation ${invitation.id} for ${githubUsername} in ${org} (created ${invitation.createdAt})`,
+    level: "info"
+  });
+  return true;
 }
 
 export async function reinviteToOrgTeam(
@@ -2342,6 +3208,46 @@ export async function reinviteToOrgTeam(
      * for the same person may already have replaced it.
      */
     userId?: string;
+    /**
+     * Do nothing if GitHub already has an invitation pending for this user.
+     *
+     * For AUTOMATION only. Background repair can run the same repair more than once — a redelivered
+     * queue message, two envelopes for one user, an hourly sweep overlapping a trigger — and each
+     * extra POST mails the student another invitation. GitHub's own membership state is the reliable
+     * evidence of an outstanding invitation, and the probe below already fetches it, so this costs
+     * no extra request.
+     *
+     * The manual "Resend invitation" paths deliberately do NOT set this: resending is the entire
+     * point when a student never received or lost the first email.
+     */
+    skipIfInvitationPending?: boolean;
+    /**
+     * Called when `skipIfInvitationPending` suppresses the send, with the pending invitation's
+     * GitHub creation time.
+     *
+     * The membership sweep stamps `invitation_date` when it ENQUEUES, and only reconsiders the role a
+     * full staleness period after that stamp. When the send is then suppressed, the stamp no longer
+     * describes any invitation: the one the student actually holds is older and lapses sooner. The
+     * caller uses this to move `invitation_date` back to the real invitation, so the sweep comes
+     * back when that invitation expires rather than a week after the skip.
+     */
+    onInvitationStillPending?: (createdAt: string) => Promise<void>;
+    /**
+     * Slugs of OTHER teams in this org that a fresh invitation should also carry: the user's other
+     * live, unconfirmed enrollments in classes sharing the org. Consulted only when this call POSTs
+     * a new invitation.
+     *
+     * Needed because replacing a lapsed invitation cancels it for every class it carried, and GitHub
+     * then confirms each class only through its own team (the `membership` webhook). An invitation
+     * carrying only our team would leave a sibling enrollment unattached, and the `member_invited`
+     * webhook's fresh invitation_date would keep the sweep away from it for a week.
+     *
+     * Read from our enrollments rather than copied from the cancelled invitation, for two reasons.
+     * A retry after the cancel succeeded but the POST failed can no longer see the old invitation,
+     * and the database still answers the same. And the old invitation may carry a class the user has
+     * since dropped, which a copy would re-invite them to.
+     */
+    additionalTeamSlugs?: () => Promise<string[]>;
   } = {}
 ) {
   scope?.setTag("github_operation", "reinvite_to_team");
@@ -2385,7 +3291,12 @@ export async function reinviteToOrgTeam(
     });
     return await reinviteToOrgTeam(org, team_slug, currentUsername, scope, {
       skipUsernameReresolve: true,
-      userId: options.userId
+      userId: options.userId,
+      // Carry the caller's automation flags into the retry, or a renamed account silently loses the
+      // duplicate-invitation guard on the path most likely to need it.
+      skipIfInvitationPending: options.skipIfInvitationPending,
+      onInvitationStillPending: options.onInvitationStillPending,
+      additionalTeamSlugs: options.additionalTeamSlugs
     });
   }
   const userID = user.data.id;
@@ -2452,7 +3363,12 @@ export async function reinviteToOrgTeam(
   // them to the team directly with PUT /orgs/{org}/teams/{team_slug}/memberships/{username}.
   // Relying on the POST error message is fragile (it varies between "this org" and "this organization"),
   // so we check membership state explicitly first.
-  let isAlreadyActiveOrgMember = false;
+  // TRI-STATE, not two booleans. "Not pending" and "we could not find out" must not be the same
+  // value: the confirmation decision in the error handler below turns an unknown into a claim that
+  // the user has accepted, and a role confirmed while the user is only invited is invisible to the
+  // membership reconciler and to the stuck alert — so if that invitation expires, the enrollment is
+  // broken permanently with nothing watching it.
+  let membershipState: "active" | "pending" | "absent" | "unknown" = "unknown";
   try {
     const orgMembership = await octokit.request("GET /orgs/{org}/memberships/{username}", {
       org,
@@ -2460,7 +3376,9 @@ export async function reinviteToOrgTeam(
     });
     const state = (orgMembership.data as { state?: string } | undefined)?.state;
     if (orgMembership.status === 200 && state === "active") {
-      isAlreadyActiveOrgMember = true;
+      membershipState = "active";
+    } else if (orgMembership.status === 200 && state === "pending") {
+      membershipState = "pending";
     }
     scope?.addBreadcrumb({
       category: "github",
@@ -2470,12 +3388,15 @@ export async function reinviteToOrgTeam(
   } catch (e) {
     const status = (e as { status?: number })?.status;
     if (status === 404) {
+      // A definite answer: no membership and no outstanding invitation.
+      membershipState = "absent";
       scope?.addBreadcrumb({
         category: "github",
         message: `User ${githubUsername} is not a member of ${org} (404), will send invitation`,
         level: "info"
       });
     } else {
+      // Stays "unknown": anything else is a failed probe, not evidence of absence.
       scope?.addBreadcrumb({
         category: "github",
         message: `Error checking org membership for ${githubUsername} in ${org}: ${e}`,
@@ -2484,7 +3405,60 @@ export async function reinviteToOrgTeam(
     }
   }
 
-  if (isAlreadyActiveOrgMember) {
+  if (membershipState === "pending" && options.skipIfInvitationPending) {
+    const pending = await findPendingOrgInvitation(octokit, org, githubUsername, scope);
+    let plan = planPendingInvitation(pending, teamID);
+    if (plan === "replace" && !(await cancelLapsedInvitation(octokit, org, githubUsername, pending!, scope))) {
+      // Could not clear it. Handle it as the live invitation GitHub still says it is.
+      plan = pending!.teamIds.includes(teamID) ? "skip" : "attach";
+    }
+    if (plan === "replace") {
+      // Expired by GitHub's own 7-day rule but still listed as pending (see cancelLapsedInvitation),
+      // and now cancelled. Fall through and send a fresh invitation in its place. It carries our team
+      // plus `additionalTeamSlugs`, not the cancelled invitation's teams: see that option.
+      scope?.setTag("replaced_lapsed_invitation", "true");
+    } else if (plan === "skip") {
+      // Team-scoped, not org-scoped: see findPendingOrgInvitation. A pending invitation for a
+      // sibling class in the same org must NOT suppress this one.
+      //
+      // Returning false is "nothing changed", which is what callers do with it. Note it does NOT
+      // mean "already a member": the callers that read this value to mark a role org-confirmed
+      // (github-user-sync) never set skipIfInvitationPending, precisely so a pending invitation is
+      // never mistaken for membership.
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} already has a pending invitation to ${org} covering team ${resolvedSlug} (created ${pending!.createdAt}); not sending another`,
+        level: "info"
+      });
+      await options.onInvitationStillPending?.(pending!.createdAt);
+      return false;
+    } else {
+      // Pending, but not covering our team: a sibling class in the same org, or an invitation the
+      // list could not show us (see findPendingOrgInvitation's fail-open). Attach OUR team to the
+      // user directly rather than posting a second org invitation: GitHub rejects the duplicate with
+      // an `already_exists` validation error, and the handler below reads that as "already an active
+      // member" — which would mark this role org-confirmed for someone who has not accepted anything.
+      // A confirmed role is invisible to the reconciler and to the stuck alert, so if the invitation
+      // then expires the enrollment is broken permanently and silently. The team endpoint extends the
+      // invitation to this team and leaves the membership pending, which is the truth.
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} has a pending invitation to ${org} that does not cover team ${resolvedSlug}; adding the team to it`,
+        level: "info"
+      });
+      await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
+        org,
+        team_slug: resolvedSlug,
+        username: githubUsername,
+        role: "member"
+      });
+      // Deliberately NOT markUserRoleOrgConfirmedForTeam: the user is still pending. Returning true
+      // reports "an invitation was extended", which is what callers record as a change.
+      return true;
+    }
+  }
+
+  if (membershipState === "active") {
     scope?.addBreadcrumb({
       category: "github",
       message: `User ${githubUsername} is already in org ${org}; adding directly to team ${resolvedSlug}`,
@@ -2500,6 +3474,14 @@ export async function reinviteToOrgTeam(
     return false;
   }
 
+  const inviteTeamIds = [
+    ...new Set([
+      teamID,
+      ...(options.additionalTeamSlugs
+        ? await resolveTeamIds(octokit, org, await options.additionalTeamSlugs(), scope)
+        : [])
+    ])
+  ];
   try {
     const limiter = getCreateContentLimiter(org);
     const resp = await limiter.schedule(() =>
@@ -2507,7 +3489,7 @@ export async function reinviteToOrgTeam(
         org,
         role: "direct_member",
         invitee_id: userID,
-        team_ids: [teamID]
+        team_ids: inviteTeamIds
       })
     );
     scope?.addBreadcrumb({
@@ -2568,16 +3550,142 @@ export async function reinviteToOrgTeam(
         username: githubUsername,
         role: "member"
       });
-      //...and mark the corresponding class's user_role as org-confirmed.
-      await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
-      return false;
+      // ...and do NOT mark the role org-confirmed here. This used to, and that was the one write
+      // capable of breaking an enrollment permanently.
+      //
+      // GitHub answers a duplicate invitation with the same `already_exists` error whether the
+      // invitee has accepted or not, so reaching this branch proves only that GitHub knows the
+      // invitee. It cannot prove membership: the active case returns further up, on a successful
+      // probe — the compiler agrees, since `membershipState` is narrowed to
+      // "pending" | "absent" | "unknown" by the time control reaches here. So every route into
+      // this branch is one where the user may hold nothing but an invitation.
+      //
+      // A role confirmed while the user is merely invited is invisible to the membership
+      // reconciler and to the stuck alert, so an invitation that then expires leaves the
+      // enrollment broken forever with nothing watching it. Leaving it unconfirmed costs nothing
+      // by comparison: the reconciler retries hourly, and the team-membership check at the top of
+      // this function confirms the role the moment the user actually appears in the team.
+      scope?.setTag("membership_state_at_invite", membershipState);
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} is not a confirmed member of ${org} (state: ${membershipState}); team ${resolvedSlug} attached, leaving the role unconfirmed`,
+        level: "info"
+      });
+      return true;
     }
     throw err;
   }
 }
 const staffTeamCache = new Map<string, Promise<string[]>>();
 const orgMembershipCache = new Map<string, Promise<Endpoints["GET /orgs/{org}/members"]["response"]["data"][]>>();
-async function getTeamMembers(org: string, team_slug: string, octokit: Octokit): Promise<string[]> {
+// A READ FAILURE is not cached at all, so a retry re-asks rather than inheriting a wrong answer.
+//
+// Bounded, unlike the staff-team and org-membership caches above, because this list is edited in the
+// admin UI and nothing invalidates a warm isolate: an unbounded entry means an exemption added right
+// after a sync does not apply until that isolate is recycled, which can be hours. The TTL is short
+// enough that an admin edit takes effect on the next sync but still collapses the burst that matters
+// — assignment-create-all-repos syncs every repo in a course back to back against the same org.
+const ORG_EXEMPTION_CACHE_TTL_MS = 60_000;
+const orgExemptionCache = new Map<string, { readAt: number; users: Promise<string[]> }>();
+
+/**
+ * Per-org allowlist of GitHub logins that permission sync must never remove.
+ *
+ * Some accounts hold access the course roster cannot explain and should keep it — institutional IT,
+ * an integration account, faculty carried on a repo directly rather than through the staff team.
+ * That used to be `adminsThatShouldNotBeListedAsAdmins`: five names hardcoded here, applied to every
+ * org, invisible to the admins who know who those people actually are, and changeable only by a
+ * deploy. `github_orgs.permission_sync_exempt_users` is the same decision moved to the per-org
+ * config admins already manage; the constant stays as a global backstop so nothing regresses.
+ *
+ * THROWS when the list could not be read, which is distinct from an empty list — and aborts the
+ * sync, exactly as an unreadable staff roster does. Degrading instead would finish the run having
+ * performed only the additive half, and the callers that ignore `removalsSkipped` (both repo
+ * creation paths, github-user-sync, the async worker) would record the repo as ready: a student
+ * dropped from the course keeps write access and nothing retries. An exemption list that silently
+ * reads as absent is the other half of the same failure — it strips a protected account off a repo.
+ */
+async function getOrgPermissionSyncExemptions(org: string, scope?: Sentry.Scope): Promise<string[]> {
+  try {
+    return await readOrgPermissionSyncExemptions(org);
+  } catch (err) {
+    // Tagged before rethrowing so the abort is attributable to the config read rather than looking
+    // like a GitHub failure. The failure is not cached, so the retry re-asks.
+    scope?.setTag("org_permission_exemptions", "unavailable");
+    throw err;
+  }
+}
+
+function readOrgPermissionSyncExemptions(org: string): Promise<string[]> {
+  const cached = orgExemptionCache.get(org);
+  if (cached && Date.now() - cached.readAt < ORG_EXEMPTION_CACHE_TTL_MS) {
+    return cached.users;
+  }
+  const pending = (async () => {
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
+    );
+    const { data, error } = await adminSupabase
+      .from("github_orgs")
+      .select("permission_sync_exempt_users")
+      .eq("org_name", org)
+      .maybeSingle();
+    // maybeSingle: an org with no configuration row is `null` with no error, and that is a real
+    // answer (no exemptions). Only a genuine error is unknown.
+    if (error) {
+      throw error;
+    }
+    // Lowercased on write by admin_upsert_github_org, and again here: a row edited directly with
+    // SQL would otherwise never match the lowercased logins the sync compares against.
+    return (data?.permission_sync_exempt_users ?? []).map((u) => u.toLowerCase());
+  })().catch((err) => {
+    orgExemptionCache.delete(org);
+    throw err;
+  });
+  orgExemptionCache.set(org, { readAt: Date.now(), users: pending });
+  return pending;
+}
+/**
+ * The team does not exist on GitHub at all.
+ *
+ * Distinct from {@link TeamMembersUnreadableError}: this is a stable configuration (a course whose
+ * staff team was never created), so callers degrade rather than fail. Membership is UNKNOWN, never
+ * empty — see the throw in {@link getTeamMembers}.
+ */
+export class TeamNotFoundError extends Error {
+  constructor(
+    readonly org: string,
+    readonly team_slug: string
+  ) {
+    super(`GitHub team ${org}/${team_slug} not found`);
+    this.name = "TeamNotFoundError";
+  }
+}
+
+/**
+ * The team EXISTS but its member list could not be read.
+ *
+ * This is the transient case, and it must fail closed. Treating it like an absent team degrades the
+ * sync to "skip every removal" and lets the caller record success, so a student dropped from the
+ * course keeps write access with nothing scheduled to retry. Separated from
+ * {@link TeamNotFoundError} so a course that legitimately has no staff team is not broken by
+ * failing closed on a condition that does not apply to it.
+ */
+export class TeamMembersUnreadableError extends Error {
+  constructor(
+    readonly org: string,
+    readonly team_slug: string,
+    /** Named to avoid shadowing `Error.cause`, which is a base-class member. */
+    readonly underlyingError: unknown
+  ) {
+    super(`GitHub team ${org}/${team_slug} exists but its members could not be read`);
+    this.name = "TeamMembersUnreadableError";
+  }
+}
+
+export async function getTeamMembers(org: string, team_slug: string, octokit: Octokit): Promise<string[]> {
   try {
     const team = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
       org,
@@ -2585,17 +3693,101 @@ async function getTeamMembers(org: string, team_slug: string, octokit: Octokit):
     });
     return team.map((m) => m.login.toLowerCase());
   } catch (e) {
-    // If it's a 404 error from GitHub, add a breadcrumb and return empty array
     if (e && typeof e === "object" && "status" in e && (e as { status?: number }).status === 404) {
+      // Throw rather than return []. An empty list here reads as "no staff on this team", and that
+      // list is the only thing standing between syncRepoPermissions and DELETE-ing every staff
+      // member off every repo it touches. Worse, the caller caches the RESOLVED promise, so a
+      // successful [] would stick for the isolate's whole life while a throw self-evicts.
       Sentry.addBreadcrumb({
         category: "github.api",
         message: `404 Not Found when fetching team members for org: ${org}, team_slug: ${team_slug}`,
         level: "info"
       });
-      return [];
+      // WHICH 404 this is decides whether callers may degrade. A 404 on the members endpoint is
+      // ambiguous on its own: the team may not exist (a course whose staff team was never created
+      // — stable, and degrading is correct), or the team may exist while this particular read
+      // failed (transient, and degrading silently skips every removal while the caller records
+      // success). Probing the team itself is what separates them, and it costs one request on a
+      // path that is already failing.
+      let teamExists = false;
+      try {
+        await octokit.request("GET /orgs/{org}/teams/{team_slug}", { org, team_slug });
+        teamExists = true;
+      } catch (probeError) {
+        if (
+          probeError &&
+          typeof probeError === "object" &&
+          "status" in probeError &&
+          (probeError as { status?: number }).status === 404
+        ) {
+          teamExists = false;
+        } else {
+          // The probe itself failed for some other reason, so we still do not know. Unknown must
+          // not resolve to the degradable verdict.
+          throw new TeamMembersUnreadableError(org, team_slug, probeError);
+        }
+      }
+      if (teamExists) {
+        throw new TeamMembersUnreadableError(org, team_slug, e);
+      }
+      throw new TeamNotFoundError(org, team_slug);
     }
     throw e;
   }
+}
+
+/**
+ * Collaborators to remove from a repo.
+ *
+ * `staffRoster === null` means the staff team could not be read. Fail closed and remove nobody:
+ * leaving a stale collaborator is fixed by the next sync, whereas stripping the teaching staff off
+ * every repo in a course is a manual, high-visibility recovery.
+ */
+export function computeCollaboratorRemovals({
+  existingUsernames,
+  desiredUsernames,
+  staffRoster,
+  adminExclusions
+}: {
+  existingUsernames: string[];
+  desiredUsernames: string[];
+  staffRoster: string[] | null;
+  adminExclusions: string[];
+}): string[] {
+  if (staffRoster === null) {
+    return [];
+  }
+  return existingUsernames.filter(
+    (u) => !desiredUsernames.includes(u) && !staffRoster.includes(u) && !adminExclusions.includes(u)
+  );
+}
+
+/**
+ * Narrow removal candidates to the ones a removal can actually act on.
+ *
+ * `DELETE /repos/{owner}/{repo}/collaborators/{username}` removes a DIRECT collaborator grant. It
+ * cannot revoke access someone holds through a team or through org ownership — GitHub accepts the
+ * call, reports success, and the person keeps their access. `GET .../collaborators` defaults to
+ * `affiliation=all`, so the candidate list it feeds contains all three kinds mixed together, and
+ * every team-derived or owner-derived entry became one serial DELETE that changed nothing.
+ *
+ * Measured on a real course org: a freshly created handout repo listed 37 collaborators, of which
+ * ZERO were direct (org `default_repository_permission` is `none`; all 37 came from the staff team
+ * plus org owners). The sync issued 22 removals, took 63.6s doing it, revoked nothing, and would
+ * have repeated the same 63.6s on every subsequent sync of that repo. That is what pushed handout
+ * creation past 95s and made the browser give up before the chained solution-repo call.
+ *
+ * Filtering here rather than fetching only `affiliation=direct` in the first place: the unfiltered
+ * list is still the right input for the "already has access, do not re-add" check, since access via
+ * a team is real access and a redundant direct grant would be wrong.
+ *
+ * The hardcoded `adminsThatShouldNotBeListedAsAdmins` allowlist is the same problem patched by hand
+ * for five specific people; this covers every org owner without naming them, and that list stays as
+ * a backstop.
+ */
+export function filterToDirectCollaborators(candidates: string[], directUsernames: string[]): string[] {
+  const direct = new Set(directUsernames.map((u) => u.toLowerCase()));
+  return candidates.filter((u) => direct.has(u.toLowerCase()));
 }
 async function getOrgMembers(
   org: string,
@@ -2646,7 +3838,8 @@ async function reresolveMissingGitHubLogin(
 ): Promise<string> {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   // Prefer the caller's stable user id. Finding the row by login is inherently racy here: the login
   // we were handed is one GitHub says doesn't exist, and another invitation for the same person —
@@ -2802,6 +3995,22 @@ export type SyncRepoPermissionsOptions = {
   studentTeamPermission?: "pull" | null;
 };
 
+/**
+ * Step-timing wrapper, same shape and same motivation as the one on `createRepo`.
+ *
+ * This function is instrumented because of what the 2026-09-07 numbers actually measure. The
+ * ~279.5s p50 was derived from pgmq (`archived_at - (vt - 300s)`), i.e. it is the duration of the
+ * whole `create_repo` MESSAGE — and the worker's create_repo case calls
+ * `github.syncRepoPermissions(...)` immediately after `createRepo` returns, inside the same
+ * message. So the unexplained ~275s is not necessarily inside repo creation at all: it can be here.
+ * This path makes far more GitHub calls than createRepo does (two team-slug resolutions, the staff
+ * roster, the full org member list, a paginated collaborator list, a paginated repo-teams list, a
+ * fresh membership check per not-yet-cached user, then one write per collaborator added or removed),
+ * and several of them are paginated, so their cost is bounded by org size rather than by anything
+ * in our code. Timing them is the only way to tell which half of the message owns the 4.7 minutes.
+ *
+ * The body is unchanged in `syncRepoPermissionsInstrumented`; this wrapper only reports.
+ */
 export async function syncRepoPermissions(
   org: string,
   repo: string,
@@ -2809,14 +4018,90 @@ export async function syncRepoPermissions(
   githubUsernamesMixedCase: string[],
   _scope?: Sentry.Scope,
   options: SyncRepoPermissionsOptions = {}
-): Promise<{ madeChanges: boolean }> {
+): Promise<{ madeChanges: boolean; removalsSkipped: boolean }> {
+  const timings = new StepTimings("sync_repo_permissions", {
+    meta: { org, repo, course_slug: courseSlug, user_count: githubUsernamesMixedCase.length }
+  });
+  try {
+    return await syncRepoPermissionsInstrumented(
+      org,
+      repo,
+      courseSlug,
+      githubUsernamesMixedCase,
+      _scope,
+      options,
+      timings
+    );
+  } catch (error) {
+    // Same reasoning as createRepo: flag only what escapes. This path recovers from a missing staff
+    // team on purpose (TeamNotFoundError degrades to "do not remove anyone" and carries on).
+    timings.noteEscapingError(error);
+    // Backstop for every OTHER repo-scoped call in the sync. The collaborator read classifies its
+    // own 404 because it sits inside the retry ladder and has to short-circuit those 93 seconds,
+    // but the sync goes on to read the repo's teams and to add/remove collaborators — and this
+    // function has been measured at 94 seconds, so a repo deleted part-way through is not
+    // hypothetical. During the 2026-09-09 sp26 cleanup an instructor deleted 146 repos by hand;
+    // any one of those could have landed mid-sync. Without this, such a 404 escapes bare and the
+    // worker reads it as systemic, opening the org-wide circuit — the original incident, entered
+    // through a different call.
+    //
+    // Safe to apply this broadly precisely because it verifies instead of assuming: a 404 that was
+    // never about the repo (a deleted GitHub account on a collaborator PUT) probes back `present`
+    // and is rethrown untouched.
+    let reinterpreted: RepositoryMissingError | RepositoryUnreadableError | undefined;
+    try {
+      const [owner, repoName] = repo.includes("/") ? repo.split("/") : [org, repo];
+      const octokit = await getOctoKit(owner, _scope);
+      if (octokit) {
+        reinterpreted = await reinterpretRepoNotFound(octokit, owner, repoName, error, () =>
+          fetchRepositorySelection(owner)
+        );
+      }
+    } catch (reinterpretError) {
+      // A rate limit hit WHILE classifying outranks the 404 that prompted the classification: it is
+      // the actionable one, it carries Retry-After, and the worker has real backoff for it. Losing
+      // it here would report the 404 instead and open the org circuit — the same mistake this
+      // function exists to prevent, one level up. (classifyRepoPresence and
+      // fetchRepositorySelection both rethrow rate limits, so they can reach this catch.)
+      if (carriesRateLimitSignal(reinterpretError)) {
+        throw reinterpretError;
+      }
+      // Anything else is just a failed attempt to explain the original error, and must not mask it.
+      Sentry.addBreadcrumb({
+        category: "github",
+        message: `Could not classify the 404 escaping sync for ${org}/${repo}; reporting the original error`,
+        level: "warning",
+        data: {
+          classify_error: reinterpretError instanceof Error ? reinterpretError.message : String(reinterpretError)
+        }
+      });
+    }
+    // Thrown OUTSIDE the try on purpose: the previous shape threw here from inside it, so my own
+    // intended throw landed in my own catch and had to be fished back out by instanceof — which is
+    // exactly how the rate-limit case came to be swallowed.
+    if (reinterpreted) throw reinterpreted;
+    throw error;
+  } finally {
+    timings.finish((snapshot) => attachStepTimingsToScope(snapshot, _scope));
+  }
+}
+
+async function syncRepoPermissionsInstrumented(
+  org: string,
+  repo: string,
+  courseSlug: string,
+  githubUsernamesMixedCase: string[],
+  _scope: Sentry.Scope | undefined,
+  options: SyncRepoPermissionsOptions,
+  timings: StepTimings
+): Promise<{ madeChanges: boolean; removalsSkipped: boolean }> {
   if (isGithubStubEnabled()) {
     await recordE2eGithubCall(
       "syncRepoPermissions",
       { org, repo, courseSlug, githubUsernames: githubUsernamesMixedCase, options },
       _scope
     );
-    return { madeChanges: false };
+    return { madeChanges: false, removalsSkipped: false };
   }
   let madeChanges = false;
   const scope = _scope?.clone();
@@ -2832,45 +4117,99 @@ export async function syncRepoPermissions(
     org = owner;
     repo = repoName;
   }
-  const octokit = await getOctoKit(org, scope);
+  const octokit = await timeStep(timings, "get_octokit", () => getOctoKit(org, scope));
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
   // Resolve to the team's real GitHub slug: if the team was created out-of-band and GitHub
   // normalized its slug differently from `${courseSlug}-staff`, the literal would 404 on the
   // members/repo-access endpoints below, silently leaving repos without staff access.
-  const team_slug = await resolveExistingTeamSlug(org, `${courseSlug}-staff`, octokit);
-  if (!staffTeamCache.has(org + "-" + courseSlug)) {
+  const resolvedStaffTeamSlug = await timeStep(timings, "resolve_staff_team_slug", () =>
+    resolveTeamSlugIfExists(org, `${courseSlug}-staff`, octokit)
+  );
+  // Keep the derived name as the slug we *use*, so the members read below still produces the
+  // TeamNotFoundError the degradation path downstream is written against.
+  const team_slug = resolvedStaffTeamSlug ?? `${courseSlug}-staff`;
+  // JSON tuple, not `org + "-" + courseSlug`, for the same reason as teamSlugCache above: string
+  // concat is ambiguous and could serve one course's staff roster to another.
+  const staffCacheKey = JSON.stringify([org, courseSlug]);
+  if (!staffTeamCache.has(staffCacheKey)) {
     staffTeamCache.set(
-      org + "-" + courseSlug,
+      staffCacheKey,
       getTeamMembers(org, team_slug, octokit).catch((err) => {
-        staffTeamCache.delete(org + "-" + courseSlug);
+        staffTeamCache.delete(staffCacheKey);
         throw err;
       })
     );
   }
-  const staffTeamUsernames = await staffTeamCache.get(org + "-" + courseSlug);
-  if (!orgMembershipCache.has(org)) {
-    orgMembershipCache.set(
-      org,
-      getOrgMembers(org, octokit).catch((err) => {
-        orgMembershipCache.delete(org);
-        throw err;
-      })
-    );
+  // null means UNKNOWN. Distinct from [], which means "the team exists and has no members" and is
+  // a legitimate reason to remove collaborators.
+  let staffTeamUsernames: string[] | null = null;
+  try {
+    // Timed at the AWAIT, not at the request: this is a promise cache, so a second concurrent job
+    // for the same course blocks here on the first job's in-flight roster read. That wait is real
+    // latency for this message and would otherwise be invisible.
+    staffTeamUsernames =
+      (await timeStep(timings, "staff_team_members", () => staffTeamCache.get(staffCacheKey))) ?? null;
+  } catch (err) {
+    // ONLY the "team does not exist at all" case degrades to an unknown roster and carries on.
+    // A 403 (secondary rate limit), 502, network error, or a members read that failed while the
+    // team DOES exist (TeamMembersUnreadableError) must still abort the sync: swallowing any of
+    // those would finish the run, skip every removal, and let the caller record
+    // is_github_ready = true — so a student dropped from the course keeps write access and nothing
+    // ever retries. That is the same "unknown read as benign" shape this guard exists to close,
+    // one level up.
+    //
+    // The distinction matters because `removalsSkipped` is inspected by only one of this
+    // function's callers. Failing closed on the transient case is what makes the other callers
+    // correct without each having to interpret a partial result; a course that genuinely has no
+    // staff team still degrades, so failing closed does not break it.
+    if (!(err instanceof TeamNotFoundError)) {
+      throw err;
+    }
+    scope?.setTag("staff_team_roster", "unavailable");
+    Sentry.withScope((s) => {
+      s.setFingerprint(["staff-team-roster-unavailable"]);
+      // Attach to the FORKED scope this capture actually uses, not to `scope`.
+      attachHandledFailureTimings(timings, s, "staff_team_members", err);
+      Sentry.captureException(err, s);
+    });
+    console.error(`Could not read staff team for ${org}/${courseSlug}; not removing any collaborators`, err);
   }
-  const orgMembers = await orgMembershipCache.get(org);
-  const allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
-  const existingAccess = await retryWithBackoff(
-    () =>
-      octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
-        owner: org,
-        repo,
-        per_page: 100
-      }),
-    5,
-    3000,
-    scope
+  // The org roster answers exactly one question — "is this person I am about to ADD already in the
+  // org?" — so with nobody to add it is pure cost. Handout and solution repo creation both pass an
+  // empty username list, and on a large org this paginated read took 18.8s of the 95.6s that made
+  // handout creation outlive the browser's patience. Both consumers below are optional-chained, so
+  // leaving it undefined is the same code path as a failed lookup.
+  let allOrgMembers: string[] | undefined;
+  if (githubUsernames.length === 0) {
+    scope?.setTag("org_members_skipped", "no_desired_users");
+  } else {
+    if (!orgMembershipCache.has(org)) {
+      orgMembershipCache.set(
+        org,
+        getOrgMembers(org, octokit).catch((err) => {
+          orgMembershipCache.delete(org);
+          throw err;
+        })
+      );
+    }
+    // Same promise-cache note as the staff roster above. On a cold isolate this is a PAGINATED list
+    // of every member of the org, which for a large course org is many sequential requests.
+    const orgMembers = await timeStep(timings, "org_members", () => orgMembershipCache.get(org));
+    allOrgMembers = orgMembers?.map((u) => u.login.toLowerCase());
+  }
+  // maxRetries 5 / baseDelayMs 3000 — the same 93s worst-case ladder as get_head_sha, and still
+  // the right ladder for the read-after-create lag it was written for. A repo that is GONE 404s
+  // identically, so `listCollaboratorsOrThrowMissing` classifies the 404 before we spend the
+  // ladder on it; see that function for what the ambiguity used to cost.
+  const existingAccess = await timeStep(timings, "list_collaborators", () =>
+    retryWithBackoff(
+      () => listCollaboratorsOrThrowMissing(octokit, org, repo, () => fetchRepositorySelection(org)),
+      5,
+      3000,
+      scope
+    )
   );
   const existingUsernames = existingAccess
     .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")
@@ -2882,56 +4221,102 @@ export async function syncRepoPermissions(
   });
   // console.log(`${org}/${repo} existing collaborators: ${existingUsernames.join(", ")}`);
   //Check if staff team has access to the repo, if not, add it
-  const teamsWithAccess = await octokit.paginate("GET /repos/{owner}/{repo}/teams", {
-    owner: org,
-    repo
-  });
-  if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
-    madeChanges = true;
-    await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
-      org,
-      team_slug,
+  const teamsWithAccess = await timeStep(timings, "list_repo_teams", () =>
+    octokit.paginate("GET /repos/{owner}/{repo}/teams", {
       owner: org,
-      repo,
-      permission: "maintain"
-    });
+      repo
+    })
+  );
+  // `resolvedStaffTeamSlug === null` means the course has no staff team on GitHub. Reading its
+  // roster already degrades to "remove nobody" a few lines up (see the TeamNotFoundError catch);
+  // this grant did not, and PUT-ing to a team that does not exist 404s and takes the whole sync —
+  // and its caller — down. Skip it for the same reason: a course that legitimately has no staff
+  // team must not be broken by it, and the staff-team sync is what owns creating one.
+  if (resolvedStaffTeamSlug === null) {
+    scope?.setTag("staff_team_grant", "skipped_absent");
+  } else if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
+    madeChanges = true;
+    await timeStep(timings, "grant_staff_team", () =>
+      octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+        org,
+        team_slug,
+        owner: org,
+        repo,
+        permission: "maintain"
+      })
+    );
   }
   // Optionally grant the students team read access (mode 2 handout repos). Resolve the real slug for
   // the same reason as the staff team above, so grant/revoke hit the correct team endpoint.
-  const studentsTeamSlug = await resolveExistingTeamSlug(org, `${courseSlug}-students`, octokit);
-  if (options.studentTeamPermission) {
+  let studentsTeamSlug = await timeStep(timings, "resolve_students_team_slug", () =>
+    resolveTeamSlugIfExists(org, `${courseSlug}-students`, octokit)
+  );
+  // The students team is created LAZILY, by the student-team sync, the first time somebody is
+  // enrolled. A mode-2 handout is normally created before that has ever run — a brand-new course
+  // has nobody enrolled — so the team the grant below needs does not exist yet, and the grant 404s
+  // AFTER the handout repo has already been created but before `template_repo` is persisted. That
+  // is a 500 on every first mode-2 handout of a new course, and a retry hits it again.
+  //
+  // Create it here rather than skipping, because `studentTeamPermission` is only ever set by the
+  // mode-2 handout path, which REQUIRES students to be able to read the handout. Skipping would
+  // let creation report success while leaving the repo unreadable, and nothing revisits the
+  // handout's team grants once the team later appears. Creating an empty `<slug>-students` team is
+  // exactly what the student-team sync would do on the next enrollment anyway.
+  if (options.studentTeamPermission && studentsTeamSlug === null) {
+    const created = await timeStep(timings, "create_students_team", () =>
+      getTeamAndCreateIfNeeded(org, `${courseSlug}-students`, octokit)
+    );
+    studentsTeamSlug = created.data.slug ?? `${courseSlug}-students`;
+    scope?.setTag("students_team_created", "true");
+  }
+  if (options.studentTeamPermission && studentsTeamSlug) {
+    // Bound to locals so the narrowing survives into the closure below: TypeScript discards the
+    // `if (options.studentTeamPermission)` narrowing inside a callback (options is a mutable
+    // parameter), so passing `options.studentTeamPermission` there would widen back to
+    // `"pull" | null | undefined`. Same value, same request — this is a typing artifact of wrapping
+    // the call in a timing closure, not a behavior change. `studentsTeamSlug` needs the same
+    // treatment now that it is a mutable `string | null`.
+    const studentTeamPermission = options.studentTeamPermission;
+    const studentsTeam = studentsTeamSlug;
     const hasStudentsTeam = teamsWithAccess.some(
-      (t) => t.slug === studentsTeamSlug && t.permission === options.studentTeamPermission
+      (t) => t.slug === studentsTeam && t.permission === studentTeamPermission
     );
     if (!hasStudentsTeam) {
       madeChanges = true;
-      await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
-        org,
-        team_slug: studentsTeamSlug,
-        owner: org,
-        repo,
-        permission: options.studentTeamPermission
-      });
+      await timeStep(timings, "grant_students_team", () =>
+        octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+          org,
+          team_slug: studentsTeam,
+          owner: org,
+          repo,
+          permission: studentTeamPermission
+        })
+      );
       scope?.addBreadcrumb({
         category: "github",
-        message: `${org}/${repo} granted ${studentsTeamSlug} team ${options.studentTeamPermission}`,
+        message: `${org}/${repo} granted ${studentsTeam} team ${options.studentTeamPermission}`,
         level: "info"
       });
     }
-  } else {
-    // No student access desired — revoke any stale students-team grant.
-    const hasStudentsTeamAccess = teamsWithAccess.some((t) => t.slug === studentsTeamSlug);
+  } else if (studentsTeamSlug) {
+    // No student access desired — revoke any stale students-team grant. Guarded on the team
+    // existing: with no students team there is no grant to revoke, and `teamsWithAccess` could
+    // never match an absent team anyway.
+    const studentsTeam = studentsTeamSlug;
+    const hasStudentsTeamAccess = teamsWithAccess.some((t) => t.slug === studentsTeam);
     if (hasStudentsTeamAccess) {
       madeChanges = true;
-      await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
-        org,
-        team_slug: studentsTeamSlug,
-        owner: org,
-        repo
-      });
+      await timeStep(timings, "revoke_students_team", () =>
+        octokit.request("DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+          org,
+          team_slug: studentsTeam,
+          owner: org,
+          repo
+        })
+      );
       scope?.addBreadcrumb({
         category: "github",
-        message: `${org}/${repo} removed ${studentsTeamSlug} team access`,
+        message: `${org}/${repo} removed ${studentsTeam} team access`,
         level: "info"
       });
     }
@@ -2949,7 +4334,8 @@ export async function syncRepoPermissions(
   if (desiredUsersNotInCachedOrg.length > 0) {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     // Create a bottleneck limiter to run no more than 20 at once
@@ -2959,44 +4345,51 @@ export async function syncRepoPermissions(
 
     // For each user not in cached org, check if they're actually in the org now (fresh API call)
     // and also handle potential username changes
-    const verificationResults = await Promise.all(
-      desiredUsersNotInCachedOrg.map((username) =>
-        limiter.schedule(async () => {
-          // First, try to verify current membership with fresh API call
-          try {
-            await octokit.request("GET /orgs/{org}/members/{username}", {
-              org,
-              username
-            });
-            // User IS in org - they were just not in the stale cache
-            scope?.addBreadcrumb({
-              category: "github",
-              message: `${username} verified as org member (was not in cache)`,
-              level: "info"
-            });
-            return { username, isInOrg: true, newUsername: null };
-          } catch (membershipError: unknown) {
-            const err = membershipError as { status?: number };
-            if (err.status === 404 || err.status === 302) {
-              // User is NOT in org - might be a username change
-              const result = await updateGitHubUsernameForUser(username, octokit, adminSupabase, scope);
-              if (result.newUsername) {
-                // Username changed - verify new username is in org
-                try {
-                  await octokit.request("GET /orgs/{org}/members/{username}", {
-                    org,
-                    username: result.newUsername
-                  });
-                  return { username, isInOrg: true, newUsername: result.newUsername };
-                } catch {
-                  return { username, isInOrg: false, newUsername: result.newUsername };
+    // One fresh `GET /orgs/{org}/members/{username}` per user missing from the cached member list,
+    // fanned out 20 at a time, and each 404 additionally triggers a username re-resolution that
+    // reads Supabase and calls GitHub again. Timed as one step, with a counter for the fan-out
+    // size, because the cost here scales with the roster rather than with the repo.
+    countStep(timings, "org_membership_checks", desiredUsersNotInCachedOrg.length);
+    const verificationResults = await timeStep(timings, "verify_org_membership", () =>
+      Promise.all(
+        desiredUsersNotInCachedOrg.map((username) =>
+          limiter.schedule(async () => {
+            // First, try to verify current membership with fresh API call
+            try {
+              await octokit.request("GET /orgs/{org}/members/{username}", {
+                org,
+                username
+              });
+              // User IS in org - they were just not in the stale cache
+              scope?.addBreadcrumb({
+                category: "github",
+                message: `${username} verified as org member (was not in cache)`,
+                level: "info"
+              });
+              return { username, isInOrg: true, newUsername: null };
+            } catch (membershipError: unknown) {
+              const err = membershipError as { status?: number };
+              if (err.status === 404 || err.status === 302) {
+                // User is NOT in org - might be a username change
+                const result = await updateGitHubUsernameForUser(username, octokit, adminSupabase, scope);
+                if (result.newUsername) {
+                  // Username changed - verify new username is in org
+                  try {
+                    await octokit.request("GET /orgs/{org}/members/{username}", {
+                      org,
+                      username: result.newUsername
+                    });
+                    return { username, isInOrg: true, newUsername: result.newUsername };
+                  } catch {
+                    return { username, isInOrg: false, newUsername: result.newUsername };
+                  }
                 }
+                return { username, isInOrg: false, newUsername: null };
               }
-              return { username, isInOrg: false, newUsername: null };
+              throw membershipError;
             }
-            throw membershipError;
-          }
-        })
+          })
+        )
       )
     );
 
@@ -3019,20 +4412,64 @@ export async function syncRepoPermissions(
   const newAccess = githubUsernames.filter(
     (u) => !existingUsernames.includes(u) && verifiedOrgMembers.has(u.toLowerCase())
   );
-  const removeAccess = existingUsernames.filter(
-    (u) =>
-      !githubUsernames.includes(u) &&
-      !staffTeamUsernames?.includes(u) &&
-      !adminsThatShouldNotBeListedAsAdmins.includes(u)
+  // Read BEFORE computing removals, and it THROWS rather than degrading when the read fails, for
+  // the same reason the staff roster aborts on a 403: a removal made against an incomplete
+  // exemption list is not recoverable by the next sync — the access is already gone — and a run
+  // that quietly skipped the removal half would be recorded as complete by the callers that do not
+  // inspect `removalsSkipped`.
+  const orgExemptions = await timeStep(timings, "org_permission_exemptions", () =>
+    getOrgPermissionSyncExemptions(org, scope)
   );
+  const removalCandidates = computeCollaboratorRemovals({
+    existingUsernames,
+    desiredUsernames: githubUsernames,
+    staffRoster: staffTeamUsernames,
+    // Per-org config first, then the legacy global constant as a backstop. Once every org that
+    // needs one has a row, the constant can be deleted.
+    adminExclusions: [...adminsThatShouldNotBeListedAsAdmins, ...orgExemptions]
+  });
+  // Only ask for the direct-collaborator list when something might actually be removed, so the
+  // common no-op sync keeps costing exactly the requests it costs today.
+  let removeAccess: string[] = [];
+  if (removalCandidates.length > 0) {
+    // Same classification as the first collaborator read, and for the same reason: this is the
+    // sync's OTHER retry ladder, and the whole-sync backstop sits outside it. Left bare, a repo
+    // deleted between the two reads would spend a second 93-second ladder here before the backstop
+    // ever saw the error. The two ladders are the only places that need in-band classification;
+    // every other repo-scoped call in this function fails fast and the backstop catches it.
+    const directAccess = await timeStep(timings, "list_direct_collaborators", () =>
+      retryWithBackoff(
+        () =>
+          listCollaboratorsOrThrowMissing(octokit, org, repo, () => fetchRepositorySelection(org), {
+            affiliation: "direct"
+          }),
+        5,
+        3000,
+        scope
+      )
+    );
+    removeAccess = filterToDirectCollaborators(
+      removalCandidates,
+      directAccess.map((c) => c.login)
+    );
+    // The gap between these two is the futile work this guard removes. Counted so a regression
+    // shows up as a number rather than as latency somebody has to go and explain.
+    countStep(timings, "removals_skipped_not_direct", removalCandidates.length - removeAccess.length);
+  }
   for (const username of newAccess) {
     madeChanges = true;
-    const resp = await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
-      owner: org,
-      repo,
-      username,
-      permission: "write"
-    });
+    // Accumulated across the loop, with a counter for how many writes were actually issued. One
+    // request per collaborator, issued SEQUENTIALLY — so this step is (users to add) x (per-write
+    // latency), and the counter is what lets us divide those two apart after the fact.
+    countStep(timings, "collaborators_added");
+    const resp = await timeStep(timings, "add_collaborator", () =>
+      octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
+        owner: org,
+        repo,
+        username,
+        permission: "write"
+      })
+    );
     scope?.addBreadcrumb({
       category: "github",
       message: `${org}/${repo} adding collaborator ${username}`,
@@ -3056,13 +4493,25 @@ export async function syncRepoPermissions(
     });
 
     console.log(`removing collaborator ${username} from ${org}/${repo}`);
-    await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
-      owner: org,
-      repo,
-      username
-    });
+    countStep(timings, "collaborators_removed");
+    await timeStep(timings, "remove_collaborator", () =>
+      octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
+        owner: org,
+        repo,
+        username
+      })
+    );
   }
-  return { madeChanges };
+  // `removalsSkipped` is REPORTED, not just logged. A run that could not read the staff roster
+  // performed only the additive half of the sync, and a caller that then writes
+  // is_github_ready = true makes that run indistinguishable from a complete one — so a student
+  // dropped from the course keeps push access and reconcile_stuck_repo_creations, which scans only
+  // is_github_ready = false, never revisits it. That is the outcome the TeamNotFoundError comment
+  // above rejects for a 403; the flag is what stops it happening for a 404.
+  //
+  // The staff roster is the only input that can be unknown here: an unreadable exemption list
+  // throws out of this function rather than reaching this line.
+  return { madeChanges, removalsSkipped: staffTeamUsernames === null };
 }
 /**
  * Mark the user_role row for a specific (org, team_slug) as github_org_confirmed = true.
@@ -3097,7 +4546,8 @@ async function markUserRoleOrgConfirmedForTeam({
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const { data: userData, error: userError } = await adminSupabase
@@ -3514,7 +4964,8 @@ export async function enqueueSyncRepoPermissions({
 }) {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data, error } = await adminSupabase.rpc("enqueue_github_sync_repo_permissions", {
     p_class_id: class_id,
@@ -3533,7 +4984,8 @@ export async function enqueueSyncRepoPermissions({
 export async function enqueueGithubArchiveRepo(class_id: number, org: string, repo: string, debug_id?: string) {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data, error } = await adminSupabase.rpc("enqueue_github_archive_repo", {
     p_class_id: class_id,

@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 import { createAdminClient } from "@/utils/supabase/client";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { verify } from "@noble/ed25519";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 /**
  * Discord Interactions endpoint for handling slash commands
@@ -24,7 +25,7 @@ import { verify } from "@noble/ed25519";
  * - 6: DEFERRED_UPDATE_MESSAGE
  * - 7: UPDATE_MESSAGE
  */
-export async function POST(request: NextRequest) {
+async function postHandler(request: NextRequest) {
   const scope = Sentry.getCurrentScope();
   scope.setTag("endpoint", "discord_interactions");
 
@@ -172,11 +173,25 @@ async function handleSyncRolesCommand(interaction: DiscordInteraction, scope: Se
     });
   }
 
-  // Find classes with this Discord server
+  // Find classes with this Discord server.
+  //
+  // Archived classes are excluded. The guild uniqueness index stops covering a class once it is
+  // archived, so a finished course's server can be claimed by a new one, and a command in the new
+  // owner's server must not resolve to the old course. A BEFORE UPDATE trigger already clears
+  // discord_server_id when a class is archived (trg_release_discord_server_on_archive), so this filter should never have
+  // anything to exclude -- it is here because "a slash command acted on the wrong course's server" is
+  // not a failure worth leaving to a single trigger.
   const { data: classes, error: classesError } = await adminSupabase
     .from("classes")
     .select("id, name, slug")
-    .eq("discord_server_id", guildId);
+    .eq("discord_server_id", guildId)
+    // `not is true`, not `eq false`: classes.archived is nullable (added as
+    // `boolean DEFAULT false` with no NOT NULL, and every SQL predicate in the Discord schema wraps it
+    // in COALESCE for that reason). `.eq("archived", false)` is SQL equality, so a row with
+    // archived IS NULL matches neither -- and this filter decides whether a slash command resolves to
+    // a course at all, so a NULL there would answer a student's /sync-roles with "no course is linked
+    // to this server".
+    .not("archived", "is", true);
 
   if (classesError) {
     scope.setContext("classes_error", { error: classesError.message });
@@ -337,3 +352,7 @@ function hexToBytes(hex: string): Uint8Array {
   }
   return bytes;
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const POST = withRouteMetrics("/api/discord/interactions", postHandler);

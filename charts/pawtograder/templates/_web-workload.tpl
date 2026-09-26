@@ -3,23 +3,58 @@ Web (Next.js) Service + Deployment, parameterized so the stable channel and any
 extra deployment channels (.Values.channels) render from one definition.
 
 Usage:
-  {{ include "pawtograder.web.workload" (dict "ctx" . "component" "web" "image" .Values.web.image "replicas" .Values.web.replicas) }}
+  {{ include "pawtograder.web.workload" (dict "ctx" . "component" "web" "image" .Values.web.image "replicas" .Values.web.replicas "workflowLeader" .Values.web.workflowMetricsLeader) }}
 
 Args:
-  ctx        root context (.)
-  component  component label + name suffix: "web" for stable, "web-<channel>" for a channel
-  image      image dict ({ repository, tag, pullPolicy })
-  replicas   replica count
+  ctx                     root context (.)
+  component               component label + name suffix: "web" for stable,
+                          "web-<channel>" for a channel, "metrics-leader" for the
+                          dedicated workflow-metrics leader
+  image                   image dict ({ repository, tag, pullPolicy })
+  replicas                replica count
+  workflowLeader          bool. Renders METRICS_WORKFLOW_REFRESH_LEADER=true, which
+                          makes /api/metrics refresh the DB-backed workflow gauges.
+                          Must be true on AT MOST ONE workload in the release.
+                          Passed in rather than read from
+                          .Values.web.workflowMetricsLeader inside the template, so
+                          each call site owns the answer: web.yaml forwards the
+                          value, web-channels.yaml hard-codes false (a canary must
+                          never become a second leader), web-metrics-leader.yaml
+                          hard-codes true. The rendered `#` comment next to the env
+                          var is deliberately left at its pre-refactor wording —
+                          emitted comments are part of the rendered bytes, and the
+                          byte-identity guard rail compares text.
+  config                  OPTIONAL per-workload pod-shape overrides (placement,
+                          resources, strategy, securityContext, preStop, grace
+                          period, extraEnv). Omit to use .Values.web verbatim.
+  refreshIntervalSeconds  OPTIONAL. Renders METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS
+                          next to the leader flag. Rendered only when the key is
+                          PRESENT (kindIs "invalid" test, not `with` — 0 is a
+                          meaningful value that disables the app-side throttle):
+                          the app already defaults to 300s, so callers that do not
+                          pass it (web.yaml, web-channels.yaml) render EXACTLY the
+                          bytes they rendered before this arg existed. That is a
+                          hard requirement — a diff in those two templates is a full
+                          rolling restart of every prod web replica plus the live
+                          canary channel on a deploy that was meant to be additive,
+                          and charts/pawtograder/tests/render-guardrails.sh asserts
+                          byte-identity against every consumer values file.
 
-All other config (env, secrets, probes, resources, placement) is shared from
+Everything not overridden via `config` (env, secrets, probes) is shared from
 .Values.web — channels differ only by name, labels, image, and replicas. They
 target the same Postgres/auth/storage as stable (see chart README: channels share
 the data plane; only web + edge-functions code varies).
+
+Deployment-wide identity — .Values.web.service.port, .branding, .apiUrl, .e2e —
+is deliberately NOT part of `config`: a second workload of the same app must
+serve on the same port, against the same API, under the same brand. Only the
+pod's shape is per-workload.
 */}}
 {{- define "pawtograder.web.workload" -}}
 {{- $ctx := .ctx -}}
 {{- $component := .component -}}
 {{- $image := .image -}}
+{{- $cfg := .config | default $ctx.Values.web -}}
 {{- $name := include "pawtograder.componentName" (dict "ctx" $ctx "component" $component) -}}
 apiVersion: v1
 kind: Service
@@ -46,7 +81,7 @@ metadata:
     {{- include "pawtograder.componentLabels" (dict "ctx" $ctx "component" $component) | nindent 4 }}
 spec:
   replicas: {{ .replicas }}
-  {{- include "pawtograder.deploymentStrategy" (dict "component" $ctx.Values.web) | nindent 2 }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" $cfg) | nindent 2 }}
   selector:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" $ctx "component" $component) | nindent 6 }}
@@ -57,15 +92,15 @@ spec:
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" $ctx }}
       {{- include "pawtograder.imagePullSecrets" $ctx | nindent 6 }}
-      {{- include "pawtograder.priorityClassName" (dict "ctx" $ctx "component" $ctx.Values.web) | nindent 6 }}
-      {{- include "pawtograder.podSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.web) | nindent 6 }}
-      terminationGracePeriodSeconds: {{ $ctx.Values.web.terminationGracePeriodSeconds | default 30 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" $ctx "component" $cfg) | nindent 6 }}
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" $ctx "component" $cfg) | nindent 6 }}
+      terminationGracePeriodSeconds: {{ $cfg.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: web
           image: {{ include "pawtograder.image" (dict "ctx" $ctx "image" $image) }}
           imagePullPolicy: {{ $image.pullPolicy }}
-          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ctx "component" $ctx.Values.web) | nindent 10 }}
-          {{- include "pawtograder.preStop" (dict "component" $ctx.Values.web) | nindent 10 }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ctx "component" $cfg) | nindent 10 }}
+          {{- include "pawtograder.preStop" (dict "component" $cfg) | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ $ctx.Values.web.service.port }}
@@ -107,7 +142,7 @@ spec:
                   name: {{ $ctx.Values.secrets.names.jwt }}
                   key: METRICS_SCRAPE_TOKEN
                   optional: true
-            {{- if $ctx.Values.web.workflowMetricsLeader }}
+            {{- if .workflowLeader }}
             # Leader-gate for DB-backed workflow gauges. /api/metrics only
             # refreshes the cluster-wide RPCs when this is set; without it
             # the route just exports whatever is currently in the registry.
@@ -120,6 +155,15 @@ spec:
             # leader deployment instead.
             - name: METRICS_WORKFLOW_REFRESH_LEADER
               value: "true"
+            {{- if not (kindIs "invalid" .refreshIntervalSeconds) }}
+            # Floor on how often refreshWorkflowMetrics() actually hits the
+            # DB, independent of scrape frequency. This is the only bound
+            # that survives a second Prometheus, a hand-edited ServiceMonitor
+            # or an operator running a curl loop against /api/metrics.
+            # Omitted => the app's built-in 300s default (lib/metrics.ts).
+            - name: METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS
+              value: {{ .refreshIntervalSeconds | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if $ctx.Values.web.e2e.enabled }}
@@ -184,7 +228,7 @@ spec:
               value: {{ .ssoProviders | toJson | quote }}
             {{- end }}
             {{- end }}
-            {{- with $ctx.Values.web.extraEnv }}
+            {{- with $cfg.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           envFrom:
@@ -228,14 +272,14 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 10
           resources:
-            {{- toYaml $ctx.Values.web.resources | nindent 12 }}
-      {{- with (include "pawtograder.nodeSelector" (dict "ctx" $ctx "component" $ctx.Values.web)) }}
+            {{- toYaml $cfg.resources | nindent 12 }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" $ctx "component" $cfg)) }}
       nodeSelector:
         {{- . | nindent 8 }}
       {{- end }}
-      {{- with (include "pawtograder.tolerations" (dict "ctx" $ctx "component" $ctx.Values.web)) }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" $ctx "component" $cfg)) }}
       tolerations:
         {{- . | nindent 8 }}
       {{- end }}
-      {{- include "pawtograder.componentAffinity" (dict "ctx" $ctx "component" $ctx.Values.web "name" $component) | nindent 6 }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" $ctx "component" $cfg "name" $component) | nindent 6 }}
 {{- end -}}

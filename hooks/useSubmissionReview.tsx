@@ -15,8 +15,12 @@ import {
   useWritableSubmissionReviews
 } from "./useSubmission";
 import { useNavigationProgress } from "@/components/ui/navigation-progress";
-import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
-import { computeRubricGradingCompletion, gradeTargetsForSubmission } from "@/lib/rubricGradingCompletion";
+import { useAssignmentGroupWithMembersLoadState } from "@/hooks/useCourseController";
+import {
+  computeRubricGradingCompletion,
+  gradeTargetsForSubmission,
+  perStudentEvaluationBlocked
+} from "@/lib/rubricGradingCompletion";
 
 export type SubmissionReviewContextType = {
   activeReviewAssignmentId: number | undefined;
@@ -327,10 +331,14 @@ export function useMissingRubricChecksForActiveReview() {
   const allCriteria = useRubricCriteriaByRubric(activeSubmissionReview?.rubric_id);
   const rubricPartsRaw = useRubricParts(activeSubmissionReview?.rubric_id ?? null);
   const rubricParts = useMemo(() => rubricPartsRaw ?? [], [rubricPartsRaw]);
-  const groupRow = useAssignmentGroupWithMembers({
+  const { group: groupRow, loaded: groupLoaded } = useAssignmentGroupWithMembersLoadState({
     assignment_group_id: submission.assignment_group_id ?? undefined
   });
-  const groupMemberProfileIds = (groupRow?.assignment_groups_members ?? []).map((m) => m.profile_id);
+  // Memoized: this was a fresh array on every render, so the useMemo below never actually memoized.
+  const groupMemberProfileIds = useMemo(
+    () => (groupRow?.assignment_groups_members ?? []).map((m) => m.profile_id),
+    [groupRow]
+  );
 
   const gradeTargets = useMemo(
     () =>
@@ -342,16 +350,58 @@ export function useMissingRubricChecksForActiveReview() {
     [submission.assignment_group_id, submission.profile_id, groupMemberProfileIds]
   );
 
+  // Until the group's membership is known, per-student completion cannot be evaluated: the
+  // underlying check degrades to "any one member's comment satisfies the whole group", which
+  // produces a false all-clear.
   const rubricPartStudentAssignments =
     (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
 
+  const gradeTargetsBlocked = perStudentEvaluationBlocked({
+    rubricParts,
+    gradeTargets,
+    gradeTargetsLoaded: groupLoaded,
+    rubricPartStudentAssignments
+  });
+
   return useMemo(() => {
-    if (!activeSubmissionReview || !rubricChecks?.length) {
+    // `gradeTargetsBlocked` means "completeness cannot be evaluated", and callers turn it into a
+    // permanently disabled button. It must therefore NOT be set for a rubric that simply has no
+    // checks: the assignment-creation trigger inserts an empty 'Grading Rubric' and an empty
+    // 'Self-Review Rubric' (20250721175659_regrading-reviews.sql), so `rubricChecks.length === 0` is
+    // the steady state for those, not a loading state. Reporting it as blocked left the grader
+    // staring at a spinner that never resolved, on a review with genuinely nothing missing.
+    if (!activeSubmissionReview) {
       return {
         missing_required_checks: [],
         missing_optional_checks: [],
         missing_required_criteria: [],
-        missing_optional_criteria: []
+        missing_optional_criteria: [],
+        gradeTargetsBlocked: true,
+        gradeTargetsLoaded: groupLoaded
+      };
+    }
+
+    if (!rubricChecks?.length) {
+      return {
+        missing_required_checks: [],
+        missing_optional_checks: [],
+        missing_required_criteria: [],
+        missing_optional_criteria: [],
+        gradeTargetsBlocked: false,
+        gradeTargetsLoaded: groupLoaded
+      };
+    }
+
+    if (gradeTargetsBlocked) {
+      // Empty lists here mean "unknown", NOT "nothing missing". Callers must read
+      // gradeTargetsBlocked rather than infer completeness from the empty arrays.
+      return {
+        missing_required_checks: [],
+        missing_optional_checks: [],
+        missing_required_criteria: [],
+        missing_optional_criteria: [],
+        gradeTargetsBlocked: true,
+        gradeTargetsLoaded: groupLoaded
       };
     }
 
@@ -370,7 +420,9 @@ export function useMissingRubricChecksForActiveReview() {
       missing_required_checks,
       missing_optional_checks,
       missing_required_criteria,
-      missing_optional_criteria
+      missing_optional_criteria,
+      gradeTargetsBlocked: false,
+      gradeTargetsLoaded: groupLoaded
     };
   }, [
     activeSubmissionReview,
@@ -379,7 +431,9 @@ export function useMissingRubricChecksForActiveReview() {
     rubricParts,
     comments,
     rubricPartStudentAssignments,
-    gradeTargets
+    gradeTargets,
+    gradeTargetsBlocked,
+    groupLoaded
   ]);
 }
 

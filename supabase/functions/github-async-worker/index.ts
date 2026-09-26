@@ -1,7 +1,7 @@
 import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type {
   ArchiveRepoAndLockArgs,
   CreateRepoArgs,
@@ -20,11 +20,26 @@ import {
   NonRetryableGitHubError,
   NonRetryableRepoError,
   NonRetryableUserError,
+  RepositoryMissingError,
+  RepositoryUnreadableError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
+import { beginWorkerRun } from "../_shared/workerRun.ts";
+import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
+import {
+  beginOrgLeaseRun,
+  drainOrgLease,
+  isolateStartedAtMs,
+  type OrgSlotRow,
+  type OrgSlotRpc
+} from "../_shared/orgLeaseRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { shouldSendOrgInvitation, siblingInviteTeamSlugs } from "../_shared/orgInviteWindow.ts";
+import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { notReadyRequeuePatch, planRepoNotReadyWait } from "../_shared/repoNotReadyPlan.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -156,12 +171,16 @@ function recordMetric(
       p_status_code: params.status_code,
       p_latency_ms: latency_ms
     });
-    log_result.then((result) => {
-      if (result.error) {
-        console.error(result.error);
-        Sentry.captureException(result.error, scope);
-      }
-    });
+    // Detached: gateway-call logging must not add latency to the call it logs.
+    // Flushed after it settles, since nothing else will be alive to do it.
+    waitUntilWithSentryFlush(
+      log_result.then((result) => {
+        if (result.error) {
+          console.error(result.error);
+          Sentry.captureException(result.error, scope);
+        }
+      })
+    );
   } else {
     // Create new log record (fallback for backward compatibility)
     const log_result = adminSupabase.schema("public").rpc("log_api_gateway_call", {
@@ -172,12 +191,16 @@ function recordMetric(
       p_message_processed_at: new Date().toISOString(),
       p_latency_ms: latency_ms
     });
-    log_result.then((result) => {
-      if (result.error) {
-        console.error(result.error);
-        Sentry.captureException(result.error, scope);
-      }
-    });
+    // Detached: gateway-call logging must not add latency to the call it logs.
+    // Flushed after it settles, since nothing else will be alive to do it.
+    waitUntilWithSentryFlush(
+      log_result.then((result) => {
+        if (result.error) {
+          console.error(result.error);
+          Sentry.captureException(result.error, scope);
+        }
+      })
+    );
   }
 }
 
@@ -267,16 +290,103 @@ function computeBackoffSeconds(baseSeconds: number | undefined, retryCount: numb
   return backoff + jitter;
 }
 
+/**
+ * Options for a requeue that is not a failure retry.
+ *
+ * `incrementRetryCount` defaults to TRUE so every existing caller keeps its behaviour; only the
+ * readiness ladder passes false, because a deferral must not spend the failure budget the
+ * circuit-breaker and exception paths share. See `not_ready_count` on GitHubAsyncEnvelope.
+ */
+interface RequeueOptions {
+  incrementRetryCount?: boolean;
+  patch?: Partial<GitHubAsyncEnvelope>;
+}
+
+/**
+ * RETURNS WHETHER THE REPLACEMENT WAS ACTUALLY ENQUEUED, and callers must not archive the original
+ * until it says true.
+ *
+ * This used to resolve normally on a failed `send` — the error went to Sentry and nothing else — so
+ * a caller doing `await requeueWithDelay(...); await archiveMessage(...)` deleted the only copy of
+ * the job whenever the queue write failed. Silent, permanent work loss on a transient database
+ * error. Returning a boolean is what lets a caller leave the message unarchived instead, which falls
+ * back to plain visibility-timeout redelivery: slower, but the job still happens.
+ *
+ * NOTE for anyone touching the other call sites: they still ignore this return value and archive
+ * unconditionally, which is the same latent bug. Left alone here deliberately — each one needs its
+ * own decision about whether leaving the message unarchived is correct in that path — and tracked
+ * rather than half-fixed.
+ */
+/**
+ * Retire a message whose REPLACEMENT has already been enqueued: archive it, and if archiving is
+ * exhausted, delete it.
+ *
+ * WHY A FALLBACK AND NOT JUST `archiveMessage`. Once a replacement is on the queue, the original is a
+ * duplicate, and leaving it live FORKS THE JOB: it reappears at its visibility timeout carrying the
+ * OLD `not_ready_count`, sends a second replacement from that stale count, and now two chains
+ * advance independently — each able to fork again. `sync_repo_permissions` is a reconcile so the
+ * duplicate GitHub work is not corrupting, but the queue pressure and duplicate DLQ records
+ * compound, and the whole point of the ladder is to stop one message multiplying its own cost.
+ *
+ * `delete` is a genuinely different failure surface from `archive`, not a retry of it: archive INSERTS
+ * into the archive table and then removes from the queue, so it fails on anything wrong with that
+ * table — bloat, a partition problem, a permission change — while delete only removes. That makes it
+ * worth trying when archive has already spent its three attempts, and it is why this is a fallback
+ * rather than a fourth attempt at the same call.
+ *
+ * Losing the archive ROW is an acceptable price for not forking the job: the archive table is
+ * forensics, and pgmq.a_async_calls is where this whole investigation's measurements came from, so
+ * the loss is recorded loudly rather than swallowed.
+ *
+ * Returns false only if BOTH failed, in which case the fork is live and the report says so.
+ */
+async function retireReplacedMessage(
+  adminSupabase: SupabaseClient<Database>,
+  msgId: number,
+  scope: Sentry.Scope,
+  queueName: string
+): Promise<boolean> {
+  if (await archiveMessage(adminSupabase, msgId, scope, queueName)) return true;
+  const { error } = await adminSupabase.schema("pgmq_public").rpc("delete", {
+    queue_name: queueName,
+    message_id: msgId
+  });
+  if (!error) {
+    console.warn(
+      `[pgmq] archive exhausted for msg_id=${msgId} queue=${queueName}; DELETED instead to avoid forking the job (archive row lost)`
+    );
+    const s = scope.clone();
+    s.setLevel("warning");
+    s.setContext("archive_fallback_delete", { msg_id: msgId, queue_name: queueName });
+    Sentry.captureMessage("github-async-worker: archive exhausted, deleted the replaced message instead", s);
+    return true;
+  }
+  console.error(
+    `[pgmq] could NOT retire replaced msg_id=${msgId} queue=${queueName} (archive and delete both failed) — its replacement is already queued, so this job is now FORKED`
+  );
+  const s = scope.clone();
+  s.setLevel("error");
+  s.setContext("retire_failed_job_forked", {
+    msg_id: msgId,
+    queue_name: queueName,
+    delete_error: error.message
+  });
+  Sentry.captureMessage("github-async-worker: replaced message could not be retired; job is forked", s);
+  return false;
+}
+
 async function requeueWithDelay(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
   delaySeconds: number,
   scope: Sentry.Scope,
-  queueName: string = "async_calls"
-) {
+  queueName: string = "async_calls",
+  opts: RequeueOptions = {}
+): Promise<boolean> {
   const newEnvelope: GitHubAsyncEnvelope = {
     ...envelope,
-    retry_count: (envelope.retry_count ?? 0) + 1
+    ...(opts.patch ?? {}),
+    retry_count: (envelope.retry_count ?? 0) + (opts.incrementRetryCount === false ? 0 : 1)
   };
   const result = await adminSupabase.schema("pgmq_public").rpc("send", {
     queue_name: queueName,
@@ -286,7 +396,9 @@ async function requeueWithDelay(
   if (result.error) {
     scope.setContext("requeue_error", { error_message: result.error.message, delay_seconds: delaySeconds });
     Sentry.captureException(result.error, scope);
+    return false;
   }
+  return true;
 }
 
 async function sendToDeadLetterQueue(
@@ -592,6 +704,101 @@ async function checkAndTripErrorCircuitBreaker(
  */
 const PGMQ_MAX_READ_CT = 10;
 
+/**
+ * `onInvitationStillPending` for reinviteToOrgTeam: move this enrollment's `invitation_date` back to
+ * the invitation GitHub actually holds.
+ *
+ * The membership sweep stamps `invitation_date` at enqueue time and reconsiders the role only once
+ * that stamp is a staleness period old. When the worker then finds an older invitation still
+ * pending and sends nothing, the stamp is a week later than the invitation the student holds, so
+ * the sweep would come back a week after that invitation expired. Rewinding it makes the sweep
+ * return on the next hourly pass after the real invitation lapses.
+ *
+ * Only ever moves the date EARLIER (`gt`), so it cannot undo a newer invitation's stamp from the
+ * `member_invited` webhook. A failed write is reported and swallowed: the team sync this envelope
+ * exists for must still run, and the cost of a miss is the old one-week delay.
+ */
+function rewindInvitationDate(
+  adminSupabase: SupabaseClient<Database>,
+  classId: number,
+  userId: string,
+  roles: Database["public"]["Enums"]["app_role"][],
+  scope: Sentry.Scope
+): (createdAt: string) => Promise<void> {
+  return async (createdAt: string) => {
+    const { error } = await adminSupabase
+      .from("user_roles")
+      .update({ invitation_date: createdAt })
+      .eq("class_id", classId)
+      .eq("user_id", userId)
+      .in("role", roles)
+      .gt("invitation_date", createdAt);
+    if (error) {
+      scope.setContext("invitation_date_rewind", { class_id: classId, user_id: userId, created_at: createdAt });
+      Sentry.captureException(error, scope);
+    }
+  };
+}
+
+/**
+ * `additionalTeamSlugs` for reinviteToOrgTeam: the teams of this user's other live, unconfirmed
+ * enrollments in classes sharing `org`, so a fresh invitation (notably one replacing a lapsed
+ * invitation that carried them) does not strand those enrollments. See siblingInviteTeamSlugs.
+ *
+ * A failed read THROWS, so the envelope retries. Answering "no siblings" would send a partial
+ * invitation, and its `member_invited` webhook stamps invitation_date for every class in the org,
+ * hiding the omitted enrollments from the sweep for a week.
+ *
+ * The org is matched case-insensitively, like classes_unique_github_org_slug: GitHub org names are.
+ */
+function siblingTeamSlugs(
+  adminSupabase: SupabaseClient<Database>,
+  org: string,
+  classId: number,
+  userId: string,
+  scope: Sentry.Scope
+): () => Promise<string[]> {
+  return async () => {
+    const { data, error } = await adminSupabase
+      .from("user_roles")
+      .select(
+        "role, disabled, github_org_confirmed, classes!inner(id, slug, github_org, is_demo, archived, start_date, end_date)"
+      )
+      .eq("user_id", userId)
+      .eq("disabled", false)
+      .ilike("classes.github_org", org)
+      .neq("class_id", classId);
+    if (error) throw error;
+    return siblingInviteTeamSlugs(data ?? [], org, classId);
+  };
+}
+
+/**
+ * The GitHub usernames that should be on a class's student or staff team.
+ *
+ * One RPC, deliberately, because syncTeam is SUBTRACTIVE — it removes every current team member
+ * absent from this list — which makes the read's consistency a correctness property. Reading the
+ * roster across several requests, by offset or by key, gives each page its own snapshot: a student
+ * who accepts their invitation midway is read as unconfirmed in an early page and missing from the
+ * list, while the webhook has since confirmed them and GitHub has added them to the team. syncTeam
+ * removes them, and because the role now reads confirmed, neither the sweep nor the alert will ever
+ * reconsider it — a silent, permanent loss of access. The function also returns an array rather
+ * than rows, which keeps PostgREST's max_rows ceiling from truncating a large class into the same
+ * subtractive damage.
+ */
+async function fetchIntendedTeamUsernames(
+  adminSupabase: SupabaseClient<Database>,
+  classId: number,
+  kind: "student" | "staff"
+): Promise<string[]> {
+  const { data, error } = await adminSupabase.rpc("class_team_member_usernames", {
+    p_class_id: classId,
+    p_kind: kind
+  });
+  if (error) throw error;
+  return (data ?? []).filter((u): u is string => Boolean(u));
+}
+
 export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
@@ -645,6 +852,12 @@ export async function processEnvelope(
   }
   // Circuit breaker: check both org-level and method-specific circuits
   try {
+    // THE ALLOCATOR MIRRORS THIS RESOLVER, so the two lists have to stay in step. `v_org_expr` in
+    // supabase/migrations/20260914120000_async_lease_pin_org.sql resolves the same eight methods to
+    // the same org, because the per-org slot budget has to be charged to the org the handler below
+    // is going to call. Adding a method here, or changing where one of them reads its org from,
+    // means editing that expression in a migration too; drift shows up as an '(unknown-method)'
+    // bucket in public.async_worker_slots.org.
     const org = ((): string | undefined => {
       if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
       if (envelope.method === "sync_student_team" || envelope.method === "sync_staff_team")
@@ -770,74 +983,129 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Syncing student team for user ${args.userId}`, level: "info" });
+        // At most ONE invitation per envelope. The pre- and post-reconcile checks below can match
+        // the same row — nothing in-process records that we invited, and the webhook that stamps
+        // invitation_date may not have arrived yet — which mails the student twice for one
+        // enrollment. Latent until now because both checks required invitation_date IS NULL and
+        // were reached almost only on a fresh enrollment; re-invites make the overlap routine.
+        let invitedThisRun = false;
         if (args.userId) {
           //Make sure that the student has been invited to the org
           const { data, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .eq("role", "student")
+            // Never reinvite a dropped student. The disable-triggered sync routes their id here, and
+            // the class-wide reconcile below is what removes them from the team — reinviting would
+            // immediately undo that, and an accepted invitation would let the membership webhook mark
+            // the disabled role confirmed. Narrow while this gate required invitation_date IS NULL,
+            // which excluded any student who had ever been invited; the staleness branch matches
+            // precisely those students instead. Matches the staff path.
+            .eq("disabled", false)
             .maybeSingle();
           if (error) throw error;
           if (
             data &&
-            data.invitation_date === null &&
             data.users?.github_username &&
             data.classes?.github_org &&
-            data.classes?.slug
+            data.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: data.invitation_date,
+              cls: data.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               data.classes.github_org,
               `${data.classes.slug}-students`,
               data.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["student"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  data.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
+            invitedThisRun = true;
           }
         }
 
         await github.syncStudentTeam(
           args.org,
           args.courseSlug,
-          async () => {
-            const { data, error } = await adminSupabase
-              .from("user_roles")
-              .select("github_org_confirmed, users(github_username)")
-              .eq("class_id", envelope.class_id || 0)
-              .eq("role", "student")
-              .eq("disabled", false)
-              .limit(1000);
-            if (error) throw error;
-            return (data || [])
-              .filter((s) => s.users?.github_username && s.github_org_confirmed)
-              .map((s) => s.users!.github_username!);
-          },
+          async () => await fetchIntendedTeamUsernames(adminSupabase, envelope.class_id || 0, "student"),
           scope
         );
         // If an affected user is provided and they haven't been invited yet, ensure org invitation to students team
-        if (args.userId && envelope.class_id) {
+        if (args.userId && envelope.class_id && !invitedThisRun) {
           const { data: ur, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .eq("role", "student")
-            .single();
+            // Same as the pre-reconcile lookup above: a dropped student must not be reinvited.
+            .eq("disabled", false)
+            // maybeSingle (not single): with the disabled filter — and on a role DELETE, where the
+            // trigger still routes the removed user's id here — no row is the normal case rather
+            // than an error. This lookup's errors are swallowed by the `!error &&` guard anyway.
+            .maybeSingle();
           if (
             !error &&
             ur &&
-            ur.invitation_date === null &&
             ur.users?.github_username &&
             ur.classes?.github_org &&
-            ur.classes?.slug
+            ur.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: ur.invitation_date,
+              cls: ur.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               ur.classes.github_org,
               `${ur.classes.slug}-students`,
               ur.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["student"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  ur.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
           }
         }
@@ -862,6 +1130,8 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Syncing staff team for org ${args.org}`, level: "info" });
+        // One invitation per envelope, for the reason spelled out on the student path above.
+        let invitedThisRun = false;
         if (args.userId) {
           scope.setTag("user_id", args.userId);
           //Make sure that the student has been invited to the org
@@ -871,7 +1141,9 @@ export async function processEnvelope(
           // row simply means "no per-user reinvite to do".
           const { data, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
@@ -882,41 +1154,55 @@ export async function processEnvelope(
           if (error) throw error;
           if (
             data &&
-            data.invitation_date === null &&
             data.users?.github_username &&
             data.classes?.github_org &&
-            data.classes?.slug
+            data.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: data.invitation_date,
+              cls: data.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               data.classes.github_org,
               `${data.classes.slug}-staff`,
               data.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["instructor", "grader", "admin"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  data.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
+            invitedThisRun = true;
           }
         }
         await github.syncStaffTeam(
           args.org,
           args.courseSlug,
-          async () => {
-            const { data, error } = await adminSupabase
-              .from("user_roles")
-              .select("users(github_username)")
-              .eq("class_id", envelope.class_id || 0)
-              .in("role", ["instructor", "grader", "admin"])
-              .eq("github_org_confirmed", true)
-              .eq("disabled", false)
-              .limit(5000);
-            if (error) throw error;
-            return (data || []).map((s) => s.users!.github_username!).filter(Boolean);
-          },
+          async () => await fetchIntendedTeamUsernames(adminSupabase, envelope.class_id || 0, "staff"),
           scope
         );
-        if (args.userId && envelope.class_id) {
+        if (args.userId && envelope.class_id && !invitedThisRun) {
           const { data: ur, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
@@ -927,17 +1213,39 @@ export async function processEnvelope(
           if (
             !error &&
             ur &&
-            ur.invitation_date === null &&
             ur.users?.github_username &&
             ur.classes?.github_org &&
-            ur.classes?.slug
+            ur.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: ur.invitation_date,
+              cls: ur.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               ur.classes.github_org,
               `${ur.classes.slug}-staff`,
               ur.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["instructor", "grader", "admin"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  ur.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
           }
         }
@@ -979,6 +1287,20 @@ export async function processEnvelope(
         }
         Sentry.addBreadcrumb({ message: `Creating repo ${repoName} for org ${org}`, level: "info" });
         const limiter = getCreateContentLimiter(org);
+        // This one `schedule` wraps the WHOLE repo creation, and the limiter is Redis-backed —
+        // fleet-wide per org, `{ reservoir: 40, maxConcurrent: 40, refresh 40/60s }`. A create_repo
+        // measured p50 279.5s (prod, 2026-09-07, 58 messages), so each in-flight creation holds one
+        // of those 40 slots for ~4.7 minutes, and the SAME pool serves org invitations
+        // (`POST /orgs/{org}/invitations`) and sync_repo_to_handout. That is why the worker's drain
+        // concurrency is capped at 8 rather than at anything near 40 — see
+        // _shared/asyncWorkerTuning.ts.
+        //
+        // DO NOT move any limiter-scheduled call INSIDE this wrapper. Nothing inside createRepo
+        // re-enters this limiter today, which is the only reason the pattern is safe: nest a
+        // permission/invitation call in here and, once >= maxConcurrent outer jobs are running,
+        // every slot is held by an outer job waiting on an inner job that can never start — a
+        // Bottleneck deadlock. If that ever changes, the concurrency ceiling has to come DOWN.
+        //
         // createRepo patches repo settings after generate/fork (squash merge on, template flag, branch ruleset, …).
         const effectiveSource = sourceRepo ?? templateRepo;
         const headSha = await limiter.schedule(() =>
@@ -1134,11 +1456,144 @@ export async function processEnvelope(
         //Otherwise we might race against a createRepo, and end up overwriting to the wrong githubUsernames.
         const { data: repository } = await adminSupabase
           .from("repositories")
-          .select("is_github_ready")
+          .select("is_github_ready, creation_error")
           .eq("repository", `${org}/${repoName}`)
           .maybeSingle();
         if (!repository?.is_github_ready) {
-          console.log("repo is not ready", `${org}/${repoName}`);
+          // "Not ready" covers two states that deserve opposite answers. With no creation_error the
+          // repo is still on its way — requeue and let it land, which is what this gate was written
+          // for. With one recorded, the row is parked: creation failed for good, or the repo turned
+          // out to be missing (RepositoryMissingError, handled below). Requeueing that is pure
+          // waste — nothing will change it, and the message just redelivers every visibility
+          // timeout until read_ct trips the poison-pill limit ~50 minutes later. Archive it and
+          // say why.
+          if (repository?.creation_error) {
+            console.log(`repo is parked, dropping permission sync: ${org}/${repoName} — ${repository.creation_error}`);
+            scope.setTag("permission_sync_skipped", "repo_parked");
+            // Close out the api_gateway_calls row this envelope opened. enqueue_* inserts it with
+            // status_code = 0, and archiving the message ends its life — so without this the row
+            // stays pending forever and every dropped duplicate inflates the call totals with no
+            // completion status or latency. 422: the job was well-formed but can never succeed,
+            // matching the non-retryable path below.
+            recordMetric(
+              adminSupabase,
+              {
+                method: envelope.method,
+                status_code: 422,
+                class_id: envelope.class_id,
+                debug_id: envelope.debug_id,
+                enqueued_at: meta.enqueued_at,
+                log_id: envelope.log_id
+              },
+              scope
+            );
+            // DLQ before archiving, rather than just dropping the message.
+            //
+            // The subtle case this protects: when the error path below parks the row but its own
+            // sendToDeadLetterQueue call fails, it deliberately leaves the message UNARCHIVED so
+            // that write can be retried. That redelivered message arrives back here, and it is
+            // indistinguishable from a duplicate — so simply archiving would consume the very
+            // retry the error path was preserving, and the terminal failure would vanish from DLQ
+            // tracking during exactly the transient outage the retry exists for.
+            //
+            // Routing every parked message through the DLQ makes both cases correct without having
+            // to tell them apart, and matches the handler's convention that terminal work leaves a
+            // DLQ record. It does mean a genuine duplicate also lands there, which is the intended
+            // trade: a redundant DLQ row is recoverable, a lost one is not.
+            const dlqSuccess = await sendToDeadLetterQueue(
+              adminSupabase,
+              envelope,
+              meta,
+              new Error(`Repository is parked and cannot be synced: ${repository.creation_error}`),
+              scope
+            );
+            if (!dlqSuccess) {
+              // Leave it unarchived so the DLQ write is retried; read_ct's poison limit bounds this.
+              console.error(`Failed to DLQ parked permission sync for ${org}/${repoName}, leaving unarchived`);
+              return false;
+            }
+            return true;
+          }
+          // Still provisioning: wait for it, but wait on an EXPLICIT delay rather than by letting
+          // the visibility timeout expire. See _shared/repoNotReadyPlan.ts for why the difference
+          // matters and what it cost in production.
+          //
+          // The counter is `not_ready_count`, NOT `retry_count`. A deferral is not a failure, and retry_count is the
+          // failure budget the circuit-breaker (DLQ at >= 5) and exception paths share — spending it
+          // on waiting means a repo that needed five polls meets its first real GitHub error with
+          // the budget gone and gets DLQ'd instead of retried.
+          const notReadyDeferrals = envelope.not_ready_count ?? 0;
+          const notReadyPlan = planRepoNotReadyWait(notReadyDeferrals);
+          if (notReadyPlan.action === "dlq") {
+            // Same shape as the circuit-breaker ceiling above: DLQ, then archive only if the DLQ
+            // write landed, so a transient DLQ outage leaves the message to be retried rather than
+            // dropping the terminal record on the floor.
+            const exhausted = new Error(
+              `Repository ${org}/${repoName} was still not marked ready after ${notReadyDeferrals} deferrals`
+            );
+            scope.setTag("permission_sync_skipped", "repo_never_ready");
+            // Close the api_gateway_calls row this job opened. sendToDeadLetterQueue does not touch
+            // it and no replacement envelope survives this branch, so without this the row sits at
+            // its pending status_code = 0 forever. 422 rather than a new code, matching the parked
+            // terminal path a few lines up: same situation — well-formed job, no attempt left that
+            // can succeed — and a third status for a near-identical outcome would only make the
+            // metric harder to read.
+            recordMetric(
+              adminSupabase,
+              {
+                method: envelope.method,
+                status_code: 422,
+                class_id: envelope.class_id,
+                debug_id: envelope.debug_id,
+                enqueued_at: meta.enqueued_at,
+                log_id: envelope.log_id
+              },
+              scope
+            );
+            const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, exhausted, scope);
+            if (dlqSuccess) {
+              await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+            } else {
+              console.error(`Failed to DLQ never-ready permission sync for ${org}/${repoName}, leaving unarchived`);
+              scope.setContext("dlq_archive_skipped", { msg_id: meta.msg_id, reason: "DLQ send failed" });
+              Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, { level: "error" });
+            }
+            return false;
+          }
+          console.log(
+            `repo is not ready ${org}/${repoName} — requeueing in ${notReadyPlan.delaySeconds}s ` +
+              `(attempt ${notReadyPlan.attempt}/${notReadyPlan.maxAttempts})`
+          );
+          scope.setTag("permission_sync_deferred", "repo_not_ready");
+          // No recordMetric here, matching the circuit-breaker requeue path: the new envelope keeps
+          // this one's log_id, so the api_gateway_calls row this job opened is closed by whichever
+          // attempt finally succeeds. Recording a status here would close it early and the eventual
+          // success would have nothing to write to.
+          const requeued = await requeueWithDelay(
+            adminSupabase,
+            envelope,
+            notReadyPlan.delaySeconds,
+            scope,
+            queueName,
+            {
+              incrementRetryCount: false,
+              patch: notReadyRequeuePatch(envelope, meta.enqueued_at)
+            }
+          );
+          if (!requeued) {
+            // The replacement never made it onto the queue, so this message is the only copy left.
+            // Leave it UNARCHIVED: it falls back to visibility-timeout redelivery, which is the slow
+            // path this change exists to avoid but is still infinitely better than losing the sync.
+            // read_ct's poison limit continues to bound it.
+            console.error(
+              `Failed to requeue not-ready permission sync for ${org}/${repoName}; leaving unarchived for visibility-timeout redelivery`
+            );
+            scope.setTag("permission_sync_requeue_failed", "true");
+            return false;
+          }
+          // The replacement is live, so the original MUST NOT be: see retireReplacedMessage for what
+          // happens if both stay on the queue.
+          await retireReplacedMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
@@ -2233,6 +2688,17 @@ export async function processEnvelope(
       // one issue per method is enough. The offending login is on the tag and in the message.
       scope.setFingerprint(["github-non-retryable-user", envelope.method]);
       scope.setTag("github_username", error.githubUsername);
+    } else if (error instanceof RepositoryMissingError) {
+      // Deleting an assignment's repos by hand turns up dozens of these at once (146 rows for one
+      // sp26 assignment on 2026-09-09). Group them; the repo is on the tag and in the message.
+      scope.setFingerprint(["github-repository-missing", envelope.method]);
+      scope.setTag("missing_repository", error.fullName);
+    } else if (error instanceof RepositoryUnreadableError) {
+      // Narrowing an installation's repo selection would produce one of these per affected repo at
+      // once, so group them the same way. Kept separate from the missing case because the operator
+      // action differs: re-grant access, versus accept that the repo is gone.
+      scope.setFingerprint(["github-repository-unreadable", envelope.method]);
+      scope.setTag("unreadable_repository", error.fullName);
     }
 
     const errorId = Sentry.captureException(error, scope);
@@ -2269,20 +2735,98 @@ export async function processEnvelope(
           scope.setTag("non_retryable_repo_error", "true");
         }
         const reason = error.message;
+        // A repo that is gone is not just "this job failed" — the ROW is wrong, and every future
+        // job derived from it will fail the same way. Clearing is_github_ready parks the row, so
+        // the sync_repo_permissions pre-flight gate drops the duplicates already queued for it
+        // (see that gate) instead of each one paying for its own discovery, and the row stops
+        // silently claiming a working repo.
+        //
+        // Safe to pair with creation_error and only with it: reconcile_stuck_repo_creations
+        // re-enqueues create_repo for rows with `is_github_ready = false AND creation_error IS
+        // NULL`, so clearing the flag on its own would hand a deleted repo to the reconciler and
+        // have it recreated. Setting both in one update keeps the row parked.
+        const repoUpdate =
+          error instanceof RepositoryMissingError
+            ? { creation_error: reason, is_github_ready: false }
+            : { creation_error: reason };
+        // Two ways this write can fail without throwing, both of which would leave us believing a
+        // row was parked when it was not:
+        //
+        //   1. postgrest-js RESOLVES with `{ error }` rather than throwing, so a PostgREST or
+        //      database failure is invisible to the catch below.
+        //   2. An UPDATE that matches ZERO rows is a success in both Postgres and PostgREST. The
+        //      by-name fallback is the exposed one: `.eq("repository", ...)` is case-sensitive
+        //      while GitHub treats owner/repo case-insensitively, so an envelope whose casing
+        //      differs from the stored value silently parks nothing — as would a row already
+        //      deleted.
+        //
+        // Parking is what stops the next job repeating this failure, so "we think we parked it"
+        // has to mean a row actually changed. `.select("id")` makes the affected rows observable;
+        // zero of them is a failed park, and a failed park means do not archive, because
+        // redelivery is the only thing that gets us another attempt.
+        let parked = true;
         try {
-          if (envelope.repo_id) {
-            await adminSupabase.from("repositories").update({ creation_error: reason }).eq("id", envelope.repo_id);
+          if (error instanceof RepositoryUnreadableError) {
+            // Terminal for this job, but it says nothing about the row: the repo may be alive and
+            // simply not granted to this installation. Recording a creation_error here would put a
+            // failure in front of an instructor for a repo that is fine, and the cause is on our
+            // side of the fence. Stop the work, leave the data alone.
+            scope.setTag("repository_unreadable", error.fullName);
+          } else if (envelope.repo_id) {
+            const { data: rows, error: e } = await adminSupabase
+              .from("repositories")
+              .update(repoUpdate)
+              .eq("id", envelope.repo_id)
+              .select("id");
+            if (e) throw e;
+            if (!rows?.length) throw new Error(`no repositories row matched id ${envelope.repo_id}`);
           } else if (envelope.method === "create_repo" && envelope.class_id) {
             const { org: eo, repoName: ern } = envelope.args as CreateRepoArgs;
-            await adminSupabase
+            const { data: rows, error: e } = await adminSupabase
               .from("repositories")
-              .update({ creation_error: reason })
+              .update(repoUpdate)
               .eq("class_id", envelope.class_id)
-              .eq("repository", `${eo}/${ern}`);
+              .eq("repository", `${eo}/${ern}`)
+              .select("id");
+            if (e) throw e;
+            if (!rows?.length)
+              throw new Error(`no repositories row matched ${eo}/${ern} in class ${envelope.class_id}`);
+          } else if (error instanceof RepositoryMissingError) {
+            // sync_repo_permissions envelopes carry no repo_id (enqueue_github_sync_repo_permissions
+            // takes org + repo, not a row id), so match on the full name the error actually
+            // confirmed missing. Not scoped by class_id: `repository` carries a UNIQUE index
+            // (unique_repo_name), so this touches at most one row, and the envelope's class_id is
+            // absent on some paths.
+            const { data: rows, error: e } = await adminSupabase
+              .from("repositories")
+              .update(repoUpdate)
+              .eq("repository", error.fullName)
+              .select("id");
+            if (e) throw e;
+            if (!rows?.length) {
+              // Most likely an owner/repo casing difference between the envelope and the stored
+              // value, since GitHub is case-insensitive here and this filter is not. Naming it
+              // explicitly beats a silent no-op that reports success.
+              throw new Error(
+                `no repositories row matched ${error.fullName} (casing mismatch, or row already deleted)`
+              );
+            }
           }
         } catch (markErr) {
+          parked = false;
           console.error("Failed to record creation_error on repository row:", markErr);
           Sentry.captureException(markErr, scope);
+        }
+        // Only for a missing repo, where the park IS the fix. Every other non-retryable error is
+        // already terminal on its own and has always gone to the DLQ regardless of this write —
+        // holding those back on a transient DB blip would be a new way to wedge the queue.
+        if (!parked && error instanceof RepositoryMissingError) {
+          scope.setTag("park_failed", "true");
+          Sentry.captureMessage(
+            `Could not park ${error.fullName}; leaving msg ${meta.msg_id} unarchived to retry the park`,
+            scope
+          );
+          return false;
         }
         recordMetric(
           adminSupabase,
@@ -2529,17 +3073,118 @@ export async function processEnvelope(
   }
 }
 
+/**
+ * Drain tuning, resolved ONCE per isolate.
+ *
+ * Memoized rather than re-read per iteration for two reasons: the values cannot
+ * change without a pod roll (they are container env), and the issue reporting
+ * below must not repeat on every ~7 min iteration for the life of the lease —
+ * that would be a Sentry event every few minutes for a static misconfiguration.
+ */
+let cachedTuning: ReturnType<typeof resolveAsyncWorkerTuning> | null = null;
+
+/**
+ * Tag which drain path this isolate is on, and with what caps.
+ *
+ * Unconditional, for the same reason the drain tags are: `org_slots_enabled=false` is the
+ * interesting case during a rollout, because "this pod is still on the old path" is otherwise
+ * indistinguishable from "this pod has not reported yet".
+ */
+function tagOrgSlots(scope: Sentry.Scope, orgSlots: ReturnType<typeof resolveAsyncWorkerTuning>["orgSlots"]) {
+  scope.setTag("org_slots_enabled", String(orgSlots.enabled));
+  if (!orgSlots.enabled) return;
+  scope.setTag("org_slot_global_cap", String(orgSlots.globalCap));
+  scope.setTag("org_slot_max_per_org", String(orgSlots.maxPerOrg));
+  scope.setTag("org_slot_lease_ttl_seconds", String(orgSlots.leaseTtlSeconds));
+}
+
+function getTuning(scope: Sentry.Scope) {
+  // TAGGING IS PER SCOPE, MEMOIZATION IS PER ISOLATE, and the two must not be
+  // conflated. runBatchHandler() builds a FRESH Sentry.Scope for every run, and
+  // in bounded mode (no Redis: each cron poke drains and returns) there are many
+  // runs per isolate. An early `return cachedTuning` before these setTag calls
+  // therefore left every run after the first with untagged batch and envelope
+  // events — the tags were on a scope that had already been discarded. So tag
+  // unconditionally, and memoize only the resolution and the one-time report
+  // below, which would otherwise be re-emitted on every poke for a static
+  // misconfiguration.
+  if (cachedTuning) {
+    scope.setTag("drain_concurrency", String(cachedTuning.drainConcurrency));
+    scope.setTag("visibility_timeout_seconds", String(cachedTuning.visibilityTimeoutSeconds));
+    tagOrgSlots(scope, cachedTuning.orgSlots);
+    return cachedTuning;
+  }
+  const tuning = resolveAsyncWorkerTuning(Deno.env);
+  cachedTuning = tuning;
+
+  scope.setTag("drain_concurrency", String(tuning.drainConcurrency));
+  scope.setTag("visibility_timeout_seconds", String(tuning.visibilityTimeoutSeconds));
+  tagOrgSlots(scope, tuning.orgSlots);
+
+  for (const issue of tuning.issues) {
+    console.warn(`[pgmq] worker: ${issue.message}`);
+  }
+  // Only a rejected/clamped value is worth an event: it means the configured
+  // number is NOT the one in force, which is invisible from the outside. That
+  // now includes the COHERENCE clamp — someone who sets concurrency 8 through a
+  // Helm-bypass path and gets 2 because the visibility timeout only covers 2
+  // needs to hear about it, since their throughput change did not happen.
+  // `invariant` issues stay log-only: the one that survives enforcement is the
+  // shipped legacy pair (4, 300), which is deliberate, so reporting it would
+  // page on every deployment.
+  const misconfigured = tuning.issues.filter((i) => i.kind !== "invariant");
+  if (misconfigured.length > 0) {
+    const s = scope.clone();
+    s.setLevel("warning");
+    s.setTag("async_worker_tuning_rejected", "true");
+    s.setContext("async_worker_tuning", {
+      drain_concurrency: tuning.drainConcurrency,
+      visibility_timeout_seconds: tuning.visibilityTimeoutSeconds,
+      issues: misconfigured.map((i) => i.message)
+    });
+    // The scope goes POSITIONALLY, and the level goes ON the scope. This worker
+    // builds its own Sentry.Scope rather than using the SDK's current scope, so
+    // an options-object second argument (`{ level: "warning" }`) is applied to
+    // the CURRENT scope and silently drops every tag and context set above —
+    // the event would arrive with only the count in its message. Same shape as
+    // the captureException/captureMessage calls elsewhere in this file.
+    Sentry.captureMessage(
+      `github-async-worker: rejected ${misconfigured.length} configured drain tuning value(s); running on bounded values`,
+      s
+    );
+  }
+  return tuning;
+}
+
 export async function processBatch(adminSupabase: SupabaseClient<Database>, scope: Sentry.Scope) {
-  // VT (sleep_seconds) needs to comfortably exceed worst-case handler runtime.
-  // sync_repo_to_handout in particular can take minutes when many files change,
-  // and a too-short VT causes a re-read storm: the message stays in q_async_calls
-  // with read_ct climbing forever and `sync_data` never updating because the
-  // Edge Function isolate is killed mid-handler. 300s is well above the Edge
-  // Function wall clock and well above observed p99 handler durations.
+  // `n` is the CONCURRENCY CEILING (the batch below runs under
+  // Promise.allSettled inside a single leaseholder isolate), and `sleep_seconds`
+  // is the pgmq visibility timeout. Both were hardcoded at 4 / 300 until the
+  // 2026-09-07 CS 4530 burst measured what that costs: 58 create_repo messages
+  // took 88 MINUTES to drain, 2-4 completing every ~7 min, and 20 of the 58 came
+  // back with read_ct > 1 (max 3) because a ~420s batch outlives a 300s VT and
+  // pgmq re-served messages that were still in flight.
+  //
+  // The comment that used to live here claimed 300s was "well above observed
+  // p99 handler durations". That is FALSE for create_repo under burst and is why
+  // this is now configurable instead of asserted.
+  //
+  // THE INVARIANT: the VT must exceed the worst case for a whole batch of `n`,
+  // NOT for one message — raising `n` without raising the VT makes the
+  // redelivery storm worse, not better. The same holds for the isolate lifetime.
+  // Both are encoded in _shared/asyncWorkerTuning.ts, which holds the bounds,
+  // the calibration and the full incident narrative, and which ENFORCES them:
+  // the pair below is coherent by construction, because an incoherent
+  // configuration has `n` degraded until it fits (never below 1) rather than
+  // being handed through with a warning. The chart refuses the same combinations
+  // at render time. Read that file before changing either number, and do NOT put
+  // constants back here.
+  const tuning = getTuning(scope);
+
   let result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "async_calls",
-    sleep_seconds: 300,
-    n: 4
+    sleep_seconds: tuning.visibilityTimeoutSeconds,
+    n: tuning.drainConcurrency
   });
 
   if (result.error) {
@@ -2551,10 +3196,13 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
   let queueName: "async_calls" | "async_calls_low_priority" = "async_calls";
 
   if (messages.length === 0) {
+    // Same tuning object as the main queue on purpose: these two call sites drifting
+    // apart is how the low-priority queue would quietly keep the 300s VT (and the
+    // re-read storm) after the main queue was fixed.
     result = await adminSupabase.schema("pgmq_public").rpc("read", {
       queue_name: "async_calls_low_priority",
-      sleep_seconds: 300,
-      n: 4
+      sleep_seconds: tuning.visibilityTimeoutSeconds,
+      n: tuning.drainConcurrency
     });
     if (result.error) {
       Sentry.captureException(result.error, scope);
@@ -2566,32 +3214,273 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
 
   if (messages.length === 0) return false;
 
-  await Promise.allSettled(
-    messages.map(async (msg) => {
-      const ok = await processEnvelope(
-        adminSupabase,
-        msg.message,
-        { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, read_ct: msg.read_ct, queue_name: queueName },
-        scope
-      );
-      if (ok) {
-        const archived = await archiveMessage(adminSupabase, msg.msg_id, scope, queueName);
-        if (!archived) {
-          console.error(
-            `[pgmq] worker: handler returned OK but archive failed msg_id=${msg.msg_id} queue=${queueName} — message will redeliver after VT`
-          );
-          Sentry.captureMessage(
-            "github-async-worker: processed message but failed to archive after retries; expect redelivery",
-            {
-              level: "error",
-              extra: { msg_id: msg.msg_id, queue_name: queueName }
-            }
-          );
-        }
-      }
-    })
-  );
+  await processQueueMessages(adminSupabase, messages, queueName, scope);
   return true;
+}
+
+/**
+ * Run one batch of messages: handler, archive, and the Sentry bookkeeping around both.
+ *
+ * Extracted from processBatch so the per-org lease path (runOrgLeasedHandler) runs the IDENTICAL
+ * per-message logic. Everything that makes a message safe lives here — the archive-failure report,
+ * the poison-pill accounting inside processEnvelope (PGMQ_MAX_READ_CT), the per-message scope — and
+ * a second copy of it in the org path is how one of those would quietly diverge.
+ */
+async function processQueueMessages(
+  adminSupabase: SupabaseClient<Database>,
+  // `org` is present only on the per-org lease path, where `claim_org_slot_and_read` returns it
+  // alongside the pgmq columns. Tagged from the ROW rather than only from the claim so that if the
+  // SQL ever returned a mixed batch, a message would still be attributed to its own org.
+  messages: (QueueMessage<GitHubAsyncEnvelope> & { org?: string })[],
+  queueName: "async_calls" | "async_calls_low_priority",
+  scope: Sentry.Scope
+) {
+  await Promise.allSettled(messages.map((msg) => processOneQueueMessage(adminSupabase, msg, queueName, scope)));
+}
+
+/**
+ * One message: handler, archive, and the Sentry bookkeeping around both.
+ *
+ * Split out of `processQueueMessages` because the two drain paths now differ in WHEN a message
+ * starts, not in what happens to it. The batch path maps this over a whole read; the continuous
+ * refill path starts one of these per claimed message and tops the queue up as each settles. Both
+ * run the identical per-message logic, which is the point — the archive-failure report, the
+ * poison-pill accounting inside processEnvelope (PGMQ_MAX_READ_CT), the requeue-with-delay and DLQ
+ * paths and the per-message scope all live here and there is exactly one copy of them.
+ */
+async function processOneQueueMessage(
+  adminSupabase: SupabaseClient<Database>,
+  msg: QueueMessage<GitHubAsyncEnvelope> & { org?: string },
+  queueName: "async_calls" | "async_calls_low_priority",
+  scope: Sentry.Scope
+): Promise<void> {
+  // ONE SCOPE PER MESSAGE, because `n` of these run CONCURRENTLY and
+  // Sentry.Scope is a mutable bag. `archiveMessage` writes to whatever scope
+  // it is handed — setContext("archive_error", { msg_id, … }) and
+  // setTag("pgmq_archive_failed", "true") — so handing it processBatch's
+  // shared scope let four concurrent archives scribble over each other:
+  // a capture could report a FOREIGN msg_id, and pgmq_archive_failed=true
+  // stuck on the shared object for the rest of the batch, so a later event
+  // for a message that archived cleanly still claimed an archive failure.
+  //
+  // NOT the same thing as processEnvelope's scope handling, and do not
+  // "fix" that by analogy: processEnvelope already clones per envelope (see
+  // `_scope?.clone()` at its top), and Scope.clone() copies context and tags
+  // BY VALUE, so its two archiveMessage call sites are already isolated and
+  // the step-timings snapshot attached inside it is already private. Adding
+  // another clone there would be harmful — see the comment on
+  // attachStepTimingsToScope in _shared/GitHubWrapper.ts. Only THIS call
+  // site was reading through to the shared object.
+  //
+  // Cloning rather than constructing fresh keeps the batch- and run-level
+  // context the shared scope carries (function, worker_run_mode, the drain
+  // tuning tags), which a `new Sentry.Scope()` would silently drop.
+  const msgScope = scope.clone();
+  msgScope.setTag("msg_id", String(msg.msg_id));
+  msgScope.setTag("queue_name", queueName);
+  if (msg.org) msgScope.setTag("github_org", msg.org);
+
+  const ok = await processEnvelope(
+    adminSupabase,
+    msg.message,
+    {
+      msg_id: msg.msg_id,
+      // THE JOB'S ENQUEUE TIME, NOT THIS HOP'S. `meta.enqueued_at` has exactly one consumer —
+      // recordMetric's `latency_ms` (and the DLQ metadata built from it) — and the api_gateway_calls
+      // row it writes is keyed on `log_id`, so it is opened once for the whole job and overwritten by
+      // whichever delivery finishes it. A readiness deferral sends a NEW pgmq message, so taking this
+      // message's own timestamp would report only the final hop and under-report every job that ever
+      // waited: precisely the jobs whose latency the deferral ladder exists to shorten.
+      //
+      // Resolved HERE rather than at each recordMetric call because there are twenty of them across
+      // the handler and its DLQ helpers, and the terminal ones — parked repo, NonRetryableGitHubError,
+      // the generic catch — are exactly the paths a per-branch fix keeps missing (it missed them on
+      // the first pass of #999). One substitution at the single construction site makes the property
+      // hold everywhere and stay holding. `read_ct` deliberately stays per-message: it bounds THIS
+      // delivery, not the job.
+      enqueued_at: (msg.message as GitHubAsyncEnvelope | null)?.original_enqueued_at ?? msg.enqueued_at,
+      read_ct: msg.read_ct,
+      queue_name: queueName
+    },
+    msgScope
+  );
+  if (ok) {
+    const archived = await archiveMessage(adminSupabase, msg.msg_id, msgScope, queueName);
+    if (!archived) {
+      console.error(
+        `[pgmq] worker: handler returned OK but archive failed msg_id=${msg.msg_id} queue=${queueName} — message will redeliver after VT`
+      );
+      // This message's scope, positionally — not an options object. The
+      // options-object form is applied to the SDK's CURRENT scope, which is
+      // not this manually-built one, so the event would arrive without the
+      // worker's own tags; and the scope it does report must be the one only
+      // this message has written to.
+      const s = msgScope.clone();
+      s.setLevel("error");
+      s.setContext("archive_failed", { msg_id: msg.msg_id, queue_name: queueName });
+      Sentry.captureMessage(
+        "github-async-worker: processed message but failed to archive after retries; expect redelivery",
+        s
+      );
+    }
+  }
+}
+
+/**
+ * The pgmq queues this worker drains, in priority order. Shared by both drain paths so the
+ * low-priority fallback cannot be added to one and forgotten in the other.
+ *
+ * EVERY QUEUE IN THIS LIST NEEDS A SEEDED SLOT POOL. `async_worker_slots` is seeded per queue and
+ * `claim_org_slot_and_read` picks its free slot with `where s.queue_name = ...`, so a queue with no
+ * pool can never be claimed. That used to surface as zero rows forever — indistinguishable here
+ * from an empty queue, with every liveness signal green — which is why the SQL now RAISES on an
+ * unseeded pool instead, and why `claimOnce` treats that as fatal on the first occurrence. Adding a
+ * queue here without seeding its pool in a migration is therefore a loud, immediate failure rather
+ * than a silent one. Both queues in this list are seeded today (64 and 16 slots).
+ */
+const ASYNC_QUEUE_NAMES = ["async_calls", "async_calls_low_priority"] as const;
+
+/**
+ * Adapter from the pinned SQL contract to the RPC interface orgLeaseRun.ts wants.
+ *
+ * It lives here rather than in _shared/orgLeaseRun.ts so that module stays free of the generated
+ * `Database` type and testable under `deno test` with no client — the same split asyncWorkerTuning.ts
+ * uses with its `EnvReader`. Everything still goes through PostgREST: there is no direct pg
+ * connection anywhere in this worker, which is also why the lease is a server-side table and not an
+ * advisory lock.
+ */
+function orgSlotRpc(adminSupabase: SupabaseClient<Database>): OrgSlotRpc {
+  const pgmq = adminSupabase.schema("pgmq_public");
+  return {
+    claim: async (args) => {
+      // Rows come back either as messages (`status = 'claimed'`) or as a single status row saying
+      // why nothing was claimed. orgLeaseRun.ts does the discrimination; this only forwards.
+      const { data, error } = await pgmq.rpc("claim_org_slot_and_read", args);
+      return { data: (data ?? []) as OrgSlotRow<GitHubAsyncEnvelope>[], error };
+    },
+    // `queue_name` leads on all three. Renewal and release are scoped to ONE pool: a run that
+    // rotates queues can hold a lease in each for a moment, and renewing the pool it is draining
+    // must not extend the one it walked away from — that lease is meant to lapse at its TTL.
+    renew: async (args) => {
+      const { data, error } = await pgmq.rpc("renew_org_slot", args);
+      return { data: data as boolean | null, error };
+    },
+    release: async (args) => {
+      const { data, error } = await pgmq.rpc("release_org_slot", args);
+      return { data, error };
+    }
+  };
+}
+
+/**
+ * Drain as a PER-ORG leaseholder.
+ *
+ * The difference from the single-leaseholder path below is entirely in WHO this isolate competes
+ * with. There, one Redis lease per deployment picked one drainer and every other poke went idle, so
+ * several classes in different GitHub orgs releasing at once queued behind one FIFO drain while the
+ * per-org GitHub content limiter (40 concurrent / 40 per minute PER ORG) sat mostly idle for all but
+ * one of them. Here each isolate claims a slot for ONE org and drains only that org's messages, so
+ * the orgs proceed in parallel and each one's limiter is the only thing bounding it.
+ *
+ * WHY THIS PATH HAS A WALL-CLOCK BUDGET AND THE REDIS-LEASED ONE BELOW DOES NOT. `beginWorkerRun`'s
+ * bounded mode already returns on a wall-clock budget, and its LEASED mode keeps exactly ONE
+ * resident drainer per deployment, so a retirement there costs one isolate's in-flight batch per
+ * deployment. This path runs `globalCap` leaseholders at once, all of them resident for as long as
+ * they keep finding work, so the same retirement costs `globalCap x n` messages — which is what the
+ * 2026-09-15 redelivery numbers are. Same defect in kind, two orders of magnitude apart in scale,
+ * and this is the path where it was measured.
+ *
+ * `tuning.drainConcurrency` and `tuning.visibilityTimeoutSeconds` are UNCHANGED by this path and
+ * deliberately so: both ceilings in asyncWorkerTuning.ts are per-leaseholder, each leaseholder is
+ * its own isolate, and concurrency here comes from more isolates rather than a bigger batch. See the
+ * 2026-09-13 update in that file.
+ *
+ * WHAT `drainConcurrency` MEANS ON THIS PATH depends on the kill switch. With continuous refill on
+ * (the default) it is messages IN FLIGHT: `drainOrgLease` tops the in-flight set back up to `n` as
+ * each message settles rather than re-reading a whole batch once all `n` have. The ceiling is
+ * identical either way (no claim may ever ask for more than `n`), but the 2026-09-13 burst spent
+ * ~27% of every claimed slot-second waiting on the slowest message of its batch, and that is what
+ * refill recovers. With the switch off it is messages per read, and the loop is the pre-refill one.
+ * The Redis-leased path (`processBatch`, below) is untouched by all of this and always
+ * batch-at-a-time.
+ */
+async function runOrgLeasedHandler(
+  adminSupabase: SupabaseClient<Database>,
+  scope: Sentry.Scope,
+  tuning: ReturnType<typeof resolveAsyncWorkerTuning>
+) {
+  // The lease and the driver share this set: the driver adds and removes, and the lease reads its
+  // size to decide whether it may give a slot back, whether it must keep renewing past the end of
+  // the run, whether the idle budget has started, and whether a claim must be pinned to the org it
+  // is already draining. See `inFlightCount` in orgLeaseRun.ts.
+  //
+  // It is wired up on BOTH shapes on purpose. The batch driver never puts anything in it, so with
+  // the kill switch off this reads 0 for the life of the run and every one of those decisions
+  // reverts to its pre-refill answer — the rollback is the whole state machine, not just the loop.
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({
+    name: "github_async_worker",
+    scope,
+    rpc: orgSlotRpc(adminSupabase),
+    queueNames: ASYNC_QUEUE_NAMES,
+    drainConcurrency: tuning.drainConcurrency,
+    visibilityTimeoutSeconds: tuning.visibilityTimeoutSeconds,
+    maxPerOrg: tuning.orgSlots.maxPerOrg,
+    globalCap: tuning.orgSlots.globalCap,
+    leaseTtlMs: tuning.orgSlots.leaseTtlSeconds * 1000,
+    idleSleepMs: 15000,
+    errorSleepMs: 5000,
+    // THE WALL-CLOCK CLAIM BUDGET, and note there is no `isolateStartedAt` alongside it: the anchor
+    // is orgLeaseRun.ts's module-level capture, so this isolate's SECOND and THIRD runs inherit what
+    // the first one spent. That matters here specifically — `started` is reset in the `.finally()`
+    // below, the cron pokes twice a minute, and an idle run returns after 50s, so an isolate really
+    // does take poke after poke across its life. Passing a per-run anchor would give each of those a
+    // fresh allowance while the wall clock the runtime kills on kept running down.
+    runBudgetMs: tuning.orgSlots.runBudgetSeconds * 1000,
+    inFlightCount: () => inFlight.size
+  });
+  scope.setTag("worker_run_mode", run.mode);
+  scope.setTag("org_slot_drain", tuning.orgSlots.continuousRefill ? "continuous_refill" : "batch");
+  scope.setTag("org_slot_run_budget_seconds", String(tuning.orgSlots.runBudgetSeconds));
+  // How much of THIS ISOLATE was already gone when this run started. The tag a triage needs is not
+  // the budget (which is the same on every event) but the remainder, because a run that claims
+  // nothing and returns in milliseconds is indistinguishable from a broken one without it.
+  scope.setTag("isolate_age_ms_at_run_start", String(Date.now() - isolateStartedAtMs()));
+
+  try {
+    await drainOrgLease<GitHubAsyncEnvelope>({
+      run,
+      inFlight,
+      // THE KILL SWITCH, read as the boolean asyncWorkerTuning.ts already resolved. Not re-parsed
+      // here: that file reads GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL as a bounded INTEGER so
+      // a typo is reported instead of silently becoming truthy, and a second reading of the same env
+      // var in this file is how the two would eventually disagree about what "0" means.
+      continuousRefill: tuning.orgSlots.continuousRefill,
+      // The same `n` the run was built with, and `drainOrgLease` now REFUSES any other value rather
+      // than trusting these two call sites to stay in step. Both directions are wrong and only one
+      // of them is obvious: a smaller target strands part of the leaseholder's allowance, and a
+      // larger one is reachable by accumulation even though a single claim is capped — four, then
+      // four more — putting handlers in flight that the allocator's `max_per_org x drainConcurrency`
+      // budget never counted, against the per-org GitHub limiter this feature exists to respect.
+      maxInFlight: tuning.drainConcurrency,
+      // No per-claim scope clone any more, because there is no longer a per-claim batch to attribute
+      // — `processOneQueueMessage` clones per message and tags `github_org` from the message's own
+      // row, which is where the org belongs once several claims can be in flight at once. Writing it
+      // onto the shared run scope here would leave a stale org on every event captured afterwards.
+      process: (message, context) =>
+        processOneQueueMessage(
+          adminSupabase,
+          { ...message, org: context.org },
+          context.queueName as "async_calls" | "async_calls_low_priority",
+          scope
+        ),
+      onError: (e) => Sentry.captureException(e, scope)
+    });
+  } finally {
+    // AFTER the driver's drain, never before it: `drainWithContinuousRefill` does not return while
+    // messages are still running, so by here the slot has nothing left running under it.
+    await run.release();
+  }
 }
 
 export async function runBatchHandler() {
@@ -2600,25 +3489,55 @@ export async function runBatchHandler() {
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
-  const isRunning = true;
-  while (isRunning) {
-    try {
-      const hasWork = await processBatch(adminSupabase, scope);
-      if (!hasWork) {
-        await new Promise((resolve) => setTimeout(resolve, 15000));
+  // WHICH DRAIN PATH, and why the default is the old one.
+  //
+  // `orgSlots.enabled` is false unless GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP is set to something
+  // above 0, which is the same inertness property the drain tuning already has: deploying this
+  // changes nothing until an operator opts in. The two paths are mutually exclusive on purpose --
+  // per-org mode does NOT take the Redis lease, because the slot table is already the mutual
+  // exclusion AND the concurrency cap, and holding both would mean one Redis leaseholder per
+  // deployment claiming org slots one at a time, i.e. the FIFO drain this change exists to remove.
+  const tuning = getTuning(scope);
+  if (tuning.orgSlots.enabled) {
+    await runOrgLeasedHandler(adminSupabase, scope, tuning);
+    return;
+  }
+
+  // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts for why the old
+  // module-level `started` flag could not work under `edgeFunctions.policy: per_request`.
+  const run = await beginWorkerRun({
+    name: "github_async_worker",
+    scope,
+    idleSleepMs: 15000,
+    errorSleepMs: 5000
+  });
+  scope.setTag("worker_run_mode", run.mode);
+
+  try {
+    while (run.shouldContinue()) {
+      await run.heartbeat();
+      if (!run.shouldContinue()) break;
+      try {
+        const hasWork = await processBatch(adminSupabase, scope);
+        if (!hasWork) {
+          if (!(await run.onIdle())) break;
+        }
+      } catch (e) {
+        Sentry.captureException(e, scope);
+        await run.onError();
       }
-    } catch (e) {
-      Sentry.captureException(e, scope);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
+  } finally {
+    await run.release();
   }
 }
 
 if (import.meta.main) {
-  Deno.serve((req) => {
+  serveWithSentryFlush((req) => {
     const secret = req.headers.get("x-edge-function-secret");
     const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
 
@@ -2644,7 +3563,25 @@ if (import.meta.main) {
 
     if (!started) {
       started = true;
-      EdgeRuntime.waitUntil(runBatchHandler());
+      // Reset on exit so the flag does not stay true for the isolate's whole life, which would
+      // stop the worker restarting even once the underlying fault cleared. Unlike the notification
+      // and gradebook processors, this loop has no consecutive-error cap: batch errors are
+      // captured, delayed 5s, and retried indefinitely. `.catch` is what makes an exit visible --
+      // nothing consumes the promise handed to waitUntil, so a rejection here would otherwise be
+      // an unhandled rejection that never reaches Sentry.
+      waitUntilWithSentryFlush(
+        runBatchHandler()
+          .catch((e) => {
+            const scope = new Sentry.Scope();
+            scope.setTag("function", "github_async_worker");
+            scope.setTag("error_source", "run_batch_handler_startup");
+            Sentry.captureException(e, scope);
+            console.error("[serve] Batch handler exited with an error:", e);
+          })
+          .finally(() => {
+            started = false;
+          })
+      );
     }
 
     return new Response(
