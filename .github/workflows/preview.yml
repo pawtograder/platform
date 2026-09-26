@@ -517,6 +517,15 @@ jobs:
           # `pawtograder-preview-*` glob, so the label is how per-PR namespaces
           # are matched without granting `*`.
           kubectl label namespace "$NS" pawtograder.net/preview=true --overwrite
+          # Which run owns this namespace. Run IDs increase monotonically per
+          # repository, so this is a total order over deploys and teardowns
+          # that does not depend on event delivery order — which is exactly
+          # what giving teardown its own concurrency group gave up. A teardown
+          # older than this value is stale and must not delete what a newer
+          # deploy just created. `annotate`, not `label`: the value is not a
+          # selector and labels cannot hold arbitrary numbers safely.
+          kubectl annotate namespace "$NS" \
+            pawtograder.net/deploy-run-id="$GITHUB_RUN_ID" --overwrite
       # Second credential, deliberately. The first is cluster-scoped and may
       # only create Namespaces; writing Secrets needs a namespaced Role, and
       # putting the Secret rule on the ClusterRole instead would have granted
@@ -1535,12 +1544,41 @@ jobs:
             exit 1
           fi
 
+      # The other half of the ordering problem. The deploy side refuses to
+      # CREATE a namespace whose preview is no longer wanted; this refuses to
+      # DELETE one that a newer deploy already owns. Sequence it prevents:
+      # label removed, this teardown queues, label added again, the new deploy
+      # runs in the other concurrency group and recreates the namespace, and
+      # then this run — still holding its original intent — deletes a live
+      # preview that no further event would rebuild.
+      #
+      # Fails toward CLEANUP, deliberately and unlike the deploy-side check: a
+      # missing or unreadable annotation means an older preview or an
+      # unreachable API, and skipping teardown on that basis is how namespaces
+      # leak. Only a well-formed, strictly newer run id stops the deletion.
+      - name: Is this teardown superseded by a newer deploy?
+        id: supersede
+        if: steps.ns.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          owner=$(kubectl get ns "$NS" \
+            -o jsonpath='{.metadata.annotations.pawtograder\.net/deploy-run-id}' 2>/dev/null || true)
+          superseded=false
+          if [ -n "$owner" ] && printf '%s' "$owner" | grep -qE '^[0-9]+$' \
+             && [ "$owner" -gt "$GITHUB_RUN_ID" ]; then
+            superseded=true
+            echo "::notice title=Teardown superseded::namespace ${NS} is owned by deploy run ${owner}, which is newer than this teardown (${GITHUB_RUN_ID}). A preview was re-requested while this run was queued; leaving it alone."
+          fi
+          echo "superseded=${superseded}" >> "$GITHUB_OUTPUT"
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+
       # Written to its own file rather than over $HOME/.kube/config: the
       # cluster-scoped credential is still needed afterwards to delete the
       # namespace itself, and re-minting it would be a second round trip for a
       # token we already hold.
       - name: Cluster credentials (in-namespace)
-        if: steps.ns.outputs.exists == 'true'
+        if: steps.ns.outputs.exists == 'true' && steps.supersede.outputs.superseded != 'true'
         uses: ./.github/actions/cluster-credentials
         with:
           mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
@@ -1555,7 +1593,7 @@ jobs:
           kubeconfig_path: ${{ runner.temp }}/kubeconfig-preview-ns
 
       - name: helm uninstall + empty the namespace
-        if: steps.ns.outputs.exists == 'true'
+        if: steps.ns.outputs.exists == 'true' && steps.supersede.outputs.superseded != 'true'
         env:
           KUBECONFIG: ${{ runner.temp }}/kubeconfig-preview-ns
           NS: ${{ needs.meta.outputs.namespace }}
@@ -1581,7 +1619,7 @@ jobs:
       # failure; it just does not leak a namespace on the way out.
       - name: Delete the namespace
         id: delete
-        if: ${{ !cancelled() && steps.ns.outputs.exists == 'true' }}
+        if: ${{ !cancelled() && steps.ns.outputs.exists == 'true' && steps.supersede.outputs.superseded != 'true' }}
         env:
           NS: ${{ needs.meta.outputs.namespace }}
         run: |
@@ -1602,7 +1640,9 @@ jobs:
       # holding this preview's live SUPABASE_SERVICE_ROLE_KEY and
       # END_TO_END_SECRET was silently left behind, with nothing to retry it.
       - name: Remove e2e bundle from OpenBao (best-effort)
-        if: ${{ !cancelled() }}
+        # Not when superseded: the bundle belongs to the live preview that
+        # just replaced this teardown's target.
+        if: ${{ !cancelled() && steps.supersede.outputs.superseded != 'true' }}
         continue-on-error: true
         env:
           PREVIEW_ID: ${{ needs.meta.outputs.preview_id }}
@@ -1700,7 +1740,9 @@ jobs:
           # regardless: the run went red while the PR comment told the author
           # their namespace and PVCs were gone. Three outcomes, three texts.
           message: >-
-            ${{ (steps.ns.outcome == 'success' && steps.ns.outputs.exists != 'true')
+            ${{ steps.supersede.outputs.superseded == 'true'
+                && format('♻️ **Teardown skipped** — a newer deploy re-requested this preview, so `{0}` was left running.', needs.meta.outputs.namespace)
+            || (steps.ns.outcome == 'success' && steps.ns.outputs.exists != 'true')
                 && format('🧹 **No preview to tear down** — `{0}` was already absent.', needs.meta.outputs.namespace)
             || (steps.ns.outcome == 'success' && steps.delete.outcome == 'success')
                 && format('🧹 **Preview torn down** — namespace `{0}` deleted.', needs.meta.outputs.namespace)
