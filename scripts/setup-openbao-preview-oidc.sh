@@ -198,14 +198,18 @@ jwt_role() {
   # The action logs in once per job and never renews, so this is a hard
   # ceiling. The symptom is a mid-apply `Unauthorized` from helm ~20 minutes
   # in, which looks like a cluster problem rather than a TTL one.
-  $CLI write "auth/jwt/role/${name}" \
-    role_type="jwt" \
-    user_claim="job_workflow_ref" \
-    bound_audiences="${AUDIENCE}" \
-    bound_claims_type="string" \
-    bound_claims="${claims}" \
-    token_policies="${policy}" \
-    token_ttl="${TOKEN_MAX_TTL}" token_max_ttl="${TOKEN_MAX_TTL}" token_num_uses=0
+  # The whole role goes in as a JSON body on stdin. Passed as a key=value
+  # argument, bound_claims reaches the API as a STRING and is rejected with
+  # "expected type 'map[string]interface {}'" — the CLI only parses nested
+  # objects out of a JSON request body.
+  jq -n \
+    --arg aud "$AUDIENCE" --arg policy "$policy" --arg ttl "$TOKEN_MAX_TTL" \
+    --argjson claims "$claims" \
+    '{role_type: "jwt", user_claim: "job_workflow_ref", bound_audiences: [$aud],
+      bound_claims_type: "string", bound_claims: $claims,
+      token_policies: [$policy], token_ttl: $ttl, token_max_ttl: $ttl,
+      token_num_uses: 0}' |
+    $CLI write "auth/jwt/role/${name}" -
 }
 
 # Each tier binds a DIFFERENT environment claim, and that is what actually

@@ -478,6 +478,18 @@ spec:
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE", "DELETE"]
         resources: ["rolebindings", "clusterrolebindings"]
+      # ServiceAccounts too: the engine creates one per credential, and
+      # without this it could create (or edit) one in any namespace.
+      #
+      # serviceaccounts/token is the TokenRequest subresource and a SEPARATE
+      # resource string: matching "serviceaccounts" alone does not cover it,
+      # and §1 grants OpenBao cluster-wide create on it, so without it here
+      # OpenBao could mint a token for ANY ServiceAccount in the cluster
+      # without creating or binding anything.
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["serviceaccounts", "serviceaccounts/token"]
   # The OpenBao pod's own ServiceAccount — NOT the per-credential SAs the
   # engine generates, which live in the preview namespaces. Confirm it before
   # applying; a matchConditions that matches nothing disables the policy
@@ -485,20 +497,62 @@ spec:
   matchConditions:
     - name: only-openbao
       expression: "request.userInfo.username == 'system:serviceaccount:openbao:openbao'"
+  variables:
+    - name: obj
+      expression: "object == null ? oldObject : object"
+    - name: ns
+      expression: "request.namespace"
+    - name: previewNs
+      expression: "request.namespace.startsWith('pawtograder-preview-pr-') || request.namespace == 'pawtograder-preview-ci'"
+    # The engine's generated-name prefix (default name_template
+    # "v-{{.DisplayName}}-{{.RoleName}}-..."). Accounts that already exist —
+    # `default`, the chart's own — never match it.
+    - name: generated
+      expression: "'v-'"
   validations:
-    # RoleBindings: preview namespaces and the CI namespace only.
+    # ServiceAccounts AND their tokens: the preview namespace (namespaced
+    # tiers) or pawtograder-preview-ci (cluster tiers), and only accounts the
+    # engine generated. request.name is the ServiceAccount's name for both the
+    # object and its token subresource.
     - expression: >-
-        request.resource.resource != 'rolebindings' ||
-        (object == null ? oldObject : object).metadata.namespace.startsWith('pawtograder-preview-pr-') ||
-        (object == null ? oldObject : object).metadata.namespace == 'pawtograder-preview-ci'
-      message: "preview CI may only bind roles inside pawtograder-preview-pr-* or pawtograder-preview-ci"
+        request.resource.resource != 'serviceaccounts' ||
+        (variables.previewNs && request.name.startsWith(variables.generated))
+      message: "OpenBao may only manage, or mint tokens for, its own generated (v-*) ServiceAccounts in pawtograder-preview-pr-* or pawtograder-preview-ci"
+    # RoleBindings: PR preview namespaces only, to one of the five namespaced
+    # tiers, and ONLY to ServiceAccounts in that same namespace. Checking the
+    # roleRef without the subjects bounded WHAT could be bound but not TO
+    # WHOM: a stolen Bao token could bind a tier to any identity it liked.
+    #
+    # NOT pawtograder-preview-ci, unlike the ServiceAccount rule above. No
+    # tier ever binds there — the two cluster tiers always use a
+    # ClusterRoleBinding — and a namespaced grant there (preview-deploy is
+    # `*` on core) could mint tokens for the provision/teardown
+    # ServiceAccounts that live in it.
+    - expression: >-
+        request.resource.resource != 'rolebindings' || (
+          variables.ns.startsWith('pawtograder-preview-pr-') &&
+          variables.obj.roleRef.kind == 'ClusterRole' &&
+          variables.obj.roleRef.name in ['pawtograder-preview-read', 'pawtograder-preview-publish',
+            'pawtograder-preview-deploy', 'pawtograder-preview-provision-secrets', 'pawtograder-preview-teardown-ns'] &&
+          (!has(variables.obj.subjects) || variables.obj.subjects.all(s,
+            s.kind == 'ServiceAccount' && has(s.namespace) && s.namespace == variables.ns &&
+            s.name.startsWith(variables.generated)))
+        )
+      message: "OpenBao may only bind a namespaced preview tier, inside a preview namespace, to a ServiceAccount in that namespace"
     # ClusterRoleBindings: only the two tiers that are cluster-scoped by
-    # necessity. Binding preview-deploy or preview-teardown-ns cluster-wide
-    # would hand every namespace to CI.
+    # necessity, and only to ServiceAccounts in pawtograder-preview-ci. Binding
+    # preview-deploy or preview-teardown-ns cluster-wide would hand every
+    # namespace to CI; binding provision/teardown to an arbitrary subject —
+    # OpenBao's own SA included — would hand it cluster-wide namespace
+    # create/delete that outlives any lease.
     - expression: >-
-        request.resource.resource != 'clusterrolebindings' ||
-        (object == null ? oldObject : object).roleRef.name in ['pawtograder-preview-provision', 'pawtograder-preview-teardown']
-      message: "preview CI may only create ClusterRoleBindings for preview-provision or preview-teardown"
+        request.resource.resource != 'clusterrolebindings' || (
+          variables.obj.roleRef.name in ['pawtograder-preview-provision', 'pawtograder-preview-teardown'] &&
+          (!has(variables.obj.subjects) || variables.obj.subjects.all(s,
+            s.kind == 'ServiceAccount' && has(s.namespace) && s.namespace == 'pawtograder-preview-ci' &&
+            s.name.startsWith(variables.generated)))
+        )
+      message: "OpenBao may only create ClusterRoleBindings for preview-provision/-teardown, to ServiceAccounts in pawtograder-preview-ci"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -520,6 +574,28 @@ roles, in preview namespaces only, plus two of them cluster-scoped. That is a
 bounded, enumerable blast radius rather than "arbitrary cluster permissions",
 which is what it was when the engine authored its own rules.
 
+`serviceaccounts/token` in `resourceRules` is load-bearing. §1 grants OpenBao
+cluster-wide `create` on that subresource, which RBAC cannot narrow to labeled
+namespaces, and a rule matching only `serviceaccounts` does not see
+TokenRequest. Without it, a stolen OpenBao token mints a token for any
+ServiceAccount in the cluster — production workloads, `preview-deployer` —
+without creating or binding anything. Check it directly:
+
+```bash
+kubectl --as=system:serviceaccount:openbao:openbao \
+  create token pawtograder -n pawtograder-staging --duration=10m >/dev/null
+# expect: ... denied request: OpenBao may only manage, or mint tokens for ...
+```
+
+The `v-` name check keeps OpenBao away from accounts it did not create —
+`default`, the chart's own ServiceAccounts — as token targets and as binding
+subjects. It does not stop an attacker who holds OpenBao's token from creating
+a new `v-`-prefixed account in `pawtograder-preview-ci` and binding a cluster
+tier to it: that binding has no lease, so it outlives cleanup. The residual is
+bounded to `preview-provision` and `preview-teardown`, whose namespace reach
+§2 limits to `pawtograder-preview-pr-*`. The audit-log alert in §1 is what
+catches it.
+
 ## 3. Configure OpenBao
 
 ```bash
@@ -528,6 +604,14 @@ BAO_ADDR=https://bao.work.ripley.cloud BAO_TOKEN=... \
 ```
 
 Idempotent. Override `REPO`, `BASE_REFS`, `WORKFLOW`, `CI_NS` by env if needed.
+
+`CI_NS` is not only a script setting. §2 and §2b both name
+`pawtograder-preview-ci` literally: the `matchConditions` username prefix in
+§2, and the ServiceAccount namespace and ClusterRoleBinding subject checks in
+§2b. Overriding `CI_NS` without editing both policies makes every
+provision/teardown mint fail at admission — and editing the §2 prefix wrongly
+disables that policy silently, per the warning under it. Change all three
+together, re-run the dry runs, and repeat the teardown check in §Verify.
 
 ## Verify — before switching CI over
 
@@ -559,19 +643,47 @@ bao write auth/jwt/login role=preview-deploy jwt="$PREVIEW_JWT" # expect denied
                                                                 # (wrong environment claim)
 
 # 2. Is the read role actually read-only?
+#
+#    ttl=10m, not less: TokenRequest rejects expirationSeconds under 600
+#    ("may not specify a duration less than 10 minutes"), and the engine does
+#    NOT clean up the ServiceAccount and RoleBinding it created before that
+#    failure — look for leftover v-root-* objects afterwards.
+#
+#    Test through a kubeconfig holding ONLY the minted token. `kubectl
+#    --token=` on top of an admin kubeconfig still sends the admin client
+#    certificate, the API server authenticates the certificate first, and
+#    every check below then reports what cluster-admin can do — all "yes",
+#    which looks like a catastrophically broad role rather than a broken test.
+#    `auth whoami` must print system:serviceaccount:..., not your own user.
 SA=$(bao write -field=service_account_token \
       kubernetes/creds/preview-read \
-      kubernetes_namespace=pawtograder-preview-pr-1 ttl=5m)
-kubectl --token="$SA" -n pawtograder-preview-pr-1 get secret pawtograder-jwt   # yes
-kubectl --token="$SA" -n pawtograder-preview-pr-1 delete secret pawtograder-jwt # no
-kubectl --token="$SA" get secret -n pawtograder-prod                            # no
-kubectl --token="$SA" auth can-i '*' '*' --all-namespaces                       # no
+      kubernetes_namespace=pawtograder-preview-pr-1 ttl=10m)
+TK=$(mktemp); kubectl config view --raw --minify -o json |
+  jq --arg t "$SA" '.users[0].user = {token: $t}' > "$TK"
+k() { kubectl --kubeconfig "$TK" "$@"; }
+k auth whoami                                                          # system:serviceaccount:...
+k auth can-i get secret/pawtograder-jwt -n pawtograder-preview-pr-1    # yes
+k auth can-i delete secret/pawtograder-jwt -n pawtograder-preview-pr-1 # no
+# NAMED get, not `get secret -n ...`: without a name kubectl does a LIST,
+# which this role never grants, so a cluster-wide get-only binding would
+# still show the "expected" denial.
+k auth can-i get secret/pawtograder-jwt -n pawtograder-prod            # no
+k auth can-i '*' '*' --all-namespaces                                  # no
+rm -f "$TK"
 
 # 3. Does the label selector actually bound issuance?
 kubectl label namespace pawtograder-preview-pr-1 pawtograder.net/preview-
 bao write kubernetes/creds/preview-read \
-  kubernetes_namespace=pawtograder-preview-pr-1 ttl=5m   # expect failure
+  kubernetes_namespace=pawtograder-preview-pr-1 ttl=10m  # expect failure
 kubectl label namespace pawtograder-preview-pr-1 pawtograder.net/preview=true
+
+# 4. Test Bao policy restrictions with a NON-root token. A root token ignores
+#    denied_parameters, so `cluster_role_binding=true` "succeeding" as root
+#    proves nothing about the policy (§2b should still refuse the binding).
+PT=$(bao token create -policy=preview-deploy -ttl=15m -field=token)
+BAO_TOKEN=$PT bao write kubernetes/creds/preview-deploy \
+  kubernetes_namespace=pawtograder-preview-pr-1 cluster_role_binding=true ttl=10m  # permission denied
+BAO_TOKEN=$PT bao token revoke -self
 ```
 
 ## Cut over
