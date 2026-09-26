@@ -157,8 +157,10 @@ spec:
 # `endpoints` to a ServiceAccount in any other namespace (an ARC runner, say),
 # and a hand-written Endpoints object routes the preview's Ingress to any IP.
 # kube-controller-manager runs with --use-service-account-credentials, so its
-# controllers appear as these three ServiceAccounts. Cluster admins
-# (system:masters) are allowed for break-glass repair.
+# controllers appear as these three ServiceAccounts, and nobody else is
+# exempt: not even system:masters, because under PREVIEW_CLUSTER_AUTH=static
+# the deploy job applies the PR's chart with a cluster-admin kubeconfig. For
+# break-glass repair, delete the binding first.
 #
 # EndpointSlices are not in the deploy role's API groups, so RBAC covers them
 # already; they are listed so that stays true if the role grows.
@@ -186,8 +188,7 @@ spec:
         request.userInfo.username in [
           'system:serviceaccount:kube-system:endpoint-controller',
           'system:serviceaccount:kube-system:endpointslice-controller',
-          'system:serviceaccount:kube-system:endpointslicemirroring-controller'] ||
-        'system:masters' in request.userInfo.?groups.orValue([])
+          'system:serviceaccount:kube-system:endpointslicemirroring-controller']
       message: "only the endpoint controllers may write Endpoints or EndpointSlices in a preview namespace"
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -197,6 +198,187 @@ metadata:
 spec:
   policyName: preview-endpoints-managed
   validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# Monitoring: previews may describe scrapes of their own pods, nothing more.
+#
+# The cluster Prometheus (monitoring/kps-prometheus) selects ServiceMonitors,
+# PodMonitors, Probes, ScrapeConfigs and PrometheusRules from EVERY namespace,
+# and it sits outside the preview egress policy. The deploy role holds
+# monitoring.coreos.com/*, so without these a PR's chart could have Prometheus
+# scrape arbitrary internal URLs (namespaceSelector.any, proxyUrl, relabeling
+# of __address__, a redirect from a preview pod), POST client credentials to
+# any URL (oauth2), read files off the Prometheus pod (bearerTokenFile, TLS
+# *File), or forge series for other namespaces (honorLabels, relabeling,
+# recording rules).
+#
+# The chart renders only ServiceMonitors with `selector` + `endpoints` and one
+# alert-only PrometheusRule. The allow-lists below are that shape plus a few
+# harmless tuning fields.
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-servicemonitor-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["monitoring.coreos.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["servicemonitors"]
+  variables:
+    - name: endpoints
+      expression: "object.spec.?endpoints.orValue([])"
+    - name: allowedEndpointFields
+      expression: >-
+        ['port', 'targetPort', 'path', 'scheme', 'interval', 'scrapeTimeout',
+         'params', 'authorization', 'basicAuth', 'bearerTokenSecret',
+         'tlsConfig', 'followRedirects', 'honorTimestamps', 'enableHttp2',
+         'filterRunning', 'trackTimestampsStaleness']
+  validations:
+    - expression: >-
+        object.spec.all(k, k in ['endpoints', 'selector', 'namespaceSelector',
+          'sampleLimit', 'targetLimit', 'labelLimit', 'labelNameLengthLimit',
+          'labelValueLengthLimit', 'bodySizeLimit'])
+      messageExpression: >-
+        'ServiceMonitor spec field not allowed in a preview namespace: ' +
+        object.spec.filter(k, !(k in ['endpoints', 'selector', 'namespaceSelector',
+          'sampleLimit', 'targetLimit', 'labelLimit', 'labelNameLengthLimit',
+          'labelValueLengthLimit', 'bodySizeLimit'])).join(', ')
+    - expression: >-
+        !has(object.spec.namespaceSelector) || (
+          !object.spec.namespaceSelector.?any.orValue(false) &&
+          object.spec.namespaceSelector.?matchNames.orValue([]).all(n,
+            n == namespaceObject.metadata.name))
+      message: "a preview ServiceMonitor may only select Services in its own namespace"
+    - expression: >-
+        variables.endpoints.all(e, e.all(k, k in variables.allowedEndpointFields))
+      messageExpression: >-
+        'ServiceMonitor endpoint field not allowed in a preview namespace: ' +
+        variables.endpoints.map(e, e.filter(k, !(k in variables.allowedEndpointFields)).join(', '))
+          .filter(x, x != '').join('; ')
+    - expression: >-
+        variables.endpoints.all(e, e.?tlsConfig.orValue({}).all(k,
+          k in ['ca', 'cert', 'keySecret', 'serverName', 'insecureSkipVerify']))
+      message: "ServiceMonitor tlsConfig may only reference Secrets/ConfigMaps (no *File fields)"
+    # Set by the Kyverno mutation below on every preview ServiceMonitor, so
+    # charts need not carry it. Prometheus follows redirects by default, which
+    # would let a preview pod bounce the scraper to any internal URL.
+    - expression: >-
+        variables.endpoints.all(e, e.?followRedirects.orValue(true) == false)
+      message: "preview ServiceMonitor endpoints must set followRedirects: false"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-servicemonitor-surface
+spec:
+  policyName: preview-servicemonitor-surface
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-prometheusrule-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["monitoring.coreos.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["prometheusrules"]
+  validations:
+    # Alerting rules only. A recording rule writes new series into the shared
+    # Prometheus with any name and labels, e.g. a fake series for staging.
+    - expression: >-
+        object.spec.?groups.orValue([]).all(g,
+          g.?rules.orValue([]).all(r, has(r.alert) && !has(r.record)))
+      message: "preview PrometheusRules may contain alerting rules only (no `record`)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-prometheusrule-surface
+spec:
+  policyName: preview-prometheusrule-surface
+  validationActions: [Deny]
+---
+# Every other monitoring.coreos.com kind. The chart renders none of them, and
+# PodMonitor/Probe/ScrapeConfig reach targets outside the namespace directly.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-monitoring-kinds
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["monitoring.coreos.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources:
+          - podmonitors
+          - probes
+          - scrapeconfigs
+          - alertmanagerconfigs
+          - alertmanagers
+          - prometheuses
+          - prometheusagents
+          - thanosrulers
+  validations:
+    - expression: "false"
+      messageExpression: >-
+        'preview namespaces may not create ' + request.resource.resource +
+        '; only ServiceMonitors and alert-only PrometheusRules'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-monitoring-kinds
+spec:
+  policyName: preview-monitoring-kinds
+  validationActions: [Deny]
+---
+# Sets followRedirects: false on every preview ServiceMonitor endpoint, so
+# existing PR charts pass preview-servicemonitor-surface without a chart
+# change. Mutating admission runs before validating admission, and the VAP
+# above rejects anything this did not reach (e.g. Kyverno down), so the pair
+# fails closed.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: preview-servicemonitor-no-redirects
+spec:
+  background: false
+  rules:
+    - name: disable-follow-redirects
+      match:
+        any:
+          - resources:
+              kinds: ["monitoring.coreos.com/v1/ServiceMonitor"]
+              operations: ["CREATE", "UPDATE"]
+              namespaceSelector:
+                matchLabels:
+                  pawtograder.net/preview: "true"
+      mutate:
+        foreach:
+          - list: "request.object.spec.endpoints"
+            patchesJson6902: |-
+              - op: add
+                path: "/spec/endpoints/{{elementIndex}}/followRedirects"
+                value: false
 ---
 # ---------------------------------------------------------------------------
 # Network: preview pods reach the internet, their own stack and shared Redis.

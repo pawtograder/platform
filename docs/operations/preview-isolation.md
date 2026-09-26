@@ -44,10 +44,36 @@ bound to preview namespaces:
 - `preview-service-surface`: Services must be ClusterIP with a selector and no
   `externalIPs`. This refuses NodePort, LoadBalancer, ExternalName and
   selectorless Services.
-- `preview-endpoints-managed`: in a preview namespace, only the endpoint
-  controllers (and `system:masters`) may write Endpoints or EndpointSlices. The
-  check is on the writer, not its namespace: the chart can grant `endpoints` to
-  a ServiceAccount anywhere on the cluster.
+- `preview-endpoints-managed`: in a preview namespace, only the three
+  kube-controller-manager endpoint controllers may write Endpoints or
+  EndpointSlices. The check is on the writer, not its namespace: the chart can
+  grant `endpoints` to a ServiceAccount anywhere on the cluster. There is no
+  `system:masters` exemption, because in `PREVIEW_CLUSTER_AUTH=static` mode the
+  chart is applied with a cluster-admin kubeconfig.
+
+## Monitoring: admission policies and a Kyverno mutation
+
+The cluster Prometheus (`monitoring/kps-prometheus`) selects monitoring CRs from
+every namespace and sits outside the preview egress policy, and the deploy role
+holds `monitoring.coreos.com/*`. Previews legitimately create ServiceMonitors
+and one alert-only PrometheusRule, so these kinds are constrained, not removed:
+
+- `preview-servicemonitor-surface`: allow-lists of ServiceMonitor spec and
+  endpoint fields (the chart's shape plus limits and TLS/auth that reference
+  Secrets). `namespaceSelector` may name only the preview's own namespace. This
+  refuses `honorLabels`, relabelings, `jobLabel` and target labels (forging
+  another namespace's series); `proxyUrl` and `oauth2` (making Prometheus call
+  arbitrary URLs); and `bearerTokenFile` and TLS `*File` fields (reading files
+  off the Prometheus pod). It also requires `followRedirects: false`.
+- `preview-servicemonitor-no-redirects` (Kyverno `ClusterPolicy`) sets
+  `followRedirects: false` on every preview ServiceMonitor endpoint. Prometheus
+  follows redirects by default, so without this a preview pod could redirect
+  the scraper to any internal URL. Mutation runs before validation, so charts
+  need no change, and the policy above fails closed if Kyverno is down.
+- `preview-prometheusrule-surface`: alerting rules only. A recording rule could
+  write arbitrary series into the shared Prometheus.
+- `preview-monitoring-kinds`: every other monitoring kind (PodMonitor, Probe,
+  ScrapeConfig, AlertmanagerConfig and the operator's own CRs) is refused.
 
 ## Network: Cilium policies
 
@@ -82,6 +108,8 @@ Check the admission policies type-checked:
 ```bash
 kubectl get validatingadmissionpolicy preview-ingress-surface \
   preview-service-surface preview-endpoints-managed \
+  preview-servicemonitor-surface preview-prometheusrule-surface \
+  preview-monitoring-kinds \
   -o custom-columns=NAME:.metadata.name,TYPECHECK:.status.typeChecking
 ```
 
@@ -100,6 +128,10 @@ kubectl get validatingadmissionpolicy preview-ingress-surface \
   the probes above.
 
 ## Known residuals
+
+- A preview's alert rules are evaluated by the shared Prometheus and can query
+  any series, so an expensive expression costs cluster-wide query capacity.
+  No Alertmanager is wired to that Prometheus, so preview alerts page nobody.
 
 - Port 443 on the nodes is ingress-nginx, which serves every Ingress on the
   cluster. A preview can reach internal hostnames through it the same way any
