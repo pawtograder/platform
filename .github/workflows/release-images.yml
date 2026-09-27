@@ -239,7 +239,17 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          REF="${REGISTRY}/${REPO_OWNER}/web-nextcache:${REF_NAME}"
+          # Docker tags allow [A-Za-z0-9._-] and may not start with . or -, so a
+          # ref like `feature/foo` or a v* tag with `+build` is not usable as-is.
+          # Left unsanitised the failure is SILENT in both directions: inspect
+          # fails and reads as a cold miss, and the push fails into the export
+          # step's continue-on-error, so such a branch rebuilds cold forever.
+          # Matches the `/` -> `-` convention the version logic already uses.
+          SAFE_REF="$(printf '%s' "$REF_NAME" | tr -c 'A-Za-z0-9._-' '-')"
+          SAFE_REF="$(printf '%s' "$SAFE_REF" | sed -E 's/^[.-]+//')"
+          SAFE_REF="${SAFE_REF:0:128}"
+          [ -n "$SAFE_REF" ] || SAFE_REF="unnamed"
+          REF="${REGISTRY}/${REPO_OWNER}/web-nextcache:${SAFE_REF}"
           printf 'push=%s\n' "$REF" >> "$GITHUB_OUTPUT"
           if docker buildx imagetools inspect "$REF" >/dev/null 2>&1; then
             printf 'seed=%s\n' "$REF" >> "$GITHUB_OUTPUT"
