@@ -212,6 +212,62 @@ jobs:
           echo "::add-mask::$ANON"
           echo "ANON_KEY=$ANON" >> "$GITHUB_ENV"
 
+      # Next's incremental build cache, carried between runs as an image.
+      #
+      # `cache-from: type=gha` below only restores LAYERS, and `COPY . .` in the
+      # Dockerfile invalidates every layer below it on any source change, so the
+      # layer cache never spares us `npm run build` -- it only spares npm ci and
+      # apt. Seeding .next/cache lets the build itself be incremental, which is
+      # the part that actually takes the time.
+      #
+      # A BuildKit `--mount=type=cache` cannot do this job: setup-buildx-action
+      # creates a fresh docker-container builder every run, so a mount-backed
+      # cache is empty every run. An image is pulled, so it survives.
+      #
+      # Falls back to `next-cache-empty` (a stage inside the Dockerfile) when the
+      # tag does not exist yet -- first run on a new branch, or after a manual
+      # delete. Never fails the build for a missing cache.
+      - name: Resolve Next build cache image
+        id: nextcache
+        run: |
+          set -euo pipefail
+          REF="${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/web-nextcache:${{ github.ref_name }}"
+          echo "push=$REF" >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "$REF" >/dev/null 2>&1; then
+            echo "seed=$REF" >> "$GITHUB_OUTPUT"
+            echo "seeding .next/cache from $REF"
+          else
+            echo "seed=next-cache-empty" >> "$GITHUB_OUTPUT"
+            echo "no cache image at $REF yet; building cold"
+          fi
+
+      # Composed once, then used by BOTH build steps below. They must match
+      # exactly: the cache-export build reuses the `builder` stage from the web
+      # build via the builder's in-run cache, and any difference in these args
+      # changes that stage's layers and silently recompiles the whole app.
+      - name: Compose web build args
+        run: |
+          {
+            echo 'WEB_BUILD_ARGS<<__ARGS_EOF__'
+            echo "NEXT_PUBLIC_PAWTOGRADER_WEB_URL=${{ steps.hosts.outputs.web }}"
+            echo "NEXT_PUBLIC_SUPABASE_URL=${{ steps.hosts.outputs.api }}"
+            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ env.ANON_KEY }}"
+            echo "NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID=${{ secrets.STAGING_GITHUB_OAUTH_CLIENT_ID }}"
+            echo "NEXT_PUBLIC_BUGSINK_DSN=${{ secrets.STAGING_BUGSINK_DSN }}"
+            echo "NEXT_PUBLIC_BUGSINK_HOST=${{ secrets.STAGING_BUGSINK_HOST }}"
+            echo "NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.STAGING_POSTHOG_KEY }}"
+            echo "NEXT_PUBLIC_POSTHOG_HOST=${{ secrets.STAGING_POSTHOG_HOST }}"
+            echo "NEXT_PUBLIC_POSTHOG_UI_HOST=${{ secrets.STAGING_POSTHOG_UI_HOST }}"
+            echo "NEXT_PUBLIC_ENABLE_SIGNUPS=false"
+            echo "NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}"
+            echo "NEXT_PUBLIC_PAWTOGRADER_CHANNEL=${{ steps.hosts.outputs.channel }}"
+            echo "NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=${{ steps.hosts.outputs.suffix }}"
+            echo "SENTRY_RELEASE=${{ needs.meta.outputs.version }}"
+            echo "SUPABASE_URL=${{ steps.hosts.outputs.api }}"
+            echo "NEXT_CACHE_IMAGE=${{ steps.nextcache.outputs.seed }}"
+            echo '__ARGS_EOF__'
+          } >> "$GITHUB_ENV"
+
       - name: Build & push web image
         uses: docker/build-push-action@v6
         with:
@@ -219,28 +275,34 @@ jobs:
           file: Dockerfile
           push: true
           tags: ${{ format('{0}/{1}/web:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
-          build-args: |
-            NEXT_PUBLIC_PAWTOGRADER_WEB_URL=${{ steps.hosts.outputs.web }}
-            NEXT_PUBLIC_SUPABASE_URL=${{ steps.hosts.outputs.api }}
-            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ env.ANON_KEY }}
-            NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID=${{ secrets.STAGING_GITHUB_OAUTH_CLIENT_ID }}
-            NEXT_PUBLIC_BUGSINK_DSN=${{ secrets.STAGING_BUGSINK_DSN }}
-            NEXT_PUBLIC_BUGSINK_HOST=${{ secrets.STAGING_BUGSINK_HOST }}
-            NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.STAGING_POSTHOG_KEY }}
-            NEXT_PUBLIC_POSTHOG_HOST=${{ secrets.STAGING_POSTHOG_HOST }}
-            NEXT_PUBLIC_POSTHOG_UI_HOST=${{ secrets.STAGING_POSTHOG_UI_HOST }}
-            NEXT_PUBLIC_ENABLE_SIGNUPS=false
-            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
-            NEXT_PUBLIC_PAWTOGRADER_CHANNEL=${{ steps.hosts.outputs.channel }}
-            NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=${{ steps.hosts.outputs.suffix }}
-            SENTRY_RELEASE=${{ needs.meta.outputs.version }}
-            SUPABASE_URL=${{ steps.hosts.outputs.api }}
+          build-args: ${{ env.WEB_BUILD_ARGS }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ needs.meta.outputs.version }}
           cache-from: type=gha,scope=web
           cache-to: type=gha,scope=web,mode=max
+
+      # Publish this run's .next/cache for the next run to seed from.
+      #
+      # Same context, same Dockerfile, same build args, so the `builder` stage is
+      # already in this builder's cache from the step above -- this exports the
+      # cache directory rather than rebuilding anything. It is a scratch image
+      # holding one directory, so the push is small next to what it saves.
+      #
+      # continue-on-error: the web image is already pushed by this point, and a
+      # failure to store a cache must never fail a release.
+      - name: Build & push Next build cache
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: next-cache-export
+          push: true
+          tags: ${{ steps.nextcache.outputs.push }}
+          build-args: ${{ env.WEB_BUILD_ARGS }}
+          cache-from: type=gha,scope=web
 
       - name: Tag additional refs
         run: |
