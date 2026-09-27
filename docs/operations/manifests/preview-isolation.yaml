@@ -405,6 +405,13 @@ spec:
     # let it preempt staging.
     - expression: "object.spec.?priorityClassName.orValue('') == ''"
       message: "preview pods may not set a priorityClassName"
+    # Every container is work for a shared kubelet and runtime, whatever it
+    # requests. The chart's pods have at most 2 containers and 2 init
+    # containers.
+    - expression: >-
+        size(object.spec.containers) <= 6 &&
+        size(object.spec.?initContainers.orValue([])) <= 6
+      message: "preview pods may have at most 6 containers and 6 init containers"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -412,6 +419,36 @@ metadata:
   name: preview-pod-injection
 spec:
   policyName: preview-pod-injection
+  validationActions: [Deny]
+---
+# Deployments and StatefulSets keep revisionHistoryLimit old ReplicaSets or
+# ControllerRevisions. The quota counts both, but a high limit would fill it
+# with history and stall rollouts; the chart uses the default of 10.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-workload-history
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets"]
+  validations:
+    - expression: "object.spec.?revisionHistoryLimit.orValue(10) <= 10"
+      message: "preview Deployments and StatefulSets may keep at most 10 revisions"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-workload-history
+spec:
+  policyName: preview-workload-history
   validationActions: [Deny]
 ---
 # ---------------------------------------------------------------------------
@@ -474,6 +511,7 @@ spec:
               count/statefulsets.apps: "10" # 2
               count/daemonsets.apps: "2" # 0
               count/replicasets.apps: "200" # 39; revision history accumulates
+              count/controllerrevisions.apps: "50" # 2; StatefulSet revision history
               count/cronjobs.batch: "5" # 0
               count/roles.rbac.authorization.k8s.io: "10" # 0
               count/rolebindings.rbac.authorization.k8s.io: "50" # 7; OpenBao mints one per credential
@@ -511,6 +549,12 @@ spec:
                 defaultRequest:
                   cpu: 50m
                   memory: 64Mi
+                # Floors, so a chart cannot pack hundreds of near-free
+                # containers under the CPU and memory quota. The chart's
+                # smallest explicit request is 50m.
+                min:
+                  cpu: 10m
+                  memory: 16Mi
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -633,8 +677,12 @@ spec:
     # Sample counts do not bound bytes: one enormous sample or non-sample text
     # still has to be read and parsed. Required, at most 16MiB; the largest
     # preview target returns about 1MB.
+    # The regex alone admits up to 99999KiB; the int check holds KiB/KB to
+    # 16384 so both units share the 16MiB ceiling.
     - expression: >-
-        object.spec.?bodySizeLimit.orValue('').matches('^([1-9][0-9]{0,4}(KiB|KB)|([1-9]|1[0-6])(MiB|MB))$')
+        object.spec.?bodySizeLimit.orValue('').matches('^([1-9][0-9]{0,4}(KiB|KB)|([1-9]|1[0-6])(MiB|MB))$') &&
+        (!object.spec.bodySizeLimit.matches('KB$|KiB$') ||
+         int(object.spec.bodySizeLimit.replace('KiB', '').replace('KB', '')) <= 16384)
       message: "preview ServiceMonitors need a bodySizeLimit between 1KiB and 16MiB"
     - expression: >-
         ['labelLimit', 'labelNameLengthLimit', 'labelValueLengthLimit'].all(k,

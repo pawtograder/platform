@@ -112,8 +112,14 @@ what the chart renders:
   more often than every 5 minutes (the shared ESO controller and OpenBao).
 - PrometheusRule: at most 20 groups and 100 rules, evaluated no more often
   than every 30s.
-- ServiceMonitor: a required `bodySizeLimit` of at most 16MiB (Kyverno fills
-  in 10MiB), on top of the sample, target and interval bounds below.
+- ServiceMonitor: a required `bodySizeLimit` of at most 16MiB, in MiB or KiB
+  (Kyverno fills in 10MiB), on top of the sample, target and interval bounds
+  below.
+- Pod: at most 6 containers and 6 init containers (kubelet and runtime work),
+  with LimitRange floors of 10m CPU and 16Mi memory per container so they
+  cannot be packed in for free.
+- Deployment and StatefulSet: `revisionHistoryLimit` at most 10, the default,
+  so history cannot fill the ReplicaSet and ControllerRevision quotas.
 
 ## Resource ceilings
 
