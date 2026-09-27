@@ -1,9 +1,9 @@
 /**
  * `pawtograder assessment export` — streams a class snapshot to a directory.
  *
- * Thin slice (current): writes manifest.json, subjects.json, sections.json
- * by consuming the assessment.export.preamble NDJSON stream. Per-assignment
- * facts (rubrics, scores, tests, hints) and gradebook are wired in later.
+ * Writes manifest.json, subjects.json, and sections.json from the
+ * assessment.export.preamble NDJSON stream, then one directory per assignment
+ * (rubrics, scores, tests, hints, engagement) and the gradebook.
  *
  * Identity modes:
  *   --identity opaque (default) — random per-run salt + server pepper; intra-dump only

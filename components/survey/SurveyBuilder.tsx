@@ -22,7 +22,8 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { LuChevronUp, LuChevronDown, LuTrash2 } from "react-icons/lu";
 
 import type { BuilderSurvey, BuilderElement, ElementType } from "./SurveyBuilderDataTypes";
-import { makeEmptySurvey } from "./factories";
+import { PASSTHROUGH_TYPE, passthroughSourceType } from "./SurveyBuilderDataTypes";
+import { makeEmptySurvey, nextChoiceValue } from "./factories";
 import { toJSON, fromJSON, fromJSONString, toJSONString } from "./serde";
 
 import {
@@ -249,7 +250,16 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
             ? "Checkboxes"
             : t === "boolean"
               ? "Yes / No"
-              : t;
+              : t === "rating"
+                ? "Rating"
+                : t;
+
+  /**
+   * Label for a question the builder has no editor for. Shows the real SurveyJS type so
+   * the instructor can find it in the JSON editor.
+   */
+  const elementLabel = (el: BuilderElement) =>
+    el.type === PASSTHROUGH_TYPE ? passthroughSourceType(el) : typeLabel(el.type);
 
   return (
     <Flex height="100vh">
@@ -370,7 +380,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                   {elements.map((el, idxEl) => {
                     const atTop = idxEl === 0;
                     const atBottom = idxEl === elements.length - 1;
-                    const label = typeLabel(el.type);
+                    const label = elementLabel(el);
 
                     return (
                       <Accordion.Item key={el.id} value={el.id}>
@@ -468,169 +478,287 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                         <Accordion.ItemContent>
                           <Accordion.ItemBody>
                             <Box display="grid" gap="3">
-                              {/* Question name */}
-                              <Box>
-                                <Text fontSize="sm" color="gray.600" mb="1">
-                                  Question name
-                                </Text>
-                                <Input
-                                  size="sm"
-                                  value={el.name ?? ""}
-                                  onChange={(e) => updateQuestionName(el.id, e.target.value)}
-                                  placeholder={`${label} question`}
-                                />
-                              </Box>
-
-                              {/* Description */}
-                              <Box>
-                                <Text fontSize="sm" color="gray.600" mb="1">
-                                  Description
-                                </Text>
-                                <Textarea
-                                  size="sm"
-                                  value={el.description ?? ""}
-                                  onChange={(e) => updateElementField(el.id, "description", e.target.value)}
-                                  placeholder="Optional helper text"
-                                />
-                              </Box>
-
-                              {/* Required toggle */}
-                              <Box>
-                                <Switch.Root
-                                  checked={!!el.isRequired}
-                                  onCheckedChange={(detail) => updateElementField(el.id, "isRequired", detail.checked)}
-                                  display="flex"
-                                  alignItems="center"
-                                  gap="2"
-                                >
-                                  <Switch.HiddenInput />
-                                  <Switch.Control />
-                                  <Switch.Label>Required</Switch.Label>
-                                </Switch.Root>
-                              </Box>
-
-                              {/* ======= NEW: Choices/Options blocks ======= */}
-
-                              {/* RadioGroup / Checkbox: Choices editor */}
-                              {(el.type === "radiogroup" || el.type === "checkbox") && (
-                                <Box mt="2" p="3" borderWidth="1px" rounded="md">
-                                  <Heading as="h4" size="sm" mb="3">
-                                    Choices
-                                  </Heading>
-
-                                  <Stack gap="2">
-                                    {(el.choices ?? []).map((c, i) => (
-                                      <HStack key={i} align="start">
-                                        <Input
-                                          size="sm"
-                                          flex="1"
-                                          value={c.value}
-                                          placeholder={`Value ${i + 1}`}
-                                          onChange={(e) => {
-                                            const list = [...(el.choices ?? [])];
-                                            const curr = list[i] ?? { value: "" };
-                                            list[i] = {
-                                              ...curr,
-                                              value: e.target.value
-                                            };
-                                            updateElementFields(el.id, { choices: list });
-                                          }}
-                                        />
-                                        <HStack>
-                                          <IconButton
-                                            aria-label="Move up"
-                                            size="sm"
-                                            variant="ghost"
-                                            onClick={() => {
-                                              const list = [...(el.choices ?? [])];
-                                              if (i > 0) {
-                                                const [item] = list.splice(i, 1);
-                                                list.splice(i - 1, 0, item);
-                                                updateElementFields(el.id, { choices: list });
-                                              }
-                                            }}
-                                          >
-                                            <Span>↑</Span>
-                                          </IconButton>
-                                          <IconButton
-                                            aria-label="Move down"
-                                            size="sm"
-                                            variant="ghost"
-                                            onClick={() => {
-                                              const list = [...(el.choices ?? [])];
-                                              if (i < list.length - 1) {
-                                                const [item] = list.splice(i, 1);
-                                                list.splice(i + 1, 0, item);
-                                                updateElementFields(el.id, { choices: list });
-                                              }
-                                            }}
-                                          >
-                                            <Span>↓</Span>
-                                          </IconButton>
-                                          <IconButton
-                                            aria-label="Remove"
-                                            size="sm"
-                                            colorScheme="red"
-                                            variant="ghost"
-                                            onClick={() => {
-                                              const list = [...(el.choices ?? [])].filter((_, j) => j !== i);
-                                              const safe = list.length > 0 ? list : [{ value: "Item 1" }];
-                                              updateElementFields(el.id, { choices: safe });
-                                            }}
-                                          >
-                                            <Span>✕</Span>
-                                          </IconButton>
-                                        </HStack>
-                                      </HStack>
-                                    ))}
-
-                                    <Button
+                              {el.type === PASSTHROUGH_TYPE ? (
+                                <Box borderWidth="1px" rounded="md" p="3">
+                                  <Text fontSize="sm" color="fg.muted">
+                                    This is a <b>{passthroughSourceType(el)}</b> question. The visual builder has no
+                                    editor for this type, so it is preserved exactly as written — edit it in the JSON
+                                    editor below. You can still reorder or delete it here.
+                                  </Text>
+                                </Box>
+                              ) : (
+                                <>
+                                  {/* Question name */}
+                                  <Box>
+                                    <Text fontSize="sm" color="gray.600" mb="1">
+                                      Question name
+                                    </Text>
+                                    <Input
                                       size="sm"
-                                      variant="outline"
-                                      onClick={() => {
-                                        const curr = el.choices ?? [];
-                                        const n = curr.length + 1;
-                                        const next = [...curr, { value: `Item ${n}` }];
-                                        updateElementFields(el.id, { choices: next });
-                                      }}
-                                    >
-                                      Add choice
-                                    </Button>
-                                  </Stack>
-                                </Box>
-                              )}
+                                      value={el.name ?? ""}
+                                      onChange={(e) => updateQuestionName(el.id, e.target.value)}
+                                      placeholder={`${label} question`}
+                                    />
+                                  </Box>
 
-                              {/* Boolean: True/False labels */}
-                              {el.type === "boolean" && (
-                                <Box mt="2" p="3" borderWidth="1px" rounded="md">
-                                  <Heading as="h4" size="sm" mb="3">
-                                    Options
-                                  </Heading>
-                                  <HStack>
-                                    <Box flex="1">
-                                      <Text fontSize="sm" color="gray.600" mb="1">
-                                        True label
-                                      </Text>
-                                      <Input
-                                        size="sm"
-                                        value={el.labelTrue}
-                                        onChange={(e) => updateElementFields(el.id, { labelTrue: e.target.value })}
-                                      />
+                                  {/* Description */}
+                                  <Box>
+                                    <Text fontSize="sm" color="gray.600" mb="1">
+                                      Description
+                                    </Text>
+                                    <Textarea
+                                      size="sm"
+                                      value={el.description ?? ""}
+                                      onChange={(e) => updateElementField(el.id, "description", e.target.value)}
+                                      placeholder="Optional helper text"
+                                    />
+                                  </Box>
+
+                                  {/* Required toggle */}
+                                  <Box>
+                                    <Switch.Root
+                                      checked={!!el.isRequired}
+                                      onCheckedChange={(detail) =>
+                                        updateElementField(el.id, "isRequired", detail.checked)
+                                      }
+                                      display="flex"
+                                      alignItems="center"
+                                      gap="2"
+                                    >
+                                      <Switch.HiddenInput />
+                                      <Switch.Control />
+                                      <Switch.Label>Required</Switch.Label>
+                                    </Switch.Root>
+                                  </Box>
+
+                                  {/* ======= NEW: Choices/Options blocks ======= */}
+
+                                  {/* RadioGroup / Checkbox: Choices editor */}
+                                  {(el.type === "radiogroup" || el.type === "checkbox") && (
+                                    <Box mt="2" p="3" borderWidth="1px" rounded="md">
+                                      <Heading as="h4" size="sm" mb="3">
+                                        Choices
+                                      </Heading>
+
+                                      <Stack gap="2">
+                                        {(el.choices ?? []).map((c, i) => (
+                                          <HStack key={i} align="start">
+                                            <Input
+                                              size="sm"
+                                              flex="1"
+                                              value={String(c.value)}
+                                              placeholder={`Value ${i + 1}`}
+                                              aria-label={`Choice ${i + 1} value`}
+                                              onChange={(e) => {
+                                                const list = [...(el.choices ?? [])];
+                                                const curr = list[i] ?? { value: "" };
+                                                list[i] = {
+                                                  ...curr,
+                                                  value: nextChoiceValue(curr, e.target.value)
+                                                };
+                                                updateElementFields(el.id, { choices: list });
+                                              }}
+                                            />
+                                            <Input
+                                              size="sm"
+                                              flex="1"
+                                              value={c.text ?? ""}
+                                              // A localized label is a per-locale object. It round-trips
+                                              // untouched, but there is no sensible single-line edit for
+                                              // it, and typing here would drop every other translation.
+                                              disabled={c.raw?.text !== undefined && typeof c.raw.text !== "string"}
+                                              placeholder={
+                                                c.raw?.text !== undefined && typeof c.raw.text !== "string"
+                                                  ? "Localized - edit in the JSON editor"
+                                                  : `Label ${i + 1} (optional)`
+                                              }
+                                              aria-label={`Choice ${i + 1} label`}
+                                              onChange={(e) => {
+                                                const list = [...(el.choices ?? [])];
+                                                const curr = list[i] ?? { value: "" };
+                                                const text = e.target.value;
+                                                list[i] = text ? { ...curr, text } : { ...curr, text: undefined };
+                                                updateElementFields(el.id, { choices: list });
+                                              }}
+                                            />
+                                            <HStack>
+                                              <IconButton
+                                                aria-label="Move up"
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() => {
+                                                  const list = [...(el.choices ?? [])];
+                                                  if (i > 0) {
+                                                    const [item] = list.splice(i, 1);
+                                                    list.splice(i - 1, 0, item);
+                                                    updateElementFields(el.id, { choices: list });
+                                                  }
+                                                }}
+                                              >
+                                                <Span>↑</Span>
+                                              </IconButton>
+                                              <IconButton
+                                                aria-label="Move down"
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() => {
+                                                  const list = [...(el.choices ?? [])];
+                                                  if (i < list.length - 1) {
+                                                    const [item] = list.splice(i, 1);
+                                                    list.splice(i + 1, 0, item);
+                                                    updateElementFields(el.id, { choices: list });
+                                                  }
+                                                }}
+                                              >
+                                                <Span>↓</Span>
+                                              </IconButton>
+                                              <IconButton
+                                                aria-label="Remove"
+                                                size="sm"
+                                                colorScheme="red"
+                                                variant="ghost"
+                                                onClick={() => {
+                                                  const list = [...(el.choices ?? [])].filter((_, j) => j !== i);
+                                                  const safe = list.length > 0 ? list : [{ value: "Item 1" }];
+                                                  updateElementFields(el.id, { choices: safe });
+                                                }}
+                                              >
+                                                <Span>✕</Span>
+                                              </IconButton>
+                                            </HStack>
+                                          </HStack>
+                                        ))}
+
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() => {
+                                            const curr = el.choices ?? [];
+                                            const n = curr.length + 1;
+                                            const next = [...curr, { value: `Item ${n}` }];
+                                            updateElementFields(el.id, { choices: next });
+                                          }}
+                                        >
+                                          Add choice
+                                        </Button>
+                                      </Stack>
                                     </Box>
-                                    <Box flex="1">
-                                      <Text fontSize="sm" color="gray.600" mb="1">
-                                        False label
-                                      </Text>
-                                      <Input
-                                        size="sm"
-                                        value={el.labelFalse}
-                                        onChange={(e) => updateElementFields(el.id, { labelFalse: e.target.value })}
-                                      />
+                                  )}
+
+                                  {/* Boolean: True/False labels */}
+                                  {el.type === "boolean" && (
+                                    <Box mt="2" p="3" borderWidth="1px" rounded="md">
+                                      <Heading as="h4" size="sm" mb="3">
+                                        Options
+                                      </Heading>
+                                      <HStack>
+                                        <Box flex="1">
+                                          <Text fontSize="sm" color="gray.600" mb="1">
+                                            True label
+                                          </Text>
+                                          <Input
+                                            size="sm"
+                                            value={el.labelTrue ?? ""}
+                                            onChange={(e) => updateElementFields(el.id, { labelTrue: e.target.value })}
+                                          />
+                                        </Box>
+                                        <Box flex="1">
+                                          <Text fontSize="sm" color="gray.600" mb="1">
+                                            False label
+                                          </Text>
+                                          <Input
+                                            size="sm"
+                                            value={el.labelFalse ?? ""}
+                                            onChange={(e) => updateElementFields(el.id, { labelFalse: e.target.value })}
+                                          />
+                                        </Box>
+                                      </HStack>
                                     </Box>
-                                  </HStack>
-                                </Box>
+                                  )}
+                                  {/* Rating: scale bounds and end labels */}
+                                  {el.type === "rating" && (
+                                    <Box mt="2" p="3" borderWidth="1px" rounded="md">
+                                      <Heading as="h4" size="sm" mb="3">
+                                        Scale
+                                      </Heading>
+                                      {el.rateValues && el.rateValues.length > 0 ? (
+                                        <Text fontSize="sm" color="fg.muted">
+                                          This question defines {el.rateValues.length} explicit scale points, which take
+                                          precedence over a numeric range. Edit them in the JSON editor below to keep
+                                          their stored values intact — changing a value would orphan responses already
+                                          submitted against it.
+                                        </Text>
+                                      ) : (
+                                        <HStack>
+                                          <Box flex="1">
+                                            <Text fontSize="sm" color="gray.600" mb="1">
+                                              Minimum
+                                            </Text>
+                                            <Input
+                                              size="sm"
+                                              type="number"
+                                              value={el.rateMin ?? ""}
+                                              onChange={(e) =>
+                                                updateElementFields(el.id, {
+                                                  rateMin: e.target.value === "" ? undefined : Number(e.target.value)
+                                                })
+                                              }
+                                            />
+                                          </Box>
+                                          <Box flex="1">
+                                            <Text fontSize="sm" color="gray.600" mb="1">
+                                              Maximum
+                                            </Text>
+                                            <Input
+                                              size="sm"
+                                              type="number"
+                                              value={el.rateMax ?? ""}
+                                              onChange={(e) =>
+                                                updateElementFields(el.id, {
+                                                  rateMax: e.target.value === "" ? undefined : Number(e.target.value)
+                                                })
+                                              }
+                                            />
+                                          </Box>
+                                        </HStack>
+                                      )}
+                                      <HStack mt="3">
+                                        <Box flex="1">
+                                          <Text fontSize="sm" color="gray.600" mb="1">
+                                            Low end label
+                                          </Text>
+                                          <Input
+                                            size="sm"
+                                            value={el.minRateDescription ?? ""}
+                                            placeholder="e.g. Strongly disagree"
+                                            onChange={(e) =>
+                                              updateElementFields(el.id, {
+                                                minRateDescription: e.target.value || undefined
+                                              })
+                                            }
+                                          />
+                                        </Box>
+                                        <Box flex="1">
+                                          <Text fontSize="sm" color="gray.600" mb="1">
+                                            High end label
+                                          </Text>
+                                          <Input
+                                            size="sm"
+                                            value={el.maxRateDescription ?? ""}
+                                            placeholder="e.g. Strongly agree"
+                                            onChange={(e) =>
+                                              updateElementFields(el.id, {
+                                                maxRateDescription: e.target.value || undefined
+                                              })
+                                            }
+                                          />
+                                        </Box>
+                                      </HStack>
+                                    </Box>
+                                  )}
+                                  {/* ======= /NEW ======= */}
+                                </>
                               )}
-                              {/* ======= /NEW ======= */}
                             </Box>
                           </Accordion.ItemBody>
                         </Accordion.ItemContent>
@@ -691,6 +819,13 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                 onClick={() => addElementToCurrentPage("boolean", `question_${elements.length + 1}`)}
               >
                 + Yes / No
+              </Button>
+              <Button
+                size="sm"
+                type="button"
+                onClick={() => addElementToCurrentPage("rating", `question_${elements.length + 1}`)}
+              >
+                + Rating
               </Button>
             </HStack>
           </Flex>

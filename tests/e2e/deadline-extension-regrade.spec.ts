@@ -15,7 +15,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 // End-to-end coverage for the "re-grade late commits after a deadline extension"
-// feature (migration 20260604130000). Exercises the RPC lifecycle + the staging
+// feature (migration 20260927120000). Exercises the RPC lifecycle + the staging
 // trigger + the grader_results backfill trigger + notifications at the data
 // layer. One magic-link auth flow total (the instructor); each test gets a
 // fresh student + repository so tests are fully isolated.
@@ -83,12 +83,9 @@ async function insertGraderResult(submissionId: number, score: number): Promise<
 }
 
 async function candidatesForBatch(batchId: number) {
-  const { data, error } = await ADMIN()
-    .from("deadline_regrade_candidates")
-    .select("*")
-    .eq("batch_id", batchId);
+  const { data, error } = await ADMIN().from("deadline_regrade_candidates").select("*").eq("batch_id", batchId);
   if (error) throw new Error(error.message);
-  return data as unknown as Array<Record<string, unknown>>;
+  return data ?? [];
 }
 
 test.beforeAll(async () => {
@@ -136,23 +133,21 @@ test.describe("Deadline-extension regrade", () => {
     await insertCheckRun("oldcommit0", "old work", 5); // before old deadline -> excluded
 
     // Non-instructor (service role -> auth.uid() null) is blocked.
-    const blocked = await ADMIN().rpc("enumerate_deadline_regrade_candidates" as never, {
+    const blocked = await ADMIN().rpc("enumerate_deadline_regrade_candidates", {
       p_assignment_id: assignment.id,
       p_old_due_date: oldDue
-    } as never);
+    });
     expect(blocked.error).not.toBeNull();
 
     // Instructor enumerates -> exactly the in-window commit.
-    const { data: batchId, error } = await instructorClient.rpc("enumerate_deadline_regrade_candidates" as never, {
+    const { data: batchId, error } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
       p_assignment_id: assignment.id,
       p_old_due_date: oldDue
-    } as never);
+    });
     expect(error).toBeNull();
     expect(batchId).not.toBeNull();
 
-    const cands = (await candidatesForBatch(batchId as unknown as number)).filter(
-      (c) => c.profile_id === student.private_profile_id
-    );
+    const cands = (await candidatesForBatch(batchId!)).filter((c) => c.profile_id === student.private_profile_id);
     expect(cands).toHaveLength(1);
     expect(cands[0].sha).toBe("newcommit1");
   });
@@ -167,13 +162,11 @@ test.describe("Deadline-extension regrade", () => {
     // A later commit inside the window.
     await insertCheckRun("latesha80", "improved work", 1);
 
-    const { data: batchId } = await instructorClient.rpc("enumerate_deadline_regrade_candidates" as never, {
+    const { data: batchId } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
       p_assignment_id: assignment.id,
       p_old_due_date: oldDue
-    } as never);
-    const candidate = (await candidatesForBatch(batchId as unknown as number)).find(
-      (c) => c.profile_id === student.private_profile_id
-    )!;
+    });
+    const candidate = (await candidatesForBatch(batchId!)).find((c) => c.profile_id === student.private_profile_id)!;
     expect(candidate.current_submission_id).toBe(currentSubId);
     expect(Number(candidate.current_score)).toBe(50);
 
@@ -186,28 +179,22 @@ test.describe("Deadline-extension regrade", () => {
       .select("is_active, is_staged")
       .eq("id", stagedSubId)
       .single();
-    expect((stagedRow as { is_active: boolean }).is_active).toBe(false);
-    expect((stagedRow as { is_staged: boolean }).is_staged).toBe(true);
-    const { data: baselineRow } = await ADMIN()
-      .from("submissions")
-      .select("is_active")
-      .eq("id", currentSubId)
-      .single();
-    expect((baselineRow as { is_active: boolean }).is_active).toBe(true);
+    expect(stagedRow!.is_active).toBe(false);
+    expect(stagedRow!.is_staged).toBe(true);
+    const { data: baselineRow } = await ADMIN().from("submissions").select("is_active").eq("id", currentSubId).single();
+    expect(baselineRow!.is_active).toBe(true);
 
     // grader_results insert fires the backfill trigger.
     await insertGraderResult(stagedSubId, 80);
-    const afterBackfill = (await candidatesForBatch(batchId as unknown as number)).find(
-      (c) => c.id === candidate.id
-    )!;
+    const afterBackfill = (await candidatesForBatch(batchId!)).find((c) => c.id === candidate.id)!;
     expect(afterBackfill.staged_status).toBe("graded");
     expect(afterBackfill.staged_submission_id).toBe(stagedSubId);
     expect(Number(afterBackfill.staged_score)).toBe(80);
 
     // Instructor promotes.
-    const { data: applyResult, error: applyErr } = await instructorClient.rpc("apply_deadline_regrade" as never, {
+    const { data: applyResult, error: applyErr } = await instructorClient.rpc("apply_deadline_regrade", {
       p_candidate_id: candidate.id
-    } as never);
+    });
     expect(applyErr).toBeNull();
     expect((applyResult as { status: string }).status).toBe("applied");
 
@@ -217,20 +204,13 @@ test.describe("Deadline-extension regrade", () => {
       .select("is_active, is_staged")
       .eq("id", stagedSubId)
       .single();
-    expect((promoted as { is_active: boolean }).is_active).toBe(true);
-    expect((promoted as { is_staged: boolean }).is_staged).toBe(false);
-    const { data: demoted } = await ADMIN()
-      .from("submissions")
-      .select("is_active")
-      .eq("id", currentSubId)
-      .single();
-    expect((demoted as { is_active: boolean }).is_active).toBe(false);
+    expect(promoted!.is_active).toBe(true);
+    expect(promoted!.is_staged).toBe(false);
+    const { data: demoted } = await ADMIN().from("submissions").select("is_active").eq("id", currentSubId).single();
+    expect(demoted!.is_active).toBe(false);
 
     // Student got a submission_regraded notification with the differential.
-    const { data: notifs } = await ADMIN()
-      .from("notifications")
-      .select("body, user_id")
-      .eq("user_id", student.user_id);
+    const { data: notifs } = await ADMIN().from("notifications").select("body, user_id").eq("user_id", student.user_id);
     const regradeNotif = (notifs ?? []).find((n) => (n.body as { type?: string }).type === "submission_regraded");
     expect(regradeNotif).toBeTruthy();
     const body = regradeNotif!.body as { old_score: number; new_score: number; submission_id: number };
@@ -243,17 +223,17 @@ test.describe("Deadline-extension regrade", () => {
     const oldDue = subDays(new Date(), 2).toISOString();
     await insertCheckRun("skipsha", "late", 1);
 
-    const { data: batchId } = await instructorClient.rpc("enumerate_deadline_regrade_candidates" as never, {
+    const { data: batchId } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
       p_assignment_id: assignment.id,
       p_old_due_date: oldDue
-    } as never);
-    const candidateId = (await candidatesForBatch(batchId as unknown as number)).find(
+    });
+    const candidateId = (await candidatesForBatch(batchId!)).find(
       (c) => c.profile_id === student.private_profile_id
-    )!.id as number;
+    )!.id;
 
-    const { error: skipErr } = await instructorClient.rpc("skip_deadline_regrade" as never, {
+    const { error: skipErr } = await instructorClient.rpc("skip_deadline_regrade", {
       p_candidate_id: candidateId
-    } as never);
+    });
     expect(skipErr).toBeNull();
 
     const { data: skipped } = await ADMIN()

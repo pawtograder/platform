@@ -1,5 +1,6 @@
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
+import { ViewAsStudentButton } from "@/components/course/view-as-student-button";
 import { AssignedLabSections } from "@/components/discussion/AssignedLabSections";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
@@ -574,6 +575,10 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
       {!githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
 
+      <HStack justify="flex-end" mb={2}>
+        <ViewAsStudentButton />
+      </HStack>
+
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
         {showSurveysDashboard && (
           <Box mb={2} borderWidth="1px" borderColor="border.subtle" borderRadius="md" overflowX="auto">
@@ -629,9 +634,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
           Assignment Grading Overview
         </Heading>
         <Text mb={4} color="fg.muted" fontSize="sm">
-          One RPC now loads all assignment metrics. Incomplete submission reviews and incomplete review assignments are
-          tracked separately (review assignments may be higher when multiple graders are assigned to one submission).
-          &nbsp;“Grading due” reflects the due date for grading work.
+          Incomplete submission reviews and incomplete review assignments are tracked separately (review assignments may
+          be higher when multiple graders are assigned to one submission). &nbsp;“Grading due” reflects the due date for
+          grading work.
         </Text>
         {metricsLoadFailed ? (
           <CardRoot borderColor="red.200" borderWidth="1px">

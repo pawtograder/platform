@@ -17,6 +17,29 @@ export interface Credentials {
   api_url: string;
 }
 
+/**
+ * Accept either a full endpoint URL or a bare API host and return the
+ * `cli` Edge Function endpoint. Self-hosted deployments serve it from the
+ * API gateway origin (`https://api.<hostname>` by default), not the web host.
+ */
+export function normalizeApiUrl(url: string): string {
+  const trimmed = url.trim().replace(/\/+$/, "");
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    throw new CLIError(`Invalid API URL: ${url}`);
+  }
+
+  const path = parsed.pathname.replace(/\/+$/, "");
+  if (path.endsWith("/functions/v1/cli")) return parsed.toString().replace(/\/+$/, "");
+
+  parsed.pathname = path.endsWith("/functions/v1") ? `${path}/cli` : `${path}/functions/v1/cli`;
+  return parsed.toString();
+}
+
 interface CLIApiResponse {
   success: boolean;
   data?: any;
@@ -70,6 +93,24 @@ export function requireCredentials(): Credentials {
 }
 
 /**
+ * The configured request timeout in milliseconds, or 0 for none.
+ *
+ * Rejected rather than coerced: `Number("30s")` is `NaN`, `NaN > 0` is false, so a
+ * mistyped value silently disabled the timeout altogether while the operator believed
+ * one was in force — and the abort-specific guidance below then became unreachable.
+ */
+export function resolveHttpTimeoutMs(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return 0;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new CLIError(
+      `Invalid PAWTOGRADER_HTTP_TIMEOUT_MS: ${raw}. Give a whole number of milliseconds, e.g. 600000, or unset it for no timeout.`
+    );
+  }
+  return value;
+}
+
+/**
  * Send a command to the CLI edge function
  */
 export async function apiCall(command: string, params: Record<string, unknown> = {}): Promise<any> {
@@ -81,7 +122,7 @@ export async function apiCall(command: string, params: Record<string, unknown> =
   }
 
   const start = Date.now();
-  const timeoutMs = Number(process.env.PAWTOGRADER_HTTP_TIMEOUT_MS ?? "0");
+  const timeoutMs = resolveHttpTimeoutMs(process.env.PAWTOGRADER_HTTP_TIMEOUT_MS);
   const controller = timeoutMs > 0 ? new AbortController() : undefined;
   const timeoutId = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
 
@@ -132,6 +173,13 @@ export async function apiCall(command: string, params: Record<string, unknown> =
         `Server error (HTTP ${response.status}) after ${elapsed}s.\n` +
           `   Response body: ${rawBody.slice(0, 200)}${rawBody.length > 200 ? "..." : ""}\n` +
           "   The server may be overloaded. Try again later."
+      );
+    }
+    if (/^\s*<(!doctype|html)/i.test(rawBody)) {
+      throw new CLIError(
+        `API returned an HTML page (HTTP ${response.status}) from ${creds.api_url}.\n` +
+          "   That URL is serving the web app, not the 'cli' Edge Function.\n" +
+          "   Point --url at your deployment's API gateway origin (usually https://api.<hostname>)."
       );
     }
     throw new CLIError(`API returned invalid JSON (HTTP ${response.status}): ${rawBody.slice(0, 150)}`);

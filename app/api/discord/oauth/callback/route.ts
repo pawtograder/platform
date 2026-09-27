@@ -1,6 +1,7 @@
 import { createClient } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 function getRedirectUrl(request: Request, origin: string, path: string): string {
   const forwardedHost = request.headers.get("x-forwarded-host");
@@ -14,7 +15,7 @@ function getRedirectUrl(request: Request, origin: string, path: string): string 
   }
 }
 
-export async function GET(request: Request) {
+async function getHandler(request: Request) {
   // The `/api/discord/oauth/callback` route handles the Discord OAuth callback
   // for linking Discord accounts to existing user accounts.
   //
@@ -45,3 +46,7 @@ export async function GET(request: Request) {
     getRedirectUrl(request, origin, `/course?error_description=${encodeURIComponent("Discord authentication failed")}`)
   );
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const GET = withRouteMetrics("/api/discord/oauth/callback", getHandler);

@@ -1,4 +1,12 @@
-{{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.autoscaling.enabled }}
+{{- /*
+Not rendered under maintenance.active: maintenance.sh `down` deletes this HPA
+before scaling functions to 0 (an HPA scales straight back toward minReplicas,
+and cannot be paused at 0 without the HPAScaleToZero gate), so the posture
+renders it absent too. Helm then deletes it from the release, which is a no-op
+on an object `down` already removed. It comes back on exit; see
+templates/edge-functions.yaml and docs/operations/planned-maintenance.md.
+*/ -}}
+{{- if and .Values.edgeFunctions.enabled .Values.edgeFunctions.autoscaling.enabled (not .Values.maintenance.active) }}
 {{- if not (or .Values.edgeFunctions.autoscaling.targetMemoryUtilizationPercentage .Values.edgeFunctions.autoscaling.targetCPUUtilizationPercentage) }}
 {{- fail "edgeFunctions.autoscaling is enabled but no target set: configure targetMemoryUtilizationPercentage and/or targetCPUUtilizationPercentage (an HPA with an empty metrics list is invalid)" }}
 {{- end }}

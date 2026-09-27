@@ -1,11 +1,33 @@
 import * as Sentry from "@sentry/nextjs";
 import posthog from "posthog-js";
 
+// NOTE: stale-bundle recovery is installed from `<StaleBundleRecovery />` in the
+// root layout (a normal client component), NOT here. The client-instrumentation
+// entry is loaded through a special Next path whose module graph is fragile —
+// importing an extra module here can make the whole entry fail to evaluate
+// (silently taking Sentry + PostHog init down with it). The `beforeSend` filter
+// below stays here because it needs no extra imports.
+
 if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
     api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
     ui_host: process.env.NEXT_PUBLIC_POSTHOG_UI_HOST,
-    defaults: "2025-05-24"
+    defaults: "2025-05-24",
+    // Keep PostHog state out of cookies entirely. Its default persistence is
+    // "localStorage+cookie", and the cookie's domain is chosen by a probe that
+    // walks up the hostname keeping the BROADEST domain the browser accepts —
+    // for pawtograder.khoury.northeastern.edu that resolves to
+    // ".northeastern.edu". So the cookie was sent to every Pawtograder host,
+    // including the api host, which never reads cookies at all.
+    //
+    // That matters because the API host has hard request-header limits: an
+    // oversized Cookie header 400s the Realtime WebSocket handshake at the
+    // ingress before it reaches Kong. localStorage costs us nothing here —
+    // there is no cross-subdomain identity requirement it cannot serve.
+    persistence: "localStorage",
+    // Belt and braces: if persistence ever goes back to a cookie mode, keep it
+    // scoped to this host rather than letting the probe pick .northeastern.edu.
+    cross_subdomain_cookie: false
   });
 } else {
   console.error("NEXT_PUBLIC_POSTHOG_KEY is not set, posthog will not be initialized");
@@ -94,6 +116,17 @@ Sentry.init({
       }
     }
 
+    // Filter errors thrown by injected browser extensions (reader-mode/page-scraper
+    // content scripts, etc.). Our own code is always served from `app:///_next/static/...`,
+    // whereas extension content scripts surface as `app:///assets/*.js`. These bubble up to
+    // the page's global onunhandledrejection handler and get attributed to us even though
+    // they originate from the user's extensions (e.g. invalid `querySelector` selectors).
+    if (
+      event.exception?.values?.some((e) => e.stacktrace?.frames?.some((f) => f.filename?.startsWith("app:///assets/")))
+    ) {
+      return null;
+    }
+
     if (event.exception && event.exception.values) {
       for (const exception of event.exception.values) {
         if (exception.type === "AbortError" && exception.value === "The operation was aborted.") {
@@ -117,6 +150,31 @@ Sentry.init({
           exception.value?.includes("failed")
         ) {
           return null; // Discard chunk load errors
+        }
+        // The worker-side sibling of ChunkLoadError: a web worker importScripts() a Next
+        // chunk that it can't fetch — the tab dropped offline (these arrive interleaved with
+        // realtime channel_error/reconnect breadcrumbs) or a deploy landed mid-session and the
+        // old chunk is gone. Reported both as a plain onerror Error and, when the worker's
+        // ErrorEvent itself is captured, as an `ErrorEvent` whose value wraps the same text,
+        // so match on the message rather than the type.
+        if (exception.value?.includes("Failed to execute 'importScripts' on 'WorkerGlobalScope'")) {
+          return null;
+        }
+        // Discard the stale-bundle sibling of ChunkLoadError: a deploy lands
+        // mid-session, the chunk file loads (200) but the loaded webpack runtime
+        // is missing the requested module factory, so `__webpack_require__` hits
+        // `undefined.call(...)`. `installStaleBundleRecovery()` reloads to self-heal;
+        // this just keeps the transient deploy-skew event out of Sentry. Gated on
+        // the webpack-runtime stack so genuine `reading 'call'` bugs still report.
+        if (
+          exception.type === "TypeError" &&
+          /reading 'call'|undefined is not an object \(evaluating '[^']*\.call'\)/.test(exception.value ?? "")
+        ) {
+          const frames = exception.stacktrace?.frames ?? [];
+          const fromWebpackRuntime = frames.some((f) => /webpack[-.]/.test(f.filename ?? ""));
+          if (fromWebpackRuntime) {
+            return null;
+          }
         }
         if ("message" in exception) {
           const message = exception.message as string;

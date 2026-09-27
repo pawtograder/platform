@@ -46,7 +46,10 @@ test.describe("active submission gradebook recalculation", () => {
       assignment_slug: `e2e-active-submission-${suffix}`
     });
     assignmentId = assignment.id;
-    assignmentSlug = assignment.slug ?? "";
+    if (!assignment.slug) {
+      throw new Error(`Assignment ${assignmentId} was created without a slug`);
+    }
+    assignmentSlug = assignment.slug;
 
     const gradebookColumn = await getAssignmentGradebookColumn(classId, assignmentSlug);
     gradebookId = gradebookColumn.gradebook_id;

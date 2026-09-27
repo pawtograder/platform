@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AssignmentGroupJoinRequest } from "../_shared/FunctionTypes.d.ts";
 import { enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import {
@@ -12,6 +12,7 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 async function handleAssignmentGroupJoin(
   req: Request,
   scope: Sentry.Scope
@@ -21,7 +22,8 @@ async function handleAssignmentGroupJoin(
   scope?.setTag("assignment_group_id", assignment_group_id.toString());
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data: assignmentGroup } = await adminSupabase
     .from("assignment_groups")
@@ -92,7 +94,9 @@ async function handleAssignmentGroupJoin(
         course_slug: assignmentGroup.classes!.slug!,
         org: assignmentGroup.classes!.github_org!,
         repo: assignmentGroup.repositories[0].repository,
-        githubUsernames: remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!),
+        githubUsernames: remaining_members
+          .map((m) => m.profiles?.user_roles?.users?.github_username)
+          .filter((u): u is string => !!u),
         debug_id: `assignment-group-join-${assignment_group_id}`
       });
     } else if (remaining_members_error) {

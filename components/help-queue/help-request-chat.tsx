@@ -499,26 +499,40 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
         }
       }
 
-      // Update help request with new submission reference and privacy
+      // Update the submission reference, and escalate privacy if the new reference set
+      // requires it. Referencing code can only ever turn privacy ON.
+      //
+      // This used to derive is_private from the reference set on every save
+      // (`is_private: hasFileReferences || hasSubmissionReference`), which meant removing
+      // the last code reference silently published a request the student had chosen to
+      // keep private. That leaked the whole conversation, not just the row: RLS on
+      // help_request_messages goes through can_access_help_request(), which reads this
+      // same flag, and the row is re-broadcast to the class:<id>:students channel.
+      //
+      // is_private is the student's own setting (the create form forces it on when a
+      // submission is referenced, and disables the checkbox), so an edit to the code
+      // references must never take it back down. A privacy downgrade is now also
+      // rejected in the database for non-staff callers, by the
+      // forbid_help_request_privacy_downgrade trigger. If we ever want to give students
+      // an explicit "make this public" control, it needs a dedicated SECURITY DEFINER
+      // RPC that re-checks who is asking and what is attached -- not a direct column
+      // write from a form-save path like this one.
       const hasFileReferences = newRefs.length > 0;
       const hasSubmissionReference = editingSubmissionId !== null;
-      const shouldBePrivate = hasFileReferences || hasSubmissionReference;
+      const mustBePrivate = hasFileReferences || hasSubmissionReference;
+      const nextIsPrivate = request.is_private || mustBePrivate;
 
       await helpRequests.update(request.id, {
         referenced_submission_id: editingSubmissionId,
-        is_private: shouldBePrivate
+        // Only send the column when it actually changes, so a no-op save can't trip the
+        // downgrade trigger or churn the realtime broadcast.
+        ...(nextIsPrivate === request.is_private ? {} : { is_private: nextIsPrivate })
       });
 
-      // Show appropriate privacy message
-      if (shouldBePrivate && !request.is_private) {
+      if (nextIsPrivate && !request.is_private) {
         toaster.success({
           title: "Privacy Updated",
           description: "Help request has been marked as private due to code references."
-        });
-      } else if (!shouldBePrivate && request.is_private) {
-        toaster.success({
-          title: "Privacy Updated",
-          description: "Help request has been made public as it no longer contains code references."
         });
       }
 

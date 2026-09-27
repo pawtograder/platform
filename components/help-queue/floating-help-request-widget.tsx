@@ -20,10 +20,6 @@ import { toaster } from "@/components/ui/toaster";
 import type { HelpRequestResolutionStatus } from "@/utils/supabase/DatabaseTypes";
 import useModalManager from "@/hooks/useModalManager";
 
-const HelpDrawer = dynamic(() => import("@/components/help-queue/help-drawer"), {
-  ssr: false
-});
-
 const HelpRequestResolutionModal = dynamic(() => import("@/components/help-queue/help-request-resolution-modal"), {
   ssr: false
 });
@@ -34,7 +30,8 @@ export function FloatingHelpRequestWidget() {
   const { course_id } = useParams();
   const { role, private_profile_id, isReadOnly } = useClassProfiles();
   const featureEnabled = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS);
-  const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
+  // The drawer itself is mounted once by HelpDrawerProvider, so this only needs to open it.
+  const { openDrawer } = useHelpDrawer();
   const [isExpanded, setIsExpanded] = useState(false);
   const unreadCount = useHelpRequestUnreadCount(activeRequest?.request.id);
   const allHelpRequestStudents = useHelpRequestStudents();
@@ -212,7 +209,6 @@ export function FloatingHelpRequestWidget() {
             </Button>
           </Tooltip>
         </Box>
-        {isDrawerOpen && <HelpDrawer isOpen={isDrawerOpen} onClose={closeDrawer} />}
       </>
     );
   }

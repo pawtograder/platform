@@ -1,18 +1,22 @@
 import { createClient } from "@/utils/supabase/server";
 import { Link, Box, Flex, VStack, HStack, Heading, Text } from "@chakra-ui/react";
 import { TimeZoneProvider } from "@/lib/TimeZoneProvider";
+import { getBranding } from "@/lib/branding";
 import { redirect } from "next/navigation";
 import { ReactNode } from "react";
 
 /** Default when no course context; matches course layout fallback. */
 const ADMIN_DISPLAY_TIME_ZONE = "America/New_York";
 
-export const metadata = {
-  title: {
-    default: "Admin · Pawtograder",
-    template: "%s · Admin · Pawtograder"
-  }
-};
+export async function generateMetadata() {
+  const brandName = getBranding().name;
+  return {
+    title: {
+      default: `Admin · ${brandName}`,
+      template: `%s · Admin · ${brandName}`
+    }
+  };
+}
 
 interface AdminLayoutProps {
   children: ReactNode;
@@ -86,6 +90,18 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                   Classes
                 </Link>
                 <Link
+                  href="/admin/github-orgs"
+                  color="blue.600"
+                  _hover={{ color: "blue.800" }}
+                  px={3}
+                  py={2}
+                  rounded="md"
+                  fontSize="sm"
+                  fontWeight="medium"
+                >
+                  GitHub Orgs
+                </Link>
+                <Link
                   href="/admin/import"
                   color="blue.600"
                   _hover={{ color: "blue.800" }}
@@ -108,6 +124,30 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                   fontWeight="medium"
                 >
                   SIS Sync
+                </Link>
+                <Link
+                  href="/admin/lti-platforms"
+                  color="blue.600"
+                  _hover={{ color: "blue.800" }}
+                  px={3}
+                  py={2}
+                  rounded="md"
+                  fontSize="sm"
+                  fontWeight="medium"
+                >
+                  LTI Platforms
+                </Link>
+                <Link
+                  href="/admin/lti-contexts"
+                  color="blue.600"
+                  _hover={{ color: "blue.800" }}
+                  px={3}
+                  py={2}
+                  rounded="md"
+                  fontSize="sm"
+                  fontWeight="medium"
+                >
+                  LTI Contexts
                 </Link>
                 <Link
                   href="/admin/notifications"

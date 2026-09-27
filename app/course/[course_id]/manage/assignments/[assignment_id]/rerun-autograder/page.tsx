@@ -1,7 +1,7 @@
 "use client";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
@@ -635,7 +635,6 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
 
   return (
     <VStack>
-      <Toaster />
       <VStack paddingBottom="55px">
         <Box width="100%" maxWidth="1200px" border="1px solid" borderColor="border.muted" borderRadius="md" p={4}>
           <HStack alignItems="flex-end" gap={6} flexWrap="wrap">
@@ -1040,7 +1039,7 @@ export default function RerunAutograderPage() {
   if (isAssignmentLoading) {
     return <Skeleton height="100px" />;
   }
-  if (!assignment?.data.autograder.grader_repo) {
+  if (!assignment?.data?.autograder?.grader_repo) {
     return <Text>Assignment not found</Text>;
   }
   return (

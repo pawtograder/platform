@@ -5,6 +5,22 @@ import { createRedis, type RedisClient } from "./Redis.ts";
  * See https://github.com/SGrondin/bottleneck — Scripts.allKeys in lib/Scripts.js
  */
 
+// Reuse ONE Redis connection per isolate across metrics scrapes. Previously
+// collectBottleneckRedisSnapshots() called createRedis() on every scrape and
+// never closed the connection — with Redis `timeout 0` (idle connections never
+// reaped) each scrape leaked a socket, and across N pods this walked
+// connected_clients up to maxclients and produced "ERR max number of clients
+// reached". Caching mirrors the getRedisClient() pattern in GitHubSyncHelpers.
+let metricsRedisClient: RedisClient | null = null;
+
+function getMetricsRedisClient(): RedisClient | null {
+  if (metricsRedisClient) {
+    return metricsRedisClient;
+  }
+  metricsRedisClient = createRedis();
+  return metricsRedisClient;
+}
+
 const METRICS_LUA = `
 local id = ARGV[1]
 local now = tonumber(ARGV[2])
@@ -113,10 +129,10 @@ function parseEvalTriple(raw: unknown): { running: number; concurrent_clients: n
  * so callers can record a single error in Sentry.
  */
 export async function collectBottleneckRedisSnapshots(): Promise<BottleneckLimiterSnapshot[]> {
-  // createRedis picks ioredis (REDIS_URL) or the Upstash REST adapter
-  // automatically; both speak the SCAN + EVAL subset Bottleneck stores
-  // its limiter state under. Returns null when Redis isn't configured.
-  const redis = createRedis();
+  // Reuse the isolate-scoped client (see getMetricsRedisClient). ioredis
+  // auto-reconnects, so a cached connection stays healthy across scrapes; the
+  // old per-scrape createRedis() leaked one socket every scrape.
+  const redis = getMetricsRedisClient();
   if (!redis) {
     return [];
   }

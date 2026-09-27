@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Toaster, toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsInstructor } from "@/hooks/useClassProfiles";
 import {
   useAssignments,
@@ -837,7 +837,6 @@ export default function LabRosterPage() {
           />
         )}
       </VStack>
-      <Toaster />
     </Container>
   );
 }

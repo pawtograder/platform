@@ -1,0 +1,229 @@
+/**
+ * @jest-environment node
+ */
+
+import {
+  BRANCH_PROTECTION_RULESET_NAME,
+  DEFAULT_BRANCH_PROTECTION,
+  buildBranchProtectionRules,
+  diffBranchProtectionRules,
+  isBranchProtectionUnsupportedError,
+  planBranchProtectionAction,
+  requestsNoBranchProtection
+} from "@/supabase/functions/_shared/branchProtection";
+
+describe("buildBranchProtectionRules", () => {
+  it("returns an empty list when no flags are set", () => {
+    expect(
+      buildBranchProtectionRules({
+        blockForcePush: false,
+        requirePullRequest: false,
+        requiredReviewers: 0
+      })
+    ).toEqual([]);
+  });
+
+  it("emits only non_fast_forward for the default config", () => {
+    expect(buildBranchProtectionRules(DEFAULT_BRANCH_PROTECTION)).toEqual([{ type: "non_fast_forward" }]);
+  });
+
+  it("emits pull_request with the configured review count", () => {
+    const rules = buildBranchProtectionRules({
+      blockForcePush: true,
+      requirePullRequest: true,
+      requiredReviewers: 2
+    });
+    expect(rules).toHaveLength(2);
+    expect(rules[0]).toEqual({ type: "non_fast_forward" });
+    expect(rules[1]).toMatchObject({
+      type: "pull_request",
+      parameters: expect.objectContaining({ required_approving_review_count: 2 })
+    });
+  });
+
+  it("clamps a negative reviewer count to zero", () => {
+    const rules = buildBranchProtectionRules({
+      blockForcePush: false,
+      requirePullRequest: true,
+      requiredReviewers: -3
+    });
+    expect(rules).toEqual([
+      {
+        type: "pull_request",
+        parameters: expect.objectContaining({ required_approving_review_count: 0 })
+      }
+    ]);
+  });
+
+  it("ignores requiredReviewers when requirePullRequest is false", () => {
+    expect(
+      buildBranchProtectionRules({
+        blockForcePush: true,
+        requirePullRequest: false,
+        requiredReviewers: 5
+      })
+    ).toEqual([{ type: "non_fast_forward" }]);
+  });
+});
+
+describe("requestsNoBranchProtection", () => {
+  // Gates the early return in applyBranchProtectionRuleset: when true, NO
+  // GitHub rulesets endpoint is hit at all.
+  it("is true when every protection flag is off", () => {
+    expect(requestsNoBranchProtection({ blockForcePush: false, requirePullRequest: false, requiredReviewers: 0 })).toBe(
+      true
+    );
+  });
+
+  it("is true for a handout repo with force-push protection disabled (the staging case)", () => {
+    // assignment-create-handout-repo builds exactly this when protect_block_force_push is false.
+    expect(requestsNoBranchProtection({ blockForcePush: false, requirePullRequest: false, requiredReviewers: 0 })).toBe(
+      true
+    );
+  });
+
+  it("is false for the default config (force-push still blocked)", () => {
+    expect(requestsNoBranchProtection(DEFAULT_BRANCH_PROTECTION)).toBe(false);
+  });
+
+  it("is false when a pull request is required even with no minimum reviewers", () => {
+    expect(requestsNoBranchProtection({ blockForcePush: false, requirePullRequest: true, requiredReviewers: 0 })).toBe(
+      false
+    );
+  });
+});
+
+describe("diffBranchProtectionRules", () => {
+  it("reports equal when both sides match", () => {
+    const result = diffBranchProtectionRules([{ type: "non_fast_forward" }], [{ type: "non_fast_forward" }]);
+    expect(result).toEqual({ equal: true, toAdd: [], toRemove: [] });
+  });
+
+  it("is insensitive to rule ordering", () => {
+    const pr = {
+      type: "pull_request" as const,
+      parameters: {
+        required_approving_review_count: 1,
+        dismiss_stale_reviews_on_push: false,
+        require_code_owner_review: false,
+        require_last_push_approval: false,
+        required_review_thread_resolution: false
+      }
+    };
+    const result = diffBranchProtectionRules([{ type: "non_fast_forward" }, pr], [pr, { type: "non_fast_forward" }]);
+    expect(result.equal).toBe(true);
+  });
+
+  it("emits the missing additions and stale removals", () => {
+    const result = diffBranchProtectionRules(
+      [{ type: "non_fast_forward" }],
+      [
+        {
+          type: "pull_request",
+          parameters: {
+            required_approving_review_count: 1,
+            dismiss_stale_reviews_on_push: false,
+            require_code_owner_review: false,
+            require_last_push_approval: false,
+            required_review_thread_resolution: false
+          }
+        }
+      ]
+    );
+    expect(result.equal).toBe(false);
+    expect(result.toAdd).toHaveLength(1);
+    expect(result.toAdd[0].type).toBe("pull_request");
+    expect(result.toRemove).toEqual([{ type: "non_fast_forward" }]);
+  });
+});
+
+describe("planBranchProtectionAction", () => {
+  it("plans noop when nothing exists and nothing desired", () => {
+    expect(
+      planBranchProtectionAction({ blockForcePush: false, requirePullRequest: false, requiredReviewers: 0 }, null)
+    ).toEqual({ kind: "noop" });
+  });
+
+  it("plans delete when ruleset exists but nothing desired", () => {
+    expect(
+      planBranchProtectionAction({ blockForcePush: false, requirePullRequest: false, requiredReviewers: 0 }, [
+        { type: "non_fast_forward" }
+      ])
+    ).toEqual({ kind: "delete" });
+  });
+
+  it("plans create when ruleset absent but rules desired", () => {
+    const action = planBranchProtectionAction(DEFAULT_BRANCH_PROTECTION, null);
+    expect(action.kind).toBe("create");
+    if (action.kind === "create") {
+      expect(action.rules).toEqual([{ type: "non_fast_forward" }]);
+    }
+  });
+
+  it("plans noop when existing rules already match desired", () => {
+    expect(planBranchProtectionAction(DEFAULT_BRANCH_PROTECTION, [{ type: "non_fast_forward" }])).toEqual({
+      kind: "noop"
+    });
+  });
+
+  it("plans update when existing rules differ from desired", () => {
+    const action = planBranchProtectionAction(
+      { blockForcePush: true, requirePullRequest: true, requiredReviewers: 1 },
+      [{ type: "non_fast_forward" }]
+    );
+    expect(action.kind).toBe("update");
+    if (action.kind === "update") {
+      expect(action.rules.map((r) => r.type).sort()).toEqual(["non_fast_forward", "pull_request"]);
+    }
+  });
+});
+
+describe("isBranchProtectionUnsupportedError", () => {
+  it("recognises the free-org rulesets rejection GitHub returns from the list endpoint", () => {
+    // Verbatim from a handout-repo creation against a non-paid org.
+    const err = Object.assign(
+      new Error("Upgrade to GitHub Pro or make this repository public to enable this feature."),
+      {
+        status: 403
+      }
+    );
+    expect(isBranchProtectionUnsupportedError(err)).toBe(true);
+  });
+
+  it("reads the message off the response body and the errors array", () => {
+    expect(
+      isBranchProtectionUnsupportedError({
+        message: "Forbidden",
+        response: { data: { message: "Upgrade your GitHub plan to use this feature." } }
+      })
+    ).toBe(true);
+    expect(
+      isBranchProtectionUnsupportedError({
+        message: "Validation Failed",
+        response: { data: { errors: [{ message: "Upgrade your account to enable this feature." }] } }
+      })
+    ).toBe(true);
+    expect(
+      isBranchProtectionUnsupportedError({
+        message: "Validation Failed",
+        response: { data: { errors: ["Upgrade to GitHub Team to enable this feature."] } }
+      })
+    ).toBe(true);
+  });
+
+  it("does not swallow permission or transport failures", () => {
+    expect(isBranchProtectionUnsupportedError(new Error("Resource not accessible by integration"))).toBe(false);
+    expect(isBranchProtectionUnsupportedError(new Error("Bad credentials"))).toBe(false);
+    expect(isBranchProtectionUnsupportedError({ response: { data: { message: "Not Found" } } })).toBe(false);
+    expect(isBranchProtectionUnsupportedError(null)).toBe(false);
+    expect(isBranchProtectionUnsupportedError("upgrade to github pro")).toBe(false);
+  });
+});
+
+describe("BRANCH_PROTECTION_RULESET_NAME", () => {
+  it("matches the name historically used by createBranchProtectionRuleset", () => {
+    // Locking this so future renames are deliberate — existing repos in the
+    // wild have rulesets with exactly this name and we look them up by name.
+    expect(BRANCH_PROTECTION_RULESET_NAME).toBe("Protect main branch");
+  });
+});

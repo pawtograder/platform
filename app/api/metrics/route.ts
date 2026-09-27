@@ -5,8 +5,8 @@
 // when monitoring.enabled=true. Without the env var set the endpoint
 // returns 503 so we don't leak metrics on hostile networks.
 
-import { timingSafeEqual } from "node:crypto";
-import { getMetrics, refreshWorkflowMetrics } from "@/lib/metrics";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { getMetrics, isWorkflowRefreshLeader, refreshWorkflowMetrics } from "@/lib/metrics";
 
 // prom-client uses Node-only APIs (process.cpuUsage, V8 GC hooks).
 export const runtime = "nodejs";
@@ -20,14 +20,12 @@ function isAuthorized(headerValue: string | null): boolean {
   const m = headerValue.match(/^Bearer\s+(.+)$/);
   if (!m) return false;
   const presented = m[1];
-  // Pad to the longer of the two so timingSafeEqual doesn't throw on
-  // length mismatch (which itself is timing-revealing).
-  const len = Math.max(expected.length, presented.length);
-  const a = Buffer.alloc(len);
-  const b = Buffer.alloc(len);
-  a.write(expected);
-  b.write(presented);
-  return timingSafeEqual(a, b) && expected.length === presented.length;
+  // Constant-time compare. Hash both sides to fixed-length digests so this is correct for
+  // multi-byte/unicode tokens (Buffer.alloc(charLength)+write truncates UTF-8, which could make
+  // two different tokens compare equal) and never throws on a length mismatch.
+  const a = createHash("sha256").update(expected).digest();
+  const b = createHash("sha256").update(presented).digest();
+  return timingSafeEqual(a, b);
 }
 
 export async function GET(req: Request): Promise<Response> {
@@ -61,12 +59,16 @@ export async function GET(req: Request): Promise<Response> {
   // The chart sets the env var on a single dedicated replica (or on
   // index 0 of a StatefulSet, etc.). Other replicas still expose
   // node/process gauges from the same registry; only the workflow
-  // family is leader-gated.
+  // family is leader-gated. lib/metrics.ts reads the SAME predicate
+  // when it builds the registry, so a non-leader process does not even
+  // register web_workflow_metrics_last_success_timestamp_seconds — an
+  // unlabelled gauge is exported as 0 the moment it is registered, and
+  // a fleet-wide 0 would make the absence alert permanently silent.
   //
   // Failures are swallowed inside the helper and surfaced as
   // web_workflow_metrics_refresh_errors_total so the scrape itself
   // never fails just because the DB is slow.
-  if (process.env.METRICS_WORKFLOW_REFRESH_LEADER === "true") {
+  if (isWorkflowRefreshLeader()) {
     await refreshWorkflowMetrics();
   }
 

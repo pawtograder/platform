@@ -13,6 +13,10 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests/e2e",
+  /* The Canvas LTI 1.3 suite is heavy (boots a full Canvas LMS) and runs in its
+     own selectively-triggered CI lane via playwright.canvas.config.ts. Keep it
+     out of the default/per-PR E2E run. */
+  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts"],
   /* One-time gate before any worker spawns: probe PostgREST until its
      schema cache is loaded. Deployed previews don't admit traffic until
      this finishes, so test setup never races a partial cache. See
@@ -40,7 +44,20 @@ export default defineConfig({
         // Upload to Argos on CI only.
         uploadToArgos: !!process.env.CI,
 
+        // Deliberately NOT `ignoreUploadFailures: true`. Swallowing an upload
+        // error would make a failed upload indistinguishable from a passing
+        // run: `e2e-local` goes green having compared no screenshots, and
+        // `argos/platform` — a required context — is never reported at all,
+        // so the PR parks at "Expected — Waiting for status" with the reason
+        // buried in a 75-minute log. A missing visual check is not a passing
+        // one, and the loud failure is what says so. The canvas lane
+        // (playwright.canvas.config.ts) keeps the same behaviour; the two
+        // must not diverge in failure semantics.
+
         // Set your Argos token (required if not using GitHub Actions).
+        // Empty string is falsy, and the SDK's getAuthToken does `if (token)
+        // return token` before falling through to the tokenless path — so
+        // leaving this unset is what selects tokenless on CI.
         token: process.env.ARGOS_TOKEN || ""
       }
     ],

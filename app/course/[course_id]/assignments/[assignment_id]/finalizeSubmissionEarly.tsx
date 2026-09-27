@@ -130,7 +130,7 @@ export default function FinalizeSubmissionEarly({
   };
 
   return (
-    <Box width="50%" alignItems={"center"}>
+    <Box width={{ base: "100%", md: "50%" }} alignItems={"center"}>
       <PopConfirm
         triggerLabel="Finalize Submission Early"
         trigger={

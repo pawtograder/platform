@@ -1,6 +1,6 @@
 "use client";
 
-import { Toaster, toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController, useStudentRoster } from "@/hooks/useCourseController";
 import { getScore, useGradebookColumns, useGradebookController } from "@/hooks/useGradebook";
@@ -383,7 +383,6 @@ export default function ImportGradebookColumns() {
               <Dialog.Title>Import Gradebook Columns</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
-              <Toaster />
               <VStack>
                 {step === 1 && (
                   <>

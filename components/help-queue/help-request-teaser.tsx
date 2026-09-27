@@ -1,5 +1,6 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { getQueueTypeColor } from "@/lib/utils";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, AvatarGroup, Badge, Box, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
@@ -106,7 +107,7 @@ export const HelpRequestTeaser = (props: Props) => {
     if (effectiveStudents.length === 0) {
       return (
         <Avatar.Root size="sm">
-          <Avatar.Image src={(creatorProfile?.avatar_url || undefined) as string | undefined} alt="" />
+          <Avatar.Image src={sanitizeImageSrc(creatorProfile?.avatar_url)} alt="" />
           <Avatar.Fallback>{(creatorProfile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
@@ -116,7 +117,7 @@ export const HelpRequestTeaser = (props: Props) => {
       const displayProfile = student1Profile || creatorProfile;
       return (
         <Avatar.Root size="sm">
-          <Avatar.Image src={(displayProfile?.avatar_url || undefined) as string | undefined} alt="" />
+          <Avatar.Image src={sanitizeImageSrc(displayProfile?.avatar_url)} alt="" />
           <Avatar.Fallback>{(displayProfile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
@@ -145,7 +146,7 @@ export const HelpRequestTeaser = (props: Props) => {
       <AvatarGroup size="sm">
         {avatars.map((p) => (
           <Avatar.Root key={p.id} size="sm">
-            <Avatar.Image src={p.avatar_url} alt="" />
+            <Avatar.Image src={sanitizeImageSrc(p.avatar_url)} alt="" />
             <Avatar.Fallback>{(p.name || "?").charAt(0)}</Avatar.Fallback>
           </Avatar.Root>
         ))}

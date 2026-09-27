@@ -747,7 +747,10 @@ export class GradebookCellController {
         this._data = await this._fetchGradebookForThisStudent();
       }
 
-      if (this._closed) {
+      // The class controller can be closed by a navigation while the fetch above is in flight,
+      // leaving this gradebook controller open but with nothing to subscribe to (its subscribe
+      // methods throw once closed, which would surface here as an unhandled rejection).
+      if (this._closed || this._classRealTimeController.isClosed) {
         return;
       }
 

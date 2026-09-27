@@ -225,6 +225,12 @@ export function DiscussionSearch({ onChangeAction }: DiscussionSearchProps) {
             placeholder="Search posts"
             size="sm"
             bg="bg"
+            _focusVisible={{
+              outline: "2px solid",
+              outlineColor: "blue.500",
+              outlineOffset: "2px",
+              borderColor: "blue.500"
+            }}
             pr={inputValue ? "8" : undefined}
             data-shortcut="search"
             aria-label="Search posts"

@@ -1,8 +1,14 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
-import * as Sentry from "npm:@sentry/deno";
-import { createRepo, getOctoKit, reinviteToOrgTeam, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import {
+  createRepo,
+  getOctoKit,
+  NonRetryableRepoError,
+  reinviteToOrgTeam,
+  syncRepoPermissions
+} from "../_shared/GitHubWrapper.ts";
 import {
   assertUserIsInstructor,
   SecurityError,
@@ -10,6 +16,8 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
+import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { isOrgInviteWindowKnownClosed } from "../_shared/orgInviteWindow.ts";
 import type {
   GitHubLinkStatus,
   GitHubMembershipStatus,
@@ -18,6 +26,7 @@ import type {
   InstructorGitHubUnlinkRequest
 } from "../_shared/FunctionTypes.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 type InstructorGitHubRequest =
   | InstructorGitHubDiagnoseRequest
@@ -45,31 +54,74 @@ type TargetStudentEnrollment = {
 };
 
 function getAdminSupabase() {
-  return createClient<Database>(Deno.env.get("SUPABASE_URL") || "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "");
+  return createClient<Database>(Deno.env.get("SUPABASE_URL") || "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "", {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS
+  });
 }
+
+/**
+ * The distinct kinds of repair a sync can perform.
+ *
+ * Reported as Sentry tags on "Fix GitHub button made changes" so the event is countable. It used to
+ * carry a single boolean across five different repairs, which made the issue unreadable in
+ * aggregate: an org invitation that GitHub had expired, a repo that was never created, and ordinary
+ * collaborator drift all produced the identical event, and telling them apart meant opening
+ * breadcrumbs one event at a time.
+ */
+type RepairKind =
+  | "staff_org_invite"
+  | "student_org_invite"
+  // reinviteToOrgTeam returns false for two very different outcomes: the user was already in the
+  // team (a no-op), or they were already in the ORG and it just added them to the team (a repair,
+  // and the one that leaves a staff member able to see the course's repositories). The boolean
+  // cannot tell them apart, but our own row can: an enrollment that was unconfirmed before the call
+  // and confirmed after it changed, whichever branch did it.
+  | "staff_org_confirmed"
+  | "student_org_confirmed"
+  | "group_repo_create"
+  | "individual_repo_create"
+  | "repo_permission_sync"
+  | "github_username_changed";
 
 async function ensureStaffOrgMembership(userID: string, githubUsername: string, scope: Sentry.Scope) {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data: staffRoles, error: staffError } = await adminSupabase
     .from("user_roles")
-    .select("class_id, role, github_org_confirmed, classes(slug, github_org)")
+    .select("class_id, role, github_org_confirmed, classes(slug, github_org, start_date, end_date, archived)")
     .eq("disabled", false)
-    .in("role", ["instructor", "grader"])
+    .in("role", ["instructor", "grader", "admin"])
     .eq("user_id", userID);
   if (staffError) {
     Sentry.captureException(staffError, scope);
-    return { madeChanges: false, errorMessages: ["Error fetching staff roles"] };
+    return {
+      madeChanges: false,
+      errorMessages: ["Error fetching staff roles"],
+      repairKinds: new Set<RepairKind>()
+    };
   }
   if (!staffRoles || staffRoles.length === 0) {
-    return { madeChanges: false, errorMessages: [] };
+    return { madeChanges: false, errorMessages: [], repairKinds: new Set<RepairKind>() };
   }
   let madeChanges = false;
   const errorMessages: string[] = [];
+  const repairKinds = new Set<RepairKind>();
   for (const c of staffRoles) {
     if (!c.classes?.github_org || !c.classes?.slug) {
+      continue;
+    }
+    // Don't mail an invitation to rejoin a course that is demonstrably over (or archived). Only
+    // acts on evidence — a class with no term dates still reconciles, because this function is the
+    // student- and instructor-facing escape hatch and most classes have no dates set.
+    if (isOrgInviteWindowKnownClosed(c.classes)) {
+      Sentry.addBreadcrumb({
+        category: "github",
+        message: `Skipping staff org reconcile for ${c.classes.github_org}/${c.classes.slug}: outside the class term window`,
+        level: "info"
+      });
       continue;
     }
     const team_slug = `${c.classes.slug}-staff`;
@@ -79,22 +131,38 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
       level: "info"
     });
     try {
-      const resp = await reinviteToOrgTeam(c.classes.github_org, team_slug, githubUsername, scope);
-      madeChanges = madeChanges || resp;
-      if (!resp) {
+      const resp = await reinviteToOrgTeam(c.classes.github_org, team_slug, githubUsername, scope, {
+        userId: userID
+      });
+      if (resp) {
+        madeChanges = true;
+        repairKinds.add("staff_org_invite");
+      } else {
         // Either already in the team, or just added directly via PUT. Mark confirmed for this class.
-        await adminSupabase
+        const { error: confirmError } = await adminSupabase
           .from("user_roles")
           .update({ github_org_confirmed: true })
           .eq("user_id", userID)
           .eq("class_id", c.class_id);
+        // supabase-js resolves with { error } rather than throwing, so this write cannot fail into
+        // the catch below — it has to be inspected. A silent failure here leaves the "accept your
+        // invitation" banner up for a user who is in fact in the team.
+        if (confirmError) {
+          Sentry.captureException(confirmError, scope);
+          errorMessages.push(`Error confirming GitHub organization membership for ${c.classes.github_org}`);
+        } else if (c.github_org_confirmed !== true) {
+          // Not an invitation, but not nothing either: the role went unconfirmed -> confirmed, which
+          // is what clears the banner. Recorded as a repair so the event fires; deliberately NOT
+          // folded into madeChanges, which drives the user-facing "repositories were updated" message.
+          repairKinds.add("staff_org_confirmed");
+        }
       }
     } catch (e) {
       Sentry.captureException(e, scope);
       errorMessages.push(`Error inviting ${githubUsername} to ${c.classes.github_org}/${team_slug}`);
     }
   }
-  return { madeChanges, errorMessages };
+  return { madeChanges, errorMessages, repairKinds };
 }
 
 async function ensureAllReposExist(userID: string, githubUsername: string, scope: Sentry.Scope) {
@@ -104,7 +172,14 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     .select(
       // "*"
       // "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*,assignments(*), assignment_groups(*,repositories(*)), user_roles(users(github_username)))))",
-      "class_id, github_org_confirmed, classes(slug, github_org, time_zone), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
+      // `repositories(*, assignments(archived_at))`: the repo rows carry no assignment data of their
+      // own, and both permission-sync fan-outs below have to skip repos whose assignment has been
+      // archived. Unambiguous embed — repositories has exactly one FK to assignments
+      // (repositories_assignment_id_fkey).
+      //
+      // The class's term dates and archived flag come along for isOrgInviteWindowKnownClosed below,
+      // which decides whether this reconcile may still mail an org invitation.
+      "class_id, github_org_confirmed, classes(slug, github_org, time_zone, start_date, end_date, archived), profiles!private_profile_id(id, name, sortable_name, repositories(*, assignments(archived_at)), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*, assignments(archived_at)), assignment_groups_members(*, user_roles(users(github_username))))))"
     )
     .eq("disabled", false)
     .eq("role", "student")
@@ -114,26 +189,56 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     throw new UserVisibleError("Error fetching classes");
   }
   if (!classes || classes.length === 0) {
-    return { madeChanges: false, errorMessages: [] };
+    return { madeChanges: false, errorMessages: [], repairKinds: new Set<RepairKind>() };
   }
 
   let madeChanges = false;
+  const errorMessages: string[] = [];
+  const repairKinds = new Set<RepairKind>();
 
   for (const c of classes) {
-    if (c!.classes.github_org) {
+    // Require both org and slug: the student team name is derived as `${slug}-students`, so a class
+    // with github_org set but slug still NULL would reconcile against a bogus `null-students` team.
+    // Mirrors the staff loop above and the team-sync migration (20260611120001).
+    if (c!.classes.github_org && c!.classes.slug && !isOrgInviteWindowKnownClosed(c!.classes)) {
       Sentry.addBreadcrumb({
         category: "github",
-        message: `Reinviting user ${githubUsername} to org ${c!.classes.github_org}, team ${c!.classes.slug! + "-students"}`,
+        message: `Reinviting user ${githubUsername} to org ${c!.classes.github_org}, team ${c!.classes.slug + "-students"}`,
         level: "info"
       });
-      const resp = await reinviteToOrgTeam(c!.classes.github_org, c!.classes.slug! + "-students", githubUsername);
-      madeChanges = madeChanges || resp;
-      if (!resp) {
-        await adminSupabase
-          .from("user_roles")
-          .update({ github_org_confirmed: true })
-          .eq("user_id", userID)
-          .eq("class_id", c!.class_id);
+      // Reconcile each enrolled org independently: a failure in one org (broken installation,
+      // transient GitHub/DB error) must not abort reconciliation of the user's other orgs. Record
+      // and continue rather than throwing out of the whole sync.
+      try {
+        const resp = await reinviteToOrgTeam(
+          c!.classes.github_org,
+          c!.classes.slug + "-students",
+          githubUsername,
+          undefined,
+          { userId: userID }
+        );
+        if (resp) {
+          madeChanges = true;
+          repairKinds.add("student_org_invite");
+        }
+        if (!resp) {
+          const { error: confirmError } = await adminSupabase
+            .from("user_roles")
+            .update({ github_org_confirmed: true })
+            .eq("user_id", userID)
+            .eq("class_id", c!.class_id);
+          // Inspected rather than assumed, for the reason given in the staff loop above.
+          if (confirmError) {
+            Sentry.captureException(confirmError, scope);
+            errorMessages.push(`Error confirming GitHub organization membership for ${c!.classes.github_org}`);
+          } else if (c!.github_org_confirmed !== true) {
+            // Same unconfirmed -> confirmed repair as the staff loop.
+            repairKinds.add("student_org_confirmed");
+          }
+        }
+      } catch (e) {
+        Sentry.captureException(e, scope);
+        errorMessages.push(`Error reconciling org membership for ${c!.classes.github_org}/${c!.classes.slug}-students`);
       }
     }
   }
@@ -142,6 +247,23 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   const existingGroupRepos = classes.flatMap((c) =>
     c!.profiles!.assignment_groups_members!.flatMap((g) => g.assignment_groups.repositories)
   );
+
+  // An archived assignment is over: its repos need no collaborator reconciliation, and if the
+  // instructor deleted them on GitHub when they abandoned the assignment then syncing is not just
+  // pointless but noisy — every one 404s, and this is the user-facing "Fix GitHub" path, so the
+  // student is shown `Error syncing permissions for <repo>` about something that is not their
+  // problem and cannot fix. Two abandoned sp26 assignments left 192 such rows in neu-cs2100.
+  // Mirrors the trigger-path filter in
+  // 20260909170000_org_join_sync_skips_archived_assignments.sql.
+  //
+  // Deliberately NOT applied to `existingRepos` below. That list answers "does a repo already
+  // exist for this assignment?", which decides whether to CREATE one — a different question, and
+  // one where dropping archived rows would conclude "missing" and manufacture a fresh repo for a
+  // retired assignment. Existence is unconditional; only syncing is filtered.
+  const isForLiveAssignment = (repo: { assignments?: { archived_at: string | null } | null }) =>
+    !repo.assignments?.archived_at;
+  const individualReposToSync = existingIndividualRepos.filter(isForLiveAssignment);
+  const groupReposToSync = existingGroupRepos.filter(isForLiveAssignment);
 
   const existingRepos = [...existingIndividualRepos, ...existingGroupRepos];
   //Find all assignments that the student is enrolled in that have been released
@@ -155,6 +277,11 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
       classes!.map((c) => c!.class_id)
     )
     .eq("classes.user_roles.user_id", userID)
+    // Never create a repo for a retired assignment. Same reasoning as the sync filter above, and
+    // the same predicate the migration adds to create_repos_for_student — this function is the
+    // TypeScript twin of that path, so a student pressing "Fix GitHub" must not manufacture repos
+    // the instructor has archived.
+    .is("archived_at", null)
     .not("template_repo", "is", "null")
     .not("template_repo", "eq", "")
     .lte("release_date", TZDate.tz(classes[0].classes.time_zone!).toISOString())
@@ -166,31 +293,66 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   const assignments = allAssignments.filter(
     (a) =>
       a.template_repo?.includes("/") &&
+      // Skip assignments in classes that aren't GitHub-ready (no org, or slug still NULL): the repo
+      // name is built from `${slug}-...` and the row from `${github_org}/...`, so a partially
+      // configured class would produce bogus `null-*` repos. Mirrors the invite-loop guard above.
+      a.classes?.github_org &&
+      a.classes?.slug &&
       ((a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
         a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader"))
   );
 
-  const errorMessages: string[] = [];
   //For each group repo, sync the permissions
   const createdAsGroupRepos = await Promise.all(
-    classes.flatMap((c) =>
-      c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
+    classes.flatMap((c) => {
+      // Skip classes that aren't GitHub-ready (no org, or slug still NULL): repo names/rows below are
+      // built from `${slug}-...` / `${github_org}/...`, so a partially configured class would create
+      // bogus `null-*` repositories. Mirrors the invite-loop guard above.
+      if (!c!.classes.github_org || !c!.classes.slug) {
+        return [];
+      }
+      return c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
         const group = groupMembership.assignment_groups;
         const assignment = groupMembership.assignments;
         if (!assignment.template_repo?.includes("/")) {
           return;
         }
+        // This fan-out CREATES a repo whenever the group has none, and it reads its assignment from
+        // its own embed rather than from `allAssignments` — so the `archived_at` filter on that
+        // query does not reach here. Without this guard, "Fix GitHub" would still manufacture a
+        // fresh group repo for an assignment the instructor has retired.
+        if (assignment.archived_at) {
+          return;
+        }
         const repoName = `${c.classes!.slug}-${assignment.slug}-group-${sanitizeRepoNameComponent(group.name)}`;
+        // PER-JOB SCOPE. This closure is one of four fan-outs in this function that share the single
+        // request scope, and it runs concurrently over every group repo. Everything below writes
+        // repo-specific data to whatever scope it is handed: the captures in this closure, the
+        // breadcrumbs, and — since the step-timing work — a `step_timings_*` context and tag set
+        // written by createRepo / syncRepoPermissions on completion. On one shared object those
+        // writes overwrite each other, so a capture here could report a SIBLING repository's timing
+        // breakdown. Unlike assignment-create-all-repos, the per-repository failures here ARE
+        // captured (below), so the clone has to be threaded into those captures too — otherwise the
+        // problem moves rather than goes away. Same invariant the async worker holds per envelope at
+        // github-async-worker/index.ts:613; Scope.clone() copies tags/contexts/breadcrumbs by value,
+        // so inherited request context (user_id, github_username, ...) survives.
+        const jobScope = scope?.clone() ?? scope;
+        jobScope?.setTag("repository", `${c.classes!.github_org}/${repoName}`);
 
-        Sentry.addBreadcrumb({
+        jobScope?.addBreadcrumb({
           category: "github",
           message: `repoName: ${repoName}, template_repo: '${assignment.template_repo}', groupMembership: ${JSON.stringify(groupMembership, null, 2)}, existingRepos: ${JSON.stringify(groupMembership.assignment_groups.repositories, null, 2)}`,
           level: "info"
         });
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
+          // madeChanges covers the row we are about to insert, which is a real change even if GitHub
+          // then fails. The repair KIND is recorded only once the repository is ready — the catch
+          // below turns a failure into an error message, so tagging here would report a successful
+          // creation for a repair that did not happen, in the one event this PR adds to make those
+          // outcomes countable.
           madeChanges = true;
-          Sentry.addBreadcrumb({
+          jobScope?.addBreadcrumb({
             category: "github",
             message: `Creating repo ${repoName}`,
             level: "info"
@@ -208,11 +370,30 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             .select("id")
             .single();
           if (error) {
-            Sentry.captureException(error, scope);
+            Sentry.captureException(error, jobScope);
             throw new UserVisibleError(`Error creating repo: ${error}`);
           }
           try {
-            const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
+            // E2E fixtures must never hit real GitHub. Skip createRepo + syncRepoPermissions and mark
+            // the row ready with a fake SHA. Stub-record tests still fall through.
+            if (
+              shouldSkipRealGithubForE2eFixture({
+                org: c.classes!.github_org,
+                courseSlug: c.classes!.slug,
+                repoName
+              })
+            ) {
+              const { error: e2eReadyError } = await adminSupabase
+                .from("repositories")
+                .update({ synced_repo_sha: `e2e-skip-${repoName}`, is_github_ready: true })
+                .eq("id", dbRepo!.id);
+              if (e2eReadyError) {
+                throw e2eReadyError;
+              }
+              repairKinds.add("group_repo_create");
+              return assignment;
+            }
+            const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!, {}, jobScope);
             const { error: updateRepoError } = await adminSupabase
               .from("repositories")
               .update({
@@ -223,9 +404,17 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             if (updateRepoError) {
               throw updateRepoError;
             }
+            repairKinds.add("group_repo_create");
           } catch (e) {
-            Sentry.captureException(e, scope);
-            await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+            Sentry.captureException(e, jobScope);
+            // Keep the row (is_github_ready stays false) so the reconciler + self-healing createRepo
+            // can auto-repair a transient failure; deleting would orphan a possibly-blank GitHub repo
+            // and hide it from the reconciler. Only a terminal (non-retryable) failure records
+            // creation_error to park the row for an instructor (matches
+            // autograder-create-repos-for-student).
+            if (e instanceof NonRetryableRepoError) {
+              await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo!.id);
+            }
             errorMessages.push(
               `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
             );
@@ -234,7 +423,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         }
 
         try {
-          Sentry.addBreadcrumb({
+          jobScope?.addBreadcrumb({
             category: "github",
             message: `Syncing permissions for ${repoName}, groupMemberUsernames: ${group.assignment_groups_members
               .filter((m) => m.user_roles) // Needed to not barf when a student is removed from the class
@@ -251,15 +440,18 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
               .filter((m) => m.user_roles) // Needed to not barf when a student is removed from the class
               .filter((m) => m.user_roles.users.github_username)
               .map((m) => m.user_roles.users.github_username!),
-            scope
+            jobScope
           );
-          madeChanges = madeChanges || madeChangesForRepo;
+          if (madeChangesForRepo) {
+            madeChanges = true;
+            repairKinds.add("repo_permission_sync");
+          }
         } catch (e) {
-          Sentry.captureException(e, scope);
+          Sentry.captureException(e, jobScope);
           errorMessages.push(`Error syncing repo permissions for ${repoName}`);
         }
-      })
-    )
+      });
+    })
   );
 
   const requests = assignments!
@@ -285,14 +477,20 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
       //Is it a group assignment?
       const courseSlug = assignment.classes!.slug;
       const repoName = `${courseSlug}-${assignment.slug}-${githubUsername}`;
+      // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above: shared request
+      // scope + concurrent fan-out means this closure's own captures would report another
+      // repository's timings.
+      const jobScope = scope?.clone() ?? scope;
+      jobScope?.setTag("repository", `${assignment.classes!.github_org}/${repoName}`);
       if (existingRepos.find((repo) => repo.repository === `${assignment.classes!.github_org}/${repoName}`)) {
-        Sentry.addBreadcrumb({
+        jobScope?.addBreadcrumb({
           category: "github",
           message: `Repo ${repoName} already exists...`,
           level: "info"
         });
         return;
       }
+      // Recorded after the repository is ready, for the reason given on the group path above.
       madeChanges = true;
       //Use service role key to insert the repo into the database
       const { error, data: dbRepo } = await adminSupabase
@@ -306,19 +504,41 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         .select("id")
         .single();
       if (error) {
-        Sentry.captureException(error, scope);
+        Sentry.captureException(error, jobScope);
         throw new UserVisibleError(`Error inserting repo: ${error}`);
       }
 
       try {
-        Sentry.addBreadcrumb({
+        jobScope?.addBreadcrumb({
           category: "github",
           message: `Creating repo and syncing permissions for ${repoName}, githubUsername: ${githubUsername}`,
           level: "info"
         });
-        const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
-        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], scope);
-        await adminSupabase
+        // E2E fixtures must never hit real GitHub (see group-repo path above).
+        if (shouldSkipRealGithubForE2eFixture({ org: assignment.classes!.github_org, courseSlug, repoName })) {
+          const { error: e2eReadyError } = await adminSupabase
+            .from("repositories")
+            .update({
+              synced_repo_sha: `e2e-skip-${repoName}`,
+              synced_handout_sha: assignment.latest_template_sha,
+              is_github_ready: true
+            })
+            .eq("id", dbRepo!.id);
+          if (e2eReadyError) {
+            throw e2eReadyError;
+          }
+          repairKinds.add("individual_repo_create");
+          return `e2e-skip-${repoName}`;
+        }
+        const new_repo_sha = await createRepo(
+          assignment.classes!.github_org!,
+          repoName,
+          assignment.template_repo,
+          {},
+          jobScope
+        );
+        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], jobScope);
+        const { error: readyError } = await adminSupabase
           .from("repositories")
           .update({
             synced_repo_sha: new_repo_sha,
@@ -326,25 +546,43 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             is_github_ready: true
           })
           .eq("id", dbRepo!.id);
+        // The repo exists on GitHub but the row still says otherwise: a real failure, and one the
+        // reconciler repairs. Throwing routes it through the same catch as a createRepo failure
+        // rather than reporting a completed repair.
+        if (readyError) {
+          throw readyError;
+        }
+        repairKinds.add("individual_repo_create");
 
         return new_repo_sha;
       } catch (e) {
-        Sentry.captureException(e, scope);
+        Sentry.captureException(e, jobScope);
         errorMessages.push(`Error creating repo: ${repoName}`);
-        await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+        // Keep the row so the reconciler + self-healing createRepo can auto-repair a transient
+        // failure (deleting would orphan a possibly-blank GitHub repo and hide it from the
+        // reconciler). Only a terminal (non-retryable) failure records creation_error to park the
+        // row for an instructor (matches the group path above and autograder-create-repos-for-student).
+        if (e instanceof NonRetryableRepoError) {
+          await adminSupabase.from("repositories").update({ creation_error: e.message }).eq("id", dbRepo!.id);
+        }
       }
     });
   await Promise.all(requests);
 
   // Sync permissions for existing individual repos
-  const individualRepoSyncPromises = existingIndividualRepos
+  const individualRepoSyncPromises = individualReposToSync
     .filter((repo) => repo.repository && repo.repository.includes("/"))
     .map(async (repo) => {
+      // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above: shared request
+      // scope + concurrent fan-out means this closure's own captures would report another
+      // repository's timings.
+      const jobScope = scope?.clone() ?? scope;
+      jobScope?.setTag("repository", repo.repository);
       try {
         const [orgName, repoName] = repo.repository.split("/");
         const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
         if (classSlug) {
-          Sentry.addBreadcrumb({
+          jobScope?.addBreadcrumb({
             category: "github",
             message: `Syncing permissions for ${repo.repository}, githubUsername: ${githubUsername}`,
             level: "info"
@@ -354,20 +592,28 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             repoName,
             classSlug,
             [githubUsername],
-            scope
+            jobScope
           );
-          madeChanges = madeChanges || madeChangesForRepo;
+          if (madeChangesForRepo) {
+            madeChanges = true;
+            repairKinds.add("repo_permission_sync");
+          }
         }
       } catch (e) {
-        Sentry.captureException(e, scope);
+        Sentry.captureException(e, jobScope);
         errorMessages.push(`Error syncing permissions for repo: ${repo.repository}`);
       }
     });
 
   // Sync permissions for existing group repos
-  const groupRepoSyncPromises = existingGroupRepos
+  const groupRepoSyncPromises = groupReposToSync
     .filter((repo) => repo.repository && repo.repository.includes("/"))
     .map(async (repo) => {
+      // PER-JOB SCOPE, for the reason spelled out on the group-repo fan-out above: shared request
+      // scope + concurrent fan-out means this closure's own captures would report another
+      // repository's timings.
+      const jobScope = scope?.clone() ?? scope;
+      jobScope?.setTag("repository", repo.repository);
       try {
         const [orgName, repoName] = repo.repository.split("/");
         const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
@@ -382,7 +628,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             .filter((m) => m.user_roles && m.user_roles.users.github_username)
             .map((m) => m.user_roles.users.github_username!);
 
-          Sentry.addBreadcrumb({
+          jobScope?.addBreadcrumb({
             category: "github",
             message: `Syncing permissions for ${repo.repository}, groupMemberUsernames: ${groupMemberUsernames.join(", ")}`,
             level: "info"
@@ -392,21 +638,23 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             repoName,
             classSlug,
             groupMemberUsernames,
-            scope
+            jobScope
           );
-          madeChanges = madeChanges || madeChangesForRepo;
+          if (madeChangesForRepo) {
+            madeChanges = true;
+            repairKinds.add("repo_permission_sync");
+          }
         }
       } catch (e) {
-        Sentry.captureException(e, scope);
+        Sentry.captureException(e, jobScope);
         errorMessages.push(`Error syncing permissions for repo: ${repo.repository}`);
       }
     });
 
   await Promise.all([...individualRepoSyncPromises, ...groupRepoSyncPromises]);
-  if (madeChanges) {
-    Sentry.captureMessage("Fix GitHub button made changes", scope);
-  }
-  return { madeChanges, errorMessages };
+  // The capture itself lives in syncGitHubUser: staff-only repairs and a GitHub username change
+  // happen outside this function and were invisible in Sentry while the event was emitted here.
+  return { madeChanges, errorMessages, repairKinds };
 }
 async function fetchGitHubUserLogin(
   githubUserId: string | null | undefined,
@@ -620,14 +868,22 @@ async function syncGitHubUser(
   const staffResult = await ensureStaffOrgMembership(userId, gitHubUser.login, scope);
 
   //For good measure, make sure that all repos for the student exist and have the correct permissions
-  const { madeChanges: studentMadeChanges, errorMessages: studentErrorMessages } = await ensureAllReposExist(
-    userId,
-    gitHubUser.login,
-    scope
-  );
+  const {
+    madeChanges: studentMadeChanges,
+    errorMessages: studentErrorMessages,
+    repairKinds: studentRepairKinds
+  } = await ensureAllReposExist(userId, gitHubUser.login, scope);
   const madeChanges = staffResult.madeChanges || studentMadeChanges;
   const errorMessages = [...staffResult.errorMessages, ...studentErrorMessages];
   const changedUsername = userData.github_username !== gitHubUser.login;
+  const repairKinds = new Set<RepairKind>([...staffResult.repairKinds, ...studentRepairKinds]);
+  if (changedUsername) {
+    // A rename is a repair too: the stored login was wrong, and every GitHub call made on the
+    // user's behalf between the rename and this sync was made against a login that no longer
+    // existed. Tagged, but deliberately not folded into madeChanges, whose meaning ("repositories
+    // were updated, refresh the page") the UI depends on.
+    repairKinds.add("github_username_changed");
+  }
   const messages = [];
   if (changedUsername) {
     Sentry.addBreadcrumb({
@@ -641,6 +897,18 @@ async function syncGitHubUser(
   }
   if (madeChanges) {
     messages.push(`Repositories were updated. Please refresh the page.`);
+  }
+  if (repairKinds.size > 0) {
+    // One tag per kind so a Sentry search can count a single repair, plus the sorted join so the
+    // combinations are countable too. The message text is unchanged on purpose: it keeps the
+    // existing issue's history rather than splitting it in two on the day this ships.
+    const kinds = [...repairKinds].sort();
+    scope.setTag("repair_kinds", kinds.join(","));
+    for (const kind of kinds) {
+      scope.setTag(`repair_${kind}`, "true");
+    }
+    scope.setContext("repairs", { kinds, made_changes: madeChanges, errors: errorMessages.length });
+    Sentry.captureMessage("Fix GitHub button made changes", scope);
   }
   messages.push(...errorMessages);
   return {
@@ -686,7 +954,7 @@ async function unlinkGitHubIdentityForUser(userEmail: string, scope: Sentry.Scop
     throw new UserVisibleError("Missing Supabase URL or anon key");
   }
 
-  const userSupabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
+  const userSupabase = createClient<Database>(supabaseUrl, supabaseAnonKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
   const { data: sessionData, error: sessionError } = await userSupabase.auth.verifyOtp({
     token_hash: magicLinkData.properties.hashed_token,
     type: "magiclink"
@@ -730,6 +998,7 @@ async function handleInstructorGitHubRequest(req: Request, body: InstructorGitHu
   }
 
   if (body.action === "sync") {
+    scope.setTag("sync_trigger", "instructor");
     if (!target.classes?.github_org) {
       throw new UserVisibleError("Course has no GitHub organization configured");
     }
@@ -789,12 +1058,18 @@ async function parseRequestBody(req: Request): Promise<Record<string, unknown>> 
   }
 }
 
-async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
+async function handleStudentGitHubSync(req: Request, source: string, scope: Sentry.Scope) {
+  // "login" or "button" — the two callers are indistinguishable in production otherwise, and the
+  // repairs recorded here were mostly the login-time reconcile rather than a student pressing
+  // anything. Normalized to those two values rather than passed through: the label is
+  // client-supplied, and an unbounded tag would be a cardinality hole in Sentry.
+  scope.setTag("sync_trigger", source === "login" ? "login" : "button");
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) {
     throw new SecurityError("Missing Authorization header");
   }
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }
@@ -806,22 +1081,68 @@ async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
   if (!user) {
     throw new SecurityError("User not found");
   }
-  const { data: classData, error: classError } = await supabase
+  const { data: classRows, error: classError } = await supabase
     .from("classes")
-    .select("github_org, user_roles!inner(user_id, disabled)")
+    .select("github_org, start_date, end_date, archived, user_roles!inner(user_id, disabled, github_org_confirmed)")
     .eq("user_roles.user_id", user.id)
     .eq("user_roles.disabled", false)
-    .not("github_org", "is", "null")
-    .limit(1)
-    .single();
+    .not("github_org", "is", "null");
   if (classError) {
     Sentry.captureException(classError, scope);
     throw new UserVisibleError("Error fetching class");
   }
-  if (!classData) {
+  const orgs = [...new Set((classRows ?? []).map((c) => c.github_org).filter((o): o is string => Boolean(o)))];
+  if (orgs.length === 0) {
     throw new UserVisibleError("User not in any classes");
   }
-  return await syncGitHubUser(user.id, classData.github_org!, false, scope);
+
+  // Force past syncGitHubUser's 24h recent-sync throttle when the user still has an unconfirmed
+  // org enrollment. syncGitHubUser stamps last_github_user_sync before reconciling, so a run that
+  // failed part-way (e.g. a transient error in ensureAllReposExist) would otherwise leave the user
+  // throttled with github_org_confirmed = false — the "accept your invitation" banner stuck for 24h.
+  // Deciding force server-side from github_org_confirmed (not a client flag) keeps the throttle's
+  // anti-spam guarantee for already-reconciled users while letting a stuck user retry each login.
+  // Treat NULL github_org_confirmed as unconfirmed too (the column is nullable): the invitation
+  // banner shows whenever github_org_confirmed is falsy, so `!== true` keeps this force decision
+  // aligned with the banner instead of skipping NULL rows that still show the stuck banner.
+  //
+  // A class whose window is provably closed does NOT count, because nothing will ever confirm that
+  // enrollment again: this function skips reconciling a closed class, and so does the hourly
+  // reconciler. Leaving it in would make an enrollment that ends unconfirmed — a user who left the
+  // org after the course finished, which the member_removed webhook now records — force a full
+  // reconciliation, GitHub calls included, on every login the user ever makes.
+  const hasUnconfirmedEnrollment = (classRows ?? []).some(
+    (c) => !isOrgInviteWindowKnownClosed(c) && (c.user_roles ?? []).some((r) => r.github_org_confirmed !== true)
+  );
+
+  // syncGitHubUser reconciles ALL of the user's enrolled orgs/teams internally (see
+  // ensureAllReposExist + ensureStaffOrgMembership), so a single successful call covers every org.
+  // The org argument only selects which org's GitHub App installation resolves the login from the
+  // github_user_id — so try each until one succeeds, ensuring one mis-installed org doesn't block
+  // reconciliation of the rest.
+  let lastError: unknown;
+  for (let i = 0; i < orgs.length; i++) {
+    const org = orgs[i];
+    // The first attempt respects the throttle decision (hasUnconfirmedEnrollment). RETRIES force
+    // past it: syncGitHubUser stamps last_github_user_sync before reconciling, so a first attempt
+    // that throws mid-reconcile would leave a retry hitting the 24h recent-sync gate — which returns
+    // a benign "synced recently" response that would mask the real failure and report a repair that
+    // never happened. Forcing retries makes them actually run (and surface a real error if they too
+    // fail).
+    const force = i > 0 || hasUnconfirmedEnrollment;
+    try {
+      return await syncGitHubUser(user.id, org, force, scope);
+    } catch (e) {
+      lastError = e;
+      Sentry.captureException(e, scope);
+      scope?.addBreadcrumb({
+        category: "github",
+        level: "warning",
+        message: `GitHub sync via org ${org} failed, trying next org if any: ${e}`
+      });
+    }
+  }
+  throw lastError instanceof Error ? lastError : new UserVisibleError("Error syncing GitHub account");
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
@@ -829,7 +1150,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (body.action === "diagnose" || body.action === "sync" || body.action === "unlink") {
     return await handleInstructorGitHubRequest(req, body as InstructorGitHubRequest, scope);
   }
-  return await handleStudentGitHubSync(req, scope);
+  return await handleStudentGitHubSync(req, typeof body.source === "string" ? body.source : "button", scope);
 }
 Deno.serve(async (req) => {
   return await wrapRequestHandler(req, handleRequest);

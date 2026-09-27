@@ -54,3 +54,9 @@ charts/
 # k6 / performance test scripts: imports and globals are k6-runtime, not
 # Node, so prettier's parser flags style issues that aren't applicable.
 tests/performance/
+
+# design-sync inputs: tooling artifacts for the claude.ai/design sync, not app
+# code. Compiled only by esbuild (never imported by the app), authored/regenerated
+# each sync, and deliberately full of `any`/mock shims — formatting them adds no
+# value and wouldn't stick across re-syncs.
+.design-sync/

@@ -8,7 +8,7 @@
 import * as fs from "fs";
 import * as readline from "readline";
 import { Writable } from "stream";
-import { readCredentials, writeCredentials, apiCall, DEFAULT_API_URL, type Credentials } from "./api";
+import { readCredentials, writeCredentials, apiCall, normalizeApiUrl, DEFAULT_API_URL, type Credentials } from "./api";
 import { getCredentialsPath } from "./credentials";
 import { logger, CLIError } from "./logger";
 
@@ -99,7 +99,7 @@ export async function startLoginFlow(options: LoginOptions): Promise<void> {
     throw new CLIError("Invalid token format. Pawtograder API tokens start with 'mcp_'.");
   }
 
-  const apiUrl = options.url || DEFAULT_API_URL;
+  const apiUrl = options.url ? normalizeApiUrl(options.url) : DEFAULT_API_URL;
 
   const previousCreds: Credentials | null = readCredentials();
 

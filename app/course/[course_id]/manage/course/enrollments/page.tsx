@@ -1,7 +1,9 @@
 "use client";
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import DiscordMembershipStatusAlerts from "@/components/discord/membership-status-alerts";
 import { toaster } from "@/components/ui/toaster";
+import { useCourse } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Accordion, Badge, Box, Collapsible, Container, Flex, Heading, Icon, List, Text } from "@chakra-ui/react";
@@ -554,10 +556,20 @@ function LinkedSectionsTab() {
   );
 }
 export default function EnrollmentsPage() {
+  const { course_id } = useParams();
+  const classId = Number(course_id);
+  const course = useCourse();
+  // Gated the same way the Discord management page gates it. Without this the RPC runs on every
+  // enrollments page load for every class, and most classes have no Discord server at all.
+  const discordServerConfigured = !!course?.discord_server_id;
+
   return (
     <Container>
       <Heading my="4">Enrollments</Heading>
       <LinkedSectionsTab />
+      {discordServerConfigured && (
+        <DiscordMembershipStatusAlerts classId={Number.isFinite(classId) ? classId : undefined} />
+      )}
       <EnrollmentsTable />
     </Container>
   );

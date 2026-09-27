@@ -52,7 +52,9 @@ export function useUserProfile(id: string | null | undefined):
       avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.id}`,
       flair: profile.flair || "",
       flair_color: profile.flair_color || "",
-      real_name: userRole?.profiles.name && profile.id !== userRole.private_profile_id ? userRole.profiles.name : "",
+      // `profiles` is a join: a `user_roles` row that arrives without it (e.g. a
+      // realtime payload carrying only the base row) must not crash the render.
+      real_name: userRole?.profiles?.name && profile.id !== userRole.private_profile_id ? userRole.profiles.name : "",
       private_profile_id: userRole?.private_profile_id,
       discussion_karma: profile.discussion_karma
     };

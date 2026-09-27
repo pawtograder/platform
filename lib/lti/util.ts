@@ -1,0 +1,240 @@
+/**
+ * Pure, dependency-free LTI helpers (no DB / no network / no `server-only`),
+ * so they can be unit-tested and shared by the service modules.
+ */
+import { LTI_CLAIM, ltiRolesToAppRole, type NrpsMember } from "./types";
+
+// ---- Canvas client_id (local vs global id) ----
+//
+// A Canvas object's *global* id is `shard_id * IDS_PER_SHARD + local_id`
+// (Switchman; IDS_PER_SHARD = 10^13). Instructure-hosted Canvas uses the global
+// id as the LTI `client_id` everywhere. But a self-hosted single-shard Canvas
+// hands out the *local* id in the OIDC login `client_id` while still using the
+// *global* id for the id_token `aud` and AGS line items. We register the
+// canonical global id (so launch `aud` verification stays exact); this matcher
+// lets the login lookup also accept the local-id form of that same key.
+const CANVAS_IDS_PER_SHARD = 10_000_000_000_000n;
+
+export function ltiClientIdMatches(stored: string, sent: string): boolean {
+  if (stored === sent) return true;
+  try {
+    const s = BigInt(stored);
+    const t = BigInt(sent);
+    // Only bridge a global id (≥ one shard) to its local-id form — never match
+    // two distinct global ids that merely share a local component.
+    if (s >= CANVAS_IDS_PER_SHARD && t < CANVAS_IDS_PER_SHARD) return s % CANVAS_IDS_PER_SHARD === t;
+    if (t >= CANVAS_IDS_PER_SHARD && s < CANVAS_IDS_PER_SHARD) return t % CANVAS_IDS_PER_SHARD === s;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// ---- JWT (decode only; verification lives in jwt.ts) ----
+export type DecodedJwt = Record<string, unknown>;
+
+export function decodeJwtPayload(jwt: string): DecodedJwt {
+  const parts = jwt.split(".");
+  if (parts.length !== 3) throw new Error("Malformed JWT");
+  const json = Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+  return JSON.parse(json) as DecodedJwt;
+}
+
+// ---- RFC5988 Link header (NRPS pagination) ----
+export function parseNextLink(linkHeader: string | null): string | undefined {
+  if (!linkHeader) return undefined;
+  for (const part of linkHeader.split(",")) {
+    const m = part.match(/<([^>]+)>\s*;\s*rel="?next"?/i);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
+// ---- AGS line item URL → scores URL ----
+export function appendPath(lineItemUrl: string, segment: string): string {
+  const url = new URL(lineItemUrl);
+  url.pathname = url.pathname.replace(/\/$/, "") + segment;
+  return url.toString();
+}
+
+// ---- Roster mapping (NRPS members → sis_sync_enrollment shape) ----
+export type RosterEntry = {
+  sis_user_id: number;
+  name: string | null;
+  role: "instructor" | "grader" | "student";
+  email: string | null;
+  sub: string;
+  lis_person_sourcedid: string | null;
+  class_section_crn: number | null;
+  lab_section_crn: number | null;
+};
+
+/**
+ * Deterministic positive 31-bit integer from the LTI `sub` (FNV-1a), used as a
+ * surrogate `sis_user_id` when the platform provides no numeric SIS id.
+ */
+export function surrogateSisId(sub: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < sub.length; i++) {
+    hash ^= sub.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 1) % 2_000_000_000;
+}
+
+/** Base projection of an Active NRPS member, sans section CRNs. */
+function baseRosterEntry(m: NrpsMember): Omit<RosterEntry, "class_section_crn" | "lab_section_crn"> {
+  const sourced = m.lis_person_sourcedid?.trim();
+  // Only trust a digit-only sourcedid as the SIS id if it survives Number()
+  // without precision loss AND fits in a Postgres int4 — sis_sync_enrollment
+  // casts sis_user_id to `integer`, so a 10+ digit institutional id (> 2^31-1)
+  // would throw "integer out of range" and abort the whole sync. Otherwise fall
+  // back to the bounded surrogate so we never map the wrong identity or overflow.
+  const INT4_MAX = 2_147_483_647;
+  const parsedSourced = sourced && /^\d+$/.test(sourced) ? Number(sourced) : undefined;
+  const numericSourced =
+    parsedSourced !== undefined && Number.isSafeInteger(parsedSourced) && parsedSourced <= INT4_MAX
+      ? parsedSourced
+      : undefined;
+  const name =
+    m.name?.trim() || [m.given_name, m.family_name].filter(Boolean).join(" ").trim() || m.email?.trim() || null;
+  return {
+    sis_user_id: numericSourced ?? surrogateSisId(m.user_id),
+    name: name || null,
+    role: ltiRolesToAppRole(m.roles),
+    email: m.email?.trim() || null,
+    sub: m.user_id,
+    lis_person_sourcedid: sourced || null
+  };
+}
+
+// ---- Per-member section resolution (NRPS sectionNames → Pawtograder CRNs) ----
+
+/** Parse a `$com.instructure.User.sectionNames` value into trimmed names.
+ *  Canvas emits this either as a JSON-array string (`'["L05","L06"]'`), a real
+ *  array, or a comma-joined string — handle all three. */
+function parseSectionNamesValue(value: unknown): string[] {
+  const out = (raw: string): string[] =>
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
+  if (typeof value !== "string") return [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.map((v) => String(v).trim()).filter(Boolean);
+    } catch {
+      /* fall through to comma-split */
+    }
+  }
+  return out(trimmed);
+}
+
+/** Extract the per-member Canvas section names from the NRPS `message[]` custom
+ *  claim (populated when `section_names=$com.instructure.User.sectionNames` is set
+ *  as a custom field on the tool). Returns [] when the claim is absent. */
+export function extractSectionNames(member: NrpsMember): string[] {
+  const names: string[] = [];
+  for (const msg of member.message ?? []) {
+    const custom = msg?.[LTI_CLAIM.custom];
+    if (custom && typeof custom === "object") {
+      const v = (custom as Record<string, unknown>).section_names;
+      names.push(...parseSectionNamesValue(v));
+    }
+  }
+  // De-dup while preserving order.
+  return [...new Set(names)];
+}
+
+/** How a context link maps members onto Pawtograder section CRNs. */
+export type SectionConfig = {
+  sectionRole: "lecture" | "lab" | "course_wide";
+  /** Context-level CRNs (topology A); null when not designated. */
+  classSectionCrn: number | null;
+  labSectionCrn: number | null;
+  /** Topology B: split members by their Canvas section name. */
+  splitByMemberSection: boolean;
+  /** canvas_section_name → resolved CRNs (topology B). */
+  nameMap: Map<string, { classSectionCrn: number | null; labSectionCrn: number | null }>;
+};
+
+export const COURSE_WIDE_CONFIG: SectionConfig = {
+  sectionRole: "course_wide",
+  classSectionCrn: null,
+  labSectionCrn: null,
+  splitByMemberSection: false,
+  nameMap: new Map()
+};
+
+/** Resolve one member's section CRNs per the context config. `unmappedNames` lists
+ *  Canvas section names with no map entry (surfaced, never silently dropped). */
+export function resolveMemberSections(
+  member: NrpsMember,
+  cfg: SectionConfig
+): { class_section_crn: number | null; lab_section_crn: number | null; unmappedNames: string[] } {
+  if (cfg.splitByMemberSection) {
+    const classCrns = new Set<number>();
+    const labCrns = new Set<number>();
+    const unmappedNames: string[] = [];
+    for (const name of extractSectionNames(member)) {
+      const hit = cfg.nameMap.get(name);
+      if (!hit) {
+        unmappedNames.push(name);
+        continue;
+      }
+      if (hit.classSectionCrn !== null) classCrns.add(hit.classSectionCrn);
+      if (hit.labSectionCrn !== null) labCrns.add(hit.labSectionCrn);
+    }
+    // A member co-enrolled in multiple mapped Canvas sections can resolve to more
+    // than one Pawtograder section. Pick DETERMINISTICALLY (lowest CRN) rather
+    // than whichever name Canvas happened to list first, so the placement can't
+    // silently flap between syncs when the platform reorders section_names.
+    const pick = (s: Set<number>) => (s.size > 0 ? Math.min(...s) : null);
+    return { class_section_crn: pick(classCrns), lab_section_crn: pick(labCrns), unmappedNames };
+  }
+  // Topology A / course_wide: the whole context maps to one section (or none).
+  if (cfg.sectionRole === "lecture") {
+    return { class_section_crn: cfg.classSectionCrn, lab_section_crn: null, unmappedNames: [] };
+  }
+  if (cfg.sectionRole === "lab") {
+    return { class_section_crn: null, lab_section_crn: cfg.labSectionCrn, unmappedNames: [] };
+  }
+  return { class_section_crn: null, lab_section_crn: null, unmappedNames: [] };
+}
+
+/** Project Active NRPS members into roster entries with section CRNs resolved per
+ *  `cfg`, plus the set of unmapped Canvas section names encountered (topology B). */
+export function mapRoster(members: NrpsMember[], cfg: SectionConfig): { roster: RosterEntry[]; unmapped: string[] } {
+  // De-dup by sis_user_id (insertion order preserved). sis_sync_enrollment keys
+  // its temp roster table on sis_user_id (PRIMARY KEY), so two members collapsing
+  // to the same id — a surrogate FNV-1a collision, a surrogate colliding with a
+  // numeric sourcedid, or NRPS listing a member twice — would raise a duplicate
+  // key error and abort the entire roster sync. Keep the first identity and union
+  // any section CRNs the duplicates resolved.
+  const bySisId = new Map<number, RosterEntry>();
+  const unmapped = new Set<string>();
+  for (const m of members) {
+    if (m.status && m.status !== "Active") continue;
+    const { class_section_crn, lab_section_crn, unmappedNames } = resolveMemberSections(m, cfg);
+    for (const n of unmappedNames) unmapped.add(n);
+    const entry: RosterEntry = { ...baseRosterEntry(m), class_section_crn, lab_section_crn };
+    const existing = bySisId.get(entry.sis_user_id);
+    if (existing) {
+      existing.class_section_crn = existing.class_section_crn ?? entry.class_section_crn;
+      existing.lab_section_crn = existing.lab_section_crn ?? entry.lab_section_crn;
+      continue;
+    }
+    bySisId.set(entry.sis_user_id, entry);
+  }
+  return { roster: [...bySisId.values()], unmapped: [...unmapped] };
+}
+
+/** Legacy course-wide projection (no section assignment). Kept for callers/tests
+ *  that don't need section resolution. */
+export function membersToRoster(members: NrpsMember[]): RosterEntry[] {
+  return mapRoster(members, COURSE_WIDE_CONFIG).roster;
+}

@@ -1,5 +1,6 @@
 import { AssignmentProvider } from "@/hooks/useAssignment";
 import { createClientWithCaching, fetchAssignmentControllerData, getEffectiveCourseIdentity } from "@/lib/ssrUtils";
+import { classScopedTableTags } from "@/lib/next-cache-tags";
 import { TZDate } from "@date-fns/tz";
 import { isAfter } from "date-fns";
 import { headers } from "next/headers";
@@ -20,15 +21,29 @@ export default async function AssignmentLayout({
   if (!user_id) {
     redirect("/");
   }
-  // Validate access: if not released and not grader or instructor, redirect to course page.
-  // Honor view-as so an instructor masquerading as a student gets the student release-date gate.
+  // Validate access: an unreleased assignment is off limits to students. Honor view-as so an
+  // instructor masquerading as a student gets the same release-date gate the student would.
   const role = await getEffectiveCourseIdentity(Number(course_id), user_id);
   if (!role) {
     redirect("/");
   }
 
-  if (role.role !== "instructor" && role.role !== "grader") {
-    const client = await createClientWithCaching({ tags: ["assignment-release-date"] });
+  // The release date gates *enrolled students* out of an assignment. Staff are exempt because they
+  // own it — including while previewing their own test submission, which no longer changes the
+  // server-side role at all (it is client state), so no special case is needed here (issue #883).
+  const isStaff = role.role === "instructor" || role.role === "grader";
+  if (!isStaff) {
+    // Send staff masquerading as an enrolled student back to the course rather than the
+    // all-courses dashboard, so the view-as banner (and its exit button) stays in reach.
+    const blockedDestination = role.isViewingAs ? `/course/${course_id}` : "/";
+    // Tag with the class-scoped strings the `assignments` invalidation trigger actually emits.
+    // The former literal `"assignment-release-date"` was emitted by nothing, so this gate —
+    // which decides whether an enrolled student may open the assignment at all — held a stale
+    // release_date for the full 1-hour TTL: publishing kept students redirected out, and
+    // un-publishing kept it reachable.
+    const client = await createClientWithCaching({
+      tags: classScopedTableTags("assignments", Number(course_id))
+    });
     const { data: assignment } = await client
       .from("assignments")
       .select("release_date, classes(time_zone)")
@@ -36,7 +51,7 @@ export default async function AssignmentLayout({
       .eq("class_id", Number(course_id))
       .single();
     if (!assignment) {
-      redirect("/");
+      redirect(blockedDestination);
     }
     if (
       assignment.release_date &&
@@ -45,13 +60,12 @@ export default async function AssignmentLayout({
         new TZDate(new Date(), assignment.classes.time_zone)
       )
     ) {
-      redirect("/");
+      redirect(blockedDestination);
     }
   }
 
   // Keep instructor/grader assignment pages responsive for very large classes by
   // skipping heavyweight SSR prefetch. Students retain SSR prefetch for faster first paint.
-  const isStaff = role.role === "instructor" || role.role === "grader";
   const initialData = isStaff ? undefined : await fetchAssignmentControllerData(assignmentId, false);
   return (
     <AssignmentProvider assignment_id={assignmentId} initialData={initialData}>

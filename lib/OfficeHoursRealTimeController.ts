@@ -67,6 +67,10 @@ export class OfficeHoursRealTimeController implements PawtograderRealTimeControl
     this._initializationPromise = this._initializeGlobalChannels();
   }
 
+  get isClosed(): boolean {
+    return this._closed;
+  }
+
   /**
    * Start the realtime controller
    * Returns true when initialization is complete

@@ -29,7 +29,6 @@ export const FIELD_LABELS: Record<string, string> = {
   min_group_size: "Minimum Group Size",
   max_group_size: "Maximum Group Size",
   allow_student_formed_groups: "Group Formation Method",
-  copy_groups_from_assignment: "Copy groups from assignment",
   group_formation_deadline: "Group Formation Deadline",
   eval_config: "Self evaluation setting",
   deadline_offset: "Hours due after programming assignment",

@@ -1,6 +1,6 @@
 import { CanvasApi } from "npm:@kth/canvas-api";
 import { Course, Enrollment, UserProfile } from "../_shared/CanvasTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 function getCanvas(id: number) {
   const canvas_api_url = Deno.env.get(`CANVAS_API_URL_${id}`) || Deno.env.get("CANVAS_API_URL");

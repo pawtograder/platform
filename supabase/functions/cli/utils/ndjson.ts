@@ -11,6 +11,8 @@
  * discriminator in each record.
  */
 
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { CLICommandError } from "../errors.ts";
 import { corsHeaders } from "./supabase.ts";
 
 export interface NdjsonWriter {
@@ -67,13 +69,30 @@ export function streamNdjson(handler: (writer: NdjsonWriter) => Promise<void>): 
   // edge runtime (broken pipe is exactly when we most want a quiet death).
   (async () => {
     try {
-      await handler(writer);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await writer.abort(message).catch(() => {});
-      return;
+      try {
+        await handler(writer);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // The Response left before the handler ran, so cli/index.ts's catch can
+        // never see this: without reporting here, every server fault inside a
+        // streaming export (statement timeouts on large courses, storage errors)
+        // is an HTTP 200 with an error line in the body and nothing in Sentry.
+        // Client errors thrown before the stream opened are still handled by the
+        // dispatcher; anything reaching here is mid-stream and ours.
+        if (!(err instanceof CLICommandError) || err.status >= 500) {
+          Sentry.captureException(err, { tags: { endpoint: "cli", phase: "ndjson_stream" } });
+        }
+        await writer.abort(message).catch(() => {});
+        return;
+      }
+      await writer.close().catch(() => {});
+    } finally {
+      // The Response left before any of this ran, so the flush that
+      // serveWithSentryFlush does on the request has already happened. This is
+      // the only point at which a mid-stream capture above can still be
+      // delivered before the per_request isolate is torn down.
+      await Sentry.flush(2000);
     }
-    await writer.close().catch(() => {});
   })();
 
   return new Response(stream.readable, {

@@ -259,6 +259,77 @@ const TEMPLATES: Record<string, SeederConfig> = {
     }
   },
 
+  // Marketing screenshot class: a believable ~500-student CS course tuned to
+  // showcase every feature area in the marketing site (big-class grading
+  // dashboard + conflicts, multi-level rubrics, autograder/test insights,
+  // office hours, and an expression-driven gradebook). Reproducible via:
+  //   npm run seed -- --template marketing
+  marketing: {
+    className: "CS 3650: Computer Systems (Now With 100% More Segfaults)",
+    students: 500,
+    graders: 20,
+    instructors: 4,
+    assignments: 8,
+    // Spread assignments across the term so some are released/graded (past),
+    // one or two are mid-grading (recent), and a few are upcoming (future).
+    dateRangeStart: -56,
+    dateRangeEnd: 14,
+    manualGradedColumns: 0, // specification scheme generates its own columns
+    rubricConfig: {
+      // Richer than the other templates so the hand-grading view looks full:
+      // multiple parts, several criteria each, and enough checks to show
+      // additive/deductive/multi-level + annotation checks side by side.
+      minPartsPerAssignment: 3,
+      maxPartsPerAssignment: 5,
+      minCriteriaPerPart: 2,
+      maxCriteriaPerPart: 3,
+      minChecksPerCriteria: 3,
+      maxChecksPerCriteria: 5
+    },
+    sectionsAndTags: {
+      // Multiple class + lab sections drive the "section-level grader pools"
+      // and "bulk-assign by lab leader" stories.
+      numClassSections: 4,
+      numLabSections: 8,
+      numStudentTags: 5,
+      numGraderTags: 6
+    },
+    labAssignments: {
+      numLabAssignments: 6,
+      minutesDueAfterLab: 1440 // 24 hours
+    },
+    groupAssignments: {
+      numGroupAssignments: 3,
+      numLabGroupAssignments: 2
+    },
+    helpRequests: {
+      numHelpRequests: 60,
+      minRepliesPerRequest: 0,
+      maxRepliesPerRequest: 40,
+      maxMembersPerRequest: 4
+    },
+    discussions: {
+      postsPerTopic: 12,
+      maxRepliesPerPost: 10,
+      numAdditionalTopics: 8
+    },
+    gradingScheme: "specification",
+    surveyConfig: {
+      numSurveys: 5,
+      numTemplates: 3,
+      responseRate: 0.75,
+      submissionRate: 0.85,
+      linkToGroupAssignments: true,
+      includeTeamCollaboration: true
+    },
+    rateLimitOverrides: {
+      assignments: {
+        maxInsertsPerSecond: 1,
+        description: "Assignment creation (500 students → many gradebook columns per assignment)"
+      }
+    }
+  },
+
   custom: {
     className: "Custom Configuration Class",
     students: 100,
@@ -329,7 +400,12 @@ async function runSeeding(config: SeederConfig) {
   const fixedUsers = {
     instructor: process.env.FIXED_INSTRUCTOR_EMAIL || undefined,
     grader: process.env.FIXED_GRADER_EMAIL || undefined,
-    student: process.env.FIXED_STUDENT_EMAIL || undefined
+    student: process.env.FIXED_STUDENT_EMAIL || undefined,
+    // Opt-in like the other fixed users: set FIXED_ADMIN_EMAIL to seed a known
+    // site-admin login for the admin portal. Left unset, no admin is created, so
+    // a deployment that doesn't ask for one never gets an always-on, full-site
+    // admin account on the shared seed password.
+    admin: process.env.FIXED_ADMIN_EMAIL || undefined
   };
 
   const seeder = new DatabaseSeeder(config.rateLimitOverrides);
@@ -351,11 +427,11 @@ async function runSeeding(config: SeederConfig) {
     .withSurveys(config.surveyConfig!)
     .withGradingScheme(config.gradingScheme!);
 
-  if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student) {
+  if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student || fixedUsers.admin) {
     // Don't log the raw emails — they may be real reviewer addresses
     // when operators wire this up for staging / on-call rotations.
     console.log(
-      `🔑 Fixed-user emails: instructor=${fixedUsers.instructor ? "[configured]" : "(faker)"} grader=${fixedUsers.grader ? "[configured]" : "(faker)"} student=${fixedUsers.student ? "[configured]" : "(faker)"}`
+      `🔑 Fixed-user emails: instructor=${fixedUsers.instructor ? "[configured]" : "(faker)"} grader=${fixedUsers.grader ? "[configured]" : "(faker)"} student=${fixedUsers.student ? "[configured]" : "(faker)"} admin=${fixedUsers.admin ? "[configured]" : "(none)"}`
     );
     chain = chain.withFixedUsers(fixedUsers);
   }
@@ -504,7 +580,7 @@ Seed the database with test data
 
 Options:
   -t, --template <template>           Use a predefined template configuration
-                                      [choices: "micro", "small", "large", "tcrs", "custom"] [default: "micro"]
+                                      [choices: "micro", "small", "large", "tcrs", "marketing", "custom"] [default: "micro"]
       --class-name <name>             Name for the test class
       
 Core Options:
@@ -620,7 +696,13 @@ async function main() {
 
     await runSeeding(config);
   } catch (error) {
-    console.error("❌ Seeding failed:", error);
+    // Log with a greppable `[seed]` prefix and ALWAYS include the stack — when
+    // this runs as a k8s post-install hook the pod is often gone before its
+    // logs can be read, so the one log line we do get needs to carry the full
+    // trace, not just the message. (See the 2026-06-06 preview-deploy seed
+    // failure, where a transient error left no actionable trace.)
+    const detail = error instanceof Error ? (error.stack ?? `${error.name}: ${error.message}`) : String(error);
+    console.error(`[seed] ❌ Seeding failed: ${detail}`);
     process.exit(1);
   }
 }

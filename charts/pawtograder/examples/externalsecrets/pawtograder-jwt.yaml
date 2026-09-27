@@ -1,0 +1,88 @@
+# Operator-authored ExternalSecret for the base `pawtograder-jwt` Secret.
+# The chart does NOT render this one (only pawtograder-web /
+# pawtograder-edge-functions / pawtograder-redis are chart-rendered), so you
+# apply it yourself before the first helm upgrade.
+#
+# Keys below are exactly what the chart consumes (see templates/secrets.yaml).
+# The JWT bundle comes from scripts/GenerateJwtKeys.ts; escrow it and store it
+# at the OpenBao path referenced here. Adjust the path to your layout.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pawtograder-jwt
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: openbao
+    kind: ClusterSecretStore
+  target:
+    name: pawtograder-jwt
+    creationPolicy: Owner
+  data:
+    # --- Always required ---
+    - secretKey: JWT_SECRET
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: JWT_SECRET
+    - secretKey: ANON_KEY
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: ANON_KEY
+    - secretKey: SERVICE_ROLE_KEY
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: SERVICE_ROLE_KEY
+    - secretKey: JWT_PRIVATE_JWKS
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: JWT_PRIVATE_JWKS
+    - secretKey: JWT_PUBLIC_JWKS
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: JWT_PUBLIC_JWKS
+    - secretKey: JWT_REALTIME_JWKS
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: JWT_REALTIME_JWKS
+    # --- Required for MCP + the CLI; harmless to omit otherwise ---
+    # The EC private JWK alone (same key as the EC entry in JWT_PRIVATE_JWKS).
+    # GenerateJwtKeys.ts emits it as JWT_SIGNING_JWK, so it is already in the
+    # bundle above. The edge runtime consumes it as JWT_SECRET; without it MCP and
+    # the CLI cannot mint per-user tokens, while everything else runs normally
+    # (the chart marks that secretKeyRef optional).
+    - secretKey: JWT_SIGNING_JWK
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: JWT_SIGNING_JWK
+    - secretKey: REALTIME_ENC_KEY
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: REALTIME_ENC_KEY
+    - secretKey: PG_META_CRYPTO_KEY
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: PG_META_CRYPTO_KEY
+    - secretKey: PGSODIUM_ROOT_KEY
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: PGSODIUM_ROOT_KEY
+    # --- Required when monitoring.enabled=true (prod default) ---
+    - secretKey: REALTIME_METRICS_BEARER
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: REALTIME_METRICS_BEARER
+    - secretKey: METRICS_SCRAPE_TOKEN
+      remoteRef:
+        key: apps/pawtograder/jwt-production
+        property: METRICS_SCRAPE_TOKEN
+    # --- Only when supavisor.enabled=true (prod disables Supavisor) ---
+    # - secretKey: SUPAVISOR_SECRET_KEY_BASE
+    #   remoteRef: { key: apps/pawtograder/jwt-production, property: SUPAVISOR_SECRET_KEY_BASE }
+    # - secretKey: SUPAVISOR_VAULT_ENC_KEY
+    #   remoteRef: { key: apps/pawtograder/jwt-production, property: SUPAVISOR_VAULT_ENC_KEY }
+    # - secretKey: SUPAVISOR_API_JWT_SECRET
+    #   remoteRef: { key: apps/pawtograder/jwt-production, property: SUPAVISOR_API_JWT_SECRET }
+    # - secretKey: SUPAVISOR_METRICS_JWT_SECRET
+    #   remoteRef: { key: apps/pawtograder/jwt-production, property: SUPAVISOR_METRICS_JWT_SECRET }
+    # - secretKey: SUPAVISOR_METRICS_BEARER
+    #   remoteRef: { key: apps/pawtograder/jwt-production, property: SUPAVISOR_METRICS_BEARER }

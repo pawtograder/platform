@@ -9,6 +9,7 @@
 import type { Argv } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError } from "@/cli/utils/logger";
+import { addJsonOption, emitJson, printTable } from "@/cli/utils/output";
 
 export const command = "classes <action>";
 export const describe = "Manage classes";
@@ -18,11 +19,14 @@ export const builder = (yargs: Argv) => {
     .command(
       "list",
       "List all classes",
-      () => {},
-      async () => {
+      (yargs) => addJsonOption(yargs),
+      async (args) => {
         try {
-          logger.step("Listing classes...");
           const data = await apiCall("classes.list");
+
+          if (emitJson(args, data)) return;
+
+          logger.step("Classes");
           const classes = data.classes;
 
           if (classes.length === 0) {
@@ -30,10 +34,16 @@ export const builder = (yargs: Argv) => {
             return;
           }
 
-          logger.tableHeader(["ID", "Slug", "Name", "GitHub Org"]);
-          for (const c of classes) {
-            logger.tableRow([c.id, c.slug, c.name, c.github_org]);
-          }
+          printTable(
+            ["ID", "Slug", "Name", "Term", "GitHub Org"],
+            classes.map((c: Record<string, unknown>) => [
+              c.id as number,
+              c.slug as string,
+              c.name as string,
+              c.term as number | null,
+              c.github_org as string | null
+            ])
+          );
           logger.blank();
           logger.info(`Total: ${classes.length} classes`);
         } catch (error) {

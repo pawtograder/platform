@@ -3,8 +3,8 @@ export const dynamic = "force-dynamic";
 import { setNewPasswordAction } from "@/app/actions";
 import { FormMessage, Message } from "@/components/form-message";
 import { SubmitButton } from "@/components/ui/submit-button";
-import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack } from "@chakra-ui/react";
-import Logo from "@/components/ui/logo";
+import { Box, Container, HStack, Input, Separator, Stack, Text } from "@chakra-ui/react";
+import AuthBrandHeader from "@/components/branding/auth-brand-header";
 
 type SearchParams = Message & { token_hash?: string };
 export default async function ResetPassword(props: { searchParams: Promise<SearchParams> }) {
@@ -13,11 +13,7 @@ export default async function ResetPassword(props: { searchParams: Promise<Searc
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>
       <Stack gap="6">
-        <VStack gap="2" textAlign="center" mt="4">
-          <Logo width={100} />
-          <Heading size="3xl">Pawtograder</Heading>
-          <Text color="fg.muted">Your pawsome course companion</Text>
-        </VStack>
+        <AuthBrandHeader />
 
         <HStack gap="6" w="100%">
           <Separator flex="1" />

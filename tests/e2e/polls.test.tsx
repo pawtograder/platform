@@ -117,7 +117,7 @@ test.describe("Polls", () => {
 
     // Wait for realtime connection to be established before updating database
     await expect(
-      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+      page.getByRole("status").filter({ hasText: "Realtime connection status: All realtime connections active" })
     ).toBeVisible({ timeout: 10000 });
 
     // Give subscription a moment to fully register

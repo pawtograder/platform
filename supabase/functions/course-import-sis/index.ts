@@ -7,7 +7,10 @@ declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
 };
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { buildSectionName } from "./sectionNaming.ts";
 
 type SISSycEnrollmentResult = {
   success: boolean;
@@ -524,7 +527,8 @@ export async function syncSISClasses(_supabase: SupabaseClient<Database>, classI
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Get SIS API configuration
@@ -957,7 +961,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     scope?.setTag("classId", classId || "all");
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     const syncHandler = async () => {
@@ -971,7 +976,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     };
 
     // Run in background for cron jobs
-    EdgeRuntime.waitUntil(syncHandler());
+    waitUntilWithSentryFlush(syncHandler());
 
     return {
       message: "SIS sync started in background"
@@ -998,6 +1003,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
 
   // Validate admin authorization for direct user calls
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: { headers: { Authorization: req.headers.get("Authorization")! } }
   });
 
@@ -1012,7 +1018,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
   // Check admin role
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // If existingClassId is provided, validate that the class exists and belongs to the same term
@@ -1126,10 +1133,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
 
     // Step 3: Process the data
     const sections: ProcessedSection[] = rosterResults.map(({ crn, data, sectionType }) => {
-      // Extract section name from course code and meeting info
-      const courseParts = data.section_meta.course.split(" ");
-      const courseNumber = courseParts[1] || "Unknown";
-      const sectionName = `${courseNumber} - ${data.section_meta.meeting_times}`;
+      // Extract section name from course code, meeting info and (for class sections) instructors
+      const sectionName = buildSectionName(
+        sectionType,
+        data.section_meta.course,
+        data.section_meta.meeting_times,
+        data.instructors
+      );
 
       // Parse meeting times for lab sections
       let parsedMeetingTimes: ParsedMeetingTime | undefined;
@@ -1279,7 +1289,8 @@ async function routeRequest(req: Request, scope: Sentry.Scope) {
 
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     const syncHandler = async () => {
       try {
@@ -1291,7 +1302,7 @@ async function routeRequest(req: Request, scope: Sentry.Scope) {
     };
 
     // Run in background for cron jobs
-    EdgeRuntime.waitUntil(syncHandler());
+    waitUntilWithSentryFlush(syncHandler());
 
     return {
       message: "SIS sync started in background",

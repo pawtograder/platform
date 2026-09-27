@@ -218,85 +218,93 @@ test.describe("Assignment due dates", () => {
     await assertStudentPageAccessible(page, "due dates assignments table");
   });
   test("When students extend their due date, the due date is updated on the assignments page", async ({ page }) => {
+    const assignmentsListUrl = `/course/${course.id}/assignments`;
+    const assignmentsListUrlPattern = new RegExp(`/course/${course.id}/assignments$`);
+    const goToAssignmentsList = async () => {
+      // Nav Button-asChild links are unreliable in Playwright; use goto. Also, `/assignments\b/`
+      // matches detail URLs (`/assignments/123`), so it must not gate "back to list".
+      await page.goto(assignmentsListUrl);
+      await expect(page).toHaveURL(assignmentsListUrlPattern);
+    };
+    const openAssignment = async (assignment: Assignment) => {
+      await goToAssignmentsList();
+      const assignmentLink = page.getByRole("link", { name: assignment.title });
+      await expect(assignmentLink).toBeVisible();
+      await assignmentLink.click();
+      await expect(page).toHaveURL(new RegExp(`/course/${course.id}/assignments/${assignment.id}$`));
+    };
+
+    const assignmentDueDateHeadingSection = (assignmentTitle: string) =>
+      page.getByRole("heading", { name: assignmentTitle }).locator("..");
+    const assignmentDueDateDisplay = (assignmentTitle: string) =>
+      assignmentDueDateHeadingSection(assignmentTitle).locator('span[data-visual-placeholder="date"]');
+    const expectAssignmentDueDate = async (assignmentTitle: string, date: Date | TZDate) => {
+      await expect(assignmentDueDateDisplay(assignmentTitle)).toHaveText(formatDateForTest(date));
+    };
+
+    const consumeTokenAndWaitForExtension = async (assignmentTitle: string) => {
+      const exceptionCreate = page.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" &&
+          response.url().includes("/rest/v1/assignment_due_date_exceptions") &&
+          response.ok()
+      );
+      await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
+      await exceptionCreate;
+      // Extension confirmation and recomputed due date render together under the assignment
+      // heading once TableController applies the new exception — not when the dialog unmounts.
+      await expect(
+        assignmentDueDateHeadingSection(assignmentTitle).getByText(
+          "(24-hour extension applied, 1 late tokens consumed)"
+        )
+      ).toBeVisible();
+    };
+
     //Test with the lab section assignment
     await loginAsUser(page, student!, course);
-    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
-    const link = page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" });
-    await link.click();
-    //Wait for the page to load to avoid race condition
-    await expect(page).toHaveURL(/\/assignments\b/);
-    await page.getByRole("link", { name: testLabAssignment!.title }).click();
+    await openAssignment(testLabAssignment!);
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
-    // Wait for the assignment detail page to fully load and the due date component to render
-    await expect(page.locator("text=/Due:/")).toBeVisible({ timeout: 10000 });
-    // The lab-adjusted due date only resolves once the student's user role (lab_section_id),
-    // lab sections, and lab-section meetings have all loaded and the memo recomputes. Under
-    // webkit + CI contention that chain can take longer than the 20s default, so give it room.
-    await expect(
-      page.getByText(formatDateForTest(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
-    ).toBeVisible({ timeout: 35_000 });
+    await expectAssignmentDueDate(
+      testLabAssignment!.title,
+      new TZDate(expectedLabAssignmentDueDate, "America/New_York")
+    );
+    await expect(page.getByRole("button", { name: "Extend Due Date" })).toBeVisible();
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
-    await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
-    // The dialog closes only after assignmentDueDateExceptions.create() resolves — an insert
-    // whose response waits on DB triggers (gradebook recalc, etc.) and can stall badly under
-    // CI load, especially on webkit. Rather than asserting on the incidental dialog teardown
-    // (which then hangs the timeout), wait for the page's applied-extension indicator, which
-    // confirms the write landed and the due date recomputed. This also leaves the dialog gone
-    // before the date assertion below, avoiding a strict-mode clash with the dialog's preview.
-    await expect(page.getByText(/extension applied/i).first()).toBeVisible({ timeout: 45_000 });
-    await expect(
-      page
-        .getByText(formatDateForTest(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))
-        .and(page.locator(':not([role="dialog"] *)'))
-    ).toBeVisible();
+    await consumeTokenAndWaitForExtension(testLabAssignment!.title);
+    await expectAssignmentDueDate(
+      testLabAssignment!.title,
+      addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)
+    );
 
     //Test with the non-lab section assignment
-    await link.click();
-    await page.getByRole("link", { name: testAssignment!.title }).click();
+    await openAssignment(testAssignment!);
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
-    await expect(page.getByText(formatDateForTest(new TZDate(assignmentDueDate, "America/New_York")))).toBeVisible();
+    await expectAssignmentDueDate(testAssignment!.title, new TZDate(assignmentDueDate, "America/New_York"));
+    await expect(page.getByRole("button", { name: "Extend Due Date" })).toBeVisible();
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
-    await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
-    // The dialog closes only after assignmentDueDateExceptions.create() resolves — an insert
-    // whose response waits on DB triggers (gradebook recalc, etc.) and can stall badly under
-    // CI load, especially on webkit. Rather than asserting on the incidental dialog teardown
-    // (which then hangs the timeout), wait for the page's applied-extension indicator, which
-    // confirms the write landed and the due date recomputed. This also leaves the dialog gone
-    // before the date assertion below, avoiding a strict-mode clash with the dialog's preview.
-    await expect(page.getByText(/extension applied/i).first()).toBeVisible({ timeout: 45_000 });
-    await expect(
-      page
-        .getByText(formatDateForTest(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
-        .and(page.locator(':not([role="dialog"] *)'))
-    ).toBeVisible();
+    await consumeTokenAndWaitForExtension(testAssignment!.title);
+    await expectAssignmentDueDate(
+      testAssignment!.title,
+      addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)
+    );
 
     //Test with the group assignment
-    await link.click();
-    await page.getByRole("link", { name: testGroupAssignment!.title }).click();
+    await openAssignment(testGroupAssignment!);
 
     await expect(page.getByText("This is a test group assignment for E2E testing")).toBeVisible();
-    await expect(
-      page.getByText(formatDateForTest(new TZDate(groupAssignmentDueDate, "America/New_York")))
-    ).toBeVisible();
+    await expectAssignmentDueDate(testGroupAssignment!.title, new TZDate(groupAssignmentDueDate, "America/New_York"));
+    await expect(page.getByRole("button", { name: "Extend Due Date" })).toBeVisible();
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
-    await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
-    // The dialog closes only after assignmentDueDateExceptions.create() resolves — an insert
-    // whose response waits on DB triggers (gradebook recalc, etc.) and can stall badly under
-    // CI load, especially on webkit. Rather than asserting on the incidental dialog teardown
-    // (which then hangs the timeout), wait for the page's applied-extension indicator, which
-    // confirms the write landed and the due date recomputed. This also leaves the dialog gone
-    // before the date assertion below, avoiding a strict-mode clash with the dialog's preview.
-    await expect(page.getByText(/extension applied/i).first()).toBeVisible({ timeout: 45_000 });
-    await expect(
-      page
-        .getByText(formatDateForTest(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
-        .and(page.locator(':not([role="dialog"] *)'))
-    ).toBeVisible();
+    await consumeTokenAndWaitForExtension(testGroupAssignment!.title);
+    await expectAssignmentDueDate(
+      testGroupAssignment!.title,
+      addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)
+    );
     await assertStudentPageAccessible(page, "due dates after token extensions");
   });
 });

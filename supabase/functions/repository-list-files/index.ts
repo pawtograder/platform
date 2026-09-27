@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { ListFilesRequest } from "../_shared/FunctionTypes.d.ts";
 import { assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { courseId, orgName, repoName } = (await req.json()) as ListFilesRequest;
   scope?.setTag("function", "repository-list-files");

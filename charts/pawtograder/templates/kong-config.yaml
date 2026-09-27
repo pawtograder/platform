@@ -140,6 +140,27 @@ data:
               - /functions/v1/
         plugins:
           - name: cors
+      {{- range $c := .Values.channels }}
+      {{- if $c.edgeFunctions }}
+      # Channel "{{ $c.name }}": /functions/v1/* on its own host routes to that
+      # channel's functions deployment. This route carries `hosts`, so it
+      # out-prioritizes the host-agnostic functions-v1-all above for requests to
+      # the channel host; stable-host traffic still falls through to functions-v1.
+      # auth/rest/realtime/storage have no `hosts` and stay shared across channels.
+      - name: functions-v1-{{ $c.name }}
+        _comment: "Functions ({{ $c.name }}): /functions/v1/* -> functions-{{ $c.name }}:{{ $.Values.edgeFunctions.service.port }}"
+        url: http://{{ include "pawtograder.componentName" (dict "ctx" $ "component" (printf "functions-%s" $c.name)) }}:{{ $.Values.edgeFunctions.service.port }}/
+        routes:
+          - name: functions-v1-{{ $c.name }}
+            strip_path: true
+            hosts:
+              - {{ include "pawtograder.channel.host" (dict "ctx" $ "channel" $c) | quote }}
+            paths:
+              - /functions/v1/
+        plugins:
+          - name: cors
+      {{- end }}
+      {{- end }}
       - name: meta
         _comment: "pg-meta: /pg/* -> http://meta:8080/*"
         url: http://{{ include "pawtograder.meta.host" . }}:{{ .Values.meta.service.port }}/

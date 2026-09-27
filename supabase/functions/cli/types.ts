@@ -236,6 +236,8 @@ export interface RubricsExportParams {
   class: string;
   assignment: string;
   type?: "grading" | "self_review" | "meta";
+  /** Omit ids so every row is created new on import (a template, not a round-trip). */
+  strip_ids?: boolean;
 }
 
 export interface RubricsImportParams {

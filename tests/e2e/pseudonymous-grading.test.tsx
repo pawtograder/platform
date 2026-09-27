@@ -9,6 +9,7 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
+  setGradingEditorPreference,
   supabase,
   TestingUser
 } from "./TestingUtils";
@@ -82,6 +83,11 @@ test.beforeAll(async () => {
     class_id: course.id
   });
   submission_id = submission_res.submission_id;
+
+  // This workflow exercises the classic plain/starry-night annotation UI ("Leave a comment",
+  // "Annotate line N…", react-select check picker) for both the self-reviewing student and the
+  // grading instructor, so opt both out of the now-default Monaco editor.
+  await Promise.all([student, instructor].map((u) => setGradingEditorPreference(u!.user_id, false)));
 });
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
   await logMagicLinksOnFailure([student, instructor]);
@@ -115,9 +121,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
-    await page.getByRole("link", { name: assignment!.title }).click();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}`);
 
-    await expect(page.getByText("Self Review Notice")).toBeVisible();
+    await expect(page.getByText(/Self Review Notice|Self Review Now Due/)).toBeVisible();
     await page.getByRole("button", { name: "Finalize Submission Early" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
     // The "Submission finalized" toast is the application's explicit signal
@@ -158,8 +164,8 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
         .eq("rubric_id", selfReviewRubric!.id);
       expect(ra?.length ?? 0).toBeGreaterThan(0);
     }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
-    await page.getByRole("button", { name: "Complete Self Review" }).click();
-    await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await expect(page.getByRole("region", { name: "Self-Review Rubric" })).toBeVisible();
 
     // Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
@@ -214,7 +220,13 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
-    await page.getByRole("button", { name: "Files" }).click();
+    // The submission root client-redirects graders to a default tab (router.replace, usually the
+    // autograder). Wait for that redirect to settle before clicking Files: otherwise the click can
+    // race the in-flight replace and leave the URL on /files while the previous tab stays mounted,
+    // so the file source never renders (flaky under CI load).
+    await page.waitForURL(/\/submissions\/\d+\/(?:results|files|grade)(?:[/?#]|$)/);
+    await page.getByRole("link", { name: "Files" }).click();
+    await page.waitForURL(/\/submissions\/\d+\/files(?:[/?#]|$)/);
 
     // Scroll grading rubric to top of its container
     await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
@@ -266,6 +278,25 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
+    // "Completed by" appears from the optimistic TableController update (it marks the row
+    // __db_pending and renders immediately, before the awaited PATCH to submission_reviews
+    // resolves). Navigating to the manage page in the very next step aborts that in-flight
+    // write, so completed_at intermittently never persists (observed ~25% on WebKit) while
+    // `released` — set later by a separate RPC — does. A later page load (e.g. the
+    // "real name in parentheses" view) then shows the "Complete Review" button again, and the
+    // review-completion block's differing height shifts the whole sidebar → a visual-snapshot
+    // flake. Wait for completed_at to actually land before navigating away, exactly as the
+    // `released` poll below does.
+    await expect(async () => {
+      const { data } = await supabase
+        .from("submission_reviews")
+        .select("completed_at")
+        .eq("submission_id", submission_id!)
+        .eq("rubric_id", assignment!.grading_rubric_id!)
+        .not("completed_at", "is", null);
+      expect(data?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
+
     // Release selected submission reviews (select all in filtered view, then release)
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
 
@@ -273,6 +304,12 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     const releaseBtn = page.getByRole("button", { name: /Release \d+ selected submission/ });
     await expect(releaseBtn).toBeEnabled();
     await releaseBtn.click();
+    // Issue 843 adds an instructor warning dialog when selected reviews include
+    // incomplete grading. Continue through it when present.
+    const continueAnywayBtn = page.getByRole("button", { name: "Continue anyway" });
+    if (await continueAnywayBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await continueAnywayBtn.click();
+    }
     // Wait for the release to land in the DB before navigating to the
     // submission page. On webkit the SSR'd submission page sometimes paints
     // before the released flag has propagated, leading to the badge showing
@@ -318,7 +355,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     const doMathLine = page.getByText("public int doMath(int a, int");
     await expect(doMathLine).toBeVisible();
     // toBeVisible() only requires a non-empty bounding box, not that the element is in
@@ -452,8 +489,43 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
       page.getByRole("button", { name: "Escalate Request" }),
       "Escalate Request button is removed after escalation"
     ).toHaveCount(0);
+    // Wait for the realtime comment stream to finish rendering before the snapshot.
+    // The inline thread lazy-loads its historical comments (regrade request, grader
+    // response, escalation), which races the capture and shifts the thread height — and
+    // everything below it, including the code lines — run-to-run. Bracket oldest→newest
+    // so the whole thread has landed; .first() tolerates the just-posted comment's
+    // transient optimistic-insert + realtime-echo duplicate (same pattern as grading.test.tsx).
+    await expect(region.getByText(REGRADE_REQUEST_COMMENT).first()).toBeVisible();
+    await expect(region.getByText(GRADER_REGRADE_RESPONSE).first()).toBeVisible();
+    await expect(region.getByText(STUDENT_ESCALATION_COMMENT).first()).toBeVisible();
+    // Neutralize composer focus before capture. MessageInput re-focuses its textarea
+    // after a send (setTimeout focus in message-input.tsx), so after the comment+escalate
+    // flow the composer is left focused/expanded (its send toolbar shown) in some runs and
+    // collapsed in others — a ~20% region diff. Blur whatever holds focus so the composer
+    // is consistently collapsed.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    // Pin the thread's scroll position. The region lives in a fixed-height scroll pane
+    // whose offset (nudged by the autoresizing composer) varies run-to-run, so an element
+    // capture otherwise shows a different vertical slice (file header vs. status badge at
+    // the top). Align the region to the top of its scroll container before capturing.
+    await region.evaluate((el) => {
+      const isScrollable = (c: HTMLElement) => {
+        const s = getComputedStyle(c);
+        return /(auto|scroll|overlay)/.test(s.overflowY) && c.scrollHeight > c.clientHeight;
+      };
+      let p: HTMLElement | null = el.parentElement;
+      while (p && !isScrollable(p)) p = p.parentElement;
+      const container = p ?? (document.scrollingElement as HTMLElement | null);
+      if (container) {
+        container.scrollTop += el.getBoundingClientRect().top - container.getBoundingClientRect().top - 8;
+      }
+    });
+    // Capture the inline thread region, not the full page. The escalation dialog is
+    // closed by now; scoping to the region (whose comments are confirmed rendered above)
+    // crops out page-level scroll/shift. Same approach as the resolve screenshot in
+    // grading.test.tsx.
     await visualScreenshot(page, "Pseudonymous grading - Student escalates regrade", {
-      stabilizeRubric: "Grading Rubric"
+      element: region
     });
     await assertStudentPageAccessible(page, "pseudonymous grading - student escalation /files");
   });

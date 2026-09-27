@@ -9,7 +9,7 @@ import {
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
 import { valOrNull } from "@/lib/rubric/nullish";
-import { sanitizeHydratedRubricPoints } from "@/lib/rubric/pointsSanitize";
+import { sanitizeHydratedRubricPoints, type PointsValidationWarning } from "@/lib/rubric/pointsSanitize";
 import { rubricCheckDataOrThrow } from "@/lib/rubric/validate";
 
 export function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubricCheck[] {
@@ -128,7 +128,7 @@ export function YamlRubricToHydratedRubric(
     is_private: boolean;
     review_round: NonNullable<HydratedRubric["review_round"]>;
   }
-): HydratedRubric {
+): { rubric: HydratedRubric; warnings: PointsValidationWarning[] } {
   const rubric: HydratedRubric = {
     id: 0,
     class_id: 0,
@@ -142,5 +142,9 @@ export function YamlRubricToHydratedRubric(
     cap_score_to_assignment_points: yaml.cap_score_to_assignment_points ?? false,
     hide_unless_assigned: yaml.hide_unless_assigned ?? false
   };
-  return sanitizeHydratedRubricPoints(rubric).rubric;
+  // Warnings are RETURNED, not discarded. Taking `.rubric` alone meant a `points: -5` in YAML was
+  // absolutized to +5 and persisted with no notice anywhere: the editor's own second sanitize call
+  // ran on this already-absolutized value, so its warnings list was structurally always empty and
+  // the "points adjusted" banner could never render.
+  return sanitizeHydratedRubricPoints(rubric);
 }

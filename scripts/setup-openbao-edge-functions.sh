@@ -5,6 +5,20 @@
 #
 # Resulting Bao paths (default mount=kv, prefix=apps/pawtograder):
 #
+#   apps/pawtograder/web-<env>           GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_CLIENT_SECRET,
+#                                        AZURE_OAUTH_CLIENT_ID, AZURE_OAUTH_CLIENT_SECRET,
+#                                        DISCORD_OAUTH_CLIENT_ID, DISCORD_OAUTH_CLIENT_SECRET,
+#                                        DISCORD_PUBLIC_KEY, DISCORD_WEBHOOK_PUBLIC_KEY,
+#                                        LTI_KEY_ENCRYPTION_SECRET, LTI_TOOL_ISSUER,
+#                                        LTI_STATE_SECRET, LTI_CRON_SHARED_SECRET,
+#                                        CACHE_INVALIDATION_SECRET, AZURE_OPENAI_ENDPOINT,
+#                                        OPENAI_MODEL
+#   apps/pawtograder/llm-<env>           OPENAI_API_KEY, ANTHROPIC_API_KEY,
+#                                        OPENROUTER_API_KEY, AZURE_OPENAI_KEY
+#                                        (LLM-hint provider keys read by the web app in
+#                                        app/api/llm-hint/route.ts, kept in their own
+#                                        bundle so the web ExternalSecret pulls them via
+#                                        webBundles.)
 #   apps/pawtograder/github-app-<env>    GITHUB_APP_ID, GITHUB_PRIVATE_KEY_STRING,
 #                                        GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_CLIENT_SECRET,
 #                                        GITHUB_WEBHOOK_SECRET, EVENTBRIDGE_SECRET
@@ -16,6 +30,13 @@
 #   apps/pawtograder/aws-chime-<env>     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
 #                                        AWS_CHIME_EVENT_AUTH_TOKEN, AWS_CHIME_SQS_QUEUE_ARN
 #   apps/pawtograder/discord-<env>       DISCORD_APPLICATION_ID, DISCORD_BOT_TOKEN
+#                                        (mounted into BOTH pawtograder-edge-functions
+#                                        and pawtograder-web: the Next.js bot-install
+#                                        routes read the application id as the OAuth
+#                                        client_id and the bot token to confirm the
+#                                        bot is in the guild, so `discord` has to
+#                                        appear in webBundles as well as
+#                                        edgeFunctionsBundles.)
 #   apps/pawtograder/canvas-<env>        CANVAS_API_KEY, CANVAS_API_URL
 #   apps/pawtograder/sis-<env>           SIS_API_URL, SIS_AUTH_TOKEN
 #   apps/pawtograder/smtp-<env>          SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
@@ -24,7 +45,8 @@
 #                                        MCP_OAUTH_ENDPOINT
 #   apps/pawtograder/redis-<env>         UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
 #   apps/pawtograder/sentry-<env>        SENTRY_DSN, SENTRY_DEBUG
-#   apps/pawtograder/misc-<env>          ARTIFACT_SERVE_JWT_SECRET, ASSESSMENT_EXPORT_PEPPER,
+#   apps/pawtograder/misc-<env>          EDGE_FUNCTION_SECRET,
+#                                        ARTIFACT_SERVE_JWT_SECRET, ASSESSMENT_EXPORT_PEPPER,
 #                                        METRICS_TOKEN, SUPPORT_EMAIL, APP_URL,
 #                                        EDGE_FUNCTIONS_URL, PAWTOGRADER_WEBAPP_URL
 #
@@ -61,6 +83,8 @@ set -euo pipefail
 # env-var names exactly.
 
 declare -A BUNDLE_KEYS=(
+  [web]="GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET AZURE_OAUTH_CLIENT_ID AZURE_OAUTH_CLIENT_SECRET DISCORD_OAUTH_CLIENT_ID DISCORD_OAUTH_CLIENT_SECRET DISCORD_PUBLIC_KEY DISCORD_WEBHOOK_PUBLIC_KEY LTI_KEY_ENCRYPTION_SECRET LTI_TOOL_ISSUER LTI_STATE_SECRET LTI_CRON_SHARED_SECRET CACHE_INVALIDATION_SECRET AZURE_OPENAI_ENDPOINT OPENAI_MODEL"
+  [llm]="OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY AZURE_OPENAI_KEY"
   [github-app]="GITHUB_APP_ID GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET GITHUB_PRIVATE_KEY_STRING GITHUB_WEBHOOK_SECRET EVENTBRIDGE_SECRET"
   [aws-chime]="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_CHIME_EVENT_AUTH_TOKEN AWS_CHIME_SQS_QUEUE_ARN"
   [discord]="DISCORD_APPLICATION_ID DISCORD_BOT_TOKEN"
@@ -70,7 +94,7 @@ declare -A BUNDLE_KEYS=(
   [mcp]="MCP_OAUTH_CLIENT_ID MCP_OAUTH_CLIENT_SECRET MCP_OAUTH_ENDPOINT"
   [redis]="UPSTASH_REDIS_REST_URL UPSTASH_REDIS_REST_TOKEN"
   [sentry]="SENTRY_DSN SENTRY_DEBUG"
-  [misc]="ARTIFACT_SERVE_JWT_SECRET ASSESSMENT_EXPORT_PEPPER METRICS_TOKEN SUPPORT_EMAIL APP_URL EDGE_FUNCTIONS_URL PAWTOGRADER_WEBAPP_URL"
+  [misc]="EDGE_FUNCTION_SECRET ARTIFACT_SERVE_JWT_SECRET ASSESSMENT_EXPORT_PEPPER METRICS_TOKEN SUPPORT_EMAIL APP_URL EDGE_FUNCTIONS_URL PAWTOGRADER_WEBAPP_URL"
 )
 
 usage() {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import * as Sentry from "@sentry/nextjs";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 /**
  * Cache invalidation endpoint for PostgreSQL triggers
@@ -11,7 +12,7 @@ import * as Sentry from "@sentry/nextjs";
  * Security: Validates x-cache-invalidation-secret header against
  * CACHE_INVALIDATION_SECRET environment variable.
  */
-export async function POST(request: NextRequest) {
+async function postHandler(request: NextRequest) {
   const scope = Sentry.getCurrentScope();
   scope.setTag("endpoint", "cache_invalidate");
 
@@ -93,3 +94,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const POST = withRouteMetrics("/api/cache/invalidate", postHandler);

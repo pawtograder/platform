@@ -17,6 +17,7 @@
 import type { ArgumentsCamelCase } from "yargs";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError } from "@/cli/utils/logger";
+import { printTable } from "@/cli/utils/output";
 import { parseAssignmentScheduleCsv, normalizeDate } from "@/cli/utils/schedule";
 import { runCopyAssignmentRepos } from "@/cli/lib/assignments/copyAssignmentRepos";
 import type { RepoCopyPair } from "@/cli/lib/assignments/types";
@@ -88,11 +89,16 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
       logger.info(`Target: ${data.target_class.name} (${data.target_class.slug})`);
       logger.blank();
 
-      logger.tableHeader(["Slug", "Title", "Release", "Due", "Linked surveys"]);
-      for (const a of data.assignments_to_copy) {
-        const n = Array.isArray(a.linked_surveys) ? a.linked_surveys.length : 0;
-        logger.tableRow([a.slug, a.title, a.release_date || "-", a.due_date || "-", String(n)]);
-      }
+      printTable(
+        ["Slug", "Title", "Release", "Due", "Linked surveys"],
+        data.assignments_to_copy.map((a: Record<string, unknown>) => [
+          a.slug as string,
+          a.title as string,
+          (a.release_date as string | null) || "-",
+          (a.due_date as string | null) || "-",
+          Array.isArray(a.linked_surveys) ? a.linked_surveys.length : 0
+        ])
+      );
       logger.blank();
       return;
     }

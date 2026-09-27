@@ -123,6 +123,10 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
   get profileId(): string {
     return this._profileId;
   }
+
+  get isClosed(): boolean {
+    return this._closed;
+  }
   /**
    * Start the realtime controller with enhanced features
    * Returns true when initialization is complete

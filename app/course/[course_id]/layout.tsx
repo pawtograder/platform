@@ -8,6 +8,7 @@ import { NavigationProgressProvider } from "@/components/ui/navigation-progress"
 import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
 import { fetchCourseControllerData, getCourse, getEffectiveCourseIdentity } from "@/lib/ssrUtils";
+import { getBranding } from "@/lib/branding";
 import { TimeZoneProvider } from "@/lib/TimeZoneProvider";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -20,10 +21,11 @@ export async function generateMetadata({ params }: { params: Promise<{ course_id
   const { course_id } = await params;
   const course = await getCourse(Number(course_id));
   const name = course?.course_title || course?.name || "Course";
+  const brandName = getBranding().name;
   return {
     title: {
-      default: `${name} · Pawtograder`,
-      template: `%s · ${name} · Pawtograder`
+      default: `${name} · ${brandName}`,
+      template: `%s · ${name} · ${brandName}`
     }
   };
 }

@@ -1,6 +1,7 @@
 import { Avatar, Box, HStack, Skeleton, VStack, IconButton, Text } from "@chakra-ui/react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { useNotification } from "@/hooks/useNotifications";
 import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
 import { useParams, useRouter } from "next/navigation";
@@ -322,7 +323,7 @@ function HelpRequestMessageNotificationTeaser({ notification }: { notification: 
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={author.avatar_url} alt="" />
+        <Avatar.Image src={sanitizeImageSrc(author.avatar_url)} alt="" />
         <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
@@ -417,7 +418,7 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={author.avatar_url} alt="" />
+        <Avatar.Image src={sanitizeImageSrc(author.avatar_url)} alt="" />
         <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
@@ -517,7 +518,7 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={actor?.avatar_url} alt="" />
+        <Avatar.Image src={sanitizeImageSrc(actor?.avatar_url)} alt="" />
         <Avatar.Fallback fontSize="xs">{actor?.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">

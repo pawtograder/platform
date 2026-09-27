@@ -5,9 +5,12 @@ import * as path from "node:path";
 import type { Page as PlaywrightCorePage } from "playwright-core";
 
 const DEFAULT_EXCLUDES = [
-  // Third-party / rich editors often fail strict axe rules without affecting core app UX in E2E.
-  ".monaco-editor",
-  ".monaco-mouse-cursor-text",
+  // NOTE: Monaco (`.monaco-editor`) is deliberately NOT excluded. The read-only
+  // code viewer is configured for accessibility (ariaLabel /
+  // accessibilitySupport:"on" / tabFocusMode — components/ui/code-file-monaco.tsx)
+  // and axe scans it like first-party UI. If a scan surfaces a violation inside
+  // Monaco internals we cannot configure away, re-add the *narrowest* selector
+  // here with the axe rule id and reason.
   // SurveyJS emits its own tree with unlabeled buttons and low-contrast palette.
   // Cover both legacy (sv-) and modern (sd-) class prefixes plus its action surfaces.
   "[data-surveyjs]",
@@ -311,6 +314,12 @@ export async function assertPageHasLandmarks(page: Page, contextLabel?: string):
   const title = await page.title();
   expect(title.trim(), `${prefix}page has a non-empty <title>`).not.toBe("");
 
+  // WCAG 2.4.2: the title template appends the product name on every route
+  // (app/layout.tsx + course layout). Mirrors lib/branding.ts name resolution
+  // so re-branded deployments can still run the suite.
+  const brandName = process.env.BRAND_NAME?.trim() || "Pawtograder";
+  expect(title, `${prefix}<title> includes the product name ("${brandName}")`).toContain(brandName);
+
   const lang = await page.locator("html").getAttribute("lang");
   expect(lang, `${prefix}html element has a lang attribute`).toBeTruthy();
 
@@ -361,4 +370,259 @@ export async function assertSkipLinksWork(page: Page, contextLabel?: string): Pr
   // focusLandmark adds tabindex=-1 to non-focusable landmarks and focuses them.
   const active = await page.evaluate(() => document.activeElement?.id ?? null);
   expect(active, `${prefix}activating skip link moves focus to #main-content`).toBe("main-content");
+}
+
+export type FocusStop = {
+  tag: string;
+  id: string | null;
+  role: string | null;
+  ariaLabel: string | null;
+  testId: string | null;
+  text: string;
+  /** Whether this stop comes after the previous stop in DOM order, judged via
+   *  compareDocumentPosition inside a single evaluate (no handles persist, so
+   *  detached nodes are never compared). `null` when unjudgeable: the first
+   *  stop, or the previous stop unmounted between presses (realtime re-render).
+   *  Robust against unrelated DOM insertions/removals, which shift document
+   *  indices but not the relative order of two connected nodes. */
+  followsPrevious: boolean | null;
+};
+
+const TAB_STOP_STAMP = "data-e2e-prev-tab-stop";
+
+/**
+ * Presses Tab `count` times from a body-focused state and returns a descriptor
+ * of `document.activeElement` after each press. Use to assert focus order
+ * (WCAG 2.4.3) — e.g. that `followsPrevious` is never `false`.
+ */
+export async function tabSequence(page: Page, count: number): Promise<FocusStop[]> {
+  await page.evaluate((stamp) => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    document.body.focus();
+    document.querySelectorAll(`[${stamp}]`).forEach((el) => el.removeAttribute(stamp));
+  }, TAB_STOP_STAMP);
+
+  const stops: FocusStop[] = [];
+  for (let i = 0; i < count; i++) {
+    await page.keyboard.press("Tab");
+    const stop = await page.evaluate<FocusStop, string>((stamp) => {
+      const el = document.activeElement as HTMLElement | null;
+      const prev = document.querySelector(`[${stamp}]`);
+      if (!el || el === document.body) {
+        return { tag: "body", id: null, role: null, ariaLabel: null, testId: null, text: "", followsPrevious: null };
+      }
+      const followsPrevious =
+        prev && prev !== el ? Boolean(prev.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) : null;
+      prev?.removeAttribute(stamp);
+      el.setAttribute(stamp, "");
+      return {
+        tag: el.tagName.toLowerCase(),
+        id: el.id || null,
+        role: el.getAttribute("role"),
+        ariaLabel: el.getAttribute("aria-label"),
+        testId: el.getAttribute("data-testid"),
+        text: (el.innerText ?? "").trim().slice(0, 80),
+        followsPrevious
+      };
+    }, TAB_STOP_STAMP);
+    stops.push(stop);
+  }
+  await page
+    .evaluate(
+      (stamp) => document.querySelectorAll(`[${stamp}]`).forEach((el) => el.removeAttribute(stamp)),
+      TAB_STOP_STAMP
+    )
+    .catch(() => {});
+  return stops;
+}
+
+/**
+ * Presses a landmark-jump chord (e.g. "Alt+m") and asserts the resulting
+ * `document.activeElement` matches `expectedFocusSelector` AND is actually
+ * visible (bounding box larger than 1×1 — guards against focusing an element
+ * that is still screen-reader-clipped, the historical Alt+K skip-links bug).
+ *
+ * Callers must gate to chromium: WebKit's synthetic Alt+letter composes
+ * special characters instead of delivering the chord.
+ */
+export async function assertLandmarkJump(
+  page: Page,
+  chord: string,
+  expectedFocusSelector: string,
+  contextLabel?: string
+): Promise<void> {
+  const prefix = contextLabel ? `[${contextLabel}] ` : "";
+
+  // Retry a few times: on a fresh navigation the chord can fire before the
+  // client-side keydown listener hydrates, leaving focus on <body>.
+  let result = { matched: false, visible: false, actual: "(body)" };
+  for (let attempt = 0; attempt < 5 && !result.matched; attempt++) {
+    // Neutral starting focus so the chord isn't swallowed by a form field.
+    await page.evaluate(() => {
+      (document.activeElement as HTMLElement | null)?.blur();
+      document.body.focus();
+    });
+    await page.keyboard.press(chord);
+    await page.waitForTimeout(200);
+
+    result = await page.evaluate((sel) => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el || el === document.body) return { matched: false, visible: false, actual: "(body)" };
+      const rect = el.getBoundingClientRect();
+      return {
+        matched: el.matches(sel),
+        visible: rect.width > 1 && rect.height > 1,
+        actual: `${el.tagName.toLowerCase()}#${el.id || "(no id)"}[aria-label="${el.getAttribute("aria-label") ?? ""}"]`
+      };
+    }, expectedFocusSelector);
+  }
+
+  expect(
+    result.matched,
+    `${prefix}${chord} focuses "${expectedFocusSelector}" (active element was ${result.actual})`
+  ).toBe(true);
+  expect(result.visible, `${prefix}${chord} target "${expectedFocusSelector}" is visibly rendered (>1×1)`).toBe(true);
+}
+
+/**
+ * WCAG 1.4.10 (Reflow) check: at a 320 CSS-px-wide viewport — the spec's
+ * equivalent of a 1280px window at 400% zoom — the page must not require
+ * horizontal scrolling and all content must remain reachable by vertical
+ * scroll (catches `overflow:hidden` shells that clip content with no way to
+ * reach it).
+ *
+ * If the current viewport is not already 320px wide (preferred: set it via
+ * `test.use({ viewport: { width: 320, height: 640 } })` on the spec), the
+ * helper resizes for the check and restores the original size afterwards.
+ * A viewport-disabled context (`viewport: null`) is rejected up front: there
+ * would be no original size to restore.
+ */
+export async function assertReflowAt320(page: Page, contextLabel?: string): Promise<void> {
+  const prefix = contextLabel ? `[${contextLabel}] ` : "";
+  const original = page.viewportSize();
+  if (!original) {
+    throw new Error(
+      `${prefix}assertReflowAt320 requires a viewport (got viewport: null); set one via test.use({ viewport: { width: 320, height: 640 } })`
+    );
+  }
+  const needsResize = original.width !== 320;
+  if (needsResize) {
+    await page.setViewportSize({ width: 320, height: 640 });
+  }
+
+  // The test fixture's visual-test CSS pins placeholder text (dates etc.) to a
+  // fixed 18ch nowrap box, which cannot reflow and falsely trips the 320px
+  // check. Disable it for the measurement — real users never load that CSS.
+  await page.evaluate(() => document.documentElement.removeAttribute("data-visual-tests")).catch(() => {});
+
+  try {
+    if (needsResize) {
+      // Let responsive breakpoints and dvh-based layouts settle after the resize.
+      await page.waitForTimeout(250);
+    }
+
+    await expect(page.getByRole("main").first(), `${prefix}main landmark visible at 320px`).toBeVisible({
+      timeout: 15000
+    });
+
+    // Layout can transiently overflow while hydration/collapse effects run;
+    // poll until the page-level width settles (or the deadline hits, in which
+    // case the assertions below report the persistent overflow).
+    await page
+      .waitForFunction(
+        () => {
+          const scroller = document.scrollingElement ?? document.documentElement;
+          return scroller.scrollWidth <= scroller.clientWidth + 1;
+        },
+        undefined,
+        { timeout: 5000, polling: 250 }
+      )
+      .catch(() => {});
+
+    // The waitForFunction above is the sole transient-overflow filter; sample
+    // the assertion metrics once after it settles (or times out).
+    const metrics = await page.evaluate(() => {
+      const scroller = document.scrollingElement ?? document.documentElement;
+      const main = document.querySelector('main, [role="main"]') as HTMLElement | null;
+
+      // Detect a working vertical scroll pane (app-shell pattern). The shells
+      // in this app live INSIDE <main id="main-content">, so scan descendants
+      // (cheap scrollHeight check first, computed style only for candidates);
+      // also walk ancestors in case a future shell wraps main instead.
+      const isScrollPane = (el: HTMLElement) =>
+        el.scrollHeight > el.clientHeight + 1 && /(auto|scroll)/.test(window.getComputedStyle(el).overflowY);
+      let innerScrollable = false;
+      if (main) {
+        innerScrollable = Array.prototype.some.call(main.querySelectorAll("*"), (el: Element) =>
+          isScrollPane(el as HTMLElement)
+        );
+        for (
+          let cur: HTMLElement | null = main;
+          cur && cur !== document.body && !innerScrollable;
+          cur = cur.parentElement
+        ) {
+          innerScrollable = isScrollPane(cur);
+        }
+      }
+
+      const pageScrollable = scroller.scrollHeight > scroller.clientHeight + 1;
+      const contentOverflowsViewport = main ? main.scrollHeight > window.innerHeight : false;
+
+      return {
+        scrollWidth: scroller.scrollWidth,
+        clientWidth: scroller.clientWidth,
+        mainHeight: main?.getBoundingClientRect().height ?? 0,
+        pageScrollable,
+        innerScrollable,
+        contentOverflowsViewport
+      };
+    });
+
+    // On persistent overflow, name the widest offending elements so the
+    // failure is actionable without re-running locally.
+    let offenderNote = "";
+    if (metrics.scrollWidth > metrics.clientWidth + 1) {
+      const offenders = await page
+        .evaluate(() => {
+          const limit = (document.scrollingElement ?? document.documentElement).clientWidth + 1;
+          const out: string[] = [];
+          document.querySelectorAll("body *").forEach((el) => {
+            const r = el.getBoundingClientRect();
+            if (r.right <= limit || r.width <= 10) return;
+            const cs = window.getComputedStyle(el);
+            if (cs.display === "none" || cs.visibility === "hidden") return;
+            const pr = el.parentElement?.getBoundingClientRect();
+            if (pr && pr.right > limit) return; // report overflow roots only
+            out.push(
+              `<${el.tagName.toLowerCase()} right=${Math.round(r.right)} w=${Math.round(r.width)}> "${((el as HTMLElement).innerText ?? "").slice(0, 50).replace(/\n/g, " ")}"`
+            );
+          });
+          return out.slice(0, 5);
+        })
+        .catch(() => [] as string[]);
+      offenderNote = offenders.length > 0 ? `\n  overflowing elements:\n  ${offenders.join("\n  ")}` : "";
+    }
+
+    expect(
+      metrics.scrollWidth,
+      `${prefix}no page-level horizontal scrolling at 320px (scrollWidth ${metrics.scrollWidth} vs clientWidth ${metrics.clientWidth})${offenderNote}`
+    ).toBeLessThanOrEqual(metrics.clientWidth + 1);
+
+    expect(metrics.mainHeight, `${prefix}main content has non-zero height at 320px`).toBeGreaterThan(0);
+
+    // If the content is taller than the viewport, SOME scroll mechanism must
+    // exist — either the document scrolls or an inner overflow:auto pane does.
+    // (overflow:hidden shells with neither = the audit's "clipped, can't scroll".)
+    if (metrics.contentOverflowsViewport) {
+      expect(
+        metrics.pageScrollable || metrics.innerScrollable,
+        `${prefix}content taller than viewport is reachable by vertical scroll (document or inner pane)`
+      ).toBe(true);
+    }
+  } finally {
+    await page.evaluate(() => document.documentElement.setAttribute("data-visual-tests", "")).catch(() => {});
+    if (needsResize) {
+      await page.setViewportSize(original);
+    }
+  }
 }

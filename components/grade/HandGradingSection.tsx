@@ -12,7 +12,7 @@ import {
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import { useRubricCheckInstances, useSubmission, useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
-import { maxPointsForCriterion } from "@/lib/rubric/points";
+import { earnedPointsForCriterion, maxPointsForCriterion } from "@/lib/rubric/points";
 import type {
   HydratedRubricCheck,
   RegradeRequest,
@@ -23,6 +23,7 @@ import type {
   SubmissionComments,
   SubmissionFileComment
 } from "@/utils/supabase/DatabaseTypes";
+import { SpokenValue } from "@/components/ui/spoken-value";
 import { Badge, Box, Heading, HStack, Text, VStack } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -94,15 +95,27 @@ function AppliedCheckRow({
   return (
     <Box borderWidth="1px" borderColor="border.info" borderRadius="md" p={2} w="100%" fontSize="sm">
       <HStack justify="space-between" align="start" gap={2} flexWrap="wrap">
-        <Text fontWeight="semibold" color="fg.default" wordBreak="break-word">
+        <Text as="h5" fontWeight="semibold" color="fg.default" wordBreak="break-word">
           {check.name}
         </Text>
-        <Text fontWeight="semibold" color={isAdditive ? "green.600" : "red.600"} flexShrink={0}>
-          {signedPoints}
+        {/* {color}.fg tokens keep AA contrast in both light and dark modes (green/red.600 fail at 14px). */}
+        <Text fontWeight="semibold" color={isAdditive ? "green.fg" : "red.fg"} flexShrink={0}>
+          <SpokenValue
+            spoken={
+              points === 0
+                ? `0 points for ${check.name}`
+                : isAdditive
+                  ? `${points} points added for ${check.name}`
+                  : `${points} points deducted for ${check.name}`
+            }
+          >
+            {signedPoints}
+          </SpokenValue>
         </Text>
       </HStack>
       {check.description && (
-        <Box color="fg.subtle" fontSize="xs" mt={1}>
+        // fg.muted (not fg.subtle) — subtle is below the 4.5:1 AA contrast floor for body text.
+        <Box color="fg.muted" fontSize="xs" mt={1}>
           <Markdown>{check.description}</Markdown>
         </Box>
       )}
@@ -158,7 +171,7 @@ function UnappliedCheckRow({
       <HStack justify="space-between" align="start" gap={2} flexWrap="wrap">
         <VStack align="start" gap={0} minW="0">
           <HStack gap={2} flexWrap="wrap">
-            <Text fontWeight="semibold" color="fg.default" wordBreak="break-word">
+            <Text as="h5" fontWeight="semibold" color="fg.default" wordBreak="break-word">
               {check.name}
             </Text>
             <Badge size="sm" variant="surface" colorPalette="gray">
@@ -173,7 +186,7 @@ function UnappliedCheckRow({
         </VStack>
         <VStack align="end" gap={1} flexShrink={0}>
           {potentialLabel && (
-            <Text fontSize="xs" color="fg.subtle">
+            <Text fontSize="xs" color="fg.muted">
               {potentialLabel}
             </Text>
           )}
@@ -285,10 +298,11 @@ function CheckRow({
 
 /**
  * One criterion block: header with name and earned/max, then a row per check. Earned points are
- * rolled up from the applied points across the criterion's checks, mirroring the recompute logic
- * in 20250522235254_fix-compute-grades-negative-score.sql:
- *   - additive:     min(sum of applied points, total_points)
- *   - non-additive: max(total_points - sum of applied deductions, 0)
+ * rolled up from the applied points across the criterion's checks via earnedPointsForCriterion,
+ * mirroring the per-criterion score branches in _submission_review_recompute_scores:
+ *   - deduction-only: max(-sum of applied deductions, -total_points)  (a non-positive penalty)
+ *   - additive:       min(sum of applied points, total_points)
+ *   - non-additive:   max(total_points - sum of applied deductions, 0)
  * Renders nothing (but keeps child hooks mounted) when no checks are visible to the current user.
  */
 function CriterionBlock({
@@ -322,7 +336,6 @@ function CriterionBlock({
     []
   );
 
-  const totalPoints = criteria.total_points ?? 0;
   const max = useMemo(
     () =>
       maxPointsForCriterion({
@@ -338,9 +351,19 @@ function CriterionBlock({
   const appliedTotal = useMemo(() => Object.values(checkState).reduce((acc, s) => acc + s.appliedSum, 0), [checkState]);
   const anyVisible = useMemo(() => Object.values(checkState).some((s) => s.visible), [checkState]);
 
-  // Earned: additive caps the sum at total_points; non-additive / deduction-only subtracts the
-  // applied deductions from total_points, floored at 0.
-  const earned = criteria.is_additive ? Math.min(appliedTotal, totalPoints) : Math.max(totalPoints - appliedTotal, 0);
+  // Earned points this criterion contributes, by mode (see earnedPointsForCriterion):
+  // additive caps the applied sum at total_points; non-additive subtracts applied deductions from
+  // total_points (floored at 0); deduction-only contributes a non-positive penalty. Folding
+  // deduction-only into the non-additive branch (the prior bug) reported total_points - applied as
+  // "earned", which both inflated the criterion line and let the rolled-up earned exceed the max.
+  const earned = earnedPointsForCriterion(
+    {
+      is_additive: criteria.is_additive,
+      is_deduction_only: criteria.is_deduction_only,
+      total_points: criteria.total_points
+    },
+    appliedTotal
+  );
 
   // Bubble criterion-level visibility + score up to the section header / emptiness check.
   useEffect(() => {
@@ -374,12 +397,14 @@ function CriterionBlock({
     >
       <HStack justify="space-between" align="start" gap={2} flexWrap="wrap" mb={2}>
         <VStack align="start" gap={0} minW="0">
-          <Text fontWeight="semibold" color="fg.default" wordBreak="break-word">
+          <Text as="h4" fontWeight="semibold" color="fg.default" wordBreak="break-word">
             {criteria.name}
           </Text>
         </VStack>
         <Text fontWeight="semibold" flexShrink={0}>
-          {earned} / {max}
+          <SpokenValue spoken={`${earned} of ${max} points for ${criteria.name}`}>
+            {earned} / {max}
+          </SpokenValue>
         </Text>
       </HStack>
       {criteria.description && (
@@ -485,12 +510,14 @@ export default function HandGradingSection({ reviewId, appliedOnly }: HandGradin
   return (
     <Box display={anyVisible || showEmptyNote ? "block" : "none"} borderWidth="1px" borderRadius="md" p={4} w="100%">
       <HStack justify="space-between" align="center" mb={anyVisible ? 3 : 2} flexWrap="wrap" gap={2}>
-        <Heading as="h2" size="sm">
+        <Heading as="h3" size="sm">
           Hand grading
         </Heading>
         {anyVisible && (
           <Text fontWeight="semibold">
-            {totalEarned} / {totalMax}
+            <SpokenValue spoken={`${totalEarned} of ${totalMax} points from hand grading`}>
+              {totalEarned} / {totalMax}
+            </SpokenValue>
           </Text>
         )}
       </HStack>

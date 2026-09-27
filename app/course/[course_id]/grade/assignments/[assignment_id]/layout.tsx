@@ -1,11 +1,14 @@
 import { AssignmentProvider } from "@/hooks/useAssignment";
 import { createClientWithCaching, getUserRolesForCourse } from "@/lib/ssrUtils";
+import { classScopedTableTags } from "@/lib/next-cache-tags";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-export async function generateMetadata({ params }: { params: Promise<{ assignment_id: string }> }) {
-  const { assignment_id } = await params;
-  const client = await createClientWithCaching({ tags: ["assignment_metadata"] });
+export async function generateMetadata({ params }: { params: Promise<{ course_id: string; assignment_id: string }> }) {
+  const { course_id, assignment_id } = await params;
+  const client = await createClientWithCaching({
+    tags: classScopedTableTags("assignments", Number(course_id))
+  });
   const { data: assignment } = await client
     .from("assignments")
     .select("title")
@@ -39,7 +42,7 @@ export default async function GradeAssignmentLayout({
     redirect(`/course/${courseId}`);
   }
 
-  const client = await createClientWithCaching({ tags: ["assignment_metadata"] });
+  const client = await createClientWithCaching({ tags: classScopedTableTags("assignments", courseId) });
   const { data: assignment } = await client
     .from("assignments")
     .select("id")

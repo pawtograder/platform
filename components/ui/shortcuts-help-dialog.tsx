@@ -104,6 +104,11 @@ export default function ShortcutsHelpDialog() {
                 <Row label="Focus per-page search (when present)" keys={<Kbd>s</Kbd>} />
                 <Row label="Focus per-page search (alternate)" keys={<Kbd>/</Kbd>} />
               </Box>
+              <Text fontSize="xs" color="fg.muted" mt="2">
+                Some browsers and screen readers reserve Alt combinations for their own menus. If a jump doesn&apos;t
+                fire, press <Kbd>Tab</Kbd> from the top of the page instead — the skip links reach the same landmarks in
+                every browser.
+              </Text>
             </Box>
 
             <Box>
@@ -144,6 +149,38 @@ export default function ShortcutsHelpDialog() {
                   keys={
                     <>
                       <Kbd>s</Kbd> or <Kbd>/</Kbd>
+                    </>
+                  }
+                />
+              </Box>
+            </Box>
+
+            <Box>
+              <Heading size="sm" mb="2">
+                Grading (viewing submission files)
+              </Heading>
+              <Box as="ul" listStyleType="none" m="0" p="0">
+                <Row
+                  label="Next / previous file"
+                  keys={
+                    <>
+                      <Kbd>j</Kbd> / <Kbd>k</Kbd> or <Kbd>↓</Kbd> / <Kbd>↑</Kbd>
+                    </>
+                  }
+                />
+                <Row
+                  label="Next / previous comment"
+                  keys={
+                    <>
+                      <Kbd>n</Kbd> / <Kbd>p</Kbd>
+                    </>
+                  }
+                />
+                <Row
+                  label="Quick-apply a rubric check (in the editor)"
+                  keys={
+                    <>
+                      <Kbd>{MOD}</Kbd>+<Kbd>.</Kbd>
                     </>
                   }
                 />

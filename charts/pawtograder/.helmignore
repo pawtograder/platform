@@ -9,3 +9,15 @@
 *.bak
 .helmignore
 README.md.tmp
+
+# Build/ops assets that are NOT consumed by any template at render time, so they
+# must stay OUT of the packaged chart — otherwise they bloat Helm's release
+# Secret (capped at 1 MiB). In particular maintenance/maintenance-mode.png (~830K
+# of incompressible binary) pushed the release Secret over the limit and broke
+# `helm upgrade`. The maintenance page's PNG is baked into the maintenance IMAGE
+# (images/maintenance/Dockerfile) and served by nginx from there — the chart's
+# ConfigMap only needs maintenance/index.html (a Files.Get target, kept).
+*.png
+images/
+scripts/
+tests/

@@ -7,7 +7,9 @@ import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
+import { classSummary, resolveClass, resolveAssignment } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
+import { resolveDueDate, resolveReleaseDate } from "../utils/zonedDate.ts";
 import { copyLinkedSurveysForAssignment, fetchLatestLinkedSurveysForAssignment } from "../utils/surveyCopy.ts";
 import { copyRubricStructure, copyRubricCheckReferencesForAssignment } from "../utils/rubric.ts";
 import { repoExistsOnGitHub } from "../utils/github.ts";
@@ -93,6 +95,7 @@ async function handleAssignmentsList(ctx: MCPAuthContext, params: Record<string,
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const { data: assignments, error } = await supabase
     .from("assignments")
@@ -100,12 +103,12 @@ async function handleAssignmentsList(ctx: MCPAuthContext, params: Record<string,
     .eq("class_id", classData.id)
     .order("release_date", { ascending: true });
 
-  if (error) throw new CLICommandError(`Failed to fetch assignments: ${error.message}`);
+  if (error) throw new CLICommandError(`Failed to fetch assignments: ${error.message}`, 500);
 
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       assignments: (assignments ?? []).map((a) => ({
         id: a.id,
         slug: a.slug,
@@ -132,12 +135,13 @@ async function handleAssignmentsShow(ctx: MCPAuthContext, params: Record<string,
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdentifier);
 
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       assignment: {
         id: assignment.id,
         slug: assignment.slug,
@@ -167,17 +171,26 @@ async function handleAssignmentsDelete(ctx: MCPAuthContext, params: Record<strin
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  // Instructor-level, not grader: this deletes an assignment and archives its
+  // student repositories. The callee now admits service-role callers (it has to,
+  // since we invoke it with the admin client), so this is the check that actually
+  // gates the operation.
+  await assertUserIsClassInstructor(supabase, ctx.userId, classData.id);
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdentifier);
 
   const { data, error } = await supabase.functions.invoke("assignment-delete", {
     body: { assignment_id: assignment.id, class_id: classData.id }
   });
 
-  if (error) throw new CLICommandError(`Failed to delete assignment: ${error.message}`);
+  // A failure to invoke, or an error reported by the callee, is a server-side fault
+  // rather than a bad request — classified 500 so it reaches Sentry instead of being
+  // reported to the operator as their mistake.
+  if (error) throw new CLICommandError(`Failed to delete assignment: ${error.message}`, 500);
   const invokeError = data as { error?: { details?: string; message?: string }; message?: string } | null;
   if (invokeError?.error) {
     throw new CLICommandError(
-      `Failed to delete assignment: ${invokeError.error.details ?? invokeError.error.message ?? "Unknown error"}`
+      `Failed to delete assignment: ${invokeError.error.details ?? invokeError.error.message ?? "Unknown error"}`,
+      500
     );
   }
 
@@ -207,6 +220,35 @@ function mergeScheduleDueDateOverrides(
   return dueDate ?? latestDueDate;
 }
 
+/**
+ * Resolves a schedule CSV date override in the target class's time zone.
+ *
+ * The client normalizes `--schedule` rows to a bare `YYYY-MM-DD`
+ * (`cli/utils/schedule.ts`), which Postgres would resolve in the session zone
+ * (UTC) when written to a `timestamptz` — making `2026-01-22` mean Jan 21, 7 PM
+ * Eastern, a day early. `reviews assign` already resolves the identical input as
+ * end-of-day in the class zone, so without this the two commands disagreed about
+ * what a bare date means.
+ */
+function resolveScheduleDate(
+  value: string | undefined,
+  timeZone: string | null,
+  field: "release_date" | "due_date"
+): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    // Opposite boundaries for a bare date: a due date is the end of the named
+    // day, a release date is the start of it. Using the deadline convention for a
+    // release kept the assignment hidden for almost the whole day requested.
+    return field === "release_date" ? resolveReleaseDate(value, timeZone) : resolveDueDate(value, timeZone);
+  } catch (err) {
+    throw new CLICommandError(
+      `Invalid ${field} in schedule: ${err instanceof Error ? err.message : String(value)}`,
+      400
+    );
+  }
+}
+
 async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as AssignmentsCopyParams;
   const sourceClassId = p.source_class;
@@ -231,6 +273,16 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
   const supabase = getAdminClient();
   const sourceClass = await resolveClass(supabase, sourceClassId);
   const targetClass = await resolveClass(supabase, targetClassId);
+  // Both sides: reading the source and writing the target each need access, or a
+  // grader in one class could copy content into a class they do not belong to.
+  //
+  // The target side requires instructor, matching `assignments.delete` below and the RLS
+  // policy the web path runs under (`authorizeforclassinstructor` on `assignments`).
+  // Copying creates assignments, self-review settings, rubrics, and GitHub handout repos;
+  // accepting a grader here let a TA create course structure they had no way to remove,
+  // since `assignments.delete` does check for instructor.
+  await assertUserCanAccessClass(supabase, ctx.userId, sourceClass.id);
+  await assertUserIsClassInstructor(supabase, ctx.userId, targetClass.id);
 
   if (copyDebug) {
     const { log } = createAssignmentCopyDebugLog({
@@ -438,7 +490,7 @@ async function getOrCreateDefaultSelfReviewSetting(
     .limit(1)
     .maybeSingle();
   if (error) {
-    throw new CLICommandError(`Failed to fetch default self-review setting: ${error.message}`);
+    throw new CLICommandError(`Failed to fetch default self-review setting: ${error.message}`, 500);
   }
   if (existing?.id) return existing.id;
   const { data: created, error: insertError } = await supabase
@@ -509,7 +561,8 @@ async function copySingleAssignment(
       .maybeSingle();
     if (error) {
       throw new CLICommandError(
-        `Failed to look up existing assignment (target_class_id=${targetClass.id}, source_slug=${sourceAssignment.slug}): ${error.message}`
+        `Failed to look up existing assignment (target_class_id=${targetClass.id}, source_slug=${sourceAssignment.slug}): ${error.message}`,
+        500
       );
     }
     existingAssignment = data as AssignmentWithAutograder | null;
@@ -562,8 +615,11 @@ async function copySingleAssignment(
       title: sourceAssignment.title,
       slug: sourceAssignment.slug,
       description: sourceAssignment.description,
-      release_date: options.releaseDateOverride ?? sourceAssignment.release_date,
-      due_date: options.dueDateOverride ?? sourceAssignment.due_date,
+      release_date:
+        resolveScheduleDate(options.releaseDateOverride, targetClass.time_zone, "release_date") ??
+        sourceAssignment.release_date,
+      due_date:
+        resolveScheduleDate(options.dueDateOverride, targetClass.time_zone, "due_date") ?? sourceAssignment.due_date,
       total_points: sourceAssignment.total_points,
       max_late_tokens: sourceAssignment.max_late_tokens,
       group_config: sourceAssignment.group_config,
@@ -647,7 +703,8 @@ async function copySingleAssignment(
               .filter(Boolean)
               .join("; ") || undefined;
           throw new CLICommandError(
-            `Failed to set ${column} on assignment (assignment_id=${newAssignment.id}, ${column}=${targetRubricId}): ${error.message}${detail ? ` (${detail})` : ""}`
+            `Failed to set ${column} on assignment (assignment_id=${newAssignment.id}, ${column}=${targetRubricId}): ${error.message}${detail ? ` (${detail})` : ""}`,
+            500
           );
         }
         if (httpStatus < 200 || httpStatus >= 300) {

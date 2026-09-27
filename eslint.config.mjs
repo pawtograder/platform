@@ -13,6 +13,9 @@ const FORBIDDEN_PALETTE_BG_WITH_WHITE =
   "/]):has(JSXAttribute[name.name='color'][value.value='white'])";
 
 const eslintConfig = [
+  // design-sync inputs are tooling artifacts (esbuild-compiled, never imported by
+  // the app, regenerated each sync, intentionally full of `any`/mock shims).
+  { ignores: [".design-sync/**"] },
   ...compat.config({ extends: ["next/core-web-vitals", "next/typescript", "prettier"] }),
   {
     linterOptions: { reportUnusedDisableDirectives: "warn" },

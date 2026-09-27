@@ -14,7 +14,10 @@ import type {
   SubmissionsCommentsImportParams
 } from "../types.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveAssignment, resolveClass } from "../utils/resolvers.ts";
+import { classSummary, resolveAssignment, resolveClass } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { pageAll } from "../utils/paging.ts";
+import { gradingTotalForStudent } from "../utils/gradingTotals.ts";
 import { resolveSelectors } from "../utils/selectors.ts";
 import { createExportTokenizer } from "../utils/assessmentExportPepper.ts";
 import { validateExportIdentityParams } from "../utils/exportIdentity.ts";
@@ -58,25 +61,92 @@ interface SubmissionsExportParams {
   submission_ids?: number[];
 }
 
-async function assertUserCanAccessClass(userId: string, classId: number): Promise<void> {
-  const supabase = getAdminClient();
+/**
+ * Every `submission_artifacts` row already stored under this (submission_id, name).
+ *
+ * A list read rather than `.maybeSingle()`, and the error is returned rather than
+ * discarded. `submission_artifacts` has no unique index on (submission_id, name) — only
+ * its primary key — and the overwrite path inserts before it deletes, so an interrupted
+ * run leaves two rows. `.maybeSingle()` answers PGRST116 with `data: null` for exactly
+ * that state, so swallowing the error made the handler conclude nothing was stored:
+ * `--overwrite` became a permanent no-op that added one more row per invocation, and the
+ * grading comments stayed attached to the artifact the operator meant to replace.
+ */
+async function findExistingArtifacts(
+  supabase: ReturnType<typeof getAdminClient>,
+  submissionId: number,
+  name: string
+): Promise<{ data: Array<{ id: number }>; error: string | null }> {
   const { data, error } = await supabase
-    .from("user_roles")
+    .from("submission_artifacts")
     .select("id")
-    .eq("user_id", userId)
-    .eq("class_id", classId)
-    .eq("disabled", false)
-    .in("role", ["instructor", "grader"])
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw new CLICommandError(`Failed to verify class access: ${error.message}`, 500);
-  if (!data) {
-    throw new CLICommandError("You do not have instructor/grader access to this class", 403);
-  }
+    .eq("submission_id", submissionId)
+    .eq("name", name)
+    .order("id", { ascending: true });
+  if (error) return { data: [], error: `failed to look up existing artifact: ${error.message}` };
+  return { data: data ?? [], error: null };
 }
 
+/**
+ * Rejects caller-supplied submission ids that are not part of the resolved assignment.
+ *
+ * Every handler runs on the service-role client, so an id from the request body is
+ * otherwise used verbatim: `.in("submission_id", ids)` on a table that carries no
+ * class predicate reaches the whole deployment, and submission ids are sequential, so
+ * enumeration is trivial. `assertUserCanAccessClass` authorizes the *class*, not the
+ * ids, so this is the step that ties the two together and it has to run on every path
+ * that accepts ids — reads and writes alike.
+ */
+async function assertSubmissionsBelongToAssignment(
+  supabase: ReturnType<typeof getAdminClient>,
+  classId: number,
+  assignmentId: number,
+  requestedIds: number[],
+  label: string
+): Promise<number[]> {
+  const unique = [...new Set(requestedIds)];
+  if (unique.length === 0) return [];
+
+  const ownedIds: number[] = [];
+  for (let i = 0; i < unique.length; i += 500) {
+    const batch = unique.slice(i, i + 500);
+    const rows = await pageAll<{ id: number }>(
+      () =>
+        supabase
+          .from("submissions")
+          .select("id")
+          .eq("class_id", classId)
+          .eq("assignment_id", assignmentId)
+          .in("id", batch)
+          .order("id", { ascending: true }),
+      `Failed to validate ${label}`
+    );
+    ownedIds.push(...rows.map((r) => r.id));
+  }
+
+  const ownedSet = new Set(ownedIds);
+  const foreignIds = unique.filter((id) => !ownedSet.has(id));
+  if (foreignIds.length > 0) {
+    throw new CLICommandError(
+      `${label}: these submission ids do not belong to assignment ${assignmentId} in class ${classId}: ` +
+        foreignIds.slice(0, 20).join(", ") +
+        (foreignIds.length > 20 ? ` (and ${foreignIds.length - 20} more)` : ""),
+      400
+    );
+  }
+  return ownedIds;
+}
+
+/**
+ * `classId`/`assignmentId` scope the lookup. The submission ids come from the caller's
+ * payload and are only validated row by row inside the RPC, so an unscoped
+ * `.in("submission_id", ids)` on the service-role client answered for other classes:
+ * the returned `skipped_without_review_assignee` set then discloses, by its complement,
+ * which of another class's submissions are assigned for a rubric part.
+ */
 async function fetchAssigneesForRubricPart(
+  classId: number,
+  assignmentId: number,
   submissionIds: number[],
   rubricPartId: number
 ): Promise<Map<number, string>> {
@@ -97,7 +167,13 @@ async function fetchAssigneesForRubricPart(
       const { data: rows, error } = await supabase
         .from("review_assignments")
         .select("id, submission_id, assignee_profile_id")
+        .eq("class_id", classId)
+        .eq("assignment_id", assignmentId)
         .in("submission_id", batch)
+        // Ordered: unordered .range() paging can skip or duplicate rows, and the
+        // first match below becomes the recorded comment author — so without a
+        // stable order the attribution varied between runs.
+        .order("id", { ascending: true })
         .range(page * PAGE, (page + 1) * PAGE - 1);
       if (error) throw new CLICommandError(`review_assignments: ${error.message}`, 500);
       if (!rows?.length) {
@@ -128,6 +204,7 @@ async function fetchAssigneesForRubricPart(
         .from("review_assignment_rubric_parts")
         .select("review_assignment_id, rubric_part_id")
         .in("review_assignment_id", batch)
+        .order("id", { ascending: true })
         .range(page * PAGE, (page + 1) * PAGE - 1);
       if (error) throw new CLICommandError(`review_assignment_rubric_parts: ${error.message}`, 500);
       if (!rows?.length) {
@@ -155,6 +232,41 @@ async function fetchAssigneesForRubricPart(
   }
 
   return out;
+}
+
+/**
+ * Decodes base64, returning null when the input was not valid base64.
+ *
+ * `Buffer.from(x, "base64")` never throws — it drops characters outside the
+ * alphabet — so the only way to know the input decoded losslessly is to re-encode
+ * and compare. Without this a corrupt manifest uploaded truncated artifact bytes
+ * and reported success.
+ */
+/** Base64 with at least one data character, optional trailing padding, nothing else. */
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+function decodeBase64Strict(input: string): Uint8Array | null {
+  if (typeof input !== "string" || input.length === 0) return null;
+  const normalized = input.replace(/\s+/g, "");
+
+  // The grammar is checked before decoding. Padding-only input ("=", "====", or
+  // whitespace around one) slipped through the re-encode comparison below, because
+  // Buffer decodes it to zero bytes and stripping padding reduces both operands to the
+  // empty string — so `--overwrite` replaced a real artifact with an empty object and
+  // reported success. Requiring a data character also rules out the empty payload,
+  // which the length guard above already rejected in its unpadded form.
+  if (!BASE64_RE.test(normalized)) return null;
+  // 4n+1 is not a reachable length for base64; the re-encode check catches it too, but
+  // failing here says why.
+  if (normalized.replace(/=+$/, "").length % 4 === 1) return null;
+
+  const buf = Buffer.from(normalized, "base64");
+  if (buf.length === 0) return null;
+  // Re-encoding is canonical, so compare against the canonicalized input: strip
+  // padding from both sides rather than requiring the caller to pad exactly.
+  const reencoded = buf.toString("base64").replace(/=+$/, "");
+  if (reencoded !== normalized.replace(/=+$/, "")) return null;
+  return new Uint8Array(buf);
 }
 
 type WorkItem =
@@ -231,11 +343,20 @@ async function runCommentsImportOrSync(ctx: MCPAuthContext, params: Record<strin
   const classData = await resolveClass(supabase, p.class);
   const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
 
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const dryRun = p.dry_run === true;
   const payload = p.payload;
   const syncIds = payload.sync_submission_ids ?? [];
+
+  // `sync_submission_ids` is the sole predicate of the RPC's three soft-delete
+  // UPDATEs (`submission_id = ANY (v_sync_ids)` — see
+  // 20260319120000_cli_import_submission_comments_batch.sql), which carry no class or
+  // assignment filter of their own. Passing the caller's ids through unchecked let a
+  // grader in one class soft-delete another class's grading comments and still get
+  // `success: true`; the insert path is protected only because the RPC rejects
+  // out-of-class rows individually, which the deletes do not do.
+  await assertSubmissionsBelongToAssignment(supabase, classData.id, assignment.id, syncIds, "sync_submission_ids");
 
   const queue = buildWorkQueue(payload);
 
@@ -352,7 +473,7 @@ async function handleCommentsPrepare(ctx: MCPAuthContext, params: Record<string,
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, p.class);
   const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   if (p.author_profile_id && p.rubric_part_id) {
     throw new CLICommandError("Specify only one of author_profile_id or rubric_part_id");
@@ -397,7 +518,7 @@ async function handleCommentsPrepare(ctx: MCPAuthContext, params: Record<string,
     }
   } else if (p.rubric_part_id != null) {
     const ids = Array.from(submissionIds);
-    const assignees = await fetchAssigneesForRubricPart(ids, p.rubric_part_id);
+    const assignees = await fetchAssigneesForRubricPart(classData.id, assignment.id, ids, p.rubric_part_id);
 
     for (const sid of ids) {
       if (!assignees.has(sid)) skippedNoReviewAssignee.add(sid);
@@ -459,7 +580,7 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, p.class);
   const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const dryRun = p.dry_run === true;
   const overwrite = p.overwrite === true;
@@ -512,22 +633,23 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
     }
 
     if (dryRun) {
-      const { data: existing } = await supabase
-        .from("submission_artifacts")
-        .select("id")
-        .eq("submission_id", art.submission_id)
-        .eq("name", art.name)
-        .maybeSingle();
-      if (existing && !overwrite) skipped++;
-      else if (existing && overwrite) overwritten++;
+      const { data: existing, error: existingErr } = await findExistingArtifacts(supabase, art.submission_id, art.name);
+      if (existingErr) {
+        errors.push({ submission_id: art.submission_id, artifact_name: art.name, reason: existingErr });
+        continue;
+      }
+      if (existing.length > 0 && !overwrite) skipped++;
+      else if (existing.length > 0 && overwrite) overwritten++;
       else uploaded++;
       continue;
     }
 
-    let bytes: Uint8Array;
-    try {
-      bytes = new Uint8Array(Buffer.from(art.content_base64, "base64"));
-    } catch {
+    // Validated, not try/caught: Buffer.from(x, "base64") never throws. It silently
+    // drops characters outside the alphabet, so the old guard was dead code and a
+    // corrupt manifest uploaded truncated bytes and reported success. Re-encoding and
+    // comparing is the cheap way to prove the input decoded losslessly.
+    const bytes = decodeBase64Strict(art.content_base64);
+    if (bytes === null) {
       errors.push({
         submission_id: art.submission_id,
         artifact_name: art.name,
@@ -536,26 +658,27 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       continue;
     }
 
-    const { data: existing } = await supabase
-      .from("submission_artifacts")
-      .select("id")
-      .eq("submission_id", art.submission_id)
-      .eq("name", art.name)
-      .maybeSingle();
+    const { data: priorArtifacts, error: existingErr } = await findExistingArtifacts(
+      supabase,
+      art.submission_id,
+      art.name
+    );
+    if (existingErr) {
+      errors.push({ submission_id: art.submission_id, artifact_name: art.name, reason: existingErr });
+      continue;
+    }
 
-    if (existing && !overwrite) {
+    if (priorArtifacts.length > 0 && !overwrite) {
       skipped++;
       continue;
     }
 
-    if (existing && overwrite) {
-      await supabase.from("submission_artifact_comments").delete().eq("submission_artifact_id", existing.id);
-      const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${existing.id}`;
-      await supabase.storage.from("submission-artifacts").remove([oldPath]);
-      await supabase.from("submission_artifacts").delete().eq("id", existing.id);
-      overwritten++;
-    }
-
+    // The old artifact is deleted *after* the replacement is safely stored, further
+    // down. Deleting first meant that when the upload failed we rolled back only the
+    // new row, so the original artifact and all of its grading comments were already
+    // gone — reported as one entry in errors[] under success: true. Two rows can
+    // coexist here: submission_artifacts has no unique constraint on
+    // (submission_id, name), only its primary key.
     const { data: inserted, error: insErr } = await supabase
       .from("submission_artifacts")
       .insert({
@@ -584,6 +707,8 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       contentType: "application/octet-stream"
     });
     if (upErr) {
+      // Roll back only the new row. The old artifact and its comments are still
+      // intact because they have not been touched yet.
       await supabase.from("submission_artifacts").delete().eq("id", inserted.id);
       errors.push({
         submission_id: art.submission_id,
@@ -592,6 +717,69 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       });
       continue;
     }
+
+    // The replacement is stored, so the old artifact can go. Errors here are
+    // reported rather than discarded: a failure leaves a duplicate row behind, and
+    // silently swallowing it is how `--overwrite` used to appear to work while
+    // leaving the storage object orphaned.
+    if (priorArtifacts.length > 0 && overwrite) {
+      // Ordered comments → row → storage object, stopping at the first failure for a
+      // given row, and repeated for *every* prior row so a run that follows a failed
+      // cleanup reconciles the duplicate rather than adding to it.
+      //
+      // Deleting the object first was wrong in a way that compounds: a failed comment
+      // delete leaves comments whose foreign key then blocks the row delete, so the old
+      // artifact row survives pointing at a blob that no longer exists, and the grading
+      // comments attached to it point at nothing. Removing the object last means every
+      // failure leaves a *complete* old artifact — redundant, but coherent, and the
+      // operator can retry.
+      //
+      // Every prior row is cleaned up, not just one. Because the insert now precedes the
+      // delete and there is no unique index on (submission_id, name), an interrupted run
+      // can leave duplicates behind; overwriting only the first would make `--overwrite`
+      // a permanent no-op that adds a row each time it is invoked.
+      const failCleanup = (priorId: number, reason: string) => {
+        errors.push({
+          submission_id: art.submission_id,
+          artifact_name: art.name,
+          reason: `replacement stored as artifact ${inserted.id}, but removing the previous artifact ${priorId} failed: ${reason}`
+        });
+      };
+
+      let cleanupFailed = false;
+      for (const prior of priorArtifacts) {
+        const { error: commentsErr } = await supabase
+          .from("submission_artifact_comments")
+          .delete()
+          .eq("submission_artifact_id", prior.id);
+        if (commentsErr) {
+          failCleanup(prior.id, commentsErr.message);
+          cleanupFailed = true;
+          continue;
+        }
+
+        const { error: rowErr } = await supabase.from("submission_artifacts").delete().eq("id", prior.id);
+        if (rowErr) {
+          failCleanup(prior.id, rowErr.message);
+          cleanupFailed = true;
+          continue;
+        }
+
+        const oldPath = `classes/${classData.id}/profiles/${profileSlot}/submissions/${art.submission_id}/${prior.id}`;
+        const { error: objectErr } = await supabase.storage.from("submission-artifacts").remove([oldPath]);
+        if (objectErr) {
+          // The row is gone, so nothing references this blob any more. Reported so the
+          // orphan can be swept, but the data model is consistent.
+          failCleanup(prior.id, `its storage object was left behind: ${objectErr.message}`);
+          cleanupFailed = true;
+        }
+      }
+
+      if (cleanupFailed) continue;
+      overwritten++;
+      continue;
+    }
+
     uploaded++;
   }
 
@@ -620,7 +808,7 @@ async function handleSubmissionsExport(ctx: MCPAuthContext, rawParams: Record<st
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, params.class);
-  await assertUserCanAccessClass(ctx.userId, classData.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const allSubmissions = params.all_submissions === true;
   const withBinary = params.with_binary === true;
@@ -678,7 +866,7 @@ async function handleSubmissionsExport(ctx: MCPAuthContext, rawParams: Record<st
         identity_mode: mode,
         dump_id: dumpId,
         exported_at: new Date().toISOString(),
-        class: { id: classData.id, slug: classData.slug, name: classData.name },
+        class: classSummary(classData),
         assignment: { id: assignment.id, slug: assignment.slug, title: assignment.title },
         submissions_scope: allSubmissions ? "all" : "active",
         with_binary: withBinary,
@@ -706,11 +894,58 @@ async function handleSubmissionsExport(ctx: MCPAuthContext, rawParams: Record<st
   }
 
   if (section === "files") {
-    const submissionIds = params.submission_ids;
-    if (!Array.isArray(submissionIds) || submissionIds.length === 0) {
+    const rawSubmissionIds = params.submission_ids;
+    if (!Array.isArray(rawSubmissionIds) || rawSubmissionIds.length === 0) {
       throw new CLICommandError("submission_ids is required for section=files", 400);
     }
-    const filesBatchIndex = typeof params.files_batch_index === "number" ? params.files_batch_index : 0;
+
+    const requestedIds = [...new Set(rawSubmissionIds.map((id) => Number(id)))];
+    if (requestedIds.some((id) => !Number.isInteger(id) || id < 1)) {
+      throw new CLICommandError("submission_ids must all be positive integers", 400);
+    }
+
+    // Scope the caller's ids to the class and assignment they were authorized for.
+    //
+    // Without this the only predicate downstream is `.in("submission_id", ids)` on
+    // the service-role client, so anyone holding cli:read in a single class could
+    // pass ids belonging to any other class and receive full submission_files
+    // contents — student source code — for the whole deployment. Submission ids
+    // are sequential, so enumeration is trivial. `assignment` was already
+    // resolved here but never applied to the query.
+    const ownedIds: number[] = [];
+    for (let i = 0; i < requestedIds.length; i += 500) {
+      const batch = requestedIds.slice(i, i + 500);
+      const rows = await pageAll<{ id: number }>(
+        () =>
+          supabase
+            .from("submissions")
+            .select("id")
+            .eq("class_id", classData.id)
+            .eq("assignment_id", assignment.id)
+            .in("id", batch)
+            .order("id", { ascending: true }),
+        "Failed to validate submission_ids"
+      );
+      ownedIds.push(...rows.map((r) => r.id));
+    }
+
+    const ownedSet = new Set(ownedIds);
+    const foreignIds = requestedIds.filter((id) => !ownedSet.has(id));
+    if (foreignIds.length > 0) {
+      throw new CLICommandError(
+        `These submission ids do not belong to assignment ${assignment.id} in class ${classData.id}: ` +
+          foreignIds.slice(0, 20).join(", ") +
+          (foreignIds.length > 20 ? ` (and ${foreignIds.length - 20} more)` : ""),
+        400
+      );
+    }
+
+    const submissionIds = ownedIds;
+    const rawBatchIndex = params.files_batch_index ?? 0;
+    if (!Number.isInteger(Number(rawBatchIndex)) || Number(rawBatchIndex) < 0) {
+      throw new CLICommandError("files_batch_index must be a non-negative integer", 400);
+    }
+    const filesBatchIndex = Number(rawBatchIndex);
 
     return streamNdjson(async (writer) => {
       const { fileCount, nextFilesBatchIndex } = await streamSubmissionFiles(supabase, tokenizer, writer, {
@@ -736,6 +971,171 @@ function normalizePatternList(raw: string[] | undefined): string[] {
   if (!raw) return [];
   return raw.map((p) => p.trim()).filter((p) => p.length > 0);
 }
+
+const SUBMISSIONS_LIST_PAGE = 1000;
+const SUBMISSIONS_LIST_DEFAULT_LIMIT = 1000;
+const SUBMISSIONS_LIST_MAX_LIMIT = 10000;
+
+interface SubmissionsListParams {
+  class?: string | number;
+  assignment?: string | number;
+  limit?: number;
+  /** Include enrolled students who have no submission (activesubmissionid is null). */
+  include_non_submitters?: boolean;
+}
+
+/**
+ * submissions.list — the roster-plus-grades view the instructor submissions
+ * page renders.
+ *
+ * Two properties of `submissions_with_grades_for_assignment_nice` shape this
+ * handler (see supabase/migrations/20260716000000_roster_placeholder_flag.sql):
+ *
+ *   - It emits one row per *enrolled student*, not per submission. `id` is the
+ *     `user_roles.id`, so the submission is `activesubmissionid`. Members of a
+ *     group therefore produce several rows sharing one `activesubmissionid`;
+ *     we keep them all (one line per student is what an operator wants) and
+ *     report the distinct submission count separately.
+ *   - A student with no submission still gets a row, with a null
+ *     `activesubmissionid`. Those are excluded unless asked for, so the
+ *     default output lists work that exists.
+ *
+ * `is_placeholder` marks a manually created submission (`submitted_via =
+ * 'manual'`), which is unrelated to whether the student submitted.
+ */
+async function handleSubmissionsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
+  const p = params as unknown as SubmissionsListParams;
+  if (!p.class) throw new CLICommandError("class is required");
+  if (!p.assignment) throw new CLICommandError("assignment is required");
+
+  const limit = p.limit === undefined || p.limit === null ? SUBMISSIONS_LIST_DEFAULT_LIMIT : Number(p.limit);
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new CLICommandError(`limit must be a positive integer (got ${String(p.limit)})`, 400);
+  }
+  if (limit > SUBMISSIONS_LIST_MAX_LIMIT) {
+    throw new CLICommandError(
+      `limit must be ${SUBMISSIONS_LIST_MAX_LIMIT} or less (got ${limit}). A class roster does not exceed that.`,
+      400
+    );
+  }
+
+  const supabase = getAdminClient();
+  const classData = await resolveClass(supabase, p.class);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
+  const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
+
+  // One row past `limit`, used only to answer "is there more?" and then dropped.
+  // `.range()` can never return more than it asks for, so testing `rows.length >= limit`
+  // reported an exactly-full final page as truncated.
+  const probeLimit = limit + 1;
+  const rows: Array<Record<string, unknown>> = [];
+  for (let offset = 0; rows.length < probeLimit; offset += SUBMISSIONS_LIST_PAGE) {
+    const page = Math.min(SUBMISSIONS_LIST_PAGE, probeLimit - rows.length);
+    let query = supabase
+      .from("submissions_with_grades_for_assignment_nice")
+      .select(
+        "id, activesubmissionid, ordinal, name, sortable_name, groupname, student_private_profile_id, " +
+          "sha, repository, autograder_score, total_score, tweak, released, tokens_consumed, hours, " +
+          "due_date, late_due_date, gradername, assignedgradername, completed_at, checkername, " +
+          "class_section_name, lab_section_name, is_placeholder, created_at, assignment_group_id, " +
+          "per_student_grading_totals, individual_scores"
+      )
+      .eq("class_id", classData.id)
+      .eq("assignment_id", assignment.id);
+
+    if (!p.include_non_submitters) {
+      query = query.not("activesubmissionid", "is", null);
+    }
+
+    const { data, error } = await query
+      .order("sortable_name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(offset, offset + page - 1);
+
+    if (error) {
+      throw new CLICommandError(`Failed to list submissions: ${error.message}`, 500);
+    }
+
+    const batch = (data ?? []) as unknown as Array<Record<string, unknown>>;
+    rows.push(...batch);
+    if (batch.length < page) break;
+  }
+
+  const truncated = rows.length > limit;
+  if (truncated) rows.length = limit;
+
+  // `total_score` on this view is the review's shared total. For rubrics with
+  // individually graded or per-student-assigned parts, the authoritative figure
+  // for a roster row is that student's entry in per_student_grading_totals (or
+  // the legacy individual_scores), which is what the instructor table shows.
+  // Reporting the shared value for every group member would misstate individual
+  // students, so the resolved figure is exposed as student_total_score.
+  const submissions = rows.map((r) => ({
+    ...r,
+    /**
+     * The deadline this student is actually held to: the view's `late_due_date` is
+     * `due_date` plus the `hours` of extension granted to them, not a separate grace
+     * period, and naming it "late" invited reading it as one.
+     */
+    effective_due_date: r.late_due_date ?? r.due_date ?? null,
+    student_total_score: gradingTotalForStudent(
+      {
+        total_score: (r.total_score as number | null) ?? null,
+        per_student_grading_totals: r.per_student_grading_totals,
+        individual_scores: r.individual_scores
+      },
+      r.student_private_profile_id as string | null
+    )
+  }));
+
+  const distinctSubmissions = new Set(
+    rows.map((r) => r.activesubmissionid).filter((id): id is number => typeof id === "number")
+  );
+
+  // Counted with its own query rather than from `rows`. The default fetch filters
+  // non-submitters out, so counting them in the result was structurally always zero;
+  // and even with --include-non-submitters the count would describe the page rather
+  // than the class as soon as `limit` bit.
+  const { count: nonSubmitterCount, error: nonSubmitterError } = await supabase
+    .from("submissions_with_grades_for_assignment_nice")
+    .select("id", { count: "exact", head: true })
+    .eq("class_id", classData.id)
+    .eq("assignment_id", assignment.id)
+    .is("activesubmissionid", null);
+  if (nonSubmitterError) {
+    throw new CLICommandError(`Failed to count non-submitters: ${nonSubmitterError.message}`, 500);
+  }
+
+  return {
+    success: true,
+    data: {
+      class: classSummary(classData),
+      assignment: {
+        id: assignment.id,
+        slug: assignment.slug,
+        title: assignment.title,
+        due_date: assignment.due_date,
+        total_points: assignment.total_points
+      },
+      submissions,
+      summary: {
+        rows: rows.length,
+        distinct_submissions: distinctSubmissions.size,
+        /** Enrolled students with no active submission, across the whole assignment. */
+        non_submitters: nonSubmitterCount ?? 0,
+        /** Non-submitters present in `submissions`; zero unless --include-non-submitters. */
+        non_submitters_listed: rows.filter((r) => r.activesubmissionid == null).length,
+        truncated
+      }
+    }
+  };
+}
+
+registerCommand({
+  name: "submissions.list",
+  requiredScope: "cli:read",
+  handler: handleSubmissionsList
+});
 
 registerCommand({
   name: "submissions.comments.import",

@@ -1,12 +1,13 @@
 #!/usr/bin/env -S deno run --allow-net --allow-env --allow-read
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import type { DiscordAsyncEnvelope } from "../_shared/DiscordAsyncTypes.ts";
 
 // Import the processEnvelope function directly from the main worker
 import { processEnvelope } from "./index.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function debugProcessEnvelope(envelopeJson: string) {
   const scope = new Sentry.Scope();
@@ -72,7 +73,7 @@ async function debugProcessEnvelope(envelopeJson: string) {
     console.log("✅ Environment variables configured");
     console.log(`   SUPABASE_URL: ${supabaseUrl.substring(0, 30)}...`);
 
-    const adminSupabase = createClient<Database>(supabaseUrl, supabaseKey);
+    const adminSupabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
     // Create debug metadata
     const meta = {

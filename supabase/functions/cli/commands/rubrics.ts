@@ -5,8 +5,10 @@
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
-import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
-import { fetchRubricWithHierarchy, requireRubricTableDeleteOk } from "../utils/rubric.ts";
+import { classSummary, resolveClass, resolveAssignment, resolveRubricIdForType } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
+import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
+import { pageAll } from "../utils/paging.ts";
 import {
   indexAssignmentRubrics,
   resolveYamlReference,
@@ -14,14 +16,23 @@ import {
   type IndexedCheck,
   type YamlReference
 } from "../utils/rubricReferences.ts";
+import {
+  buildUpdateRubricFullPayload,
+  planRubricImport,
+  rubricPathKey,
+  rubricTreeToYaml,
+  validateRubricYaml,
+  type RubricTreeLike,
+  type RubricYaml
+} from "../../_shared/rubricYaml.ts";
+import { createAuthenticatedSupabaseClient } from "../../_shared/MCPAuth.ts";
 import { CLICommandError } from "../errors.ts";
 import type {
   CLIResponse,
   RubricsListParams,
   RubricsExportParams,
   RubricsImportParams,
-  RubricWithHierarchy,
-  RubricExportPart
+  RubricWithHierarchy
 } from "../types.ts";
 
 async function handleRubricsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
@@ -31,6 +42,7 @@ async function handleRubricsList(ctx: MCPAuthContext, params: Record<string, unk
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdentifier);
 
   const rubricTypes = [
@@ -58,7 +70,7 @@ async function handleRubricsList(ctx: MCPAuthContext, params: Record<string, unk
   return {
     success: true,
     data: {
-      class: { id: classData.id, slug: classData.slug, name: classData.name },
+      class: classSummary(classData),
       assignment: { id: assignment.id, slug: assignment.slug, title: assignment.title },
       rubrics
     }
@@ -74,60 +86,6 @@ async function handleRubricsList(ctx: MCPAuthContext, params: Record<string, unk
  * passing them through {@link serializeReferencesForExport}. Checks with no
  * outgoing references omit the field entirely.
  */
-function buildExportData(
-  rubric: RubricWithHierarchy,
-  referencesByCheckId: Map<number, YamlReference[]>
-): {
-  name: string;
-  description: string | null;
-  cap_score_to_assignment_points: boolean;
-  is_private: boolean;
-  review_round: string | null;
-  parts: RubricExportPart[];
-} {
-  return {
-    name: rubric.name,
-    description: rubric.description,
-    cap_score_to_assignment_points: rubric.cap_score_to_assignment_points,
-    is_private: rubric.is_private,
-    review_round: rubric.review_round,
-    parts: (rubric.rubric_parts ?? []).map((part) => ({
-      name: part.name,
-      description: part.description,
-      ordinal: part.ordinal,
-      criteria: (part.rubric_criteria ?? []).map((criteria) => ({
-        name: criteria.name,
-        description: criteria.description,
-        ordinal: criteria.ordinal,
-        total_points: criteria.total_points,
-        is_additive: criteria.is_additive,
-        is_deduction_only: criteria.is_deduction_only,
-        min_checks_per_submission: criteria.min_checks_per_submission,
-        max_checks_per_submission: criteria.max_checks_per_submission,
-        checks: (criteria.rubric_checks ?? []).map((check) => {
-          const refs = referencesByCheckId.get(check.id);
-          const out: RubricExportPart["criteria"][number]["checks"][number] = {
-            name: check.name,
-            description: check.description,
-            ordinal: check.ordinal,
-            points: check.points,
-            is_annotation: check.is_annotation,
-            is_comment_required: check.is_comment_required,
-            is_required: check.is_required,
-            annotation_target: check.annotation_target,
-            artifact: check.artifact,
-            file: check.file,
-            group: check.group,
-            max_annotations: check.max_annotations,
-            student_visibility: check.student_visibility
-          };
-          if (refs && refs.length > 0) out.references = refs;
-          return out;
-        })
-      }))
-    }))
-  };
-}
 
 /**
  * Load every rubric on `assignmentId` and return both the hierarchy list and a
@@ -155,7 +113,7 @@ async function loadAssignmentRubricIndex(
     .eq("assignment_id", assignmentId);
 
   if (error) {
-    throw new CLICommandError(`Failed to load rubrics for assignment ${assignmentId}: ${error.message}`);
+    throw new CLICommandError(`Failed to load rubrics for assignment ${assignmentId}: ${error.message}`, 500);
   }
   const rubrics = (data ?? []) as RubricWithHierarchy[];
   return { rubrics, indexed: indexAssignmentRubrics(rubrics) };
@@ -170,19 +128,12 @@ async function handleRubricsExport(ctx: MCPAuthContext, params: Record<string, u
   if (!classIdentifier) throw new CLICommandError("class is required");
   if (!assignmentIdentifier) throw new CLICommandError("assignment is required");
 
-  const validTypes = ["grading", "self_review", "meta"];
-  if (!validTypes.includes(rubricType)) {
-    throw new CLICommandError(`Invalid rubric type: ${rubricType}. Must be grading, self_review, or meta`);
-  }
-
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdentifier);
 
-  let rubricId: number | null = null;
-  if (rubricType === "grading") rubricId = assignment.grading_rubric_id;
-  else if (rubricType === "self_review") rubricId = assignment.self_review_rubric_id;
-  else if (rubricType === "meta") rubricId = assignment.meta_grading_rubric_id;
+  const rubricId = resolveRubricIdForType(assignment, rubricType);
 
   if (!rubricId) {
     throw new CLICommandError(`No ${rubricType} rubric found for this assignment`);
@@ -206,28 +157,80 @@ async function handleRubricsExport(ctx: MCPAuthContext, params: Record<string, u
 
   const referencesByCheckId = new Map<number, YamlReference[]>();
   if (referencingCheckIds.length > 0) {
-    const { data: refRows, error: refErr } = await supabase
-      .from("rubric_check_references")
-      .select("referencing_rubric_check_id, referenced_rubric_check_id")
-      .eq("assignment_id", assignment.id)
-      .in("referencing_rubric_check_id", referencingCheckIds);
-    if (refErr) {
-      throw new CLICommandError(
-        `Failed to load rubric_check_references for assignment ${assignment.id}: ${refErr.message}`
-      );
-    }
+    // Batched and paged. A check can reference several others, so the row count is a
+    // multiple of the check count and is not bounded by it: an unpaged read silently
+    // stopped at `max_rows`, and the export then omitted those references — which
+    // `rubrics import` reads as "delete them", so an export/import round-trip destroyed
+    // exactly the references that fell past the cap.
     const grouped = new Map<number, Array<{ referenced_rubric_check_id: number }>>();
-    for (const row of refRows ?? []) {
-      const arr = grouped.get(row.referencing_rubric_check_id) ?? [];
-      arr.push({ referenced_rubric_check_id: row.referenced_rubric_check_id });
-      grouped.set(row.referencing_rubric_check_id, arr);
+    for (let i = 0; i < referencingCheckIds.length; i += 500) {
+      const batch = referencingCheckIds.slice(i, i + 500);
+      const refRows = await pageAll<{ referencing_rubric_check_id: number; referenced_rubric_check_id: number }>(
+        () =>
+          supabase
+            .from("rubric_check_references")
+            .select("referencing_rubric_check_id, referenced_rubric_check_id")
+            .eq("assignment_id", assignment.id)
+            .in("referencing_rubric_check_id", batch)
+            .order("id", { ascending: true }),
+        `Failed to load rubric_check_references for assignment ${assignment.id}`
+      );
+      for (const row of refRows) {
+        const arr = grouped.get(row.referencing_rubric_check_id) ?? [];
+        arr.push({ referenced_rubric_check_id: row.referenced_rubric_check_id });
+        grouped.set(row.referencing_rubric_check_id, arr);
+      }
     }
     for (const [checkId, refs] of grouped) {
       referencesByCheckId.set(checkId, serializeReferencesForExport(refs, indexed));
     }
   }
 
-  const exportData = buildExportData(rubric, referencesByCheckId);
+  const exportData = rubricTreeToYaml(rubric as unknown as RubricTreeLike, referencesByCheckId, {
+    class_id: classData.id,
+    assignment_id: assignment.id,
+    rubric_id: rubricId,
+    review_round: rubric.review_round,
+    exported_at: new Date().toISOString()
+  });
+
+  if (p.strip_ids === true) {
+    // A template rather than a round-trip artifact: without ids every row is created
+    // new on import, which is what you want when seeding a different assignment.
+    delete exportData._source;
+    const idBackedReferences: string[] = [];
+    for (const part of exportData.parts) {
+      delete part.id;
+      for (const criteria of part.criteria) {
+        delete criteria.id;
+        for (const check of criteria.checks) {
+          delete check.id;
+          // A reference falls back to `{id: N}` when the target is outside this
+          // assignment or its name path is ambiguous. Stripping row ids does not make
+          // that portable: the id names a row in *this* database, so importing the
+          // template elsewhere resolves nothing and the importer drops the reference
+          // with a warning — a copied rubric quietly missing a cross-round dependency.
+          // Better to fail the export, which the operator can fix by disambiguating the
+          // names.
+          for (const ref of check.references ?? []) {
+            if (ref.id !== undefined && ref.check === undefined) {
+              idBackedReferences.push(`${part.name} › ${criteria.name} › ${check.name} → check id ${ref.id}`);
+            }
+          }
+        }
+      }
+    }
+    if (idBackedReferences.length > 0) {
+      throw new CLICommandError(
+        "This rubric cannot be exported as a portable template: these references identify their target " +
+          "by database id, because the target is on another assignment or its part/criterion/check names " +
+          `are not unique within this one. Importing elsewhere would silently drop them.\n  ` +
+          `${idBackedReferences.join("\n  ")}\n` +
+          "Rename the ambiguous checks so each reference resolves by name, or export without --strip-ids.",
+        409
+      );
+    }
+  }
 
   return {
     success: true,
@@ -239,49 +242,226 @@ async function handleRubricsExport(ctx: MCPAuthContext, params: Record<string, u
   };
 }
 
+/**
+ * HTTP status for an `update_rubric_full` failure.
+ *
+ * The RPC has no exception handler of its own, so failures arrive as PostgREST
+ * errors carrying the SQLSTATE. Every one of them means **nothing was changed** —
+ * the function is a single transaction — and the messages say so, because that is
+ * the whole point of routing through it instead of the old four-request
+ * delete-then-insert.
+ */
+function classifyRubricRpcError(code: string | undefined, message: string, rubricId: number): CLICommandError {
+  const nothingChanged = "Nothing was changed.";
+
+  if (code === "23503") {
+    return new CLICommandError(
+      `${message}\n   A rubric check you removed is still referenced by existing grading comments. ` +
+        `${nothingChanged} Re-add the check to the YAML, or delete those comments first.`,
+      409
+    );
+  }
+  if (code === "57014") {
+    return new CLICommandError(
+      `The rubric write exceeded the database statement timeout and was rolled back. ${nothingChanged}`,
+      504
+    );
+  }
+  if (code === "40001" || code === "40P01" || code === "55P03") {
+    return new CLICommandError(
+      `Another rubric save is in progress for rubric ${rubricId}. ${nothingChanged} Retry.`,
+      409
+    );
+  }
+  if (code === "22P02" || code === "22003") {
+    return new CLICommandError(`A value in the YAML is not storable: ${message}. ${nothingChanged}`, 400);
+  }
+  if (code === "42501") {
+    return new CLICommandError(
+      `The rubric RPC is not executable by your role, which usually means the deployment is behind on migrations: ${message}`,
+      403
+    );
+  }
+  if (code === "PGRST202") {
+    return new CLICommandError(`update_rubric_full is missing from this deployment: ${message}`, 500);
+  }
+  if (code === "P0001") {
+    if (/Not authorized to edit rubrics/i.test(message)) {
+      return new CLICommandError(
+        `${message}. If you were recently granted instructor access, wait for the role sync and retry.`,
+        403
+      );
+    }
+    if (/not found in class/i.test(message)) {
+      return new CLICommandError(`${message}. Re-run \`rubrics list\` — the rubric moved.`, 409);
+    }
+    return new CLICommandError(`update_rubric_full rejected the rubric: ${message}. ${nothingChanged}`, 400);
+  }
+  return new CLICommandError(`update_rubric_full failed: ${message}`, 500);
+}
+
+/**
+ * rubrics.import — applies a YAML rubric through `update_rubric_full`, the same RPC
+ * the web editor uses.
+ *
+ * This replaces a four-request delete-then-insert that had no transaction and
+ * type-cast enums instead of validating them, so a typo'd value landed *after* the
+ * live rubric had been deleted. On a rubric that had been graded it could not even
+ * succeed: `rubric_check_references` was deleted, the `rubric_checks` delete then
+ * failed on the comment foreign key, and the references were gone for good.
+ *
+ * The RPC is one transaction that diffs rather than wipes, cascades points changes to
+ * existing comments, and recomputes affected submission_reviews — none of which the
+ * raw inserts did. It gates on `authorizeforclassinstructor`, so it must be called on
+ * a per-user client, and `rubrics.import` is therefore instructor-only.
+ */
 async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as RubricsImportParams;
   const classIdentifier = p.class;
   const assignmentIdentifier = p.assignment;
   const rubricType = p.type ?? "grading";
-  const rubricData = p.rubric;
   const dryRun = p.dry_run === true;
 
   if (!classIdentifier) throw new CLICommandError("class is required");
   if (!assignmentIdentifier) throw new CLICommandError("assignment is required");
-  if (!rubricData) throw new CLICommandError("rubric data is required");
-  if (!rubricData.name) throw new CLICommandError("rubric.name is required");
-  if (!Array.isArray(rubricData.parts)) throw new CLICommandError("rubric.parts must be an array");
+  if (!p.rubric) throw new CLICommandError("rubric data is required");
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
+  // Instructor-level: the RPC enforces the same thing, but checking here means a
+  // grader gets a clear 403 instead of a raw Postgres exception after the read work.
+  await assertUserIsClassInstructor(supabase, ctx.userId, classData.id);
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdentifier);
 
-  let targetRubricId: number | null = null;
-  if (rubricType === "grading") targetRubricId = assignment.grading_rubric_id;
-  else if (rubricType === "self_review") targetRubricId = assignment.self_review_rubric_id;
-  else if (rubricType === "meta") targetRubricId = assignment.meta_grading_rubric_id;
-  else throw new CLICommandError(`Invalid rubric type: ${rubricType}`);
-
+  const targetRubricId = resolveRubricIdForType(assignment, rubricType);
   if (!targetRubricId) {
     throw new CLICommandError(`No ${rubricType} rubric exists for this assignment. Create the rubric first.`);
   }
 
-  let partCount = rubricData.parts.length;
-  let criteriaCount = 0;
-  let checkCount = 0;
-  for (const part of rubricData.parts) {
-    if (!Array.isArray(part.criteria)) {
-      throw new CLICommandError(`Part '${part.name}' must have 'criteria' array`);
-    }
-    criteriaCount += part.criteria.length;
-    for (const criteria of part.criteria) {
-      if (!Array.isArray(criteria.checks)) {
-        throw new CLICommandError(`Criteria '${criteria.name}' must have 'checks' array`);
-      }
-      checkCount += criteria.checks.length;
+  const validated = validateRubricYaml(p.rubric);
+  if (!validated.ok) {
+    throw new CLICommandError(
+      `The rubric YAML has ${validated.errors.length} problem(s):\n` +
+        validated.errors.map((e) => `   ${e.path || "(root)"}: ${e.message}`).join("\n"),
+      400
+    );
+  }
+  const yaml: RubricYaml = validated.value;
+
+  const current = await fetchRubricWithHierarchy(supabase, targetRubricId);
+  if (!current) throw new CLICommandError(`Rubric not found: ${targetRubricId}`, 404);
+  const currentTree = current as unknown as RubricTreeLike;
+
+  // The YAML's review_round is never written. The RPC only sets it on insert, and
+  // the old code *did* write it on update — so `export --type self_review` followed
+  // by `import --type grading` rewrote the grading rubric's round, desynchronising it
+  // from assignments.grading_rubric_id. Disagreement is a caller error.
+  if (yaml.review_round && currentTree.review_round && yaml.review_round !== currentTree.review_round) {
+    throw new CLICommandError(
+      `This YAML was exported from the '${yaml.review_round}' rubric but --type ${rubricType} targets the ` +
+        `'${currentTree.review_round}' rubric. Re-run with the matching --type, or remove review_round from the YAML.`,
+      400
+    );
+  }
+
+  // References are resolved before the write, against the whole-assignment index.
+  // Only cross-round references are legal, so every target lives in a rubric this
+  // call is not touching and its id is stable across the transaction.
+  const { indexed } = await loadAssignmentRubricIndex(supabase, assignment.id);
+  const resolvedRefsByPath = new Map<string, number[]>();
+  const referenceWarnings: string[] = [];
+
+  const persistedRefsByCheckId = new Map<number, number[]>();
+  const existingCheckIds: number[] = [];
+  for (const part of currentTree.rubric_parts ?? []) {
+    for (const crit of part.rubric_criteria ?? []) {
+      for (const check of crit.rubric_checks ?? []) existingCheckIds.push(check.id);
     }
   }
+  if (existingCheckIds.length > 0) {
+    for (let i = 0; i < existingCheckIds.length; i += 500) {
+      const batch = existingCheckIds.slice(i, i + 500);
+      // Paged within the batch. A check may own several references, so 500 checks can
+      // return well past `max_rows` rows — and this map is what preserves references
+      // whose YAML form failed to resolve. A truncated read would look like "that
+      // check has no saved references", and update_rubric_full treats the payload as
+      // the desired set, so an unrelated typo elsewhere in the file would delete
+      // dependencies that were never mentioned.
+      const refRows = await pageAll<{
+        referencing_rubric_check_id: number;
+        referenced_rubric_check_id: number;
+      }>(
+        () =>
+          supabase
+            .from("rubric_check_references")
+            .select("referencing_rubric_check_id, referenced_rubric_check_id")
+            .in("referencing_rubric_check_id", batch)
+            .order("id", { ascending: true }),
+        "Failed to load existing references"
+      );
+      for (const row of refRows) {
+        const list = persistedRefsByCheckId.get(row.referencing_rubric_check_id) ?? [];
+        list.push(row.referenced_rubric_check_id);
+        persistedRefsByCheckId.set(row.referencing_rubric_check_id, list);
+      }
+    }
+  }
+
+  yaml.parts.forEach((part, partIdx) => {
+    part.criteria.forEach((criteria, critIdx) => {
+      criteria.checks.forEach((check, checkIdx) => {
+        const key = rubricPathKey(partIdx, critIdx, checkIdx);
+        const refs = check.references ?? [];
+        if (refs.length === 0) return;
+
+        const resolved: number[] = [];
+        const failures: string[] = [];
+        for (const ref of refs) {
+          const outcome = resolveYamlReference(ref, indexed, currentTree.review_round ?? null);
+          if (!outcome.ok) {
+            failures.push(outcome.reason);
+            continue;
+          }
+          if (!resolved.includes(outcome.target.checkId)) resolved.push(outcome.target.checkId);
+        }
+
+        if (failures.length > 0) {
+          const persisted = typeof check.id === "number" ? persistedRefsByCheckId.get(check.id) : undefined;
+          if (persisted && persisted.length > 0) {
+            // Union, not replacement: the RPC removes any reference row absent from the
+            // payload, so dropping an unresolvable one would actively delete a working
+            // reference rather than merely skip it — but substituting the persisted set
+            // wholesale threw away the references that *did* resolve, so adding one valid
+            // reference alongside one typo silently discarded the valid one while
+            // reporting that nothing was lost.
+            const merged = [...resolved];
+            for (const id of persisted) if (!merged.includes(id)) merged.push(id);
+            referenceWarnings.push(
+              `check '${check.name}': ${failures.join("; ")} — kept the ${persisted.length} reference(s) already stored`
+            );
+            resolvedRefsByPath.set(key, merged);
+            return;
+          }
+          referenceWarnings.push(`check '${check.name}': ${failures.join("; ")} — dropped`);
+        }
+        resolvedRefsByPath.set(key, resolved);
+      });
+    });
+  });
+
+  const payload = buildUpdateRubricFullPayload({
+    yaml,
+    rubricId: targetRubricId,
+    classId: classData.id,
+    assignmentId: assignment.id,
+    reviewRound: currentTree.review_round,
+    existing: currentTree,
+    resolvedRefsByPath
+  });
+
+  const plan = planRubricImport(currentTree, payload);
+  const source = yaml._source ?? null;
+  const rebuildingFromForeignYaml = plan.foreign_ids.length > 0;
 
   if (dryRun) {
     return {
@@ -290,196 +470,52 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
         dry_run: true,
         rubric_type: rubricType,
         target_rubric_id: targetRubricId,
-        summary: { parts: partCount, criteria: criteriaCount, checks: checkCount },
-        rubric: rubricData
+        plan,
+        source,
+        rebuilding_from_foreign_yaml: rebuildingFromForeignYaml,
+        warnings: [...validated.warnings.map((w) => `${w.path}: ${w.message}`), ...referenceWarnings],
+        message: "Nothing was changed."
       }
     };
   }
 
-  requireRubricTableDeleteOk(
-    "rubric_check_references",
-    targetRubricId,
-    await supabase.from("rubric_check_references").delete().eq("rubric_id", targetRubricId)
-  );
-  requireRubricTableDeleteOk(
-    "rubric_checks",
-    targetRubricId,
-    await supabase.from("rubric_checks").delete().eq("rubric_id", targetRubricId)
-  );
-  requireRubricTableDeleteOk(
-    "rubric_criteria",
-    targetRubricId,
-    await supabase.from("rubric_criteria").delete().eq("rubric_id", targetRubricId)
-  );
-  requireRubricTableDeleteOk(
-    "rubric_parts",
-    targetRubricId,
-    await supabase.from("rubric_parts").delete().eq("rubric_id", targetRubricId)
-  );
+  // A per-user client, minted immediately before the call: the RPC gates on
+  // authorizeforclassinstructor, which needs auth.uid(), and the JWT lives 60
+  // seconds without auto-refresh, so the reads above can outlast one minted earlier.
+  const writeClient = await createAuthenticatedSupabaseClient(ctx.userId);
+  const { data: rpcSummary, error: rpcError } = await writeClient.rpc("update_rubric_full", {
+    p_rubric: payload as unknown as never
+  });
 
-  const { error: updateError } = await supabase
-    .from("rubrics")
-    .update({
-      name: rubricData.name,
-      description: rubricData.description ?? null,
-      cap_score_to_assignment_points: rubricData.cap_score_to_assignment_points ?? true,
-      is_private: rubricData.is_private ?? false,
-      review_round:
-        (rubricData.review_round as "self-review" | "grading-review" | "meta-grading-review" | "code-walk" | null) ??
-        null
-    })
-    .eq("id", targetRubricId);
-
-  if (updateError) throw new CLICommandError(`Failed to update rubric: ${updateError.message}`);
-
-  // Track every newly-inserted check so we can resolve its YAML `references`
-  // after all checks (across every part/criterion) have been written.
-  const pendingChecks: Array<{
-    newCheckId: number;
-    partName: string;
-    criterionName: string;
-    checkName: string;
-    yamlReferences?: YamlReference[];
-  }> = [];
-
-  for (const part of rubricData.parts) {
-    const { data: newPart, error: partError } = await supabase
-      .from("rubric_parts")
-      .insert({
-        assignment_id: assignment.id,
-        class_id: classData.id,
-        rubric_id: targetRubricId,
-        name: part.name,
-        description: part.description ?? null,
-        ordinal: part.ordinal ?? 0
-      })
-      .select("id")
-      .single();
-
-    if (partError || !newPart) {
-      throw new CLICommandError(`Failed to create part '${part.name}': ${partError?.message ?? "Unknown"}`);
-    }
-
-    for (const criteria of part.criteria) {
-      const { data: newCriteria, error: criteriaError } = await supabase
-        .from("rubric_criteria")
-        .insert({
-          assignment_id: assignment.id,
-          class_id: classData.id,
-          rubric_id: targetRubricId,
-          rubric_part_id: newPart.id,
-          name: criteria.name,
-          description: criteria.description ?? null,
-          ordinal: criteria.ordinal ?? 0,
-          total_points: criteria.total_points ?? 0,
-          is_additive: criteria.is_additive ?? true,
-          is_deduction_only: criteria.is_deduction_only ?? false,
-          min_checks_per_submission: criteria.min_checks_per_submission ?? null,
-          max_checks_per_submission: criteria.max_checks_per_submission ?? null
-        })
-        .select("id")
-        .single();
-
-      if (criteriaError || !newCriteria) {
-        throw new CLICommandError(
-          `Failed to create criteria '${criteria.name}': ${criteriaError?.message ?? "Unknown"}`
-        );
-      }
-
-      for (const check of criteria.checks) {
-        const { data: newCheck, error: checkError } = await supabase
-          .from("rubric_checks")
-          .insert({
-            assignment_id: assignment.id,
-            class_id: classData.id,
-            rubric_id: targetRubricId,
-            rubric_criteria_id: newCriteria.id,
-            name: check.name,
-            description: check.description ?? null,
-            ordinal: check.ordinal ?? 0,
-            points: check.points ?? 0,
-            is_annotation: check.is_annotation ?? false,
-            is_comment_required: check.is_comment_required ?? false,
-            is_required: check.is_required ?? false,
-            annotation_target: check.annotation_target ?? null,
-            artifact: check.artifact ?? null,
-            file: check.file ?? null,
-            group: check.group ?? null,
-            max_annotations: check.max_annotations ?? null,
-            student_visibility:
-              (check.student_visibility as "always" | "if_released" | "if_applied" | "never") ?? "always"
-          })
-          .select("id")
-          .single();
-
-        if (checkError || !newCheck) {
-          throw new CLICommandError(`Failed to create check '${check.name}': ${checkError?.message ?? "Unknown"}`);
-        }
-
-        pendingChecks.push({
-          newCheckId: newCheck.id,
-          partName: part.name,
-          criterionName: criteria.name,
-          checkName: check.name,
-          yamlReferences: Array.isArray(check.references) ? check.references : undefined
-        });
-      }
-    }
+  if (rpcError) {
+    throw classifyRubricRpcError(rpcError.code, rpcError.message, targetRubricId);
   }
 
-  // ─── Resolve references after all checks are inserted ────────────────────
-  // Reload the full assignment rubric index so we can resolve cross-rubric
-  // name-keyed references (the export may include multiple rubrics, and the
-  // import may run them sequentially — either way, querying the DB now gives
-  // us the freshest snapshot).
-  const { rubrics: allRubrics, indexed: assignmentIndex } = await loadAssignmentRubricIndex(supabase, assignment.id);
-  const currentRubric = allRubrics.find((r) => r.id === targetRubricId);
-  const currentReviewRound = currentRubric?.review_round ?? null;
-
-  const warnings: Array<{ check_path: string; reason: string }> = [];
-  let referenceRowsInserted = 0;
-
-  for (const pending of pendingChecks) {
-    const refs = pending.yamlReferences;
-    if (!refs || refs.length === 0) continue;
-    const checkPath = `${pending.partName} > ${pending.criterionName} > ${pending.checkName}`;
-    for (const ref of refs) {
-      const outcome = resolveYamlReference(ref, assignmentIndex, currentReviewRound);
-      if (!outcome.ok) {
-        warnings.push({ check_path: checkPath, reason: outcome.reason });
-        // deno-lint-ignore no-console
-        console.warn(`[rubrics.import] Skipping reference on "${checkPath}": ${outcome.reason}`);
-        continue;
-      }
-      const { error: refInsertErr } = await supabase.from("rubric_check_references").insert({
-        assignment_id: assignment.id,
-        class_id: classData.id,
-        rubric_id: targetRubricId,
-        referencing_rubric_check_id: pending.newCheckId,
-        referenced_rubric_check_id: outcome.target.checkId
-      });
-      if (refInsertErr) {
-        throw new CLICommandError(
-          `Failed to insert rubric_check_reference for check "${checkPath}" → check id ${outcome.target.checkId}: ${refInsertErr.message}`
-        );
-      }
-      referenceRowsInserted++;
+  // Counts read back from the database rather than from the input, so what is
+  // reported is what exists.
+  const after = await fetchRubricWithHierarchy(supabase, targetRubricId);
+  const afterTree = (after ?? currentTree) as unknown as RubricTreeLike;
+  let criteriaCount = 0;
+  let checkCount = 0;
+  for (const part of afterTree.rubric_parts ?? []) {
+    for (const crit of part.rubric_criteria ?? []) {
+      criteriaCount += 1;
+      checkCount += (crit.rubric_checks ?? []).length;
     }
   }
 
   return {
     success: true,
     data: {
+      dry_run: false,
       rubric_type: rubricType,
-      rubric_id: targetRubricId,
-      summary: {
-        parts: partCount,
-        criteria: criteriaCount,
-        checks: checkCount,
-        references: referenceRowsInserted
-      },
-      reference_warnings: warnings,
-      message: "Rubric imported successfully"
+      target_rubric_id: targetRubricId,
+      message: typeof rpcSummary === "string" ? rpcSummary : "Rubric applied.",
+      summary: { parts: (afterTree.rubric_parts ?? []).length, criteria: criteriaCount, checks: checkCount },
+      plan,
+      source,
+      rebuilding_from_foreign_yaml: rebuildingFromForeignYaml,
+      warnings: [...validated.warnings.map((w) => `${w.path}: ${w.message}`), ...referenceWarnings]
     }
   };
 }

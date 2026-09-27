@@ -1,0 +1,26 @@
+# Operator-authored ExternalSecret for the base `pawtograder-s3` Secret.
+# Not chart-rendered; apply before the first helm upgrade.
+#
+# The object-store credentials used by the storage tier and by the backup,
+# backup-verify, and restore-drill Jobs.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: pawtograder-s3
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: openbao
+    kind: ClusterSecretStore
+  target:
+    name: pawtograder-s3
+    creationPolicy: Owner
+  data:
+    - secretKey: AWS_ACCESS_KEY_ID
+      remoteRef:
+        key: apps/pawtograder/s3-production
+        property: AWS_ACCESS_KEY_ID
+    - secretKey: AWS_SECRET_ACCESS_KEY
+      remoteRef:
+        key: apps/pawtograder/s3-production
+        property: AWS_SECRET_ACCESS_KEY

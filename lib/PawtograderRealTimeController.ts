@@ -45,4 +45,12 @@ export interface PawtograderRealTimeController {
    * @returns Current status of all managed channels
    */
   getConnectionStatus(): ConnectionStatus;
+
+  /**
+   * Whether `close()` has been called. A closed controller has torn down its channels and
+   * cannot be revived, and its subscribe methods throw. Callers that reach a subscribe call
+   * across an `await` must re-check this: the controller can be closed by a navigation while
+   * their initial fetch is still in flight.
+   */
+  readonly isClosed: boolean;
 }

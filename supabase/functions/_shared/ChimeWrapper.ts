@@ -3,8 +3,9 @@ import { Database } from "./SupabaseTypes.d.ts";
 // import { jwtDecode } from "npm:jwt-decode"; // Currently unused
 import { UserVisibleError } from "./HandlerUtils.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "./requestScopedAuthOptions.ts";
 
 function uuid() {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -52,7 +53,8 @@ export async function processSNSMessage(message: ChimeSNSMessage, scope?: Sentry
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   if (message.detail.eventType === "chime:AttendeeJoined") {
@@ -207,7 +209,8 @@ export async function getActiveMeeting(helpRequest: HelpRequest, scope?: Sentry.
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const activeMeeting = await adminSupabase
     .from("video_meeting_sessions")

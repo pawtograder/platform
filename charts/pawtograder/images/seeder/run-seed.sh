@@ -13,6 +13,16 @@
 #      / student emails get woven into the simulation (not bolted on
 #      after the fact — they ARE the first user of each role)
 #
+# Logging contract: every line is prefixed `[seed]` and timestamped so it
+# reads cleanly through `kubectl logs`. On ANY failure the script prints a
+# diagnostic snapshot (row counts for the tables the seed populates) before
+# exiting — a failed seed is almost always a *partial* seed, and knowing how
+# far it got (e.g. "1 class, 1 user, 0 everything-else" => died right after
+# the first gotrue user) is the difference between a 2-minute diagnosis and
+# re-running the whole stack to reproduce. See the 2026-06-06 preview-deploy
+# incident: a transient auth/postgres startup race killed the seed partway,
+# but the pod was gone before its logs could be read.
+#
 # Env (consumed; see Dockerfile for full list):
 #   PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD
 #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  (used by createAdminClient)
@@ -21,6 +31,11 @@
 #   FIXED_INSTRUCTOR_EMAIL, FIXED_GRADER_EMAIL, FIXED_STUDENT_EMAIL
 
 set -euo pipefail
+
+# Timestamped, prefixed logging. log -> stdout, warn/err -> stderr.
+log()  { echo "[seed] $(date -u +%H:%M:%S) $*"; }
+warn() { echo "[seed] $(date -u +%H:%M:%S) WARN  $*" >&2; }
+err()  { echo "[seed] $(date -u +%H:%M:%S) ERROR $*" >&2; }
 
 : "${PGHOST:?PGHOST is required}"
 : "${PGUSER:?PGUSER is required}"
@@ -32,10 +47,50 @@ export PGHOST PGPORT PGUSER PGDATABASE PGPASSWORD SUPABASE_URL SUPABASE_SERVICE_
 
 SEED_TEMPLATE="${SEED_TEMPLATE:-small}"
 
-echo "[seed] target=${PGUSER}@${PGHOST}:${PGPORT:-5432}/${PGDATABASE}"
-echo "[seed] template=${SEED_TEMPLATE}"
+# -----------------------------------------------------------------------------
+# Diagnostic snapshot — how far did the seed get?
+# -----------------------------------------------------------------------------
+# Printed on every failure (via the ERR trap) and after the idempotency skip.
+# Every query is guarded so the snapshot itself can never fail the script /
+# mask the original error. A missing table (early failure, pre-migrations)
+# just prints "n/a".
+snapshot() {
+  local label="${1:-state}"
+  err "── diagnostic snapshot (${label}) ──"
+  local t
+  for t in \
+    "auth.users" \
+    "public.classes" \
+    "public.profiles" \
+    "public.user_roles" \
+    "public.assignments" \
+    "public.submissions"; do
+    local n
+    n="$(psql -tAc "SELECT count(*) FROM ${t}" 2>/dev/null)" || n="n/a (no table / no connection)"
+    err "    ${t}: ${n:-n/a}"
+  done
+  err "──────────────────────────────────"
+}
+
+# ERR trap: fires on any unhandled non-zero command (e.g. SeedDB.ts throwing,
+# a psql error under `set -e`). Prints where it died + the snapshot, then lets
+# the non-zero exit propagate.
+on_err() {
+  local rc=$?
+  err "failed (exit ${rc}) at line ${BASH_LINENO[0]:-?}: ${BASH_COMMAND}"
+  snapshot "on failure"
+}
+trap on_err ERR
+
+# fail <msg> — for the expected guard failures below. Logs, snapshots, exits 1.
+# Uses its own exit so the message is specific; the ERR trap won't double-fire
+# because we exit straight away.
+fail() { err "$*"; snapshot "on failure"; exit 1; }
+
+log "target=${PGUSER}@${PGHOST}:${PGPORT:-5432}/${PGDATABASE}"
+log "template=${SEED_TEMPLATE}"
 if [ -n "${FIXED_INSTRUCTOR_EMAIL:-}${FIXED_GRADER_EMAIL:-}${FIXED_STUDENT_EMAIL:-}" ]; then
-  echo "[seed] fixed users: instructor=${FIXED_INSTRUCTOR_EMAIL:-(faker)} grader=${FIXED_GRADER_EMAIL:-(faker)} student=${FIXED_STUDENT_EMAIL:-(faker)}"
+  log "fixed users: instructor=${FIXED_INSTRUCTOR_EMAIL:-(faker)} grader=${FIXED_GRADER_EMAIL:-(faker)} student=${FIXED_STUDENT_EMAIL:-(faker)}"
 fi
 
 # -----------------------------------------------------------------------------
@@ -44,13 +99,16 @@ fi
 ready=0
 for i in $(seq 1 60); do
   if pg_isready -q; then ready=1; break; fi
-  echo "[seed] waiting for postgres ($i/60)"
+  log "waiting for postgres ($i/60)"
   sleep 2
 done
 if [ "$ready" -ne 1 ]; then
-  echo "[seed] postgres did not become ready after 120s" >&2
-  exit 1
+  # Surface the actual pg_isready diagnostic instead of a bare timeout.
+  err "postgres did not become ready after 120s; last pg_isready:"
+  pg_isready || true
+  fail "postgres unavailable"
 fi
+log "postgres ready"
 
 # -----------------------------------------------------------------------------
 # Phase 2 — wait for supabase services to finish their own migrations
@@ -61,28 +119,83 @@ fi
 check_ready() {
   psql -tAc "$1" 2>/dev/null | grep -q 1
 }
+# Human label for each guard so a timeout names the laggard rather than just
+# reporting "not ready".
+declare -a SVC_LABELS=(
+  "auth schema (auth.identities)"
+  "storage schema (storage.buckets.public)"
+  "realtime publication (supabase_realtime)"
+  "realtime schema (realtime.messages)"
+)
+declare -a SVC_CHECKS=(
+  "SELECT 1 FROM information_schema.tables WHERE table_schema='auth' AND table_name='identities'"
+  "SELECT 1 FROM information_schema.columns WHERE table_schema='storage' AND table_name='buckets' AND column_name='public'"
+  "SELECT 1 FROM pg_publication WHERE pubname='supabase_realtime'"
+  "SELECT 1 FROM information_schema.tables WHERE table_schema='realtime' AND table_name='messages'"
+)
 ready=0
 for i in $(seq 1 90); do
   ok=true
-  check_ready "SELECT 1 FROM information_schema.tables WHERE table_schema='auth' AND table_name='identities'"                                                || ok=false
-  check_ready "SELECT 1 FROM information_schema.columns WHERE table_schema='storage' AND table_name='buckets' AND column_name='public'"                       || ok=false
-  check_ready "SELECT 1 FROM pg_publication WHERE pubname='supabase_realtime'"                                                                                || ok=false
-  check_ready "SELECT 1 FROM information_schema.tables WHERE table_schema='realtime' AND table_name='messages'"                                               || ok=false
-  if $ok; then ready=1; echo "[seed] supabase services migrated"; break; fi
-  echo "[seed] waiting for supabase services ($i/90)"
+  pending=""
+  for idx in "${!SVC_CHECKS[@]}"; do
+    if ! check_ready "${SVC_CHECKS[$idx]}"; then
+      ok=false
+      pending="${pending:+$pending, }${SVC_LABELS[$idx]}"
+    fi
+  done
+  if $ok; then ready=1; log "supabase services migrated"; break; fi
+  log "waiting for supabase services ($i/90) — pending: ${pending}"
   sleep 4
 done
 if [ "$ready" -ne 1 ]; then
-  echo "[seed] supabase services not ready after 6min" >&2
-  exit 1
+  fail "supabase services not ready after 6min — still pending: ${pending}"
 fi
 
 # Also wait for pawtograder migrations to apply public.classes etc. The
 # migrations Job is a regular install resource (not a hook), so we may
 # fire before it completes if --wait-for-jobs is misbehaving upstream.
 if ! psql -tAc "SELECT to_regclass('public.classes') IS NOT NULL" | grep -q '^t$'; then
-  echo "[seed] public.classes does not exist — pawtograder migrations have not completed" >&2
-  exit 1
+  fail "public.classes does not exist — pawtograder migrations have not completed"
+fi
+
+# -----------------------------------------------------------------------------
+# Phase 2b — wait for the Auth HTTP API (gotrue, via Kong) to actually serve.
+# -----------------------------------------------------------------------------
+# Phase 2 only proves the auth SCHEMA exists in postgres. SeedDB.ts creates its
+# users through the gotrue admin HTTP API ($SUPABASE_URL/auth/v1), which can
+# still be cold when this post-install hook fires the instant the stack comes
+# up — that race aborts seeding partway through. Poll gotrue's health endpoint
+# until it answers 200 (node 22 ships a global fetch; the image has no curl).
+auth_ready() {
+  node -e '
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+    fetch(process.env.SUPABASE_URL + "/auth/v1/health", { headers: { apikey: key } })
+      .then((r) => process.exit(r.ok ? 0 : 1))
+      .catch(() => process.exit(1));
+  ' 2>/dev/null
+}
+# Verbose probe used only when the wait times out: prints the HTTP status or
+# the fetch error so we can tell "gotrue 503 / still migrating" apart from
+# "DNS/connection refused" apart from "wrong URL".
+auth_probe_verbose() {
+  node -e '
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+    const url = process.env.SUPABASE_URL + "/auth/v1/health";
+    fetch(url, { headers: { apikey: key } })
+      .then(async (r) => { console.error("    GET " + url + " -> HTTP " + r.status + " " + (await r.text()).slice(0, 200)); process.exit(0); })
+      .catch((e) => { console.error("    GET " + url + " -> " + (e && e.message ? e.message : e)); process.exit(0); });
+  ' 2>&1 || true
+}
+ready=0
+for i in $(seq 1 60); do
+  if auth_ready; then ready=1; log "auth HTTP API ready"; break; fi
+  log "waiting for auth HTTP API ($i/60)"
+  sleep 3
+done
+if [ "$ready" -ne 1 ]; then
+  err "auth HTTP API ($SUPABASE_URL/auth/v1) not serving after 180s; last probe:"
+  auth_probe_verbose
+  fail "auth HTTP API unavailable"
 fi
 
 # -----------------------------------------------------------------------------
@@ -94,19 +207,31 @@ fi
 # org so re-runs across helm upgrades are no-ops.
 existing="$(psql -tAc "SELECT count(*) FROM public.classes WHERE archived=false")"
 if [ "${existing:-0}" -gt 0 ]; then
-  echo "[seed] ${existing} non-archived class(es) already present — skipping seed"
+  log "${existing} non-archived class(es) already present — skipping seed"
+  # A class with no roles/assignments is the fingerprint of a *previous*
+  # failed seed: the skip below would then mask that broken state as a green
+  # deploy. We don't change behaviour (still skip — flipping it could wipe a
+  # real class), but we log loudly so the false-green is visible at a glance.
+  roles="$(psql -tAc "SELECT count(*) FROM public.user_roles" 2>/dev/null || echo n/a)"
+  asgn="$(psql -tAc "SELECT count(*) FROM public.assignments" 2>/dev/null || echo n/a)"
+  log "existing data: user_roles=${roles} assignments=${asgn}"
+  if [ "${roles:-0}" = "0" ] || [ "${asgn:-0}" = "0" ]; then
+    warn "existing class looks PARTIAL (no roles or no assignments) — likely a"
+    warn "prior failed seed. This preview may be incompletely seeded even though"
+    warn "the deploy is green. Archive the class to force a clean re-seed."
+  fi
   exit 0
 fi
 
 # -----------------------------------------------------------------------------
 # Phase 4 — run the realistic seeder
 # -----------------------------------------------------------------------------
-echo "[seed] running scripts/SeedDB.ts --template ${SEED_TEMPLATE}"
-# SeedDB.ts loads config from the environment (fed by the K8s Secret), not from
-# a file. Its dotenv.config({ path: ".env.local", quiet: true }) silently
-# tolerates a missing .env.local — so DON'T create one here: the image runs as
-# USER node but WORKDIR /app is root-owned, and writing into it fails with
-# "Permission denied", which aborts the whole seed.
+log "running scripts/SeedDB.ts --template ${SEED_TEMPLATE}"
+# No .env.local is created here: SeedDB.ts reads its config from the environment
+# (exported above / fed by the K8s Secret), and its
+# dotenv.config({ path: ".env.local", quiet: true }) call silently tolerates a
+# missing file — so the seeder needs no dotenv file at all.
+# A non-zero exit here trips the ERR trap, which prints the diagnostic snapshot.
 npx tsx scripts/SeedDB.ts --template "${SEED_TEMPLATE}"
 
-echo "[seed] done"
+log "done"

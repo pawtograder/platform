@@ -26,3 +26,11 @@ export function useFeatureEnabled(feature: CourseFeatureName): boolean {
 export function useGradebookWhatIfFeatureEnabled(): boolean {
   return useCourseFeature(COURSE_FEATURES.GRADEBOOK_WHAT_IF, false);
 }
+
+/**
+ * Opt-in: present an assignment's suggested due date as its due date, demoting the hard
+ * deadline to the close of the resubmission window. Off unless the course enables it.
+ */
+export function useSuggestedDueDateEmphasisEnabled(): boolean {
+  return useCourseFeature(COURSE_FEATURES.SUGGESTED_DUE_DATE, false);
+}

@@ -85,14 +85,30 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
   }, []);
 
   return (
-    <Box height="100dvh" overflow="hidden" display="flex" flexDirection="column">
+    // WCAG 1.4.10 (Reflow): fixed shell only from md up; at narrow widths (== 400% zoom on
+    // a 1280px window) the page scrolls as a normal document instead of clipping content.
+    // Mirrors the student discussion/office-hours shells.
+    <Box
+      height={{ base: "auto", md: "100dvh" }}
+      minH={{ base: "100dvh", md: "auto" }}
+      overflow={{ base: "visible", md: "hidden" }}
+      display="flex"
+      flexDirection="column"
+    >
       <OfficeHoursHeader
         mode={mode}
         officeHoursBaseHref={officeHoursBaseHref}
         currentRequest={currentRequest}
         isManageMode={true}
       />
-      <Flex flex="1" minH="0" overflow="hidden" px={{ base: 2, md: 3 }} py={{ base: 2, md: 2 }} gap={2}>
+      <Flex
+        flex="1"
+        minH="0"
+        overflow={{ base: "visible", md: "hidden" }}
+        px={{ base: 2, md: 3 }}
+        py={{ base: 2, md: 2 }}
+        gap={2}
+      >
         {showSidebar && (
           <Box
             flexShrink={0}
@@ -108,7 +124,7 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
             />
           </Box>
         )}
-        <Box flex="1" minW={0} overflowY="auto" overflowX="hidden">
+        <Box flex="1" minW={0} overflowY={{ base: "visible", md: "auto" }} overflowX="hidden">
           {children}
         </Box>
       </Flex>

@@ -14,14 +14,24 @@ async function handleTokenInfo(ctx: MCPAuthContext, _params: Record<string, unkn
     data: { user }
   } = await supabase.auth.admin.getUserById(ctx.userId);
 
-  const { data: profile } = await supabase.from("profiles").select("name").eq("user_id", ctx.userId).single();
+  // profiles is keyed on (id, class_id) and has no user_id column, so the
+  // previous lookup by user_id always failed and the name was always null. The
+  // display name lives on the auth user's metadata; a per-class profile name
+  // would need a class to disambiguate, which this command does not take.
+  const metadata = (user?.user_metadata ?? {}) as Record<string, unknown>;
+  const metadataName =
+    typeof metadata.name === "string"
+      ? metadata.name
+      : typeof metadata.full_name === "string"
+        ? metadata.full_name
+        : null;
 
   return {
     success: true,
     data: {
       user_id: ctx.userId,
       email: user?.email ?? null,
-      name: profile?.name ?? null,
+      name: metadataName,
       scopes: ctx.scopes,
       token_id: ctx.tokenId
     }

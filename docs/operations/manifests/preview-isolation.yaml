@@ -1,0 +1,1362 @@
+# Cluster-side isolation for Pawtograder PR previews on ripley.
+# See docs/operations/preview-isolation.md for what each object closes and how
+# to verify it. Apply with:  kubectl apply -f docs/operations/manifests/preview-isolation.yaml
+#
+# Every object here is keyed on the namespace label pawtograder.net/preview=true,
+# which the preview workflow's `secrets` job sets on creation. The preview
+# deploy credential cannot change namespace labels, cilium.io objects or
+# admission policies, so nothing in a PR's chart can loosen these.
+
+# ---------------------------------------------------------------------------
+# Ingress: a preview may only publish its own hostnames.
+#
+# ingress-nginx merges every Ingress that names the same host into one server
+# block, and there is one IngressClass for the whole cluster. Without this, a
+# PR's chart could add a path under auth.in.ripley.cloud, bao.work.ripley.cloud
+# or any other host and have it served with that host's certificate.
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-ingress-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["ingresses"]
+  variables:
+    # pawtograder-preview-pr-1034 -> pr-1034, the label every host must carry.
+    - name: id
+      expression: >-
+        namespaceObject.metadata.name.startsWith('pawtograder-preview-')
+        ? namespaceObject.metadata.name.substring(20) : ''
+    - name: suffix
+      expression: "'.preview.pawtograder.net'"
+    - name: annotations
+      expression: "object.metadata.?annotations.orValue({})"
+    # Every annotation must be on this list, not just nginx ones: other
+    # controllers act on Ingress annotations too. cert-manager's ingress-shim
+    # would issue a certificate from a DNS-01 ClusterIssuer for the whole
+    # pawtograder.net zone; within nginx's own prefix, server-alias adds
+    # hostnames and auth-url makes nginx call an arbitrary URL. The list is the
+    # annotations the chart sets, plus helm and kubectl bookkeeping.
+    - name: allowedAnnotations
+      expression: >-
+        ['meta.helm.sh/release-name',
+         'meta.helm.sh/release-namespace',
+         'kubectl.kubernetes.io/last-applied-configuration',
+         'nginx.ingress.kubernetes.io/proxy-body-size',
+         'nginx.ingress.kubernetes.io/proxy-buffer-size',
+         'nginx.ingress.kubernetes.io/proxy-buffers-number',
+         'nginx.ingress.kubernetes.io/proxy-read-timeout',
+         'nginx.ingress.kubernetes.io/proxy-send-timeout',
+         'nginx.ingress.kubernetes.io/proxy-connect-timeout',
+         'nginx.ingress.kubernetes.io/limit-rps',
+         'nginx.ingress.kubernetes.io/limit-connections',
+         'nginx.ingress.kubernetes.io/auth-type',
+         'nginx.ingress.kubernetes.io/auth-secret',
+         'nginx.ingress.kubernetes.io/auth-realm',
+         'nginx.ingress.kubernetes.io/ssl-redirect',
+         'nginx.ingress.kubernetes.io/force-ssl-redirect']
+  validations:
+    # List sizes. ingress-nginx renders every host and path into its shared
+    # configuration and reloads for all hosts; the chart uses 2 rules with
+    # 1 path each and one TLS entry with 2 hosts.
+    - expression: >-
+        size(object.spec.?rules.orValue([])) <= 5 &&
+        object.spec.?rules.orValue([]).all(r, size(r.?http.?paths.orValue([])) <= 10) &&
+        size(object.spec.?tls.orValue([])) <= 2 &&
+        object.spec.?tls.orValue([]).all(t, size(t.?hosts.orValue([])) <= 5)
+      message: "a preview Ingress may have at most 5 rules, 10 paths per rule, 2 TLS entries and 5 hosts per TLS entry"
+    - expression: variables.id.startsWith('pr-')
+      message: "preview Ingresses must live in a pawtograder-preview-pr-* namespace"
+    # Host must be <id>.preview.pawtograder.net or <id>-<x>.preview.pawtograder.net,
+    # one DNS label (the wildcard certificate covers exactly one). A rule with
+    # no host is a catch-all for every hostname, so it is refused.
+    - expression: >-
+        object.spec.?rules.orValue([]).all(r,
+          r.?host.orValue('').endsWith(variables.suffix) &&
+          !r.host.substring(0, size(r.host) - size(variables.suffix)).contains('.') &&
+          (r.host == variables.id + variables.suffix ||
+           r.host.startsWith(variables.id + '-')))
+      messageExpression: >-
+        'every Ingress rule needs a host of the form ' + variables.id +
+        '[-name].preview.pawtograder.net'
+    - expression: >-
+        object.spec.?tls.orValue([]).all(t, t.?hosts.orValue([]).all(h,
+          h.endsWith(variables.suffix) &&
+          !h.substring(0, size(h) - size(variables.suffix)).contains('.') &&
+          (h == variables.id + variables.suffix || h.startsWith(variables.id + '-'))))
+      messageExpression: >-
+        'TLS hosts must be of the form ' + variables.id + '[-name].preview.pawtograder.net'
+    - expression: "!has(object.spec.defaultBackend)"
+      message: "preview Ingresses may not set a defaultBackend"
+    - expression: "object.spec.?ingressClassName.orValue('') == 'nginx'"
+      message: "preview Ingresses must set ingressClassName: nginx"
+    - expression: >-
+        object.spec.?rules.orValue([]).all(r,
+          r.?http.?paths.orValue([]).all(p, has(p.backend.service)))
+      message: "preview Ingress backends must be Services in the same namespace"
+    - expression: >-
+        variables.annotations.all(k, k in variables.allowedAnnotations)
+      messageExpression: >-
+        'annotation not allowed on a preview Ingress: ' +
+        variables.annotations.filter(k, !(k in variables.allowedAnnotations)).join(', ')
+    # ingress-nginx accepts <namespace>/<name> here, which would read another
+    # namespace's Secret.
+    - expression: >-
+        !('nginx.ingress.kubernetes.io/auth-secret' in variables.annotations) ||
+        !variables.annotations['nginx.ingress.kubernetes.io/auth-secret'].contains('/')
+      message: "auth-secret must name a Secret in the preview's own namespace"
+    # Values, not just names. ingress-nginx is shared with staging and every
+    # internal host, so a preview must not lift its request-size, buffer or
+    # timeout ceilings: proxy-body-size "0" means unlimited, and huge buffers
+    # or timeouts let public requests to a preview hold the controller's
+    # memory, disk and connections. Bounds sit just above what the chart sets
+    # (55m, 16k, 8, 3600).
+    - expression: >-
+        !('nginx.ingress.kubernetes.io/proxy-body-size' in variables.annotations) ||
+        (variables.annotations['nginx.ingress.kubernetes.io/proxy-body-size'].matches('^[1-9][0-9]{0,2}[mM]$') &&
+         int(variables.annotations['nginx.ingress.kubernetes.io/proxy-body-size'].replace('M', '').replace('m', '')) <= 100)
+      message: "proxy-body-size must be between 1m and 100m"
+    - expression: >-
+        !('nginx.ingress.kubernetes.io/proxy-buffer-size' in variables.annotations) ||
+        (variables.annotations['nginx.ingress.kubernetes.io/proxy-buffer-size'].matches('^[1-9][0-9]{0,1}[kK]$') &&
+         int(variables.annotations['nginx.ingress.kubernetes.io/proxy-buffer-size'].replace('K', '').replace('k', '')) <= 64)
+      message: "proxy-buffer-size must be between 1k and 64k"
+    - expression: >-
+        !('nginx.ingress.kubernetes.io/proxy-buffers-number' in variables.annotations) ||
+        (variables.annotations['nginx.ingress.kubernetes.io/proxy-buffers-number'].matches('^[1-9][0-9]?$') &&
+         int(variables.annotations['nginx.ingress.kubernetes.io/proxy-buffers-number']) <= 16)
+      message: "proxy-buffers-number must be between 1 and 16"
+    - expression: >-
+        ['nginx.ingress.kubernetes.io/proxy-read-timeout',
+         'nginx.ingress.kubernetes.io/proxy-send-timeout'].all(k,
+          !(k in variables.annotations) ||
+          (variables.annotations[k].matches('^[1-9][0-9]{0,3}$') &&
+           int(variables.annotations[k]) <= 3600))
+      message: "proxy-read-timeout and proxy-send-timeout must be 1-3600 seconds"
+    - expression: >-
+        !('nginx.ingress.kubernetes.io/proxy-connect-timeout' in variables.annotations) ||
+        (variables.annotations['nginx.ingress.kubernetes.io/proxy-connect-timeout'].matches('^[1-9][0-9]?$') &&
+         int(variables.annotations['nginx.ingress.kubernetes.io/proxy-connect-timeout']) <= 60)
+      message: "proxy-connect-timeout must be 1-60 seconds"
+    - expression: >-
+        ['nginx.ingress.kubernetes.io/limit-rps',
+         'nginx.ingress.kubernetes.io/limit-connections'].all(k,
+          !(k in variables.annotations) ||
+          variables.annotations[k].matches('^[1-9][0-9]{0,3}$'))
+      message: "limit-rps and limit-connections must be integers from 1 to 9999"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-ingress-surface
+spec:
+  policyName: preview-ingress-surface
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# Services: ClusterIP with a selector, nothing else.
+#
+# NodePort and LoadBalancer open ports outside the namespace. externalIPs lets
+# a Service capture cluster traffic to an arbitrary IP (CVE-2020-8554).
+# ExternalName, or a selectorless Service with hand-written Endpoints, points
+# an in-namespace name (and so the preview's Ingress) at anything the ingress
+# controller can reach, which is every internal service.
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-service-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["services"]
+  validations:
+    # Each port is routing state Cilium programs on every node; the chart's
+    # Services have at most 2.
+    - expression: "size(object.spec.?ports.orValue([])) <= 8"
+      message: "a preview Service may have at most 8 ports"
+    - expression: "object.spec.?type.orValue('ClusterIP') == 'ClusterIP'"
+      message: "preview Services must be type ClusterIP"
+    - expression: "size(object.spec.?externalIPs.orValue([])) == 0"
+      message: "preview Services may not set externalIPs"
+    - expression: "size(object.spec.?selector.orValue({})) > 0"
+      message: "preview Services must have a pod selector"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-service-surface
+spec:
+  policyName: preview-service-surface
+  validationActions: [Deny]
+---
+# Endpoints in a preview namespace are written by the endpoint controllers and
+# nobody else. The check is on WHO writes, not where the writer comes from: the
+# chart holds rbac.authorization.k8s.io/* in its namespace, so it can grant
+# `endpoints` to a ServiceAccount in any other namespace (an ARC runner, say),
+# and a hand-written Endpoints object routes the preview's Ingress to any IP.
+# kube-controller-manager runs with --use-service-account-credentials, so its
+# controllers appear as these three ServiceAccounts, and nobody else is
+# exempt: not even system:masters, because under PREVIEW_CLUSTER_AUTH=static
+# the deploy job applies the PR's chart with a cluster-admin kubeconfig. For
+# break-glass repair, delete the binding first.
+#
+# EndpointSlices are not in the deploy role's API groups, so RBAC covers them
+# already; they are listed so that stays true if the role grows.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-endpoints-managed
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["endpoints"]
+      - apiGroups: ["discovery.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["endpointslices"]
+  validations:
+    - expression: >-
+        request.userInfo.username in [
+          'system:serviceaccount:kube-system:endpoint-controller',
+          'system:serviceaccount:kube-system:endpointslice-controller',
+          'system:serviceaccount:kube-system:endpointslicemirroring-controller']
+      message: "only the endpoint controllers may write Endpoints or EndpointSlices in a preview namespace"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-endpoints-managed
+spec:
+  policyName: preview-endpoints-managed
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# External Secrets: only chart-shaped ExternalSecrets against openbao-preview.
+#
+# The deploy role holds external-secrets.io/*. The `openbao` store refuses
+# preview namespaces, but a namespaced SecretStore is its own store: with the
+# Webhook provider, the shared ESO controller (outside the preview's egress
+# policy) fetches any URL and writes the response into a preview Secret. So:
+# no SecretStore, PushSecret or any other ESO kind, and an ExternalSecret may
+# name only ClusterSecretStore/openbao-preview, with no per-entry sourceRef
+# (which can point at another store or a generator).
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-externalsecret-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["external-secrets.io", "generators.external-secrets.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["*"]
+  validations:
+    # Reconcile load on the shared ESO controller and OpenBao. The chart uses
+    # one dataFrom entry per ExternalSecret and refreshes hourly. A
+    # refreshInterval of 0 means sync once, which is allowed.
+    - expression: >-
+        request.resource.resource != 'externalsecrets' || (
+          size(object.spec.?data.orValue([])) <= 20 &&
+          size(object.spec.?dataFrom.orValue([])) <= 5 &&
+          (!has(object.spec.refreshInterval) ||
+           duration(object.spec.refreshInterval) == duration('0s') ||
+           duration(object.spec.refreshInterval) >= duration('5m')))
+      message: "preview ExternalSecrets may have at most 20 data and 5 dataFrom entries, and refresh no more often than every 5m"
+    - expression: "request.resource.resource == 'externalsecrets'"
+      messageExpression: >-
+        'preview namespaces may not create ' + request.resource.resource +
+        '; only ExternalSecrets against ClusterSecretStore/openbao-preview'
+    - expression: >-
+        request.resource.resource != 'externalsecrets' || (
+          object.spec.?secretStoreRef.?kind.orValue('') == 'ClusterSecretStore' &&
+          object.spec.?secretStoreRef.?name.orValue('') == 'openbao-preview')
+      message: "preview ExternalSecrets must use secretStoreRef ClusterSecretStore/openbao-preview"
+    - expression: >-
+        request.resource.resource != 'externalsecrets' || (
+          object.spec.?data.orValue([]).all(d, !has(d.sourceRef)) &&
+          object.spec.?dataFrom.orValue([]).all(d, !has(d.sourceRef)))
+      message: "preview ExternalSecrets may not set sourceRef (other stores or generators)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-externalsecret-surface
+spec:
+  policyName: preview-externalsecret-surface
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# Secrets and ConfigMaps: no keys that cluster-wide controllers act on.
+#
+# - Reflector (reflector.v1.k8s.emberstack.com/*) copies an annotated Secret or
+#   ConfigMap into other namespaces (reflection-auto-namespaces) or pulls one
+#   in (reflects). A preview could plant data in pawtograder-staging, e.g. an
+#   optional integration Secret staging reads on its next rollout. Only
+#   Reflector itself may write objects carrying its annotations; that is how
+#   the preview wildcard certificate arrives.
+# - The Grafana sidecars load any ConfigMap or Secret labelled
+#   grafana_dashboard (from ALL namespaces), grafana_datasource or
+#   grafana_alert. Dashboards are keyed by filename, so a preview replaces the
+#   shared ones. preview.yml renders none.
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-controller-keys
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["secrets", "configmaps"]
+  validations:
+    - expression: >-
+        request.userInfo.username == 'system:serviceaccount:reflector:reflector' ||
+        object.metadata.?annotations.orValue({}).all(k,
+          !k.startsWith('reflector.v1.k8s.emberstack.com/'))
+      message: "only Reflector may write reflector.v1.k8s.emberstack.com/* annotations in a preview namespace"
+    - expression: >-
+        object.metadata.?labels.orValue({}).all(k,
+          !(k in ['grafana_dashboard', 'grafana_datasource', 'grafana_alert']))
+      message: "Grafana sidecar discovery labels are not allowed in a preview namespace"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-controller-keys
+spec:
+  policyName: preview-controller-keys
+  validationActions: [Deny]
+---
+# Pods: no OpenTelemetry operator injection (its annotations accept
+# <namespace>/<name> references, which would copy another namespace's
+# Instrumentation into a preview pod), and no way onto nodes reserved for
+# staging or the control plane.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-pod-injection
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  validations:
+    - expression: >-
+        object.metadata.?annotations.orValue({}).all(k,
+          !k.startsWith('instrumentation.opentelemetry.io/') &&
+          !k.startsWith('sidecar.opentelemetry.io/'))
+      message: "OpenTelemetry injection annotations are not allowed in a preview namespace"
+    # Placement. The staging workers are tainted tier=prod-staging:NoSchedule,
+    # as are the control plane and the interLink virtual node, so refusing
+    # every toleration except Kubernetes' own node.kubernetes.io/* conditions
+    # (added by admission and the DaemonSet controller) keeps preview pods on
+    # the general pool whatever nodeSelector or affinity they ask for.
+    # nodeName on CREATE would skip the scheduler, and taints with it; the
+    # scheduler sets it later through pods/binding, which is not matched here.
+    - expression: "request.operation != 'CREATE' || !has(object.spec.nodeName)"
+      message: "preview pods may not set spec.nodeName"
+    - expression: >-
+        object.spec.?tolerations.orValue([]).all(t,
+          t.?key.orValue('').startsWith('node.kubernetes.io/'))
+      message: "preview pods may only tolerate node.kubernetes.io/* conditions"
+    # Only system-* PriorityClasses exist; a preview needs none, and one would
+    # let it preempt staging.
+    - expression: "object.spec.?priorityClassName.orValue('') == ''"
+      message: "preview pods may not set a priorityClassName"
+    # Every container is work for a shared kubelet and runtime, whatever it
+    # requests. The chart's pods have at most 2 containers and 2 init
+    # containers.
+    - expression: >-
+        size(object.spec.containers) <= 6 &&
+        size(object.spec.?initContainers.orValue([])) <= 6
+      message: "preview pods may have at most 6 containers and 6 init containers"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-pod-injection
+spec:
+  policyName: preview-pod-injection
+  validationActions: [Deny]
+---
+# Workload fan-out. The quota rejects pods beyond its ceiling, but the
+# workload controllers keep retrying them, which is sustained controller,
+# admission and apiserver load that no quota counts. So the desired sizes are
+# bounded here: the chart runs every Deployment and StatefulSet at 1 replica
+# and every Job as 1 pod with at most 3 retries.
+#
+# revisionHistoryLimit is capped too: the quota counts old ReplicaSets and
+# ControllerRevisions, and a high limit would fill it with history and stall
+# rollouts. The chart uses the default of 10.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-workload-bounds
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs"]
+  validations:
+    - expression: >-
+        request.resource.resource == 'jobs' ||
+        (object.spec.?replicas.orValue(1) <= 3 &&
+         object.spec.?revisionHistoryLimit.orValue(10) <= 10)
+      message: "preview Deployments and StatefulSets may run at most 3 replicas and keep at most 10 revisions"
+    - expression: >-
+        request.resource.resource != 'jobs' || (
+          object.spec.?parallelism.orValue(1) <= 2 &&
+          object.spec.?completions.orValue(1) <= 4 &&
+          object.spec.?backoffLimit.orValue(6) <= 6 &&
+          object.spec.?backoffLimitPerIndex.orValue(0) <= 6)
+      message: "preview Jobs may have parallelism at most 2, completions at most 4 and at most 6 retries"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-workload-bounds
+spec:
+  policyName: preview-workload-bounds
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# Pod specs: nothing the kubelet does on the pod's behalf may leave the pod.
+#
+# The Cilium policy governs traffic FROM the preview pod. Three things in a pod
+# spec are carried out by the node's kubelet instead, from the node network,
+# outside that policy:
+#   - probes and lifecycle handlers with an explicit httpGet/tcpSocket `host`
+#     (without one they target the pod's own IP);
+#   - network-backed inline volumes (nfs, iscsi, cephfs, rbd, csi, ...), which
+#     PSA baseline still allows;
+#   - PersistentVolumeClaims that pick a volume (volumeName, selector, a
+#     dataSource) or a storage class with pre-made volumes (local-minio).
+# Checked on pods and on workload templates, so a bad template is refused at
+# the Deployment/StatefulSet/Job instead of failing pod creation in a loop.
+# The chart uses configMap, secret, projected, emptyDir and PVC volumes; exec,
+# httpGet and tcpSocket probes without a host, at a period of 5s or more; and
+# ceph-rbd claims only.
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-pod-spec
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: podSpec
+      expression: "object.spec"
+    - name: containers
+      expression: >-
+        variables.podSpec.containers + variables.podSpec.?initContainers.orValue([])
+    - name: probes
+      expression: >-
+        variables.containers.map(c, [c.?livenessProbe, c.?readinessProbe, c.?startupProbe]
+          .filter(p, p.hasValue()).map(p, p.value())).flatten()
+    - name: hooks
+      expression: >-
+        variables.containers.map(c, [c.?lifecycle.?postStart, c.?lifecycle.?preStop]
+          .filter(h, h.hasValue()).map(h, h.value())).flatten()
+  validations:
+    - expression: >-
+        variables.podSpec.?volumes.orValue([]).all(v,
+          !has(v.nfs) && !has(v.iscsi) && !has(v.cephfs) && !has(v.rbd) &&
+          !has(v.csi) && !has(v.glusterfs) && !has(v.fc) && !has(v.flexVolume) &&
+          !has(v.hostPath) && !has(v.ephemeral) && !has(v.image) &&
+          !has(v.azureFile) && !has(v.azureDisk) && !has(v.awsElasticBlockStore) &&
+          !has(v.gcePersistentDisk) && !has(v.cinder) && !has(v.portworxVolume) &&
+          !has(v.quobyte) && !has(v.scaleIO) && !has(v.storageos) &&
+          !has(v.vsphereVolume) && !has(v.photonPersistentDisk) && !has(v.flocker) &&
+          !has(v.gitRepo))
+      message: "preview pods may only use configMap, secret, projected, emptyDir, downwardAPI and persistentVolumeClaim volumes"
+    - expression: >-
+        (variables.probes + variables.hooks).all(h,
+          (!has(h.httpGet) || !has(h.httpGet.host)) &&
+          (!has(h.tcpSocket) || !has(h.tcpSocket.host)))
+      message: "probes and lifecycle handlers may not set a host; they must target the pod itself"
+    - expression: "variables.probes.all(p, p.?periodSeconds.orValue(10) >= 5)"
+      message: "preview probes may run no more often than every 5 seconds"
+    # Images are pulled by the node's container runtime, outside the preview
+    # egress policy, so the registry host is a destination too. Docker Hub
+    # (including short names like `alpine`), ghcr.io and quay.io are what the
+    # chart uses, and the nodes pull all three through the in-cluster
+    # mirrors. Any other host, an IP or a port is refused.
+    - expression: >-
+        variables.containers.all(c,
+          size(c.image.split('/')) == 1 ||
+          c.image.split('/')[0] in ['docker.io', 'ghcr.io', 'quay.io'] ||
+          !(c.image.split('/')[0].contains('.') ||
+            c.image.split('/')[0].contains(':') ||
+            c.image.split('/')[0] == 'localhost'))
+      messageExpression: >-
+        'preview images must come from docker.io, ghcr.io or quay.io; got ' +
+        variables.containers.map(c, c.image).filter(i, size(i.split('/')) > 1 &&
+          !(i.split('/')[0] in ['docker.io', 'ghcr.io', 'quay.io']) &&
+          (i.split('/')[0].contains('.') || i.split('/')[0].contains(':') ||
+           i.split('/')[0] == 'localhost')).join(', ')
+    # Kubernetes honours the grace period on uninstall and namespace deletion,
+    # so a huge one behind a process that ignores SIGTERM holds the namespace
+    # (and its PVCs) Terminating. The chart's longest is 600s (Postgres).
+    - expression: "variables.podSpec.?terminationGracePeriodSeconds.orValue(30) <= 900"
+      message: "preview pods may set terminationGracePeriodSeconds of at most 900"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-pod-spec
+spec:
+  policyName: preview-pod-spec
+  validationActions: [Deny]
+---
+# The same checks on workload templates, plus no template finalizers (the
+# controllers copy them onto every pod). Separate from the pod policy because
+# CEL is type-checked per kind: a Pod has no spec.template.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-workload-template
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs"]
+  variables:
+    - name: podSpec
+      expression: "object.spec.template.spec"
+    - name: containers
+      expression: >-
+        variables.podSpec.containers + variables.podSpec.?initContainers.orValue([])
+    - name: probes
+      expression: >-
+        variables.containers.map(c, [c.?livenessProbe, c.?readinessProbe, c.?startupProbe]
+          .filter(p, p.hasValue()).map(p, p.value())).flatten()
+    - name: hooks
+      expression: >-
+        variables.containers.map(c, [c.?lifecycle.?postStart, c.?lifecycle.?preStop]
+          .filter(h, h.hasValue()).map(h, h.value())).flatten()
+  validations:
+    - expression: >-
+        variables.podSpec.?volumes.orValue([]).all(v,
+          !has(v.nfs) && !has(v.iscsi) && !has(v.cephfs) && !has(v.rbd) &&
+          !has(v.csi) && !has(v.glusterfs) && !has(v.fc) && !has(v.flexVolume) &&
+          !has(v.hostPath) && !has(v.ephemeral) && !has(v.image) &&
+          !has(v.azureFile) && !has(v.azureDisk) && !has(v.awsElasticBlockStore) &&
+          !has(v.gcePersistentDisk) && !has(v.cinder) && !has(v.portworxVolume) &&
+          !has(v.quobyte) && !has(v.scaleIO) && !has(v.storageos) &&
+          !has(v.vsphereVolume) && !has(v.photonPersistentDisk) && !has(v.flocker) &&
+          !has(v.gitRepo))
+      message: "preview pods may only use configMap, secret, projected, emptyDir, downwardAPI and persistentVolumeClaim volumes"
+    - expression: >-
+        (variables.probes + variables.hooks).all(h,
+          (!has(h.httpGet) || !has(h.httpGet.host)) &&
+          (!has(h.tcpSocket) || !has(h.tcpSocket.host)))
+      message: "probes and lifecycle handlers may not set a host; they must target the pod itself"
+    - expression: "variables.probes.all(p, p.?periodSeconds.orValue(10) >= 5)"
+      message: "preview probes may run no more often than every 5 seconds"
+    # Images are pulled by the node's container runtime, outside the preview
+    # egress policy, so the registry host is a destination too. Docker Hub
+    # (including short names like `alpine`), ghcr.io and quay.io are what the
+    # chart uses, and the nodes pull all three through the in-cluster
+    # mirrors. Any other host, an IP or a port is refused.
+    - expression: >-
+        variables.containers.all(c,
+          size(c.image.split('/')) == 1 ||
+          c.image.split('/')[0] in ['docker.io', 'ghcr.io', 'quay.io'] ||
+          !(c.image.split('/')[0].contains('.') ||
+            c.image.split('/')[0].contains(':') ||
+            c.image.split('/')[0] == 'localhost'))
+      messageExpression: >-
+        'preview images must come from docker.io, ghcr.io or quay.io; got ' +
+        variables.containers.map(c, c.image).filter(i, size(i.split('/')) > 1 &&
+          !(i.split('/')[0] in ['docker.io', 'ghcr.io', 'quay.io']) &&
+          (i.split('/')[0].contains('.') || i.split('/')[0].contains(':') ||
+           i.split('/')[0] == 'localhost')).join(', ')
+    # Kubernetes honours the grace period on uninstall and namespace deletion,
+    # so a huge one behind a process that ignores SIGTERM holds the namespace
+    # (and its PVCs) Terminating. The chart's longest is 600s (Postgres).
+    - expression: "variables.podSpec.?terminationGracePeriodSeconds.orValue(30) <= 900"
+      message: "preview pods may set terminationGracePeriodSeconds of at most 900"
+    - expression: "size(object.spec.template.metadata.?finalizers.orValue([])) == 0"
+      message: "preview workload templates may not carry finalizers"
+    # The per-pod rules in preview-pod-injection, applied to the template so a
+    # workload whose every pod would be refused is refused itself, instead of
+    # its controller retrying doomed pod creations.
+    - expression: "!has(variables.podSpec.nodeName)"
+      message: "preview workload templates may not set spec.nodeName"
+    - expression: >-
+        variables.podSpec.?tolerations.orValue([]).all(t,
+          t.?key.orValue('').startsWith('node.kubernetes.io/'))
+      message: "preview pods may only tolerate node.kubernetes.io/* conditions"
+    - expression: "variables.podSpec.?priorityClassName.orValue('') == ''"
+      message: "preview pods may not set a priorityClassName"
+    - expression: >-
+        size(variables.podSpec.containers) <= 6 &&
+        size(variables.podSpec.?initContainers.orValue([])) <= 6
+      message: "preview pods may have at most 6 containers and 6 init containers"
+    - expression: >-
+        object.spec.template.metadata.?annotations.orValue({}).all(k,
+          !k.startsWith('instrumentation.opentelemetry.io/') &&
+          !k.startsWith('sidecar.opentelemetry.io/'))
+      message: "OpenTelemetry injection annotations are not allowed in a preview namespace"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-workload-template
+spec:
+  policyName: preview-workload-template
+  validationActions: [Deny]
+---
+# StatefulSet claim templates: the PVC rules below, at the StatefulSet.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-statefulset-claims
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["statefulsets"]
+  validations:
+    - expression: >-
+        object.spec.?volumeClaimTemplates.orValue([]).all(t,
+          t.spec.?storageClassName.orValue('') == 'ceph-rbd' &&
+          !has(t.spec.volumeName) && !has(t.spec.selector) &&
+          !has(t.spec.dataSource) && !has(t.spec.dataSourceRef) &&
+          size(t.metadata.?finalizers.orValue([])) == 0)
+      message: "preview volumeClaimTemplates must use storageClassName ceph-rbd, may not pick a volume (volumeName, selector, dataSource), and may not carry finalizers"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-statefulset-claims
+spec:
+  policyName: preview-statefulset-claims
+  validationActions: [Deny]
+---
+# The same claim rules on the PVC itself, which the StatefulSet controller
+# creates from the template. volumeName is refused on CREATE only: the binder
+# sets it afterwards.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-pvc-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["persistentvolumeclaims"]
+  validations:
+    - expression: >-
+        object.spec.?storageClassName.orValue('') == 'ceph-rbd' &&
+        !has(object.spec.volumeName) && !has(object.spec.selector) &&
+        !has(object.spec.dataSource) && !has(object.spec.dataSourceRef)
+      message: "preview PVCs must use storageClassName ceph-rbd and may not pick a volume (volumeName, selector, dataSource)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-pvc-surface
+spec:
+  policyName: preview-pvc-surface
+  validationActions: [Deny]
+---
+# Finalizers. A finalizer no controller removes leaves its object, and so the
+# namespace, Terminating forever, and the teardown role cannot patch it away.
+# Only the finalizers a real controller owns are allowed, on the kind it
+# manages: ESO's cleanup on ExternalSecrets, pvc-protection on PVCs, the Job
+# controller's tracking finalizer on pods, and the garbage collector's
+# foregroundDeletion/orphan anywhere. Workload and claim templates are
+# checked by preview-workload-template and preview-statefulset-claims.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-finalizers
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["configmaps", "services", "serviceaccounts", "secrets", "pods", "persistentvolumeclaims"]
+      - apiGroups: ["apps"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs"]
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["ingresses"]
+      - apiGroups: ["external-secrets.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["externalsecrets"]
+      - apiGroups: ["monitoring.coreos.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["servicemonitors", "prometheusrules"]
+  variables:
+    - name: allowed
+      expression: >-
+        ['foregroundDeletion', 'orphan'] +
+        (request.resource.resource == 'externalsecrets'
+          ? ['externalsecrets.external-secrets.io/externalsecret-cleanup'] : []) +
+        (request.resource.resource == 'persistentvolumeclaims'
+          ? ['kubernetes.io/pvc-protection'] : []) +
+        (request.resource.resource == 'pods'
+          ? ['batch.kubernetes.io/job-tracking'] : [])
+  validations:
+    - expression: >-
+        object.metadata.?finalizers.orValue([]).all(f, f in variables.allowed)
+      messageExpression: >-
+        'finalizer not allowed on a preview ' + request.resource.resource + ': ' +
+        object.metadata.?finalizers.orValue([]).filter(f, !(f in variables.allowed)).join(', ')
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-finalizers
+spec:
+  policyName: preview-finalizers
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# Resource ceilings: a ResourceQuota and LimitRange in every preview
+# namespace, generated and kept in sync by Kyverno (synchronize: true puts
+# them back if changed or deleted), and admission that lets nobody but
+# Kyverno and the namespace controller touch them. The deploy role holds
+# core/* and RBAC in the namespace, so without the admission policy the chart
+# could delete the quota, or grant that right to a ServiceAccount elsewhere.
+#
+# Sized from a measured preview (about 5 CPU / 15Gi requested,
+# 13 CPU / 37Gi limits, 11-15 pods including hook Jobs, one 10Gi PVC), with
+# room for a rolling deploy that surges edge-functions (2 CPU / 6Gi
+# Guaranteed) while hook Jobs run.
+# ---------------------------------------------------------------------------
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: preview-resource-ceilings
+spec:
+  generateExisting: true
+  rules:
+    - name: quota
+      match:
+        any:
+          - resources:
+              kinds: ["Namespace"]
+              selector:
+                matchLabels:
+                  pawtograder.net/preview: "true"
+      generate:
+        apiVersion: v1
+        kind: ResourceQuota
+        name: preview-quota
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            hard:
+              requests.cpu: "16"
+              requests.memory: 48Gi
+              limits.cpu: "40"
+              limits.memory: 80Gi
+              limits.ephemeral-storage: 100Gi
+              pods: "40"
+              count/jobs.batch: "20"
+              persistentvolumeclaims: "4"
+              requests.storage: 60Gi
+              services: "30"
+              services.loadbalancers: "0"
+              services.nodeports: "0"
+              configmaps: "60"
+              secrets: "60"
+              count/ingresses.networking.k8s.io: "5"
+              # Every other namespaced type the deploy role can create, so a
+              # chart cannot pile up objects that cost apiserver, controller,
+              # Cilium or operator capacity outside the namespace. Measured
+              # maxima across live previews in comments.
+              count/deployments.apps: "30" # 9
+              count/statefulsets.apps: "10" # 2
+              count/daemonsets.apps: "2" # 0
+              count/replicasets.apps: "200" # 39; revision history accumulates
+              count/controllerrevisions.apps: "50" # 2; StatefulSet revision history
+              count/cronjobs.batch: "5" # 0
+              count/roles.rbac.authorization.k8s.io: "10" # 0
+              count/rolebindings.rbac.authorization.k8s.io: "50" # 7; OpenBao mints one per credential
+              count/serviceaccounts: "50" # 9; likewise
+              count/networkpolicies.networking.k8s.io: "10" # 0
+              count/poddisruptionbudgets.policy: "10" # 0
+              count/horizontalpodautoscalers.autoscaling: "10" # 0
+              count/externalsecrets.external-secrets.io: "10" # 2
+              count/servicemonitors.monitoring.coreos.com: "20" # 7
+              count/prometheusrules.monitoring.coreos.com: "5" # 1
+              count/podmonitors.monitoring.coreos.com: "0"
+              count/endpoints: "60"
+    - name: limits
+      match:
+        any:
+          - resources:
+              kinds: ["Namespace"]
+              selector:
+                matchLabels:
+                  pawtograder.net/preview: "true"
+      generate:
+        apiVersion: v1
+        kind: LimitRange
+        name: preview-limits
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            limits:
+              - type: Container
+                # ephemeral-storage: the chart sets no limit, so every
+                # container gets this one and the quota counts it. At 8Gi a
+                # fresh preview's ~12 pods reserved 96Gi of the 100Gi and the
+                # seed Job could not start. Measured use is under 20MiB per
+                # pod. Keep default x the pods quota (2Gi x 40 = 80Gi) under
+                # limits.ephemeral-storage, so defaults alone cannot exhaust it.
+                default:
+                  cpu: "2"
+                  memory: 2Gi
+                  ephemeral-storage: 2Gi
+                defaultRequest:
+                  cpu: 50m
+                  memory: 64Mi
+                # Floors, so a chart cannot pack hundreds of near-free
+                # containers under the CPU and memory quota. The chart's
+                # smallest explicit request is 50m.
+                min:
+                  cpu: 10m
+                  memory: 16Mi
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-ceilings-managed
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["resourcequotas", "limitranges"]
+  validations:
+    - expression: >-
+        request.userInfo.username in [
+          'system:serviceaccount:kyverno:kyverno-background-controller',
+          'system:serviceaccount:kube-system:namespace-controller']
+      message: "preview ResourceQuotas and LimitRanges are managed by Kyverno"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-ceilings-managed
+spec:
+  policyName: preview-ceilings-managed
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
+# Monitoring: previews may describe scrapes of their own pods, nothing more.
+#
+# The cluster Prometheus (monitoring/kps-prometheus) selects ServiceMonitors,
+# PodMonitors, Probes, ScrapeConfigs and PrometheusRules from EVERY namespace,
+# and it sits outside the preview egress policy. The deploy role holds
+# monitoring.coreos.com/*, so without these a PR's chart could have Prometheus
+# scrape arbitrary internal URLs (namespaceSelector.any, proxyUrl, relabeling
+# of __address__, a redirect from a preview pod), POST client credentials to
+# any URL (oauth2), read files off the Prometheus pod (bearerTokenFile, TLS
+# *File), or forge series for other namespaces (honorLabels, relabeling,
+# recording rules).
+#
+# The chart renders only ServiceMonitors with `selector` + `endpoints` and one
+# alert-only PrometheusRule. The allow-lists below are that shape plus a few
+# harmless tuning fields.
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-servicemonitor-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["monitoring.coreos.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["servicemonitors"]
+  variables:
+    - name: endpoints
+      expression: "object.spec.?endpoints.orValue([])"
+    - name: allowedEndpointFields
+      expression: >-
+        ['port', 'targetPort', 'path', 'scheme', 'interval', 'scrapeTimeout',
+         'params', 'authorization', 'basicAuth', 'bearerTokenSecret',
+         'tlsConfig', 'followRedirects', 'honorTimestamps', 'enableHttp2',
+         'filterRunning', 'trackTimestampsStaleness']
+  validations:
+    - expression: >-
+        object.spec.all(k, k in ['endpoints', 'selector', 'namespaceSelector',
+          'sampleLimit', 'targetLimit', 'labelLimit', 'labelNameLengthLimit',
+          'labelValueLengthLimit', 'bodySizeLimit'])
+      messageExpression: >-
+        'ServiceMonitor spec field not allowed in a preview namespace: ' +
+        object.spec.filter(k, !(k in ['endpoints', 'selector', 'namespaceSelector',
+          'sampleLimit', 'targetLimit', 'labelLimit', 'labelNameLengthLimit',
+          'labelValueLengthLimit', 'bodySizeLimit'])).join(', ')
+    - expression: >-
+        !has(object.spec.namespaceSelector) || (
+          !object.spec.namespaceSelector.?any.orValue(false) &&
+          object.spec.namespaceSelector.?matchNames.orValue([]).all(n,
+            n == namespaceObject.metadata.name))
+      message: "a preview ServiceMonitor may only select Services in its own namespace"
+    - expression: >-
+        variables.endpoints.all(e, e.all(k, k in variables.allowedEndpointFields))
+      messageExpression: >-
+        'ServiceMonitor endpoint field not allowed in a preview namespace: ' +
+        variables.endpoints.map(e, e.filter(k, !(k in variables.allowedEndpointFields)).join(', '))
+          .filter(x, x != '').join('; ')
+    - expression: >-
+        variables.endpoints.all(e, e.?tlsConfig.orValue({}).all(k,
+          k in ['ca', 'cert', 'keySecret', 'serverName', 'insecureSkipVerify']))
+      message: "ServiceMonitor tlsConfig may only reference Secrets/ConfigMaps (no *File fields)"
+    # Set by the Kyverno mutation below on every preview ServiceMonitor, so
+    # charts need not carry it. Prometheus follows redirects by default, which
+    # would let a preview pod bounce the scraper to any internal URL.
+    - expression: >-
+        variables.endpoints.all(e, e.?followRedirects.orValue(true) == false)
+      message: "preview ServiceMonitor endpoints must set followRedirects: false"
+    # Load ceilings on the shared scraper. sampleLimit and targetLimit are
+    # filled in by the Kyverno mutation below when the chart omits them; the
+    # largest preview target (postgres-exporter) returns about 7.5k samples.
+    # The number of ServiceMonitors is bounded by the namespace ResourceQuota.
+    - expression: "size(variables.endpoints) <= 4"
+      message: "a preview ServiceMonitor may have at most 4 endpoints"
+    - expression: >-
+        variables.endpoints.all(e,
+          (!has(e.interval) || duration(e.interval) >= duration('15s')) &&
+          (!has(e.scrapeTimeout) || duration(e.scrapeTimeout) <= duration('30s')))
+      message: "preview scrape interval must be at least 15s and scrapeTimeout at most 30s"
+    - expression: >-
+        object.spec.?sampleLimit.orValue(0) > 0 && object.spec.sampleLimit <= 50000 &&
+        object.spec.?targetLimit.orValue(0) > 0 && object.spec.targetLimit <= 100
+      message: "preview ServiceMonitors need sampleLimit <= 50000 and targetLimit <= 100"
+    # Sample counts do not bound bytes: one enormous sample or non-sample text
+    # still has to be read and parsed. Required, at most 16MiB; the largest
+    # preview target returns about 1MB.
+    # The regex alone admits up to 99999KiB; the int check holds KiB/KB to
+    # 16384 so both units share the 16MiB ceiling.
+    - expression: >-
+        object.spec.?bodySizeLimit.orValue('').matches('^([1-9][0-9]{0,4}(KiB|KB)|([1-9]|1[0-6])(MiB|MB))$') &&
+        (!object.spec.bodySizeLimit.matches('KB$|KiB$') ||
+         int(object.spec.bodySizeLimit.replace('KiB', '').replace('KB', '')) <= 16384)
+      message: "preview ServiceMonitors need a bodySizeLimit between 1KiB and 16MiB"
+    - expression: >-
+        ['labelLimit', 'labelNameLengthLimit', 'labelValueLengthLimit'].all(k,
+          !(k in object.spec) || (object.spec[k] > 0 && object.spec[k] <= 1000))
+      message: "preview ServiceMonitor label limits must be between 1 and 1000"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-servicemonitor-surface
+spec:
+  policyName: preview-servicemonitor-surface
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-prometheusrule-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["monitoring.coreos.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["prometheusrules"]
+  validations:
+    # Evaluation load on the shared Prometheus. The chart ships 7 groups and
+    # 26 rules at the default interval.
+    - expression: >-
+        size(object.spec.?groups.orValue([])) <= 20 &&
+        object.spec.?groups.orValue([]).map(g, size(g.?rules.orValue([]))).sum() <= 100 &&
+        object.spec.?groups.orValue([]).all(g,
+          !has(g.interval) || duration(g.interval) >= duration('30s'))
+      message: "a preview PrometheusRule may have at most 20 groups and 100 rules, evaluated no more often than every 30s"
+    # Alerting rules only. A recording rule writes new series into the shared
+    # Prometheus with any name and labels, e.g. a fake series for staging.
+    - expression: >-
+        object.spec.?groups.orValue([]).all(g,
+          g.?rules.orValue([]).all(r, has(r.alert) && !has(r.record)))
+      message: "preview PrometheusRules may contain alerting rules only (no `record`)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-prometheusrule-surface
+spec:
+  policyName: preview-prometheusrule-surface
+  validationActions: [Deny]
+---
+# Every other monitoring.coreos.com kind. The chart renders none of them, and
+# PodMonitor/Probe/ScrapeConfig reach targets outside the namespace directly.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-monitoring-kinds
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["monitoring.coreos.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources:
+          - podmonitors
+          - probes
+          - scrapeconfigs
+          - alertmanagerconfigs
+          - alertmanagers
+          - prometheuses
+          - prometheusagents
+          - thanosrulers
+  validations:
+    - expression: "false"
+      messageExpression: >-
+        'preview namespaces may not create ' + request.resource.resource +
+        '; only ServiceMonitors and alert-only PrometheusRules'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-monitoring-kinds
+spec:
+  policyName: preview-monitoring-kinds
+  validationActions: [Deny]
+---
+# Sets followRedirects: false on every preview ServiceMonitor endpoint, so
+# existing PR charts pass preview-servicemonitor-surface without a chart
+# change. Mutating admission runs before validating admission, and the VAP
+# above rejects anything this did not reach (e.g. Kyverno down), so the pair
+# fails closed.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: preview-servicemonitor-no-redirects
+spec:
+  background: false
+  rules:
+    - name: disable-follow-redirects
+      match:
+        any:
+          - resources:
+              kinds: ["monitoring.coreos.com/v1/ServiceMonitor"]
+              operations: ["CREATE", "UPDATE"]
+              namespaceSelector:
+                matchLabels:
+                  pawtograder.net/preview: "true"
+      mutate:
+        foreach:
+          - list: "request.object.spec.endpoints"
+            patchesJson6902: |-
+              - op: add
+                path: "/spec/endpoints/{{elementIndex}}/followRedirects"
+                value: false
+    - name: default-scrape-limits
+      match:
+        any:
+          - resources:
+              kinds: ["monitoring.coreos.com/v1/ServiceMonitor"]
+              operations: ["CREATE", "UPDATE"]
+              namespaceSelector:
+                matchLabels:
+                  pawtograder.net/preview: "true"
+      mutate:
+        # Defaults only (+() adds a field when absent); the VAP caps any
+        # value the chart sets itself.
+        patchStrategicMerge:
+          spec:
+            +(sampleLimit): 20000
+            +(targetLimit): 50
+            +(bodySizeLimit): 10MiB
+---
+# ---------------------------------------------------------------------------
+# Network: preview pods reach the internet, their own stack and shared Redis.
+#
+# Egress allow-list. Everything else in the cluster (pawtograder-staging,
+# openbao, minio, monitoring, kube-apiserver, kubelets) and on the LAN is
+# dropped. The chart's own NetworkPolicy cannot provide this: the PR controls
+# the chart, and the deploy role can delete NetworkPolicies.
+#
+# The allow-list alone is NOT an upper bound. Cilium unions the allows of every
+# policy that selects an endpoint, and the deploy role can create ordinary
+# NetworkPolicies, so a chart could add an allow-all egress policy and undo
+# everything above. `egressDeny` is what makes the bound hold: a deny wins over
+# any allow from any policy. The allow rules then define what is reachable,
+# and the deny rules below repeat the forbidden set so no other policy can
+# reopen it.
+#
+# Observed traffic from idle previews before this was written: kube-dns:53,
+# pawtograder-shared-redis:6379, and the preview's own pods. The rest comes
+# from values-preview.yaml: S3 at s3.talos.ripley.cloud (ingress-nginx, which
+# runs on the host network, so it is `host`/`remote-node` on 443), and the
+# preview's own API host, which resolves to the public edge address.
+#
+# Known residual: port 443 on the nodes is ingress-nginx, which serves every
+# Ingress in the cluster, so a preview can reach internal hostnames the same
+# way any LAN client can. Those rely on their own authentication.
+# ---------------------------------------------------------------------------
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: pawtograder-preview-egress
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:io.cilium.k8s.namespace.labels.pawtograder.net/preview: "true"
+  egress:
+    # Pods of this (or another) preview. A clusterwide policy cannot say
+    # "same namespace"; cross-preview reach is accepted.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.cilium.k8s.namespace.labels.pawtograder.net/preview: "true"
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: pawtograder-shared-redis
+      toPorts:
+        - ports:
+            - port: "6379"
+              protocol: TCP
+    - toEntities: [host, remote-node]
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+            - port: "443"
+              protocol: TCP
+    - toCIDRSet:
+        - cidr: 0.0.0.0/0
+          except:
+            - 10.0.0.0/8
+            - 172.16.0.0/12
+            - 192.168.0.0/16
+            - 100.64.0.0/10
+            - 169.254.0.0/16
+  egressDeny:
+    # Pods outside previews, kube-dns and shared Redis.
+    - toEndpoints:
+        - matchExpressions:
+            - key: k8s:io.cilium.k8s.namespace.labels.pawtograder.net/preview
+              operator: DoesNotExist
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: NotIn
+              values: [kube-system, pawtograder-shared-redis]
+    - toEndpoints:
+        - matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: In
+              values: [kube-system]
+            - key: k8s:k8s-app
+              operator: NotIn
+              values: [kube-dns]
+    # Every node port except ingress-nginx's 80 and 443. This covers the
+    # kube-apiserver (6443, also reachable as the `kube-apiserver` entity),
+    # the kubelet, etcd and Talos apid.
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports:
+            - port: "1"
+              endPort: 79
+              protocol: TCP
+            - port: "81"
+              endPort: 442
+              protocol: TCP
+            - port: "444"
+              endPort: 65535
+              protocol: TCP
+            - port: "1"
+              endPort: 65535
+              protocol: UDP
+    # The LAN and link-local, including cloud-style metadata addresses.
+    - toCIDRSet:
+        - cidr: 10.0.0.0/8
+        - cidr: 172.16.0.0/12
+        - cidr: 192.168.0.0/16
+        - cidr: 100.64.0.0/10
+        - cidr: 169.254.0.0/16
+---
+# ---------------------------------------------------------------------------
+# Network: the pawtograder ARC pool (pawtograder-ci, pawtograder-e2e).
+#
+# Trusted PRs run there: lint/jest/deno/e2e execute PR code on the runner, and
+# the preview build jobs run PR Dockerfiles in its docker daemon. A deny-list
+# rather than an allow-list because the pool's legitimate needs are wider and
+# less observable (runners scale to zero): GitHub, GHCR, the kube-apiserver
+# for preview deploys, the registry and cache behind ingress-nginx, OpenBao
+# via its public name. What it never needs is another namespace's pods or a
+# LAN host that is not a cluster node.
+#
+# enableDefaultDeny.egress=false keeps every other destination allowed; a
+# deny rule wins over any allow.
+# ---------------------------------------------------------------------------
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: pawtograder-ci-egress-deny
+  namespace: arc-runners-pawtograder
+spec:
+  endpointSelector: {}
+  enableDefaultDeny:
+    egress: false
+    ingress: false
+  egressDeny:
+    - toEndpoints:
+        - matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: NotIn
+              values: [arc-runners-pawtograder, kube-system]
+    - toEndpoints:
+        - matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: In
+              values: [kube-system]
+            - key: k8s:k8s-app
+              operator: NotIn
+              values: [kube-dns]
+    # Node management ports. Nodes are `host`/`remote-node`, not CIDRs, so the
+    # LAN deny below does not cover them; 80/443 (ingress-nginx) and 6443
+    # (kube-apiserver, used by preview deploys) stay open.
+    - toEntities: [host, remote-node]
+      toPorts:
+        - ports:
+            - port: "10250" # kubelet
+              protocol: TCP
+            - port: "10255"
+              protocol: TCP
+            - port: "2379" # etcd
+              endPort: 2380
+              protocol: TCP
+            - port: "50000" # talos apid / trustd
+              endPort: 50001
+              protocol: TCP
+    - toCIDRSet:
+        - cidr: 10.0.0.0/8
+        - cidr: 172.16.0.0/12
+        - cidr: 192.168.0.0/16
+        - cidr: 100.64.0.0/10
+        - cidr: 169.254.0.0/16

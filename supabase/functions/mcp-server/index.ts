@@ -18,7 +18,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { minimatch } from "npm:minimatch@9";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
@@ -29,12 +29,16 @@ import {
   MCPAuthError,
   updateTokenLastUsed
 } from "../_shared/MCPAuth.ts";
+import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
+import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
-    dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA")
+    beforeSend: normalizeEventFingerprint,
+    ...sentryIdentity(),
+    dsn: Deno.env.get("SENTRY_DSN")!
   });
 }
 
@@ -2044,7 +2048,7 @@ function getEndpointUrl(_req: Request): string | null {
 // Main Handler
 // =============================================================================
 
-Deno.serve(async (req: Request): Promise<Response> => {
+serveWithSentryFlush(async (req: Request): Promise<Response> => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -2076,11 +2080,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const context = await authenticateMCPRequest(authHeader);
 
       // Update last used timestamp asynchronously
-      updateTokenLastUsed(context.tokenId).catch((err) => {
-        Sentry.captureException(err, {
-          tags: { operation: "update_token_last_used", tokenId: context.tokenId }
-        });
-      });
+      // Detached on purpose: the SSE/JSON response must not wait on a
+      // last-used timestamp write. Routed through the background-work helper
+      // so a late failure still gets flushed -- the request-boundary flush has
+      // already run by the time this settles.
+      // Detached on purpose: the response must not wait on a last-used timestamp
+      // write. updateTokenLastUsed reports its own failures, so there is nothing to
+      // catch here — but it reports them AFTER this response, so the flush has to
+      // come from the background helper rather than the request boundary.
+      waitUntilWithSentryFlush(updateTokenLastUsed(context.tokenId));
 
       // Create SSE stream
       const { stream, sse } = createSSEStream();
@@ -2104,11 +2112,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
         }
       });
     } catch (error) {
-      Sentry.captureException(error, {
-        tags: { component: "mcp_server", method: "GET" }
-      });
+      // Expired tokens and missing scopes are expected traffic on a public
+      // endpoint; only server faults are worth reporting.
+      if (!(error instanceof MCPAuthError) || error.shouldReport) {
+        Sentry.captureException(error, {
+          tags: { component: "mcp_server", method: "GET" }
+        });
+      }
 
-      const status = error instanceof MCPAuthError ? 401 : 500;
+      const status = error instanceof MCPAuthError ? error.status : 500;
       const message = error instanceof Error ? error.message : "Internal server error";
 
       return new Response(JSON.stringify({ error: message }), {
@@ -2132,11 +2144,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const context = await authenticateMCPRequest(authHeader);
 
     // Update last used timestamp asynchronously
-    updateTokenLastUsed(context.tokenId).catch((err) => {
-      Sentry.captureException(err, {
-        tags: { operation: "update_token_last_used", tokenId: context.tokenId }
-      });
-    });
+    // Detached on purpose: the SSE/JSON response must not wait on a
+    // last-used timestamp write. Routed through the background-work helper
+    // so a late failure still gets flushed -- the request-boundary flush has
+    // already run by the time this settles.
+    // Detached on purpose: the response must not wait on a last-used timestamp
+    // write. updateTokenLastUsed reports its own failures, so there is nothing to
+    // catch here — but it reports them AFTER this response, so the flush has to
+    // come from the background helper rather than the request boundary.
+    waitUntilWithSentryFlush(updateTokenLastUsed(context.tokenId));
 
     // Parse the MCP request (can be single or batch)
     const body = await req.json();
@@ -2214,11 +2230,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (error) {
-    Sentry.captureException(error, {
-      tags: { component: "mcp_server" }
-    });
+    if (!(error instanceof MCPAuthError) || error.shouldReport) {
+      Sentry.captureException(error, {
+        tags: { component: "mcp_server" }
+      });
+    }
 
-    const status = error instanceof MCPAuthError ? 401 : 500;
+    const status = error instanceof MCPAuthError ? error.status : 500;
     const message = error instanceof Error ? error.message : "Internal server error";
 
     return new Response(

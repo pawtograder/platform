@@ -11,7 +11,7 @@ import {
   setRowOverrideValues,
   clearRowOverrideValues
 } from "./expression/DependencySource.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 const DEBUG_LOG = Boolean(Deno.env.get("DEBUG_GRADEBOOK_CALCULATION")) || false;
 

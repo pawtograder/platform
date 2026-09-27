@@ -58,15 +58,23 @@ RUN apt-get update \
 # privileges below.
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 
-# Source files SeedDB.ts walks transitively. Copy enough of the tree to
-# resolve all imports — scripts/, tests/, utils/, supabase/ (the Database
-# type), components/, libs/, etc. The image is for seeding so we don't
-# care about excluding test fixtures.
+# Source files SeedDB.ts → DatabaseSeedingUtils.ts walks transitively. Copy
+# every top-level dir its import closure resolves through, or tsx fails at
+# resolution with MODULE_NOT_FOUND before seeding anything:
+#   scripts/  - the seeder + demo fixtures/copyRubrics
+#   utils/    - utils/supabase/{Database,Supabase}Types
+#   supabase/ - migrations / generated types
+#   tests/    - tests/fixtures + tests/generator used by the seed
+#   lib/      - e.g. lib/rubricCommentTargetStudentProfileId
+#   types/    - e.g. types/survey-analytics
+# The image is for seeding so we don't care about excluding test fixtures.
 COPY --chown=node:node tsconfig.json package.json package-lock.json ./
 COPY --chown=node:node scripts ./scripts
 COPY --chown=node:node utils ./utils
 COPY --chown=node:node supabase ./supabase
 COPY --chown=node:node tests ./tests
+COPY --chown=node:node lib ./lib
+COPY --chown=node:node types ./types
 
 # Entrypoint wrapper. Stays root-owned (mode 0755) so node can execute
 # it but not modify it.
@@ -79,6 +87,14 @@ LABEL org.opencontainers.image.source="https://github.com/pawtograder/platform" 
       org.opencontainers.image.title="pawtograder-seeder" \
       org.opencontainers.image.revision="$GIT_SHA" \
       org.opencontainers.image.version="$VERSION"
+
+# WORKDIR created /app as root. The seeder runs as `node` (below) and writes
+# transient files into its CWD at runtime — tsx's on-disk cache and a few
+# demo-fixture/manifest helpers in scripts/. With a root-owned /app those
+# writes fail ("Permission denied") and abort the whole seed, so make the
+# working directory writable by the runtime user. Non-recursive: the copied
+# contents are already --chown=node:node.
+RUN chown node:node /app
 
 # Drop privileges. The node:bookworm-slim base image ships a non-root
 # `node` user (uid/gid 1000). The image is a short-lived post-install

@@ -14,14 +14,16 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   const { assignment_id } = (await req.json()) as { assignment_id: number };
   scope?.setTag("function", "assignment-group-leave");
   scope?.setTag("assignment_id", assignment_id.toString());
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data: assignment } = await adminSupabase
     .from("assignments")
@@ -81,7 +83,9 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
         course_slug: membership.classes!.slug!,
         org: membership.classes!.github_org!,
         repo: repository.repository,
-        githubUsernames: remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!),
+        githubUsernames: remaining_members
+          .map((m) => m.profiles?.user_roles?.users?.github_username)
+          .filter((u): u is string => !!u),
         debug_id: `assignment-group-leave-${membership.assignment_group_id}`
       });
     }

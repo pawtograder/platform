@@ -3,7 +3,7 @@
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAllStudentRoles, useCourse, useCourseController, useProfiles } from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -14,7 +14,13 @@ import {
   assignmentGroupLeave,
   EdgeFunctionError
 } from "@/lib/edgeFunctions";
+import {
+  assignmentProvisionsRepositories,
+  groupNameRequirementsText,
+  isValidGroupName
+} from "@/lib/groupNameValidation";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
@@ -102,17 +108,14 @@ function CreateGroupButton({
               <Dialog.Title>Create a new group</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
-              <Field.Root invalid={name.length > 0 && !/^[a-zA-Z0-9_-]{1,36}$/.test(name)}>
+              <Field.Root invalid={name.length > 0 && !isValidGroupName(name, assignment.repo_mode)}>
                 <Field.Label>Choose a name for your group</Field.Label>
                 <Input name="name" value={name} onChange={(e) => setName(e.target.value)} />
                 <Field.HelperText>
                   Other students will use this name to find your group, and instructors will use this name to identify
-                  the group. The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36
-                  characters.
+                  the group. {groupNameRequirementsText(assignment.repo_mode)}
                 </Field.HelperText>
-                <Field.ErrorText>
-                  The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters.
-                </Field.ErrorText>
+                <Field.ErrorText>{groupNameRequirementsText(assignment.repo_mode)}</Field.ErrorText>
               </Field.Root>
               <Field.Root>
                 <Field.Label>Invite other students to join your group</Field.Label>
@@ -132,6 +135,7 @@ function CreateGroupButton({
               </Dialog.ActionTrigger>
               <Button
                 loading={isLoading}
+                disabled={!isValidGroupName(name, assignment.repo_mode)}
                 colorPalette="green"
                 onClick={() => {
                   setIsLoading(true);
@@ -146,7 +150,15 @@ function CreateGroupButton({
                   )
                     .then(() => {
                       repositories.refetchAll().then(() => {
-                        toaster.create({ title: "Repositories created", description: "", type: "success" });
+                        toaster.create({
+                          //An assignment that provisions no repository still creates the group; saying otherwise
+                          //promises the student a repo that is never coming
+                          title: assignmentProvisionsRepositories(assignment.repo_mode)
+                            ? "Repositories created"
+                            : "Group created",
+                          description: "",
+                          type: "success"
+                        });
                         setOpen(false);
                         setName("");
                         setSelectedInvitees([]);
@@ -604,7 +616,7 @@ function GroupMember({ profile_id }: { profile_id: string }) {
   return (
     <HStack>
       <Avatar.Root size="xs">
-        <Avatar.Image src={profile?.avatar_url} alt="" />
+        <Avatar.Image src={sanitizeImageSrc(profile?.avatar_url)} alt="" />
         <Avatar.Fallback>{profile?.name?.slice(0, 2)}</Avatar.Fallback>
       </Avatar.Root>
       <Text fontSize="sm" color="fg.muted">
@@ -852,7 +864,27 @@ function GroupDetails({
   );
 }
 
-function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
+function RepositoryLabel({ repository }: { repository: Repository }) {
+  const { role } = useClassProfiles();
+  if (!role.github_org_confirmed) {
+    return (
+      <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
+        {repository.repository} (requires GitHub authorization to access)
+      </Text>
+    );
+  }
+  return (
+    <Link
+      href={`https://github.com/${repository.repository}`}
+      data-visual-test="transparent"
+      data-visual-placeholder="repository"
+    >
+      {repository.repository} {repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
+    </Link>
+  );
+}
+
+export function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (!repositories) {
     return <Skeleton height="100px" />;
   }
@@ -869,13 +901,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link
-          href={`https://github.com/${repositories[0].repository}`}
-          data-visual-test="transparent"
-          data-visual-placeholder="repository"
-        >
-          {repositories[0].repository} {repositories[0].is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
-        </Link>
+        <RepositoryLabel repository={repositories[0]} />
       </HStack>
     );
   }
@@ -887,13 +913,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontWeight="bold" fontSize="sm">
           Current group repository:
         </Text>{" "}
-        <Link
-          href={`https://github.com/${groupRepo?.repository}`}
-          data-visual-test="transparent"
-          data-visual-placeholder="repository"
-        >
-          {groupRepo?.repository} {groupRepo?.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
-        </Link>
+        {groupRepo && <RepositoryLabel repository={groupRepo} />}
       </HStack>
       <Text fontWeight="bold">
         Note that you have multiple repositories currently. Please be sure that you are developing in the correct one
@@ -901,13 +921,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
       </Text>
       <Text>
         Individual repository (not in use, you are now in a group):{" "}
-        <Link
-          href={`https://github.com/${personalRepo?.repository}`}
-          data-visual-test="transparent"
-          data-visual-placeholder="repository"
-        >
-          {personalRepo?.repository} {personalRepo?.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
-        </Link>
+        {personalRepo && <RepositoryLabel repository={personalRepo} />}
       </Text>
     </VStack>
   );
@@ -915,10 +929,14 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
 
 export default function ManageGroupWidget({
   assignment,
-  repositories
+  repositories,
+  showRepositories = true
 }: {
   assignment: Assignment;
   repositories: Repository[];
+  // Hidden for repo-less modes (none / no_submission), where group management
+  // still applies but there are no Git repositories to link.
+  showRepositories?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
   const { time_zone } = useCourse();
@@ -940,7 +958,7 @@ export default function ManageGroupWidget({
         <Text fontSize="sm" color="fg.muted">
           You will not be able to join a group for this assignment.
         </Text>
-        <RepositoriesInfo repositories={repositories} />
+        {showRepositories && <RepositoriesInfo repositories={repositories} />}
       </Box>
     );
   }
@@ -1009,13 +1027,12 @@ export default function ManageGroupWidget({
   }
   return (
     <Box>
-      <Toaster />
       <Heading size="md">{heading}</Heading>
       <Text fontSize="sm" color="fg.muted">
         {description}
       </Text>
       {actions}
-      <RepositoriesInfo repositories={repositories} />
+      {showRepositories && <RepositoriesInfo repositories={repositories} />}
     </Box>
   );
 }

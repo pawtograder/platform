@@ -50,14 +50,15 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkGemoji from "remark-gemoji";
 import { FaCode, FaComments, FaEye, FaRegComment } from "react-icons/fa";
-import CodeFile, {
+import CodeFileStarryNight from "./code-file-starry-night";
+import {
   CodeLineComment,
   isRubricCheckDataWithOptions,
   LineCheckAnnotation,
   RubricCheckSelectOption,
   RubricCheckSubOptions,
   RubricCriteriaSelectGroupOption
-} from "./code-file";
+} from "./code-file-shared";
 import { GroupMemberSelectOption } from "./group-member-select-option";
 import LineCommentForm from "./line-comments-form";
 import MessageInput from "./message-input";
@@ -1269,7 +1270,7 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
             </ReactMarkdown>
           </Box>
         ) : (
-          <CodeFile file={file} embedded language="text.md" />
+          <CodeFileStarryNight file={file} embedded language="text.md" />
         )}
         <Box
           borderTop="1px solid"

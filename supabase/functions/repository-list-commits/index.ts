@@ -3,7 +3,7 @@ import { RepositoryListCommitsRequest } from "../_shared/FunctionTypes.d.ts";
 import { listCommits } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInCourse, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { ListCommitsResponse } from "../_shared/GitHubWrapper.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 export type RepositoryListCommitsResponse = {
   commits: ListCommitsResponse["data"];

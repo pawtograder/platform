@@ -3,7 +3,7 @@
 import { Heading, VStack, HStack, IconButton } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import DeckAnalytics from "./deckAnalytics";
-import Link from "@/components/ui/link";
+import NextLink from "next/link";
 import { FaArrowLeft } from "react-icons/fa";
 
 /**
@@ -19,11 +19,14 @@ export default function FlashcardDeckAnalyticsPage() {
     <VStack align="stretch" w="100%" gap={6} p={6}>
       <HStack justifyContent="space-between" alignItems="center">
         <HStack>
-          <Link href={`/course/${course_id}/manage/course/flashcard-decks`}>
-            <IconButton variant="ghost" size="sm" aria-label="Go back to flashcard decks">
+          <IconButton asChild variant="ghost" size="sm">
+            <NextLink
+              href={`/course/${course_id}/manage/course/flashcard-decks`}
+              aria-label="Go back to flashcard decks"
+            >
               <FaArrowLeft />
-            </IconButton>
-          </Link>
+            </NextLink>
+          </IconButton>
           <Heading size="lg">Flashcard Deck Analytics</Heading>
         </HStack>
       </HStack>

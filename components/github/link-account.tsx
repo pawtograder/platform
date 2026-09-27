@@ -87,9 +87,10 @@ export default function LinkAccount() {
           {errorDescription}
         </Alert>
       )}
-      <HStack alignItems="flex-start">
-        <VStack alignItems="flex-start" gap="0">
-          <HStack>
+      {/* Wraps so the sign-in button reflows below the text at narrow widths (WCAG 1.4.10). */}
+      <HStack alignItems="flex-start" flexWrap="wrap">
+        <VStack alignItems="flex-start" gap="0" minW={0}>
+          <HStack flexWrap="wrap">
             <Icon size="xl" as={BsGithub} /> <Heading size="lg">Connect to GitHub to access assignments</Heading>
           </HStack>
           <Text fontSize="sm">
@@ -109,10 +110,14 @@ export default function LinkAccount() {
           mr="0"
           colorPalette="green"
           onClick={async () => {
+            // Route through /auth/callback (not straight to the course page) so the first-login
+            // org-membership reconciliation runs for users who link GitHub from this banner; the
+            // callback then forwards to the course page via `next`.
+            const next = encodeURIComponent(`/course/${course.id}`);
             const { error } = await supabase.auth.linkIdentity({
               provider: "github",
               options: {
-                redirectTo: `${window.location.origin}/course/${course.id}`
+                redirectTo: `${window.location.origin}/auth/callback?next=${next}`
               }
             });
             if (error) {

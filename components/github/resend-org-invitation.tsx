@@ -3,7 +3,7 @@
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, Heading, HStack, Icon, Text, VStack, PopoverTrigger } from "@chakra-ui/react";
-import { toaster, Toaster } from "../ui/toaster";
+import { toaster } from "../ui/toaster";
 import { EdgeFunctionError, resendOrgInvitation } from "@/lib/edgeFunctions";
 import { FaEnvelope } from "react-icons/fa";
 import { BsGithub, BsInfoCircle } from "react-icons/bs";
@@ -89,7 +89,6 @@ export default function ResendOrgInvitation() {
       bg="bg.success"
       mx="auto"
     >
-      <Toaster />
       <HStack alignItems="flex-start">
         <VStack alignItems="flex-start" gap="0">
           <HStack>

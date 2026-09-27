@@ -4,6 +4,7 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
 import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
+import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import { AdminGetClassesResponse } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Card, Flex, HStack, Table, Text, VStack } from "@chakra-ui/react";
@@ -24,6 +25,11 @@ export default function ClassManagementTable({ classes: initialClasses }: ClassM
   const [isDeleting, setIsDeleting] = useState<number | null>(null);
 
   const supabase = createClient();
+  // `classes` is seeded from a server component and kept optimistically in local state, so the
+  // write shows here immediately. The refresh is for the *next* visit: without it, navigating
+  // away and back within `staleTimes.dynamic` remounts this table from the browser's cached
+  // pre-write payload and the archived class reappears.
+  const revalidateServerCaches = useRevalidateServerCaches();
 
   const handleDelete = async (classId: number) => {
     setIsDeleting(classId);
@@ -42,6 +48,8 @@ export default function ClassManagementTable({ classes: initialClasses }: ClassM
         description: "The class has been archived successfully.",
         type: "success"
       });
+
+      await revalidateServerCaches();
     } catch (error) {
       toaster.create({
         title: "Error",
@@ -55,6 +63,7 @@ export default function ClassManagementTable({ classes: initialClasses }: ClassM
 
   const handleClassUpdated = (updatedClass: Class) => {
     setClasses(classes.map((c) => (c.id === updatedClass.id ? updatedClass : c)));
+    void revalidateServerCaches();
   };
 
   return (

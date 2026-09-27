@@ -50,6 +50,10 @@ export class DiscussionThreadRealTimeController implements PawtograderRealTimeCo
     this._initializationPromise = this._initializeThreadChannel();
   }
 
+  get isClosed(): boolean {
+    return this._closed;
+  }
+
   /**
    * Start the realtime controller
    * Returns true when initialization is complete

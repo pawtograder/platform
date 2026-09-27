@@ -1,0 +1,35 @@
+{{- /*
+Extra web deployment channels. Each entry in .Values.channels with a `web`
+block renders its own web Service+Deployment (component "web-<name>") from the
+shared pawtograder.web.workload definition, on its own image tag. Channels share
+the stable data plane (Postgres/auth/storage) and are reached on their own host
+(see templates/ingress-channels.yaml); the app redirects each course to its
+channel's host based on classes.deployment_channel.
+*/ -}}
+{{- if .Values.web.enabled }}
+{{- range $c := .Values.channels }}
+{{- if $c.web }}
+{{- /* Require the channel's own image tag: without it mergeOverwrite falls back
+   to the stable repository+tag, so the channel host would serve byte-identical
+   stable code (the intended A/B split silently produces zero difference). */ -}}
+{{- if not (and $c.web.image $c.web.image.tag) }}
+{{- fail (printf "channel %q: channels[].web.image.tag is required when a web block is present (a channel without its own tag would run the stable image, not a canary build)" $c.name) }}
+{{- end }}
+{{- $image := mergeOverwrite (deepCopy $.Values.web.image) $c.web.image }}
+{{- /* hasKey, not `default 1`: Sprig `default` treats 0 as empty, which would
+   render replicas: 0 as 1 and make a channel impossible to idle to zero. */ -}}
+{{- $replicas := ternary $c.web.replicas 1 (hasKey $c.web "replicas") }}
+{{- /* maintenance.active fences the channel too: maintenance.sh `down` scales
+   every web-<channel> Deployment to 0, so the posture must render the same. */ -}}
+{{- $replicas = include "pawtograder.maintenance.writerReplicas" (dict "ctx" $ "replicas" $replicas) }}
+{{- /* workflowLeader is hard-coded false: a channel must NEVER be a metrics
+   leader. Channel replica counts are per-channel and unbounded, channel pods are
+   not scraped today (their component label is web-<name>), and a canary running
+   the refresh would double every global workflow gauge against the SAME database
+   the stable tier reads. No "config" either — this renders byte-identically to
+   before the arg existed. */ -}}
+---
+{{ include "pawtograder.web.workload" (dict "ctx" $ "component" (printf "web-%s" $c.name) "image" $image "replicas" $replicas "workflowLeader" false) }}
+{{- end }}
+{{- end }}
+{{- end }}

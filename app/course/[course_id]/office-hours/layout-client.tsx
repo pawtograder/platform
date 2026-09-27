@@ -66,11 +66,14 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
   return (
     <ClassProfileProvider>
       <ModerationBanNotice classId={Number(course_id)}>
+        {/* WCAG 1.4.10 (Reflow): fixed shell only from md up; at narrow widths (== 400% zoom on
+            a 1280px window) the page scrolls as a normal document instead of clipping content. */}
         <Box
           as="section"
           aria-label="Office Hours"
-          height="100dvh"
-          overflow="hidden"
+          height={{ base: "auto", md: "100dvh" }}
+          minH={{ base: "100dvh", md: "auto" }}
+          overflow={{ base: "visible", md: "hidden" }}
           display="flex"
           flexDirection="column"
         >
@@ -80,7 +83,13 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
             currentRequest={currentRequest}
             isManageMode={false}
           />
-          <Box flex="1" minH="0" overflow="auto" px={{ base: 3, md: 6 }} py={{ base: 3, md: 6 }}>
+          <Box
+            flex="1"
+            minH="0"
+            overflow={{ base: "visible", md: "auto" }}
+            px={{ base: 3, md: 6 }}
+            py={{ base: 3, md: 6 }}
+          >
             {children}
           </Box>
         </Box>

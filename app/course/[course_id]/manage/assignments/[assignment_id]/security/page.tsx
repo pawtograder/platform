@@ -9,6 +9,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import Link from "@/components/ui/link";
+import NextLink from "next/link";
 import Markdown from "@/components/ui/markdown";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController } from "@/hooks/useAssignment";
@@ -261,15 +262,15 @@ function GraderOutputModal({
               </Alert.Root>
             )}
             <Box>
-              <Link
-                href={`/course/${courseId}/assignments/${assignmentId}/submissions/${result.submission_id}/results`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <Button variant="outline" size="sm" data-testid="view-full-results-button">
+              <Button asChild variant="outline" size="sm" data-testid="view-full-results-button">
+                <NextLink
+                  href={`/course/${courseId}/assignments/${assignmentId}/submissions/${result.submission_id}/results`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   View Full Grader Results
-                </Button>
-              </Link>
+                </NextLink>
+              </Button>
             </Box>
           </VStack>
         </DialogBody>

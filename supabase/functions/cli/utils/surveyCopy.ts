@@ -83,7 +83,7 @@ export async function fetchLatestLinkedSurveysForAssignment(
     .is("deleted_at", null);
 
   if (error) {
-    throw new CLICommandError(`Failed to fetch linked surveys: ${error.message}`);
+    throw new CLICommandError(`Failed to fetch linked surveys: ${error.message}`, 500);
   }
   return dedupeSurveysToLatestVersion((data ?? []) as SurveyRow[]);
 }
@@ -95,7 +95,7 @@ export async function fetchLatestSurveysForClass(
   const { data, error } = await supabase.from("surveys").select("*").eq("class_id", classId).is("deleted_at", null);
 
   if (error) {
-    throw new CLICommandError(`Failed to fetch surveys: ${error.message}`);
+    throw new CLICommandError(`Failed to fetch surveys: ${error.message}`, 500);
   }
   return dedupeSurveysToLatestVersion((data ?? []) as SurveyRow[]);
 }

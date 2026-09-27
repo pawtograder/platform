@@ -1,0 +1,49 @@
+# Shared wildcard TLS certificate for per-PR preview deploys.
+#
+# WHY: previews used to request a fresh Let's Encrypt cert per PR for the exact
+# SAN set [pr-N.preview…, api.pr-N.preview…]. LE caps "certificates per exact
+# set of identifiers" at 5/week, so a heavily re-deployed PR (or enough churn
+# across PRs against the 50/week per-registered-domain cap) starts getting
+# `429 rateLimited`, cert-manager can't fill the Secret, and nginx serves its
+# self-signed "Fake Certificate" → browser SSL error.
+#
+# FIX: issue ONE wildcard cert for *.preview.pawtograder.net via the existing
+# letsencrypt-prod ClusterIssuer (which already has a Cloudflare DNS-01 solver
+# for the pawtograder.net zone — wildcards REQUIRE DNS-01), and reflect its
+# Secret into every pawtograder-preview-* namespace. Previews then consume the
+# shared Secret instead of each minting their own — zero per-PR issuance, so the
+# rate limit is never touched again. The cert auto-renews once; renewals are
+# re-reflected automatically.
+#
+# A TLS wildcard spans only ONE label, so it covers single-label hosts under
+# preview.pawtograder.net. Previews keep a separate API host but flatten it to a
+# single label (pr-N-api.preview.pawtograder.net, via global.apiHostnameFlatten)
+# so both the app host (pr-N.preview…) and the api host (pr-N-api.preview…) fall
+# under this one wildcard. The old two-label api.pr-N.preview… form could never
+# be wildcard-covered.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: pawtograder-preview-wildcard
+  namespace: cert-manager
+spec:
+  secretName: pawtograder-preview-wildcard-tls
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  privateKey:
+    rotationPolicy: Always
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - "*.preview.pawtograder.net"
+  # Reflector (emberstack) copies the resulting Secret into every namespace
+  # matching the regex, and keeps copies in sync on renewal. The annotations
+  # live on the *Secret* cert-manager creates, via secretTemplate.
+  secretTemplate:
+    annotations:
+      reflector.v1.k8s.emberstack.com/reflection-allowed: "true"
+      reflector.v1.k8s.emberstack.com/reflection-allowed-namespaces: "pawtograder-preview-.*"
+      reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true"
+      reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: "pawtograder-preview-.*"

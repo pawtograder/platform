@@ -18,7 +18,7 @@ import useTags from "@/hooks/useTags";
 import { useParams } from "next/navigation";
 import TagDisplay from "@/components/ui/tag";
 import { EmailCreateDataWithoutId, EmailManagementProvider, useEmailManagement } from "./EmailManagementContext";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import EmailPreviewAndSend from "./previewAndSend";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { TZDate } from "@date-fns/tz";
@@ -325,7 +325,7 @@ function EmailsInnerPage() {
     })?.private_profile_id;
     const group = assignment && profile_id ? userGroup(profile_id) : null;
     const baseUrl = window.location.origin;
-    const course_name = course?.data.name;
+    const course_name = course?.data?.name;
     const assignment_name = assignment?.title;
     const assignment_slug = assignment?.slug;
     const assignment_group_name = group?.name;
@@ -352,7 +352,7 @@ function EmailsInnerPage() {
     }
     if (due_date) {
       // Use the user's preferred timezone from context, or fall back to course timezone
-      const displayTimeZone = timeZoneContext?.timeZone || course?.data.time_zone || "America/New_York";
+      const displayTimeZone = timeZoneContext?.timeZone || course?.data?.time_zone || "America/New_York";
       inserted_text = inserted_text.replace(
         /{due_date}/g,
         `${formatInTimeZone(due_date, displayTimeZone, "MMM d, h:mm a zzz")}`
@@ -867,7 +867,6 @@ export default function EmailsPage() {
       <EmailManagementProvider>
         <EmailsInnerPage />
         <HistoryPage />
-        <Toaster />
       </EmailManagementProvider>
     </Box>
   );
