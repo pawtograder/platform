@@ -1,8 +1,10 @@
 "use client";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DialogCloseTrigger } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
+import Link from "@/components/ui/link";
 import PersonAvatar from "@/components/ui/person-avatar";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
@@ -1207,9 +1209,30 @@ export default function DueDateExceptions() {
             This assignment allows students to use up to {assignment.max_late_tokens} late tokens to extend the due
             date. Each late token extends the due date by 24 hours. Students in the course are given a total of{" "}
             {course.late_tokens_per_student} late tokens. You can view and edit the due date exceptions for each student
-            below. Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
+            below. Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.{" "}
+            <Link href="https://docs.pawtograder.com/staff/assignments/extensions" target="_blank">
+              Read the documentation
+            </Link>
+            .
           </Text>
         </Box>
+        {course.late_tokens_per_student === 0 && assignment.max_late_tokens > 0 && (
+          <Alert status="warning" title="Students in this course have no late tokens" mb={4}>
+            <Text>
+              This assignment allows up to {assignment.max_late_tokens} late token
+              {assignment.max_late_tokens === 1 ? "" : "s"}, but Late Tokens Per Student is 0, so no student has a token
+              to spend.
+              {assignment.require_tokens_before_due_date
+                ? ""
+                : " Late pushes will be rejected instead of automatically applying a token."}{" "}
+              Set the allotment under{" "}
+              <Link href={`/course/${course.id}/manage/course/due-date-extensions`}>
+                Course Settings → Due Date Extensions
+              </Link>
+              , or grant individual extensions below.
+            </Text>
+          </Alert>
+        )}
       </Box>
 
       <VStack w="100%" gap={0}>

@@ -1154,6 +1154,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               }
 
               if (!result.success) {
+                // A course with no allotment makes every assignment-level allowance moot; saying
+                // "only 0 remaining" reads as though the student spent tokens they never had.
+                if ((repoData.assignments.classes?.late_tokens_per_student ?? 0) <= 0) {
+                  throw new UserVisibleError(
+                    `${errorMessage}. This course does not give late tokens, so none could be applied. Contact your instructor if you need an extension.`,
+                    400
+                  );
+                }
                 throw new UserVisibleError(
                   `You don't have enough late tokens to submit. You need ${result.tokens_needed} token(s) but only have ${result.tokens_remaining} remaining.`,
                   400
