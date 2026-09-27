@@ -25,6 +25,9 @@ channel host's /functions/v1 traffic to the matching functions-<name> Service
 {{- /* hasKey, not `default 1`, so replicas: 0 can idle the channel (Sprig
    `default` treats 0 as empty). */ -}}
 {{- $replicas := ternary $c.edgeFunctions.replicas 1 (hasKey $c.edgeFunctions "replicas") }}
+{{- /* maintenance.active: 0, as maintenance.sh `down` leaves functions-<channel>
+   (channels never autoscale, so replicas is always rendered here). */ -}}
+{{- $replicas = include "pawtograder.maintenance.writerReplicas" (dict "ctx" $ "replicas" $replicas) }}
 ---
 {{ include "pawtograder.edgeFunctions.workload" (dict "ctx" $ "component" (printf "functions-%s" $c.name) "image" $image "replicas" $replicas "autoscaling" false) }}
 {{- end }}

@@ -33,6 +33,12 @@ metadata:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-restore-drill") | nindent 4 }}
 spec:
   schedule: {{ $rd.schedule | quote }}
+  {{- /* maintenance.active: suspended, the state maintenance.sh `down` leaves
+     this write-capable CronJob in (SUSPEND_CRONJOBS). Off, nothing is rendered
+     and the API default (false) applies, as before. */}}
+  {{- if .Values.maintenance.active }}
+  suspend: true
+  {{- end }}
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: {{ $rd.startingDeadlineSeconds | default 1800 }}
   successfulJobsHistoryLimit: 3
