@@ -681,6 +681,13 @@ async function main() {
         console.log(`  skipping assignment ${row.id}: its class no longer has a slug`);
         continue;
       }
+      // Its own slug too, and without falling back to the plan's value: both creation endpoints
+      // reload the real NULL and build `<class>-handout-null`, which several assignments can
+      // collide on, while the fallback let the old derived name pass the ownership check below.
+      if (!fresh.slug) {
+        console.log(`  skipping assignment ${row.id}: it no longer has a slug`);
+        continue;
+      }
       // The same rule the plan used, re-evaluated against the reloaded row rather than a derived
       // name spelled out again here. Spelling it out was wrong for exactly one mode:
       // fork_from_prior_assignment mirrors the SOURCE's pointer, which can never equal
@@ -694,7 +701,7 @@ async function main() {
         // Reloaded for the same reason as the class slug beside it: both halves of the derived
         // handout name can be renamed while earlier repairs in this sweep run, and judging the
         // pointer against the OLD name lets creation replace one the instructor kept.
-        assignmentSlug: fresh.slug ?? row.slug,
+        assignmentSlug: fresh.slug,
         sourceTemplateRepo:
           (fresh.repo_mode ?? row.repo_mode) === "fork_from_prior_assignment"
             ? await sourceHandoutFor(

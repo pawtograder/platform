@@ -389,6 +389,10 @@ async function repairMissingSolutionRepos(opts: {
         {
           ...a,
           repo_mode: fresh.repo_mode,
+          // Reloaded, like the class beside it. Keeping the scan's slug let a slug cleared since the
+          // scan pass eligibility, while both creation endpoints reload the real NULL and build
+          // `<class>-handout-null`, a name several assignments can collide on.
+          slug: fresh.slug,
           classes: fresh.classes as AssignmentRow["classes"]
         },
         excludedOrgSet

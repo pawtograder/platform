@@ -817,6 +817,24 @@ export async function updateAutograderWorkflowHash(
     await recordE2eGithubCall("updateAutograderWorkflowHash", { repoName, ref });
     return null;
   }
+  if (options?.onlyRowsPinnedToRef) {
+    // The row filter below is not enough on its own. The handout push webhook writes the new
+    // revision's hash FIRST and advances latest_template_sha afterwards, so for the whole of that
+    // handler a row still reads as pinned to `ref` while already carrying the newer hash — and
+    // writing ours then leaves it advertising S2 with S1's hash once the webhook finishes. When
+    // the default branch has moved past `ref`, that webhook is either done or in flight and
+    // rehashes every sharer, this caller's row included, so there is nothing for us to write.
+    //
+    // This narrows the race to a push landing between this read and the update below; it does not
+    // close it. Closing it needs workflow_sha to record the revision it describes.
+    const headNow = await getDefaultBranchHeadSha(repoName);
+    if (headNow && headNow !== ref) {
+      console.log(
+        `Skipping pinned workflow hash for ${repoName} at ${ref}: the default branch is already at ${headNow}`
+      );
+      return null;
+    }
+  }
   const file = (await getFileFromRepo(repoName, GRADE_WORKFLOW_PATH, undefined, ref)) as { content: string };
   const hash = createHash("sha256");
   if (!file.content) {
@@ -833,8 +851,6 @@ export async function updateAutograderWorkflowHash(
   console.log("updating autograder workflow hash", hashStr, repoName);
   let assignmentsQuery = adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
   if (options?.onlyRowsPinnedToRef) {
-    // A push landing between this select and the update below is still written over, but its own
-    // webhook rehashes afterwards, so the window closes itself; the unconditional form never did.
     assignmentsQuery = assignmentsQuery.eq("latest_template_sha", ref!);
   }
   const { data: assignments } = await assignmentsQuery;
