@@ -272,6 +272,17 @@ kubectl get validatingadmissionpolicy preview-ingress-surface \
 
 ## Known residuals
 
+- Availability, not isolation. The caps above bound the obvious amplifiers, but
+  a malicious chart can still spend shared capacity inside them: a large
+  Deployment `maxSurge` during rollouts (the quota rejects the extra pods and
+  the controller retries), expensive PromQL in its alert rules, and the
+  combined scrape load of its ServiceMonitors (at most 20 × 4 endpoints ×
+  100 targets). None of these reads or changes anything outside the namespace.
+  They are accepted because only `pawtograder-contributors` members can
+  trigger a preview (plus a triager's label for fork PRs), and the response is
+  the same as for any abuse of write access: remove the contributor from the
+  team. If one becomes a problem, tighten that specific bound.
+
 - The deploy job applies the PR's chart, and helm's `lookup` reads anything
   the deploy credential can read. That is safe only because the credential is
   the namespaced OIDC `preview-deploy` token; `preview.yml` has no static
