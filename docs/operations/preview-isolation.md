@@ -9,6 +9,26 @@ This page covers the controls that keep a previewed PR inside its namespace.
 Most key on the namespace label `pawtograder.net/preview=true`, which the
 `secrets` job in `preview.yml` sets and the deploy credential cannot change.
 
+## Who gets to run
+
+The trust gate (`.github/workflows/_trust-gate.yml`) admits a PR's code to the
+self-hosted runners and to previews in one of two ways:
+
+- **Write access** (the `pawtograder-contributors` team): automatic, for
+  regular contributors. Write also lets them push branches here (which get
+  automatic previews) and label PRs.
+- **Per-run approval**, for anyone else whose fork PR is otherwise
+  well-formed: the run waits in the `ci-approval` environment until a
+  required reviewer (`pawtograder-owners`) approves it from the PR's "Review
+  deployments" button. The approval covers exactly the commit in that run, and
+  every push asks again. The contributor gets no permission on the repo.
+
+Fork previews additionally need the `preview` label, and the approval is only
+requested once it is present. Settings for `ci-approval`: required reviewers
+`pawtograder-owners`, self-review prevention off (a maintainer who labels a PR
+triggers that run and must still be able to approve it; the fork author is
+never a reviewer), deployment branches `staging` only.
+
 ## The deploy role
 
 `pawtograder-preview-deploy` (defined in

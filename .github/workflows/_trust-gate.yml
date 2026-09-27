@@ -67,6 +67,21 @@ name: Trust gate
 #   * sender            — whoever fired this event (on `synchronize`, the
 #                         pusher; on `labeled`, whoever added the label)
 #
+# MAINTAINER APPROVAL FOR EVERYONE ELSE
+# -------------------------------------
+# A fork PR whose principals are identified but lack write is not refused
+# outright any more: the `approval` job below runs in the `ci-approval`
+# environment, whose required reviewers must approve the run before anything
+# downstream starts. GitHub shows a "Review deployments" button on the PR. The
+# run's head SHA comes from its event payload and cannot change, so an approval
+# covers exactly the commit the reviewer looked at; every new push starts new
+# runs that must be approved again. Nothing runs, and no runner is held, while
+# a run waits. Rejecting it fails the checks. This keeps write access (and the
+# branch pushes, labels and automatic previews that come with it) for regular
+# contributors, and lets anyone else be admitted one reviewed commit at a time.
+# Only "resolved, lacks write" is approvable: an unlisted event, a deleted
+# head repository, or a permission lookup that failed stay hard refusals.
+#
 # Residual risk, accepted deliberately: a collaborator on a trusted user's
 # personal fork can land code that runs here without holding write themselves.
 # Closing that would mean refusing fork PRs altogether, which is the workflow
@@ -114,11 +129,13 @@ on:
         required: false
     outputs:
       trusted:
-        description: "true when the head commit came from someone with write access here"
-        value: ${{ jobs.gate.outputs.trusted }}
+        description: >-
+          true when every principal has write access here, or a ci-approval
+          reviewer approved this run
+        value: ${{ jobs.verdict.outputs.trusted }}
       approved:
         description: "trusted, AND (require_label empty OR that label is on the PR)"
-        value: ${{ jobs.gate.outputs.approved }}
+        value: ${{ jobs.verdict.outputs.approved }}
 
 permissions: {}
 
@@ -137,7 +154,8 @@ jobs:
       issues: read
     outputs:
       trusted: ${{ steps.trust.outputs.trusted }}
-      approved: ${{ steps.approve.outputs.approved }}
+      needs_approval: ${{ steps.trust.outputs.needs_approval }}
+      wanted: ${{ steps.approve.outputs.wanted }}
     steps:
       - id: trust
         name: Resolve trust
@@ -290,6 +308,7 @@ jobs:
               trusted=false
               reason="no identifiable principal on this fork PR"
               echo "trusted=false" >> "$GITHUB_OUTPUT"
+              echo "needs_approval=false" >> "$GITHUB_OUTPUT"
               echo "::notice title=Untrusted ref::${reason}"
               exit 0
             fi
@@ -309,6 +328,9 @@ jobs:
               fi
               if [[ $rc -ne 0 ]]; then
                 trusted=false
+                # Resolved and lacks write: the one untrusted outcome a
+                # ci-approval reviewer may override for this run.
+                needs_approval=true
                 reason="'${u}' does not have write access to ${REPO}"
                 break
               fi
@@ -316,19 +338,25 @@ jobs:
           fi
 
           echo "trusted=${trusted}" >> "$GITHUB_OUTPUT"
+          echo "needs_approval=${needs_approval:-false}" >> "$GITHUB_OUTPUT"
           echo "reason=${reason}" >> "$GITHUB_OUTPUT"
 
           if [[ "$trusted" == "true" ]]; then
             echo "::notice title=Trusted::${reason}"
+          elif [[ "${needs_approval:-false}" == "true" ]]; then
+            echo "::notice title=Awaiting approval::${reason}. A ci-approval reviewer can approve this run (Review deployments on the PR); regular contributors belong in the pawtograder-contributors team instead."
           else
-            echo "::notice title=Untrusted ref::${reason}. Self-hosted lanes (lint, unit tests, E2E, preview) are skipped. To grant access, add the contributor to the pawtograder-contributors team; it takes effect on their next push."
+            echo "::notice title=Untrusted ref::${reason}. Self-hosted lanes (lint, unit tests, E2E, preview) are skipped."
           fi
 
       - id: approve
         name: Apply label requirement
+        # Whether this run is WANTED (label present, or not required), worked
+        # out regardless of trust: the verdict job combines the two, and the
+        # approval job asks a reviewer only for runs that are wanted, so an
+        # unlabelled fork PR does not page anyone on every push.
         env:
           GH_TOKEN: ${{ secrets.trust_token || secrets.GITHUB_TOKEN }}
-          TRUSTED: ${{ steps.trust.outputs.trusted }}
           REQUIRE_LABEL: ${{ inputs.require_label }}
           FORKS_ALLOWED: ${{ inputs.forks_allowed }}
           REPO: ${{ github.repository }}
@@ -340,13 +368,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "$TRUSTED" != "true" ]]; then
-            echo "approved=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           if [[ -z "${REQUIRE_LABEL}" || -z "${PR_NUMBER:-}" ]]; then
             # No label requirement, or not a PR event (push / dispatch).
-            echo "approved=true" >> "$GITHUB_OUTPUT"
+            echo "wanted=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -366,14 +390,14 @@ jobs:
           # approval no longer depends on the label. Close the PR, or use the
           # workflow_dispatch destroy path, to keep it down.
           if [[ -n "${HEAD_REPO:-}" && "$HEAD_REPO" == "$REPO" ]]; then
-            echo "approved=true" >> "$GITHUB_OUTPUT"
+            echo "wanted=true" >> "$GITHUB_OUTPUT"
             echo "::notice title=Preview approved::head branch lives in ${REPO}, so the '${REQUIRE_LABEL}' label is not required"
             exit 0
           fi
 
           # Everything past here is a fork PR (or one whose head repo is gone).
           if [[ "$FORKS_ALLOWED" != "true" ]]; then
-            echo "approved=false" >> "$GITHUB_OUTPUT"
+            echo "wanted=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=No preview::Fork previews are disabled until PREVIEW_CLUSTER_AUTH=oidc; the static credential is cluster-admin."
             exit 0
           fi
@@ -393,9 +417,66 @@ jobs:
           rm -f "$err"
 
           if grep -Fxq -- "$REQUIRE_LABEL" <<<"$labels"; then
-            echo "approved=true" >> "$GITHUB_OUTPUT"
+            echo "wanted=true" >> "$GITHUB_OUTPUT"
             echo "::notice title=Preview requested::label '${REQUIRE_LABEL}' is present"
           else
-            echo "approved=false" >> "$GITHUB_OUTPUT"
+            echo "wanted=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=No preview::Add the '${REQUIRE_LABEL}' label to this PR to deploy a preview environment."
           fi
+
+  # --------------------------------------------------------------------------
+  # approval: a reviewer admits this one run. The environment's required
+  # reviewers (pawtograder-owners), self-review prevention and staging-only
+  # deployment branch policy are repository settings; see
+  # docs/operations/preview-isolation.md. No steps that matter, no checkout,
+  # no permissions: the approval itself is the whole job.
+  # --------------------------------------------------------------------------
+  approval:
+    needs: gate
+    if: needs.gate.outputs.needs_approval == 'true' && needs.gate.outputs.wanted == 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    environment: ci-approval
+    steps:
+      - name: Approved
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: echo "::notice title=Approved::A ci-approval reviewer admitted PR #${PR_NUMBER} at ${HEAD_SHA} for this run."
+
+  # --------------------------------------------------------------------------
+  # verdict: what callers read. Trusted = every principal has write, or this
+  # run was approved. `always()` so a skipped approval (nothing to approve)
+  # still produces a verdict; gated on the gate job having SUCCEEDED so an
+  # unresolvable lookup still fails closed. A rejected approval fails the
+  # approval job, which fails this workflow for the caller, and its required
+  # checks go red.
+  # --------------------------------------------------------------------------
+  verdict:
+    needs: [gate, approval]
+    if: always() && needs.gate.result == 'success' && needs.approval.result != 'failure' && needs.approval.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      trusted: ${{ steps.v.outputs.trusted }}
+      approved: ${{ steps.v.outputs.approved }}
+    steps:
+      - id: v
+        env:
+          DIRECT: ${{ needs.gate.outputs.trusted }}
+          APPROVAL: ${{ needs.approval.result }}
+          WANTED: ${{ needs.gate.outputs.wanted }}
+        run: |
+          set -euo pipefail
+          trusted=false
+          if [[ "$DIRECT" == "true" ]]; then
+            trusted=true
+          elif [[ "$APPROVAL" == "success" ]]; then
+            trusted=true
+            echo "::notice title=Trusted by approval::a ci-approval reviewer approved this run"
+          fi
+          approved=false
+          [[ "$trusted" == "true" && "$WANTED" == "true" ]] && approved=true
+          echo "trusted=${trusted}" >> "$GITHUB_OUTPUT"
+          echo "approved=${approved}" >> "$GITHUB_OUTPUT"
+          echo "trusted=${trusted} approved=${approved} (direct=${DIRECT}, approval=${APPROVAL}, wanted=${WANTED})"
