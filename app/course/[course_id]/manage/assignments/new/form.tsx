@@ -19,7 +19,9 @@ import {
 } from "@chakra-ui/react";
 import { Controller, FieldErrors, FieldValues } from "react-hook-form";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import Link from "@/components/ui/link";
 import { toaster } from "@/components/ui/toaster";
 import { summarizeInvalidFields } from "@/lib/assignmentFormErrors";
 import { calculateLabBasedDueDate } from "@/lib/labDueDate";
@@ -34,7 +36,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { LuCheck } from "react-icons/lu";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
 import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import { useTableControllerTableValues } from "@/lib/TableController";
@@ -1009,6 +1011,10 @@ export default function AssignmentForm({
     form.getValues("require_tokens_before_due_date") == true
   );
   const timezone = course.time_zone || "America/New_York";
+  // The class-wide allotment caps every per-assignment limit, so read it live: an instructor who
+  // fixes it in Course Settings and navigates back should see the warning below go away.
+  const classLateTokensPerStudent = useCourse().late_tokens_per_student;
+  const maxLateTokens = Number(watch("max_late_tokens") ?? 0);
   // Read through the course controller, not `role.classes`: that role snapshot is fetched once per
   // page load and has no realtime subscription, so an instructor who toggles the flag in Course
   // Settings and soft-navigates here would keep seeing the pre-toggle helper text. `useCourse()`
@@ -1307,10 +1313,31 @@ export default function AssignmentForm({
               <CardHeader>
                 <CardTitle>Late submissions</CardTitle>
                 <Text fontSize="sm" color="fg.muted">
-                  How work submitted after the due date is handled — late tokens and ungraded late submissions.
+                  How work submitted after the due date is handled — late tokens and ungraded late submissions.{" "}
+                  <Link href="https://docs.pawtograder.com/staff/assignments/configuration#late-tokens" target="_blank">
+                    Read the documentation
+                  </Link>
+                  .
                 </Text>
               </CardHeader>
               <CardBody gap="5px">
+                {classLateTokensPerStudent === 0 && maxLateTokens > 0 && (
+                  <Alert status="warning" title="Students in this course have no late tokens" mb={2}>
+                    <Text>
+                      Late Tokens Per Student is set to 0 for this course, so students cannot use a late token on this
+                      assignment. Max late tokens only limits how many of their course-wide tokens a student may spend
+                      here; it does not give them any.
+                      {requireTokensBeforeDueDate
+                        ? ""
+                        : " Pushes after the deadline will be rejected instead of automatically applying a token."}{" "}
+                      Set the allotment under{" "}
+                      <Link href={`/course/${course.id}/manage/course/due-date-extensions`}>
+                        Course Settings → Due Date Extensions
+                      </Link>
+                      .
+                    </Text>
+                  </Alert>
+                )}
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"

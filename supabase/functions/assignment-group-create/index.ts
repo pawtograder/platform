@@ -7,10 +7,12 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { assignmentProvisionsRepositories } from "../_shared/repoCreationStrategy.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   //Get the user
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: req.headers.get("Authorization")! }
     }
@@ -52,7 +54,8 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   const profile_id = profile.private_profile_id;
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   //Validate that the user does not have an open group request for this assignment

@@ -20,6 +20,8 @@ import { parse } from "jsr:@std/yaml";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { describeHandoutSeedResult, seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { rpcNull } from "../_shared/rpcNull.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, expect_no_grader_repo } = (await req.json()) as AssignmentCreateSolutionRepoRequest;
@@ -32,7 +34,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const { data: assignment } = await adminSupabase
@@ -248,12 +251,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     scope.setTag("total_autograder_points", points.toString());
     const { data: applied, error } = await adminSupabase.rpc("record_autograder_head_metadata", {
       p_assignment_id: assignment_id,
-      p_expected_sha: previousSha,
+      p_expected_sha: rpcNull(previousSha),
       p_new_sha: commitSha,
       p_config: config,
       p_points: points,
       p_message: message,
-      p_author: author,
+      p_author: rpcNull(author),
       p_ref: `refs/heads/${defaultBranch}`,
       // The pointer we observed at the top of this function. The autograder settings page writes a
       // custom repository's parsed config BEFORE writing its pointer, so checking only the SHA
@@ -263,7 +266,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // NULL here means "expect no pointer", not "do not care": the RPC compares with IS NOT
       // DISTINCT FROM either way. NULL is the normal value on this path, so a "do not care" reading
       // would switch the check off exactly when it is needed.
-      p_expected_grader_repo: pointerExpectationForRpc,
+      p_expected_grader_repo: rpcNull(pointerExpectationForRpc),
       // The config as it stood when this function read the pointer. github-repo-configure-webhook
       // persists a newly selected repository's parsed pawtograder.yml BEFORE the settings page
       // writes the matching grader_repo, and touches neither the sha nor the pointer doing it — so
@@ -403,7 +406,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // NULL otherwise (we either cleared a stale pointer above or never had one).
   const { data: published, error: pointerError } = await adminSupabase.rpc("publish_grader_repo", {
     p_assignment_id: assignment_id,
-    p_expected_grader_repo: webhookHasReconciled ? solutionRepoFullName : null,
+    p_expected_grader_repo: rpcNull(webhookHasReconciled ? solutionRepoFullName : null),
     p_new_grader_repo: solutionRepoFullName,
     // Rechecked here as well as in the metadata RPC, because those are two transactions. A disable
     // landing between them leaves points computed from the enabled state already committed, and

@@ -20,14 +20,26 @@ import {
   NonRetryableGitHubError,
   NonRetryableRepoError,
   NonRetryableUserError,
+  RepositoryMissingError,
+  RepositoryUnreadableError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
+import {
+  beginOrgLeaseRun,
+  drainOrgLease,
+  isolateStartedAtMs,
+  type OrgSlotRow,
+  type OrgSlotRpc
+} from "../_shared/orgLeaseRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
+import { syncRepositoryToHandout, TerminalSyncError } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { shouldSendOrgInvitation, siblingInviteTeamSlugs } from "../_shared/orgInviteWindow.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { notReadyRequeuePatch, planRepoNotReadyWait } from "../_shared/repoNotReadyPlan.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -72,6 +84,98 @@ async function getAssignmentTemplateSha(
     .maybeSingle();
   if (error) throw error;
   return data?.latest_template_sha ?? null;
+}
+
+/**
+ * Which way the handout moved between the revision a repository is on and the revision this job
+ * carries.
+ *
+ * A sync writes the diff `from → to` into the student's repository, so the direction has to be
+ * settled before anything is written. Two things deliver a job whose `to_sha` is OLDER than the
+ * revision the row already reached: revisions queued close together and processed out of order,
+ * and a redelivery after the pgmq visibility timeout of a job whose successor already merged.
+ * The only guard was exact equality of the two shas, and that passes both.
+ *
+ * Handed a `from` newer than `to`, getChangedFiles returns the REVERSE diff, and every file in
+ * it matches the handout at the revision the repository is already on, so the conflict guard
+ * reads the whole diff as machine-written, skips nothing, the pull request self-merges, and the
+ * student's repository is rolled back to the older handout with synced_handout_sha written
+ * backwards to match. Nothing downstream can tell that apart from an ordinary sync.
+ *
+ * The comparison is its own request rather than reading the one getChangedFiles makes: that
+ * one is served from a 12-hour Redis cache, so on a cache hit there is no comparison to read.
+ *
+ * Everything this cannot settle for good reads as forward ("unknown"), and deliberately so: the
+ * handout is unreachable, a sha stopped resolving because its history was rewritten, the E2E
+ * stub answered in a shape with no status in it. Those repositories sync as they did before this
+ * check existed. A guard for a rare ordering fault that can park every repository in a course
+ * when it misreads its own input is worse than the fault, so only an answer that MEANS the
+ * handout moved the other way stops a sync.
+ *
+ * A compare that merely FAILED is different, and is "undetermined" instead: a 5xx, a network
+ * error, a rate limit. Those say nothing about the shas, and reading them as forward let a stale
+ * job through the one guard against it on nothing more than a bad moment at GitHub -- after
+ * which getChangedFiles, served from its cache or succeeding on the next request, hands back the
+ * reverse diff described above. The caller decides what an undetermined answer is worth. Only a
+ * 404 or 422, which is GitHub saying a revision does not resolve, stays "unknown".
+ *
+ * Which is why "diverged" is not one of them by itself. An instructor who force-pushes or
+ * rebases the handout's default branch leaves every repository's recorded revision on a
+ * history the new head does not descend from, and GitHub answers "diverged" for a target that
+ * is not stale at all but the very revision the assignment is advertising. Reading that as
+ * stale archived the job without touching the repository, and every retry reached the same
+ * answer: the repository stayed permanently behind, quietly, for as long as the handout kept
+ * that history. So a divergent target is checked against `advertisedSha`, the assignment's
+ * `latest_template_sha`. If they are the same commit, the handout's history was rewritten and
+ * this job carries the current revision; syncing it is the only way the repository ever
+ * catches up.
+ *
+ * That sync is safe to attempt because `getChangedFiles` compares with `...`, the three-dot
+ * form, which diffs from the MERGE BASE of the two revisions. Rewritten history changes which
+ * commit that is; it does not make the diff a revert of anything the student has, and paths
+ * untouched since the merge base are not in it.
+ */
+async function classifyHandoutDirection(
+  templateRepo: string,
+  fromSha: string | null,
+  toSha: string,
+  advertisedSha: string | null,
+  scope: Sentry.Scope
+): Promise<"forward" | "identical" | "stale" | "rewritten" | "unknown" | "undetermined"> {
+  // No recorded revision: the repository has never been synced, so every revision is forward.
+  if (!fromSha) return "forward";
+  if (fromSha === toSha) return "identical";
+  // An E2E repository name carries a per-run `--<suffix>` that exists only in our database, so
+  // asking GitHub to compare two revisions of it is neither possible nor meaningful. Same
+  // reasoning as getDefaultBranchHeadSha, which skips these for the same reason.
+  if (templateRepo.startsWith(github.END_TO_END_REPO_PREFIX)) return "unknown";
+  try {
+    const octokit = await github.getOctoKit(templateRepo, scope);
+    if (!octokit) return "unknown";
+    const [owner, repo] = templateRepo.split("/");
+    const { data } = await octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+      owner,
+      repo,
+      basehead: `${fromSha}...${toSha}`
+    });
+    // `status` is relative to the base. "behind" is the one answer that establishes this job's
+    // revision is OLDER than the one the repository reached; everything else, including a
+    // status GitHub adds later, syncs.
+    if (data.status === "behind") return "stale";
+    // Neither contains the other. Stale only if this is not the revision the assignment is
+    // advertising -- see the note above on a force-pushed handout.
+    if (data.status === "diverged") return advertisedSha && toSha === advertisedSha ? "rewritten" : "stale";
+    if (data.status === "identical") return "identical";
+    return "forward";
+  } catch (error) {
+    console.error(`Could not compare ${fromSha}...${toSha} on ${templateRepo}:`, error);
+    Sentry.addBreadcrumb({
+      message: `Handout direction undetermined for ${templateRepo} (${fromSha.substring(0, 7)}...${toSha.substring(0, 7)})`,
+      level: "warning"
+    });
+    const status = (error as { status?: unknown } | null)?.status;
+    return status === 404 || status === 422 ? "unknown" : "undetermined";
+  }
 }
 
 const PGMQ_ARCHIVE_MAX_ATTEMPTS = 3;
@@ -278,16 +382,99 @@ function computeBackoffSeconds(baseSeconds: number | undefined, retryCount: numb
   return backoff + jitter;
 }
 
+/**
+ * Options for a requeue that is not a failure retry.
+ *
+ * `incrementRetryCount` defaults to TRUE so every existing caller keeps its behaviour; only the
+ * readiness ladder passes false, because a deferral must not spend the failure budget the
+ * circuit-breaker and exception paths share. See `not_ready_count` on GitHubAsyncEnvelope.
+ */
+interface RequeueOptions {
+  incrementRetryCount?: boolean;
+  patch?: Partial<GitHubAsyncEnvelope>;
+}
+
+/**
+ * Retire a message whose REPLACEMENT has already been enqueued: archive it, and if archiving is
+ * exhausted, delete it.
+ *
+ * WHY A FALLBACK AND NOT JUST `archiveMessage`. Once a replacement is on the queue, the original is a
+ * duplicate, and leaving it live FORKS THE JOB: it reappears at its visibility timeout carrying the
+ * OLD `not_ready_count`, sends a second replacement from that stale count, and now two chains
+ * advance independently — each able to fork again. `sync_repo_permissions` is a reconcile so the
+ * duplicate GitHub work is not corrupting, but the queue pressure and duplicate DLQ records
+ * compound, and the whole point of the ladder is to stop one message multiplying its own cost.
+ *
+ * `delete` is a genuinely different failure surface from `archive`, not a retry of it: archive INSERTS
+ * into the archive table and then removes from the queue, so it fails on anything wrong with that
+ * table — bloat, a partition problem, a permission change — while delete only removes. That makes it
+ * worth trying when archive has already spent its three attempts, and it is why this is a fallback
+ * rather than a fourth attempt at the same call.
+ *
+ * Losing the archive ROW is an acceptable price for not forking the job: the archive table is
+ * forensics, and pgmq.a_async_calls is where this whole investigation's measurements came from, so
+ * the loss is recorded loudly rather than swallowed.
+ *
+ * Returns false only if BOTH failed, in which case the fork is live and the report says so.
+ */
+async function retireReplacedMessage(
+  adminSupabase: SupabaseClient<Database>,
+  msgId: number,
+  scope: Sentry.Scope,
+  queueName: string
+): Promise<boolean> {
+  if (await archiveMessage(adminSupabase, msgId, scope, queueName)) return true;
+  const { error } = await adminSupabase.schema("pgmq_public").rpc("delete", {
+    queue_name: queueName,
+    message_id: msgId
+  });
+  if (!error) {
+    console.warn(
+      `[pgmq] archive exhausted for msg_id=${msgId} queue=${queueName}; DELETED instead to avoid forking the job (archive row lost)`
+    );
+    const s = scope.clone();
+    s.setLevel("warning");
+    s.setContext("archive_fallback_delete", { msg_id: msgId, queue_name: queueName });
+    Sentry.captureMessage("github-async-worker: archive exhausted, deleted the replaced message instead", s);
+    return true;
+  }
+  console.error(
+    `[pgmq] could NOT retire replaced msg_id=${msgId} queue=${queueName} (archive and delete both failed) — its replacement is already queued, so this job is now FORKED`
+  );
+  const s = scope.clone();
+  s.setLevel("error");
+  s.setContext("retire_failed_job_forked", {
+    msg_id: msgId,
+    queue_name: queueName,
+    delete_error: error.message
+  });
+  Sentry.captureMessage("github-async-worker: replaced message could not be retired; job is forked", s);
+  return false;
+}
+
+/**
+ * Send a delayed copy of this envelope, and say whether it actually went.
+ *
+ * The boolean is load-bearing. Every caller archives the original message after requeueing,
+ * which is only correct if a replacement exists: this used to report the send error to Sentry
+ * and return normally, so a failed `pgmq_public.send` left the caller archiving the one copy
+ * of the work and reporting the message complete. The job was gone -- no retry, no dead
+ * letter, nothing on the row to say so. Leaving the original UNARCHIVED instead costs one
+ * redelivery after the visibility timeout, which is what the queue is for, and `read_ct`'s
+ * poison limit still bounds it.
+ */
 async function requeueWithDelay(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
   delaySeconds: number,
   scope: Sentry.Scope,
-  queueName: string = "async_calls"
-) {
+  queueName: string = "async_calls",
+  opts: RequeueOptions = {}
+): Promise<boolean> {
   const newEnvelope: GitHubAsyncEnvelope = {
     ...envelope,
-    retry_count: (envelope.retry_count ?? 0) + 1
+    ...(opts.patch ?? {}),
+    retry_count: (envelope.retry_count ?? 0) + (opts.incrementRetryCount === false ? 0 : 1)
   };
   const result = await adminSupabase.schema("pgmq_public").rpc("send", {
     queue_name: queueName,
@@ -296,8 +483,11 @@ async function requeueWithDelay(
   });
   if (result.error) {
     scope.setContext("requeue_error", { error_message: result.error.message, delay_seconds: delaySeconds });
+    scope.setTag("requeue_failed", "true");
     Sentry.captureException(result.error, scope);
+    return false;
   }
+  return true;
 }
 
 async function sendToDeadLetterQueue(
@@ -603,6 +793,101 @@ async function checkAndTripErrorCircuitBreaker(
  */
 const PGMQ_MAX_READ_CT = 10;
 
+/**
+ * `onInvitationStillPending` for reinviteToOrgTeam: move this enrollment's `invitation_date` back to
+ * the invitation GitHub actually holds.
+ *
+ * The membership sweep stamps `invitation_date` at enqueue time and reconsiders the role only once
+ * that stamp is a staleness period old. When the worker then finds an older invitation still
+ * pending and sends nothing, the stamp is a week later than the invitation the student holds, so
+ * the sweep would come back a week after that invitation expired. Rewinding it makes the sweep
+ * return on the next hourly pass after the real invitation lapses.
+ *
+ * Only ever moves the date EARLIER (`gt`), so it cannot undo a newer invitation's stamp from the
+ * `member_invited` webhook. A failed write is reported and swallowed: the team sync this envelope
+ * exists for must still run, and the cost of a miss is the old one-week delay.
+ */
+function rewindInvitationDate(
+  adminSupabase: SupabaseClient<Database>,
+  classId: number,
+  userId: string,
+  roles: Database["public"]["Enums"]["app_role"][],
+  scope: Sentry.Scope
+): (createdAt: string) => Promise<void> {
+  return async (createdAt: string) => {
+    const { error } = await adminSupabase
+      .from("user_roles")
+      .update({ invitation_date: createdAt })
+      .eq("class_id", classId)
+      .eq("user_id", userId)
+      .in("role", roles)
+      .gt("invitation_date", createdAt);
+    if (error) {
+      scope.setContext("invitation_date_rewind", { class_id: classId, user_id: userId, created_at: createdAt });
+      Sentry.captureException(error, scope);
+    }
+  };
+}
+
+/**
+ * `additionalTeamSlugs` for reinviteToOrgTeam: the teams of this user's other live, unconfirmed
+ * enrollments in classes sharing `org`, so a fresh invitation (notably one replacing a lapsed
+ * invitation that carried them) does not strand those enrollments. See siblingInviteTeamSlugs.
+ *
+ * A failed read THROWS, so the envelope retries. Answering "no siblings" would send a partial
+ * invitation, and its `member_invited` webhook stamps invitation_date for every class in the org,
+ * hiding the omitted enrollments from the sweep for a week.
+ *
+ * The org is matched case-insensitively, like classes_unique_github_org_slug: GitHub org names are.
+ */
+function siblingTeamSlugs(
+  adminSupabase: SupabaseClient<Database>,
+  org: string,
+  classId: number,
+  userId: string,
+  scope: Sentry.Scope
+): () => Promise<string[]> {
+  return async () => {
+    const { data, error } = await adminSupabase
+      .from("user_roles")
+      .select(
+        "role, disabled, github_org_confirmed, classes!inner(id, slug, github_org, is_demo, archived, start_date, end_date)"
+      )
+      .eq("user_id", userId)
+      .eq("disabled", false)
+      .ilike("classes.github_org", org)
+      .neq("class_id", classId);
+    if (error) throw error;
+    return siblingInviteTeamSlugs(data ?? [], org, classId);
+  };
+}
+
+/**
+ * The GitHub usernames that should be on a class's student or staff team.
+ *
+ * One RPC, deliberately, because syncTeam is SUBTRACTIVE — it removes every current team member
+ * absent from this list — which makes the read's consistency a correctness property. Reading the
+ * roster across several requests, by offset or by key, gives each page its own snapshot: a student
+ * who accepts their invitation midway is read as unconfirmed in an early page and missing from the
+ * list, while the webhook has since confirmed them and GitHub has added them to the team. syncTeam
+ * removes them, and because the role now reads confirmed, neither the sweep nor the alert will ever
+ * reconsider it — a silent, permanent loss of access. The function also returns an array rather
+ * than rows, which keeps PostgREST's max_rows ceiling from truncating a large class into the same
+ * subtractive damage.
+ */
+async function fetchIntendedTeamUsernames(
+  adminSupabase: SupabaseClient<Database>,
+  classId: number,
+  kind: "student" | "staff"
+): Promise<string[]> {
+  const { data, error } = await adminSupabase.rpc("class_team_member_usernames", {
+    p_class_id: classId,
+    p_kind: kind
+  });
+  if (error) throw error;
+  return (data ?? []).filter((u): u is string => Boolean(u));
+}
+
 export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
@@ -656,6 +941,12 @@ export async function processEnvelope(
   }
   // Circuit breaker: check both org-level and method-specific circuits
   try {
+    // THE ALLOCATOR MIRRORS THIS RESOLVER, so the two lists have to stay in step. `v_org_expr` in
+    // supabase/migrations/20260914120000_async_lease_pin_org.sql resolves the same eight methods to
+    // the same org, because the per-org slot budget has to be charged to the org the handler below
+    // is going to call. Adding a method here, or changing where one of them reads its org from,
+    // means editing that expression in a migration too; drift shows up as an '(unknown-method)'
+    // bucket in public.async_worker_slots.org.
     const org = ((): string | undefined => {
       if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
       if (envelope.method === "sync_student_team" || envelope.method === "sync_staff_team")
@@ -704,8 +995,12 @@ export async function processEnvelope(
           const delaySeconds = 180; // minimum enforced delay while circuit open
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org");
-          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName);
-          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          // Archived only if the replacement really went: see requeueWithDelay. An
+          // unarchived original redelivers after the visibility timeout, which is the
+          // safe outcome; archiving one that was never replaced loses the job.
+          if (await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName)) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
           return false;
         }
       }
@@ -742,8 +1037,12 @@ export async function processEnvelope(
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org_method");
           scope.setTag("circuit_method", envelope.method);
-          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName);
-          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          // Archived only if the replacement really went: see requeueWithDelay. An
+          // unarchived original redelivers after the visibility timeout, which is the
+          // safe outcome; archiving one that was never replaced loses the job.
+          if (await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName)) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
           return false;
         }
       }
@@ -781,74 +1080,129 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Syncing student team for user ${args.userId}`, level: "info" });
+        // At most ONE invitation per envelope. The pre- and post-reconcile checks below can match
+        // the same row — nothing in-process records that we invited, and the webhook that stamps
+        // invitation_date may not have arrived yet — which mails the student twice for one
+        // enrollment. Latent until now because both checks required invitation_date IS NULL and
+        // were reached almost only on a fresh enrollment; re-invites make the overlap routine.
+        let invitedThisRun = false;
         if (args.userId) {
           //Make sure that the student has been invited to the org
           const { data, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .eq("role", "student")
+            // Never reinvite a dropped student. The disable-triggered sync routes their id here, and
+            // the class-wide reconcile below is what removes them from the team — reinviting would
+            // immediately undo that, and an accepted invitation would let the membership webhook mark
+            // the disabled role confirmed. Narrow while this gate required invitation_date IS NULL,
+            // which excluded any student who had ever been invited; the staleness branch matches
+            // precisely those students instead. Matches the staff path.
+            .eq("disabled", false)
             .maybeSingle();
           if (error) throw error;
           if (
             data &&
-            data.invitation_date === null &&
             data.users?.github_username &&
             data.classes?.github_org &&
-            data.classes?.slug
+            data.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: data.invitation_date,
+              cls: data.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               data.classes.github_org,
               `${data.classes.slug}-students`,
               data.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["student"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  data.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
+            invitedThisRun = true;
           }
         }
 
         await github.syncStudentTeam(
           args.org,
           args.courseSlug,
-          async () => {
-            const { data, error } = await adminSupabase
-              .from("user_roles")
-              .select("github_org_confirmed, users(github_username)")
-              .eq("class_id", envelope.class_id || 0)
-              .eq("role", "student")
-              .eq("disabled", false)
-              .limit(1000);
-            if (error) throw error;
-            return (data || [])
-              .filter((s) => s.users?.github_username && s.github_org_confirmed)
-              .map((s) => s.users!.github_username!);
-          },
+          async () => await fetchIntendedTeamUsernames(adminSupabase, envelope.class_id || 0, "student"),
           scope
         );
         // If an affected user is provided and they haven't been invited yet, ensure org invitation to students team
-        if (args.userId && envelope.class_id) {
+        if (args.userId && envelope.class_id && !invitedThisRun) {
           const { data: ur, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .eq("role", "student")
-            .single();
+            // Same as the pre-reconcile lookup above: a dropped student must not be reinvited.
+            .eq("disabled", false)
+            // maybeSingle (not single): with the disabled filter — and on a role DELETE, where the
+            // trigger still routes the removed user's id here — no row is the normal case rather
+            // than an error. This lookup's errors are swallowed by the `!error &&` guard anyway.
+            .maybeSingle();
           if (
             !error &&
             ur &&
-            ur.invitation_date === null &&
             ur.users?.github_username &&
             ur.classes?.github_org &&
-            ur.classes?.slug
+            ur.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: ur.invitation_date,
+              cls: ur.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               ur.classes.github_org,
               `${ur.classes.slug}-students`,
               ur.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["student"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  ur.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
           }
         }
@@ -873,6 +1227,8 @@ export async function processEnvelope(
           return true;
         }
         Sentry.addBreadcrumb({ message: `Syncing staff team for org ${args.org}`, level: "info" });
+        // One invitation per envelope, for the reason spelled out on the student path above.
+        let invitedThisRun = false;
         if (args.userId) {
           scope.setTag("user_id", args.userId);
           //Make sure that the student has been invited to the org
@@ -882,7 +1238,9 @@ export async function processEnvelope(
           // row simply means "no per-user reinvite to do".
           const { data, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id || 0)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
@@ -893,41 +1251,55 @@ export async function processEnvelope(
           if (error) throw error;
           if (
             data &&
-            data.invitation_date === null &&
             data.users?.github_username &&
             data.classes?.github_org &&
-            data.classes?.slug
+            data.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: data.invitation_date,
+              cls: data.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               data.classes.github_org,
               `${data.classes.slug}-staff`,
               data.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["instructor", "grader", "admin"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  data.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
+            invitedThisRun = true;
           }
         }
         await github.syncStaffTeam(
           args.org,
           args.courseSlug,
-          async () => {
-            const { data, error } = await adminSupabase
-              .from("user_roles")
-              .select("users(github_username)")
-              .eq("class_id", envelope.class_id || 0)
-              .in("role", ["instructor", "grader", "admin"])
-              .eq("github_org_confirmed", true)
-              .eq("disabled", false)
-              .limit(5000);
-            if (error) throw error;
-            return (data || []).map((s) => s.users!.github_username!).filter(Boolean);
-          },
+          async () => await fetchIntendedTeamUsernames(adminSupabase, envelope.class_id || 0, "staff"),
           scope
         );
-        if (args.userId && envelope.class_id) {
+        if (args.userId && envelope.class_id && !invitedThisRun) {
           const { data: ur, error } = await adminSupabase
             .from("user_roles")
-            .select("invitation_date, users(github_username), classes(slug, github_org)")
+            .select(
+              "invitation_date, users(github_username), classes(slug, github_org, start_date, end_date, archived)"
+            )
             .eq("class_id", envelope.class_id)
             .eq("user_id", args.userId)
             .in("role", ["instructor", "grader", "admin"])
@@ -938,17 +1310,39 @@ export async function processEnvelope(
           if (
             !error &&
             ur &&
-            ur.invitation_date === null &&
             ur.users?.github_username &&
             ur.classes?.github_org &&
-            ur.classes?.slug
+            ur.classes?.slug &&
+            shouldSendOrgInvitation({
+              invitationDate: ur.invitation_date,
+              cls: ur.classes,
+              forceReinvite: args.forceReinvite
+            })
           ) {
             await github.reinviteToOrgTeam(
               ur.classes.github_org,
               `${ur.classes.slug}-staff`,
               ur.users.github_username,
               scope,
-              { userId: args.userId }
+              // Automation: never mail a second invitation when GitHub already has one pending.
+              {
+                userId: args.userId,
+                skipIfInvitationPending: true,
+                onInvitationStillPending: rewindInvitationDate(
+                  adminSupabase,
+                  envelope.class_id || 0,
+                  args.userId,
+                  ["instructor", "grader", "admin"],
+                  scope
+                ),
+                additionalTeamSlugs: siblingTeamSlugs(
+                  adminSupabase,
+                  ur.classes.github_org,
+                  envelope.class_id || 0,
+                  args.userId,
+                  scope
+                )
+              }
             );
           }
         }
@@ -1159,11 +1553,144 @@ export async function processEnvelope(
         //Otherwise we might race against a createRepo, and end up overwriting to the wrong githubUsernames.
         const { data: repository } = await adminSupabase
           .from("repositories")
-          .select("is_github_ready")
+          .select("is_github_ready, creation_error")
           .eq("repository", `${org}/${repoName}`)
           .maybeSingle();
         if (!repository?.is_github_ready) {
-          console.log("repo is not ready", `${org}/${repoName}`);
+          // "Not ready" covers two states that deserve opposite answers. With no creation_error the
+          // repo is still on its way — requeue and let it land, which is what this gate was written
+          // for. With one recorded, the row is parked: creation failed for good, or the repo turned
+          // out to be missing (RepositoryMissingError, handled below). Requeueing that is pure
+          // waste — nothing will change it, and the message just redelivers every visibility
+          // timeout until read_ct trips the poison-pill limit ~50 minutes later. Archive it and
+          // say why.
+          if (repository?.creation_error) {
+            console.log(`repo is parked, dropping permission sync: ${org}/${repoName} — ${repository.creation_error}`);
+            scope.setTag("permission_sync_skipped", "repo_parked");
+            // Close out the api_gateway_calls row this envelope opened. enqueue_* inserts it with
+            // status_code = 0, and archiving the message ends its life — so without this the row
+            // stays pending forever and every dropped duplicate inflates the call totals with no
+            // completion status or latency. 422: the job was well-formed but can never succeed,
+            // matching the non-retryable path below.
+            recordMetric(
+              adminSupabase,
+              {
+                method: envelope.method,
+                status_code: 422,
+                class_id: envelope.class_id,
+                debug_id: envelope.debug_id,
+                enqueued_at: meta.enqueued_at,
+                log_id: envelope.log_id
+              },
+              scope
+            );
+            // DLQ before archiving, rather than just dropping the message.
+            //
+            // The subtle case this protects: when the error path below parks the row but its own
+            // sendToDeadLetterQueue call fails, it deliberately leaves the message UNARCHIVED so
+            // that write can be retried. That redelivered message arrives back here, and it is
+            // indistinguishable from a duplicate — so simply archiving would consume the very
+            // retry the error path was preserving, and the terminal failure would vanish from DLQ
+            // tracking during exactly the transient outage the retry exists for.
+            //
+            // Routing every parked message through the DLQ makes both cases correct without having
+            // to tell them apart, and matches the handler's convention that terminal work leaves a
+            // DLQ record. It does mean a genuine duplicate also lands there, which is the intended
+            // trade: a redundant DLQ row is recoverable, a lost one is not.
+            const dlqSuccess = await sendToDeadLetterQueue(
+              adminSupabase,
+              envelope,
+              meta,
+              new Error(`Repository is parked and cannot be synced: ${repository.creation_error}`),
+              scope
+            );
+            if (!dlqSuccess) {
+              // Leave it unarchived so the DLQ write is retried; read_ct's poison limit bounds this.
+              console.error(`Failed to DLQ parked permission sync for ${org}/${repoName}, leaving unarchived`);
+              return false;
+            }
+            return true;
+          }
+          // Still provisioning: wait for it, but wait on an EXPLICIT delay rather than by letting
+          // the visibility timeout expire. See _shared/repoNotReadyPlan.ts for why the difference
+          // matters and what it cost in production.
+          //
+          // The counter is `not_ready_count`, NOT `retry_count`. A deferral is not a failure, and retry_count is the
+          // failure budget the circuit-breaker (DLQ at >= 5) and exception paths share — spending it
+          // on waiting means a repo that needed five polls meets its first real GitHub error with
+          // the budget gone and gets DLQ'd instead of retried.
+          const notReadyDeferrals = envelope.not_ready_count ?? 0;
+          const notReadyPlan = planRepoNotReadyWait(notReadyDeferrals);
+          if (notReadyPlan.action === "dlq") {
+            // Same shape as the circuit-breaker ceiling above: DLQ, then archive only if the DLQ
+            // write landed, so a transient DLQ outage leaves the message to be retried rather than
+            // dropping the terminal record on the floor.
+            const exhausted = new Error(
+              `Repository ${org}/${repoName} was still not marked ready after ${notReadyDeferrals} deferrals`
+            );
+            scope.setTag("permission_sync_skipped", "repo_never_ready");
+            // Close the api_gateway_calls row this job opened. sendToDeadLetterQueue does not touch
+            // it and no replacement envelope survives this branch, so without this the row sits at
+            // its pending status_code = 0 forever. 422 rather than a new code, matching the parked
+            // terminal path a few lines up: same situation — well-formed job, no attempt left that
+            // can succeed — and a third status for a near-identical outcome would only make the
+            // metric harder to read.
+            recordMetric(
+              adminSupabase,
+              {
+                method: envelope.method,
+                status_code: 422,
+                class_id: envelope.class_id,
+                debug_id: envelope.debug_id,
+                enqueued_at: meta.enqueued_at,
+                log_id: envelope.log_id
+              },
+              scope
+            );
+            const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, exhausted, scope);
+            if (dlqSuccess) {
+              await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+            } else {
+              console.error(`Failed to DLQ never-ready permission sync for ${org}/${repoName}, leaving unarchived`);
+              scope.setContext("dlq_archive_skipped", { msg_id: meta.msg_id, reason: "DLQ send failed" });
+              Sentry.captureMessage(`Message ${meta.msg_id} not archived due to DLQ failure`, { level: "error" });
+            }
+            return false;
+          }
+          console.log(
+            `repo is not ready ${org}/${repoName} — requeueing in ${notReadyPlan.delaySeconds}s ` +
+              `(attempt ${notReadyPlan.attempt}/${notReadyPlan.maxAttempts})`
+          );
+          scope.setTag("permission_sync_deferred", "repo_not_ready");
+          // No recordMetric here, matching the circuit-breaker requeue path: the new envelope keeps
+          // this one's log_id, so the api_gateway_calls row this job opened is closed by whichever
+          // attempt finally succeeds. Recording a status here would close it early and the eventual
+          // success would have nothing to write to.
+          const requeued = await requeueWithDelay(
+            adminSupabase,
+            envelope,
+            notReadyPlan.delaySeconds,
+            scope,
+            queueName,
+            {
+              incrementRetryCount: false,
+              patch: notReadyRequeuePatch(envelope, meta.enqueued_at)
+            }
+          );
+          if (!requeued) {
+            // The replacement never made it onto the queue, so this message is the only copy left.
+            // Leave it UNARCHIVED: it falls back to visibility-timeout redelivery, which is the slow
+            // path this change exists to avoid but is still infinitely better than losing the sync.
+            // read_ct's poison limit continues to bound it.
+            console.error(
+              `Failed to requeue not-ready permission sync for ${org}/${repoName}; leaving unarchived for visibility-timeout redelivery`
+            );
+            scope.setTag("permission_sync_requeue_failed", "true");
+            return false;
+          }
+          // The replacement is live, so the original MUST NOT be: see retireReplacedMessage for what
+          // happens if both stay on the queue.
+          await retireReplacedMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
         await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
@@ -1312,15 +1839,47 @@ export async function processEnvelope(
           level: "info"
         });
 
+        /**
+         * The guarded writer, reachable from the catch below.
+         *
+         * `applyRepositoryUpdate` is built inside the try, after the row read that gives it its
+         * predicates, so the catch cannot see it -- and the catch writes too. That write used to
+         * be unguarded: a job that threw after losing the race replaced a live revision's
+         * sync_data with its own error, so a repository reading "Sync Blocked" with a list of
+         * files became "Sync Error" about a failure in a job whose conclusions had already been
+         * discarded. Assigned as soon as the predicates exist; undefined before that, which
+         * only a failure in the row read itself can reach, and that one still has to be
+         * recorded somehow.
+         */
+        let applyGuardedRepositoryUpdate:
+          | ((update: Database["public"]["Tables"]["repositories"]["Update"]) => Promise<boolean>)
+          | undefined;
+
         try {
           // Check to see if the repo is already up to date. Use full-SHA equality
           // (NOT a 6-char prefix — short prefixes can collide and have caused
           // truncated-SHA false-positives in the past, see FixStuckSyncs `[truncated SHA]`).
           const { data: currentRepo } = await adminSupabase
             .from("repositories")
-            .select("synced_handout_sha, synced_repo_sha")
+            .select(
+              "synced_handout_sha, synced_repo_sha, desired_handout_sha, sync_data, assignments(latest_template_sha)"
+            )
             .eq("id", repository_id)
             .maybeSingle();
+          // The handout revision this repo is actually on, read in the SAME row as
+          // synced_repo_sha just above. The envelope's from_sha was recorded when the job
+          // was queued, and a second handout revision queued while the first sync was in
+          // flight leaves it stale: classifying with a stale from_sha against a current
+          // synced_repo_sha makes the files the FIRST sync installed look like the
+          // student's work, so the second sync skips its own machine-written content and
+          // can block on it. Both sides of the comparison have to come from one moment.
+          const currentSyncedHandoutSha = currentRepo?.synced_handout_sha ?? from_sha;
+          // The revision the row is WAITING for, read in the same breath. It is the only
+          // ordering between two revisions available anywhere in this handler -- shas do not
+          // compare -- and queueing sets it to the revision it queues, so a job whose to_sha is
+          // not this value has been superseded.
+          const currentDesiredHandoutSha = currentRepo?.desired_handout_sha ?? null;
+
           if (currentRepo?.synced_handout_sha === to_sha) {
             Sentry.addBreadcrumb({
               message: `Repository ${repository_full_name} is already up to date`,
@@ -1329,25 +1888,297 @@ export async function processEnvelope(
             return true;
           }
 
+          // Establish the direction before anything is written, and before the in_progress marker
+          // below: a stale job that rewrote sync_data on its way to doing nothing would overwrite
+          // the blocked status a live revision is relying on. A job the handout has moved past is
+          // finished work, not failed work: archive it and report success, because requeueing it
+          // only redelivers the same stale revision.
+          //
+          // Only "stale" stops here, and an "undetermined" answer that cannot rule it out.
+          // "identical" goes down the ordinary path, which finds no
+          // changed files and records the revision: the early return above covers the case
+          // where the row already holds to_sha, so what is left is a row holding no revision at
+          // all, and skipping that one would leave it holding none.
+          // The revision the assignment is advertising right now, which is what tells a
+          // force-pushed handout apart from a job the handout has moved past. Read from the
+          // same row as everything else above, so it costs no extra query.
+          const advertisedHandoutSha = currentRepo?.assignments?.latest_template_sha ?? null;
+          const direction = await classifyHandoutDirection(
+            template_repo,
+            currentSyncedHandoutSha,
+            to_sha,
+            advertisedHandoutSha,
+            scope
+          );
+          scope.setTag("handout_direction", direction);
+          if (direction === "rewritten") {
+            Sentry.addBreadcrumb({
+              message:
+                `Handout ${template_repo} no longer contains ${(currentSyncedHandoutSha ?? "").substring(0, 7)}, ` +
+                `but ${to_sha.substring(0, 7)} is the revision the assignment advertises: its history was ` +
+                `rewritten, so ${repository_full_name} syncs from the merge base`,
+              level: "warning"
+            });
+          }
+          // A compare that failed rather than answered. The one ordering available without
+          // GitHub is desired_handout_sha: queueing sets it to the revision it queues, so a job
+          // carrying exactly that revision is the newest one there is and cannot be the stale
+          // job this check exists to stop. Anything else waits for a compare that answers,
+          // without writing to the row -- a stale job's error would replace the status a live
+          // revision is relying on. Bounded like the lost-race retry below: past it, this job is
+          // dropped and the row is left to the revision that superseded it, which never rolls
+          // a repository back.
+          if (direction === "undetermined" && to_sha !== currentDesiredHandoutSha) {
+            const currentRetryCount = envelope.retry_count ?? 0;
+            if (currentRetryCount >= 5) {
+              Sentry.captureMessage(
+                `Could not establish whether ${to_sha.substring(0, 7)} is newer than the revision ` +
+                  `${repository_full_name} is on after ${currentRetryCount} attempts, and it is not the ` +
+                  `revision the row is waiting for; dropping this job rather than risking a rollback`,
+                scope
+              );
+              return true;
+            }
+            return await requeueWithDelay(
+              adminSupabase,
+              envelope,
+              computeBackoffSeconds(30, currentRetryCount),
+              scope,
+              queueName
+            );
+          }
+          if (direction === "stale") {
+            Sentry.addBreadcrumb({
+              message:
+                `Skipping sync of ${repository_full_name} to ${to_sha.substring(0, 7)}: the repository is ` +
+                `on ${(currentSyncedHandoutSha ?? "").substring(0, 7)}, which the handout reached later`,
+              level: "warning"
+            });
+            return true;
+          }
+
+          // The pull request an EARLIER revision opened, read from the row that was already
+          // fetched above so it costs no extra query. Both outcomes that end without one of
+          // their own carry it forward: a blocked revision and a terminal failure. That PR is
+          // still open on GitHub and is still the thing the student has to merge, so writing
+          // sync_data without it would delete the instructor's only link to it and move the
+          // row out of the "PR Open" status into one that says there is nothing to act on.
+          //
+          // Read BEFORE the in_progress marker is written, and written INTO it, because the
+          // marker replaces sync_data wholesale. A job killed after planting the marker leaves
+          // the row holding only the marker, so a redelivery read the PR fields out of an
+          // object that no longer had them and the link was gone for good -- carried by nothing
+          // into the blocked or terminal result that followed.
+          const priorSyncData = (currentRepo?.sync_data ?? {}) as {
+            pr_number?: number;
+            pr_url?: string;
+            pr_state?: string;
+            branch_name?: string;
+          };
+          const carriedPr =
+            priorSyncData.pr_state === "open" && priorSyncData.pr_number
+              ? {
+                  pr_number: priorSyncData.pr_number,
+                  pr_url: priorSyncData.pr_url,
+                  pr_state: priorSyncData.pr_state,
+                  branch_name: priorSyncData.branch_name
+                }
+              : {};
+
+          // WHAT THIS JOB SAW WHEN IT STARTED, and the price of writing anything after the
+          // long GitHub work without checking it is still true.
+          //
+          // `processBatch` runs a batch of messages concurrently and `queue_repository_syncs`
+          // serializes nothing per repository, so two jobs for the same repository -- H2 and
+          // H3, or one message and its redelivery after the visibility timeout -- can both
+          // read the row at H1 and both classify as forward. The direction check above cannot
+          // see that: it runs before the work, and the overlap happens after. Whichever
+          // FINISHES second then writes its own outcome over the other's, and the outcomes are
+          // not interchangeable: an older merged job regresses synced_handout_sha and
+          // desired_handout_sha to its own to_sha, and an older blocked job replaces a live
+          // revision's blocked status and unresolved paths with its own.
+          //
+          // So every terminal write goes through here, and carries TWO predicates.
+          //
+          // The revision is the first, and on its own it is not enough: the blocked outcome
+          // and the terminal-failure outcome deliberately leave synced_handout_sha where it
+          // is, so after the first of two overlapping jobs finishes with either of them the
+          // column still holds the value BOTH jobs classified against -- and the older job's
+          // write matches, and replaces a live revision's blocker with its own. The same holds
+          // for two jobs that each end with an open pull request: neither advances the column,
+          // and the older one orphans the newer one's PR.
+          //
+          // The second predicate is the job's own in_progress marker. Each job writes one
+          // before it starts the long work, carrying the pgmq message id that only it has, and
+          // every write that follows -- by the worker, by this function, by the webhook
+          // recording a merge -- replaces sync_data wholesale. So "the marker is still mine"
+          // is exactly the question "has anything else touched this repository since I began",
+          // which is the question the revision alone could not answer.
+          //
+          // Postgres decides both. A zero-row result means this job's conclusions describe a
+          // repository that no longer exists in that state; they are discarded rather than
+          // applied -- see `retireStaleSync` for what happens to the job.
+          const applyRepositoryUpdate = async (
+            update: Database["public"]["Tables"]["repositories"]["Update"],
+            { requireOwnMarker }: { requireOwnMarker: boolean }
+          ): Promise<boolean> => {
+            let guarded = adminSupabase.from("repositories").update(update).eq("id", repository_id);
+            // `.eq` on a null value matches nothing in SQL, so a row that records no revision
+            // needs `.is`. Getting this wrong would make every first sync of a repository look
+            // stale and discard its own result.
+            guarded =
+              currentSyncedHandoutSha === null
+                ? guarded.is("synced_handout_sha", null)
+                : guarded.eq("synced_handout_sha", currentSyncedHandoutSha);
+            // And the revision the row was waiting for. Without it, an OLDER job could plant
+            // its marker after desired_handout_sha had already advanced to a newer one, finish,
+            // write desired back to its own target -- and the newer job, finding the row now
+            // waiting for the older revision, would retire itself as superseded. The newest
+            // update lost, and every predicate satisfied. Ordering the contenders at CLAIM time
+            // is what stops it, which is why this predicate is on the marker write too.
+            guarded =
+              currentDesiredHandoutSha === null
+                ? guarded.is("desired_handout_sha", null)
+                : guarded.eq("desired_handout_sha", currentDesiredHandoutSha);
+            if (requireOwnMarker) {
+              // A JSON-subfield filter, which PostgREST supports directly (`data->>type` is
+              // used the same way in github-repo-webhook). The marker writes msg_id as a
+              // number, so the text form of it is what `->>` compares.
+              guarded = guarded.eq("sync_data->>msg_id", String(meta.msg_id));
+            }
+            const { data, error } = await guarded.select("id");
+            if (error) throw error;
+            const applied = (data?.length ?? 0) > 0;
+            if (!applied) scope.setTag("sync_write_lost_race", "true");
+            return applied;
+          };
+          applyGuardedRepositoryUpdate = (update) => applyRepositoryUpdate(update, { requireOwnMarker: true });
+
+          /**
+           * What to do with a job whose write found the row already moved on.
+           *
+           * Not simply "drop it": the job that won the race may be the OLDER revision, in
+           * which case this one carries the update the instructor is waiting for and dropping
+           * it leaves the repository behind with nothing queued. So the row is re-read, and
+           * three answers come out of it.
+           *
+           * If the row already records this job's own target, the work is accounted for and
+           * the message is finished.
+           *
+           * If the row's desired_handout_sha is some OTHER revision, this job is not carrying
+           * the one anyone is waiting for -- queueing raises that column to the revision it
+           * queues -- so it is dropped. That is the answer that keeps two overlapping jobs
+           * from trading the repository back and forth: without it, each requeue re-ran the
+           * full sync and re-planted its own marker, knocking the other one out, five times
+           * each before retry_count stopped them. desired_handout_sha is the only ordering
+           * between two revisions available here, since shas do not compare.
+           *
+           * Otherwise this job IS carrying the wanted revision, and it is requeued to run
+           * again against the state that is actually there, which is the only way its
+           * classification can be correct.
+           *
+           * Returns true when the message itself is done, because a requeued copy is a new
+           * message -- and false when a requeue was needed but its send failed, which leaves
+           * the original unarchived so pgmq redelivers it rather than losing the work.
+           * `retry_count` bounds the requeues at the same 5 the circuit breaker uses, and
+           * pgmq's read_ct bounds it again if this path is ever reached without requeueing.
+           */
+          const retireStaleSync = async (): Promise<boolean> => {
+            const { data: fresh } = await adminSupabase
+              .from("repositories")
+              .select("synced_handout_sha, desired_handout_sha")
+              .eq("id", repository_id)
+              .maybeSingle();
+            if (!fresh) {
+              // The repository row is gone -- the assignment was deleted while this ran. There
+              // is nothing to write to and nothing a retry could find, so the job is finished.
+              scope.setTag("stale_sync_row_missing", "true");
+              Sentry.addBreadcrumb({
+                message: `Repository ${repository_id} (${repository_full_name}) no longer exists; dropping its sync job`,
+                level: "info"
+              });
+              return true;
+            }
+            const freshSha = fresh.synced_handout_sha ?? null;
+            scope.setTag("stale_sync_row_sha", (freshSha ?? "none").substring(0, 7));
+            if (freshSha === to_sha) {
+              Sentry.addBreadcrumb({
+                message:
+                  `Sync of ${repository_full_name} to ${to_sha.substring(0, 7)} finished after another job ` +
+                  `already recorded that revision; discarding this job's duplicate bookkeeping`,
+                level: "info"
+              });
+              return true;
+            }
+            if (fresh.desired_handout_sha && fresh.desired_handout_sha !== to_sha) {
+              scope.setTag("stale_sync_superseded_by", fresh.desired_handout_sha.substring(0, 7));
+              Sentry.addBreadcrumb({
+                message:
+                  `Sync of ${repository_full_name} to ${to_sha.substring(0, 7)} lost the write race and the ` +
+                  `repository is now waiting for ${fresh.desired_handout_sha.substring(0, 7)}; dropping this job ` +
+                  `rather than requeueing a revision nobody is waiting for`,
+                level: "info"
+              });
+              return true;
+            }
+            const currentRetryCount = envelope.retry_count ?? 0;
+            if (currentRetryCount >= 5) {
+              Sentry.captureMessage(
+                `Sync of ${repository_full_name} to ${to_sha.substring(0, 7)} lost the write race ` +
+                  `${currentRetryCount} times; giving up and leaving the row as the winning job left it`,
+                scope
+              );
+              return true;
+            }
+            Sentry.addBreadcrumb({
+              message:
+                `Sync of ${repository_full_name} to ${to_sha.substring(0, 7)} was classified against ` +
+                `${(currentSyncedHandoutSha ?? "none").substring(0, 7)} but the row now reads ` +
+                `${(freshSha ?? "none").substring(0, 7)}; requeueing rather than writing a stale conclusion`,
+              level: "warning"
+            });
+            // False, not true, when the send failed. Returning true archives this message, and
+            // archiving the only copy of a job whose replacement never went loses the revision
+            // outright -- the row stays on the competing job's state with nothing scheduled to
+            // fix it. Unarchived, pgmq redelivers after the visibility timeout.
+            return await requeueWithDelay(adminSupabase, envelope, 30, scope, queueName);
+          };
+
           // Persist an "in_progress" marker BEFORE the long work. This gives us
           // (a) durable evidence of the attempt even if the Edge Function isolate
           // is killed mid-handler (e.g. memory limit exceeded) — without this,
           // sync_data stays at the default `{}` and the repo looks like it was
           // never even tried, and (b) operational visibility (we can spot stuck
           // rows immediately in SQL without scraping pgmq).
-          await adminSupabase
-            .from("repositories")
-            .update({
-              sync_data: {
-                status: "in_progress",
-                started_at: new Date().toISOString(),
-                msg_id: meta.msg_id,
-                from_sha,
-                to_sha,
-                sync_strategy: sync_strategy ?? "template_pr"
-              }
-            })
-            .eq("id", repository_id);
+          //
+          // Guarded like every other write: a job that has already lost the race writes an
+          // in_progress marker over a live revision's status and then does minutes of GitHub
+          // work whose result is thrown away. Failing here costs nothing and skips all of it.
+          //
+          // This write is the one that PLANTS the marker, so it cannot require it: only the
+          // revision is checked here.
+          if (
+            !(await applyRepositoryUpdate(
+              {
+                sync_data: {
+                  // Carried through the marker so a redelivery can still find it.
+                  ...carriedPr,
+                  status: "in_progress",
+                  started_at: new Date().toISOString(),
+                  // The token every write after this one is matched against. pgmq gives each
+                  // message its own id, so this is what makes the marker this job's and not
+                  // another's.
+                  msg_id: meta.msg_id,
+                  from_sha,
+                  to_sha,
+                  sync_strategy: sync_strategy ?? "template_pr"
+                }
+              },
+              { requireOwnMarker: false }
+            ))
+          ) {
+            return await retireStaleSync();
+          }
 
           // For fork-based assignments (mode 2 / mode 3) GitHub already knows the
           // upstream — one call to POST /repos/{owner}/{repo}/merge-upstream
@@ -1362,12 +2193,15 @@ export async function processEnvelope(
               scope
             );
             if (merge.kind === "synced" || merge.kind === "already_up_to_date") {
-              const { error: updateError } = await adminSupabase
-                .from("repositories")
-                .update({
+              const applied = await applyRepositoryUpdate(
+                {
                   synced_handout_sha: to_sha,
                   synced_repo_sha: merge.mergedSha,
                   desired_handout_sha: to_sha,
+                  // GitHub merged the upstream itself, so anything that blocked a template_pr
+                  // attempt on an earlier revision is delivered now.
+                  sync_blocked_at: null,
+                  sync_block_reason: null,
                   sync_data: {
                     last_sync_attempt: new Date().toISOString(),
                     status: merge.kind === "synced" ? "merged_via_fork_sync" : "no_changes_needed",
@@ -1375,9 +2209,10 @@ export async function processEnvelope(
                     upstream_repo_full_name: upstream_repo_full_name ?? null,
                     merge_sha: merge.mergedSha
                   }
-                })
-                .eq("id", repository_id);
-              if (updateError) throw updateError;
+                },
+                { requireOwnMarker: true }
+              );
+              if (!applied) return await retireStaleSync();
               recordMetric(
                 adminSupabase,
                 {
@@ -1403,16 +2238,22 @@ export async function processEnvelope(
             });
           }
 
-          // Get syncedRepoSha - either from DB or fetch first commit if not set
-          let syncedRepoSha = currentRepo?.synced_repo_sha;
+          // The repo-side commit the last sync produced, and the baseline the conflict guard
+          // classifies against: a file that differs from it is the student's own work.
+          //
+          // A missing baseline is passed through as null rather than replaced with the
+          // repository's first commit. That fallback compared two unrelated trees -- the root
+          // commit of the student's repo against the handout at from_sha -- so on a repository
+          // whose row predates the column, nearly every changed file came back content_differs
+          // or only_in_your_repo. Binaries were skipped, text patches failed against stale root
+          // content and were skipped too, and a repository where the student had changed nothing
+          // reported blocked_by_student_changes. With null, the guard falls back to comparing
+          // repository content against the handout at from_sha, which is what a baseline tree
+          // approximates in the first place.
+          const syncedRepoSha = currentRepo?.synced_repo_sha ?? null;
           if (!syncedRepoSha) {
             Sentry.addBreadcrumb({
-              message: `No synced_repo_sha found for ${repository_full_name}, fetching first commit`,
-              level: "info"
-            });
-            syncedRepoSha = await getFirstCommit(repository_full_name, "main", scope);
-            Sentry.addBreadcrumb({
-              message: `Using first commit as base: ${syncedRepoSha}`,
+              message: `No synced_repo_sha recorded for ${repository_full_name}; classifying against the handout itself`,
               level: "info"
             });
           }
@@ -1421,51 +2262,203 @@ export async function processEnvelope(
           const result = await syncRepositoryToHandout({
             repositoryFullName: repository_full_name,
             templateRepo: template_repo,
-            fromSha: from_sha,
+            fromSha: currentSyncedHandoutSha,
             toSha: to_sha,
             syncedRepoSha,
             autoMerge: true,
             waitBeforeMerge: 2000,
             adminSupabase,
-            scope
+            scope,
+            // A rewritten handout cannot be read with a three-dot compare: it reports only what
+            // changed on the new side since the merge base, so a file the rewrite DROPPED, or a
+            // change it reverted, is invisible and the sync finds nothing to do. Tree-to-tree
+            // is the only diff that describes the state the repository now has to be in.
+            diffStrategy: direction === "rewritten" ? "rewritten" : "descendant"
           });
 
           if (!result.success) {
+            // A TERMINAL failure is about this one repository and fails the same way on every
+            // attempt: a student pushed their own commits onto the sync branch, the branch moved
+            // while it was being checked, or the update needs more per-file reads than one sync
+            // is allowed to make. Throwing sent those
+            // through the generic error path, which opens a 30-second circuit breaker keyed
+            // `<org>:sync_repo_to_handout` and feeds the 8-hour org-wide trip, so one student's
+            // branch paused handout syncs for a whole course org, once per attempt, six times
+            // over before the job dead-lettered. Record it on the repository and archive the job.
+            //
+            // `terminal_reason` is the stable code the helper carries across that flattening,
+            // because `success: false` is where the error's class is lost.
+            const terminalReason = result.terminal_reason;
+            if (terminalReason) {
+              scope.setTag("terminal_sync_error", terminalReason);
+              // Neither sha moves: nothing reached the repository, and the revision it is on is
+              // still the revision it is on.
+              //
+              // sync_blocked_at is set here for the same reason the blocked outcome sets it, and
+              // it is the same trap either way. queue_repository_syncs raised
+              // desired_handout_sha to the latest sha before this job ran, so the row now reads
+              // desired = latest with a sync that delivered nothing. Without the timestamp the
+              // only clause that could still reach it is p_force, recoverable from the Sync
+              // button, invisible to every other caller, including the autograder toggle, which
+              // would then report an assignment fully propagated while this repository still
+              // holds the wrong workflow. A state a person has to act on has to be a state the
+              // enqueue condition can see.
+              //
+              // No automated re-enqueue can loop on this: queue_repository_syncs is the only
+              // producer of sync_repo_to_handout jobs, and it opens with an auth.uid() check, so
+              // every job exists because a person asked for one. A repository that keeps failing
+              // this way costs one job per press, which is exactly what pressing Sync means.
+              const applied = await applyRepositoryUpdate(
+                {
+                  sync_blocked_at: new Date().toISOString(),
+                  // The code names the case; the message the error class carries names what the
+                  // person has to do about it: merge or close the pull request, wait for the
+                  // branch to settle, split the handout change. Taking that message as-is keeps
+                  // the two from drifting apart.
+                  sync_block_reason: `${terminalReason}: ${result.error ?? "no further detail was recorded"}`,
+                  sync_data: {
+                    // The pull request an earlier revision opened, for the same reason the
+                    // blocked outcome carries it: it is still open on GitHub, it is still the
+                    // thing the student has to merge, and replacing sync_data wholesale would
+                    // delete the instructor's only link to it and drop the row from "PR Open"
+                    // into "Sync Error" -- reporting a repository as having nothing to act on
+                    // when what it has is a pull request waiting.
+                    ...carriedPr,
+                    last_sync_attempt: new Date().toISOString(),
+                    last_sync_error: result.error ?? terminalReason,
+                    status: "error",
+                    terminal_reason: terminalReason,
+                    // WHICH revision failed, recorded for the same reason the blocked outcome
+                    // records it. sync_blocked_at says a person is needed and says nothing
+                    // about what for; when the older pull request carried above is merged, the
+                    // webhook has to decide whether that merge resolved this failure or is
+                    // unrelated to it, and without the revision it cannot tell -- it cleared
+                    // the marker and overwrote this state, leaving a repository stuck on the
+                    // older revision that non-forced queueing then skipped as up to date.
+                    blocked_handout_sha: to_sha
+                  }
+                },
+                { requireOwnMarker: true }
+              );
+              if (!applied) return await retireStaleSync();
+              Sentry.addBreadcrumb({
+                message: `Sync of ${repository_full_name} stopped terminally (${terminalReason}); a human has to act on it`,
+                level: "warning"
+              });
+              return true;
+            }
             throw new Error(result.error || "Sync failed");
           }
 
-          // Update repository with sync status
-          if (result.no_changes) {
-            const { error: updateError } = await adminSupabase
-              .from("repositories")
-              .update({
+          // Update repository with sync status.
+          //
+          // The handout held something new and none of it could be written, because every
+          // changed file is the student's own work. synced_handout_sha deliberately does
+          // NOT advance: recording this as synced would mark an update delivered that never
+          // reached the repo, permanently, with no PR to point at. Leaving it behind while
+          // desired_handout_sha advances is what makes the repo show up as out of date.
+          if (result.blocked_by_student_changes) {
+            // desired_handout_sha is NOT written here. queue_repository_syncs already set
+            // it to the latest template sha before it enqueued this job, so writing it
+            // again is a no-op, and leaving it high is what keeps the repo reading as
+            // behind the handout. What makes the repo retryable is sync_blocked_at:
+            // queue_repository_syncs enqueues a repo carrying that timestamp even when
+            // desired_handout_sha already matches. The column holds where sync_data.status
+            // could not; 20260913120000 records why.
+            //
+            // Re-running a blocked sync re-classifies, re-blocks, and overwrites this same
+            // object, so repeated attempts accumulate nothing.
+            //
+            // `carriedPr` keeps the pull request an EARLIER revision opened; see where it is
+            // built for why dropping it would cost the instructor their only link to it.
+            const blockingPaths = result.unresolved_paths ?? [];
+            const namedPaths = blockingPaths.slice(0, 3).join(", ");
+            const applied = await applyRepositoryUpdate(
+              {
+                sync_blocked_at: new Date().toISOString(),
+                sync_block_reason:
+                  `${blockingPaths.length} file(s) changed in the handout are the student's own work` +
+                  (namedPaths
+                    ? `: ${namedPaths}${blockingPaths.length > 3 ? ` and ${blockingPaths.length - 3} more` : ""}`
+                    : ""),
+                sync_data: {
+                  ...carriedPr,
+                  last_sync_attempt: new Date().toISOString(),
+                  status: "blocked_by_student_changes",
+                  blocked_handout_sha: to_sha,
+                  unresolved_paths: blockingPaths
+                }
+              },
+              { requireOwnMarker: true }
+            );
+            if (!applied) return await retireStaleSync();
+            Sentry.addBreadcrumb({
+              message:
+                `Handout ${to_sha.substring(0, 7)} not delivered to ${repository_full_name}: ` +
+                `${(result.unresolved_paths ?? []).length} changed file(s) are the student's own work`,
+              level: "warning"
+            });
+          } else if (result.no_changes) {
+            // The two shas move together or not at all. synced_repo_sha is the baseline the
+            // conflict guard classifies against, so advancing synced_handout_sha on its own
+            // leaves the baseline describing an older tree. That matters most on the recheck
+            // this outcome can come from: someone hand-applied the handout's changes, the repo
+            // genuinely holds to_sha's content, and with a stale baseline every hand-applied
+            // path reads as the student's own work against content that is already correct,
+            // making the repo likelier to block on every revision after this one.
+            //
+            // The head has to be the one the helper read while it reached that decision.
+            // Fetching it here instead would pick up a push the student made in between and
+            // record their work as the machine-written baseline, which is the single mistake
+            // this guard exists to prevent. So when the helper reports no head, the baseline
+            // stays where it is: their work keeps reading as theirs.
+            const helperRepoHead = result.repo_head_sha;
+            const applied = await applyRepositoryUpdate(
+              {
                 synced_handout_sha: to_sha,
+                ...(helperRepoHead ? { synced_repo_sha: helperRepoHead } : {}),
                 desired_handout_sha: to_sha,
+                // This sync delivered everything the handout held, so whatever blocked an
+                // earlier revision no longer does.
+                sync_blocked_at: null,
+                sync_block_reason: null,
                 sync_data: {
                   last_sync_attempt: new Date().toISOString(),
                   status: "no_changes_needed"
                 }
-              })
-              .eq("id", repository_id);
-            if (updateError) throw updateError;
+              },
+              { requireOwnMarker: true }
+            );
+            if (!applied) return await retireStaleSync();
           } else {
-            const { error: updateError } = await adminSupabase
-              .from("repositories")
-              .update({
-                synced_handout_sha: result.merged ? to_sha : from_sha,
+            const applied = await applyRepositoryUpdate(
+              {
+                // Not the envelope's from_sha: writing that back would move
+                // synced_handout_sha BACKWARDS when a newer sync has already advanced it.
+                synced_handout_sha: result.merged ? to_sha : currentSyncedHandoutSha,
                 synced_repo_sha: result.merged ? result.merge_sha : undefined,
                 desired_handout_sha: to_sha,
+                // Cleared on both shapes. A merge delivered the update; an open pull request is
+                // the thing the student has to act on, and the instructor has a link to click.
+                // Neither is a repo the Sync button should have to force its way past.
+                sync_blocked_at: null,
+                sync_block_reason: null,
                 sync_data: {
                   pr_number: result.pr_number,
                   pr_url: result.pr_url,
                   pr_state: result.merged ? "merged" : "open",
                   branch_name: `sync-to-${to_sha.substring(0, 7)}`,
                   last_sync_attempt: new Date().toISOString(),
-                  merge_sha: result.merge_sha
+                  merge_sha: result.merge_sha,
+                  // Files the sync left to the student even though a PR was opened for the
+                  // rest. Recorded so the instructor can name them after the PR is merged
+                  // and the row goes back to reading "Synced"; absent on a clean sync.
+                  unresolved_paths: result.unresolved_paths
                 }
-              })
-              .eq("id", repository_id);
-            if (updateError) throw updateError;
+              },
+              { requireOwnMarker: true }
+            );
+            if (!applied) return await retireStaleSync();
           }
 
           recordMetric(
@@ -1483,18 +2476,38 @@ export async function processEnvelope(
           return true;
         } catch (error) {
           console.trace(error);
-          // Update repository with error status
-          const { error: updateError } = await adminSupabase
-            .from("repositories")
-            .update({
-              sync_data: {
-                last_sync_attempt: new Date().toISOString(),
-                last_sync_error: error instanceof Error ? error.message : String(error),
-                status: "error"
+          // Update repository with error status -- guarded, so a job that has already lost the
+          // race does not replace a live revision's state with its own failure. A zero-row
+          // result is that case and is not an error to report: this job's account of the
+          // repository is simply not the one that counts any more.
+          const errorSyncData = {
+            sync_data: {
+              last_sync_attempt: new Date().toISOString(),
+              last_sync_error: error instanceof Error ? error.message : String(error),
+              status: "error"
+            }
+          };
+          try {
+            if (applyGuardedRepositoryUpdate) {
+              const applied = await applyGuardedRepositoryUpdate(errorSyncData);
+              if (!applied) {
+                scope.setTag("error_write_lost_race", "true");
+                Sentry.addBreadcrumb({
+                  message:
+                    `Not recording this job's failure on ${repository_full_name}: another job has written to the ` +
+                    `repository since this one began, so this error describes a state that is no longer there`,
+                  level: "info"
+                });
               }
-            })
-            .eq("id", repository_id);
-          if (updateError) {
+            } else {
+              // Only reachable when the read that builds the predicates is itself what failed.
+              const { error: updateError } = await adminSupabase
+                .from("repositories")
+                .update(errorSyncData)
+                .eq("id", repository_id);
+              if (updateError) throw updateError;
+            }
+          } catch (updateError) {
             console.error("Failed to update repository with error status:", updateError);
             Sentry.captureException(updateError, scope);
           }
@@ -1621,8 +2634,16 @@ export async function processEnvelope(
               console.log(
                 `[repo-analytics] Rate limit below budget: remaining=${remaining}, limit=${limit}, budget=${rateLimitBudget}. Requeuing in ${RATE_LIMIT_REQUEUE_DELAY_SECONDS}s. Core reset at ${resetAt.toISOString()}`
               );
-              await requeueWithDelay(adminSupabase, envelope, RATE_LIMIT_REQUEUE_DELAY_SECONDS, scope, queueName);
-              const archived = await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+              const requeued = await requeueWithDelay(
+                adminSupabase,
+                envelope,
+                RATE_LIMIT_REQUEUE_DELAY_SECONDS,
+                scope,
+                queueName
+              );
+              // See requeueWithDelay: archiving an original whose replacement never went would
+              // drop the work entirely. Leaving it unarchived costs one redelivery.
+              const archived = requeued ? await archiveMessage(adminSupabase, meta.msg_id, scope, queueName) : false;
               if (!archived) {
                 console.error(
                   `[repo-analytics] requeued delayed copy but failed to archive original msg_id=${meta.msg_id} queue=${queueName}`
@@ -2258,6 +3279,17 @@ export async function processEnvelope(
       // one issue per method is enough. The offending login is on the tag and in the message.
       scope.setFingerprint(["github-non-retryable-user", envelope.method]);
       scope.setTag("github_username", error.githubUsername);
+    } else if (error instanceof RepositoryMissingError) {
+      // Deleting an assignment's repos by hand turns up dozens of these at once (146 rows for one
+      // sp26 assignment on 2026-09-09). Group them; the repo is on the tag and in the message.
+      scope.setFingerprint(["github-repository-missing", envelope.method]);
+      scope.setTag("missing_repository", error.fullName);
+    } else if (error instanceof RepositoryUnreadableError) {
+      // Narrowing an installation's repo selection would produce one of these per affected repo at
+      // once, so group them the same way. Kept separate from the missing case because the operator
+      // action differs: re-grant access, versus accept that the repo is gone.
+      scope.setFingerprint(["github-repository-unreadable", envelope.method]);
+      scope.setTag("unreadable_repository", error.fullName);
     }
 
     const errorId = Sentry.captureException(error, scope);
@@ -2283,6 +3315,61 @@ export async function processEnvelope(
     })();
 
     try {
+      // A sync that stopped on the state of one repository: a student pushed onto the sync
+      // branch, or the branch standing where the sync needs one was written by someone else.
+      // The handler above catches these from the helper's flattened result, so reaching here
+      // means one escaped: from outside that result, or from a path the flattening does not
+      // cover. Same treatment either way, and for the same reason as the branch below: retrying
+      // cannot change the answer, and it says nothing about GitHub's health. It is kept ahead of
+      // that branch because the two require different rows written: this one must NOT record
+      // creation_error, which describes how a repository was CREATED and would put a red
+      // provisioning failure in front of an instructor for a repo that exists and works.
+      // sync_data already carries the reason, written by the handler's own catch.
+      if (error instanceof TerminalSyncError) {
+        scope.setTag("terminal_sync_error", error.name);
+        // The same record the handler's own terminal path writes, for the same reason: the row is
+        // left behind the handout with desired_handout_sha already raised, and without this only
+        // a forcing caller could ever queue it again. Best-effort: the job is going to the DLQ
+        // either way, and a write request that fails here is worth knowing about but not worth
+        // holding the message for. The handler's catch has already recorded the reason in
+        // sync_data.
+        if (envelope.repo_id) {
+          const { error: hingeError } = await adminSupabase
+            .from("repositories")
+            .update({
+              sync_blocked_at: new Date().toISOString(),
+              sync_block_reason: `${error.reason}: ${error.message}`
+            })
+            .eq("id", envelope.repo_id);
+          if (hingeError) {
+            console.error("Failed to record sync_blocked_at for a terminal sync error:", hingeError);
+            Sentry.captureException(hingeError, scope);
+          }
+        }
+        recordMetric(
+          adminSupabase,
+          {
+            method: envelope.method,
+            status_code: 422,
+            class_id: envelope.class_id,
+            debug_id: envelope.debug_id,
+            enqueued_at: meta.enqueued_at,
+            log_id: envelope.log_id
+          },
+          scope
+        );
+        const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+        if (dlqSuccess) {
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        } else {
+          console.error(`Failed to send terminal sync message ${meta.msg_id} to DLQ, leaving unarchived`);
+          Sentry.captureMessage(`Terminal sync message ${meta.msg_id} not archived due to DLQ failure`, {
+            level: "error"
+          });
+        }
+        return false;
+      }
+
       // Deterministic failure about one repo or one person (an empty/missing template repo, a
       // GitHub login that no longer exists). Retrying will never succeed and this is not a systemic
       // problem, so record what we can and send the job straight to the DLQ — WITHOUT tripping the
@@ -2294,20 +3381,98 @@ export async function processEnvelope(
           scope.setTag("non_retryable_repo_error", "true");
         }
         const reason = error.message;
+        // A repo that is gone is not just "this job failed" — the ROW is wrong, and every future
+        // job derived from it will fail the same way. Clearing is_github_ready parks the row, so
+        // the sync_repo_permissions pre-flight gate drops the duplicates already queued for it
+        // (see that gate) instead of each one paying for its own discovery, and the row stops
+        // silently claiming a working repo.
+        //
+        // Safe to pair with creation_error and only with it: reconcile_stuck_repo_creations
+        // re-enqueues create_repo for rows with `is_github_ready = false AND creation_error IS
+        // NULL`, so clearing the flag on its own would hand a deleted repo to the reconciler and
+        // have it recreated. Setting both in one update keeps the row parked.
+        const repoUpdate =
+          error instanceof RepositoryMissingError
+            ? { creation_error: reason, is_github_ready: false }
+            : { creation_error: reason };
+        // Two ways this write can fail without throwing, both of which would leave us believing a
+        // row was parked when it was not:
+        //
+        //   1. postgrest-js RESOLVES with `{ error }` rather than throwing, so a PostgREST or
+        //      database failure is invisible to the catch below.
+        //   2. An UPDATE that matches ZERO rows is a success in both Postgres and PostgREST. The
+        //      by-name fallback is the exposed one: `.eq("repository", ...)` is case-sensitive
+        //      while GitHub treats owner/repo case-insensitively, so an envelope whose casing
+        //      differs from the stored value silently parks nothing — as would a row already
+        //      deleted.
+        //
+        // Parking is what stops the next job repeating this failure, so "we think we parked it"
+        // has to mean a row actually changed. `.select("id")` makes the affected rows observable;
+        // zero of them is a failed park, and a failed park means do not archive, because
+        // redelivery is the only thing that gets us another attempt.
+        let parked = true;
         try {
-          if (envelope.repo_id) {
-            await adminSupabase.from("repositories").update({ creation_error: reason }).eq("id", envelope.repo_id);
+          if (error instanceof RepositoryUnreadableError) {
+            // Terminal for this job, but it says nothing about the row: the repo may be alive and
+            // simply not granted to this installation. Recording a creation_error here would put a
+            // failure in front of an instructor for a repo that is fine, and the cause is on our
+            // side of the fence. Stop the work, leave the data alone.
+            scope.setTag("repository_unreadable", error.fullName);
+          } else if (envelope.repo_id) {
+            const { data: rows, error: e } = await adminSupabase
+              .from("repositories")
+              .update(repoUpdate)
+              .eq("id", envelope.repo_id)
+              .select("id");
+            if (e) throw e;
+            if (!rows?.length) throw new Error(`no repositories row matched id ${envelope.repo_id}`);
           } else if (envelope.method === "create_repo" && envelope.class_id) {
             const { org: eo, repoName: ern } = envelope.args as CreateRepoArgs;
-            await adminSupabase
+            const { data: rows, error: e } = await adminSupabase
               .from("repositories")
-              .update({ creation_error: reason })
+              .update(repoUpdate)
               .eq("class_id", envelope.class_id)
-              .eq("repository", `${eo}/${ern}`);
+              .eq("repository", `${eo}/${ern}`)
+              .select("id");
+            if (e) throw e;
+            if (!rows?.length)
+              throw new Error(`no repositories row matched ${eo}/${ern} in class ${envelope.class_id}`);
+          } else if (error instanceof RepositoryMissingError) {
+            // sync_repo_permissions envelopes carry no repo_id (enqueue_github_sync_repo_permissions
+            // takes org + repo, not a row id), so match on the full name the error actually
+            // confirmed missing. Not scoped by class_id: `repository` carries a UNIQUE index
+            // (unique_repo_name), so this touches at most one row, and the envelope's class_id is
+            // absent on some paths.
+            const { data: rows, error: e } = await adminSupabase
+              .from("repositories")
+              .update(repoUpdate)
+              .eq("repository", error.fullName)
+              .select("id");
+            if (e) throw e;
+            if (!rows?.length) {
+              // Most likely an owner/repo casing difference between the envelope and the stored
+              // value, since GitHub is case-insensitive here and this filter is not. Naming it
+              // explicitly beats a silent no-op that reports success.
+              throw new Error(
+                `no repositories row matched ${error.fullName} (casing mismatch, or row already deleted)`
+              );
+            }
           }
         } catch (markErr) {
+          parked = false;
           console.error("Failed to record creation_error on repository row:", markErr);
           Sentry.captureException(markErr, scope);
+        }
+        // Only for a missing repo, where the park IS the fix. Every other non-retryable error is
+        // already terminal on its own and has always gone to the DLQ regardless of this write —
+        // holding those back on a transient DB blip would be a new way to wedge the queue.
+        if (!parked && error instanceof RepositoryMissingError) {
+          scope.setTag("park_failed", "true");
+          Sentry.captureMessage(
+            `Could not park ${error.fullName}; leaving msg ${meta.msg_id} unarchived to retry the park`,
+            scope
+          );
+          return false;
         }
         recordMetric(
           adminSupabase,
@@ -2418,14 +3583,23 @@ export async function processEnvelope(
           : false;
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
-          await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName); // 8 hours
-          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          // Archived only if the replacement really went: see requeueWithDelay. An
+          // unarchived original redelivers after the visibility timeout, which is the
+          // safe outcome; archiving one that was never replaced loses the job.
+          if (await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName)) {
+            // 8 hours
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
           return false;
         }
 
         // Requeue with computed backoff delay for rate limit
-        await requeueWithDelay(adminSupabase, envelope, delay, scope, queueName);
-        await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        // Archived only if the replacement really went: see requeueWithDelay. An
+        // unarchived original redelivers after the visibility timeout, which is the
+        // safe outcome; archiving one that was never replaced loses the job.
+        if (await requeueWithDelay(adminSupabase, envelope, delay, scope, queueName)) {
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        }
         return false;
       }
 
@@ -2482,14 +3656,24 @@ export async function processEnvelope(
         const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope);
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
-          await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName); // 8 hours
-          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          // Archived only if the replacement really went: see requeueWithDelay. An
+          // unarchived original redelivers after the visibility timeout, which is the
+          // safe outcome; archiving one that was never replaced loses the job.
+          if (await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName)) {
+            // 8 hours
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
           return false;
         }
 
         // For immediate circuit breaker, requeue with 30-second delay
-        await requeueWithDelay(adminSupabase, envelope, 30, scope, queueName); // 30 seconds
-        await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        // Archived only if the replacement really went: see requeueWithDelay. An
+        // unarchived original redelivers after the visibility timeout, which is the
+        // safe outcome; archiving one that was never replaced loses the job.
+        if (await requeueWithDelay(adminSupabase, envelope, 30, scope, queueName)) {
+          // 30 seconds
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+        }
         return false;
       }
 
@@ -2542,8 +3726,13 @@ export async function processEnvelope(
       Sentry.captureException(error, scope);
 
       // Requeue with 2-minute delay and archive the current message
-      await requeueWithDelay(adminSupabase, envelope, 120, scope, queueName); // 2 minutes
-      await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+      // Archived only if the replacement really went: see requeueWithDelay. An
+      // unarchived original redelivers after the visibility timeout, which is the
+      // safe outcome; archiving one that was never replaced loses the job.
+      if (await requeueWithDelay(adminSupabase, envelope, 120, scope, queueName)) {
+        // 2 minutes
+        await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+      }
       return false;
     } catch (e) {
       console.error("error", e);
@@ -2564,6 +3753,21 @@ export async function processEnvelope(
  */
 let cachedTuning: ReturnType<typeof resolveAsyncWorkerTuning> | null = null;
 
+/**
+ * Tag which drain path this isolate is on, and with what caps.
+ *
+ * Unconditional, for the same reason the drain tags are: `org_slots_enabled=false` is the
+ * interesting case during a rollout, because "this pod is still on the old path" is otherwise
+ * indistinguishable from "this pod has not reported yet".
+ */
+function tagOrgSlots(scope: Sentry.Scope, orgSlots: ReturnType<typeof resolveAsyncWorkerTuning>["orgSlots"]) {
+  scope.setTag("org_slots_enabled", String(orgSlots.enabled));
+  if (!orgSlots.enabled) return;
+  scope.setTag("org_slot_global_cap", String(orgSlots.globalCap));
+  scope.setTag("org_slot_max_per_org", String(orgSlots.maxPerOrg));
+  scope.setTag("org_slot_lease_ttl_seconds", String(orgSlots.leaseTtlSeconds));
+}
+
 function getTuning(scope: Sentry.Scope) {
   // TAGGING IS PER SCOPE, MEMOIZATION IS PER ISOLATE, and the two must not be
   // conflated. runBatchHandler() builds a FRESH Sentry.Scope for every run, and
@@ -2577,6 +3781,7 @@ function getTuning(scope: Sentry.Scope) {
   if (cachedTuning) {
     scope.setTag("drain_concurrency", String(cachedTuning.drainConcurrency));
     scope.setTag("visibility_timeout_seconds", String(cachedTuning.visibilityTimeoutSeconds));
+    tagOrgSlots(scope, cachedTuning.orgSlots);
     return cachedTuning;
   }
   const tuning = resolveAsyncWorkerTuning(Deno.env);
@@ -2584,6 +3789,7 @@ function getTuning(scope: Sentry.Scope) {
 
   scope.setTag("drain_concurrency", String(tuning.drainConcurrency));
   scope.setTag("visibility_timeout_seconds", String(tuning.visibilityTimeoutSeconds));
+  tagOrgSlots(scope, tuning.orgSlots);
 
   for (const issue of tuning.issues) {
     console.warn(`[pgmq] worker: ${issue.message}`);
@@ -2678,62 +3884,273 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
 
   if (messages.length === 0) return false;
 
-  await Promise.allSettled(
-    messages.map(async (msg) => {
-      // ONE SCOPE PER MESSAGE, because `n` of these run CONCURRENTLY and
-      // Sentry.Scope is a mutable bag. `archiveMessage` writes to whatever scope
-      // it is handed — setContext("archive_error", { msg_id, … }) and
-      // setTag("pgmq_archive_failed", "true") — so handing it processBatch's
-      // shared scope let four concurrent archives scribble over each other:
-      // a capture could report a FOREIGN msg_id, and pgmq_archive_failed=true
-      // stuck on the shared object for the rest of the batch, so a later event
-      // for a message that archived cleanly still claimed an archive failure.
-      //
-      // NOT the same thing as processEnvelope's scope handling, and do not
-      // "fix" that by analogy: processEnvelope already clones per envelope (see
-      // `_scope?.clone()` at its top), and Scope.clone() copies context and tags
-      // BY VALUE, so its two archiveMessage call sites are already isolated and
-      // the step-timings snapshot attached inside it is already private. Adding
-      // another clone there would be harmful — see the comment on
-      // attachStepTimingsToScope in _shared/GitHubWrapper.ts. Only THIS call
-      // site was reading through to the shared object.
-      //
-      // Cloning rather than constructing fresh keeps the batch- and run-level
-      // context the shared scope carries (function, worker_run_mode, the drain
-      // tuning tags), which a `new Sentry.Scope()` would silently drop.
-      const msgScope = scope.clone();
-      msgScope.setTag("msg_id", String(msg.msg_id));
-      msgScope.setTag("queue_name", queueName);
-
-      const ok = await processEnvelope(
-        adminSupabase,
-        msg.message,
-        { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, read_ct: msg.read_ct, queue_name: queueName },
-        msgScope
-      );
-      if (ok) {
-        const archived = await archiveMessage(adminSupabase, msg.msg_id, msgScope, queueName);
-        if (!archived) {
-          console.error(
-            `[pgmq] worker: handler returned OK but archive failed msg_id=${msg.msg_id} queue=${queueName} — message will redeliver after VT`
-          );
-          // This message's scope, positionally — not an options object. The
-          // options-object form is applied to the SDK's CURRENT scope, which is
-          // not this manually-built one, so the event would arrive without the
-          // worker's own tags; and the scope it does report must be the one only
-          // this message has written to.
-          const s = msgScope.clone();
-          s.setLevel("error");
-          s.setContext("archive_failed", { msg_id: msg.msg_id, queue_name: queueName });
-          Sentry.captureMessage(
-            "github-async-worker: processed message but failed to archive after retries; expect redelivery",
-            s
-          );
-        }
-      }
-    })
-  );
+  await processQueueMessages(adminSupabase, messages, queueName, scope);
   return true;
+}
+
+/**
+ * Run one batch of messages: handler, archive, and the Sentry bookkeeping around both.
+ *
+ * Extracted from processBatch so the per-org lease path (runOrgLeasedHandler) runs the IDENTICAL
+ * per-message logic. Everything that makes a message safe lives here — the archive-failure report,
+ * the poison-pill accounting inside processEnvelope (PGMQ_MAX_READ_CT), the per-message scope — and
+ * a second copy of it in the org path is how one of those would quietly diverge.
+ */
+async function processQueueMessages(
+  adminSupabase: SupabaseClient<Database>,
+  // `org` is present only on the per-org lease path, where `claim_org_slot_and_read` returns it
+  // alongside the pgmq columns. Tagged from the ROW rather than only from the claim so that if the
+  // SQL ever returned a mixed batch, a message would still be attributed to its own org.
+  messages: (QueueMessage<GitHubAsyncEnvelope> & { org?: string })[],
+  queueName: "async_calls" | "async_calls_low_priority",
+  scope: Sentry.Scope
+) {
+  await Promise.allSettled(messages.map((msg) => processOneQueueMessage(adminSupabase, msg, queueName, scope)));
+}
+
+/**
+ * One message: handler, archive, and the Sentry bookkeeping around both.
+ *
+ * Split out of `processQueueMessages` because the two drain paths now differ in WHEN a message
+ * starts, not in what happens to it. The batch path maps this over a whole read; the continuous
+ * refill path starts one of these per claimed message and tops the queue up as each settles. Both
+ * run the identical per-message logic, which is the point — the archive-failure report, the
+ * poison-pill accounting inside processEnvelope (PGMQ_MAX_READ_CT), the requeue-with-delay and DLQ
+ * paths and the per-message scope all live here and there is exactly one copy of them.
+ */
+async function processOneQueueMessage(
+  adminSupabase: SupabaseClient<Database>,
+  msg: QueueMessage<GitHubAsyncEnvelope> & { org?: string },
+  queueName: "async_calls" | "async_calls_low_priority",
+  scope: Sentry.Scope
+): Promise<void> {
+  // ONE SCOPE PER MESSAGE, because `n` of these run CONCURRENTLY and
+  // Sentry.Scope is a mutable bag. `archiveMessage` writes to whatever scope
+  // it is handed — setContext("archive_error", { msg_id, … }) and
+  // setTag("pgmq_archive_failed", "true") — so handing it processBatch's
+  // shared scope let four concurrent archives scribble over each other:
+  // a capture could report a FOREIGN msg_id, and pgmq_archive_failed=true
+  // stuck on the shared object for the rest of the batch, so a later event
+  // for a message that archived cleanly still claimed an archive failure.
+  //
+  // NOT the same thing as processEnvelope's scope handling, and do not
+  // "fix" that by analogy: processEnvelope already clones per envelope (see
+  // `_scope?.clone()` at its top), and Scope.clone() copies context and tags
+  // BY VALUE, so its two archiveMessage call sites are already isolated and
+  // the step-timings snapshot attached inside it is already private. Adding
+  // another clone there would be harmful — see the comment on
+  // attachStepTimingsToScope in _shared/GitHubWrapper.ts. Only THIS call
+  // site was reading through to the shared object.
+  //
+  // Cloning rather than constructing fresh keeps the batch- and run-level
+  // context the shared scope carries (function, worker_run_mode, the drain
+  // tuning tags), which a `new Sentry.Scope()` would silently drop.
+  const msgScope = scope.clone();
+  msgScope.setTag("msg_id", String(msg.msg_id));
+  msgScope.setTag("queue_name", queueName);
+  if (msg.org) msgScope.setTag("github_org", msg.org);
+
+  const ok = await processEnvelope(
+    adminSupabase,
+    msg.message,
+    {
+      msg_id: msg.msg_id,
+      // THE JOB'S ENQUEUE TIME, NOT THIS HOP'S. `meta.enqueued_at` has exactly one consumer —
+      // recordMetric's `latency_ms` (and the DLQ metadata built from it) — and the api_gateway_calls
+      // row it writes is keyed on `log_id`, so it is opened once for the whole job and overwritten by
+      // whichever delivery finishes it. A readiness deferral sends a NEW pgmq message, so taking this
+      // message's own timestamp would report only the final hop and under-report every job that ever
+      // waited: precisely the jobs whose latency the deferral ladder exists to shorten.
+      //
+      // Resolved HERE rather than at each recordMetric call because there are twenty of them across
+      // the handler and its DLQ helpers, and the terminal ones — parked repo, NonRetryableGitHubError,
+      // the generic catch — are exactly the paths a per-branch fix keeps missing (it missed them on
+      // the first pass of #999). One substitution at the single construction site makes the property
+      // hold everywhere and stay holding. `read_ct` deliberately stays per-message: it bounds THIS
+      // delivery, not the job.
+      enqueued_at: (msg.message as GitHubAsyncEnvelope | null)?.original_enqueued_at ?? msg.enqueued_at,
+      read_ct: msg.read_ct,
+      queue_name: queueName
+    },
+    msgScope
+  );
+  if (ok) {
+    const archived = await archiveMessage(adminSupabase, msg.msg_id, msgScope, queueName);
+    if (!archived) {
+      console.error(
+        `[pgmq] worker: handler returned OK but archive failed msg_id=${msg.msg_id} queue=${queueName} — message will redeliver after VT`
+      );
+      // This message's scope, positionally — not an options object. The
+      // options-object form is applied to the SDK's CURRENT scope, which is
+      // not this manually-built one, so the event would arrive without the
+      // worker's own tags; and the scope it does report must be the one only
+      // this message has written to.
+      const s = msgScope.clone();
+      s.setLevel("error");
+      s.setContext("archive_failed", { msg_id: msg.msg_id, queue_name: queueName });
+      Sentry.captureMessage(
+        "github-async-worker: processed message but failed to archive after retries; expect redelivery",
+        s
+      );
+    }
+  }
+}
+
+/**
+ * The pgmq queues this worker drains, in priority order. Shared by both drain paths so the
+ * low-priority fallback cannot be added to one and forgotten in the other.
+ *
+ * EVERY QUEUE IN THIS LIST NEEDS A SEEDED SLOT POOL. `async_worker_slots` is seeded per queue and
+ * `claim_org_slot_and_read` picks its free slot with `where s.queue_name = ...`, so a queue with no
+ * pool can never be claimed. That used to surface as zero rows forever — indistinguishable here
+ * from an empty queue, with every liveness signal green — which is why the SQL now RAISES on an
+ * unseeded pool instead, and why `claimOnce` treats that as fatal on the first occurrence. Adding a
+ * queue here without seeding its pool in a migration is therefore a loud, immediate failure rather
+ * than a silent one. Both queues in this list are seeded today (64 and 16 slots).
+ */
+const ASYNC_QUEUE_NAMES = ["async_calls", "async_calls_low_priority"] as const;
+
+/**
+ * Adapter from the pinned SQL contract to the RPC interface orgLeaseRun.ts wants.
+ *
+ * It lives here rather than in _shared/orgLeaseRun.ts so that module stays free of the generated
+ * `Database` type and testable under `deno test` with no client — the same split asyncWorkerTuning.ts
+ * uses with its `EnvReader`. Everything still goes through PostgREST: there is no direct pg
+ * connection anywhere in this worker, which is also why the lease is a server-side table and not an
+ * advisory lock.
+ */
+function orgSlotRpc(adminSupabase: SupabaseClient<Database>): OrgSlotRpc {
+  const pgmq = adminSupabase.schema("pgmq_public");
+  return {
+    claim: async (args) => {
+      // Rows come back either as messages (`status = 'claimed'`) or as a single status row saying
+      // why nothing was claimed. orgLeaseRun.ts does the discrimination; this only forwards.
+      const { data, error } = await pgmq.rpc("claim_org_slot_and_read", args);
+      return { data: (data ?? []) as OrgSlotRow<GitHubAsyncEnvelope>[], error };
+    },
+    // `queue_name` leads on all three. Renewal and release are scoped to ONE pool: a run that
+    // rotates queues can hold a lease in each for a moment, and renewing the pool it is draining
+    // must not extend the one it walked away from — that lease is meant to lapse at its TTL.
+    renew: async (args) => {
+      const { data, error } = await pgmq.rpc("renew_org_slot", args);
+      return { data: data as boolean | null, error };
+    },
+    release: async (args) => {
+      const { data, error } = await pgmq.rpc("release_org_slot", args);
+      return { data, error };
+    }
+  };
+}
+
+/**
+ * Drain as a PER-ORG leaseholder.
+ *
+ * The difference from the single-leaseholder path below is entirely in WHO this isolate competes
+ * with. There, one Redis lease per deployment picked one drainer and every other poke went idle, so
+ * several classes in different GitHub orgs releasing at once queued behind one FIFO drain while the
+ * per-org GitHub content limiter (40 concurrent / 40 per minute PER ORG) sat mostly idle for all but
+ * one of them. Here each isolate claims a slot for ONE org and drains only that org's messages, so
+ * the orgs proceed in parallel and each one's limiter is the only thing bounding it.
+ *
+ * WHY THIS PATH HAS A WALL-CLOCK BUDGET AND THE REDIS-LEASED ONE BELOW DOES NOT. `beginWorkerRun`'s
+ * bounded mode already returns on a wall-clock budget, and its LEASED mode keeps exactly ONE
+ * resident drainer per deployment, so a retirement there costs one isolate's in-flight batch per
+ * deployment. This path runs `globalCap` leaseholders at once, all of them resident for as long as
+ * they keep finding work, so the same retirement costs `globalCap x n` messages — which is what the
+ * 2026-09-15 redelivery numbers are. Same defect in kind, two orders of magnitude apart in scale,
+ * and this is the path where it was measured.
+ *
+ * `tuning.drainConcurrency` and `tuning.visibilityTimeoutSeconds` are UNCHANGED by this path and
+ * deliberately so: both ceilings in asyncWorkerTuning.ts are per-leaseholder, each leaseholder is
+ * its own isolate, and concurrency here comes from more isolates rather than a bigger batch. See the
+ * 2026-09-13 update in that file.
+ *
+ * WHAT `drainConcurrency` MEANS ON THIS PATH depends on the kill switch. With continuous refill on
+ * (the default) it is messages IN FLIGHT: `drainOrgLease` tops the in-flight set back up to `n` as
+ * each message settles rather than re-reading a whole batch once all `n` have. The ceiling is
+ * identical either way (no claim may ever ask for more than `n`), but the 2026-09-13 burst spent
+ * ~27% of every claimed slot-second waiting on the slowest message of its batch, and that is what
+ * refill recovers. With the switch off it is messages per read, and the loop is the pre-refill one.
+ * The Redis-leased path (`processBatch`, below) is untouched by all of this and always
+ * batch-at-a-time.
+ */
+async function runOrgLeasedHandler(
+  adminSupabase: SupabaseClient<Database>,
+  scope: Sentry.Scope,
+  tuning: ReturnType<typeof resolveAsyncWorkerTuning>
+) {
+  // The lease and the driver share this set: the driver adds and removes, and the lease reads its
+  // size to decide whether it may give a slot back, whether it must keep renewing past the end of
+  // the run, whether the idle budget has started, and whether a claim must be pinned to the org it
+  // is already draining. See `inFlightCount` in orgLeaseRun.ts.
+  //
+  // It is wired up on BOTH shapes on purpose. The batch driver never puts anything in it, so with
+  // the kill switch off this reads 0 for the life of the run and every one of those decisions
+  // reverts to its pre-refill answer — the rollback is the whole state machine, not just the loop.
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({
+    name: "github_async_worker",
+    scope,
+    rpc: orgSlotRpc(adminSupabase),
+    queueNames: ASYNC_QUEUE_NAMES,
+    drainConcurrency: tuning.drainConcurrency,
+    visibilityTimeoutSeconds: tuning.visibilityTimeoutSeconds,
+    maxPerOrg: tuning.orgSlots.maxPerOrg,
+    globalCap: tuning.orgSlots.globalCap,
+    leaseTtlMs: tuning.orgSlots.leaseTtlSeconds * 1000,
+    idleSleepMs: 15000,
+    errorSleepMs: 5000,
+    // THE WALL-CLOCK CLAIM BUDGET, and note there is no `isolateStartedAt` alongside it: the anchor
+    // is orgLeaseRun.ts's module-level capture, so this isolate's SECOND and THIRD runs inherit what
+    // the first one spent. That matters here specifically — `started` is reset in the `.finally()`
+    // below, the cron pokes twice a minute, and an idle run returns after 50s, so an isolate really
+    // does take poke after poke across its life. Passing a per-run anchor would give each of those a
+    // fresh allowance while the wall clock the runtime kills on kept running down.
+    runBudgetMs: tuning.orgSlots.runBudgetSeconds * 1000,
+    inFlightCount: () => inFlight.size
+  });
+  scope.setTag("worker_run_mode", run.mode);
+  scope.setTag("org_slot_drain", tuning.orgSlots.continuousRefill ? "continuous_refill" : "batch");
+  scope.setTag("org_slot_run_budget_seconds", String(tuning.orgSlots.runBudgetSeconds));
+  // How much of THIS ISOLATE was already gone when this run started. The tag a triage needs is not
+  // the budget (which is the same on every event) but the remainder, because a run that claims
+  // nothing and returns in milliseconds is indistinguishable from a broken one without it.
+  scope.setTag("isolate_age_ms_at_run_start", String(Date.now() - isolateStartedAtMs()));
+
+  try {
+    await drainOrgLease<GitHubAsyncEnvelope>({
+      run,
+      inFlight,
+      // THE KILL SWITCH, read as the boolean asyncWorkerTuning.ts already resolved. Not re-parsed
+      // here: that file reads GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL as a bounded INTEGER so
+      // a typo is reported instead of silently becoming truthy, and a second reading of the same env
+      // var in this file is how the two would eventually disagree about what "0" means.
+      continuousRefill: tuning.orgSlots.continuousRefill,
+      // The same `n` the run was built with, and `drainOrgLease` now REFUSES any other value rather
+      // than trusting these two call sites to stay in step. Both directions are wrong and only one
+      // of them is obvious: a smaller target strands part of the leaseholder's allowance, and a
+      // larger one is reachable by accumulation even though a single claim is capped — four, then
+      // four more — putting handlers in flight that the allocator's `max_per_org x drainConcurrency`
+      // budget never counted, against the per-org GitHub limiter this feature exists to respect.
+      maxInFlight: tuning.drainConcurrency,
+      // No per-claim scope clone any more, because there is no longer a per-claim batch to attribute
+      // — `processOneQueueMessage` clones per message and tags `github_org` from the message's own
+      // row, which is where the org belongs once several claims can be in flight at once. Writing it
+      // onto the shared run scope here would leave a stale org on every event captured afterwards.
+      process: (message, context) =>
+        processOneQueueMessage(
+          adminSupabase,
+          { ...message, org: context.org },
+          context.queueName as "async_calls" | "async_calls_low_priority",
+          scope
+        ),
+      onError: (e) => Sentry.captureException(e, scope)
+    });
+  } finally {
+    // AFTER the driver's drain, never before it: `drainWithContinuousRefill` does not return while
+    // messages are still running, so by here the slot has nothing left running under it.
+    await run.release();
+  }
 }
 
 export async function runBatchHandler() {
@@ -2742,8 +4159,23 @@ export async function runBatchHandler() {
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
+
+  // WHICH DRAIN PATH, and why the default is the old one.
+  //
+  // `orgSlots.enabled` is false unless GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP is set to something
+  // above 0, which is the same inertness property the drain tuning already has: deploying this
+  // changes nothing until an operator opts in. The two paths are mutually exclusive on purpose --
+  // per-org mode does NOT take the Redis lease, because the slot table is already the mutual
+  // exclusion AND the concurrency cap, and holding both would mean one Redis leaseholder per
+  // deployment claiming org slots one at a time, i.e. the FIFO drain this change exists to remove.
+  const tuning = getTuning(scope);
+  if (tuning.orgSlots.enabled) {
+    await runOrgLeasedHandler(adminSupabase, scope, tuning);
+    return;
+  }
 
   // Leased when Redis is configured, bounded otherwise -- see _shared/workerRun.ts for why the old
   // module-level `started` flag could not work under `edgeFunctions.policy: per_request`.

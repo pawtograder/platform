@@ -41,7 +41,7 @@ import {
   FiStar,
   FiUsers
 } from "react-icons/fi";
-import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
+import { MdOutlineMail, MdOutlineSchool, MdOutlineScience } from "react-icons/md";
 import { TbCards } from "react-icons/tb";
 import UserMenu from "./UserMenu";
 import { NavigationProgressBar } from "@/components/ui/navigation-progress";
@@ -158,6 +158,12 @@ const LinkItems = (courseID: number) => [
         icon: FaGithub,
         instructors_only: true,
         target: `/course/${courseID}/manage/course/github`
+      },
+      {
+        name: "Class Sections",
+        instructors_or_graders_only: true,
+        icon: MdOutlineSchool,
+        target: `/course/${courseID}/manage/course/class-sections`
       },
       {
         name: "Lab Sections",

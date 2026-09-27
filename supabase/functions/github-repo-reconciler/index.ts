@@ -13,6 +13,7 @@ import {
 import { edgeFunctionEndpoint } from "../_shared/edgeFunctionUrl.ts";
 import { canStartRepair, remainingBudgetMs } from "../_shared/repairBudget.ts";
 import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 /**
  * GitHub Repo Reconciler
@@ -24,6 +25,10 @@ import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
  *     are terminal (a deterministic config failure) and are left for an instructor to retry.
  *  2. Alert on repos stuck > 12h — any repo still not ready 12h after it was created is surfaced to
  *     Sentry so a human notices (grouped into one issue per class+assignment to avoid storms).
+ *     Applies the SAME terminal-vs-transient split as job 1: a repo with a creation_error has
+ *     already been parked for an instructor to Retry, so re-alerting on it every 15 minutes
+ *     forever adds no information and trains people to ignore the alert. Capped at
+ *     ALERT_MAX_ROWS.
  *  3. Create solution ("grader") repos the create path never created — and ONLY where the database
  *     proves it. DETACHED via waitUntil: see the note at its call site. Assignments missing both repos are neither repaired nor alerted on; see the note
  *     on repairMissingSolutionRepos for why that shape is unactionable without asking GitHub.
@@ -51,6 +56,14 @@ if (Deno.env.get("SENTRY_DSN")) {
 
 const STALE_MINUTES = 15;
 const ALERT_AFTER_HOURS = 12;
+// Bound job 2 explicitly. PostgREST already caps a result set at its own
+// db-max-rows (1000 in this deployment), so an unbounded select does not read
+// the whole table -- but it gets TRUNCATED SILENTLY, which is worse than a
+// visible limit: the "surface it so a human notices" guarantee fails precisely
+// when there is most to notice. An explicit limit makes the ceiling a decision
+// in this file rather than an accident of REST config, and the log below says
+// when it is hit.
+const ALERT_MAX_ROWS = 200;
 
 // Grace before a missing solution repo is treated as abandoned rather than in flight. Creation
 // normally completes in seconds; 30 minutes is far outside that and inside the 15-minute cadence.
@@ -618,7 +631,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  const supabase = createClient<Database>(supabaseUrl, supabaseKey);
+  const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
     // 1) Re-enqueue transient stuck repos.
@@ -634,14 +647,24 @@ Deno.serve(async (req) => {
 
     // 2) Alert on repos stuck longer than the threshold.
     const cutoff = new Date(Date.now() - ALERT_AFTER_HOURS * 60 * 60 * 1000).toISOString();
-    // Mirror reconcile_stuck_repo_creations: exclude assignments whose repo_mode doesn't require a
-    // GitHub repo (none/no_submission) so we don't falsely alert on repos that will never be ready.
+    // Mirror reconcile_stuck_repo_creations, BOTH of its exclusions:
+    //  * repo_mode none/no_submission -- assignments that never needed a GitHub repo.
+    //  * creation_error is null -- the RPC treats a row with a recorded creation_error as
+    //    TERMINAL and stops touching it (see the `and rp.creation_error is null` in
+    //    20260709130000_repo-creation-reconciler.sql). This query only ever mirrored the
+    //    first one, so a parked repo -- one the worker has given up on and handed to an
+    //    instructor to Retry -- was re-alerted to Sentry every 15 minutes, forever, and the
+    //    set only ever grew. That is the opposite of the "so a human notices" intent in the
+    //    header: the alert that fires on every cycle for rows nobody is going to action is
+    //    the one people learn to ignore.
     const { data: stuckRepos, error: stuckError } = await supabase
       .from("repositories")
-      .select("id, class_id, assignment_id, repository, creation_error, created_at, assignments!inner(repo_mode)")
+      .select("id, class_id, assignment_id, repository, created_at, assignments!inner(repo_mode)")
       .eq("is_github_ready", false)
       .lt("created_at", cutoff)
-      .not("assignments.repo_mode", "in", "(none,no_submission)");
+      .is("creation_error", null)
+      .not("assignments.repo_mode", "in", "(none,no_submission)")
+      .limit(ALERT_MAX_ROWS);
     if (stuckError) {
       console.error("[github-repo-reconciler] Failed to query long-stuck repos:", stuckError);
       scope.setContext("stuck_query_error", { error: stuckError.message });
@@ -660,7 +683,6 @@ Deno.serve(async (req) => {
         repository_id: repo.id,
         repository: repo.repository,
         created_at: repo.created_at,
-        creation_error: repo.creation_error,
         hours_stuck: ALERT_AFTER_HOURS
       });
       repoScope.setLevel("error");
@@ -668,6 +690,13 @@ Deno.serve(async (req) => {
     }
     if (stuck.length > 0) {
       console.warn(`[github-repo-reconciler] ${stuck.length} repos stuck > ${ALERT_AFTER_HOURS}h (alerted to Sentry)`);
+    }
+    // Say so when the ceiling is reached. Hitting it means there are more
+    // non-terminal stuck repos than we alerted on, which is itself the signal.
+    if (stuck.length === ALERT_MAX_ROWS) {
+      console.warn(
+        `[github-repo-reconciler] hit the ${ALERT_MAX_ROWS}-row alert cap; more stuck repos exist than were reported`
+      );
     }
 
     // 3) Create solution repos the create path never created, and alert on the rest.

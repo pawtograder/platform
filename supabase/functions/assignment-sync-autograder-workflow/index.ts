@@ -17,6 +17,7 @@ import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 /**
  * Where the live workflow is parked while the autograder is off. GitHub only runs
@@ -111,6 +112,7 @@ async function queueHandoutSyncsForAssignments(
     return { queued: 0, failed: true };
   }
   const userSupabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: { headers: { Authorization: authHeader } }
   });
   const { data: queueResult, error: queueError } = await userSupabase.rpc("queue_repository_syncs", {
@@ -162,7 +164,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const { data: assignment } = await adminSupabase

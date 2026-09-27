@@ -7,6 +7,9 @@ rendered by templates/web-channels.yaml) reuse the exact same pod spec.
 {{- /* No "config": the workload template falls back to .Values.web, so this
    renders byte-identically to before the config arg existed. workflowLeader is
    passed explicitly (rather than read inside the template) so each call site
-   owns the answer — validations.yaml still refuses true with replicas > 1. */ -}}
-{{- include "pawtograder.web.workload" (dict "ctx" . "component" "web" "image" .Values.web.image "replicas" .Values.web.replicas "workflowLeader" .Values.web.workflowMetricsLeader) }}
+   owns the answer — validations.yaml still refuses true with replicas > 1.
+   replicas goes through pawtograder.maintenance.writerReplicas: 0 under
+   maintenance.active (the web tier is a writer — Server Actions write), the
+   value itself otherwise. */ -}}
+{{- include "pawtograder.web.workload" (dict "ctx" . "component" "web" "image" .Values.web.image "replicas" (include "pawtograder.maintenance.writerReplicas" (dict "ctx" . "replicas" .Values.web.replicas)) "workflowLeader" .Values.web.workflowMetricsLeader) }}
 {{- end }}

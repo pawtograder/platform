@@ -4,6 +4,7 @@ import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "..
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 //See also autograder-sync-student-team
 async function handleRequest(req: Request, scope: Sentry.Scope) {
@@ -23,7 +24,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
     const { data: classData, error: classError } = await adminSupabase
       .from("classes")

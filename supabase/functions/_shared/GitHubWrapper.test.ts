@@ -17,18 +17,30 @@ import { Octokit, RequestError } from "npm:octokit";
 // import so the env is set first — static imports would hoist above this).
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
 const {
+  assertSourceForkable,
+  destinationHasContent,
   assertSourceNotEmpty,
+  cancelLapsedInvitation,
   computeCollaboratorRemovals,
+  confirmedRemovals,
   filterToDirectCollaborators,
+  findPendingOrgInvitation,
   getGitHubUserIfExists,
   getTeamAndCreateIfNeeded,
   getTeamMembers,
   isRepoEmpty,
   isTeamAlreadyExistsError,
   isValidRepoFullName,
+  classifyRepoPresence,
+  listCollaboratorsOrThrowMissing,
+  NonRetryableGitHubError,
   NonRetryableRepoError,
+  planPendingInvitation,
   publicSupabaseUrl,
+  RepositoryMissingError,
+  RepositoryUnreadableError,
   resolveExistingTeamSlug,
+  resolveTeamIds,
   resolveTeamSlugIfExists,
   TeamMembersUnreadableError,
   TeamNotFoundError,
@@ -139,6 +151,444 @@ Deno.test("assertSourceNotEmpty: missing source (404 on repo) -> NonRetryableRep
     NonRetryableRepoError
   );
   assertEquals(err.message.includes("not found"), true);
+});
+
+// --- Telling "not yet" from "never again" on the collaborator read ---
+//
+// A 404 from the collaborators endpoint is ambiguous: read-after-create lag on a repo that exists
+// (worth the 93s retry ladder) or a repo that is gone (where the ladder buys nothing and the
+// escaping RequestError trips the org's method circuit). These pin the classification.
+
+Deno.test("classifyRepoPresence: repo readable -> present", async () => {
+  const octokit = fakeOctokit({ "GET /repos/{owner}/{repo}": META_OK });
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "present");
+});
+
+Deno.test("classifyRepoPresence: 404 on an all-repos installation -> absent", async () => {
+  // Only here is a 404 proof: the installation can see every repo in the org, so there was
+  // nothing to hide.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "absent");
+});
+
+Deno.test("classifyRepoPresence: 404 on a selected-repos installation -> inaccessible, NOT absent", async () => {
+  // A repo we were never granted 404s exactly like a deleted one. Calling this "absent" would
+  // park a LIVE repo and skip it forever after access was restored.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "selected"), "inaccessible");
+});
+
+Deno.test(
+  'classifyRepoPresence: a statusless error whose message says "Not Found" -> unknown, never absent',
+  async () => {
+    // isGitHubNotFoundError has a `message.includes("Not Found")` fallback, so a transport/proxy
+    // error or a wrapped 5xx carrying that text would otherwise be read as proof of deletion and
+    // park a repo whose existence was never confirmed. This classification uses status only.
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}": () => {
+        throw new Error("socket hang up: Not Found");
+      }
+    });
+    assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "unknown");
+  }
+);
+
+Deno.test("classifyRepoPresence: a wrapped 5xx mentioning Not Found -> unknown, never absent", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(502, "Bad Gateway: Not Found");
+    }
+  });
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "unknown");
+});
+
+Deno.test("classifyRepoPresence: 404 with an undetermined installation scope -> unknown, so it retries", async () => {
+  // undefined scope means the lookup failed, not that the install is "selected". Terminating here
+  // would discard a permission sync (or leave a missing row unparked) because an auxiliary lookup
+  // hit a 5xx or a rate limit.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", undefined), "unknown");
+});
+
+Deno.test("classifyRepoPresence: probe itself fails (non-404) -> unknown, never absent", async () => {
+  // "We could not find out" must never be recorded as "the repo is gone" — that would park live
+  // repos during a GitHub outage.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(500, "Server Error");
+    }
+  });
+  assertEquals(await classifyRepoPresence(octokit, "org", "repo", "all"), "unknown");
+});
+
+Deno.test("listCollaboratorsOrThrowMissing: happy path returns the collaborator list", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => [{ login: "student", role_name: "write" }]
+  });
+  const got = await listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all");
+  assertEquals(got.length, 1);
+});
+
+Deno.test(
+  "listCollaboratorsOrThrowMissing: 404 on a repo that EXISTS -> rethrows, so the ladder still retries",
+  async () => {
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}/collaborators": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /repos/{owner}/{repo}": META_OK
+    });
+    const err = await assertRejects(
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all"),
+      RequestError
+    );
+    assertEquals(err.status, 404);
+  }
+);
+
+Deno.test(
+  "listCollaboratorsOrThrowMissing: 404 on a repo that is GONE -> terminal RepositoryMissingError",
+  async () => {
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}/collaborators": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /repos/{owner}/{repo}": () => {
+        throw requestError(404, "Not Found");
+      }
+    });
+    const err = await assertRejects(
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all"),
+      RepositoryMissingError
+    );
+    assertEquals(err.fullName, "org/repo");
+    // The worker branches on this to keep the failure per-row instead of tripping the org circuit.
+    assertEquals(err instanceof NonRetryableGitHubError, true);
+  }
+);
+
+Deno.test(
+  "listCollaboratorsOrThrowMissing: 404 on a selected-repos install -> RepositoryUnreadableError, terminal but not proof",
+  async () => {
+    // Both endpoints 404 because the installation was never granted this repo, not because it was
+    // deleted. This must be terminal — retrying cannot make an ungranted repo readable, and letting
+    // a bare 404 escape would spend the ladder and then trip the ORG-WIDE circuit over one repo —
+    // while still not being proof of anything about the row.
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}/collaborators": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /repos/{owner}/{repo}": () => {
+        throw requestError(404, "Not Found");
+      }
+    });
+    const err = await assertRejects(
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "selected"),
+      RepositoryUnreadableError
+    );
+    assertEquals(err.fullName, "org/repo");
+    // Non-retryable, so the worker keeps it off the shared circuit and out of the error threshold.
+    assertEquals(err instanceof NonRetryableGitHubError, true);
+    // But NOT the parking error: only proven-absent repos may touch the database.
+    assertEquals(err instanceof RepositoryMissingError, false);
+  }
+);
+
+Deno.test(
+  "listCollaboratorsOrThrowMissing: parking requires the scope to still be all-repos after the probe",
+  async () => {
+    // The TOCTOU: scope read as "all" before the probe, narrowed by an admin, so a live but
+    // newly-deselected repo 404s. Confirming after the 404 catches it and refuses to park.
+    const selections: Array<"all" | "selected"> = ["all", "selected"];
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}/collaborators": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /repos/{owner}/{repo}": () => {
+        throw requestError(404, "Not Found");
+      }
+    });
+    const err = await assertRejects(
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => selections.shift()),
+      RepositoryUnreadableError
+    );
+    assertEquals(err instanceof RepositoryMissingError, false);
+  }
+);
+
+Deno.test("listCollaboratorsOrThrowMissing: scope unreadable on confirmation -> rethrows, parks nothing", async () => {
+  // Second read failed. We had one "all" and one shrug, which is not proof.
+  const selections: Array<"all" | undefined> = ["all", undefined];
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  const err = await assertRejects(
+    () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => selections.shift()),
+    RequestError
+  );
+  assertEquals(err.status, 404);
+});
+
+Deno.test("listCollaboratorsOrThrowMissing: a rate-limited probe propagates, so the worker can back off", async () => {
+  // Not "unknown": flattening it would strip Retry-After before detectRateLimitType sees it, and
+  // the job would surface as a generic failure that opens the org circuit.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(429, "Too Many Requests");
+    }
+  });
+  const err = await assertRejects(
+    () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all"),
+    RequestError
+  );
+  assertEquals(err.status, 429);
+});
+
+Deno.test("listCollaboratorsOrThrowMissing: a 404 whose repo is PRESENT is passed through untouched", async () => {
+  // The invariant that lets the whole-sync backstop be applied broadly: a 404 that was never about
+  // the repo (e.g. a deleted GitHub account on a collaborator PUT) must not be reinterpreted as a
+  // missing repo, or a live repo gets parked because a student deleted their account.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => {
+      throw requestError(404, "Not Found");
+    },
+    "GET /repos/{owner}/{repo}": META_OK
+  });
+  const err = await assertRejects(
+    () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all"),
+    RequestError
+  );
+  assertEquals(err.status, 404);
+  assertEquals(err instanceof RepositoryMissingError, false);
+  assertEquals(err instanceof RepositoryUnreadableError, false);
+});
+
+Deno.test("listCollaboratorsOrThrowMissing: passes affiliation through, and still classifies its 404", async () => {
+  // The direct-collaborator read is the sync's second retry ladder; it needs the same in-band
+  // classification, so the helper has to carry `affiliation` without losing that behaviour.
+  let seenAffiliation: unknown = "unset";
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": (params) => {
+      seenAffiliation = params.affiliation;
+      throw requestError(404, "Not Found");
+    },
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  await assertRejects(
+    () =>
+      listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all", {
+        affiliation: "direct"
+      }),
+    RepositoryMissingError
+  );
+  assertEquals(seenAffiliation, "direct");
+});
+
+Deno.test("listCollaboratorsOrThrowMissing: omits affiliation when not asked for", async () => {
+  let seenAffiliation: unknown = "unset";
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": (params) => {
+      seenAffiliation = params.affiliation;
+      return [];
+    }
+  });
+  await listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all");
+  assertEquals(seenAffiliation, undefined);
+});
+
+Deno.test("listCollaboratorsOrThrowMissing: selection is resolved lazily, never on the happy path", async () => {
+  // The resolver hits GitHub, so it must not be called when the collaborator read succeeds.
+  let resolverCalls = 0;
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => [{ login: "student", role_name: "write" }]
+  });
+  await listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => {
+    resolverCalls++;
+    return "all";
+  });
+  assertEquals(resolverCalls, 0);
+});
+
+Deno.test(
+  "listCollaboratorsOrThrowMissing: a resolver that cannot answer -> rethrows, terminates nothing",
+  async () => {
+    // fetchRepositorySelection returns undefined when it cannot read the installation — a transient
+    // 5xx or rate limit. That must stay retryable: it is neither proof of deletion nor proof of a
+    // selected-repos install, so it may neither park the row nor discard the job.
+    const octokit = fakeOctokit({
+      "GET /repos/{owner}/{repo}/collaborators": () => {
+        throw requestError(404, "Not Found");
+      },
+      "GET /repos/{owner}/{repo}": () => {
+        throw requestError(404, "Not Found");
+      }
+    });
+    const err = await assertRejects(
+      () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => undefined),
+      RequestError
+    );
+    assertEquals(err.status, 404);
+  }
+);
+
+Deno.test("listCollaboratorsOrThrowMissing: non-404 propagates without an existence probe", async () => {
+  // No "GET /repos/{owner}/{repo}" handler: fakeOctokit throws on an unexpected route, so this
+  // fails loudly if a 403 ever starts costing an extra request.
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}/collaborators": () => {
+      throw requestError(403, "Forbidden");
+    }
+  });
+  const err = await assertRejects(
+    () => listCollaboratorsOrThrowMissing(octokit, "org", "repo", async () => "all"),
+    RequestError
+  );
+  assertEquals(err.status, 403);
+});
+
+// --- Fork-source preflight (assertSourceForkable) ---
+//
+// Regression cover for the CS 4535 incident of 2026-09-09: a private handout in an org that
+// forbids forking private repos made every create_repo for the assignment fail with a 403 that
+// nothing classified as terminal, so the reconciler re-enqueued the rows for 8.5 hours.
+
+Deno.test("assertSourceForkable: forkable source -> no throw", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => ({ data: { allow_forking: true, private: true } })
+  });
+  // Should not throw: private is fine as long as the org permits forking private repos.
+  await assertSourceForkable(octokit, "org", "handout", "org/handout");
+});
+
+Deno.test("assertSourceForkable: private + forking disabled -> names the org policy", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => ({ data: { allow_forking: false, private: true } })
+  });
+  const err = await assertRejects(
+    () => assertSourceForkable(octokit, "org", "handout", "org/handout"),
+    NonRetryableRepoError
+  );
+  // The instructor needs both remedies, and this is the one that matches a private source.
+  assertEquals(err.message.includes("does not allow forking private repositories"), true);
+  assertEquals(err.message.includes("make org/handout public"), true);
+});
+
+Deno.test("assertSourceForkable: public + forking disabled -> names the repo setting", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => ({ data: { allow_forking: false, private: false } })
+  });
+  const err = await assertRejects(
+    () => assertSourceForkable(octokit, "org", "handout", "org/handout"),
+    NonRetryableRepoError
+  );
+  assertEquals(err.message.includes("forking is disabled on that repository"), true);
+});
+
+Deno.test("assertSourceForkable: missing source (404) -> NonRetryableRepoError", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  const err = await assertRejects(
+    () => assertSourceForkable(octokit, "org", "handout", "org/handout"),
+    NonRetryableRepoError
+  );
+  assertEquals(err.message.includes("not found"), true);
+});
+
+Deno.test("assertSourceForkable: absent allow_forking is not treated as disabled", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => ({ data: { private: true } })
+  });
+  // If GitHub ever stops sending the field, undefined must not park every fork-mode creation.
+  await assertSourceForkable(octokit, "org", "handout", "org/handout");
+});
+
+Deno.test("assertSourceForkable: a transient read failure stays retryable", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(500, "Internal Server Error");
+    }
+  });
+  // Must NOT become NonRetryableRepoError: one failed read of the source is not evidence that the
+  // course is misconfigured, and parking on it would strand a healthy assignment.
+  const err = await assertRejects(() => assertSourceForkable(octokit, "org", "handout", "org/handout"));
+  assertEquals(err instanceof NonRetryableRepoError, false);
+  assertEquals((err as RequestError).status, 500);
+});
+
+// --- Adoption probe when the fork source is unforkable (destinationHasContent) ---
+//
+// createRepo is idempotent: when the destination already exists with content, the create call
+// 422s on the duplicate name and the repo is ADOPTED. The fork preflight runs before that, so
+// without this probe an unforkable source would park an assignment whose repos were provisioned
+// while forking was still allowed and whose handout was made private afterwards -- turning a
+// re-run that used to succeed into a reported config error.
+//
+// createRepo itself resolves its own Octokit through getOctoKit(org), so it cannot be driven by
+// this file's fake-request router; these cover the decision input the new branch reads.
+
+Deno.test("destinationHasContent: existing repo with content -> true (adopt)", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": META_OK,
+    "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({ data: { ref: "refs/heads/main" } })
+  });
+  assertEquals(await destinationHasContent(octokit, "org", "student-repo"), true);
+});
+
+Deno.test("destinationHasContent: existing but EMPTY repo -> false (do not adopt a blank repo)", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": META_OK,
+    "GET /repos/{owner}/{repo}/git/ref/{ref}": () => {
+      throw requestError(409, "Git Repository is empty.");
+    }
+  });
+  // The normal path REPAIRS an empty leftover by delete+regenerate, which is impossible when the
+  // source cannot be forked -- so there is nothing to adopt and the preflight error must stand.
+  assertEquals(await destinationHasContent(octokit, "org", "student-repo"), false);
+});
+
+Deno.test("destinationHasContent: no such repo (404) -> false", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(404, "Not Found");
+    }
+  });
+  assertEquals(await destinationHasContent(octokit, "org", "student-repo"), false);
+});
+
+Deno.test("destinationHasContent: a transient failure propagates rather than reading as 'no'", async () => {
+  const octokit = fakeOctokit({
+    "GET /repos/{owner}/{repo}": () => {
+      throw requestError(500, "Internal Server Error");
+    }
+  });
+  // Swallowing this would park a repo that may well have been adoptable.
+  const err = await assertRejects(() => destinationHasContent(octokit, "org", "student-repo"));
+  assertEquals((err as RequestError).status, 500);
 });
 
 // --- Idempotent team creation (getTeamAndCreateIfNeeded) ---
@@ -642,4 +1092,166 @@ Deno.test("isValidRepoFullName: whitespace is rejected", () => {
 Deno.test("isValidRepoFullName: non-strings are rejected", () => {
   assertEquals(isValidRepoFullName(42), false);
   assertEquals(isValidRepoFullName({ owner: "a", repo: "b" }), false);
+});
+
+/**
+ * The team sync's removal set is computed before its add loop, which is one network round-trip per
+ * new member, while the queue drains envelopes for the same class team concurrently. These pin the
+ * intersection that keeps a user confirmed inside that window from being deleted by the stale set.
+ */
+Deno.test("confirmedRemovals: keeps a user who became intended after the original read", () => {
+  assertEquals(confirmedRemovals(["alice", "bob"], ["bob"]), ["alice"]);
+});
+
+Deno.test("confirmedRemovals: removes users still absent from the fresh roster", () => {
+  assertEquals(confirmedRemovals(["alice", "bob"], []), ["alice", "bob"]);
+  assertEquals(confirmedRemovals(["alice"], ["carol"]), ["alice"]);
+});
+
+Deno.test("confirmedRemovals: compares logins case-insensitively, as GitHub does", () => {
+  assertEquals(confirmedRemovals(["Alice"], ["alice"]), []);
+  assertEquals(confirmedRemovals(["alice"], ["ALICE"]), []);
+});
+
+Deno.test("confirmedRemovals: an empty candidate set stays empty", () => {
+  assertEquals(confirmedRemovals([], ["alice"]), []);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Pending org invitations: a lapsed invitation GitHub still lists as pending must be replaced,
+// not treated as a live duplicate.
+// ---------------------------------------------------------------------------------------------
+
+const OUR_TEAM = 11;
+const SIBLING_TEAM = 22;
+const NOW = new Date("2026-09-21T15:23:00Z");
+
+function pendingInvite(createdAt: string, teamIds: number[]) {
+  return { id: 99, createdAt, teamIds };
+}
+
+Deno.test("planPendingInvitation: no pending invitation -> attach", () => {
+  assertEquals(planPendingInvitation(null, OUR_TEAM, NOW), "attach");
+});
+
+Deno.test("planPendingInvitation: live invitation carrying our team -> skip", () => {
+  assertEquals(planPendingInvitation(pendingInvite("2026-09-18T10:00:00Z", [OUR_TEAM]), OUR_TEAM, NOW), "skip");
+});
+
+Deno.test("planPendingInvitation: live invitation for a sibling class only -> attach", () => {
+  assertEquals(planPendingInvitation(pendingInvite("2026-09-18T10:00:00Z", [SIBLING_TEAM]), OUR_TEAM, NOW), "attach");
+});
+
+Deno.test("planPendingInvitation: 7 days old but still listed (GitHub expiry lag) -> replace", () => {
+  // The production case: invited 09-14 14:58, sweep ran 09-21 15:23, GitHub still said pending.
+  assertEquals(planPendingInvitation(pendingInvite("2026-09-14T14:58:09Z", [OUR_TEAM]), OUR_TEAM, NOW), "replace");
+  assertEquals(planPendingInvitation(pendingInvite("2026-09-14T14:58:09Z", [SIBLING_TEAM]), OUR_TEAM, NOW), "replace");
+});
+
+Deno.test("planPendingInvitation: one minute short of 7 days is still live", () => {
+  assertEquals(planPendingInvitation(pendingInvite("2026-09-14T15:24:00Z", [OUR_TEAM]), OUR_TEAM, NOW), "skip");
+});
+
+Deno.test("findPendingOrgInvitation: returns the user's invitation with its teams and creation time", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/invitations": () => [
+      { id: 1, login: "someone-else", team_count: 1, created_at: "2026-09-20T00:00:00Z" },
+      { id: 99, login: "Student1", team_count: 2, created_at: "2026-09-14T14:58:09Z" }
+    ],
+    "GET /orgs/{org}/invitations/{invitation_id}/teams": (p) => {
+      assertEquals(p.invitation_id, 99);
+      return [{ id: OUR_TEAM }, { id: SIBLING_TEAM }];
+    }
+  });
+  assertEquals(await findPendingOrgInvitation(octokit, "org", "student1"), {
+    id: 99,
+    createdAt: "2026-09-14T14:58:09Z",
+    teamIds: [OUR_TEAM, SIBLING_TEAM]
+  });
+});
+
+Deno.test("findPendingOrgInvitation: org-only invitation -> no teams, no second request", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/invitations": () => [
+      { id: 5, login: "student1", team_count: 0, created_at: "2026-09-20T00:00:00Z" }
+    ]
+  });
+  assertEquals(await findPendingOrgInvitation(octokit, "org", "student1"), {
+    id: 5,
+    createdAt: "2026-09-20T00:00:00Z",
+    teamIds: []
+  });
+});
+
+Deno.test("findPendingOrgInvitation: no invitation for the user -> null", async () => {
+  const octokit = fakeOctokit({ "GET /orgs/{org}/invitations": () => [] });
+  assertEquals(await findPendingOrgInvitation(octokit, "org", "student1"), null);
+});
+
+Deno.test("findPendingOrgInvitation: unreadable list fails open -> null", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/invitations": () => {
+      throw requestError(500);
+    }
+  });
+  assertEquals(await findPendingOrgInvitation(octokit, "org", "student1"), null);
+});
+
+Deno.test("cancelLapsedInvitation: deleted -> true", async () => {
+  let deleted: unknown;
+  const octokit = fakeOctokit({
+    "DELETE /orgs/{org}/invitations/{invitation_id}": (p) => {
+      deleted = p.invitation_id;
+      return { status: 204 };
+    }
+  });
+  assertEquals(
+    await cancelLapsedInvitation(octokit, "org", "student1", pendingInvite("2026-09-14T00:00:00Z", [])),
+    true
+  );
+  assertEquals(deleted, 99);
+});
+
+Deno.test("cancelLapsedInvitation: 404 (GitHub finished expiring it) -> true", async () => {
+  const octokit = fakeOctokit({
+    "DELETE /orgs/{org}/invitations/{invitation_id}": () => {
+      throw requestError(404);
+    }
+  });
+  assertEquals(
+    await cancelLapsedInvitation(octokit, "org", "student1", pendingInvite("2026-09-14T00:00:00Z", [])),
+    true
+  );
+});
+
+Deno.test("cancelLapsedInvitation: any other failure -> false, so the caller does not send", async () => {
+  const octokit = fakeOctokit({
+    "DELETE /orgs/{org}/invitations/{invitation_id}": () => {
+      throw requestError(403);
+    }
+  });
+  assertEquals(
+    await cancelLapsedInvitation(octokit, "org", "student1", pendingInvite("2026-09-14T00:00:00Z", [])),
+    false
+  );
+});
+
+Deno.test("resolveTeamIds: existing teams resolve to ids; teams that do not exist are skipped", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": (p) => {
+      if (p.team_slug === "a-students") return { data: { id: 1, slug: "a-students" } };
+      throw requestError(404);
+    },
+    "GET /orgs/{org}/teams": () => []
+  });
+  assertEquals(await resolveTeamIds(octokit, "rt-org", ["a-students", "gone-students", "a-students"]), [1]);
+});
+
+Deno.test("resolveTeamIds: an unreadable team throws, so no partial invitation is sent", async () => {
+  const octokit = fakeOctokit({
+    "GET /orgs/{org}/teams/{team_slug}": () => {
+      throw requestError(500);
+    }
+  });
+  await assertRejects(() => resolveTeamIds(octokit, "rt-org-2", ["b-staff"]));
 });

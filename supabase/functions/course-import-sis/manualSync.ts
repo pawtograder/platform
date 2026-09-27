@@ -24,6 +24,7 @@
 
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 // Import types and functions from the main index.ts
 import {
@@ -114,7 +115,7 @@ class Config {
  * Create admin Supabase client
  */
 function createAdminClient(): SupabaseClient<Database> {
-  return createClient<Database>(Config.supabaseUrl!, Config.supabaseServiceKey!);
+  return createClient<Database>(Config.supabaseUrl!, Config.supabaseServiceKey!, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 }
 
 /**

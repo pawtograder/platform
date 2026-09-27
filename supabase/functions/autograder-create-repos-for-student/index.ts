@@ -4,6 +4,7 @@ import { TZDate } from "npm:@date-fns/tz";
 import { AutograderCreateReposForStudentRequest } from "../_shared/FunctionTypes.d.ts";
 import {
   createRepo,
+  getDefaultBranchHeadSha,
   isUserInOrg,
   NonRetryableRepoError,
   reinviteToOrgTeam,
@@ -20,6 +21,7 @@ import {
   type SourceRepoRow
 } from "../_shared/repoCreationStrategy.ts";
 import type { BranchProtectionConfig } from "../_shared/branchProtection.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 function branchProtectionFromAssignment(a: {
   protect_block_force_push?: boolean | null;
@@ -63,7 +65,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   let userId: string;
   let githubUsername: string | null;
@@ -164,6 +167,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     console.log("assignment_id", assignmentId);
 
     const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+      auth: REQUEST_SCOPED_AUTH_OPTIONS,
       global: {
         headers: { Authorization: req.headers.get("Authorization") || "" }
       }
@@ -475,7 +479,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           //Add the repo to the database
           const adminSupabase = createClient<Database>(
             Deno.env.get("SUPABASE_URL")!,
-            Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+            Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+            { auth: REQUEST_SCOPED_AUTH_OPTIONS }
           );
           const { error, data: dbRepo } = await adminSupabase
             .from("repositories")
@@ -564,9 +569,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             // which only requeues unready rows — would never revisit it, leaving synced_repo_sha
             // null and later handout syncs with no repo-side merge base. Readiness must not be
             // able to outlive the sha it is supposed to accompany.
+            //
+            // Which is why `headSha || null` is gone. It wrote the null and marked the row ready
+            // in the same statement, so the very row the sentence above rules out was reachable
+            // whenever createRepo returned nothing, and the reconciler skips ready rows, so the
+            // baseline was never filled in later. The repo exists on GitHub by this point, so
+            // read its head; if even that comes back empty, leave the row unready and let the
+            // reconciler have another go.
+            const baselineSha =
+              headSha || (await getDefaultBranchHeadSha(`${c.classes!.github_org!}/${repoName}`, jobScope));
+            if (!baselineSha) {
+              throw new UserVisibleError(
+                `Group repository ${repoName} was created but GitHub reported no head commit for it. ` +
+                  `Please retry: syncing the handout into it needs that commit as its baseline.`
+              );
+            }
             const { error: readyError } = await adminSupabase
               .from("repositories")
-              .update({ synced_repo_sha: headSha || null, is_github_ready: true })
+              .update({ synced_repo_sha: baselineSha, is_github_ready: true })
               .eq("id", dbRepo!.id);
             if (readyError) {
               // Propagate, as the individual-repo branch does. Logging alone let this
@@ -725,7 +745,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       //Use service role key to insert the repo into the database
       const adminSupabase = createClient<Database>(
         Deno.env.get("SUPABASE_URL")!,
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        { auth: REQUEST_SCOPED_AUTH_OPTIONS }
       );
       const { error, data: dbRepo } = await adminSupabase
         .from("repositories")

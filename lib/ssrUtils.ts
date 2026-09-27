@@ -5,6 +5,7 @@ import { parseViewAsCookieValue, viewAsCookieName } from "@/lib/viewAs";
 import { classScopedTableTags, courseTag } from "@/lib/next-cache-tags";
 import { classifySupabase, timeRpc } from "@/lib/metrics";
 import { createClient } from "@supabase/supabase-js";
+import { SERVICE_CLIENT_AUTH_OPTIONS } from "@/utils/supabase/serviceClientOptions";
 import { cookies } from "next/headers";
 import type {
   Assignment,
@@ -92,12 +93,15 @@ export async function createClientWithCaching({ revalidate, tags }: { revalidate
       throw new Error("Cannot create client with no caching and tags");
     }
     // If revalidate is 0, we do NO caching
-    return createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    return createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+      auth: SERVICE_CLIENT_AUTH_OPTIONS
+    });
   }
   const client = await createClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
+      auth: SERVICE_CLIENT_AUTH_OPTIONS,
       global: {
         fetch: createFetch({
           next: {

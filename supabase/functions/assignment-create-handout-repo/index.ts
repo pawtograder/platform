@@ -16,6 +16,8 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { describeHandoutSeedResult, seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { rpcNull } from "../_shared/rpcNull.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -28,7 +30,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // `*` rather than an explicit column list: the long list this used to carry
@@ -132,14 +135,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const { data: inherited, error: inheritError } = await adminSupabase.rpc("inherit_handout_from_source", {
       p_assignment_id: assignment_id,
       p_source_assignment_id: sourceAssignment!.id,
-      p_source_template_repo: sourceAssignment!.template_repo,
-      p_source_latest_template_sha: sourceAssignment!.latest_template_sha ?? null,
+      p_source_template_repo: rpcNull(sourceAssignment!.template_repo),
+      p_source_latest_template_sha: rpcNull(sourceAssignment!.latest_template_sha ?? null),
       p_expected_repo_mode: assignment.repo_mode,
       p_expected_has_autograder: assignment.has_autograder,
       // Decides whether the RPC also sets upstream_repo, and is therefore part of its predicate —
       // the same reasoning as the create branch's pointer write.
       p_expected_submission_mode: assignment.submission_mode,
-      p_expected_template_repo: assignment.template_repo ?? null
+      p_expected_template_repo: rpcNull(assignment.template_repo ?? null)
     });
     if (inheritError) {
       // Returning 200 over a failed write here is not harmless. The caller treats success as "the

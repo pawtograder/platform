@@ -13,6 +13,25 @@ export type Database = {
         Args: { message_id: number; queue_name: string };
         Returns: boolean;
       };
+      claim_org_slot_and_read: {
+        Args: {
+          global_cap: number;
+          holder: string;
+          lease_ttl_seconds: number;
+          max_per_org: number;
+          n: number;
+          pin_org?: string;
+          queue_name: string;
+          sleep_seconds: number;
+        };
+        Returns: Database["pgmq_public"]["CompositeTypes"]["org_slot_row"][];
+        SetofOptions: {
+          from: "*";
+          to: "org_slot_row";
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
+      };
       delete: {
         Args: { message_id: number; queue_name: string };
         Returns: boolean;
@@ -37,6 +56,14 @@ export type Database = {
           isSetofReturn: true;
         };
       };
+      release_org_slot: {
+        Args: { holder: string; queue_name: string };
+        Returns: undefined;
+      };
+      renew_org_slot: {
+        Args: { holder: string; lease_ttl_seconds: number; queue_name: string };
+        Returns: boolean;
+      };
       send: {
         Args: { message: Json; queue_name: string; sleep_seconds?: number };
         Returns: number[];
@@ -50,7 +77,15 @@ export type Database = {
       [_ in never]: never;
     };
     CompositeTypes: {
-      [_ in never]: never;
+      org_slot_row: {
+        status: string | null;
+        org: string | null;
+        msg_id: number | null;
+        read_ct: number | null;
+        enqueued_at: string | null;
+        vt: string | null;
+        message: Json | null;
+      };
     };
   };
   public: {
@@ -1314,6 +1349,33 @@ export type Database = {
           }
         ];
       };
+      async_worker_slots: {
+        Row: {
+          claimed_at: string | null;
+          expires_at: string;
+          holder: string | null;
+          org: string | null;
+          queue_name: string;
+          slot: number;
+        };
+        Insert: {
+          claimed_at?: string | null;
+          expires_at?: string;
+          holder?: string | null;
+          org?: string | null;
+          queue_name: string;
+          slot: number;
+        };
+        Update: {
+          claimed_at?: string | null;
+          expires_at?: string;
+          holder?: string | null;
+          org?: string | null;
+          queue_name?: string;
+          slot?: number;
+        };
+        Relationships: [];
+      };
       audit: {
         Row: {
           class_id: number;
@@ -1712,6 +1774,9 @@ export type Database = {
           created_at: string;
           discussion_threads_total: number | null;
           gradebook_columns_total: number | null;
+          grading_actions_comment_total: number;
+          grading_actions_release_total: number;
+          grading_actions_rubric_check_total: number;
           help_request_messages_total: number | null;
           help_requests_open: number | null;
           help_requests_total: number | null;
@@ -1743,6 +1808,9 @@ export type Database = {
           created_at?: string;
           discussion_threads_total?: number | null;
           gradebook_columns_total?: number | null;
+          grading_actions_comment_total?: number;
+          grading_actions_release_total?: number;
+          grading_actions_rubric_check_total?: number;
           help_request_messages_total?: number | null;
           help_requests_open?: number | null;
           help_requests_total?: number | null;
@@ -1774,6 +1842,9 @@ export type Database = {
           created_at?: string;
           discussion_threads_total?: number | null;
           gradebook_columns_total?: number | null;
+          grading_actions_comment_total?: number;
+          grading_actions_release_total?: number;
+          grading_actions_rubric_check_total?: number;
           help_request_messages_total?: number | null;
           help_requests_open?: number | null;
           help_requests_total?: number | null;
@@ -2202,6 +2273,8 @@ export type Database = {
           last_retry_requested_at: string | null;
           observed_count: number;
           observed_discord_id: string | null;
+          self_retry_count: number;
+          self_retry_window_started_at: string | null;
           state: Database["public"]["Enums"]["discord_membership_state"];
           user_id: string;
         };
@@ -2217,6 +2290,8 @@ export type Database = {
           last_retry_requested_at?: string | null;
           observed_count?: number;
           observed_discord_id?: string | null;
+          self_retry_count?: number;
+          self_retry_window_started_at?: string | null;
           state: Database["public"]["Enums"]["discord_membership_state"];
           user_id: string;
         };
@@ -2232,6 +2307,8 @@ export type Database = {
           last_retry_requested_at?: string | null;
           observed_count?: number;
           observed_discord_id?: string | null;
+          self_retry_count?: number;
+          self_retry_window_started_at?: string | null;
           state?: Database["public"]["Enums"]["discord_membership_state"];
           user_id?: string;
         };
@@ -6704,6 +6781,8 @@ export type Database = {
           profile_id: string | null;
           repository: string;
           rerun_queued_at: string | null;
+          sync_block_reason: string | null;
+          sync_blocked_at: string | null;
           sync_data: Json | null;
           synced_handout_sha: string | null;
           synced_repo_sha: string | null;
@@ -6723,6 +6802,8 @@ export type Database = {
           profile_id?: string | null;
           repository: string;
           rerun_queued_at?: string | null;
+          sync_block_reason?: string | null;
+          sync_blocked_at?: string | null;
           sync_data?: Json | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
@@ -6742,6 +6823,8 @@ export type Database = {
           profile_id?: string | null;
           repository?: string;
           rerun_queued_at?: string | null;
+          sync_block_reason?: string | null;
+          sync_blocked_at?: string | null;
           sync_data?: Json | null;
           synced_handout_sha?: string | null;
           synced_repo_sha?: string | null;
@@ -11988,8 +12071,8 @@ export type Database = {
           excluded_from_automation: boolean;
           is_configured: boolean;
           org_name: string;
-          override_handout_template_repo: string | null;
-          override_solution_template_repo: string | null;
+          override_handout_template_repo: string;
+          override_solution_template_repo: string;
           permission_sync_exempt_users: string[];
           updated_at: string;
         }[];
@@ -12415,6 +12498,10 @@ export type Database = {
           winning_invite_url: string;
         }[];
       };
+      class_team_member_usernames: {
+        Args: { p_class_id: number; p_kind: string };
+        Returns: string[];
+      };
       cleanup_discord_async_errors: { Args: never; Returns: undefined };
       cleanup_expired_realtime_subscriptions: {
         Args: never;
@@ -12442,6 +12529,10 @@ export type Database = {
           p_rubric_part_ids?: number[];
         };
         Returns: Json;
+      };
+      clear_org_membership_and_repair: {
+        Args: { p_org: string; p_user_id: string };
+        Returns: number;
       };
       clear_unfinished_review_assignments: {
         Args: {
@@ -12694,14 +12785,6 @@ export type Database = {
         Returns: boolean;
       };
       custom_access_token_hook: { Args: { event: Json }; Returns: Json };
-      database_ram_metrics: {
-        Args: never;
-        Returns: {
-          metric_labels: Json;
-          metric_name: string;
-          metric_value: number;
-        }[];
-      };
       deactivate_expired_polls: { Args: never; Returns: undefined };
       delete_assignment_with_all_data: {
         Args: { p_assignment_id: number; p_class_id: number };
@@ -12787,6 +12870,7 @@ export type Database = {
         Args: {
           p_action?: string;
           p_class_id: number;
+          p_membership_verified_at?: string;
           p_role: Database["public"]["Enums"]["app_role"];
           p_user_id: string;
         };
@@ -12823,6 +12907,17 @@ export type Database = {
           p_source_repo?: string;
           p_student_team_permission?: string;
           p_template_repo: string;
+        };
+        Returns: number;
+      };
+      enqueue_github_org_reinvite: {
+        Args: {
+          p_class_id: number;
+          p_course_slug: string;
+          p_debug_id?: string;
+          p_is_staff: boolean;
+          p_org: string;
+          p_user_id: string;
         };
         Returns: number;
       };
@@ -13212,6 +13307,20 @@ export type Database = {
           oldest_first_observed_at: string;
         }[];
       };
+      get_stuck_org_membership_alerts: {
+        Args: { p_days?: number; p_invitation_age_days?: number };
+        Returns: {
+          class_id: number;
+          class_slug: string;
+          github_org: string;
+          missing_term_dates: boolean;
+          oldest_invitation: string;
+          stuck_count: number;
+          term_end: string;
+          term_start: string;
+          window_open: boolean;
+        }[];
+      };
       get_student_summary: {
         Args: { p_class_id: number; p_student_profile_id: string };
         Returns: Json;
@@ -13265,6 +13374,25 @@ export type Database = {
       get_submissions_to_full_marks: {
         Args: { p_assignment_id: number };
         Returns: Json;
+      };
+      get_survey_responses_for_submission: {
+        Args: { p_submission_id: number };
+        Returns: {
+          available_at: string;
+          due_date: string;
+          is_assigned: boolean;
+          is_submitted: boolean;
+          is_submitter: boolean;
+          profile_id: string;
+          profile_name: string;
+          response: Json;
+          submitted_at: string;
+          survey_id: string;
+          survey_json: Json;
+          survey_status: Database["public"]["Enums"]["survey_status"];
+          survey_title: string;
+          updated_at: string;
+        }[];
       };
       get_survey_responses_with_full_context: {
         Args: { p_class_id: number; p_survey_id: string };
@@ -13410,6 +13538,10 @@ export type Database = {
         };
         Returns: number;
       };
+      github_org_invite_window_open: {
+        Args: { p_archived: boolean; p_end_date: string; p_start_date: string };
+        Returns: boolean;
+      };
       github_team_slugify: { Args: { p_value: string }; Returns: string };
       gradebook_auto_layout: {
         Args: { p_gradebook_id: number };
@@ -13522,10 +13654,10 @@ export type Database = {
           p_expected_has_autograder: boolean;
           p_expected_repo_mode: Database["public"]["Enums"]["assignment_repo_mode"];
           p_expected_submission_mode: string;
-          p_expected_template_repo?: string | null;
+          p_expected_template_repo?: string;
           p_source_assignment_id: number;
-          p_source_latest_template_sha: string | null;
-          p_source_template_repo: string | null;
+          p_source_latest_template_sha: string;
+          p_source_template_repo: string;
         };
         Returns: boolean;
       };
@@ -13557,6 +13689,10 @@ export type Database = {
         Returns: undefined;
       };
       invoke_github_async_worker_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
+      invoke_github_membership_reconciler_background_task: {
         Args: never;
         Returns: undefined;
       };
@@ -13646,6 +13782,14 @@ export type Database = {
       merge_duplicate_class_enrollments: {
         Args: { p_class_id?: number };
         Returns: number;
+      };
+      metrics_workflow_errors_by_category: {
+        Args: { window_hours?: number };
+        Returns: {
+          category: string;
+          class_id: string;
+          count: number;
+        }[];
       };
       metrics_workflow_errors_by_name: {
         Args: { window_hours?: number };
@@ -13776,8 +13920,17 @@ export type Database = {
         };
         Returns: Json;
       };
+      publish_grader_repo: {
+        Args: {
+          p_assignment_id: number;
+          p_expected_grader_repo: string;
+          p_expected_has_autograder?: boolean;
+          p_new_grader_repo: string;
+        };
+        Returns: boolean;
+      };
       queue_repository_syncs: {
-        Args: { p_repository_ids: number[] };
+        Args: { p_force?: boolean; p_repository_ids: number[] };
         Returns: Json;
       };
       recalculate_discussion_thread_children_counts: {
@@ -13788,38 +13941,38 @@ export type Database = {
         Args: { end_id: number; start_id: number };
         Returns: undefined;
       };
+      reconcile_stale_org_invitations: {
+        Args: {
+          p_max?: number;
+          p_max_per_class?: number;
+          p_new_role_grace_minutes?: number;
+          p_stale_days?: number;
+        };
+        Returns: number;
+      };
       reconcile_stuck_discord_memberships: {
         Args: { p_limit?: number; p_stale_minutes?: number };
         Returns: number;
       };
-      publish_grader_repo: {
-        Args: {
-          p_assignment_id: number;
-          p_expected_grader_repo: string | null;
-          p_expected_has_autograder?: boolean | null;
-          p_new_grader_repo: string;
-        };
-        Returns: boolean;
+      reconcile_stuck_repo_creations: {
+        Args: { p_stale_minutes?: number };
+        Returns: number;
       };
       record_autograder_head_metadata: {
         Args: {
           p_assignment_id: number;
-          p_author: string | null;
+          p_author: string;
           p_config: Json;
-          p_expected_config?: Json | null;
-          p_expected_grader_repo?: string | null;
-          p_expected_has_autograder?: boolean | null;
-          p_expected_sha: string | null;
+          p_expected_config?: Json;
+          p_expected_grader_repo?: string;
+          p_expected_has_autograder?: boolean;
+          p_expected_sha: string;
           p_message: string;
           p_new_sha: string;
           p_points: number;
           p_ref: string;
         };
         Returns: boolean;
-      };
-      reconcile_stuck_repo_creations: {
-        Args: { p_stale_minutes?: number };
-        Returns: number;
       };
       record_discord_async_error: {
         Args: { p_error_data: Json; p_guild_id: string; p_method: string };
@@ -13875,10 +14028,18 @@ export type Database = {
         Args: { p_ordinal_updates: Json; p_series_id: string };
         Returns: undefined;
       };
+      repo_ids_with_dead_lettered_create: {
+        Args: never;
+        Returns: {
+          dead_lettered_at: string;
+          repo_id: string;
+        }[];
+      };
       repo_ids_with_queued_create: { Args: never; Returns: string[] };
       request_discord_reinvite: {
         Args: { p_class_id: number; p_user_id?: string };
         Returns: {
+          channels_repaired: number;
           queued: number;
           roles_repaired: number;
         }[];
@@ -13942,7 +14103,11 @@ export type Database = {
         Returns: boolean;
       };
       set_autograder_points_for_repo: {
-        Args: { p_assignment_id: number; p_expected_grader_repo: string | null; p_points: number };
+        Args: {
+          p_assignment_id: number;
+          p_expected_grader_repo: string;
+          p_points: number;
+        };
         Returns: boolean;
       };
       set_class_template_overrides: {
@@ -14102,6 +14267,10 @@ export type Database = {
         Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
       };
+      update_class_section_name: {
+        Args: { p_class_section_id: number; p_name: string };
+        Returns: boolean;
+      };
       update_gradebook_column_student_with_recalc: {
         Args: { p_id: number; p_updates: Json };
         Returns: undefined;
@@ -14157,6 +14326,17 @@ export type Database = {
           p_sync_status?: string;
         };
         Returns: number;
+      };
+      upsert_assignment_leaderboard_entry: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_max_score: number;
+          p_public_profile_id: string;
+          p_score: number;
+          p_submission_id: number;
+        };
+        Returns: undefined;
       };
       upsert_github_deployment: {
         Args: {
