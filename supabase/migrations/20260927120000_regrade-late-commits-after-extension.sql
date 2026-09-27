@@ -38,6 +38,36 @@ comment on column public.repository_check_runs.stage_only is
 -- `WHERE is_active = true`, and staged submissions are is_active=false, so no
 -- index changes are required - staged rows are naturally excluded.
 
+-- Students must not see a staged submission until an instructor promotes it.
+-- Same policy as 20250923022246_submissions-perf-rls.sql, with the two
+-- student branches (own profile, own group) gated on `NOT is_staged`. The
+-- staff branch is unchanged, so instructors and graders still read staged rows.
+ALTER POLICY "Instructors and graders can view all submissions in class, stud" ON public.submissions
+USING (
+  (
+    NOT is_staged AND profile_id IN (
+      SELECT up.private_profile_id
+      FROM public.user_privileges up
+      WHERE up.user_id = auth.uid() AND up.private_profile_id IS NOT NULL
+    )
+  )
+  OR (
+    class_id IN (
+      SELECT up.class_id
+      FROM public.user_privileges up
+      WHERE up.user_id = auth.uid() AND up.role IN ('instructor','grader')
+    )
+  )
+  OR (
+    NOT is_staged AND assignment_group_id IS NOT NULL AND assignment_group_id IN (
+      SELECT DISTINCT agm.assignment_group_id
+      FROM public.assignment_groups_members agm
+      JOIN public.user_privileges upg ON upg.private_profile_id = agm.profile_id
+      WHERE upg.user_id = auth.uid()
+    )
+  )
+);
+
 -- =====================================================================
 -- 2. Redefine the submissions insert hook to skip activation for staged rows
 --    (verbatim copy of the current body from
@@ -162,6 +192,116 @@ $$;
 
 COMMENT ON FUNCTION public.submissions_insert_hook_optimized() IS
   'Assigns ordinals, manages is_active, rejects individual INSERT when the student is in a group, demotes straggler individual rows on new group submission and enqueues gradebook row recalc for demoted students. Deactivation UPDATEs are predicated on is_active so an insert does not rewrite already-inactive history (20260828). Staged submissions (is_staged=true) are graded but never auto-activated.';
+
+
+-- Realtime: broadcast_submission_change pushes every submission row to the
+-- owning students' user channels, which bypasses the SELECT policy above.
+-- Verbatim copy of the body from
+-- 20251011000000_broadcast_submissions_and_notifications.sql, with the
+-- per-user broadcasts skipped while the row is staged. The staff broadcast is
+-- unchanged.
+CREATE OR REPLACE FUNCTION public.broadcast_submission_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $$
+DECLARE
+    submission_class_id bigint;
+    submission_profile_id UUID;
+    submission_group_id bigint;
+    affected_profile_ids UUID[];
+    profile_id UUID;
+    payload JSONB;
+    submission_is_staged boolean;
+BEGIN
+    -- Get the submission details
+    IF TG_OP = 'INSERT' THEN
+        submission_class_id := NEW.class_id;
+        submission_profile_id := NEW.profile_id;
+        submission_group_id := NEW.assignment_group_id;
+    ELSIF TG_OP = 'UPDATE' THEN
+        submission_class_id := NEW.class_id;
+        submission_profile_id := NEW.profile_id;
+        submission_group_id := NEW.assignment_group_id;
+    ELSIF TG_OP = 'DELETE' THEN
+        submission_class_id := OLD.class_id;
+        submission_profile_id := OLD.profile_id;
+        submission_group_id := OLD.assignment_group_id;
+    END IF;
+
+    -- A staged (deadline-regrade preview) submission is staff-only until promoted.
+    -- Promotion is an UPDATE that clears is_staged, which broadcasts to students then.
+    submission_is_staged := CASE WHEN TG_OP = 'DELETE' THEN OLD.is_staged ELSE NEW.is_staged END;
+
+    -- Get affected profile IDs (submission author and/or group members)
+    IF submission_group_id IS NOT NULL THEN
+        -- Group submission: notify all group members
+        SELECT ARRAY(
+            SELECT DISTINCT agm.profile_id
+            FROM assignment_groups_members agm
+            WHERE agm.assignment_group_id = submission_group_id
+        ) INTO affected_profile_ids;
+    ELSIF submission_profile_id IS NOT NULL THEN
+        -- Individual submission: notify the author
+        affected_profile_ids := ARRAY[submission_profile_id];
+    END IF;
+
+    -- Only broadcast if we have affected profiles
+    IF affected_profile_ids IS NOT NULL AND array_length(affected_profile_ids, 1) > 0 THEN
+        -- Create payload
+        payload := jsonb_build_object(
+            'type', 'table_change',
+            'operation', TG_OP,
+            'table', 'submissions',
+            'row_id', CASE 
+                WHEN TG_OP = 'DELETE' THEN OLD.id
+                ELSE NEW.id
+            END,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'class_id', submission_class_id,
+            'timestamp', NOW(),
+            'target_audience', 'user'
+        );
+
+        -- Broadcast to each affected user's channel (never for staged rows)
+        IF NOT submission_is_staged THEN
+            FOREACH profile_id IN ARRAY affected_profile_ids
+            LOOP
+                PERFORM public.safe_broadcast(
+                    payload,
+                    'broadcast',
+                    'class:' || submission_class_id || ':user:' || profile_id,
+                    true
+                );
+            END LOOP;
+        END IF;
+
+        -- Broadcast to staff channel (instructors/graders)
+        DECLARE
+            payload_for_staff JSONB;
+        BEGIN
+            payload_for_staff := payload || jsonb_build_object('target_audience', 'staff');
+            PERFORM public.safe_broadcast(
+                payload_for_staff,
+                'broadcast',
+                'class:' || submission_class_id || ':staff',
+                true
+            );
+        END;
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$;
 
 -- =====================================================================
 -- 3. Batch + candidate tables
@@ -433,7 +573,10 @@ declare
   v_creator_name text;
   r RECORD;
 begin
-  select * into v_cand from public.deadline_regrade_candidates where id = p_candidate_id;
+  -- Lock the candidate so overlapping calls (double click, two instructors)
+  -- serialize: the second one sees decision = 'applied' and returns early
+  -- instead of promoting and notifying a second time.
+  select * into v_cand from public.deadline_regrade_candidates where id = p_candidate_id for update;
   if v_cand.id is null then
     raise exception 'Regrade candidate % not found', p_candidate_id;
   end if;
@@ -442,6 +585,15 @@ begin
   end if;
   if v_cand.decision = 'applied' then
     return jsonb_build_object('status', 'already_applied');
+  end if;
+  if v_cand.decision <> 'pending' then
+    raise exception 'Candidate % was %; only pending candidates can be promoted', p_candidate_id, v_cand.decision;
+  end if;
+  if not exists (
+    select 1 from public.deadline_regrade_batches b
+    where b.id = v_cand.batch_id and b.status = 'open'
+  ) then
+    raise exception 'Candidate % belongs to a regrade review that is no longer open', p_candidate_id;
   end if;
   if v_cand.staged_submission_id is null then
     raise exception 'Candidate % has no graded staged submission to promote yet', p_candidate_id;
@@ -463,19 +615,23 @@ begin
   limit 1;
 
   -- Promote: deactivate prior active submission(s), activate + un-stage the candidate.
+  -- Predicated on is_active so already-inactive history is not rewritten
+  -- (same reasoning as 20260828120000).
   if v_cand.assignment_group_id is not null then
     update public.submissions
     set is_active = false
     where assignment_id = v_cand.assignment_id
       and assignment_group_id = v_cand.assignment_group_id
-      and id <> v_staged_id;
+      and id <> v_staged_id
+      and is_active;
   else
     update public.submissions
     set is_active = false
     where assignment_id = v_cand.assignment_id
       and profile_id = v_cand.profile_id
       and assignment_group_id is null
-      and id <> v_staged_id;
+      and id <> v_staged_id
+      and is_active;
   end if;
 
   update public.submissions
@@ -598,8 +754,9 @@ begin
   if not public.authorizeforclassinstructor(v_class_id) then
     raise exception 'Only instructors can close regrade batches' using errcode = 'insufficient_privilege';
   end if;
-  -- Unpromoted staged submissions are left in place: they are is_active=false
-  -- and invisible to students, and serve as an audit trail of what was previewed.
+  -- Unpromoted staged submissions are left in place: they are is_active=false,
+  -- hidden from students by the submissions SELECT policy above, and serve as
+  -- an audit trail of what was previewed.
   update public.deadline_regrade_batches
   set status = p_status, updated_at = now()
   where id = p_batch_id;

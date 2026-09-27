@@ -37,7 +37,11 @@ async function markCheckRunRequested({
     .from("repository_check_runs")
     .update({
       triggered_by: triggeredBy,
-      stage_only: stageOnly,
+      // Never clear a pending stage_only: a plain re-trigger of a sha that is
+      // awaiting its staged regrade would otherwise let that run create an
+      // ACTIVE submission, bypassing instructor promotion.
+      // autograder-create-submission clears the flag once the staged row exists.
+      stage_only: stageOnly || checkRun.stage_only,
       status: {
         ...statusObject(checkRun.status),
         requested_at: requestedAt

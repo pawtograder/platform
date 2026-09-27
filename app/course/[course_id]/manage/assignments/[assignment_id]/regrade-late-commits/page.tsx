@@ -47,6 +47,7 @@ export default function RegradeLateCommitsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Busy>({});
   const [confirmLower, setConfirmLower] = useState<DeadlineRegradeCandidate | null>(null);
+  const [stagingAll, setStagingAll] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const batchParam = searchParams.get("batch");
@@ -93,6 +94,10 @@ export default function RegradeLateCommitsPage() {
         let b: DeadlineRegradeBatch | null = null;
         if (batchParam) {
           b = await fetchRegradeBatchById(supabase, Number(batchParam));
+          // A batch id from another assignment must not render under this route.
+          if (b && b.assignment_id !== Number(assignment_id)) {
+            b = null;
+          }
         } else {
           b = await fetchOpenRegradeBatch(supabase, Number(assignment_id));
         }
@@ -209,9 +214,14 @@ export default function RegradeLateCommitsPage() {
 
   const handleStageAll = useCallback(async () => {
     const pending = candidates.filter((c) => c.decision === "pending" && c.staged_status === "none");
-    for (const c of pending) {
-      // Sequential to avoid hammering the workflow-dispatch API.
-      await handleStage(c);
+    setStagingAll(true);
+    try {
+      for (const c of pending) {
+        // Sequential to avoid hammering the workflow-dispatch API.
+        await handleStage(c);
+      }
+    } finally {
+      setStagingAll(false);
     }
   }, [candidates, handleStage]);
 
@@ -276,7 +286,13 @@ export default function RegradeLateCommitsPage() {
       </Box>
 
       <HStack>
-        <Button size="sm" variant="subtle" onClick={handleStageAll} disabled={batch.status !== "open"}>
+        <Button
+          size="sm"
+          variant="subtle"
+          onClick={handleStageAll}
+          disabled={batch.status !== "open" || stagingAll}
+          loading={stagingAll}
+        >
           Grade all ungraded
         </Button>
         <Button

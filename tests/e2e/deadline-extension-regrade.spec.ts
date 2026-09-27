@@ -106,10 +106,9 @@ test.beforeAll(async () => {
   });
 });
 
-test.beforeEach(async () => {
-  // Fresh student + repo per test (no magic link needed — service role drives data).
+async function setUpStudent(useMagicLink = false) {
   const p = getTestRunPrefix(Math.random().toString(36).slice(2, 8));
-  student = await createUserInClass({ role: "student", class_id: course.id, name: `${p} Student` });
+  student = await createUserInClass({ role: "student", class_id: course.id, name: `${p} Student`, useMagicLink });
   repoFullName = `${p}/repo`;
   const { data: repo, error } = await ADMIN()
     .from("repositories")
@@ -124,7 +123,34 @@ test.beforeEach(async () => {
     .single();
   if (error) throw new Error(`insert repository failed: ${error.message}`);
   repoId = repo!.id;
+}
+
+// Fresh student + repo per test (no magic link needed — service role drives data).
+test.beforeEach(async () => {
+  await setUpStudent();
 });
+
+/** Enumerate, stage, and grade one in-window commit; returns the candidate and staged submission ids. */
+async function stagedCandidate(): Promise<{ batchId: number; candidateId: number; stagedSubId: number }> {
+  const oldDue = subDays(new Date(), 2).toISOString();
+  const currentSubId = await insertSubmission(`cur${repoId}`, false);
+  await insertGraderResult(currentSubId, 50);
+  await insertCheckRun(`late${repoId}`, "late work", 1);
+  const { data: batchId, error } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
+    p_assignment_id: assignment.id,
+    p_old_due_date: oldDue
+  });
+  if (error) throw new Error(error.message);
+  const candidateId = (await candidatesForBatch(batchId!)).find((c) => c.profile_id === student.private_profile_id)!.id;
+  const stagedSubId = await insertSubmission(`late${repoId}`, true);
+  await insertGraderResult(stagedSubId, 80);
+  return { batchId: batchId!, candidateId, stagedSubId };
+}
+
+async function regradeNotificationCount(): Promise<number> {
+  const { data } = await ADMIN().from("notifications").select("body").eq("user_id", student.user_id);
+  return (data ?? []).filter((n) => (n.body as { type?: string }).type === "submission_regraded").length;
+}
 
 test.describe("Deadline-extension regrade", () => {
   test("enumerate finds the in-window late commit, excludes out-of-window, and is gated to instructors", async () => {
@@ -242,5 +268,47 @@ test.describe("Deadline-extension regrade", () => {
       .eq("id", candidateId)
       .single();
     expect((skipped as { decision: string }).decision).toBe("skipped");
+  });
+
+  test("students cannot read a staged submission until it is promoted", async () => {
+    await setUpStudent(true);
+    const studentClient = await createAuthenticatedClient(student);
+    const { candidateId, stagedSubId } = await stagedCandidate();
+
+    const before = await studentClient.from("submissions").select("id").eq("id", stagedSubId);
+    expect(before.error).toBeNull();
+    expect(before.data).toHaveLength(0);
+
+    const { error: applyErr } = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    expect(applyErr).toBeNull();
+
+    const after = await studentClient.from("submissions").select("id").eq("id", stagedSubId);
+    expect(after.data).toHaveLength(1);
+  });
+
+  test("a second apply is a no-op and does not notify twice", async () => {
+    const { candidateId } = await stagedCandidate();
+    const first = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    expect(first.error).toBeNull();
+    const second = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    expect(second.error).toBeNull();
+    expect((second.data as { status: string }).status).toBe("already_applied");
+    expect(await regradeNotificationCount()).toBe(1);
+  });
+
+  test("apply rejects skipped candidates and candidates in a closed batch", async () => {
+    const skipped = await stagedCandidate();
+    await instructorClient.rpc("skip_deadline_regrade", { p_candidate_id: skipped.candidateId });
+    const skippedApply = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: skipped.candidateId });
+    expect(skippedApply.error?.message).toContain("only pending candidates can be promoted");
+
+    await setUpStudent();
+    const dismissed = await stagedCandidate();
+    await instructorClient.rpc("dismiss_deadline_regrade_batch", { p_batch_id: dismissed.batchId });
+    const dismissedApply = await instructorClient.rpc("apply_deadline_regrade", {
+      p_candidate_id: dismissed.candidateId
+    });
+    expect(dismissedApply.error?.message).toContain("no longer open");
+    expect(await regradeNotificationCount()).toBe(0);
   });
 });

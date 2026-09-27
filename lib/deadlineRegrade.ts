@@ -69,7 +69,14 @@ export async function stageCandidate(
     },
     supabase
   );
-  await regradeSetCandidateGrading(supabase, candidate.id);
+  // The workflow is already dispatched, so leaving the row at staged_status
+  // 'none' would offer "Grade" again and dispatch a duplicate. Retry once
+  // before surfacing the failure.
+  try {
+    await regradeSetCandidateGrading(supabase, candidate.id);
+  } catch {
+    await regradeSetCandidateGrading(supabase, candidate.id);
+  }
 }
 
 /** Promote a candidate's staged submission to active and notify the student(s). */

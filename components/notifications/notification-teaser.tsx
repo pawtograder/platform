@@ -539,14 +539,12 @@ function SubmissionRegradedNotificationTeaser({ notification }: { notification: 
       : null;
   const direction = delta === null ? "" : delta > 0 ? " (↑)" : delta < 0 ? " (↓)" : " (no change)";
 
-  if (!regrader) {
-    return <Skeleton height="40px" width="100%" />;
-  }
-
+  // The message carries regraded_by_name, so render without waiting for the
+  // instructor's profile: it may never load in a student's course controller.
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={regrader?.avatar_url} alt="" />
+        <Avatar.Image src={sanitizeImageSrc(regrader?.avatar_url)} alt="" />
         <Avatar.Fallback fontSize="xs">{regrader?.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
