@@ -32,7 +32,8 @@ let repoId: number;
 
 const ADMIN = () => supabase as unknown as SupabaseClient<Database>;
 
-async function insertCheckRun(sha: string, message: string, daysAgo: number) {
+/** A webhook-recorded push `pushedDaysAgo`; the commit itself defaults to the same time. */
+async function insertCheckRun(sha: string, message: string, pushedDaysAgo: number, committedDaysAgo = pushedDaysAgo) {
   const { error } = await ADMIN()
     .from("repository_check_runs")
     .insert({
@@ -42,7 +43,8 @@ async function insertCheckRun(sha: string, message: string, daysAgo: number) {
       sha,
       commit_message: message,
       profile_id: student.private_profile_id,
-      status: { commit_date: subDays(new Date(), daysAgo).toISOString() }
+      created_at: subDays(new Date(), pushedDaysAgo).toISOString(),
+      status: { commit_date: subDays(new Date(), committedDaysAgo).toISOString() }
     } as Database["public"]["Tables"]["repository_check_runs"]["Insert"]);
   if (error) throw new Error(`insert check run failed: ${error.message}`);
 }
@@ -310,5 +312,84 @@ test.describe("Deadline-extension regrade", () => {
     });
     expect(dismissedApply.error?.message).toContain("no longer open");
     expect(await regradeNotificationCount()).toBe(0);
+  });
+
+  async function enumerate(oldDue: Date): Promise<number> {
+    const { data, error } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
+      p_assignment_id: assignment.id,
+      p_old_due_date: oldDue.toISOString()
+    });
+    if (error) throw new Error(error.message);
+    return data!;
+  }
+  const mine = async (batchId: number) =>
+    (await candidatesForBatch(batchId)).filter((c) => c.profile_id === student.private_profile_id);
+
+  test("the window is judged on push time, not commit time, and skips #NOT-GRADED", async () => {
+    // Committed before the old deadline but pushed after it: a candidate.
+    await insertCheckRun("pushedlate", "late push", 1, 5);
+    // A newer in-window push marked #NOT-GRADED must not displace it.
+    await insertCheckRun("practice", "try this #NOT-GRADED", 0.5);
+    const cands = await mine(await enumerate(subDays(new Date(), 2)));
+    expect(cands.map((c) => c.sha)).toEqual(["pushedlate"]);
+  });
+
+  test("a review with no candidates is closed immediately", async () => {
+    // Batches are assignment-wide, so use an assignment no other test pushes to.
+    const empty = await insertAssignment({
+      due_date: new Date().toUTCString(),
+      class_id: course.id,
+      name: `${getTestRunPrefix("empty")} Assignment`
+    });
+    const { data: batchId, error } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
+      p_assignment_id: empty.id,
+      p_old_due_date: subDays(new Date(), 2).toISOString()
+    });
+    expect(error).toBeNull();
+    const { data: batch } = await ADMIN().from("deadline_regrade_batches").select("status").eq("id", batchId!).single();
+    expect(batch!.status).toBe("dismissed");
+  });
+
+  test("a second extension keeps the first window and carries graded previews forward", async () => {
+    const { batchId: first, stagedSubId } = await stagedCandidate();
+    // Extend again from an intermediate deadline that is AFTER the late push.
+    const second = await enumerate(subDays(new Date(), 0.5));
+    const { data: firstBatch } = await ADMIN()
+      .from("deadline_regrade_batches")
+      .select("status")
+      .eq("id", first)
+      .single();
+    expect(firstBatch!.status).toBe("superseded");
+    const cands = await mine(second);
+    expect(cands).toHaveLength(1);
+    expect(cands[0].staged_status).toBe("graded");
+    expect(cands[0].staged_submission_id).toBe(stagedSubId);
+  });
+
+  test("apply refuses to replace an active submission that changed after enumeration", async () => {
+    const { candidateId, stagedSubId } = await stagedCandidate();
+    // The student pushes again under the extended deadline and it becomes active.
+    const newerSubId = await insertSubmission(`newer${repoId}`, false);
+    await insertGraderResult(newerSubId, 95);
+
+    const stale = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    expect(stale.error).toBeNull();
+    expect((stale.data as { status: string }).status).toBe("active_changed");
+    const { data: stillActive } = await ADMIN().from("submissions").select("is_active").eq("id", newerSubId).single();
+    expect(stillActive!.is_active).toBe(true);
+    expect(await regradeNotificationCount()).toBe(0);
+    const { data: snapshot } = await ADMIN()
+      .from("deadline_regrade_candidates")
+      .select("current_submission_id, current_score")
+      .eq("id", candidateId)
+      .single();
+    expect(snapshot!.current_submission_id).toBe(newerSubId);
+    expect(Number(snapshot!.current_score)).toBe(95);
+
+    // Having seen the refreshed comparison, the instructor promotes again.
+    const again = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    expect((again.data as { status: string }).status).toBe("applied");
+    const { data: promoted } = await ADMIN().from("submissions").select("is_active").eq("id", stagedSubId).single();
+    expect(promoted!.is_active).toBe(true);
   });
 });

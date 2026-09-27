@@ -617,7 +617,13 @@ export default function EditAssignment() {
         try {
           const oldDue = queryData?.due_date;
           const newDue = values.due_date as string | undefined;
-          if (oldDue && newDue && new Date(newDue).getTime() > new Date(oldDue).getTime()) {
+          // Only autograded assignments have a grading workflow to re-run.
+          if (
+            (values.has_autograder ?? queryData?.has_autograder) !== false &&
+            oldDue &&
+            newDue &&
+            new Date(newDue).getTime() > new Date(oldDue).getTime()
+          ) {
             const batchId = await enumerateDeadlineRegradeCandidates(supabase, {
               assignment_id: Number.parseInt(assignment_id as string),
               old_due_date: oldDue

@@ -21,6 +21,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Busy = Record<number, "staging" | "applying" | "skipping" | undefined>;
 
+// A staged workflow that fails before posting a grader result never leaves
+// "grading". After this long, stop polling for it and offer to grade again.
+const STALE_GRADING_MS = 30 * 60 * 1000;
+
+function isActivelyGrading(c: DeadlineRegradeCandidate): boolean {
+  if (c.staged_status !== "grading") return false;
+  if (!c.staged_triggered_at) return true;
+  return Date.now() - new Date(c.staged_triggered_at).getTime() < STALE_GRADING_MS;
+}
+
 function scoreText(s: number | null): string {
   return s === null || s === undefined ? "—" : `${s}`;
 }
@@ -117,7 +127,7 @@ export default function RegradeLateCommitsPage() {
 
   // Poll while any candidate is still grading.
   useEffect(() => {
-    const anyGrading = candidates.some((c) => c.staged_status === "grading");
+    const anyGrading = candidates.some(isActivelyGrading);
     if (anyGrading && !pollRef.current) {
       pollRef.current = setInterval(() => {
         void refresh(batch);
@@ -169,6 +179,15 @@ export default function RegradeLateCommitsPage() {
       setRowBusy(c.id, "applying");
       try {
         const res = await applyDeadlineRegrade(supabase, c.id);
+        if (res.status === "active_changed") {
+          toaster.create({
+            title: "Submission changed since this review started",
+            description: `${nameFor(c)} now has a different active submission (score ${scoreText(res.old_score ?? null)}). Nothing was promoted; review the updated comparison and promote again if you still want this commit.`,
+            type: "warning"
+          });
+          await refresh(batch);
+          return;
+        }
         toaster.create({
           title: "Promoted",
           description: `${nameFor(c)}: ${scoreText(res.old_score ?? null)} → ${scoreText(res.new_score ?? null)}. The student was notified.`,
@@ -213,7 +232,11 @@ export default function RegradeLateCommitsPage() {
   );
 
   const handleStageAll = useCallback(async () => {
-    const pending = candidates.filter((c) => c.decision === "pending" && c.staged_status === "none");
+    const pending = candidates.filter(
+      (c) =>
+        c.decision === "pending" &&
+        (c.staged_status === "none" || (c.staged_status === "grading" && !isActivelyGrading(c)))
+    );
     setStagingAll(true);
     try {
       for (const c of pending) {
@@ -271,6 +294,9 @@ export default function RegradeLateCommitsPage() {
   }
 
   const pendingCount = candidates.filter((c) => c.decision === "pending").length;
+  // Closing the batch stops the backfill trigger from attaching results, so a
+  // preview that finishes afterwards could never be promoted.
+  const anyGrading = candidates.some(isActivelyGrading);
 
   return (
     <VStack align="stretch" gap={4} p={4}>
@@ -300,7 +326,8 @@ export default function RegradeLateCommitsPage() {
           variant="outline"
           colorPalette="green"
           onClick={() => handleFinish("applied")}
-          disabled={batch.status !== "open"}
+          disabled={batch.status !== "open" || anyGrading}
+          title={anyGrading ? "Wait for preview grading to finish" : undefined}
         >
           Finish review
         </Button>
@@ -331,6 +358,7 @@ export default function RegradeLateCommitsPage() {
             const isApplied = c.decision === "applied";
             const isSkipped = c.decision === "skipped";
             const graded = c.staged_status === "graded" && c.staged_submission_id !== null;
+            const grading = isActivelyGrading(c);
             return (
               <Table.Row key={c.id} opacity={isSkipped ? 0.5 : 1}>
                 <Table.Cell>{nameFor(c)}</Table.Cell>
@@ -353,7 +381,7 @@ export default function RegradeLateCommitsPage() {
                   )}
                 </Table.Cell>
                 <Table.Cell>
-                  {c.staged_status === "grading" ? (
+                  {grading ? (
                     <HStack gap={1}>
                       <Spinner size="xs" />
                       <Text fontSize="xs" color="fg.muted">
@@ -384,10 +412,11 @@ export default function RegradeLateCommitsPage() {
                         <Button
                           size="xs"
                           variant="subtle"
-                          loading={rowBusy === "staging" || c.staged_status === "grading"}
+                          loading={rowBusy === "staging" || grading}
+                          disabled={stagingAll}
                           onClick={() => handleStage(c)}
                         >
-                          Grade
+                          {c.staged_status === "grading" ? "Retry grading" : "Grade"}
                         </Button>
                       )}
                       {graded && (

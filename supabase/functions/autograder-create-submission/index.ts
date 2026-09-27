@@ -1197,6 +1197,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             .select("created_at, grader_results!grader_results_submission_id_fkey(score)")
             .or(ownershipFilter)
             .eq("assignment_id", repoData.assignment_id)
+            // An instructor's staged regrade preview is not a student attempt.
+            .eq("is_staged", false)
             .gte(
               "created_at",
               addSeconds(new Date(), 0 - repoData.assignments.autograder.max_submissions_period_secs).toISOString()

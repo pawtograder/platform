@@ -384,10 +384,14 @@ as $$
 declare
   v_class_id bigint;
   v_new_due_date timestamptz;
+  v_has_autograder boolean;
+  v_old_due_date timestamptz;
   v_creator uuid;
   v_batch_id bigint;
+  v_superseded bigint[];
+  v_count integer;
 begin
-  select class_id, due_date into v_class_id, v_new_due_date
+  select class_id, due_date, has_autograder into v_class_id, v_new_due_date, v_has_autograder
   from public.assignments where id = p_assignment_id;
   if v_class_id is null then
     raise exception 'Assignment % not found', p_assignment_id;
@@ -396,6 +400,12 @@ begin
   if not public.authorizeforclassinstructor(v_class_id) then
     raise exception 'Only instructors can enumerate deadline regrade candidates'
       using errcode = 'insufficient_privilege';
+  end if;
+
+  -- Without an autograder there is no grading workflow to stage, so every
+  -- candidate would fail at the trigger's grade.yml preflight.
+  if not coalesce(v_has_autograder, false) then
+    raise exception 'Assignment % has no autograder; there is nothing to re-grade', p_assignment_id;
   end if;
 
   if p_old_due_date is null or v_new_due_date is null or v_new_due_date <= p_old_due_date then
@@ -407,15 +417,22 @@ begin
   where user_id = auth.uid() and class_id = v_class_id
   limit 1;
 
-  -- Supersede any prior open batch for this assignment so the dashboard only
-  -- surfaces the most recent review session.
+  -- A second extension before the first review is finished supersedes the open
+  -- batch. Widen the window back to the earliest open batch's old deadline so its
+  -- unresolved commits are re-enumerated here rather than stranded.
+  select array_agg(id), least(p_old_due_date, min(old_due_date))
+  into v_superseded, v_old_due_date
+  from public.deadline_regrade_batches
+  where assignment_id = p_assignment_id and status = 'open';
+  v_old_due_date := coalesce(v_old_due_date, p_old_due_date);
+
   update public.deadline_regrade_batches
   set status = 'superseded', updated_at = now()
-  where assignment_id = p_assignment_id and status = 'open';
+  where id = any(coalesce(v_superseded, '{}'::bigint[]));
 
   insert into public.deadline_regrade_batches
     (class_id, assignment_id, created_by, old_due_date, new_due_date, status)
-  values (v_class_id, p_assignment_id, v_creator, p_old_due_date, v_new_due_date, 'open')
+  values (v_class_id, p_assignment_id, v_creator, v_old_due_date, v_new_due_date, 'open')
   returning id into v_batch_id;
 
   -- For each repository (one per student or group) compute the per-student
@@ -429,24 +446,41 @@ begin
     r.id, r.repository, cand.sha, cand.commit_message, cand.commit_date,
     act.id, act.score, 'none', 'pending'
   from public.repositories r
+  -- Group repositories have no profile_id, but calculate_final_due_date derives
+  -- the lab-based deadline from a student profile. Pick a member the same way
+  -- autograder-create-submission does.
+  left join lateral (
+    select agm.profile_id
+    from public.assignment_groups_members agm
+    where r.assignment_group_id is not null
+      and agm.assignment_group_id = r.assignment_group_id
+    limit 1
+  ) member on true
   cross join lateral (
-    select public.calculate_final_due_date(p_assignment_id, r.profile_id, r.assignment_group_id) as new_eff
+    select public.calculate_final_due_date(
+      p_assignment_id, coalesce(r.profile_id, member.profile_id), r.assignment_group_id
+    ) as new_eff
   ) eff
   cross join lateral (
     -- old_effective = new_effective - (new_due - old_due). Assumes per-student
     -- extensions and lab-meeting selection are unchanged by the due-date move,
     -- which holds for the common (non-lab / within-window) case.
     select eff.new_eff as new_eff,
-           eff.new_eff - (v_new_due_date - p_old_due_date) as old_eff
+           eff.new_eff - (v_new_due_date - v_old_due_date) as old_eff
   ) win
   left join lateral (
+    -- The window is judged on push time (check run created_at), which is what
+    -- autograder-create-submission's deadline check uses; the commit's own
+    -- timestamp is kept for display only. #NOT-GRADED commits are practice
+    -- runs that must never become the graded submission.
     select cr.sha, cr.commit_message,
            coalesce((cr.status->>'commit_date')::timestamptz, cr.created_at) as commit_date
     from public.repository_check_runs cr
     where cr.repository_id = r.id
-      and coalesce((cr.status->>'commit_date')::timestamptz, cr.created_at) > win.old_eff
-      and coalesce((cr.status->>'commit_date')::timestamptz, cr.created_at) <= win.new_eff
-    order by coalesce((cr.status->>'commit_date')::timestamptz, cr.created_at) desc, cr.id desc
+      and cr.created_at > win.old_eff
+      and cr.created_at <= win.new_eff
+      and upper(coalesce(cr.commit_message, '')) not like '%#NOT-GRADED%'
+    order by cr.created_at desc, cr.id desc
     limit 1
   ) cand on true
   left join lateral (
@@ -465,10 +499,48 @@ begin
   ) act on true
   where r.assignment_id = p_assignment_id
     and cand.sha is not null
+    -- A personal repository retained after its owner joined a group cannot be
+    -- graded (autograder-create-submission rejects it); the group repo covers them.
+    and not (
+      r.assignment_group_id is null and exists (
+        select 1 from public.assignment_groups_members agm
+        where agm.assignment_id = p_assignment_id and agm.profile_id = r.profile_id
+      )
+    )
     -- skip when the candidate commit is already the active submission's commit
     and (act.id is null or not exists (
           select 1 from public.submissions s2 where s2.id = act.id and s2.sha = cand.sha
         ));
+  get diagnostics v_count = row_count;
+
+  -- Carry forward work already done in superseded batches on the same commit:
+  -- a graded preview does not need re-grading, and a skip stays a skip.
+  if v_superseded is not null then
+    update public.deadline_regrade_candidates c
+    set staged_submission_id = prev.staged_submission_id,
+        staged_score = prev.staged_score,
+        staged_status = prev.staged_status,
+        staged_triggered_at = prev.staged_triggered_at,
+        decision = prev.decision,
+        updated_at = now()
+    from (
+      select distinct on (p.repository_id, p.sha) p.*
+      from public.deadline_regrade_candidates p
+      where p.batch_id = any(v_superseded) and p.decision <> 'applied'
+      order by p.repository_id, p.sha, p.id desc
+    ) prev
+    where c.batch_id = v_batch_id
+      and c.repository_id = prev.repository_id
+      and c.sha = prev.sha;
+  end if;
+
+  -- Nothing to review: close the batch so the dashboard does not show an empty
+  -- "late commits await review" banner.
+  if v_count = 0 then
+    update public.deadline_regrade_batches
+    set status = 'dismissed', updated_at = now()
+    where id = v_batch_id;
+  end if;
 
   return v_batch_id;
 end;
@@ -599,6 +671,9 @@ begin
     raise exception 'Candidate % has no graded staged submission to promote yet', p_candidate_id;
   end if;
   v_staged_id := v_cand.staged_submission_id;
+  if exists (select 1 from public.submissions where id = v_staged_id and is_not_graded) then
+    raise exception 'Candidate % is a #NOT-GRADED submission and cannot be promoted', p_candidate_id;
+  end if;
 
   -- Capture the currently-active submission + autograder score (the "before").
   select s.id, gr.score into v_old_sub_id, v_old_score
@@ -613,6 +688,23 @@ begin
     )
   order by gr.id desc
   limit 1;
+
+  -- The student may have pushed again (and got a new active submission) after
+  -- the review was enumerated. The instructor's decision, including the
+  -- lower-score confirmation, was made against the old snapshot, so refresh the
+  -- snapshot and make them decide again instead of silently replacing it.
+  if v_old_sub_id is distinct from v_cand.current_submission_id then
+    update public.deadline_regrade_candidates
+    set current_submission_id = v_old_sub_id, current_score = v_old_score, updated_at = now()
+    where id = p_candidate_id;
+    return jsonb_build_object(
+      'status', 'active_changed',
+      'old_submission_id', v_old_sub_id,
+      'old_score', v_old_score,
+      'new_submission_id', v_staged_id,
+      'new_score', v_cand.staged_score
+    );
+  end if;
 
   -- Promote: deactivate prior active submission(s), activate + un-stage the candidate.
   -- Predicated on is_active so already-inactive history is not rewritten
@@ -639,7 +731,7 @@ begin
   where id = v_staged_id;
 
   update public.deadline_regrade_candidates
-  set decision = 'applied', current_submission_id = v_old_sub_id, current_score = v_old_score, updated_at = now()
+  set decision = 'applied', updated_at = now()
   where id = p_candidate_id;
 
   -- Enqueue gradebook recalculation for affected student(s).
@@ -761,6 +853,104 @@ begin
   set status = p_status, updated_at = now()
   where id = p_batch_id;
 end;
+$$;
+
+-- =====================================================================
+-- 8b. Submission limits must not count staged previews
+--     (verbatim copy of 20260115120000_add_submissions_remaining_to_limits.sql
+--     with `AND NOT s.is_staged` added to the count).
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.get_submissions_limits(p_assignment_id int8)
+RETURNS TABLE(
+	id int8,
+	created_at timestamptz,
+	max_submissions_count int4,
+	max_submissions_period_secs int4,
+	submissions_used int4,
+	submissions_remaining int4
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+	v_profile_id uuid;
+	v_assignment_group_id int8;
+	v_submissions_count int4;
+	v_max_submissions_count int4;
+	v_max_submissions_period_secs int4;
+BEGIN
+	-- Get the student's profile_id
+	SELECT ur.private_profile_id INTO v_profile_id
+	FROM public.user_privileges up
+	JOIN public.user_roles ur ON ur.user_id = up.user_id AND ur.class_id = up.class_id
+	WHERE up.role = 'student'
+	  AND up.user_id = auth.uid()
+	  AND EXISTS (
+		SELECT 1
+		FROM public.assignments a
+		WHERE a.id = p_assignment_id
+		  AND a.class_id = up.class_id
+	  )
+	LIMIT 1;
+
+	-- If no profile found, return empty result
+	IF v_profile_id IS NULL THEN
+		RETURN;
+	END IF;
+
+	-- Check if student is in a group for this assignment
+	SELECT agm.assignment_group_id INTO v_assignment_group_id
+	FROM public.assignment_groups_members agm
+	WHERE agm.assignment_id = p_assignment_id
+	  AND agm.profile_id = v_profile_id
+	LIMIT 1;
+
+	-- Get autograder settings
+	SELECT a.max_submissions_count, a.max_submissions_period_secs
+	INTO v_max_submissions_count, v_max_submissions_period_secs
+	FROM public.autograder a
+	JOIN public.assignments asn ON asn.id = a.id
+	WHERE a.id = p_assignment_id
+	  AND EXISTS (
+		SELECT 1
+		FROM public.user_privileges up
+		WHERE up.role = 'student'
+		  AND up.user_id = auth.uid()
+		  AND up.class_id = asn.class_id
+	  )
+	LIMIT 1;
+
+	-- If no autograder settings found, return empty result
+	IF v_max_submissions_count IS NULL OR v_max_submissions_period_secs IS NULL THEN
+		RETURN;
+	END IF;
+
+	-- Count submissions within the time window
+	-- Only count submissions where grader_results IS NULL OR grader_results.score > 0
+	SELECT COUNT(*)::int4 INTO v_submissions_count
+	FROM public.submissions s
+	LEFT JOIN public.grader_results gr ON gr.submission_id = s.id
+	WHERE s.assignment_id = p_assignment_id
+	  AND s.created_at >= (NOW() - (v_max_submissions_period_secs || ' seconds')::interval)
+	  AND (
+		(v_assignment_group_id IS NOT NULL AND s.assignment_group_id = v_assignment_group_id)
+		OR (v_assignment_group_id IS NULL AND s.profile_id = v_profile_id AND s.assignment_group_id IS NULL)
+	  )
+	  AND (gr.id IS NULL OR gr.score > 0)
+	  -- An instructor's staged preview is not a student attempt.
+	  AND NOT s.is_staged;
+
+	-- Return the result
+	RETURN QUERY
+	SELECT 
+		p_assignment_id as id,
+		NOW() as created_at,
+		v_max_submissions_count as max_submissions_count,
+		v_max_submissions_period_secs as max_submissions_period_secs,
+		v_submissions_count as submissions_used,
+		GREATEST(0, v_max_submissions_count - v_submissions_count) as submissions_remaining;
+END;
 $$;
 
 -- =====================================================================
