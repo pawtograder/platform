@@ -537,6 +537,29 @@ spec:
       message: "probes and lifecycle handlers may not set a host; they must target the pod itself"
     - expression: "variables.probes.all(p, p.?periodSeconds.orValue(10) >= 5)"
       message: "preview probes may run no more often than every 5 seconds"
+    # Images are pulled by the node's container runtime, outside the preview
+    # egress policy, so the registry host is a destination too. Docker Hub
+    # (including short names like `alpine`), ghcr.io and quay.io are what the
+    # chart uses, and the nodes pull all three through the in-cluster
+    # mirrors. Any other host, an IP or a port is refused.
+    - expression: >-
+        variables.containers.all(c,
+          size(c.image.split('/')) == 1 ||
+          c.image.split('/')[0] in ['docker.io', 'ghcr.io', 'quay.io'] ||
+          !(c.image.split('/')[0].contains('.') ||
+            c.image.split('/')[0].contains(':') ||
+            c.image.split('/')[0] == 'localhost'))
+      messageExpression: >-
+        'preview images must come from docker.io, ghcr.io or quay.io; got ' +
+        variables.containers.map(c, c.image).filter(i, size(i.split('/')) > 1 &&
+          !(i.split('/')[0] in ['docker.io', 'ghcr.io', 'quay.io']) &&
+          (i.split('/')[0].contains('.') || i.split('/')[0].contains(':') ||
+           i.split('/')[0] == 'localhost')).join(', ')
+    # Kubernetes honours the grace period on uninstall and namespace deletion,
+    # so a huge one behind a process that ignores SIGTERM holds the namespace
+    # (and its PVCs) Terminating. The chart's longest is 600s (Postgres).
+    - expression: "variables.podSpec.?terminationGracePeriodSeconds.orValue(30) <= 900"
+      message: "preview pods may set terminationGracePeriodSeconds of at most 900"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -601,8 +624,51 @@ spec:
       message: "probes and lifecycle handlers may not set a host; they must target the pod itself"
     - expression: "variables.probes.all(p, p.?periodSeconds.orValue(10) >= 5)"
       message: "preview probes may run no more often than every 5 seconds"
+    # Images are pulled by the node's container runtime, outside the preview
+    # egress policy, so the registry host is a destination too. Docker Hub
+    # (including short names like `alpine`), ghcr.io and quay.io are what the
+    # chart uses, and the nodes pull all three through the in-cluster
+    # mirrors. Any other host, an IP or a port is refused.
+    - expression: >-
+        variables.containers.all(c,
+          size(c.image.split('/')) == 1 ||
+          c.image.split('/')[0] in ['docker.io', 'ghcr.io', 'quay.io'] ||
+          !(c.image.split('/')[0].contains('.') ||
+            c.image.split('/')[0].contains(':') ||
+            c.image.split('/')[0] == 'localhost'))
+      messageExpression: >-
+        'preview images must come from docker.io, ghcr.io or quay.io; got ' +
+        variables.containers.map(c, c.image).filter(i, size(i.split('/')) > 1 &&
+          !(i.split('/')[0] in ['docker.io', 'ghcr.io', 'quay.io']) &&
+          (i.split('/')[0].contains('.') || i.split('/')[0].contains(':') ||
+           i.split('/')[0] == 'localhost')).join(', ')
+    # Kubernetes honours the grace period on uninstall and namespace deletion,
+    # so a huge one behind a process that ignores SIGTERM holds the namespace
+    # (and its PVCs) Terminating. The chart's longest is 600s (Postgres).
+    - expression: "variables.podSpec.?terminationGracePeriodSeconds.orValue(30) <= 900"
+      message: "preview pods may set terminationGracePeriodSeconds of at most 900"
     - expression: "size(object.spec.template.metadata.?finalizers.orValue([])) == 0"
       message: "preview workload templates may not carry finalizers"
+    # The per-pod rules in preview-pod-injection, applied to the template so a
+    # workload whose every pod would be refused is refused itself, instead of
+    # its controller retrying doomed pod creations.
+    - expression: "!has(variables.podSpec.nodeName)"
+      message: "preview workload templates may not set spec.nodeName"
+    - expression: >-
+        variables.podSpec.?tolerations.orValue([]).all(t,
+          t.?key.orValue('').startsWith('node.kubernetes.io/'))
+      message: "preview pods may only tolerate node.kubernetes.io/* conditions"
+    - expression: "variables.podSpec.?priorityClassName.orValue('') == ''"
+      message: "preview pods may not set a priorityClassName"
+    - expression: >-
+        size(variables.podSpec.containers) <= 6 &&
+        size(variables.podSpec.?initContainers.orValue([])) <= 6
+      message: "preview pods may have at most 6 containers and 6 init containers"
+    - expression: >-
+        object.spec.template.metadata.?annotations.orValue({}).all(k,
+          !k.startsWith('instrumentation.opentelemetry.io/') &&
+          !k.startsWith('sidecar.opentelemetry.io/'))
+      message: "OpenTelemetry injection annotations are not allowed in a preview namespace"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

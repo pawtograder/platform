@@ -115,6 +115,18 @@ some objects can outlive teardown. These policies cover them:
   - Probes and lifecycle handlers may not set a `host`, and probes may run no
     more often than every 5s. PSA `baseline` also refuses a host on pods; the
     template check catches it earlier.
+  - Images must come from Docker Hub (including short names), `ghcr.io` or
+    `quay.io`. The node's runtime pulls them, outside the egress policy, so an
+    image naming an internal host, IP or port would be a node-originated
+    request; the nodes pull all three registries through the in-cluster
+    mirrors.
+  - `terminationGracePeriodSeconds` at most 900 (the chart's longest is 600,
+    for Postgres). Kubernetes honours it on uninstall and namespace deletion.
+  - The template policy also repeats the per-pod rules from
+    `preview-pod-injection` (no `nodeName`, only `node.kubernetes.io/*`
+    tolerations, no `priorityClassName`, at most 6 + 6 containers, no
+    OpenTelemetry annotations), so the workload is refused rather than its
+    controller retrying pods that would be.
 - `preview-statefulset-claims` and `preview-pvc-surface`: claims must use
   `ceph-rbd` and may not pick a volume (`volumeName`, `selector`, a data
   source). `local-minio` is a Retain class with pre-made volumes.

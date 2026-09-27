@@ -399,11 +399,14 @@ Done. Next:
      namespace-name admission policy:
        docs/operations/preview-oidc-cluster-credentials.md
   2. Verify a role end to end BEFORE switching CI over (that doc's §Verify).
-  3. Flip the switch:
+  3. Turn fork previews on (every preview credential is OIDC regardless;
+     this variable only gates forks):
        gh variable set PREVIEW_CLUSTER_AUTH --body oidc --repo ${REPO}
-  4. Do NOT delete KUBECONFIG_BASE64 or BAO_PUBLISHER_ROLE_ID /
-     BAO_PUBLISHER_SECRET_ID. Only preview.yml's CLUSTER credential moved to
-     OIDC: release-images.yml's deploy-staging still requires the kubeconfig,
-     KUBECONFIG_BASE64 is the rollback path, and both KV operations still log
-     in with the AppRole. See the runbook's "What this retires".
+  4. There is NO static rollback for previews: preview.yml passes mode: oidc
+     everywhere and never reads KUBECONFIG_BASE64. If OpenBao is down,
+     previews are down until it recovers; the runbook gives manual teardown
+     steps. Keep KUBECONFIG_BASE64 in the release-build and staging
+     environments (release-images.yml's deploy-staging still needs it) and
+     BAO_PUBLISHER_ROLE_ID / BAO_PUBLISHER_SECRET_ID (both KV operations still
+     log in with the AppRole). See the runbook's "What this retires".
 EOF
