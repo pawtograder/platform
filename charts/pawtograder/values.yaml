@@ -1149,6 +1149,15 @@ edgeFunctions:
   # rolled, so keep edgeFunctions.reloader enabled and rely on the consuming
   # function to report missing config loudly (see edgeFunctions.email.enabled).
   envFromSecrets: []
+  # Extra env vars for the edge-runtime container, as plain `env` entries (same
+  # shape as web.extraEnv). Rendered after the chart's own env, so as `env` they
+  # beat anything of the same name in envFromSecrets. Use it for non-secret
+  # runtime tuning; before this existed, setting one variable meant creating a
+  # Secret just to list it in envFromSecrets. Also applies to edgeFunctions
+  # channel pods, which share this workload template.
+  extraEnv: []
+  # - name: MALLOC_ARENA_MAX
+  #   value: "2"
   email:
     # "true" | "false" | "" (unset). Rendered as EMAIL_ENABLED, consumed by
     # supabase/functions/_shared/emailTransportConfig.ts.
