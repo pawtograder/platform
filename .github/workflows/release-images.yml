@@ -227,17 +227,25 @@ jobs:
       # Falls back to `next-cache-empty` (a stage inside the Dockerfile) when the
       # tag does not exist yet -- first run on a new branch, or after a manual
       # delete. Never fails the build for a missing cache.
+      #
+      # Every dynamic value reaches the shell through `env:`, never through a
+      # ${{ }} expansion inside `run:`. GitHub expands those before the shell
+      # parses the script, so a ref name or dispatch input containing shell
+      # syntax would execute here (CWE-78). REGISTRY and REPO_OWNER are already
+      # workflow-level env, so they are plain shell variables too.
       - name: Resolve Next build cache image
         id: nextcache
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          REF="${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/web-nextcache:${{ github.ref_name }}"
-          echo "push=$REF" >> "$GITHUB_OUTPUT"
+          REF="${REGISTRY}/${REPO_OWNER}/web-nextcache:${REF_NAME}"
+          printf 'push=%s\n' "$REF" >> "$GITHUB_OUTPUT"
           if docker buildx imagetools inspect "$REF" >/dev/null 2>&1; then
-            echo "seed=$REF" >> "$GITHUB_OUTPUT"
+            printf 'seed=%s\n' "$REF" >> "$GITHUB_OUTPUT"
             echo "seeding .next/cache from $REF"
           else
-            echo "seed=next-cache-empty" >> "$GITHUB_OUTPUT"
+            printf 'seed=%s\n' "next-cache-empty" >> "$GITHUB_OUTPUT"
             echo "no cache image at $REF yet; building cold"
           fi
 
@@ -245,27 +253,49 @@ jobs:
       # exactly: the cache-export build reuses the `builder` stage from the web
       # build via the builder's in-run cache, and any difference in these args
       # changes that stage's layers and silently recompiles the whole app.
+      #
+      # Same rule as above: values arrive via `env:` and are referenced as shell
+      # variables. ANON_KEY is already in the environment from the step that
+      # read it out of the cluster. The heredoc delimiter is randomised because
+      # a value containing the literal delimiter on its own line would otherwise
+      # let a caller append arbitrary entries to $GITHUB_ENV.
       - name: Compose web build args
+        env:
+          WEB_HOST: ${{ steps.hosts.outputs.web }}
+          API_HOST: ${{ steps.hosts.outputs.api }}
+          CHANNEL: ${{ steps.hosts.outputs.channel }}
+          HOST_SUFFIX: ${{ steps.hosts.outputs.suffix }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          GIT_SHA: ${{ github.sha }}
+          SEED_IMAGE: ${{ steps.nextcache.outputs.seed }}
+          OAUTH_CLIENT_ID: ${{ secrets.STAGING_GITHUB_OAUTH_CLIENT_ID }}
+          BUGSINK_DSN: ${{ secrets.STAGING_BUGSINK_DSN }}
+          BUGSINK_HOST: ${{ secrets.STAGING_BUGSINK_HOST }}
+          POSTHOG_KEY: ${{ secrets.STAGING_POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ secrets.STAGING_POSTHOG_HOST }}
+          POSTHOG_UI_HOST: ${{ secrets.STAGING_POSTHOG_UI_HOST }}
         run: |
+          set -euo pipefail
+          DELIM="ARGS_EOF_$(openssl rand -hex 16)"
           {
-            echo 'WEB_BUILD_ARGS<<__ARGS_EOF__'
-            echo "NEXT_PUBLIC_PAWTOGRADER_WEB_URL=${{ steps.hosts.outputs.web }}"
-            echo "NEXT_PUBLIC_SUPABASE_URL=${{ steps.hosts.outputs.api }}"
-            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ env.ANON_KEY }}"
-            echo "NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID=${{ secrets.STAGING_GITHUB_OAUTH_CLIENT_ID }}"
-            echo "NEXT_PUBLIC_BUGSINK_DSN=${{ secrets.STAGING_BUGSINK_DSN }}"
-            echo "NEXT_PUBLIC_BUGSINK_HOST=${{ secrets.STAGING_BUGSINK_HOST }}"
-            echo "NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.STAGING_POSTHOG_KEY }}"
-            echo "NEXT_PUBLIC_POSTHOG_HOST=${{ secrets.STAGING_POSTHOG_HOST }}"
-            echo "NEXT_PUBLIC_POSTHOG_UI_HOST=${{ secrets.STAGING_POSTHOG_UI_HOST }}"
-            echo "NEXT_PUBLIC_ENABLE_SIGNUPS=false"
-            echo "NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}"
-            echo "NEXT_PUBLIC_PAWTOGRADER_CHANNEL=${{ steps.hosts.outputs.channel }}"
-            echo "NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=${{ steps.hosts.outputs.suffix }}"
-            echo "SENTRY_RELEASE=${{ needs.meta.outputs.version }}"
-            echo "SUPABASE_URL=${{ steps.hosts.outputs.api }}"
-            echo "NEXT_CACHE_IMAGE=${{ steps.nextcache.outputs.seed }}"
-            echo '__ARGS_EOF__'
+            printf '%s<<%s\n' 'WEB_BUILD_ARGS' "$DELIM"
+            printf '%s\n' "NEXT_PUBLIC_PAWTOGRADER_WEB_URL=$WEB_HOST"
+            printf '%s\n' "NEXT_PUBLIC_SUPABASE_URL=$API_HOST"
+            printf '%s\n' "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY"
+            printf '%s\n' "NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID=$OAUTH_CLIENT_ID"
+            printf '%s\n' "NEXT_PUBLIC_BUGSINK_DSN=$BUGSINK_DSN"
+            printf '%s\n' "NEXT_PUBLIC_BUGSINK_HOST=$BUGSINK_HOST"
+            printf '%s\n' "NEXT_PUBLIC_POSTHOG_KEY=$POSTHOG_KEY"
+            printf '%s\n' "NEXT_PUBLIC_POSTHOG_HOST=$POSTHOG_HOST"
+            printf '%s\n' "NEXT_PUBLIC_POSTHOG_UI_HOST=$POSTHOG_UI_HOST"
+            printf '%s\n' "NEXT_PUBLIC_ENABLE_SIGNUPS=false"
+            printf '%s\n' "NEXT_PUBLIC_GIT_COMMIT_SHA=$GIT_SHA"
+            printf '%s\n' "NEXT_PUBLIC_PAWTOGRADER_CHANNEL=$CHANNEL"
+            printf '%s\n' "NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=$HOST_SUFFIX"
+            printf '%s\n' "SENTRY_RELEASE=$VERSION"
+            printf '%s\n' "SUPABASE_URL=$API_HOST"
+            printf '%s\n' "NEXT_CACHE_IMAGE=$SEED_IMAGE"
+            printf '%s\n' "$DELIM"
           } >> "$GITHUB_ENV"
 
       - name: Build & push web image
