@@ -37,6 +37,9 @@ function ctx(overrides: Partial<TaskContext> = {}): TaskContext {
       assignmentName: "Agent Assignment",
       autograderScore: "5",
       autograderMax: "10",
+      gradebookScore: "45",
+      gradebookMaxScore: "100",
+      gradebookSpokenScore: "45 of 100 points",
       threadId: "900",
       threadSubject: "Office hours schedule question",
       codeFileName: "Calculator.java",
@@ -68,10 +71,31 @@ describe("read-task predicates", () => {
 
   it("gradebook task matches the assignment name case-insensitively", async () => {
     const good = await GRADEBOOK_COLUMNS_TASK.predicate(
-      verdictWithAnswer("I found AGENT assignment with score 5/10"),
+      verdictWithAnswer("I found AGENT assignment scored 45 out of 100"),
       ctx()
     );
     expect(good.success).toBe(true);
+  });
+
+  // Issue #915: the gradebook lane was green while no score was reachable at
+  // all, because the predicate only ever asked for the assignment name.
+  it("gradebook task rejects an answer that names the assignment but no score", async () => {
+    const bad = await GRADEBOOK_COLUMNS_TASK.predicate(
+      verdictWithAnswer("The gradebook lists Agent Assignment, but I could not find a score for it"),
+      ctx()
+    );
+    expect(bad.success).toBe(false);
+  });
+
+  it("gradebook task reports unbound seed needles instead of throwing", async () => {
+    const seedWithoutScore = ctx();
+    delete seedWithoutScore.seed.gradebookScore;
+    const res = await GRADEBOOK_COLUMNS_TASK.predicate(
+      verdictWithAnswer("Agent Assignment 45 out of 100"),
+      seedWithoutScore
+    );
+    expect(res.success).toBe(false);
+    expect(res.detail).toMatch(/missing from seed bindings/);
   });
 
   it("discussion-subject requires the seeded subject", async () => {
