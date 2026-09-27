@@ -318,9 +318,10 @@ async function createPushDirectSubmission(
     /**
      * The assignment's automatic late-token policy, applied to a late push exactly as the
      * Actions path applies it. It belongs to the assignment, so a repo-only assignment honours
-     * it too.
+     * it too. `classLateTokensPerStudent` is the course-wide allotment every assignment draws from;
+     * it only shapes the rejection message, since the RPC reads the balance itself.
      */
-    lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean };
+    lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean; classLateTokensPerStudent: number };
     /**
      * The pusher is course staff pushing to a repository that is their own — the Instructor Test
      * Assignment case. The Actions path exempts staff-triggered submissions from the deadline,
@@ -456,12 +457,16 @@ async function createPushDirectSubmission(
   // (require_tokens_before_due_date, which is the default), or the student's own early
   // finalization may rule it out — and in each of those the balance is never read, so reporting
   // exhaustion states something we did not check and sends the student to the wrong remedy.
-  let lateTokenOutcome: "none_offered" | "not_automatic" | "finalized_early" | "exhausted" =
+  // A course with no allotment gets its own outcome: "no late tokens left" would suggest the
+  // student spent tokens they were never given.
+  let lateTokenOutcome: "none_offered" | "none_in_course" | "not_automatic" | "finalized_early" | "exhausted" =
     lateTokenPolicy.maxLateTokens <= 0
       ? "none_offered"
-      : lateTokenPolicy.requireTokensBeforeDueDate
-        ? "not_automatic"
-        : "exhausted";
+      : lateTokenPolicy.classLateTokensPerStudent <= 0
+        ? "none_in_course"
+        : lateTokenPolicy.requireTokensBeforeDueDate
+          ? "not_automatic"
+          : "exhausted";
   let stillLate = isLate;
   if (isLate && mayRecordSubmission) {
     if (await hasFinalizedEarly(adminSupabase, studentRepo, scope)) {
@@ -673,6 +678,7 @@ async function createPushDirectSubmission(
     console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; recording a rejection`);
     const lateTokenClause = {
       none_offered: "",
+      none_in_course: ", and this course does not give late tokens, so none could be applied",
       not_automatic:
         ", and late tokens for this assignment have to be applied before the deadline, so none covered this push",
       finalized_early:
@@ -1809,7 +1815,7 @@ async function handlePushToStudentRepo(
   const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
     .from("assignments")
     .select(
-      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date"
+      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date, classes(late_tokens_per_student)"
     )
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
@@ -2163,7 +2169,8 @@ async function handlePushToStudentRepo(
       permitEmptySubmissions: pushAssignment.permit_empty_submissions ?? false,
       lateTokenPolicy: {
         maxLateTokens: pushAssignment.max_late_tokens ?? 0,
-        requireTokensBeforeDueDate: pushAssignment.require_tokens_before_due_date ?? false
+        requireTokensBeforeDueDate: pushAssignment.require_tokens_before_due_date ?? false,
+        classLateTokensPerStudent: pushAssignment.classes?.late_tokens_per_student ?? 0
       },
       // Staff pushing to their OWN repository — the Instructor Test Assignment flow — keeps the
       // bypasses the Actions path gives them. Losing that meant a no-autograder test assignment
@@ -2254,7 +2261,8 @@ async function handlePushToStudentRepo(
           permitEmptySubmissions: pushAssignment?.permit_empty_submissions ?? false,
           lateTokenPolicy: {
             maxLateTokens: pushAssignment?.max_late_tokens ?? 0,
-            requireTokensBeforeDueDate: pushAssignment?.require_tokens_before_due_date ?? false
+            requireTokensBeforeDueDate: pushAssignment?.require_tokens_before_due_date ?? false,
+            classLateTokensPerStudent: pushAssignment?.classes?.late_tokens_per_student ?? 0
           },
           actorIsStaffOwner: fallbackStanding.isOwnerStaff,
           scope
