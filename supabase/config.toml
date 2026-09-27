@@ -742,6 +742,12 @@ verify_jwt = false
 import_map = "./functions/github-repo-reconciler/deno.json"
 entrypoint = "./functions/github-repo-reconciler/index.ts"
 
+[functions.github-membership-reconciler]
+enabled = true
+verify_jwt = false
+import_map = "./functions/github-membership-reconciler/deno.json"
+entrypoint = "./functions/github-membership-reconciler/index.ts"
+
 [functions.gradebook-column-inserted]
 enabled = true
 verify_jwt = false

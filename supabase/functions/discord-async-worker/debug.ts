@@ -7,6 +7,7 @@ import type { DiscordAsyncEnvelope } from "../_shared/DiscordAsyncTypes.ts";
 
 // Import the processEnvelope function directly from the main worker
 import { processEnvelope } from "./index.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function debugProcessEnvelope(envelopeJson: string) {
   const scope = new Sentry.Scope();
@@ -72,7 +73,7 @@ async function debugProcessEnvelope(envelopeJson: string) {
     console.log("✅ Environment variables configured");
     console.log(`   SUPABASE_URL: ${supabaseUrl.substring(0, 30)}...`);
 
-    const adminSupabase = createClient<Database>(supabaseUrl, supabaseKey);
+    const adminSupabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
     // Create debug metadata
     const meta = {

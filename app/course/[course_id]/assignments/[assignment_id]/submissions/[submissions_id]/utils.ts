@@ -1,8 +1,8 @@
 "use client";
 
-/** grade, files, results, repo-analytics, checks, or deployments after /submissions/:id/ — avoids false positives from .includes("/files") elsewhere. */
+/** grade, files, results, repo-analytics, checks, deployments, or survey after /submissions/:id/ — avoids false positives from .includes("/files") elsewhere. */
 const SUBMISSION_SUB_PAGE_RE =
-  /\/submissions\/[^/]+\/(?:grade|files|results|repo-analytics|checks|deployments)(?:\/|$|\?|#)/;
+  /\/submissions\/[^/]+\/(?:grade|files|results|repo-analytics|checks|deployments|survey)(?:\/|$|\?|#)/;
 
 /** Last path segment after /submissions/:id/ (grade/files/results) — used for default active tab. */
 export function getSubmissionFilesOrResultsTab(pathname: string): "grade" | "files" | "results" | null {

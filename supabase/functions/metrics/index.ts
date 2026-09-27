@@ -6,6 +6,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 // without this Sentry.init never ran and every capture was a silent no-op.
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 /**
  * SCOPE: this handler serves only metrics that are cheap AND either per-pod or
@@ -98,7 +99,8 @@ async function generatePrometheusMetrics(): Promise<Response> {
     // Create admin client for accessing all data
     const supabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     // Query queue sizes and circuit breaker statuses using RPC functions
@@ -173,6 +175,34 @@ async function generatePrometheusMetrics(): Promise<Response> {
       { queue: "notification_emails", seconds: queueSizes?.[0]?.notification_emails_oldest_seconds || 0 }
     ];
 
+    // Depth per queue, as a LABELLED series parallel to queueOldestSeconds above.
+    //
+    // Every queue's depth is already exported below, but as a separate metric NAME
+    // (pawtograder_async_queue_size, pawtograder_discord_queue_size, ...) with no `queue` label, so
+    // no PromQL expression can join a queue's depth to its age. That join is what
+    // PawtograderQueueOldestMessageAging needs: age alone cannot distinguish a stalled queue from a
+    // bulk release draining normally, because the oldest message in a batch of N draining at R ages
+    // to N/R no matter how healthy the workers are. The rule suppresses itself while
+    // deriv(pawtograder_queue_depth) shows the queue emptying.
+    //
+    // The `queue` label values MUST stay identical to the ones in queueOldestSeconds. `unless` joins
+    // on the full label set, so a single renamed string makes the guard match nothing, and it fails
+    // quietly — the alert simply goes back to paging on healthy releases.
+    //
+    // Additive. The unlabelled per-queue names below stay exactly as they are: the dashboards in
+    // charts/pawtograder/dashboards (queues-and-workers.json, rate-limiting.json) query them by
+    // name, and renaming them would blank those panels.
+    const queueDepths: { queue: string; depth: number }[] = [
+      { queue: "async_calls", depth: asyncQueueCount },
+      { queue: "async_calls_dlq", depth: dlqQueueCount },
+      { queue: "gradebook_row_recalculate", depth: gradebookRowRecalculateQueueCount },
+      { queue: "gradebook_row_recalculate_dlq", depth: gradebookRowRecalculateDlqCount },
+      { queue: "discord_async_calls", depth: discordQueueCount },
+      { queue: "discord_async_calls_dlq", depth: discordDlqQueueCount },
+      { queue: "async_calls_low_priority", depth: asyncLowPriorityQueueCount },
+      { queue: "notification_emails", depth: notificationEmailsQueueCount }
+    ];
+
     // Generate Prometheus metrics format
     const timestamp = Date.now(); // Unix timestamp in milliseconds
 
@@ -227,6 +257,10 @@ pawtograder_notification_emails_queue_size ${notificationEmailsQueueCount} ${tim
 ${queueOldestSeconds
   .map((q) => `pawtograder_queue_oldest_message_seconds{queue="${escapeLabel(q.queue)}"} ${q.seconds} ${timestamp}`)
   .join("\n")}
+
+# HELP pawtograder_queue_depth Current number of messages in each queue, labelled by queue so depth can be joined to pawtograder_queue_oldest_message_seconds. Same values as the per-queue *_queue_size gauges above, which are kept for the dashboards.
+# TYPE pawtograder_queue_depth gauge
+${queueDepths.map((q) => `pawtograder_queue_depth{queue="${escapeLabel(q.queue)}"} ${q.depth} ${timestamp}`).join("\n")}
 
 # HELP pawtograder_circuit_breaker_open Whether a circuit breaker is currently open (1 = open, 0 = closed)
 # TYPE pawtograder_circuit_breaker_open gauge

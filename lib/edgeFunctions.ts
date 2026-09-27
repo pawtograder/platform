@@ -796,8 +796,16 @@ export async function invitationCreate(
 export async function userFetchAzureProfile(params: { accessToken: string }, supabase: SupabaseClient<Database>) {
   await invokeEdgeFunction(supabase, "user-fetch-azure-profile", { body: params });
 }
-export async function syncGitHubAccount(supabase: SupabaseClient<Database>) {
-  return await invokeEdgeFunction<{ message: string }>(supabase, "github-user-sync", { body: {} });
+/**
+ * Reconcile the signed-in user's GitHub org/team membership and repositories.
+ *
+ * `source` only labels the Sentry event the sync emits when it repairs something. It matters
+ * because the two callers look identical in production and are not: the login callback runs this
+ * for every user with an unconfirmed enrollment, so the repairs recorded under "Fix GitHub button
+ * made changes" were mostly logins, not button presses.
+ */
+export async function syncGitHubAccount(supabase: SupabaseClient<Database>, source: "login" | "button" = "button") {
+  return await invokeEdgeFunction<{ message: string }>(supabase, "github-user-sync", { body: { source } });
 }
 
 export async function diagnoseInstructorGitHubAccount(

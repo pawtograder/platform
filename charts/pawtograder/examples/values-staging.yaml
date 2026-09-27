@@ -269,6 +269,23 @@ edgeFunctions:
   resources:
     requests: { cpu: "200m", memory: "512Mi" }
     limits:   { cpu: "2",    memory: "4Gi"   }
+  # Cap glibc's native-memory growth in edge-runtime, matching Khoury prod
+  # (2026-09-25). Pods grow at idle CPU until restarted: edge-runtime v1.74.0
+  # keeps host memory after each retired user worker (supabase/edge-runtime#719),
+  # and per_request retires one per request and per pg_cron poke. The process
+  # uses plain glibc malloc with no arena cap (up to 8 x cores), and each worker
+  # copies its 5-43Mi eszip into arena heaps once glibc's dynamic mmap threshold
+  # has climbed. In prod this took the fleet mean from ~1.1Gi at 1.5h (and 1.9Gi
+  # by 3 days) to a flat ~750-900Mi that tracks load, not age.
+  #   MALLOC_ARENA_MAX=2             bound the arena count
+  #   MALLOC_MMAP_THRESHOLD_=131072  fixed 128Ki threshold (also disables the
+  #                                  dynamic one), so eszip copies are mmapped
+  #                                  and returned to the OS on free
+  extraEnv:
+    - name: MALLOC_ARENA_MAX
+      value: "2"
+    - name: MALLOC_MMAP_THRESHOLD_
+      value: "131072"
   envFromSecrets:
     - pawtograder-github-app
     - pawtograder-discord
@@ -393,8 +410,34 @@ studio:
 # ----- Nightly Postgres backups to S3 ---------------------------------------
 backup:
   enabled: true
+  # Baked mc — see charts/pawtograder/images/backup/Dockerfile. Pin this rather
+  # than leaving the default (plain supabase/postgres), or every backup,
+  # backup-verify and restore-drill run falls back to fetching mc at runtime
+  # from a third party. That is the dependency that broke backups on
+  # 2026-09-12, when MinIO archived the open-source mc project and dl.min.io
+  # started returning 410 for every binary.
+  # Tag it like the other Pawtograder images (release version or <branch>-<sha>),
+  # NOT with the Postgres version — release-images.yml publishes this repo as
+  # backup:<version>. What tracks postgres.image.tag is the Dockerfile's FROM,
+  # so pg_dump still matches the server it dumps.
+  image:
+    repository: ghcr.io/pawtograder/backup
+    tag: staging-latest
+    # staging-latest FLOATS, and it is not literally ":latest", so the k8s
+    # default would be IfNotPresent — a node would keep its cached copy after
+    # release-images.yml moves the alias, and the nightly dump would silently
+    # run a stale image. The automated deploy pins staging-<sha> and does not
+    # need this; scripts/redeploy-staging.sh uses this file as-is and does.
+    pullPolicy: Always
   schedule: "0 4 * * *"
   retentionDays: 14
+  # Dump staging goes on ceph-rbd, NOT the local-path class postgres uses above.
+  # The chart falls back to postgres.persistence.storageClass when this is
+  # unset, and inheriting local-path here would stage the whole dump on the
+  # worker's NVMe — the node-filling failure mode the scratch volume exists to
+  # avoid. Staging's DB is small, so 20Gi is ample.
+  scratchSize: 20Gi
+  scratchStorageClass: ceph-rbd
   s3:
     endpoint: https://s3.talos.ripley.cloud
     region: us-east-1

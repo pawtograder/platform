@@ -4,6 +4,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { all, create } from "npm:mathjs";
 import { minimatch } from "npm:minimatch";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 type ColumnRow = {
   id: number;
@@ -83,7 +84,9 @@ Deno.serve(async (req) => {
     exclude_column_id?: number;
   };
 
-  const admin = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const admin = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS
+  });
 
   let classId = body.class_id as number | undefined;
   let gradebookId = body.gradebook_id as number | undefined;

@@ -6,6 +6,15 @@ Pawtograder has been installed.
   Hostname:   {{ .Values.global.hostname }}
   Web URL:    {{ include "pawtograder.web.url" . }}
   API URL:    {{ include "pawtograder.api.url" . }}
+{{- if .Values.maintenance.active }}
+
+MAINTENANCE POSTURE HELD (maintenance.active=true): the web host serves the
+maintenance page, every writer tier is held at 0 replicas, the functions HPA is
+absent and the write-capable CronJobs are suspended. This is correct ONLY inside
+a planned-maintenance window. Exit: `scripts/maintenance.sh up`, then upgrade
+this same chart version with maintenance.active=false. Until then, every upgrade
+or rollback that keeps the posture re-fences {{ .Release.Namespace }}.
+{{- end }}
 
 Components enabled:
 {{- range $k, $v := dict "postgres" .Values.postgres.enabled "supavisor" .Values.supavisor.enabled "auth" .Values.auth.enabled "rest" .Values.rest.enabled "realtime" .Values.realtime.enabled "storage" .Values.storage.enabled "imgproxy" .Values.imgproxy.enabled "meta" .Values.meta.enabled "studio" .Values.studio.enabled "edgeFunctions" .Values.edgeFunctions.enabled "kong" .Values.kong.enabled "web" .Values.web.enabled }}

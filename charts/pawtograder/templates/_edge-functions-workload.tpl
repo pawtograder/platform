@@ -290,6 +290,39 @@ spec:
               value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.drainConcurrency | quote }}
             - name: GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS
               value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds | quote }}
+            # Per-org leaseholders. A SECOND scaling axis to the two above: those
+            # make one leaseholder's batch bigger inside a single 256MiB isolate,
+            # these run more leaseholders, one isolate each, one GitHub org each.
+            # globalCap 0 = off, which is the shipped default, so this renders the
+            # pre-2026-09-13 behaviour until an operator sets it. Rendered as
+            # explicit `env` (an `env` entry beats `envFrom`), so envFromSecrets
+            # cannot override them — same rule as the two knobs above.
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotGlobalCap | quote }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_ORG
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg | quote }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_LEASE_TTL_SECONDS
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds | quote }}
+            # Continuous-refill KILL SWITCH, 1 = on (shipped). Only meaningful on
+            # the org-leased path. It exists so the drain SHAPE can be rolled
+            # back without a code deploy and without setting orgSlotGlobalCap: 0,
+            # which would also give up per-org leaseholders.
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill | quote }}
+            # Wall-clock run budget for one org-leased drain: when a leaseholder
+            # stops claiming and lets the in-flight messages finish, so
+            # EDGE_WORKER_TIMEOUT_MS above cannot kill the isolate mid-message.
+            # Default and ceiling are the same number and both are DERIVED from
+            # worker.timeoutMs, so only DOWN is useful and the chart leaves the
+            # default to the worker: RENDERED ONLY WHEN SET, because a present-
+            # but-empty variable is read as a botched edit and fails safe to the
+            # 120s floor. validations.yaml refuses anything outside
+            # 120..ceiling(worker.timeoutMs) before it reaches this line.
+            {{- $runBudget := include "pawtograder.asyncWorker.runBudgetRaw" $ctx }}
+            {{- if ne $runBudget "" }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS
+              value: {{ $runBudget | quote }}
+            {{- end }}
             # Latency histogram bounds in seconds. The top finite bucket must be
             # >= worker.timeoutMs/1000 or every request that hits the worker
             # timeout lands in +Inf and the upper quantiles become an
@@ -381,6 +414,9 @@ spec:
             {{- if $ctx.Values.edgeFunctions.e2e.mockGitHub }}
             - name: E2E_MOCK_GITHUB
               value: "true"
+            {{- end }}
+            {{- with $ctx.Values.edgeFunctions.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           envFrom:
             - secretRef:

@@ -623,6 +623,89 @@ data:
         - in_progress_count:
             usage: "GAUGE"
             description: "Help requests being actively handled in the last 24h"
+    # pgmq msg_id sequence position, per queue. NOT a capacity metric -- read the
+    # next two paragraphs before sizing anything off it.
+    #
+    # WHY IT EXISTS. msg_id is a bigint and it survives the wire intact: a
+    # PostgREST round-trip against this PR's preview returned 9007199254740993
+    # (2^53 + 1) byte-exact in the response body. The loss happens in the CLIENT.
+    # V8's JSON.parse has no bigint path, so it rounds that to ...992, and the
+    # worker then calls pgmq_public.archive / pgmq_public.delete with an id one
+    # off from the message it actually processed -- archiving a message nobody
+    # handled (silent work loss) and leaving its own to be redelivered forever.
+    # Every read path has the exposure: the pre-existing pgmq_public.read, and
+    # pgmq_public.claim_org_slot_and_read added by this PR, both return
+    # msg_id bigint.
+    #
+    # ORGANIC GROWTH CANNOT REACH THAT, and the alerts on this metric are not
+    # written as if it could. Measured on prod 2026-09-13: the busiest sequence
+    # (q_discord_async_calls) stands at 137,603 and moves ~7 messages/hour,
+    # steady across 14 hours. 2^53 is ~6.5e10 times that value -- order 10^11
+    # years away. A threshold justified as "90% of 2^53" would be arithmetic with
+    # no failure mode behind it.
+    #
+    # The failure mode is a sequence SET, not a sequence grown: a restore that
+    # replays a setval from another cluster, a migration or a backfill that seeds
+    # ids, or a hand-run ALTER SEQUENCE ... RESTART WITH. Each of those moves the
+    # value by orders of magnitude in one statement, with no gradual approach to
+    # observe -- which is exactly why the series has to already exist when it
+    # happens. PawtograderQueueMsgIdHigh / PawtograderQueueMsgIdCritical in
+    # prometheus-rules.yaml read it; the durable fix is recorded there.
+    #
+    # THE queue LABEL SPELLING IS LOAD-BEARING. It must match
+    # pawtograder_queue_depth{queue="..."} and
+    # pawtograder_queue_oldest_message_seconds{queue="..."} from
+    # supabase/functions/metrics/index.ts character for character, so this can be
+    # joined to a queue's depth and age -- those two were given a shared `queue`
+    # label for exactly that reason (see the comment on queueDepths there).
+    # Stripping `q_` and `_msg_id_seq` reproduces all eight of those names;
+    # verified against prod on 2026-09-13.
+    #
+    # Do NOT rewrite the strip as replace(sequencename, 'q_', ''). replace() is
+    # unanchored and every DLQ name contains a second `q_`, so
+    # q_async_calls_dlq_msg_id_seq would come out as `async_calls_dlmsg_id_seq` --
+    # a label that matches no depth series and joins to nothing, silently. The
+    # anchored regexp removes one prefix and one suffix and nothing else.
+    #
+    # ONE ROW PER LABEL SET. The schemaname filter is what guarantees it: within
+    # pgmq, sequence names are unique and 'q_' || queue || '_msg_id_seq' is
+    # injective, so no two rows can carry the same `queue` today. The
+    # max()/GROUP BY is there to keep that true if the filter is ever widened,
+    # because a duplicate label set does not mis-rank a panel -- it makes the
+    # exporter's registry return HTTP 500 for the ENTIRE /metrics endpoint,
+    # taking every postgres metric with it (see pg_stat_statements_top and the
+    # relname notes above).
+    #
+    # COALESCE is load-bearing too. pg_sequences.last_value is NULL for a
+    # sequence nextval() has never touched, and two prod queues are in that state
+    # (async_calls_low_priority, gradebook_row_recalculate_dlq, both confirmed
+    # NULL on 2026-09-13). Without it those two series would simply be absent,
+    # and an absent series is indistinguishable from a healthy one. 0 is the
+    # honest reading: no id has been issued.
+    #
+    # Cheap -- eight sequences, one buffer page each -- so no cache_seconds. The
+    # exporter connects as supabase_admin, which both owns these sequences and is
+    # the bootstrap superuser, so no grant is needed; confirmed by running this
+    # exact query on prod as that role.
+    #
+    # master: true -- pg_sequences is per-database and pgmq lives in the
+    # application database. See the AUTO-DISCOVERY note above.
+    pawtograder_queue_msg_id:
+      query: |
+        SELECT regexp_replace(sequencename, '^q_(.*)_msg_id_seq$', '\1') AS queue,
+               max(COALESCE(last_value, 0))::float AS last_value
+        FROM pg_sequences
+        WHERE schemaname = 'pgmq'
+          AND sequencename LIKE 'q\_%\_msg\_id\_seq'
+        GROUP BY 1
+      master: true
+      metrics:
+        - queue:
+            usage: "LABEL"
+            description: "Queue name, spelled exactly as in pawtograder_queue_depth and pawtograder_queue_oldest_message_seconds (the pgmq sequence name with its q_ prefix and _msg_id_seq suffix stripped)"
+        - last_value:
+            usage: "GAUGE"
+            description: "Highest msg_id this queue's pgmq sequence has issued; 0 if nextval has never touched it. Above 2^53 a msg_id no longer survives JSON.parse in the workers, which then archive or delete the wrong message"
 
     # Note: autograder workflow business metrics (run counts by
     # conclusion, queue/run duration percentiles, error tallies) are

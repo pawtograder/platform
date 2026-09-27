@@ -554,6 +554,13 @@ gap analysis that drove the production hardening (and the items still
 deferred — automatic postgres failover, per-service metrics auth) lives in
 [PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
 
+**Read the chart version before you upgrade.** A patch bump (`0.3.26` →
+`0.3.27`) leaves Postgres running. A minor or major bump (`0.3.x` → `0.4.0`)
+is the only kind allowed to restart it. Not every one does, so check the
+release's PR for the restart-gate notice before booking a maintenance window.
+CI enforces the rule; see
+[Chart versions and Postgres restarts](../../docs/operations/planned-maintenance.md#chart-versions-and-postgres-restarts).
+
 Key mechanics:
 
 - **`global.environment: production` arms render-time guard rails**
@@ -576,6 +583,29 @@ Key mechanics:
   and a weekly `backup-verify` CronJob re-downloads the newest object,
   re-parses its TOC, and fails if the newest backup is older than 48 h.
   Restore with `pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file>`.
+  Both jobs stage the dump on a per-pod ephemeral PVC, sized by
+  `backup.scratchSize` (30Gi default) on `backup.scratchStorageClass` — the
+  dump must fit whole, since its TOC is verified locally before upload. Size
+  this for your database and point it at a cheap tier; leaving it on node
+  ephemeral storage is what makes a nightly backup fail part-written and put
+  the whole node under DiskPressure. Point it at NETWORK storage — it falls
+  back to `postgres.persistence.storageClass`, which is node-local on some
+  installs. Because a retained Job keeps its pod and each pod keeps its claim,
+  `backup.successfulJobsHistoryLimit` defaults to 1 (failures keep 3); turn
+  both down under a namespace storage quota.
+  Point `backup.image` at `ghcr.io/pawtograder/backup` (published by
+  `release-images.yml` from `charts/pawtograder/images/backup/Dockerfile`) —
+  supabase/postgres with a SHA-pinned `mc` baked in. Pin the tag: in
+  production an empty or floating `backup.image.tag` is refused, because the
+  image is only pulled on the nightly run and would otherwise fail at 04:00
+  rather than at deploy time. The jobs fall back to installing `mc` at runtime
+  when it isn't on PATH, but that fetch is a third-party dependency on the one
+  run that has to work: it broke production on 2026-09-12 when MinIO archived
+  the open-source `mc` project and `dl.min.io` began returning 410 for every
+  binary. Tag it like the other Pawtograder images (release version or
+  `<branch>-<sha>`), *not* with the Postgres version — `release-images.yml`
+  publishes it as `backup:<version>`. What tracks `postgres.image.tag` is the
+  Dockerfile's `FROM`, so `pg_dump` still matches the server it dumps.
 - **Web images are environment-specific**: `NEXT_PUBLIC_*` values (incl. the
   cluster's anon key) are baked at build time. Build prod images via
   `release-images.yml` `workflow_dispatch` with the prod hostname/namespace
