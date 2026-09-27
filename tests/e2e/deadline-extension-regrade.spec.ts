@@ -392,4 +392,16 @@ test.describe("Deadline-extension regrade", () => {
     const { data: promoted } = await ADMIN().from("submissions").select("is_active").eq("id", stagedSubId).single();
     expect(promoted!.is_active).toBe(true);
   });
+
+  test("marking a candidate as grading never downgrades a finished preview", async () => {
+    const { candidateId } = await stagedCandidate();
+    const { error } = await instructorClient.rpc("regrade_set_candidate_grading", { p_candidate_id: candidateId });
+    expect(error).toBeNull();
+    const { data } = await ADMIN()
+      .from("deadline_regrade_candidates")
+      .select("staged_status")
+      .eq("id", candidateId)
+      .single();
+    expect(data!.staged_status).toBe("graded");
+  });
 });

@@ -1032,7 +1032,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // A staged submission (deadline-extension regrade preview) is graded but
       // never auto-activated. `stage_only` is carried on the manually-triggered
       // check run.
-      const isStagedSubmission = (hasRealCheckRun && checkRun.stage_only === true) || false;
+      let isStagedSubmission = (hasRealCheckRun && checkRun.stage_only === true) || false;
+      // The flag is shared by every run of this (repository, sha). A retried
+      // preview can race the original slow run, which clears the flag when it
+      // finishes, so the retry would load stage_only=false and (the deadline now
+      // being extended) become ACTIVE without the instructor promoting it. While
+      // the commit is a pending candidate in an open review, every run for it is
+      // a preview.
+      if (!isStagedSubmission && hasRealCheckRun) {
+        const { data: pendingCandidates, error: pendingCandidatesError } = await adminSupabase
+          .from("deadline_regrade_candidates")
+          .select("id, deadline_regrade_batches!inner(status)")
+          .eq("repository_id", repoData.id)
+          .eq("sha", sha)
+          .eq("decision", "pending")
+          .eq("deadline_regrade_batches.status", "open")
+          .limit(1);
+        if (pendingCandidatesError) {
+          throw new UserVisibleError(
+            `Internal error: Failed to check for a pending deadline regrade: ${pendingCandidatesError.message}`
+          );
+        }
+        isStagedSubmission = (pendingCandidates?.length ?? 0) > 0;
+      }
       scope?.setTag("is_staged", isStagedSubmission.toString());
 
       scope?.setTag("time_zone", timeZone);

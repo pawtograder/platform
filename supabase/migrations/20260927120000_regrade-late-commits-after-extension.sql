@@ -325,6 +325,9 @@ create index if not exists deadline_regrade_batches_assignment_idx
   on public.deadline_regrade_batches (assignment_id, status);
 create index if not exists deadline_regrade_batches_class_idx
   on public.deadline_regrade_batches (class_id);
+-- At most one open review per assignment (enumeration also takes an advisory lock).
+create unique index if not exists deadline_regrade_batches_one_open_per_assignment
+  on public.deadline_regrade_batches (assignment_id) where status = 'open';
 
 -- One row per student/group candidate commit within a batch.
 create table if not exists public.deadline_regrade_candidates (
@@ -355,6 +358,10 @@ create index if not exists deadline_regrade_candidates_batch_idx
   on public.deadline_regrade_candidates (batch_id);
 create unique index if not exists deadline_regrade_candidates_unique_target
   on public.deadline_regrade_candidates (batch_id, repository_id);
+-- autograder-create-submission checks every run for a pending candidate on its
+-- (repository, sha), so keep that lookup to a small partial index.
+create index if not exists deadline_regrade_candidates_pending_commit_idx
+  on public.deadline_regrade_candidates (repository_id, sha) where decision = 'pending';
 
 -- RLS: instructors read; all writes go through SECURITY DEFINER RPCs below.
 alter table public.deadline_regrade_batches enable row level security;
@@ -369,6 +376,127 @@ drop policy if exists deadline_regrade_candidates_instructor_select on public.de
 create policy deadline_regrade_candidates_instructor_select
   on public.deadline_regrade_candidates for select
   using (public.authorizeforclassinstructor(class_id));
+
+
+-- =====================================================================
+-- 3b. Effective due date for an arbitrary base due date
+--     The regrade window needs each student's effective deadline under the OLD
+--     due date. For lab-scheduled assignments that is not new_effective minus
+--     the extension: the lab meeting is chosen relative to the base due date,
+--     so the result jumps when the base crosses a meeting. The body below is
+--     the current calculate_effective_due_date (20260825140000) with the
+--     assignment's due_date replaced by `COALESCE(base_due_date_param,
+--     assignment.due_date)`; the two-argument form now delegates with NULL, so
+--     there is still one copy of the lab logic and its behaviour is unchanged.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.calculate_effective_due_date(assignment_id_param bigint, student_profile_id_param uuid, base_due_date_param timestamp with time zone)
+ RETURNS timestamp with time zone
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+AS $$
+DECLARE
+    assignment_record RECORD;
+    student_lab_section_id bigint;
+    most_recent_lab_meeting_date date;
+    lab_section_record RECORD;
+    course_record RECORD;
+    lab_based_due_date timestamp with time zone;
+    lab_meeting_timestamp timestamp with time zone;
+    lab_end_time time;
+    base_due_date timestamp with time zone;
+BEGIN
+    -- Get assignment details
+    SELECT * INTO assignment_record
+    FROM public.assignments
+    WHERE id = assignment_id_param;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Assignment with id % not found', assignment_id_param;
+    END IF;
+
+    base_due_date := COALESCE(base_due_date_param, assignment_record.due_date);
+
+    -- If assignment doesn't use lab-based scheduling, return original due date
+    IF assignment_record.minutes_due_after_lab IS NULL THEN
+        RETURN base_due_date;
+    END IF;
+
+    -- Get student's lab section for this class
+    SELECT lab_section_id INTO student_lab_section_id
+    FROM public.user_roles
+    WHERE private_profile_id = student_profile_id_param
+    AND class_id = assignment_record.class_id
+    AND lab_section_id IS NOT NULL;
+
+    -- If student is not in a lab section, fall back to original due date
+    IF student_lab_section_id IS NULL THEN
+        RETURN base_due_date;
+    END IF;
+
+    -- Get lab section details (for end_time)
+    SELECT * INTO lab_section_record
+    FROM public.lab_sections
+    WHERE id = student_lab_section_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Lab section with id % not found', student_lab_section_id;
+    END IF;
+
+    -- Get course details (for time_zone)
+    SELECT * INTO course_record
+    FROM public.classes
+    WHERE id = assignment_record.class_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Class with id % not found', assignment_record.class_id;
+    END IF;
+
+    -- end_time is nullable, and concatenating a NULL into the meeting timestamp below would
+    -- NULL the whole comparison, match no meeting, and silently skip the lab offset. A section
+    -- with no recorded end time is treated as ending at the end of its meeting day, which is
+    -- what the assignment form's Lab Section Due Date Preview already shows.
+    lab_end_time := COALESCE(lab_section_record.end_time, TIME '23:59:59');
+
+    -- Find the most recent lab section meeting before the assignment's original due date
+    -- Convert meeting date + lab section end time to timestamp in course timezone
+    SELECT meeting_date INTO most_recent_lab_meeting_date
+    FROM public.lab_section_meetings lsm
+    WHERE lsm.lab_section_id = student_lab_section_id
+    AND (
+        (lsm.meeting_date::text || ' ' || lab_end_time::text)::timestamp AT TIME ZONE course_record.time_zone
+    ) <= base_due_date
+    AND NOT lsm.cancelled
+    ORDER BY lsm.meeting_date DESC
+    LIMIT 1;
+
+    -- If no lab meeting found before due date, fall back to original due date
+    IF most_recent_lab_meeting_date IS NULL THEN
+        RETURN base_due_date;
+    END IF;
+
+    -- Combine meeting date with lab section end time and apply course time zone
+    lab_meeting_timestamp := (
+        most_recent_lab_meeting_date::text || ' ' || lab_end_time::text
+    )::timestamp AT TIME ZONE course_record.time_zone;
+
+    -- Calculate lab-based due date
+    lab_based_due_date := lab_meeting_timestamp
+                         + (assignment_record.minutes_due_after_lab * INTERVAL '1 minute');
+
+    -- Return the lab-based due date
+    RETURN lab_based_due_date;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.calculate_effective_due_date(assignment_id_param bigint, student_profile_id_param uuid)
+ RETURNS timestamp with time zone
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+AS $$
+    SELECT public.calculate_effective_due_date(assignment_id_param, student_profile_id_param, NULL::timestamp with time zone);
+$$;
+
+revoke all on function public.calculate_effective_due_date(bigint, uuid, timestamp with time zone) from public, anon, authenticated;
 
 -- =====================================================================
 -- 4. Enumerate candidates (creates a batch + candidate rows)
@@ -417,6 +545,11 @@ begin
   where user_id = auth.uid() and class_id = v_class_id
   limit 1;
 
+  -- Two instructors saving the same assignment at once must not both see "no
+  -- open batch" and each open a review. Serialize per assignment; the partial
+  -- unique index on open batches is the backstop.
+  perform pg_advisory_xact_lock(hashtextextended('deadline_regrade_batches:' || p_assignment_id::text, 0));
+
   -- A second extension before the first review is finished supersedes the open
   -- batch. Widen the window back to the earliest open batch's old deadline so its
   -- unresolved commits are re-enumerated here rather than stranded.
@@ -459,14 +592,18 @@ begin
   cross join lateral (
     select public.calculate_final_due_date(
       p_assignment_id, coalesce(r.profile_id, member.profile_id), r.assignment_group_id
-    ) as new_eff
+    ) as new_eff,
+    public.calculate_effective_due_date(p_assignment_id, coalesce(r.profile_id, member.profile_id)) as new_base,
+    public.calculate_effective_due_date(
+      p_assignment_id, coalesce(r.profile_id, member.profile_id), v_old_due_date
+    ) as old_base
   ) eff
   cross join lateral (
-    -- old_effective = new_effective - (new_due - old_due). Assumes per-student
-    -- extensions and lab-meeting selection are unchanged by the due-date move,
-    -- which holds for the common (non-lab / within-window) case.
+    -- new_eff = new_base + the student's due-date exceptions, so the old
+    -- effective deadline is the old lab/regular deadline plus those same
+    -- exceptions (assumed unchanged by the due-date move).
     select eff.new_eff as new_eff,
-           eff.new_eff - (v_new_due_date - v_old_due_date) as old_eff
+           eff.old_base + (eff.new_eff - eff.new_base) as old_eff
   ) win
   left join lateral (
     -- The window is judged on push time (check run created_at), which is what
@@ -572,7 +709,9 @@ begin
   set staged_status = 'grading',
       staged_triggered_at = now(),
       updated_at = now()
-  where id = p_candidate_id and decision = 'pending';
+  -- The workflow is dispatched before this runs, so a fast run may already
+  -- have graded the candidate; never downgrade 'graded' back to 'grading'.
+  where id = p_candidate_id and decision = 'pending' and staged_status in ('none', 'grading', 'error');
 end;
 $$;
 
@@ -661,10 +800,12 @@ begin
   if v_cand.decision <> 'pending' then
     raise exception 'Candidate % was %; only pending candidates can be promoted', p_candidate_id, v_cand.decision;
   end if;
-  if not exists (
-    select 1 from public.deadline_regrade_batches b
-    where b.id = v_cand.batch_id and b.status = 'open'
-  ) then
+  -- Lock the batch too, so a concurrent dismiss or supersede serializes with
+  -- this promotion instead of committing between the check and the updates.
+  perform 1 from public.deadline_regrade_batches b
+  where b.id = v_cand.batch_id and b.status = 'open'
+  for update;
+  if not found then
     raise exception 'Candidate % belongs to a regrade review that is no longer open', p_candidate_id;
   end if;
   if v_cand.staged_submission_id is null then
