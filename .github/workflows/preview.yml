@@ -1240,34 +1240,61 @@ jobs:
           # dashboards (same files, same UIDs) overwrite staging's. The
           # label is refused in preview namespaces; this keeps the chart
           # from rendering it.
-          helm upgrade --install "$RELEASE" \
-            ./charts/pawtograder \
-            --namespace "$NAMESPACE" \
-            -f charts/pawtograder/examples/values-preview.yaml \
-            --set global.hostname="$HOSTNAME" \
-            --set web.image.tag="$TAG" \
-            --set edgeFunctions.image.tag="$TAG" \
-            --set migrations.image.tag="$TAG" \
-            --set seed.image.tag="$TAG" \
-            --set secrets.autogenerate=false \
-            --set secrets.create=false \
-            --set redis.shared.storeName=openbao-preview \
-            --set seed.externalSecret.storeName=openbao-preview \
-            --set secrets.externalSecret.storeName=openbao-preview \
-            --set monitoring.dashboards.stackOverview=false \
-            --set monitoring.dashboards.postgresDeepDive=false \
-            --set monitoring.dashboards.realtimeFanout=false \
-            --set monitoring.dashboards.edgeFunctions=false \
-            --set monitoring.dashboards.appBusiness=false \
-            --set monitoring.dashboards.rateLimiting=false \
-            --set monitoring.dashboards.edgeSoak=false \
-            --set monitoring.dashboards.queuesAndWorkers=false \
-            --set-string global.deploy.branch="$SAFE_BRANCH" \
-            --set-string global.deploy.pr="$DEPLOY_PR" \
-            --set-string global.deploy.runId="$GITHUB_RUN_ID" \
-            --set-string global.deploy.runAttempt="$GITHUB_RUN_ATTEMPT" \
-            --set-string global.deploy.commit="$DEPLOY_SHA" \
-            --wait --wait-for-jobs --timeout 20m
+          # Retried on one specific, transient error. On a fresh install helm
+          # creates dozens of objects while the workload controllers create
+          # ReplicaSets, pods and Endpoints charged to the same ResourceQuota;
+          # the quota's status write can lose a resourceVersion race, and the
+          # apiserver then returns 409 "Operation cannot be fulfilled on
+          # resourcequotas" for one of helm's creates. Helm does not retry.
+          # Anything else fails as before. A first install that failed leaves
+          # a release with no deployed revision, which `upgrade` refuses, so
+          # that release is uninstalled first (the Postgres PVC survives
+          # uninstall; see the destroy job).
+          attempt=1
+          while :; do
+            set +e
+                  helm upgrade --install "$RELEASE" \
+                ./charts/pawtograder \
+                --namespace "$NAMESPACE" \
+                -f charts/pawtograder/examples/values-preview.yaml \
+                --set global.hostname="$HOSTNAME" \
+                --set web.image.tag="$TAG" \
+                --set edgeFunctions.image.tag="$TAG" \
+                --set migrations.image.tag="$TAG" \
+                --set seed.image.tag="$TAG" \
+                --set secrets.autogenerate=false \
+                --set secrets.create=false \
+                --set redis.shared.storeName=openbao-preview \
+                --set seed.externalSecret.storeName=openbao-preview \
+                --set secrets.externalSecret.storeName=openbao-preview \
+                --set monitoring.dashboards.stackOverview=false \
+                --set monitoring.dashboards.postgresDeepDive=false \
+                --set monitoring.dashboards.realtimeFanout=false \
+                --set monitoring.dashboards.edgeFunctions=false \
+                --set monitoring.dashboards.appBusiness=false \
+                --set monitoring.dashboards.rateLimiting=false \
+                --set monitoring.dashboards.edgeSoak=false \
+                --set monitoring.dashboards.queuesAndWorkers=false \
+                --set-string global.deploy.branch="$SAFE_BRANCH" \
+                --set-string global.deploy.pr="$DEPLOY_PR" \
+                --set-string global.deploy.runId="$GITHUB_RUN_ID" \
+                --set-string global.deploy.runAttempt="$GITHUB_RUN_ATTEMPT" \
+                --set-string global.deploy.commit="$DEPLOY_SHA" \
+                --wait --wait-for-jobs --timeout 20m \
+              2>&1 | tee "$RUNNER_TEMP/helm-attempt.log"
+            rc=${PIPESTATUS[0]}
+            set -e
+            [ "$rc" -eq 0 ] && break
+            if [ "$attempt" -ge 3 ] || ! grep -q 'Operation cannot be fulfilled on resourcequotas' "$RUNNER_TEMP/helm-attempt.log"; then
+              exit "$rc"
+            fi
+            echo "::warning title=Quota conflict, retrying::helm hit a ResourceQuota resourceVersion conflict (attempt ${attempt}/3); retrying"
+            if ! helm history "$RELEASE" -n "$NAMESPACE" -o json 2>/dev/null | jq -e 'any(.[]; .status == "deployed" or .status == "superseded")' >/dev/null; then
+              helm uninstall "$RELEASE" -n "$NAMESPACE" --wait --timeout 5m || true
+            fi
+            attempt=$((attempt + 1))
+            sleep 10
+          done
 
       - name: Status snapshot on failure
         if: failure()
