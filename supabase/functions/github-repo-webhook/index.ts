@@ -2688,7 +2688,10 @@ async function handlePushToTemplateRepo(
           const { error } = await adminSupabase
             .from("autograder")
             .update({
-              workflow_sha: hashStr
+              workflow_sha: hashStr,
+              // The revision just hashed. Written before the pointer below advances, and it is what
+              // stops set_workflow_sha_at_pinned_revision replacing this newer hash in between.
+              workflow_sha_ref: currentHeadSha ?? null
             })
             .eq("id", assignment.id);
           if (error) {

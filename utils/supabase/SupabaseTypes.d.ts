@@ -1470,6 +1470,7 @@ export type Database = {
           max_submissions_count: number | null;
           max_submissions_period_secs: number | null;
           workflow_sha: string | null;
+          workflow_sha_ref: string | null;
         };
         Insert: {
           class_id?: number | null;
@@ -1482,6 +1483,7 @@ export type Database = {
           max_submissions_count?: number | null;
           max_submissions_period_secs?: number | null;
           workflow_sha?: string | null;
+          workflow_sha_ref?: string | null;
         };
         Update: {
           class_id?: number | null;
@@ -1494,6 +1496,7 @@ export type Database = {
           max_submissions_count?: number | null;
           max_submissions_period_secs?: number | null;
           workflow_sha?: string | null;
+          workflow_sha_ref?: string | null;
         };
         Relationships: [
           {
@@ -14130,6 +14133,10 @@ export type Database = {
           p_pr_state: string;
         };
         Returns: undefined;
+      };
+      set_workflow_sha_at_pinned_revision: {
+        Args: { p_ref: string; p_template_repo: string; p_workflow_sha: string };
+        Returns: number;
       };
       sis_sync_enrollment: {
         Args: { p_class_id: number; p_roster_data: Json; p_sync_options?: Json };

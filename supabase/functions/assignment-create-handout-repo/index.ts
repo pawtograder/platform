@@ -189,9 +189,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // already at S2. Undefined when the source has no recorded sha, which is the previous
       // behaviour and the only thing available then.
       //
-      // With a pinned sha the write is limited to rows still on it. The source's push webhook can
-      // advance every sharer (this one included) to S2 between the inherit RPC and here, and an
-      // unconditional write would then stamp S1's hash on assignments that advertise S2.
+      // With a pinned sha the write skips any row whose hash is already for another revision. The
+      // source's push webhook can hash S2 onto every sharer (this one included) between the inherit
+      // RPC and here, before it advances their pointers to S2, and an unconditional write would
+      // then leave S1's hash on assignments that advertise S2.
       const pinnedSha = sourceAssignment!.latest_template_sha ?? undefined;
       await updateAutograderWorkflowHash(sourceAssignment!.template_repo, pinnedSha, {
         onlyRowsPinnedToRef: pinnedSha !== undefined

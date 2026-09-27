@@ -800,12 +800,13 @@ export async function updateAutograderWorkflowHash(
   ref?: string,
   options?: {
     /**
-     * Write only the assignments whose `latest_template_sha` already equals `ref`. For a caller
-     * that pins its OWN pointer to `ref` before hashing, while other assignments sharing the repo
-     * may have been advanced past it by the handout push webhook: without this, hashing the older
-     * `ref` overwrites their newer workflow_sha, and their Actions submissions fail the hash check
-     * against the tree they were actually sent. Callers that hash first and pin afterwards must
-     * NOT set it, since their rows do not carry `ref` yet.
+     * Write only rows still pinned to `ref` whose stored hash is not for some other revision
+     * (see set_workflow_sha_at_pinned_revision). For a caller that pins its OWN pointer to `ref`
+     * before hashing: the handout push webhook writes a newer revision's hash before it advances
+     * `latest_template_sha`, so rows that still read as pinned to `ref` can already carry that
+     * newer hash, and writing ours over it fails their Actions submissions once the webhook
+     * finishes. Callers that hash first and pin afterwards must NOT set it, since their rows do
+     * not carry `ref` yet.
      */
     onlyRowsPinnedToRef?: boolean;
   }
@@ -816,24 +817,6 @@ export async function updateAutograderWorkflowHash(
   if (isGithubStubEnabled()) {
     await recordE2eGithubCall("updateAutograderWorkflowHash", { repoName, ref });
     return null;
-  }
-  if (options?.onlyRowsPinnedToRef) {
-    // The row filter below is not enough on its own. The handout push webhook writes the new
-    // revision's hash FIRST and advances latest_template_sha afterwards, so for the whole of that
-    // handler a row still reads as pinned to `ref` while already carrying the newer hash — and
-    // writing ours then leaves it advertising S2 with S1's hash once the webhook finishes. When
-    // the default branch has moved past `ref`, that webhook is either done or in flight and
-    // rehashes every sharer, this caller's row included, so there is nothing for us to write.
-    //
-    // This narrows the race to a push landing between this read and the update below; it does not
-    // close it. Closing it needs workflow_sha to record the revision it describes.
-    const headNow = await getDefaultBranchHeadSha(repoName);
-    if (headNow && headNow !== ref) {
-      console.log(
-        `Skipping pinned workflow hash for ${repoName} at ${ref}: the default branch is already at ${headNow}`
-      );
-      return null;
-    }
   }
   const file = (await getFileFromRepo(repoName, GRADE_WORKFLOW_PATH, undefined, ref)) as { content: string };
   const hash = createHash("sha256");
@@ -849,18 +832,31 @@ export async function updateAutograderWorkflowHash(
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   console.log("updating autograder workflow hash", hashStr, repoName);
-  let assignmentsQuery = adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
   if (options?.onlyRowsPinnedToRef) {
-    assignmentsQuery = assignmentsQuery.eq("latest_template_sha", ref!);
+    // One conditional statement in the database rather than select-ids-then-update: the check has
+    // to be on the row being written, so that a webhook write landing first is seen and respected.
+    const { error: pinnedError } = await adminSupabase.rpc("set_workflow_sha_at_pinned_revision", {
+      p_template_repo: repoName,
+      p_ref: ref!,
+      p_workflow_sha: hashStr
+    });
+    if (pinnedError) {
+      console.error(pinnedError);
+      throw new Error("Failed to update autograder workflow hash");
+    }
+    return hash;
   }
-  const { data: assignments } = await assignmentsQuery;
+  const { data: assignments } = await adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
   if (!assignments) {
     throw new Error("Assignment not found");
   }
-  const { data, error } = await adminSupabase
+  const { error } = await adminSupabase
     .from("autograder")
     .update({
-      workflow_sha: hashStr
+      workflow_sha: hashStr,
+      // The revision this hash describes, which set_workflow_sha_at_pinned_revision relies on. NULL
+      // ("unknown") when the caller hashed the unqualified head without resolving it.
+      workflow_sha_ref: ref ?? null
     })
     .in(
       "id",
