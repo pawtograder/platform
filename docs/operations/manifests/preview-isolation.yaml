@@ -902,10 +902,16 @@ spec:
           spec:
             limits:
               - type: Container
+                # ephemeral-storage: the chart sets no limit, so every
+                # container gets this one and the quota counts it. At 8Gi a
+                # fresh preview's ~12 pods reserved 96Gi of the 100Gi and the
+                # seed Job could not start. Measured use is under 20MiB per
+                # pod. Keep default x the pods quota (2Gi x 40 = 80Gi) under
+                # limits.ephemeral-storage, so defaults alone cannot exhaust it.
                 default:
                   cpu: "2"
                   memory: 2Gi
-                  ephemeral-storage: 8Gi
+                  ephemeral-storage: 2Gi
                 defaultRequest:
                   cpu: 50m
                   memory: 64Mi
