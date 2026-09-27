@@ -797,8 +797,22 @@ export async function updateAutograderWorkflowHash(
    * NEW workflow's hash against the OLD tree that students receive, so their Actions
    * submissions failed the hash check until another push repaired both values.
    */
-  ref?: string
+  ref?: string,
+  options?: {
+    /**
+     * Write only the assignments whose `latest_template_sha` already equals `ref`. For a caller
+     * that pins its OWN pointer to `ref` before hashing, while other assignments sharing the repo
+     * may have been advanced past it by the handout push webhook: without this, hashing the older
+     * `ref` overwrites their newer workflow_sha, and their Actions submissions fail the hash check
+     * against the tree they were actually sent. Callers that hash first and pin afterwards must
+     * NOT set it, since their rows do not carry `ref` yet.
+     */
+    onlyRowsPinnedToRef?: boolean;
+  }
 ) {
+  if (options?.onlyRowsPinnedToRef && !ref) {
+    throw new Error("updateAutograderWorkflowHash: onlyRowsPinnedToRef requires a ref");
+  }
   if (isGithubStubEnabled()) {
     await recordE2eGithubCall("updateAutograderWorkflowHash", { repoName, ref });
     return null;
@@ -817,7 +831,13 @@ export async function updateAutograderWorkflowHash(
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   console.log("updating autograder workflow hash", hashStr, repoName);
-  const { data: assignments } = await adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
+  let assignmentsQuery = adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
+  if (options?.onlyRowsPinnedToRef) {
+    // A push landing between this select and the update below is still written over, but its own
+    // webhook rehashes afterwards, so the window closes itself; the unconditional form never did.
+    assignmentsQuery = assignmentsQuery.eq("latest_template_sha", ref!);
+  }
+  const { data: assignments } = await assignmentsQuery;
   if (!assignments) {
     throw new Error("Assignment not found");
   }

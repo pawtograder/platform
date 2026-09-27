@@ -736,12 +736,21 @@ async function main() {
       // this loop is the only thing that honours it. Skipped for a named --assignment, exactly like
       // the checks above it: that is a human deliberately repairing one row.
       if (!targeted) {
+        // Archival is re-read here too: it was checked before this loop only, and neither creation
+        // endpoint rejects an archived row, so retiring the assignment or its class during the
+        // handout call still had the solution call publish a grader repository for it.
         const { data: orgRow, error: orgRowError } = await supabase
           .from("assignments")
-          .select("classes(github_org)")
+          .select("archived_at, classes(github_org, archived)")
           .eq("id", row.id)
           .maybeSingle();
-        const orgNow = (orgRow?.classes as { github_org: string | null } | null)?.github_org ?? null;
+        const classNow = orgRow?.classes as { github_org: string | null; archived: boolean | null } | null;
+        if (!orgRowError && (!orgRow || orgRow.archived_at || classNow?.archived)) {
+          console.log(`  skipping assignment ${row.id}: archived while it was being repaired`);
+          stoppedForExclusion = true;
+          break;
+        }
+        const orgNow = classNow?.github_org ?? null;
         const { data: exclusionNow, error: exclusionError } = orgNow
           ? await supabase
               .from("github_orgs")
@@ -782,7 +791,8 @@ async function main() {
       }
       console.log("ok");
     }
-    // A clean skip, not a success and not a failure: the operator asked automation to stop, and a
+    // A clean skip, not a success and not a failure: the operator asked automation to stop (or the
+    // work was archived), and a
     // partial handout-then-solution leaves grader_repo NULL, so the row stays repairable.
     if (stoppedForExclusion) continue;
     if (allOk) ok++;

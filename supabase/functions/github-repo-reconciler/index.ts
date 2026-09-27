@@ -523,12 +523,28 @@ async function repairMissingSolutionRepos(opts: {
         // exclusion would clear the candidate while assignment-create-solution-repo — which reads
         // the class as it is now — creates the repository in B. Asking about the wrong org is the
         // same as not asking.
+        //
+        // Archival is reloaded with it for the same reason. It was validated only before this loop,
+        // and neither creation endpoint rejects an archived row, so archiving the assignment or its
+        // class during the handout request still had the solution call create and publish a grader
+        // repository for retired work.
         const { data: orgRow, error: orgRowError } = await supabase
           .from("assignments")
-          .select("classes(github_org)")
+          .select("archived_at, classes(github_org, archived)")
           .eq("id", a.id)
           .maybeSingle();
-        const orgAtCall = (orgRow?.classes as { github_org: string | null } | null)?.github_org ?? null;
+        const classAtCall = orgRow?.classes as { github_org: string | null; archived: boolean | null } | null;
+        if (!orgRowError && (!orgRow || orgRow.archived_at !== null || classAtCall?.archived === true)) {
+          // Stopped for the same reason as an exclusion: nothing failed, and a partial
+          // handout-then-solution leaves grader_repo NULL, which is what an unarchive would need.
+          scope.setTag("repair_stopped_mid_candidate", "archived");
+          console.log(
+            `[github-repo-reconciler] Assignment ${a.id} or its class was archived while repairing it; stopping before ${fn}`
+          );
+          stoppedForExclusion = true;
+          break;
+        }
+        const orgAtCall = classAtCall?.github_org ?? null;
         const { data: orgNow, error: orgNowError } = orgAtCall
           ? await supabase
               .from("github_orgs")
@@ -564,7 +580,7 @@ async function repairMissingSolutionRepos(opts: {
         }
       }
       if (stoppedForExclusion) {
-        // Neither created nor failed. The operator asked automation to stop, and a partial
+        // Neither created nor failed. The operator asked automation to stop, or the work was retired, and a partial
         // handout-then-solution leaves grader_repo NULL, so the row stays repairable for whenever
         // the exclusion is lifted.
         continue;

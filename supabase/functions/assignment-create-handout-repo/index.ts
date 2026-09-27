@@ -170,8 +170,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // handout's grade.yml. Without this the auto-created autograder row keeps
     // workflow_sha = NULL and every student submission is rejected with a
     // "workflow sha mismatch" error. updateAutograderWorkflowHash bulk-updates
-    // all assignments sharing this template_repo, so the source assignment is
-    // unaffected (it already has the same value).
+    // assignments sharing this template_repo; see onlyRowsPinnedToRef below for
+    // which of them.
     //
     // Skipped when this assignment has no autograder: there is no submission
     // path that checks workflow_sha, and the inherited handout may legitimately
@@ -188,10 +188,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // the source's own handout webhook is delayed or failed: the pointer says S1 while GitHub is
       // already at S2. Undefined when the source has no recorded sha, which is the previous
       // behaviour and the only thing available then.
-      await updateAutograderWorkflowHash(
-        sourceAssignment!.template_repo,
-        sourceAssignment!.latest_template_sha ?? undefined
-      );
+      //
+      // With a pinned sha the write is limited to rows still on it. The source's push webhook can
+      // advance every sharer (this one included) to S2 between the inherit RPC and here, and an
+      // unconditional write would then stamp S1's hash on assignments that advertise S2.
+      const pinnedSha = sourceAssignment!.latest_template_sha ?? undefined;
+      await updateAutograderWorkflowHash(sourceAssignment!.template_repo, pinnedSha, {
+        onlyRowsPinnedToRef: pinnedSha !== undefined
+      });
     }
     return {
       repo_name: sourceAssignment!.template_repo?.split("/")[1] ?? null,
