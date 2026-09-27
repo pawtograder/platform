@@ -442,7 +442,10 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: echo "::notice title=Approved::A ci-approval reviewer admitted PR #${PR_NUMBER} at ${HEAD_SHA} for this run."
+        # Block scalar, not a plain one: in a plain YAML scalar " #" starts a
+        # comment, which cut this command off mid-string.
+        run: |
+          echo "::notice title=Approved::A ci-approval reviewer admitted PR #${PR_NUMBER} at ${HEAD_SHA} for this run."
 
   # --------------------------------------------------------------------------
   # verdict: what callers read. Trusted = every principal has write, or this
