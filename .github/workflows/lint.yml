@@ -123,6 +123,10 @@ jobs:
           # fails loudly here, which is the correct answer for something that
           # cannot be merged.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          # Fork code under pull_request_target is admitted by the trust gate
+          # (_trust-gate.yml: write access or a ci-approval reviewer), which every
+          # job doing this depends on. actions/checkout refuses it without this flag.
+          allow-unsafe-pr-checkout: true
           persist-credentials: false
       # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
       # after every push, so resolving it at checkout time is not the same as
@@ -248,6 +252,10 @@ jobs:
         with:
           # MERGE ref; see the `lint` job's checkout for why.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          # Fork code under pull_request_target is admitted by the trust gate
+          # (_trust-gate.yml: write access or a ci-approval reviewer), which every
+          # job doing this depends on. actions/checkout refuses it without this flag.
+          allow-unsafe-pr-checkout: true
           persist-credentials: false
       # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
       # after every push, so resolving it at checkout time is not the same as
@@ -388,6 +396,10 @@ jobs:
         with:
           # MERGE ref; see the `lint` job's checkout for why.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          # Fork code under pull_request_target is admitted by the trust gate
+          # (_trust-gate.yml: write access or a ci-approval reviewer), which every
+          # job doing this depends on. actions/checkout refuses it without this flag.
+          allow-unsafe-pr-checkout: true
           persist-credentials: false
       # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
       # after every push, so resolving it at checkout time is not the same as
@@ -460,6 +472,10 @@ jobs:
           # MERGE ref; see the `lint` job's checkout. Full depth so the
           # script can resolve origin/main.
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          # Fork code under pull_request_target is admitted by the trust gate
+          # (_trust-gate.yml: write access or a ci-approval reviewer), which every
+          # job doing this depends on. actions/checkout refuses it without this flag.
+          allow-unsafe-pr-checkout: true
           fetch-depth: 0
           persist-credentials: false
       - name: Verify the merge ref contains the vetted head
@@ -498,6 +514,10 @@ jobs:
         with:
           # MERGE ref; see the `lint` job's checkout for why.
           ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+          # Fork code under pull_request_target is admitted by the trust gate
+          # (_trust-gate.yml: write access or a ci-approval reviewer), which every
+          # job doing this depends on. actions/checkout refuses it without this flag.
+          allow-unsafe-pr-checkout: true
           persist-credentials: false
       # refs/pull/N/merge is MUTABLE: GitHub recomputes it in the background
       # after every push, so resolving it at checkout time is not the same as

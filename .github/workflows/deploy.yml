@@ -138,6 +138,10 @@ jobs:
           # Explicit: under pull_request_target a bare checkout is the BASE
           # branch, which would test the wrong code and pass silently.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Fork code under pull_request_target is admitted by the trust gate
+          # (_trust-gate.yml: write access or a ci-approval reviewer), which every
+          # job doing this depends on. actions/checkout refuses it without this flag.
+          allow-unsafe-pr-checkout: true
           persist-credentials: false
 
       # Restore-only, with a separate conditional save below, so that no PR
