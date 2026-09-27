@@ -161,10 +161,73 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
     );
   }
 
+  if (status === "Sync Blocked") {
+    // Nothing was written and no PR exists, so `unresolved_paths` is the only record of why
+    // the update did not arrive. Showing it here is what turns "this repo is behind" into
+    // something an instructor can act on: these are the files to ask the student about.
+    const blockedPaths = syncData?.unresolved_paths ?? [];
+    return (
+      <VStack gap={2} alignItems="flex-start" width="full">
+        <HStack gap={2}>
+          <Badge colorPalette="orange">Sync Blocked</Badge>
+          {syncData?.pr_number && syncData?.pr_url && (
+            <Link href={syncData.pr_url} target="_blank">
+              <HStack gap={1} fontSize="sm" color="blue.600">
+                <Icon as={GitPullRequest} boxSize={3} />
+                <Text>PR#{syncData.pr_number}</Text>
+              </HStack>
+            </Link>
+          )}
+        </HStack>
+        <Box
+          borderWidth="1px"
+          borderColor="orange.500"
+          bg="orange.50"
+          _dark={{ bg: "orange.950", borderColor: "orange.800" }}
+          px={3}
+          py={2}
+          borderRadius="md"
+          width="full"
+        >
+          <Text fontSize="sm" color="orange.700" _dark={{ color: "orange.300" }} wordBreak="break-word">
+            {/*
+             * Deliberately says what the sync DID, not why. An unresolved path is not always a
+             * file the student edited: the guard also leaves a file they deleted, a binary it
+             * cannot merge, a path where they have a folder, a path blocked by a file of
+             * theirs standing where a folder has to go, and a text patch that would not apply.
+             * Naming the student's edits as the cause sent instructors to ask about work that
+             * in several of those cases does not exist.
+             */}
+            {blockedPaths.length > 0
+              ? `This update could not be applied safely to these paths, so nothing was written: ${blockedPaths.join(", ")}. Check them against the handout, resolve what is different, then sync again.`
+              : "This update could not be applied safely to any of the paths it changes, so nothing was written. Check the repository against the handout, resolve what is different, then sync again."}
+          </Text>
+        </Box>
+      </VStack>
+    );
+  }
+
   if (status === "Sync Error") {
     return (
       <VStack gap={2} alignItems="flex-start" width="full">
-        <Badge colorPalette="red">Sync Error</Badge>
+        <HStack gap={2}>
+          <Badge colorPalette="red">Sync Error</Badge>
+          {/*
+           * The pull request an EARLIER revision opened, which the worker carries into a
+           * terminal failure's sync_data because it is still open and still the thing the
+           * student has to merge. computeSyncStatus reports the error ahead of "PR Open" so
+           * the failure cannot hide behind it, which makes this link the only place the
+           * instructor still sees the PR.
+           */}
+          {syncData?.pr_number && syncData?.pr_url && (
+            <Link href={syncData.pr_url} target="_blank">
+              <HStack gap={1} fontSize="sm" color="blue.600">
+                <Icon as={GitPullRequest} boxSize={3} />
+                <Text>PR#{syncData.pr_number}</Text>
+              </HStack>
+            </Link>
+          )}
+        </HStack>
         <Box
           borderWidth="1px"
           borderColor="red.500"
@@ -200,13 +263,24 @@ function SyncButton({
     setIsSyncing(true);
 
     try {
+      // An explicit human press, so it enqueues whatever the row currently says. This is the
+      // recovery path for a repo whose sync ended in a state the enqueue condition cannot see:
+      // the instructor pressing Sync means "try again now", not "try again if you think it is
+      // needed". The assignment-wide sync keeps the default: forcing there would enqueue one
+      // job per repository in a 1000-student course on every autograder toggle.
       const { data, error } = await supabase.rpc("queue_repository_syncs", {
-        p_repository_ids: [repoId]
+        p_repository_ids: [repoId],
+        p_force: true
       });
 
       if (error) throw error;
 
-      const result = data as { queued_count: number; skipped_count: number; error_count: number };
+      const result = data as {
+        queued_count: number;
+        skipped_count: number;
+        skipped_in_flight_count?: number;
+        error_count: number;
+      };
 
       if (result.queued_count > 0) {
         toaster.success({
@@ -214,6 +288,17 @@ function SyncButton({
           description: "Repository sync has been queued. This page will automatically update."
         });
         // Invalidate the row to refetch its updated state
+        await tableController?.invalidate(repoId);
+      } else if ((result.skipped_in_flight_count ?? 0) > 0) {
+        // A forced press still declines to queue a SECOND job for a repository whose sync is
+        // already running, because two syncs of one repository fight over the same branch and
+        // pull request. Reporting that as "already up to date" told the instructor the
+        // opposite of what is true, about the repository they had just asked to be fixed.
+        toaster.info({
+          title: "Sync Already Running",
+          description:
+            "A sync for this repository is already queued or in progress. This page will update when it finishes."
+        });
         await tableController?.invalidate(repoId);
       } else if (result.skipped_count > 0) {
         toaster.info({
@@ -888,17 +973,31 @@ export default function RepositoriesPage() {
     setIsBulkSyncing(true);
 
     try {
+      // Selected by hand, one repository at a time, so this is as explicit as the single press
+      // above and forces for the same reason.
       const { data: result, error } = await supabase.rpc("queue_repository_syncs", {
-        p_repository_ids: selectedIds
+        p_repository_ids: selectedIds,
+        p_force: true
       });
 
       if (error) throw error;
 
-      const syncResult = result as { queued_count: number; skipped_count: number; error_count: number };
+      const syncResult = result as {
+        queued_count: number;
+        skipped_count: number;
+        skipped_in_flight_count?: number;
+        error_count: number;
+      };
 
+      const alreadyRunning = syncResult.skipped_in_flight_count ?? 0;
       toaster.success({
         title: "Sync Queued",
-        description: `${syncResult.queued_count} repositories queued for sync. ${syncResult.skipped_count} skipped (already up to date).`
+        description:
+          `${syncResult.queued_count} repositories queued for sync. ` +
+          `${syncResult.skipped_count} skipped (already up to date).` +
+          // Counted apart from the others because it is not a repository with nothing to do:
+          // it is one whose sync is still running, and it will not be queued twice.
+          (alreadyRunning > 0 ? ` ${alreadyRunning} already syncing.` : "")
       });
 
       toggleAllRowsSelected(false);
@@ -1105,6 +1204,7 @@ export default function RepositoriesPage() {
                                   { label: "PR Open", value: "PR Open" },
                                   { label: "Sync Finalizing", value: "Sync Finalizing" },
                                   { label: "Sync in Progress", value: "Sync in Progress" },
+                                  { label: "Sync Blocked", value: "Sync Blocked" },
                                   { label: "Sync Error", value: "Sync Error" }
                                 ]}
                                 placeholder="Filter by sync status..."
