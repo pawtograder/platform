@@ -99,6 +99,38 @@ those objects, so each gets an admission policy:
   Kubernetes' own `node.kubernetes.io/*`, refuses `spec.nodeName` on create
   (which would skip the scheduler), and refuses any `priorityClassName`.
 
+## Pod specs, claims and finalizers
+
+The Cilium policy governs traffic from the preview's pods. Some parts of a pod
+spec are carried out by the node's kubelet instead, from the node network, and
+some objects can outlive teardown. These policies cover them:
+
+- `preview-pod-spec` (pods) and `preview-workload-template` (Deployment,
+  StatefulSet and Job templates, so a bad template is refused up front and
+  does not fail pod creation in a loop):
+  - Volumes: only `configMap`, `secret`, `projected`, `emptyDir`,
+    `downwardAPI` and `persistentVolumeClaim`. PSA `baseline` still allows
+    NFS, iSCSI, CephFS, RBD and inline CSI, which the kubelet mounts from the
+    node network.
+  - Probes and lifecycle handlers may not set a `host`, and probes may run no
+    more often than every 5s. PSA `baseline` also refuses a host on pods; the
+    template check catches it earlier.
+- `preview-statefulset-claims` and `preview-pvc-surface`: claims must use
+  `ceph-rbd` and may not pick a volume (`volumeName`, `selector`, a data
+  source). `local-minio` is a Retain class with pre-made volumes.
+- `preview-finalizers`: only the finalizers a real controller owns, on the kind
+  it manages (ESO's cleanup on ExternalSecrets, `pvc-protection` on PVCs, the
+  Job controller's tracking finalizer on pods, and the garbage collector's
+  `foregroundDeletion`/`orphan`). Workload and claim templates may carry none.
+  A finalizer no controller removes would leave the namespace `Terminating`
+  forever, and the teardown role cannot patch it away.
+
+CEL in admission policies is type-checked separately for each kind a policy
+matches, so a field one kind lacks (a Pod has no `spec.template`) is an error
+even behind a guard. Expressions that fail at runtime deny under
+`failurePolicy: Fail`. Keep each policy to kinds that share the fields it
+reads, and check `.status.typeChecking` after every change.
+
 ## List sizes and reconcile rates
 
 Quotas count objects, not what is inside them. The admission policies also cap
@@ -207,6 +239,8 @@ kubectl get validatingadmissionpolicy preview-ingress-surface \
   preview-servicemonitor-surface preview-prometheusrule-surface \
   preview-monitoring-kinds preview-externalsecret-surface \
   preview-controller-keys preview-pod-injection preview-ceilings-managed \
+  preview-workload-bounds preview-pod-spec preview-workload-template \
+  preview-statefulset-claims preview-pvc-surface preview-finalizers \
   -o custom-columns=NAME:.metadata.name,TYPECHECK:.status.typeChecking
 ```
 

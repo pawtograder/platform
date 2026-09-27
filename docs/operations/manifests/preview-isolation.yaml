@@ -472,6 +472,280 @@ spec:
   validationActions: [Deny]
 ---
 # ---------------------------------------------------------------------------
+# Pod specs: nothing the kubelet does on the pod's behalf may leave the pod.
+#
+# The Cilium policy governs traffic FROM the preview pod. Three things in a pod
+# spec are carried out by the node's kubelet instead, from the node network,
+# outside that policy:
+#   - probes and lifecycle handlers with an explicit httpGet/tcpSocket `host`
+#     (without one they target the pod's own IP);
+#   - network-backed inline volumes (nfs, iscsi, cephfs, rbd, csi, ...), which
+#     PSA baseline still allows;
+#   - PersistentVolumeClaims that pick a volume (volumeName, selector, a
+#     dataSource) or a storage class with pre-made volumes (local-minio).
+# Checked on pods and on workload templates, so a bad template is refused at
+# the Deployment/StatefulSet/Job instead of failing pod creation in a loop.
+# The chart uses configMap, secret, projected, emptyDir and PVC volumes; exec,
+# httpGet and tcpSocket probes without a host, at a period of 5s or more; and
+# ceph-rbd claims only.
+# ---------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-pod-spec
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: podSpec
+      expression: "object.spec"
+    - name: containers
+      expression: >-
+        variables.podSpec.containers + variables.podSpec.?initContainers.orValue([])
+    - name: probes
+      expression: >-
+        variables.containers.map(c, [c.?livenessProbe, c.?readinessProbe, c.?startupProbe]
+          .filter(p, p.hasValue()).map(p, p.value())).flatten()
+    - name: hooks
+      expression: >-
+        variables.containers.map(c, [c.?lifecycle.?postStart, c.?lifecycle.?preStop]
+          .filter(h, h.hasValue()).map(h, h.value())).flatten()
+  validations:
+    - expression: >-
+        variables.podSpec.?volumes.orValue([]).all(v,
+          !has(v.nfs) && !has(v.iscsi) && !has(v.cephfs) && !has(v.rbd) &&
+          !has(v.csi) && !has(v.glusterfs) && !has(v.fc) && !has(v.flexVolume) &&
+          !has(v.hostPath) && !has(v.ephemeral) && !has(v.image) &&
+          !has(v.azureFile) && !has(v.azureDisk) && !has(v.awsElasticBlockStore) &&
+          !has(v.gcePersistentDisk) && !has(v.cinder) && !has(v.portworxVolume) &&
+          !has(v.quobyte) && !has(v.scaleIO) && !has(v.storageos) &&
+          !has(v.vsphereVolume) && !has(v.photonPersistentDisk) && !has(v.flocker) &&
+          !has(v.gitRepo))
+      message: "preview pods may only use configMap, secret, projected, emptyDir, downwardAPI and persistentVolumeClaim volumes"
+    - expression: >-
+        (variables.probes + variables.hooks).all(h,
+          (!has(h.httpGet) || !has(h.httpGet.host)) &&
+          (!has(h.tcpSocket) || !has(h.tcpSocket.host)))
+      message: "probes and lifecycle handlers may not set a host; they must target the pod itself"
+    - expression: "variables.probes.all(p, p.?periodSeconds.orValue(10) >= 5)"
+      message: "preview probes may run no more often than every 5 seconds"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-pod-spec
+spec:
+  policyName: preview-pod-spec
+  validationActions: [Deny]
+---
+# The same checks on workload templates, plus no template finalizers (the
+# controllers copy them onto every pod). Separate from the pod policy because
+# CEL is type-checked per kind: a Pod has no spec.template.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-workload-template
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs"]
+  variables:
+    - name: podSpec
+      expression: "object.spec.template.spec"
+    - name: containers
+      expression: >-
+        variables.podSpec.containers + variables.podSpec.?initContainers.orValue([])
+    - name: probes
+      expression: >-
+        variables.containers.map(c, [c.?livenessProbe, c.?readinessProbe, c.?startupProbe]
+          .filter(p, p.hasValue()).map(p, p.value())).flatten()
+    - name: hooks
+      expression: >-
+        variables.containers.map(c, [c.?lifecycle.?postStart, c.?lifecycle.?preStop]
+          .filter(h, h.hasValue()).map(h, h.value())).flatten()
+  validations:
+    - expression: >-
+        variables.podSpec.?volumes.orValue([]).all(v,
+          !has(v.nfs) && !has(v.iscsi) && !has(v.cephfs) && !has(v.rbd) &&
+          !has(v.csi) && !has(v.glusterfs) && !has(v.fc) && !has(v.flexVolume) &&
+          !has(v.hostPath) && !has(v.ephemeral) && !has(v.image) &&
+          !has(v.azureFile) && !has(v.azureDisk) && !has(v.awsElasticBlockStore) &&
+          !has(v.gcePersistentDisk) && !has(v.cinder) && !has(v.portworxVolume) &&
+          !has(v.quobyte) && !has(v.scaleIO) && !has(v.storageos) &&
+          !has(v.vsphereVolume) && !has(v.photonPersistentDisk) && !has(v.flocker) &&
+          !has(v.gitRepo))
+      message: "preview pods may only use configMap, secret, projected, emptyDir, downwardAPI and persistentVolumeClaim volumes"
+    - expression: >-
+        (variables.probes + variables.hooks).all(h,
+          (!has(h.httpGet) || !has(h.httpGet.host)) &&
+          (!has(h.tcpSocket) || !has(h.tcpSocket.host)))
+      message: "probes and lifecycle handlers may not set a host; they must target the pod itself"
+    - expression: "variables.probes.all(p, p.?periodSeconds.orValue(10) >= 5)"
+      message: "preview probes may run no more often than every 5 seconds"
+    - expression: "size(object.spec.template.metadata.?finalizers.orValue([])) == 0"
+      message: "preview workload templates may not carry finalizers"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-workload-template
+spec:
+  policyName: preview-workload-template
+  validationActions: [Deny]
+---
+# StatefulSet claim templates: the PVC rules below, at the StatefulSet.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-statefulset-claims
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["statefulsets"]
+  validations:
+    - expression: >-
+        object.spec.?volumeClaimTemplates.orValue([]).all(t,
+          t.spec.?storageClassName.orValue('') == 'ceph-rbd' &&
+          !has(t.spec.volumeName) && !has(t.spec.selector) &&
+          !has(t.spec.dataSource) && !has(t.spec.dataSourceRef) &&
+          size(t.metadata.?finalizers.orValue([])) == 0)
+      message: "preview volumeClaimTemplates must use storageClassName ceph-rbd, may not pick a volume (volumeName, selector, dataSource), and may not carry finalizers"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-statefulset-claims
+spec:
+  policyName: preview-statefulset-claims
+  validationActions: [Deny]
+---
+# The same claim rules on the PVC itself, which the StatefulSet controller
+# creates from the template. volumeName is refused on CREATE only: the binder
+# sets it afterwards.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-pvc-surface
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["persistentvolumeclaims"]
+  validations:
+    - expression: >-
+        object.spec.?storageClassName.orValue('') == 'ceph-rbd' &&
+        !has(object.spec.volumeName) && !has(object.spec.selector) &&
+        !has(object.spec.dataSource) && !has(object.spec.dataSourceRef)
+      message: "preview PVCs must use storageClassName ceph-rbd and may not pick a volume (volumeName, selector, dataSource)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-pvc-surface
+spec:
+  policyName: preview-pvc-surface
+  validationActions: [Deny]
+---
+# Finalizers. A finalizer no controller removes leaves its object, and so the
+# namespace, Terminating forever, and the teardown role cannot patch it away.
+# Only the finalizers a real controller owns are allowed, on the kind it
+# manages: ESO's cleanup on ExternalSecrets, pvc-protection on PVCs, the Job
+# controller's tracking finalizer on pods, and the garbage collector's
+# foregroundDeletion/orphan anywhere. Workload and claim templates are
+# checked by preview-workload-template and preview-statefulset-claims.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: preview-finalizers
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        pawtograder.net/preview: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["configmaps", "services", "serviceaccounts", "secrets", "pods", "persistentvolumeclaims"]
+      - apiGroups: ["apps"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs"]
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["ingresses"]
+      - apiGroups: ["external-secrets.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["externalsecrets"]
+      - apiGroups: ["monitoring.coreos.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["servicemonitors", "prometheusrules"]
+  variables:
+    - name: allowed
+      expression: >-
+        ['foregroundDeletion', 'orphan'] +
+        (request.resource.resource == 'externalsecrets'
+          ? ['externalsecrets.external-secrets.io/externalsecret-cleanup'] : []) +
+        (request.resource.resource == 'persistentvolumeclaims'
+          ? ['kubernetes.io/pvc-protection'] : []) +
+        (request.resource.resource == 'pods'
+          ? ['batch.kubernetes.io/job-tracking'] : [])
+  validations:
+    - expression: >-
+        object.metadata.?finalizers.orValue([]).all(f, f in variables.allowed)
+      messageExpression: >-
+        'finalizer not allowed on a preview ' + request.resource.resource + ': ' +
+        object.metadata.?finalizers.orValue([]).filter(f, !(f in variables.allowed)).join(', ')
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: preview-finalizers
+spec:
+  policyName: preview-finalizers
+  validationActions: [Deny]
+---
+# ---------------------------------------------------------------------------
 # Resource ceilings: a ResourceQuota and LimitRange in every preview
 # namespace, generated and kept in sync by Kyverno (synchronize: true puts
 # them back if changed or deleted), and admission that lets nobody but
