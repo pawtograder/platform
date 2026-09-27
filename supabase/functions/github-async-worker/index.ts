@@ -105,12 +105,19 @@ async function getAssignmentTemplateSha(
  * The comparison is its own request rather than reading the one getChangedFiles makes: that
  * one is served from a 12-hour Redis cache, so on a cache hit there is no comparison to read.
  *
- * Everything this cannot settle reads as forward, and deliberately so: the handout is
- * unreachable, a sha stopped resolving because its history was rewritten, the E2E stub answered
- * in a shape with no status in it. Those repositories sync as they did before this check
- * existed. A guard for a rare ordering fault that can park every repository in a course when it
- * misreads its own input is worse than the fault, so only an answer that MEANS the handout
- * moved the other way stops a sync.
+ * Everything this cannot settle for good reads as forward ("unknown"), and deliberately so: the
+ * handout is unreachable, a sha stopped resolving because its history was rewritten, the E2E
+ * stub answered in a shape with no status in it. Those repositories sync as they did before this
+ * check existed. A guard for a rare ordering fault that can park every repository in a course
+ * when it misreads its own input is worse than the fault, so only an answer that MEANS the
+ * handout moved the other way stops a sync.
+ *
+ * A compare that merely FAILED is different, and is "undetermined" instead: a 5xx, a network
+ * error, a rate limit. Those say nothing about the shas, and reading them as forward let a stale
+ * job through the one guard against it on nothing more than a bad moment at GitHub -- after
+ * which getChangedFiles, served from its cache or succeeding on the next request, hands back the
+ * reverse diff described above. The caller decides what an undetermined answer is worth. Only a
+ * 404 or 422, which is GitHub saying a revision does not resolve, stays "unknown".
  *
  * Which is why "diverged" is not one of them by itself. An instructor who force-pushes or
  * rebases the handout's default branch leaves every repository's recorded revision on a
@@ -134,7 +141,7 @@ async function classifyHandoutDirection(
   toSha: string,
   advertisedSha: string | null,
   scope: Sentry.Scope
-): Promise<"forward" | "identical" | "stale" | "rewritten" | "unknown"> {
+): Promise<"forward" | "identical" | "stale" | "rewritten" | "unknown" | "undetermined"> {
   // No recorded revision: the repository has never been synced, so every revision is forward.
   if (!fromSha) return "forward";
   if (fromSha === toSha) return "identical";
@@ -166,7 +173,8 @@ async function classifyHandoutDirection(
       message: `Handout direction undetermined for ${templateRepo} (${fromSha.substring(0, 7)}...${toSha.substring(0, 7)})`,
       level: "warning"
     });
-    return "unknown";
+    const status = (error as { status?: unknown } | null)?.status;
+    return status === 404 || status === 422 ? "unknown" : "undetermined";
   }
 }
 
@@ -1886,7 +1894,8 @@ export async function processEnvelope(
           // finished work, not failed work: archive it and report success, because requeueing it
           // only redelivers the same stale revision.
           //
-          // Only "stale" stops here. "identical" goes down the ordinary path, which finds no
+          // Only "stale" stops here, and an "undetermined" answer that cannot rule it out.
+          // "identical" goes down the ordinary path, which finds no
           // changed files and records the revision: the early return above covers the case
           // where the row already holds to_sha, so what is left is a row holding no revision at
           // all, and skipping that one would leave it holding none.
@@ -1910,6 +1919,33 @@ export async function processEnvelope(
                 `rewritten, so ${repository_full_name} syncs from the merge base`,
               level: "warning"
             });
+          }
+          // A compare that failed rather than answered. The one ordering available without
+          // GitHub is desired_handout_sha: queueing sets it to the revision it queues, so a job
+          // carrying exactly that revision is the newest one there is and cannot be the stale
+          // job this check exists to stop. Anything else waits for a compare that answers,
+          // without writing to the row -- a stale job's error would replace the status a live
+          // revision is relying on. Bounded like the lost-race retry below: past it, this job is
+          // dropped and the row is left to the revision that superseded it, which never rolls
+          // a repository back.
+          if (direction === "undetermined" && to_sha !== currentDesiredHandoutSha) {
+            const currentRetryCount = envelope.retry_count ?? 0;
+            if (currentRetryCount >= 5) {
+              Sentry.captureMessage(
+                `Could not establish whether ${to_sha.substring(0, 7)} is newer than the revision ` +
+                  `${repository_full_name} is on after ${currentRetryCount} attempts, and it is not the ` +
+                  `revision the row is waiting for; dropping this job rather than risking a rollback`,
+                scope
+              );
+              return true;
+            }
+            return await requeueWithDelay(
+              adminSupabase,
+              envelope,
+              computeBackoffSeconds(30, currentRetryCount),
+              scope,
+              queueName
+            );
           }
           if (direction === "stale") {
             Sentry.addBreadcrumb({
