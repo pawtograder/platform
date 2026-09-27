@@ -67,6 +67,19 @@ name: Trust gate
 #   * sender            — whoever fired this event (on `synchronize`, the
 #                         pusher; on `labeled`, whoever added the label)
 #
+# CI-ONLY TRUST: the CI_TRUSTED_USERS allow-list
+# ------------------------------------------------
+# Write access is more than CI needs: it also lets someone push branches here
+# (which get automatic previews), label PRs and so on. For an outside
+# contributor who should get CI and previews and NOTHING else, add their login
+# to the CI_TRUSTED_USERS repository variable (space- or comma-separated,
+# case-insensitive). A listed login counts as a trusted principal below and
+# holds no permission on the repo. Repository variables can only be changed by
+# repo admins, and the value is read from this workflow's run context, which a
+# PR cannot influence. Fork previews still need the `preview` label from a
+# maintainer, so the list decides who MAY run, the label decides what DOES.
+# Remove the login to revoke; it takes effect on their next push.
+#
 # Residual risk, accepted deliberately: a collaborator on a trusted user's
 # personal fork can land code that runs here without holding write themselves.
 # Closing that would mean refusing fork PRs altogether, which is the workflow
@@ -170,6 +183,8 @@ jobs:
           # Stable across every event on the PR, unlike `sender`. See the
           # principal list below for why that matters on org-owned forks.
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          # CI-only trust; see "CI-ONLY TRUST" in the header. Admin-managed.
+          CI_TRUSTED_USERS: ${{ vars.CI_TRUSTED_USERS }}
         run: |
           set -euo pipefail
 
@@ -195,8 +210,22 @@ jobs:
           # inside a job whose conclusion is Success. Failing closed has to
           # mean this job FAILS, leaving a red check, not that its consumers
           # quietly stand down. The caller turns a 2 into exit 1.
+          # Logins on the CI_TRUSTED_USERS allow-list pass without an API
+          # call. GitHub logins are case-insensitive, so compare lowercased.
+          allow_listed() {
+            local want entry
+            want=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+            for entry in $(printf '%s' "${CI_TRUSTED_USERS:-}" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do
+              [[ "$entry" == "$want" ]] && return 0
+            done
+            return 1
+          }
           has_write() {
             local user="$1" out err perm role
+            if allow_listed "$user"; then
+              echo "  ${user}: on CI_TRUSTED_USERS (CI and previews only, no repo permission)"
+              return 0
+            fi
             # stderr to a FILE, not 2>&1 into `out`: a diagnostic on a
             # SUCCESSFUL call would otherwise land in the string being parsed
             # below, and the first token of a warning is not a permission.
@@ -321,7 +350,7 @@ jobs:
           if [[ "$trusted" == "true" ]]; then
             echo "::notice title=Trusted::${reason}"
           else
-            echo "::notice title=Untrusted ref::${reason}. Self-hosted lanes (lint, unit tests, E2E, preview) are skipped. To grant access, add the contributor to the pawtograder-contributors team; it takes effect on their next push."
+            echo "::notice title=Untrusted ref::${reason}. Self-hosted lanes (lint, unit tests, E2E, preview) are skipped. To grant access, add the contributor to the pawtograder-contributors team, or for CI and previews only, add their login to the CI_TRUSTED_USERS repo variable; it takes effect on their next push."
           fi
 
       - id: approve

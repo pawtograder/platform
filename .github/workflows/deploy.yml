@@ -131,7 +131,7 @@ jobs:
       - name: Require a trusted ref
         if: ${{ needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true' }}
         run: |
-          echo "::error title=Untrusted ref::E2E cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team; it takes effect on their next push.' }}"
+          echo "::error title=Untrusted ref::E2E cannot run for this PR. ${{ needs.gate.result != 'success' && 'The trust gate could not resolve a verdict — see the gate job.' || 'Add the contributor to the pawtograder-contributors team, or (CI and previews only) to the CI_TRUSTED_USERS repo variable; it takes effect on their next push.' }}"
           exit 1
       - uses: actions/checkout@v4
         with:
