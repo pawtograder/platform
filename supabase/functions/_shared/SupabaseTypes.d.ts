@@ -13,6 +13,25 @@ export type Database = {
         Args: { message_id: number; queue_name: string };
         Returns: boolean;
       };
+      claim_org_slot_and_read: {
+        Args: {
+          global_cap: number;
+          holder: string;
+          lease_ttl_seconds: number;
+          max_per_org: number;
+          n: number;
+          pin_org?: string;
+          queue_name: string;
+          sleep_seconds: number;
+        };
+        Returns: Database["pgmq_public"]["CompositeTypes"]["org_slot_row"][];
+        SetofOptions: {
+          from: "*";
+          to: "org_slot_row";
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
+      };
       delete: {
         Args: { message_id: number; queue_name: string };
         Returns: boolean;
@@ -37,6 +56,14 @@ export type Database = {
           isSetofReturn: true;
         };
       };
+      release_org_slot: {
+        Args: { holder: string; queue_name: string };
+        Returns: undefined;
+      };
+      renew_org_slot: {
+        Args: { holder: string; lease_ttl_seconds: number; queue_name: string };
+        Returns: boolean;
+      };
       send: {
         Args: { message: Json; queue_name: string; sleep_seconds?: number };
         Returns: number[];
@@ -50,7 +77,15 @@ export type Database = {
       [_ in never]: never;
     };
     CompositeTypes: {
-      [_ in never]: never;
+      org_slot_row: {
+        status: string | null;
+        org: string | null;
+        msg_id: number | null;
+        read_ct: number | null;
+        enqueued_at: string | null;
+        vt: string | null;
+        message: Json | null;
+      };
     };
   };
   public: {
@@ -1313,6 +1348,33 @@ export type Database = {
             referencedColumns: ["id"];
           }
         ];
+      };
+      async_worker_slots: {
+        Row: {
+          claimed_at: string | null;
+          expires_at: string;
+          holder: string | null;
+          org: string | null;
+          queue_name: string;
+          slot: number;
+        };
+        Insert: {
+          claimed_at?: string | null;
+          expires_at?: string;
+          holder?: string | null;
+          org?: string | null;
+          queue_name: string;
+          slot: number;
+        };
+        Update: {
+          claimed_at?: string | null;
+          expires_at?: string;
+          holder?: string | null;
+          org?: string | null;
+          queue_name?: string;
+          slot?: number;
+        };
+        Relationships: [];
       };
       audit: {
         Row: {
@@ -13306,6 +13368,25 @@ export type Database = {
         Args: { p_assignment_id: number };
         Returns: Json;
       };
+      get_survey_responses_for_submission: {
+        Args: { p_submission_id: number };
+        Returns: {
+          available_at: string;
+          due_date: string;
+          is_assigned: boolean;
+          is_submitted: boolean;
+          is_submitter: boolean;
+          profile_id: string;
+          profile_name: string;
+          response: Json;
+          submitted_at: string;
+          survey_id: string;
+          survey_json: Json;
+          survey_status: Database["public"]["Enums"]["survey_status"];
+          survey_title: string;
+          updated_at: string;
+        }[];
+      };
       get_survey_responses_with_full_context: {
         Args: { p_class_id: number; p_survey_id: string };
         Returns: {
@@ -14132,6 +14213,10 @@ export type Database = {
       update_class_late_tokens_per_student: {
         Args: { p_class_id: number; p_late_tokens_per_student: number };
         Returns: undefined;
+      };
+      update_class_section_name: {
+        Args: { p_class_section_id: number; p_name: string };
+        Returns: boolean;
       };
       update_gradebook_column_student_with_recalc: {
         Args: { p_id: number; p_updates: Json };

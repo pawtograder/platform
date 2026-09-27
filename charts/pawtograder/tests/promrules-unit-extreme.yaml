@@ -1,0 +1,96 @@
+# promtool unit tests at the MAXIMUM PERMITTED drain floor.
+#
+# templates/validations.yaml refuses queueDrainMessagesPerMinute outside 1-7.
+# That proves the chart rejects garbage. It does not prove a value the chart
+# ACCEPTS still produces a rule that discriminates — and the ceiling is the
+# value where that stops being obvious, because 7 sits only 0.27 msg/min below
+# the slowest healthy drain ever measured.
+#
+# The ceiling argument, restated so this file can be read on its own: the
+# rolling 15m windows of the healthy 2026-09-13 release bottomed out at
+# 7.27 msg/min. A floor at or above that is above every drain a real release
+# produces, so the guard matches nothing, suppresses nothing, and the release
+# pages come back with no sign that a values change caused it. 7 is therefore
+# the last value that still works, and this file is the proof that it does.
+#
+# If someone raises the bound in validations.yaml without re-measuring the
+# drain, the first scenario here goes red. That is the intended coupling: the
+# bound and the measurement move together or not at all.
+#
+# Rendered with --set monitoring.prometheusRules.queueDrainMessagesPerMinute=7
+# by promrules-unit.sh; the fixtures below therefore say "7 msg/min" in their
+# expected annotations, where promrules-unit.yaml says 2.
+rule_files:
+  - rendered-rules-extreme.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # The worst genuine drain window from the 2026-09-13 release, 7.3 msg/min,
+  # against a floor of 7. Still suppressed, by 0.3 msg/min. This is the tightest
+  # margin the permitted range allows and the whole reason the ceiling is 7 and
+  # not 8.
+  - interval: 1m
+    name: the slowest measured healthy drain is still suppressed at the ceiling
+    input_series:
+      - series: 'pawtograder_async_queue_size{namespace="pawtograder"}'
+        values: "600-7.3x75"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="async_calls"}'
+        values: "600-7.3x75"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: PawtograderAsyncQueueStuck
+        exp_alerts: []
+
+  # Same age-side check: a release whose oldest message is long past the
+  # threshold, draining at the slowest healthy rate, must not page at the
+  # ceiling either.
+  - interval: 1m
+    name: the age alert is also still suppressed at the ceiling
+    input_series:
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="async_calls"}'
+        values: "0+60x45"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="async_calls"}'
+        values: "600-7.3x45"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PawtograderQueueOldestMessageAging
+        exp_alerts: []
+
+  # Raising the floor must not cost sensitivity at the bottom: the 2026-09-07
+  # stall still pages at the ceiling, as it does at the default.
+  - interval: 1m
+    name: a stalled queue still pages at the ceiling
+    input_series:
+      - series: 'pawtograder_async_queue_size{namespace="pawtograder"}'
+        values: "58-0.5x88"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="async_calls"}'
+        values: "58-0.5x88"
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: PawtograderAsyncQueueStuck
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, severity: critical }
+            exp_annotations:
+              summary: "Pawtograder async queue is not draining"
+              description:
+                "The async worker queue in pawtograder has held above 10 for 1h while draining slower than 7 msg/min — the
+                workers are stuck or starved rather than working through a bulk release. Check worker liveness."
+
+  # And the fail-loud property is a property of the OPERATOR, not of the floor,
+  # so it must hold at every permitted value.
+  - interval: 1m
+    name: the missing-depth-gauge case still pages at the ceiling
+    input_series:
+      - series: 'pawtograder_async_queue_size{namespace="pawtograder"}'
+        values: "20x88"
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: PawtograderAsyncQueueStuck
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, severity: critical }
+            exp_annotations:
+              summary: "Pawtograder async queue is not draining"
+              description:
+                "The async worker queue in pawtograder has held above 10 for 1h while draining slower than 7 msg/min — the
+                workers are stuck or starved rather than working through a bulk release. Check worker liveness."

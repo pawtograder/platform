@@ -176,3 +176,39 @@ export function shouldSendOrgInvitation(opts: {
   if (!opts.invitationDate) return true;
   return isInvitationStale(opts.invitationDate, now) && isOrgInviteWindowOpen(opts.cls, now);
 }
+
+/** One of the user's enrollments, as {@link siblingInviteTeamSlugs} needs it. */
+export type EnrollmentForInvite = {
+  role: "admin" | "instructor" | "grader" | "student";
+  disabled: boolean;
+  github_org_confirmed: boolean | null;
+  classes:
+    | (ClassInviteWindow & { id: number; slug: string | null; github_org: string | null; is_demo?: boolean | null })
+    | null;
+};
+
+/**
+ * Team slugs for the user's OTHER enrollments in `org` that a fresh org invitation should also carry.
+ *
+ * The same eligibility the membership sweep applies (reconcile_stale_org_invitations): the enrollment
+ * is live, not yet confirmed, in a real (non-demo) class with a slug, and inside that class's
+ * invitation window. A dropped enrollment is excluded, so a replacement invitation never re-invites
+ * a user to a class they left.
+ */
+export function siblingInviteTeamSlugs(
+  enrollments: EnrollmentForInvite[],
+  org: string,
+  excludeClassId: number,
+  now: Date = new Date()
+): string[] {
+  const slugs = new Set<string>();
+  for (const e of enrollments) {
+    const cls = e.classes;
+    // Case-insensitive, like GitHub and classes_unique_github_org_slug.
+    if (!cls || cls.id === excludeClassId || cls.github_org?.toLowerCase() !== org.toLowerCase() || !cls.slug) continue;
+    if (e.disabled || e.github_org_confirmed === true || cls.is_demo === true) continue;
+    if (!isOrgInviteWindowOpen(cls, now)) continue;
+    slugs.add(`${cls.slug}-${e.role === "student" ? "students" : "staff"}`);
+  }
+  return [...slugs];
+}

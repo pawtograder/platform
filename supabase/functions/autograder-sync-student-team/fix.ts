@@ -3,11 +3,13 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { syncStudentTeam } from "../_shared/GitHubWrapper.ts";
 import { UserVisibleError } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function main() {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const f25Classes = await adminSupabase.from("classes").select("*").eq("slug", "f25").eq("id", 33).limit(1000);
   if (f25Classes.error) {

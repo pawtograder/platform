@@ -490,6 +490,39 @@ export async function refreshWorkflowMetrics(): Promise<void> {
   await pass;
 }
 
+// Record a failed aggregate, WITH the reason.
+//
+// This used to be a bare `workflowRefreshErrors.inc({ step })`: the counter
+// moved, the error object was dropped on the floor, and the alert could say
+// which step failed but nothing whatsoever about why. On Khoury prod
+// 2026-09-22 the cause was a PostgREST 503 raised by SQLSTATE 53100
+// ("could not resize shared memory segment ... No space left on device") from
+// a full /dev/shm on the database pod -- recoverable only by reading
+// PostgREST's own pod logs, because the app had discarded it. Logging the
+// PostgREST code/message here is the difference between a one-line answer and
+// an archaeology session.
+//
+// Bounded by construction: one line per failing step per refresh interval
+// (refreshIntervalMs, default 30s), and only when a step actually fails.
+function noteWorkflowRefreshFailure(
+  m: MetricsBundle,
+  step: string,
+  settled: PromiseSettledResult<{ error?: unknown } | undefined>
+): void {
+  m.workflowRefreshErrors.inc({ step });
+  const reason = settled.status === "rejected" ? settled.reason : settled.value?.error;
+  // PostgREST errors arrive as { code, message, details, hint }; a thrown
+  // fetch/network failure arrives as an Error. Narrow enough to print either
+  // without assuming a shape.
+  const detail =
+    reason instanceof Error
+      ? `${reason.name}: ${reason.message}`
+      : reason && typeof reason === "object"
+        ? JSON.stringify(reason)
+        : String(reason);
+  console.error(`[metrics] workflow-metrics refresh step "${step}" failed: ${detail}`);
+}
+
 async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
   // Throttle. The gauges are .set()-persisted in the registry between scrapes,
   // so returning here still exports the last-good values — a scrape served from
@@ -560,7 +593,7 @@ async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
         );
       }
     } else {
-      m.workflowRefreshErrors.inc({ step: "workflow_runs_1h" });
+      noteWorkflowRefreshFailure(m, "workflow_runs_1h", runs1h);
       allOk = false;
     }
     if (runs24hOk) {
@@ -575,7 +608,7 @@ async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
         );
       }
     } else {
-      m.workflowRefreshErrors.inc({ step: "workflow_runs_24h" });
+      noteWorkflowRefreshFailure(m, "workflow_runs_24h", runs24h);
       allOk = false;
     }
 
@@ -588,7 +621,7 @@ async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
         m.workflowQueueSeconds.set({ class_id: cid, quantile: "0.99" }, Number((row as { p99: number }).p99));
       }
     } else {
-      m.workflowRefreshErrors.inc({ step: "queue_seconds" });
+      noteWorkflowRefreshFailure(m, "queue_seconds", queue);
       allOk = false;
     }
 
@@ -600,7 +633,7 @@ async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
         m.workflowRunSeconds.set({ class_id: cid, quantile: "0.95" }, Number((row as { p95: number }).p95));
       }
     } else {
-      m.workflowRefreshErrors.inc({ step: "run_seconds" });
+      noteWorkflowRefreshFailure(m, "run_seconds", run);
       allOk = false;
     }
 
@@ -617,13 +650,20 @@ async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
         );
       }
     } else {
-      m.workflowRefreshErrors.inc({ step: "errors_1h" });
+      noteWorkflowRefreshFailure(m, "errors_1h", errors1h);
       allOk = false;
     }
-  } catch {
+  } catch (err) {
     // Don't let metric collection failures bubble up — the scrape should
-    // still return whatever is currently in the registry.
+    // still return whatever is currently in the registry. Log it, though:
+    // this branch means the admin client or the import failed, which is not
+    // visible anywhere else.
     m.workflowRefreshErrors.inc({ step: "refresh" });
+    console.error(
+      `[metrics] workflow-metrics refresh failed before any query ran: ${
+        err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+      }`
+    );
     allOk = false;
   } finally {
     end();

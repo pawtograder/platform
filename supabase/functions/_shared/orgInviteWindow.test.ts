@@ -16,7 +16,9 @@ import {
   isInvitationStale,
   isOrgInviteWindowKnownClosed,
   isOrgInviteWindowOpen,
-  shouldSendOrgInvitation
+  shouldSendOrgInvitation,
+  siblingInviteTeamSlugs,
+  type EnrollmentForInvite
 } from "./orgInviteWindow.ts";
 
 const TERM = { start_date: "2026-09-08", end_date: "2026-12-09", archived: false };
@@ -155,4 +157,65 @@ Deno.test("shouldSendOrgInvitation: force does not read invitation_date at all",
   const forced = { cls: TERM, forceReinvite: true, now };
   assertEquals(shouldSendOrgInvitation({ ...forced, invitationDate: "2026-10-01T11:59:59Z" }), true);
   assertEquals(shouldSendOrgInvitation({ ...forced, invitationDate: null }), true);
+});
+
+// siblingInviteTeamSlugs: which other enrollments a fresh invitation should carry teams for.
+
+const SIBLING_NOW = at("2026-10-01T12:00:00Z");
+function enrollment(
+  overrides: Partial<EnrollmentForInvite> & { cls?: Partial<NonNullable<EnrollmentForInvite["classes"]>> }
+) {
+  const { cls, ...rest } = overrides;
+  return {
+    role: "student",
+    disabled: false,
+    github_org_confirmed: false,
+    ...rest,
+    classes: { id: 2, slug: "sibling", github_org: "org", is_demo: false, ...TERM, ...cls }
+  } as EnrollmentForInvite;
+}
+
+Deno.test("siblingInviteTeamSlugs: a live unconfirmed sibling enrollment contributes its team", () => {
+  assertEquals(siblingInviteTeamSlugs([enrollment({})], "org", 1, SIBLING_NOW), ["sibling-students"]);
+  assertEquals(siblingInviteTeamSlugs([enrollment({ role: "grader" })], "org", 1, SIBLING_NOW), ["sibling-staff"]);
+});
+
+Deno.test("siblingInviteTeamSlugs: never the class being invited to, or another org", () => {
+  assertEquals(siblingInviteTeamSlugs([enrollment({ cls: { id: 1 } })], "org", 1, SIBLING_NOW), []);
+  assertEquals(siblingInviteTeamSlugs([enrollment({ cls: { github_org: "other" } })], "org", 1, SIBLING_NOW), []);
+});
+
+Deno.test("siblingInviteTeamSlugs: the org matches case-insensitively", () => {
+  assertEquals(siblingInviteTeamSlugs([enrollment({ cls: { github_org: "ORG" } })], "Org", 1, SIBLING_NOW), [
+    "sibling-students"
+  ]);
+});
+
+Deno.test("siblingInviteTeamSlugs: a dropped enrollment is never re-invited", () => {
+  assertEquals(siblingInviteTeamSlugs([enrollment({ disabled: true })], "org", 1, SIBLING_NOW), []);
+});
+
+Deno.test("siblingInviteTeamSlugs: confirmed, demo, slugless, and out-of-window classes are skipped", () => {
+  assertEquals(
+    siblingInviteTeamSlugs(
+      [
+        enrollment({ github_org_confirmed: true }),
+        enrollment({ cls: { is_demo: true } }),
+        enrollment({ cls: { slug: null } }),
+        enrollment({ cls: { archived: true } }),
+        enrollment({ cls: { start_date: null } })
+      ],
+      "org",
+      1,
+      SIBLING_NOW
+    ),
+    []
+  );
+});
+
+Deno.test("siblingInviteTeamSlugs: duplicate roles in one class yield one team", () => {
+  assertEquals(
+    siblingInviteTeamSlugs([enrollment({ role: "grader" }), enrollment({ role: "instructor" })], "org", 1, SIBLING_NOW),
+    ["sibling-staff"]
+  );
 });
