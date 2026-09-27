@@ -595,6 +595,9 @@ async function main() {
     // neither creation function rejects an archived row, so the plan built at the start would
     // happily publish repositories for work somebody has since withdrawn. A named --assignment is
     // exempt: that is a human who knows what they are repairing.
+    // The strategy this sweep planned against, from the revalidation below; the per-call reload
+    // must still see it.
+    let plannedStrategy: { repo_mode: string | null; source_assignment_id: number | null } | null = null;
     if (!targeted) {
       // The org exclusion is re-read too, not taken from the set loaded at startup. It is the
       // switch that stops automation, the creation functions deliberately do not enforce it, and a
@@ -642,6 +645,7 @@ async function main() {
         console.log(`  skipping assignment ${row.id}: archived since the plan was built`);
         continue;
       }
+      plannedStrategy = { repo_mode: fresh.repo_mode, source_assignment_id: fresh.source_assignment_id };
       if (!currentOrg) {
         // The class no longer has a GitHub org, so it can no longer have repos — the same condition
         // the eligibility filter applies when the plan is built.
@@ -748,9 +752,23 @@ async function main() {
         // handout call still had the solution call publish a grader repository for it.
         const { data: orgRow, error: orgRowError } = await supabase
           .from("assignments")
-          .select("archived_at, classes(github_org, archived)")
+          .select("archived_at, repo_mode, source_assignment_id, classes(github_org, archived)")
           .eq("id", row.id)
           .maybeSingle();
+        // The repository strategy must still be the one planned: a switch to
+        // fork_from_prior_assignment after the handout call wrote its own pointer would have the
+        // solution call publish grader_repo beside a handout the new mode does not use.
+        if (
+          !orgRowError &&
+          orgRow &&
+          plannedStrategy &&
+          (orgRow.repo_mode !== plannedStrategy.repo_mode ||
+            orgRow.source_assignment_id !== plannedStrategy.source_assignment_id)
+        ) {
+          console.log(`  skipping assignment ${row.id}: its repository strategy changed while it was being repaired`);
+          stoppedForExclusion = true;
+          break;
+        }
         const classNow = orgRow?.classes as { github_org: string | null; archived: boolean | null } | null;
         if (!orgRowError && (!orgRow || orgRow.archived_at || classNow?.archived)) {
           console.log(`  skipping assignment ${row.id}: archived while it was being repaired`);

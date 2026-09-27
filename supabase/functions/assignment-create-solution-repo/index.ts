@@ -14,7 +14,7 @@ import {
 import { calculateTotalAutograderPoints } from "../_shared/pawtograderYmlHelpers.ts";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
-import { assignmentShouldHaveRepos } from "../_shared/handoutRepoStrategy.ts";
+import { assignmentShouldHaveRepos, REPO_MODES_WITHOUT_REPOS } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { parse } from "jsr:@std/yaml";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
@@ -233,6 +233,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // whole transition in one transaction, gated on the SHA we believe is current, and reports
   // whether it applied.
   //
+  // The points this request committed, when it committed any. Needed if the pointer publish below
+  // then declines because the assignment opted out of repositories.
+  let recordedPoints: number | null = null;
   const recordHeadMetadata = async (
     commitSha: string,
     message: string,
@@ -283,6 +286,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       p_expected_has_autograder: assignment.has_autograder
     });
     if (error) throw error;
+    if (applied === true) recordedPoints = points;
     return applied === true;
   };
 
@@ -426,6 +430,27 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // using repositories. Their action is explicit and ours is derived from a naming convention, so
     // theirs wins; the repository we created is left in place rather than attached over the top.
     scope.setTag("grader_repo_pointer", "superseded");
+    // The metadata transaction above already committed this repository's points. When the decline
+    // is an opt-out of repositories, nothing recomputes them — the reconciler and this endpoint both
+    // exclude no-repo modes — so the assignment would keep an automated-points allocation that no
+    // autograder can award. Withdrawn in ONE statement that re-checks both the mode and that the
+    // value is still ours, so an instructor opting back in, or editing points, is left alone. The
+    // config and SHA stay: they are inert without a pointer, and a later opt-back-in retry resumes
+    // from them.
+    if (recordedPoints !== null && recordedPoints !== 0) {
+      const { data: withdrawn, error: withdrawError } = await adminSupabase
+        .from("assignments")
+        .update({ autograder_points: 0 })
+        .eq("id", assignment_id)
+        .eq("autograder_points", recordedPoints)
+        .in("repo_mode", [...REPO_MODES_WITHOUT_REPOS])
+        .select("id");
+      if (withdrawError) {
+        Sentry.captureException(withdrawError, scope);
+      } else if ((withdrawn?.length ?? 0) > 0) {
+        scope.setTag("autograder_points_withdrawn", "repo_opt_out");
+      }
+    }
     throw new UserVisibleError(
       `This assignment's grader repository or repository configuration changed while ${solutionRepoFullName} was ` +
         `being created, so it was not attached. The repository exists — re-save if you intended to use it.`,

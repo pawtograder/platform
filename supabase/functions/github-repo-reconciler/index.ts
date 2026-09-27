@@ -528,16 +528,36 @@ async function repairMissingSolutionRepos(opts: {
         // the class as it is now — creates the repository in B. Asking about the wrong org is the
         // same as not asking.
         //
+        // The repository strategy (repo_mode and fork source) is reloaded too, and must still be the
+        // one the plan above was built for. Switching a template-mode assignment to
+        // fork_from_prior_assignment after the handout call wrote its own pointer left the solution
+        // call accepting the new, still repo-backed mode and publishing grader_repo beside a handout
+        // the new mode does not use — which takes the row out of every repair scan.
+        //
         // Archival is reloaded with it for the same reason. It was validated only before this loop,
         // and neither creation endpoint rejects an archived row, so archiving the assignment or its
         // class during the handout request still had the solution call create and publish a grader
         // repository for retired work.
         const { data: orgRow, error: orgRowError } = await supabase
           .from("assignments")
-          .select("archived_at, classes(github_org, archived)")
+          .select("archived_at, repo_mode, source_assignment_id, classes(github_org, archived)")
           .eq("id", a.id)
           .maybeSingle();
         const classAtCall = orgRow?.classes as { github_org: string | null; archived: boolean | null } | null;
+        if (
+          !orgRowError &&
+          orgRow &&
+          (orgRow.repo_mode !== fresh.repo_mode || orgRow.source_assignment_id !== fresh.source_assignment_id)
+        ) {
+          // A clean stop, like the ones below: grader_repo is still NULL, so the next tick plans
+          // this assignment again under its new strategy.
+          scope.setTag("repair_stopped_mid_candidate", "strategy_changed");
+          console.log(
+            `[github-repo-reconciler] Assignment ${a.id}'s repository strategy changed while repairing it; stopping before ${fn}`
+          );
+          stoppedForExclusion = true;
+          break;
+        }
         if (!orgRowError && (!orgRow || orgRow.archived_at !== null || classAtCall?.archived === true)) {
           // Stopped for the same reason as an exclusion: nothing failed, and a partial
           // handout-then-solution leaves grader_repo NULL, which is what an unarchive would need.
