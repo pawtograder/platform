@@ -32,6 +32,11 @@
 #                                                                 server's max_connections)
 #   HARNESS_ITERS     claims per storm session                   (default 40)
 #   HARNESS_KEEP=1    leave the container running for inspection  (default: always removed)
+#   HARNESS_MIGRATION_<n>  apply a scratch copy in place of the nth migration of the chain below.
+#                     HARNESS_MIGRATION is an alias for n=1 and HARNESS_PIN_MIGRATION for n=2.
+#                     Used to prove a scenario is not vacuous; see the chain comment below, and note
+#                     that a run with any override in effect refuses to start unless the override
+#                     actually changed the schema the scenarios will exercise.
 #
 # interrupt_check.sh in this directory verifies the interrupted-run path: non-zero exit AND no
 # container left behind.
@@ -40,10 +45,45 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-# HARNESS_MIGRATION exists so a reviewer can point this at a MODIFIED copy of the migration and
-# watch a scenario fail. That is the only way to show a concurrency scenario is not vacuous: revert
-# the own-row lock in a scratch copy, re-run, and scenario 18 must go red. See the report.
-MIGRATION="${HARNESS_MIGRATION:-$REPO/supabase/migrations/20260912120000_per_org_async_leases.sql}"
+# The migrations under test, applied in order. Two of them now: the allocator, and the pin_org
+# argument that continuous refill needs. A future migration that touches
+# pgmq_public.claim_org_slot_and_read belongs on the END of this list.
+DEFAULT_MIGRATIONS=(
+  "$REPO/supabase/migrations/20260912120000_per_org_async_leases.sql"
+  "$REPO/supabase/migrations/20260914120000_async_lease_pin_org.sql"
+)
+
+# An override points this at a MODIFIED copy of one of those migrations, so a reviewer can revert a
+# fix in a scratch copy and watch a scenario go red. That experiment is the only thing standing
+# behind any claim that a concurrency scenario is not vacuous.
+#
+# THE TRAP IT USED TO SET, WHICH IS WHY THERE IS A GATE BELOW. The chain is applied in order and the
+# pin_org migration drops and recreates claim_org_slot_and_read in full. So mutating a copy of the
+# FIRST migration changed nothing the scenarios could observe: the committed allocator was restored
+# a second later, the suite stayed at 198/198, and the non-vacuity experiment proved nothing while
+# looking exactly like proof. Every "this scenario would catch the regression" claim resting on an
+# override of the first migration was unproven for that reason.
+#
+# Two things now stop that recurring. Overrides are addressed by POSITION in the chain, so a third
+# allocator migration needs no new variable and the last entry is always reachable. And a run with
+# any override in effect proves, before it runs a single scenario, that the override actually
+# changed the schema the scenarios will exercise.
+MIGRATIONS=()
+OVERRIDDEN_INDEXES=()
+for ((mi = 0; mi < ${#DEFAULT_MIGRATIONS[@]}; mi++)); do
+  mn=$((mi + 1))
+  mvar="HARNESS_MIGRATION_$mn"
+  movr="${!mvar:-}"
+  # Back-compatible aliases for the first two positions.
+  if [ -z "$movr" ] && [ "$mn" = "1" ]; then movr="${HARNESS_MIGRATION:-}"; fi
+  if [ -z "$movr" ] && [ "$mn" = "2" ]; then movr="${HARNESS_PIN_MIGRATION:-}"; fi
+  if [ -n "$movr" ] && [ "$movr" != "${DEFAULT_MIGRATIONS[$mi]}" ]; then
+    MIGRATIONS+=("$movr")
+    OVERRIDDEN_INDEXES+=("$mn")
+  else
+    MIGRATIONS+=("${DEFAULT_MIGRATIONS[$mi]}")
+  fi
+done
 
 IMAGE="supabase/postgres:17.4.1.075"
 EXPECTED_PGMQ="1.4.4"
@@ -81,7 +121,9 @@ psql_args=(-X -q -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -v ON_ERROR_STO
 run_sql() { psql "${psql_args[@]}" "$@"; }
 scalar()  { psql "${psql_args[@]}" -At -c "$1"; }
 
-[ -f "$MIGRATION" ] || { echo "!! migration not found: $MIGRATION" >&2; exit 2; }
+for m in "${MIGRATIONS[@]}"; do
+  [ -f "$m" ] || { echo "!! migration not found: $m" >&2; exit 2; }
+done
 
 echo ">> starting throwaway $IMAGE as $CONTAINER on 127.0.0.1:$PORT"
 docker run -d --rm \
@@ -124,15 +166,136 @@ fi
 echo ">> prerequisites"
 run_sql -f "$HERE/00_prereqs.sql" >/dev/null
 
-echo ">> applying $(basename "$MIGRATION") verbatim"
-run_sql -f "$MIGRATION" >/dev/null
+for m in "${MIGRATIONS[@]}"; do
+  echo ">> applying $(basename "$m") verbatim"
+  run_sql -f "$m" >/dev/null
+done
+
+# ------------------------------------------------------------------------------------------------
+# OVERRIDE FINGERPRINT. Only runs when an override is in effect, and costs nothing otherwise.
+#
+# The question it answers is the one the harness could not previously answer about itself: did the
+# reviewer's mutation actually reach the code the scenarios are about to call? A later migration
+# recreating the same function silently undoes an earlier one, and the only visible symptom was a
+# green table -- which is precisely what the experiment was trying to distinguish from.
+#
+# So: build the DEFAULT chain in a second database in the same container, fingerprint both schemas,
+# and refuse to run the scenarios unless they differ. That test knows nothing about which function
+# was mutated or how many migrations there are, so it does not rot when the next one lands.
+#
+# Its reach is function bodies and index definitions in public and pgmq_public. A mutation confined
+# to something outside that -- a comment, a grant -- is reported as neutralised even though it is
+# not. That direction is the safe one: it stops a run rather than blessing one.
+# ------------------------------------------------------------------------------------------------
+FINGERPRINT_SQL="
+  select string_agg(line, chr(10) order by line) from (
+    select n.nspname || '.' || p.proname || '(' ||
+           pg_get_function_identity_arguments(p.oid) || ')' || chr(9) ||
+           md5(coalesce(p.prosrc, '')) as line
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'pgmq_public')
+    union all
+    select 'index ' || schemaname || '.' || indexname || chr(9) || md5(indexdef)
+      from pg_indexes
+     where schemaname in ('public', 'pgmq_public')
+  ) f"
+
+if [ "${#OVERRIDDEN_INDEXES[@]}" -gt 0 ]; then
+  echo ">> override in effect at chain position(s): ${OVERRIDDEN_INDEXES[*]}"
+  for i in "${OVERRIDDEN_INDEXES[@]}"; do
+    d="${DEFAULT_MIGRATIONS[$((i - 1))]}"
+    o="${MIGRATIONS[$((i - 1))]}"
+    echo "     $i: $o"
+    echo "        (in place of $(basename "$d"))"
+    if cmp -s "$o" "$d"; then
+      echo
+      echo "################################################################################"
+      echo "## OVERRIDE IS NOT A MUTATION"
+      echo "##   $o"
+      echo "##   is byte-identical to $(basename "$d"). Nothing was changed, so nothing can"
+      echo "##   go red. Edit the scratch copy before re-running."
+      echo "################################################################################"
+      exit 2
+    fi
+  done
+
+  echo ">> building the default chain in a reference database to prove the override reached the schema"
+  run_sql -c "drop database if exists harness_ref" >/dev/null
+  run_sql -c "create database harness_ref" >/dev/null
+  ref_args=(-X -q -h 127.0.0.1 -p "$PORT" -U postgres -d harness_ref -v ON_ERROR_STOP=1)
+  psql "${ref_args[@]}" -f "$HERE/00_prereqs.sql" >/dev/null
+  refn=0
+  for d in "${DEFAULT_MIGRATIONS[@]}"; do
+    refn=$((refn + 1))
+    [ -f "$d" ] || { echo "!! default migration not found: $d" >&2; exit 2; }
+    psql "${ref_args[@]}" -f "$d" >/dev/null
+    # Fingerprint after EACH step, so a failure can name the migration that overwrote the mutation
+    # rather than leaving the reviewer to work it out.
+    psql "${ref_args[@]}" -At -c "$FINGERPRINT_SQL" | LC_ALL=C sort > "$WORK/ref_fp.$refn"
+  done
+
+  psql "${psql_args[@]}" -At -c "$FINGERPRINT_SQL" | LC_ALL=C sort > "$WORK/mut_fp"
+  # The SYMMETRIC difference, not one side of it: a mutation that deletes an object is as real as
+  # one that rewrites it, and comm -13 alone would call the deletion "no change".
+  # comm -3 prefixes file-2-only lines with a tab; strip that, then keep the identity column and
+  # drop the md5.
+  DIFFERING="$(LC_ALL=C comm -3 "$WORK/ref_fp.$refn" "$WORK/mut_fp" \
+                 | sed 's/^\t//' | cut -f1 | LC_ALL=C sort -u)"
+
+  if [ -z "$DIFFERING" ]; then
+    echo
+    echo "################################################################################"
+    echo "## OVERRIDE WAS NEUTRALISED -- REFUSING TO RUN THE SCENARIOS"
+    echo "##"
+    echo "##   The schema built from the overridden chain is identical to the schema built"
+    echo "##   from the committed one. A later migration recreated whatever you changed, so"
+    echo "##   the scenarios would exercise the UNMODIFIED code and pass. A green table here"
+    echo "##   would have meant nothing."
+    echo "##"
+    echo "##   Which migration last defines each allocator function:"
+    grep '^pgmq_public\.' "$WORK/ref_fp.$refn" | cut -f1 | while read -r fn; do
+      last=1
+      for ((k = 1; k <= refn; k++)); do
+        cur="$(grep -F "$fn"$'\t' "$WORK/ref_fp.$k" || true)"
+        prev=""
+        [ "$k" -gt 1 ] && prev="$(grep -F "$fn"$'\t' "$WORK/ref_fp.$((k - 1))" || true)"
+        [ "$cur" != "$prev" ] && last=$k
+      done
+      echo "##     $fn"
+      echo "##       last defined by chain position $last: $(basename "${DEFAULT_MIGRATIONS[$((last - 1))]}")"
+    done
+    echo "##"
+    echo "##   Move the mutation to that position (HARNESS_MIGRATION_<n>), or mutate every"
+    echo "##   position from yours onward."
+    echo "################################################################################"
+    exit 2
+  fi
+
+  echo ">> override reached the schema; objects that differ from the committed chain:"
+  echo "$DIFFERING" | sed 's/^/     /'
+fi
 
 echo ">> harness plumbing"
 run_sql -f "$HERE/05_harness.sql" >/dev/null
 run_sql -c "select harness.expect('0 environment', 'pgmq version in $IMAGE', '$EXPECTED_PGMQ', '${PGMQ_VER:-<none>}')" >/dev/null
 
+# The results table has to say which schema produced it. A mutated run and a clean run printed the
+# same header, so a pasted table could not be told apart from the one it was supposed to contradict.
+if [ "${#OVERRIDDEN_INDEXES[@]}" -gt 0 ]; then
+  run_sql -c "select harness.note('0 environment', 'migration chain',
+                   'OVERRIDDEN at position(s) ${OVERRIDDEN_INDEXES[*]} -- NOT the committed schema'),
+                   harness.note('0 environment', 'schema objects changed by the override',
+                   '$(echo "$DIFFERING" | tr '\n' ' ' | cut -c1-200)')" >/dev/null
+else
+  run_sql -c "select harness.note('0 environment', 'migration chain', 'committed, unmodified')" >/dev/null
+fi
+
 echo ">> scenarios 1,2,3,4,6,7,8,9 + cost"
 run_sql -f "$HERE/10_scenarios.sql"
+
+echo ">> scenario 19: a class whose github_org is the empty string"
+run_sql -f "$HERE/50_blank_org_scenarios.sql"
 
 # ------------------------------------------------------------------------------------------------
 # Scenario 5: genuinely parallel sessions.
@@ -183,6 +346,17 @@ run_sql -f "$HERE/30_storm_assert.sql"
 # This one cannot be staged from a single session. The bug needs one transaction holding the row
 # lock on a holder's slot while ANOTHER transaction runs that holder's next claim, and calling the
 # two in sequence passes against the broken allocator. So: two psql sessions, started together.
+#
+# TO CHECK THIS IS NOT VACUOUS, mutate the LAST migration in the chain -- the one that actually
+# defines the allocator the scenarios call -- not the first:
+#
+#   HARNESS_MIGRATION_2=/tmp/old_allocator.sql tests/manual/per_org_async_leases/run.sh
+#
+# where the scratch copy restores the pre-fix pick: drop the FOR UPDATE from the `mine` CTE and let
+# free_slot choose `(s.expires_at <= clock_timestamp() or s.holder = $1) order by (s.holder = $1)
+# desc` under SKIP LOCKED. Ten checks go red, five of them in this scenario, including "rows in the
+# pool bearing this holder" and both halves of the randomized race. Mutating position 1 instead
+# proves nothing and the run now refuses to start; see the OVERRIDE FINGERPRINT block above.
 # ------------------------------------------------------------------------------------------------
 echo ">> scenario 18: renewal/claim race setup"
 run_sql -f "$HERE/40_race_setup.sql"

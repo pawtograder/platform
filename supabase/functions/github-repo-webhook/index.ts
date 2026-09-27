@@ -54,6 +54,7 @@ import { ExpectedRetryError, expectedRetryReport } from "../_shared/ExpectedRetr
 import { classifyUnreadyRepoPush } from "../_shared/unreadyRepoPush.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
@@ -317,9 +318,10 @@ async function createPushDirectSubmission(
     /**
      * The assignment's automatic late-token policy, applied to a late push exactly as the
      * Actions path applies it. It belongs to the assignment, so a repo-only assignment honours
-     * it too.
+     * it too. `classLateTokensPerStudent` is the course-wide allotment every assignment draws from;
+     * it only shapes the rejection message, since the RPC reads the balance itself.
      */
-    lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean };
+    lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean; classLateTokensPerStudent: number };
     /**
      * The pusher is course staff pushing to a repository that is their own — the Instructor Test
      * Assignment case. The Actions path exempts staff-triggered submissions from the deadline,
@@ -455,12 +457,16 @@ async function createPushDirectSubmission(
   // (require_tokens_before_due_date, which is the default), or the student's own early
   // finalization may rule it out — and in each of those the balance is never read, so reporting
   // exhaustion states something we did not check and sends the student to the wrong remedy.
-  let lateTokenOutcome: "none_offered" | "not_automatic" | "finalized_early" | "exhausted" =
+  // A course with no allotment gets its own outcome: "no late tokens left" would suggest the
+  // student spent tokens they were never given.
+  let lateTokenOutcome: "none_offered" | "none_in_course" | "not_automatic" | "finalized_early" | "exhausted" =
     lateTokenPolicy.maxLateTokens <= 0
       ? "none_offered"
-      : lateTokenPolicy.requireTokensBeforeDueDate
-        ? "not_automatic"
-        : "exhausted";
+      : lateTokenPolicy.classLateTokensPerStudent <= 0
+        ? "none_in_course"
+        : lateTokenPolicy.requireTokensBeforeDueDate
+          ? "not_automatic"
+          : "exhausted";
   let stillLate = isLate;
   if (isLate && mayRecordSubmission) {
     if (await hasFinalizedEarly(adminSupabase, studentRepo, scope)) {
@@ -672,6 +678,7 @@ async function createPushDirectSubmission(
     console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; recording a rejection`);
     const lateTokenClause = {
       none_offered: "",
+      none_in_course: ", and this course does not give late tokens, so none could be applied",
       not_automatic:
         ", and late tokens for this assignment have to be applied before the deadline, so none covered this push",
       finalized_early:
@@ -1808,7 +1815,7 @@ async function handlePushToStudentRepo(
   const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
     .from("assignments")
     .select(
-      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date"
+      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date, classes(late_tokens_per_student)"
     )
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
@@ -2162,7 +2169,8 @@ async function handlePushToStudentRepo(
       permitEmptySubmissions: pushAssignment.permit_empty_submissions ?? false,
       lateTokenPolicy: {
         maxLateTokens: pushAssignment.max_late_tokens ?? 0,
-        requireTokensBeforeDueDate: pushAssignment.require_tokens_before_due_date ?? false
+        requireTokensBeforeDueDate: pushAssignment.require_tokens_before_due_date ?? false,
+        classLateTokensPerStudent: pushAssignment.classes?.late_tokens_per_student ?? 0
       },
       // Staff pushing to their OWN repository — the Instructor Test Assignment flow — keeps the
       // bypasses the Actions path gives them. Losing that meant a no-autograder test assignment
@@ -2253,7 +2261,8 @@ async function handlePushToStudentRepo(
           permitEmptySubmissions: pushAssignment?.permit_empty_submissions ?? false,
           lateTokenPolicy: {
             maxLateTokens: pushAssignment?.max_late_tokens ?? 0,
-            requireTokensBeforeDueDate: pushAssignment?.require_tokens_before_due_date ?? false
+            requireTokensBeforeDueDate: pushAssignment?.require_tokens_before_due_date ?? false,
+            classLateTokensPerStudent: pushAssignment?.classes?.late_tokens_per_student ?? 0
           },
           actorIsStaffOwner: fallbackStanding.isOwnerStaff,
           scope
@@ -2845,7 +2854,8 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       const repoName = payload.repository.full_name;
       const adminSupabase = createClient<Database>(
         Deno.env.get("SUPABASE_URL") || "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+        { auth: REQUEST_SCOPED_AUTH_OPTIONS }
       );
       console.log(`[PUSH] repo=${repoName}`);
       //Is it a student repo?
@@ -2930,7 +2940,8 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
         maybeCrash("check_run.before_db_lookup");
         const adminSupabase = createClient<Database>(
           Deno.env.get("SUPABASE_URL") || "",
-          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+          { auth: REQUEST_SCOPED_AUTH_OPTIONS }
         );
         const checkRun = await adminSupabase
           .from("repository_check_runs")
@@ -3062,7 +3073,9 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
   tagScopeWithGenericPayload(scope, "membership", payload);
 
   try {
-    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+      auth: REQUEST_SCOPED_AUTH_OPTIONS
+    });
 
     // Only process when a member is added to a team
     if (payload.action !== "added") {
@@ -3273,7 +3286,9 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
   }
 
   try {
-    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+      auth: REQUEST_SCOPED_AUTH_OPTIONS
+    });
 
     // A departure is the mirror of an invitation: it must un-confirm the enrollment, or the row
     // claims a membership that no longer exists and no repair path will ever look at it again.
@@ -3515,7 +3530,8 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   try {
@@ -3648,7 +3664,8 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   try {
@@ -3787,7 +3804,8 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Which assignments treat this repo as their upstream/class repo? (Could be
@@ -4091,7 +4109,8 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
 
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     try {

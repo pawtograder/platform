@@ -24,6 +24,7 @@ import {
   type SettledSummary
 } from "../_shared/settledSummary.ts";
 import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
@@ -220,7 +221,8 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data: classData } = await adminSupabase.from("classes").select("time_zone").eq("id", courseId).single();
   const timeZone = classData?.time_zone;

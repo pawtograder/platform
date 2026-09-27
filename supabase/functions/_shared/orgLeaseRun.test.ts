@@ -8,8 +8,21 @@
  * pinned by contract and verified separately.
  */
 
-import { assertEquals, assertNotEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@^1";
-import { beginOrgLeaseRun, OrgClaimError, type OrgSlotRow, type OrgSlotRpc, type RpcResult } from "./orgLeaseRun.ts";
+import { assertEquals, assertNotEquals, assertRejects, assertStringIncludes, assertThrows } from "jsr:@std/assert@^1";
+import { PER_MESSAGE_VT_BUDGET_SECONDS, resolveAsyncWorkerTuning } from "./asyncWorkerTuning.ts";
+import {
+  beginOrgLeaseRun,
+  DEFAULT_STREAM_QUANTUM_REFILLS,
+  drainOrgLease,
+  drainWithContinuousRefill,
+  isolateStartedAtMs,
+  STREAM_QUANTUM_BACKOFF_CAP,
+  OrgClaimError,
+  type OrgQueueMessage,
+  type OrgSlotRow,
+  type OrgSlotRpc,
+  type RpcResult
+} from "./orgLeaseRun.ts";
 
 type ClaimArgs = Parameters<OrgSlotRpc["claim"]>[0];
 
@@ -50,7 +63,7 @@ function deferred() {
  * is the shape almost every interesting case takes. Returning an `Error` from a hook makes the RPC
  * REJECT; returning an `RpcResult` with `error` set makes it fail the PostgREST way. Both paths
  * matter and the module treats them differently in exactly one place (a rejection has no `code`, so
- * it can never be recognised as the missing-function case).
+ * it can never be recognized as the missing-function case).
  */
 function fakeRpc(
   init: {
@@ -162,6 +175,58 @@ function fakeSlotTable(init: {
   const liveRows = () => rows.filter((r) => r.expiresAt > now());
 
   return { rpc, rows, liveRows, renewQueues: () => renewedQueues };
+}
+
+/**
+ * A stand-in for the ALLOCATOR'S ORG CHOICE, which is the one thing `fakeSlotTable` does not model.
+ *
+ * `fakeSlotTable` reproduces the slot ROWS; this reproduces the `winner` CTE's decision, because
+ * that decision is what pinning changes. It implements the pinned contract exactly as agreed with
+ * the SQL side:
+ *
+ *   - `pin_org` absent  -> the neediest org with ready work wins, which is what lets a run at rest
+ *                          rotate onto whichever class is backed up;
+ *   - `pin_org` present -> that org ALONE is considered, with no fallback to re-picking. Ready work
+ *                          means `claimed`, no ready work means `no_demand`.
+ *
+ * The no-fallback half is the part worth modelling: a fake that quietly served the neediest org when
+ * the pinned one was empty would make the pin look like it worked while the cap kept breaking.
+ */
+function fakeOrgAllocator(init: { ready: Record<string, number>; queueName?: string }) {
+  const ready: Record<string, number> = { ...init.ready };
+  const onQueue = init.queueName ?? "async_calls";
+  const pins: (string | undefined)[] = [];
+  let nextMsgId = 1;
+
+  const rpc: OrgSlotRpc = {
+    claim: (args) => {
+      pins.push(args.pin_org);
+      if (args.queue_name !== onQueue) return Promise.resolve({ data: statusRow("no_demand"), error: null });
+      const candidates =
+        args.pin_org === undefined
+          ? Object.keys(ready)
+              .filter((o) => ready[o] > 0)
+              .sort((a, b) => ready[b] - ready[a] || a.localeCompare(b))
+          : [args.pin_org].filter((o) => (ready[o] ?? 0) > 0);
+      const org = candidates[0];
+      if (org === undefined) return Promise.resolve({ data: statusRow("no_demand"), error: null });
+      const take = Math.min(args.n, ready[org]);
+      ready[org] -= take;
+      const rows: OrgSlotRow[] = [];
+      for (let i = 0; i < take; i++) rows.push(row(nextMsgId++, org));
+      return Promise.resolve({ data: rows, error: null });
+    },
+    renew: () => Promise.resolve({ data: true, error: null }),
+    release: () => Promise.resolve({ data: null, error: null })
+  };
+
+  return {
+    rpc,
+    pins,
+    setReady(org: string, count: number) {
+      ready[org] = count;
+    }
+  };
 }
 
 /** Captures interval registrations so tests fire renewals by hand, as workerRun.test.ts does. */
@@ -639,7 +704,7 @@ Deno.test("rotating to the other queue releases the pool the run left", async ()
   mainHasWork = false;
   assertEquals((await run.claim())?.queueName, "async_calls_low_priority");
 
-  // The eager release is a LATENCY optimisation, not what makes this correct — but when it lands,
+  // The eager release is a LATENCY optimization, not what makes this correct — but when it lands,
   // the org that was left gets its headroom back immediately instead of one TTL later.
   assertEquals(t.rows.length, 1);
   assertEquals(t.rows[0].queue, "async_calls_low_priority");
@@ -661,7 +726,7 @@ Deno.test("rotating back and forth never accumulates slots", async () => {
   assertEquals(t.rows[0].queue, "async_calls_low_priority");
 });
 
-// THE PROPERTY THAT ACTUALLY MAKES ROTATION SAFE, with the optimisation switched off. A run that
+// THE PROPERTY THAT ACTUALLY MAKES ROTATION SAFE, with the optimization switched off. A run that
 // rotates without releasing holds one lease per pool, which is legal; renewal is scoped to the pool
 // it is draining, so the one it walked away from decays on its own TTL. Renewing across pools is
 // what would turn a forgotten lease from a one-TTL cost into a permanent one.
@@ -1135,4 +1200,1742 @@ Deno.test("a renewal that resolves false after a same-queue re-claim cannot kill
   assertEquals(run.shouldContinue(), true, "a renewal older than the re-claim must not end the run");
   assertEquals(run.heldQueue(), "async_calls", "nor drop the lease the re-claim established");
   assertEquals(timers.active, 1, "nor stop the timer keeping that refreshed lease alive");
+});
+
+// ── Continuous refill ──────────────────────────────────────────────────────────
+// The property these pin is THROUGHPUT, so "the messages all got processed" proves nothing: the
+// batch loop this replaces processed every message too, at 73% of the concurrency it was claiming.
+// What follows is a deterministic simulation — a fake claim RPC, virtual time, and a duration
+// distribution fitted to production — that measures effective concurrency the same way the incident
+// was measured, and it is written to FAIL against batch-at-a-time.
+
+/**
+ * The 2026-09-14 `Khoury-CS3650` burst, as a distribution.
+ *
+ * Reconstructed from `pgmq.a_async_calls` (`vt - 480s` is the read time, `archived_at` the finish):
+ * 190 messages, mean duration 48.4s, mean slowest-of-four 68.4s, worst single message 94.8s. That
+ * shape is bimodal rather than lognormal — most `create_repo` calls land near 38s and roughly one in
+ * five stalls behind the per-org content limiter around 80s — and it is the GAP between those two
+ * modes that batch-at-a-time pays for, so a unimodal fixture would quietly understate the thing being
+ * measured. Fitted to hit all three moments; `durationFixtureStats` asserts it still does.
+ */
+function mulberry32(seed: number) {
+  let a = seed;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const DURATION_SEED = 20260914;
+
+function productionDurationsSeconds(count: number): number[] {
+  const rand = mulberry32(DURATION_SEED);
+  const out: number[] = [];
+  for (let i = 0; i < count; i++) {
+    // Sum of three uniforms as a cheap, deterministic, bounded normal.
+    const g = (rand() + rand() + rand() - 1.5) * 2;
+    const slow = rand() < 0.2;
+    const v = slow ? 80 + g * 8 : 38 + g * 6;
+    out.push(Math.max(6, Math.min(95, Math.round(v * 10) / 10)));
+  }
+  return out;
+}
+
+function durationFixtureStats(durations: number[], groupSize: number) {
+  const mean = durations.reduce((a, b) => a + b, 0) / durations.length;
+  let slowestSum = 0;
+  let groups = 0;
+  for (let i = 0; i + groupSize <= durations.length; i += groupSize) {
+    slowestSum += Math.max(...durations.slice(i, i + groupSize));
+    groups++;
+  }
+  return { mean, slowestOfGroup: slowestSum / groups, max: Math.max(...durations) };
+}
+
+/**
+ * Virtual time. Message durations are tens of seconds and a run is half an hour, so the simulation
+ * cannot use real timers; and the numbers it reports have to be exact rather than flaky, so it
+ * cannot use approximate ones either. `advance()` drains the microtask queue, jumps the clock to the
+ * next scheduled wake-up, and fires everything due — meaning the clock only ever moves when the
+ * system under test is genuinely parked, which is what makes the measurement deterministic.
+ */
+function virtualClock() {
+  let nowMs = 0;
+  let pending: { at: number; wake: () => void }[] = [];
+  return {
+    now: () => nowMs,
+    sleep: (ms: number) =>
+      new Promise<void>((resolve) => {
+        pending.push({ at: nowMs + Math.max(0, ms), wake: resolve });
+      }),
+    async advance(): Promise<boolean> {
+      await flush();
+      if (pending.length === 0) return false;
+      nowMs = pending.reduce((lowest, p) => (p.at < lowest ? p.at : lowest), Number.POSITIVE_INFINITY);
+      const due = pending.filter((p) => p.at <= nowMs);
+      pending = pending.filter((p) => p.at > nowMs);
+      for (const d of due) d.wake();
+      await flush();
+      return true;
+    }
+  };
+}
+
+type VirtualClock = ReturnType<typeof virtualClock>;
+
+async function runOnVirtualTime(clock: VirtualClock, work: Promise<void>) {
+  let settled = false;
+  const watched = work.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
+  let guard = 0;
+  while (!settled) {
+    if (!(await clock.advance())) break;
+    if (++guard > 50_000) throw new Error("the virtual clock never went idle");
+  }
+  await watched;
+  await work;
+}
+
+/** One PostgREST round trip. Small next to a message, but it is the only thing refill can idle on. */
+const CLAIM_LATENCY_MS = 20;
+
+/** A single org with a burst of ready messages on `async_calls`, and nothing anywhere else. */
+function burstRpc(clock: VirtualClock, msgIds: number[], org: string) {
+  const ready = [...msgIds];
+  const askedFor: number[] = [];
+  const pins: (string | undefined)[] = [];
+  const rpc: OrgSlotRpc = {
+    claim: async (args) => {
+      askedFor.push(args.n);
+      pins.push(args.pin_org);
+      await clock.sleep(CLAIM_LATENCY_MS);
+      if (args.queue_name !== "async_calls") return { data: statusRow("no_demand"), error: null };
+      // Honours the pin, so the simulation measures refill WITH the safety property it ships with
+      // rather than without it. One org, so a pin can only ever name that org — but a pin naming
+      // anything else must come back empty, not be quietly ignored.
+      if (args.pin_org !== undefined && args.pin_org !== org) {
+        return { data: statusRow("no_demand"), error: null };
+      }
+      const take = ready.splice(0, args.n);
+      if (take.length === 0) return { data: statusRow("no_demand"), error: null };
+      return { data: take.map((id) => row(id, org)), error: null };
+    },
+    renew: () => Promise.resolve({ data: true, error: null }),
+    release: () => Promise.resolve({ data: null, error: null })
+  };
+  return { rpc, askedFor, pins };
+}
+
+/**
+ * Effective concurrency by Little's law, which is how the 5.20 was measured on production: total
+ * busy message-seconds over the wall clock they were spread across. Utilization is that against the
+ * concurrency the leaseholder was configured for and was continuously claiming slot-time to hold.
+ */
+function concurrencyMeter() {
+  const spans: { start: number; end: number }[] = [];
+  let live = 0;
+  let peak = 0;
+  return {
+    enter() {
+      live++;
+      if (live > peak) peak = live;
+    },
+    exit(start: number, end: number) {
+      live--;
+      spans.push({ start, end });
+    },
+    get peakInFlight() {
+      return peak;
+    },
+    get count() {
+      return spans.length;
+    },
+    report(configuredConcurrency: number) {
+      const busy = spans.reduce((a, s) => a + (s.end - s.start), 0);
+      const first = Math.min(...spans.map((s) => s.start));
+      const last = Math.max(...spans.map((s) => s.end));
+      const effectiveConcurrency = busy / (last - first);
+      return {
+        effectiveConcurrency,
+        utilization: effectiveConcurrency / configuredConcurrency,
+        wallClockSeconds: (last - first) / 1000
+      };
+    }
+  };
+}
+
+const SIM_CONCURRENCY = 4;
+const SIM_MESSAGES = 190;
+
+function simBase(clock: VirtualClock) {
+  return {
+    ...base,
+    drainConcurrency: SIM_CONCURRENCY,
+    visibilityTimeoutSeconds: 480,
+    maxPerOrg: 2,
+    globalCap: 8,
+    idleSleepMs: 15_000,
+    idleBudgetMs: 30_000,
+    now: clock.now,
+    sleep: clock.sleep
+  };
+}
+
+function simWorker(clock: VirtualClock, meter: ReturnType<typeof concurrencyMeter>, durations: number[]) {
+  return async (message: OrgQueueMessage) => {
+    const start = clock.now();
+    meter.enter();
+    await clock.sleep(durations[(message.msg_id - 1) % durations.length] * 1000);
+    meter.exit(start, clock.now());
+  };
+}
+
+/**
+ * Production's shape, as environment variables, so the simulation resolves its tuning through the
+ * SAME `resolveAsyncWorkerTuning` the worker calls rather than through a hand-built object. A kill
+ * switch is only worth testing end to end: "the flag is read" and "the other branch still drains"
+ * are different claims, and it is the second one that nobody exercises until they need it.
+ */
+const SIM_ENV: Record<string, string> = {
+  GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY: "4",
+  GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS: "480",
+  EDGE_WORKER_TIMEOUT_MS: "480000",
+  GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP: "8",
+  GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_ORG: "2"
+};
+
+function simTuning(overrides: Record<string, string | undefined> = {}) {
+  const env: Record<string, string | undefined> = { ...SIM_ENV, ...overrides };
+  // asyncWorkerTuning.ts takes a `{ get(name) }`, not the bare function `SentryContext.ts` calls an
+  // EnvReader. Same idea, two spellings, and this is the seam that keeps `Deno.env` out of both.
+  return resolveAsyncWorkerTuning({ get: (key: string) => env[key] });
+}
+
+/**
+ * One drive, either shape, selected exactly as the worker selects it: `drainOrgLease` with the
+ * boolean the resolver produced. Nothing here calls a driver directly, so a switch that was wired to
+ * the wrong branch — or to nothing — would show up as the wrong utilization rather than as a passing
+ * test.
+ */
+async function simulateOrgLeaseDrain(durations: number[], tuning: ReturnType<typeof resolveAsyncWorkerTuning>) {
+  const clock = virtualClock();
+  const meter = concurrencyMeter();
+  const q = burstRpc(
+    clock,
+    durations.map((_, i) => i + 1),
+    "Khoury-CS3650"
+  );
+  const work = simWorker(clock, meter, durations);
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({
+    ...simBase(clock),
+    drainConcurrency: tuning.drainConcurrency,
+    rpc: q.rpc,
+    inFlightCount: () => inFlight.size
+  });
+
+  await runOnVirtualTime(
+    clock,
+    (async () => {
+      try {
+        await drainOrgLease({
+          run,
+          inFlight,
+          maxInFlight: tuning.drainConcurrency,
+          continuousRefill: tuning.orgSlots.continuousRefill,
+          process: (message) => work(message)
+        });
+      } finally {
+        await run.release();
+      }
+    })()
+  );
+  return { meter, claims: q.askedFor, pins: q.pins, inFlightAtExit: inFlight.size };
+}
+
+// The fixture IS the measurement, so it gets asserted rather than trusted. If someone retunes it and
+// the throughput test still passes, the test has stopped meaning anything.
+Deno.test("the duration fixture reproduces the measured burst", () => {
+  const stats = durationFixtureStats(productionDurationsSeconds(SIM_MESSAGES), SIM_CONCURRENCY);
+
+  assertEquals(Math.abs(stats.mean - 48.4) < 1.5, true, `mean ${stats.mean.toFixed(1)}s, measured 48.4s`);
+  assertEquals(
+    Math.abs(stats.slowestOfGroup - 68.4) < 2,
+    true,
+    `slowest-of-4 ${stats.slowestOfGroup.toFixed(1)}s, measured 68.4s`
+  );
+  assertEquals(Math.abs(stats.max - 94.8) < 3, true, `worst ${stats.max.toFixed(1)}s, measured 94.8s`);
+});
+
+// The switch has to default to ON and it has to be an INTEGER. `Boolean("false") === true`, so a
+// string-valued kill switch fails open at exactly the moment someone reaches for it; the tuning file
+// reads it through the same bounded-integer path as the other three knobs, and this is the assertion
+// that the worker's side of that agreement is the resolved boolean rather than a second reading.
+Deno.test("the continuous-refill switch defaults on and rejects a value that is not 0 or 1", () => {
+  assertEquals(
+    simTuning({ GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL: undefined }).orgSlots.continuousRefill,
+    true,
+    "unset means refill, so deploying the switch changes nothing on its own"
+  );
+  assertEquals(simTuning({ GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL: "1" }).orgSlots.continuousRefill, true);
+  assertEquals(simTuning({ GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL: "0" }).orgSlots.continuousRefill, false);
+
+  // The failure mode a string switch has: "false" is not 0, and must not quietly enable anything.
+  const nonsense = simTuning({ GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL: "false" });
+  assertEquals(nonsense.issues.length > 0, true, "a value outside 0|1 is reported, not silently coerced");
+});
+
+// THE HEADLINE, and the kill switch's only honest test. Same fixture, same lease, same fake RPC,
+// same entry point; the only difference between the two arms is one environment variable, resolved
+// by the real `resolveAsyncWorkerTuning`. Batch-and-wait must land near the 0.708 measured on
+// production (mean 48.4s per message against a mean 68.4s batch), and refill must not.
+Deno.test("the continuous-refill switch picks the drain shape, and both shapes drain", async () => {
+  const durations = productionDurationsSeconds(SIM_MESSAGES);
+
+  const off = simTuning({ GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL: "0" });
+  const on = simTuning();
+
+  // The two arms differ by ONE resolved boolean and nothing else, or the comparison below is
+  // measuring something other than the switch.
+  assertEquals(on.issues, [], "the simulated environment must resolve cleanly");
+  assertEquals(off.issues, []);
+  assertEquals(on.drainConcurrency, off.drainConcurrency);
+  assertEquals(on.drainConcurrency, SIM_CONCURRENCY);
+  assertEquals(on.orgSlots.continuousRefill, true);
+  assertEquals(off.orgSlots.continuousRefill, false);
+
+  const batch = await simulateOrgLeaseDrain(durations, off);
+  const refill = await simulateOrgLeaseDrain(durations, on);
+
+  const b = batch.meter.report(SIM_CONCURRENCY);
+  const r = refill.meter.report(SIM_CONCURRENCY);
+  console.log(
+    `\n  batch-at-a-time  : concurrency ${b.effectiveConcurrency.toFixed(2)}/${SIM_CONCURRENCY} ` +
+      `= ${(b.utilization * 100).toFixed(1)}% utilization, ${(b.wallClockSeconds / 60).toFixed(1)} min, ` +
+      `${batch.claims.length} claims\n` +
+      `  continuous refill: concurrency ${r.effectiveConcurrency.toFixed(2)}/${SIM_CONCURRENCY} ` +
+      `= ${(r.utilization * 100).toFixed(1)}% utilization, ${(r.wallClockSeconds / 60).toFixed(1)} min, ` +
+      `${refill.claims.length} claims\n`
+  );
+
+  assertEquals(batch.meter.count, SIM_MESSAGES, "batch mode must still drain every message");
+  assertEquals(refill.meter.count, SIM_MESSAGES, "and so must refill");
+
+  // The number from the incident: mean 48.4s per message against a mean 68.4s batch.
+  assertEquals(
+    b.utilization > 0.66 && b.utilization < 0.78,
+    true,
+    `batch-at-a-time utilization ${b.utilization.toFixed(3)} should reproduce the measured ~0.71`
+  );
+  assertEquals(
+    r.utilization > 0.95,
+    true,
+    `continuous refill utilization ${r.utilization.toFixed(3)} should be ~1; the remainder is the ` +
+      `ramp-down as the burst runs out, plus one ${CLAIM_LATENCY_MS}ms claim per message`
+  );
+  assertEquals(
+    r.wallClockSeconds < b.wallClockSeconds * 0.8,
+    true,
+    `refill drained in ${(r.wallClockSeconds / 60).toFixed(1)} min against ${(b.wallClockSeconds / 60).toFixed(1)}`
+  );
+
+  // THE ROLLBACK IS TOTAL, and it is visible in the RPC traffic rather than only in the timing. The
+  // batch shape never puts anything in the in-flight set, so it never asks for a shortfall and never
+  // pins — every lease behavior continuous refill added is keyed on that set being non-empty, so
+  // switching the flag off reverts the state machine and not just the loop.
+  assertEquals(
+    batch.claims.every((n) => n === SIM_CONCURRENCY),
+    true,
+    "batch-at-a-time always re-reads a whole batch; a shortfall claim would mean refill leaked in"
+  );
+  assertEquals(
+    batch.pins.every((p) => p === undefined),
+    true,
+    "and it never pins, because it never claims with work in flight"
+  );
+  assertEquals(batch.inFlightAtExit, 0);
+  assertEquals(
+    refill.claims.some((n) => n < SIM_CONCURRENCY),
+    true,
+    "refill tops up the shortfall"
+  );
+  assertEquals(
+    refill.pins.some((p) => p === "Khoury-CS3650"),
+    true,
+    "and pins those top-ups to the org it is already draining"
+  );
+});
+
+// The ceiling is unchanged and that is the whole safety argument: refill buys utilization of `n`,
+// never more than `n`. `maxPerOrg x n` is what bounds one org against its GitHub content quota.
+Deno.test("refill never exceeds the configured concurrency, and never asks for more than it can hold", async () => {
+  const durations = productionDurationsSeconds(SIM_MESSAGES);
+  const refill = await simulateOrgLeaseDrain(durations, simTuning());
+
+  assertEquals(refill.meter.peakInFlight, SIM_CONCURRENCY, "the ceiling is reached but never passed");
+  assertEquals(
+    refill.claims.every((n) => n >= 1 && n <= SIM_CONCURRENCY),
+    true,
+    `claims asked for ${[...new Set(refill.claims)].sort().join(", ")}; every one must be in [1, n]`
+  );
+  assertEquals(refill.claims[0], SIM_CONCURRENCY, "the first claim of a run has the whole batch to fill");
+});
+
+// The cost side of the trade, kept honest. Every claim takes a GLOBAL pg_advisory_xact_lock, so
+// claim traffic is a shared resource: refill moves from one claim per BATCH to roughly one per
+// MESSAGE, and that is acceptable only because it stays ~4x rather than becoming unbounded.
+Deno.test("refill costs about one claim per message, not one per message per slot", async () => {
+  const durations = productionDurationsSeconds(SIM_MESSAGES);
+  const batch = await simulateOrgLeaseDrain(
+    durations,
+    simTuning({ GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL: "0" })
+  );
+  const refill = await simulateOrgLeaseDrain(durations, simTuning());
+
+  console.log(
+    `\n  claims: batch ${batch.claims.length}, refill ${refill.claims.length}, for ${SIM_MESSAGES} messages\n`
+  );
+  assertEquals(
+    refill.claims.length <= SIM_MESSAGES * 1.35,
+    true,
+    `${refill.claims.length} claims for ${SIM_MESSAGES} messages is more than the shortfall rule should cost`
+  );
+  assertEquals(
+    refill.claims.length > batch.claims.length,
+    true,
+    "refill does cost more claims; the point is that it is bounded by throughput"
+  );
+});
+
+// ── Refill and the lease ───────────────────────────────────────────────────────
+// A claim can now land while `n-1` messages are still running, and three of the lease's decisions
+// were written when that was impossible.
+
+// Releasing here would tell the slot table this org has zero concurrency while this isolate runs
+// n-1 handlers against it — and the allocator would let a second leaseholder in on top.
+Deno.test("a claim that finds no work keeps the slot while messages are still running", async () => {
+  const f = fakeRpc({ claim: (_a, i) => ({ data: i === 1 ? [row(1, "acme")] : statusRow("no_demand"), error: null }) });
+  let inFlight = 0;
+  let t = 0;
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    idleBudgetMs: 1_000,
+    now: () => t,
+    inFlightCount: () => inFlight
+  });
+
+  await run.claim();
+  inFlight = 3;
+
+  assertEquals(await run.claim(), null);
+  assertEquals(f.releaseCalls, 0, "the slot is still in use, whatever the queue says about new work");
+  assertEquals(run.heldOrg(), "acme");
+  assertEquals(run.shouldContinue(), true);
+
+  // AND THE IDLE BUDGET HAS NOT STARTED. A draining leaseholder is not an idle one; arming the
+  // deadline here would end the run the moment the stream did, instead of waiting for the next
+  // arrival.
+  t += 5_000;
+  inFlight = 0;
+  assertEquals(await run.claim(), null);
+  assertEquals(f.releaseCalls, 1, "now there is nothing running, the slot goes back");
+  t += 500;
+  assertEquals(await run.onIdle(), true, "and the budget starts from here, not from the first empty claim");
+  t += 501;
+  assertEquals(await run.onIdle(), false);
+});
+
+// `no_capacity` ends the run — that is unchanged — but it can now end a run that still has work
+// under its lease, and a 60s TTL does not survive a 94.8s message.
+Deno.test("no_capacity mid-stream ends the run but keeps the lease alive until the drain finishes", async () => {
+  const timers = fakeTimers();
+  const f = fakeRpc({
+    claim: (_a, i) => ({ data: i === 1 ? [row(1, "acme")] : statusRow("no_capacity"), error: null })
+  });
+  let inFlight = 0;
+  let t = 0;
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    leaseTtlMs: 30_000,
+    now: () => t,
+    inFlightCount: () => inFlight,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+
+  await run.claim();
+  inFlight = 2;
+  assertEquals(await run.claim(), null);
+
+  assertEquals(run.shouldContinue(), false, "the fleet is saturated; this isolate stops claiming");
+  assertEquals(f.releaseCalls, 0, "but it does not hand back a slot it is still working under");
+
+  // The timer keeps renewing even though the run is over, or the lease lapses mid-drain and another
+  // leaseholder joins us in the same org.
+  t += 10_001;
+  timers.fireAll();
+  await flush();
+  assertEquals(f.renewCalls, 1, "a finished-but-draining run must keep its lease alive");
+
+  inFlight = 0;
+  await run.release();
+  assertEquals(f.releaseCalls, 1, "and the drain being over is what finally releases it");
+});
+
+Deno.test("a fatal claim failure mid-stream also defers the release", async () => {
+  const f = fakeRpc({
+    claim: (_a, i) =>
+      i === 1
+        ? { data: [row(1, "acme")], error: null }
+        : { data: null, error: { message: "no slot pool seeded for queue async_calls", code: "P0001" } }
+  });
+  let inFlight = 0;
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, inFlightCount: () => inFlight });
+
+  await run.claim();
+  inFlight = 4;
+  await assertRejects(() => run.claim(), OrgClaimError);
+
+  assertEquals(run.shouldContinue(), false, "a deployment error is still fatal on the first failure");
+  assertEquals(f.releaseCalls, 0, "the messages already claimed are still ours to finish");
+});
+
+// ── Refill and priority ────────────────────────────────────────────────────────
+
+// A momentary gap on the main queue must not be filled with analytics work: that would put both
+// queues in one in-flight set, hold a slot in both pools at once, and spend capacity the main queue
+// is about to want.
+Deno.test("a main-queue stream is not topped up from the low-priority queue", async () => {
+  let mainHasWork = true;
+  const probed: string[] = [];
+  const t = fakeSlotTable({
+    work: (q) => {
+      probed.push(q);
+      return q === "async_calls" ? (mainHasWork ? [row(1, "acme")] : statusRow("no_demand")) : [row(2, "globex")];
+    }
+  });
+  let inFlight = 0;
+  const run = beginOrgLeaseRun({ ...base, rpc: t.rpc, inFlightCount: () => inFlight });
+
+  assertEquals((await run.claim())?.queueName, "async_calls");
+  inFlight = 3;
+  mainHasWork = false;
+  probed.length = 0;
+
+  assertEquals(await run.claim(), null, "the main queue has nothing right now, and that is the answer");
+  assertEquals(probed, ["async_calls"], "the fallback queue is not probed behind a live main-queue stream");
+  assertEquals(run.heldQueue(), "async_calls");
+  assertEquals(t.rows.length, 1, "and no second pool is entered");
+
+  // When the stream really has ended, the very next claim probes everything again — this is the
+  // same `no_demand` fall-through the contract has always had, at stream granularity.
+  inFlight = 0;
+  probed.length = 0;
+  assertEquals((await run.claim())?.queueName, "async_calls_low_priority");
+  assertEquals(probed, ["async_calls", "async_calls_low_priority"]);
+});
+
+// An EARLIER VERSION OF THIS TEST asserted the opposite: that a low-priority stream probes
+// `async_calls` on every refill and rotates to it mid-stream. That was wrong, and it is worth
+// recording why rather than quietly flipping it. Rotating to another queue mid-stream releases the
+// pool the in-flight messages were claimed under, so their org stops being counted — the same
+// `max_per_org x n + (n-1)` breach that pinning closes for orgs, arriving one level up. Preemption
+// is real and worth keeping, so it is bought back a different way: only the highest-priority queue
+// is streamed, a lower-priority one drains its batch, and the full unpinned probe happens at that
+// boundary. Same preemption cadence as before refill existed — one batch — with no breach.
+Deno.test("a low-priority stream is not topped up, so the main queue is re-probed every batch", async () => {
+  let mainHasWork = false;
+  const probed: string[] = [];
+  const t = fakeSlotTable({
+    work: (q) => {
+      probed.push(q);
+      return q === "async_calls" ? (mainHasWork ? [row(1, "acme")] : statusRow("no_demand")) : [row(2, "globex")];
+    }
+  });
+  let inFlight = 0;
+  const run = beginOrgLeaseRun({ ...base, rpc: t.rpc, inFlightCount: () => inFlight });
+
+  assertEquals((await run.claim())?.queueName, "async_calls_low_priority");
+  inFlight = 2;
+  mainHasWork = true;
+  probed.length = 0;
+
+  assertEquals(await run.claim(), null, "a stream below the top priority quiesces instead of topping up");
+  assertEquals(probed, [], "and it does not spend an RPC to discover that");
+  assertEquals(t.rows.length, 1, "the slot it is draining under is untouched");
+  assertEquals(run.shouldContinue(), true);
+
+  // The batch settles. The next claim is the full unpinned probe, main queue first.
+  inFlight = 0;
+  const claimed = await run.claim();
+  assertEquals(probed[0], "async_calls", "priority order is intact at the boundary where rotating is free");
+  assertEquals(claimed?.queueName, "async_calls", "main-queue work preempts the next low-priority batch");
+  assertEquals(t.rows.length, 1, "and the pool it left is released on rotation, as it always was");
+});
+
+// ── Pinning a top-up to its org ────────────────────────────────────────────────
+// `claim_org_slot_and_read` re-points THIS HOLDER'S slot row at whichever org it picks. Between
+// streams that is the feature. Mid-stream it is a silent cap breach: the `n-1` messages still
+// running for the org we just left stop being counted, so that org reaches `max_per_org x n + (n-1)`
+// — 11 against a configured 8.
+
+Deno.test("a refill top-up stays on its org even when a needier one is waiting", async () => {
+  const alloc = fakeOrgAllocator({ ready: { acme: 10, globex: 4 } });
+  let inFlight = 0;
+  const run = beginOrgLeaseRun({ ...base, rpc: alloc.rpc, drainConcurrency: 4, inFlightCount: () => inFlight });
+
+  // Nothing in flight, so this one is unpinned and correctly takes the neediest org.
+  assertEquals((await run.claim())?.org, "acme");
+  inFlight = 4;
+
+  // Another class releases and is now far needier. An unpinned top-up would hand our row to it and
+  // leave acme's four in-flight create_repos uncounted.
+  alloc.setReady("globex", 50);
+  const topUp = await run.claim(1);
+
+  assertEquals(topUp?.org, "acme", "a top-up extends the stream it is part of; it does not rotate");
+  assertEquals(alloc.pins, [undefined, "acme"], "and it says so, rather than hoping the allocator agrees");
+  assertEquals(run.heldOrg(), "acme");
+});
+
+// The other half: the rotation this run gives up mid-stream is the one it is still supposed to make
+// at rest, or a leaseholder would pin itself to a drained org for the rest of its life.
+Deno.test("a claim with nothing in flight is unpinned and still rotates onto the neediest org", async () => {
+  const alloc = fakeOrgAllocator({ ready: { acme: 10, globex: 4 } });
+  const run = beginOrgLeaseRun({ ...base, rpc: alloc.rpc, drainConcurrency: 4 });
+
+  assertEquals((await run.claim())?.org, "acme");
+  alloc.setReady("globex", 50);
+  assertEquals((await run.claim())?.org, "globex", "with nothing in flight, rotating costs nothing and is right");
+  assertEquals(alloc.pins, [undefined, undefined]);
+});
+
+// A pinned org whose ready set has emptied must come back `no_demand` and STOP there — not fall
+// back to another org, and not fall through to the next queue.
+Deno.test("a pinned top-up that finds nothing does not fall back to another org or queue", async () => {
+  const alloc = fakeOrgAllocator({ ready: { acme: 4, globex: 50 } });
+  let inFlight = 0;
+  const run = beginOrgLeaseRun({ ...base, rpc: alloc.rpc, drainConcurrency: 4, inFlightCount: () => inFlight });
+
+  assertEquals((await run.claim())?.org, "globex");
+  inFlight = 4;
+  alloc.setReady("globex", 0);
+
+  assertEquals(await run.claim(2), null, "globex is drained, so there is nothing to top up with");
+  assertEquals(alloc.pins, [undefined, "globex"], "acme is needier, and is not considered");
+  assertEquals(run.heldOrg(), "globex", "the run keeps the lease it is still draining under");
+  assertEquals(run.shouldContinue(), true, "and it is not over; it is just full");
+});
+
+// The image can reach a database whose claim_org_slot_and_read predates `pin_org`. PostgREST matches
+// an overload on the set of argument names, so that answers PGRST202 — which is the SAME code as the
+// genuine "this function does not exist" deploy skew, and that one is fatal on the first failure.
+// Confusing the two would take the whole org-leased path down during a deploy window.
+Deno.test("a database without pin_org degrades to batch-at-a-time instead of ending the run", async () => {
+  const f = fakeRpc({
+    claim: (args) =>
+      args.pin_org === undefined
+        ? { data: [row(1, "acme")], error: null }
+        : {
+            data: null,
+            error: {
+              message: "Could not find the function pgmq_public.claim_org_slot_and_read(pin_org, ...)",
+              code: "PGRST202"
+            }
+          }
+  });
+  let inFlight = 0;
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, inFlightCount: () => inFlight });
+
+  await run.claim();
+  inFlight = 3;
+
+  assertEquals(await run.claim(1), null, "the top-up is refused");
+  assertEquals(run.shouldContinue(), true, "which is not fatal: the unpinned claims that start a run still work");
+  assertEquals(f.releaseCalls, 0, "and the slot it is draining under is not given away");
+
+  const callsBefore = f.claimArgs.length;
+  assertEquals(await run.claim(1), null);
+  assertEquals(f.claimArgs.length, callsBefore, "later top-ups skip the RPC entirely rather than re-learning this");
+
+  inFlight = 0;
+  assertNotEquals(await run.claim(), null, "while claims at rest carry on unpinned, exactly as before");
+});
+
+// The assertion of last resort. If the server ever ignores the pin, the messages it returned have
+// already had their visibility timeout bumped, so throwing them away would defer real work for a
+// whole VT to make a point. Report and carry on.
+Deno.test("a server that ignores the pin is reported loudly but does not lose the messages", async () => {
+  const f = fakeRpc({
+    claim: (_a, i) => ({ data: i === 1 ? [row(1, "acme")] : [row(2, "globex")], error: null })
+  });
+  let inFlight = 0;
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, inFlightCount: () => inFlight });
+
+  await run.claim();
+  inFlight = 2;
+  const claimed = await run.claim(1);
+
+  assertEquals(claimed?.org, "globex", "the rows are already claimed server-side; they get processed");
+  assertEquals(claimed?.messages.length, 1);
+  assertEquals(run.shouldContinue(), true, "and the run does not throw out of a claim");
+});
+
+// ── The refill driver ──────────────────────────────────────────────────────────
+
+Deno.test("the driver drains what is in flight before returning, even when the run ends early", async () => {
+  const clock = virtualClock();
+  const finished: number[] = [];
+  let saturated = false;
+  const rpc: OrgSlotRpc = {
+    claim: async (args) => {
+      await clock.sleep(CLAIM_LATENCY_MS);
+      if (args.queue_name !== "async_calls" || saturated) return { data: statusRow("no_capacity"), error: null };
+      saturated = true;
+      return { data: [row(1, "acme"), row(2, "acme"), row(3, "acme")], error: null };
+    },
+    renew: () => Promise.resolve({ data: true, error: null }),
+    release: () => Promise.resolve({ data: null, error: null })
+  };
+
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({ ...simBase(clock), rpc, inFlightCount: () => inFlight.size });
+  await runOnVirtualTime(
+    clock,
+    drainWithContinuousRefill({
+      run,
+      inFlight,
+      maxInFlight: SIM_CONCURRENCY,
+      process: async (message) => {
+        await clock.sleep(30_000);
+        finished.push(message.msg_id);
+      }
+    })
+  );
+
+  assertEquals(run.shouldContinue(), false, "no_capacity ended the run");
+  assertEquals(finished.sort(), [1, 2, 3], "and every message claimed before that still ran to completion");
+  assertEquals(inFlight.size, 0, "the driver does not return with work outstanding");
+});
+
+// The anti-spin rule. With work in flight an empty claim waits for a COMPLETION, never for a sleep
+// and never for nothing at all; with no work in flight it falls into the existing idle budget.
+Deno.test("an empty claim waits for a completion rather than hammering the RPC", async () => {
+  const clock = virtualClock();
+  let sleeps = 0;
+  let served = false;
+  let claimsWhileBusy = 0;
+  let busy = 0;
+
+  const rpc: OrgSlotRpc = {
+    claim: async (args) => {
+      if (busy > 0) claimsWhileBusy++;
+      await clock.sleep(CLAIM_LATENCY_MS);
+      if (args.queue_name !== "async_calls" || served) return { data: statusRow("no_demand"), error: null };
+      served = true;
+      return { data: [row(1, "acme")], error: null };
+    },
+    renew: () => Promise.resolve({ data: true, error: null }),
+    release: () => Promise.resolve({ data: null, error: null })
+  };
+
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({
+    ...simBase(clock),
+    rpc,
+    inFlightCount: () => inFlight.size,
+    idleBudgetMs: 30_000,
+    sleep: (ms: number) => {
+      if (busy > 0) sleeps++;
+      return clock.sleep(ms);
+    }
+  });
+
+  await runOnVirtualTime(
+    clock,
+    drainWithContinuousRefill({
+      run,
+      inFlight,
+      maxInFlight: SIM_CONCURRENCY,
+      process: async () => {
+        busy++;
+        await clock.sleep(600_000); // ten minutes: any spin would run away long before this settles
+        busy--;
+      }
+    })
+  );
+
+  // One message in flight for ten minutes, three free slots, and an empty queue. A loop that
+  // re-claimed on an empty answer would issue thousands of these.
+  assertEquals(
+    claimsWhileBusy <= 3,
+    true,
+    `${claimsWhileBusy} claims while one message ran for ten minutes; the shortfall must be claimed ` +
+      `once per completion, not once per turn`
+  );
+  assertEquals(sleeps, 0, "and it must not burn the idle sleep while it is still holding a full lease");
+  // The sleeps that DO happen are the ones after the drain, which is the existing idle budget doing
+  // exactly what it always did.
+  assertEquals(run.shouldContinue(), false, "the run ends on its idle budget once the drain is over");
+});
+
+// ── Review fixes: the four wiring faults the shipped shape could not report ────
+// Every one of these is a case where the WRONG behavior was silent. That is the property under
+// test as much as the behavior itself.
+
+// `no_capacity` and `no_demand` are not interchangeable evidence about what the server WROTE.
+// `no_demand` means `winner` was empty, so the slot UPDATE never ran. `no_capacity` also comes back
+// when an org DID qualify, a slot WAS committed by the data-modifying `claimed` CTE, and `picked`
+// then found every candidate row locked by a concurrent archive/delete/read under SKIP LOCKED.
+// Reproduced against a local database: the call answers `no_capacity` with no message rows while
+// `async_worker_slots` holds a live row for the caller. Dropping the queue from the release set on
+// that answer loses the lease for a whole TTL.
+Deno.test("a no_capacity answer still releases, because the server may have taken a slot", async () => {
+  const f = fakeRpc({ claim: () => ({ data: statusRow("no_capacity"), error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc });
+
+  assertEquals(await run.claim(), null);
+  assertEquals(run.shouldContinue(), false, "no_capacity ends the run, as it always did");
+
+  await run.release();
+  assertEquals(f.releaseQueues, ["async_calls"], "the queue it may hold a slot in is still released");
+});
+
+// ...and the other half of the same rule: `no_demand` genuinely proves nothing was written, so it
+// must still narrow the set. Without this the fix above would degrade into "release everything
+// always", which is the behavior the touchedQueues bookkeeping exists to avoid.
+Deno.test("a no_demand answer still proves there is nothing to release", async () => {
+  const f = fakeRpc({ claim: () => ({ data: statusRow("no_demand"), error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc });
+
+  assertEquals(await run.claim(), null);
+  await run.release();
+  assertEquals(f.releaseCalls, 0, "nothing was claimed anywhere, so nothing is given back");
+});
+
+// `inFlightCount` is optional and defaults to `() => 0`, which is exactly right for the batch driver
+// and silently catastrophic for the refill one: unpinned top-ups, no deferred release, renewal
+// stopping at `finished`, the idle budget arming mid-stream — and the pin-violation backstop that
+// would report it is itself gated on the same count, so nothing fires.
+Deno.test("refill refuses to run against a lease that cannot see the in-flight set", async () => {
+  const f = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc }); // no inFlightCount
+  assertEquals(run.tracksInFlight, false);
+
+  await assertRejects(
+    () =>
+      drainWithContinuousRefill({
+        run,
+        inFlight: new Set<Promise<void>>(),
+        maxInFlight: 4,
+        process: () => Promise.resolve()
+      }),
+    Error,
+    "inFlightCount"
+  );
+  assertEquals(f.claimArgs.length, 0, "and it refuses before claiming anything");
+});
+
+// The in-flight target and the allocator's `n` are one number. `claim()` caps ONE claim at
+// `drainConcurrency`, which is not the same as capping the SET, because refill accumulates across
+// claims: 4, then 4 more. The surplus is concurrency `max_per_org x drainConcurrency` never counted.
+Deno.test("drainOrgLease refuses an in-flight target that is not the run's own concurrency", async () => {
+  const seen: number[] = [];
+  const f = fakeRpc({
+    claim: (args, i) => {
+      seen.push(args.n);
+      return i === 1 ? { data: [row(1, "acme")], error: null } : { data: statusRow("no_demand"), error: null };
+    }
+  });
+  const inFlight = new Set<Promise<void>>();
+  // idleBudgetMs 0: `sleep` is instant here, so the default 50s budget would be 50s of WALL CLOCK
+  // spent spinning on an empty queue. Nothing in this test is about idling.
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    drainConcurrency: 4,
+    idleBudgetMs: 0,
+    inFlightCount: () => inFlight.size
+  });
+
+  await drainOrgLease({
+    run,
+    inFlight,
+    maxInFlight: 8, // twice the run's `n`
+    continuousRefill: true,
+    process: () => Promise.resolve()
+  });
+
+  assertEquals(seen[0], 4, "the first claim asks for the run's concurrency, not the inflated target");
+  assertEquals(
+    seen.every((n) => n <= 4),
+    true,
+    "and no claim in the run ever asks for more"
+  );
+});
+
+// The batch shape must roll back the drain SHAPE and nothing else. Reading `maxInFlight` on one path
+// and ignoring it on the other would make the kill switch a concurrency change too.
+Deno.test("the kill switch changes the drain shape, not how much is in flight", async () => {
+  const asked: number[] = [];
+  const f = fakeRpc({
+    claim: (args, i) => {
+      asked.push(args.n);
+      return i === 1 ? { data: [row(1, "acme")], error: null } : { data: statusRow("no_demand"), error: null };
+    }
+  });
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    drainConcurrency: 3,
+    idleBudgetMs: 0,
+    inFlightCount: () => inFlight.size
+  });
+
+  await drainOrgLease({
+    run,
+    inFlight,
+    maxInFlight: 3,
+    continuousRefill: false,
+    process: () => Promise.resolve()
+  });
+
+  assertEquals(asked[0], 3, "the batch path reads the same number the refill path would");
+});
+
+// `start`'s catch exists to make the tracked promise non-rejecting. Calling the reporter directly
+// from it left that invariant resting on a callback this module does not own: a throw from `onError`
+// re-rejects the very promise the catch was there to settle, and between `start` and the next
+// `settleOne` nothing is attached to it — an unhandled rejection that takes the isolate down.
+Deno.test("a reporter that throws cannot take the isolate down with it", async () => {
+  const f = fakeRpc({
+    claim: (_a, i) =>
+      i === 1 ? { data: [row(1, "acme")], error: null } : { data: statusRow("no_demand"), error: null }
+  });
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, idleBudgetMs: 0, inFlightCount: () => inFlight.size });
+
+  await drainWithContinuousRefill({
+    run,
+    inFlight,
+    maxInFlight: 4,
+    process: () => Promise.reject(new Error("handler blew up")),
+    onError: () => {
+      throw new Error("and so did the reporter");
+    }
+  });
+
+  assertEquals(inFlight.size, 0, "the message still settled and left the in-flight set");
+});
+
+// `Math.max(1, NaN)` is NaN, so the clamp in `claim()` did not clamp. A NaN `n` is serialized by
+// PostgREST as `null`, which `claim_org_slot_and_read` answers with P0001 — fatal on the FIRST
+// failure, so one bad arithmetic result ends the run with a deployment error that is not one.
+Deno.test("a non-finite message count resolves to the ceiling instead of a null n", async () => {
+  const f = fakeRpc({ claim: () => ({ data: statusRow("no_demand"), error: null }) });
+  const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, drainConcurrency: 4 });
+
+  await run.claim(Number.NaN);
+  assertEquals(f.claimArgs[0].n, 4);
+  assertEquals(Number.isFinite(f.claimArgs[0].n), true, "never NaN, which crosses the wire as null");
+});
+
+// ── The wall-clock run budget ──────────────────────────────────────────────────
+//
+// The defect these lock down was live on 2026-09-15: nothing bounded a BUSY org-leased run, so a
+// leaseholder that kept finding work drained until the runtime killed the isolate at
+// EDGE_WORKER_TIMEOUT_MS ("wall clock duration reached", 664 times in 75 minutes across 27 pods),
+// and everything it had read but not archived stayed invisible for a full visibility timeout —
+// which in production is the same 480s. `sync_repo_permissions` redelivery reached 35.4%.
+//
+// Two things have to be true of the fix and each of them can be true without the other, which is
+// why they are asserted separately everywhere below: the run must STOP CLAIMING at the deadline,
+// and the work it had already started must STILL COMPLETE. A change that only did the first would
+// be the same strand, self-inflicted.
+
+/** The prod shape the defect was measured on: a 480s isolate and a 480s visibility timeout. */
+const PROD_LIFETIME_MS = 480_000;
+
+/**
+ * Message spans, so a test can ask the question the incident asks: at the instant the runtime would
+ * have killed this isolate, how many messages had been read and not yet archived? That count IS the
+ * stranded set — each one invisible for the rest of its VT.
+ */
+type Span = { start: number; end: number };
+const inFlightAt = (spans: Span[], t: number) => spans.filter((s) => s.start <= t && t < s.end).length;
+
+/**
+ * One org-leased drain against an endless-enough queue, on virtual time.
+ *
+ * `budgetMs === null` is the PRE-CHANGE behaviour and is what the negative control runs.
+ */
+async function drainWithBudget(budgetMs: number | null) {
+  const clock = virtualClock();
+  const claimTimes: number[] = [];
+  const spans: Span[] = [];
+  // STARTS counted separately from COMPLETIONS, because "stopped claiming" and "let what it had
+  // finish" are different claims and a span list alone can only ever evidence the first. A driver
+  // that returned while messages were still running would simply record fewer spans, and every
+  // assertion written over `spans` would stay true of the smaller set.
+  let startedCount = 0;
+  // Bounded, or an unbudgeted run would never return and the negative control could not be written.
+  // 200 x 30s at 4-way concurrency is 1500s of virtual time, comfortably past the 480s wall clock.
+  const ready: number[] = [];
+  for (let i = 1; i <= 200; i++) ready.push(i);
+
+  const rpc: OrgSlotRpc = {
+    claim: async (args) => {
+      claimTimes.push(clock.now());
+      await clock.sleep(CLAIM_LATENCY_MS);
+      if (args.queue_name !== "async_calls") return { data: statusRow("no_demand"), error: null };
+      const take = ready.splice(0, args.n);
+      if (take.length === 0) return { data: statusRow("no_demand"), error: null };
+      return { data: take.map((id) => row(id, "acme")), error: null };
+    },
+    renew: () => Promise.resolve({ data: true, error: null }),
+    release: () => Promise.resolve({ data: null, error: null })
+  };
+
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({
+    ...simBase(clock),
+    rpc,
+    inFlightCount: () => inFlight.size,
+    // The clock is injected, so the anchor must be too — `beginOrgLeaseRun` refuses the pair
+    // otherwise. 0 is this isolate's birth on the virtual clock.
+    ...(budgetMs === null ? {} : { runBudgetMs: budgetMs, isolateStartedAt: 0 })
+  });
+
+  await runOnVirtualTime(
+    clock,
+    drainWithContinuousRefill({
+      run,
+      inFlight,
+      maxInFlight: SIM_CONCURRENCY,
+      process: async (message) => {
+        startedCount++;
+        const start = clock.now();
+        // STAGGERED, not a constant. With identical durations every message settles in lockstep and
+        // the in-flight set empties completely between refills, so the deadline can only ever land
+        // on an EMPTY set — and "the work in flight at the deadline still finishes" becomes a claim
+        // about nothing. These are the measured spread's shape (tens of seconds, no two alike).
+        await clock.sleep((17 + ((message.msg_id * 7) % 23)) * 1000);
+        spans.push({ start, end: clock.now() });
+      }
+    })
+  );
+  await run.release();
+
+  return {
+    claimTimes,
+    spans,
+    endedAt: clock.now(),
+    startedCount,
+    completedCount: spans.length,
+    stillTracked: inFlight.size,
+    left: ready.length,
+    run
+  };
+}
+
+// THE CORE PROPERTY, BOTH HALVES. Claiming stops at the deadline; everything already claimed still
+// runs to completion; and at the instant the runtime would have killed this isolate there is
+// nothing left unarchived, which is the whole of the 2026-09-15 defect.
+Deno.test(
+  "a run past its wall-clock budget stops claiming, and the work it already started still finishes",
+  async () => {
+    const budget = 330_000;
+    const d = await drainWithBudget(budget);
+
+    const after = d.claimTimes.filter((t) => t >= budget);
+    assertEquals(after, [], "no claim may be issued once the budget is spent");
+    // Not vacuous: it really did keep claiming right up to the deadline rather than stopping early for
+    // some unrelated reason, which is the way this test could pass while the budget did nothing.
+    assertEquals(
+      d.claimTimes.some((t) => t > budget - 60_000),
+      true,
+      "and it claimed right up to the deadline, so the stop is the budget and not an empty queue"
+    );
+
+    // THE OTHER HALF, AND IT IS COUNTED RATHER THAN INFERRED. Every message this run STARTED also
+    // COMPLETED. A budget that stopped claiming and then dropped its in-flight set on the floor would
+    // satisfy every assertion above and fail here — which is the exact bug this change could have
+    // introduced, so it gets a count and not a property over the survivors.
+    assertEquals(d.startedCount > 0, true, "the run did real work before the deadline");
+    assertEquals(
+      d.completedCount,
+      d.startedCount,
+      "every message the run started also finished; none was abandoned at the deadline"
+    );
+    assertEquals(d.stillTracked, 0, "and the driver did not return with work still tracked");
+    assertEquals(
+      d.spans.every((s) => s.end <= d.endedAt),
+      true,
+      "the driver did not return while a message it claimed was still running"
+    );
+    // THE INTERLEAVING THAT MAKES THE ASSERTION MEAN SOMETHING: messages were genuinely RUNNING at
+    // the instant claiming stopped, and they ended after it. A budget that dropped its in-flight set
+    // on the floor would satisfy "stops claiming" and fail here.
+    assertEquals(
+      inFlightAt(d.spans, budget) > 0,
+      true,
+      "the deadline landed mid-stream, with messages actually running"
+    );
+    assertEquals(
+      d.spans.some((s) => s.start < budget && s.end > budget),
+      true,
+      "and work that was in flight AT the deadline was allowed to finish past it, not dropped"
+    );
+    assertEquals(d.run.shouldContinue(), false, "the run is over");
+
+    // The point of the whole change: at the wall clock, nothing of ours is unarchived.
+    assertEquals(inFlightAt(d.spans, PROD_LIFETIME_MS), 0, "nothing is stranded when the runtime kills the isolate");
+    assertEquals(d.endedAt < PROD_LIFETIME_MS, true, "the isolate returned on its own terms, before the kill");
+  }
+);
+
+// NEGATIVE CONTROL. The same drain with no budget is the pre-change worker, and it does exactly what
+// the incident says: still claiming long past the horizon, with a full in-flight set at the kill.
+Deno.test("an unbudgeted run claims past the deadline and is still holding messages at the wall clock", async () => {
+  const d = await drainWithBudget(null);
+
+  assertEquals(
+    d.claimTimes.some((t) => t >= 330_000),
+    true,
+    "an unbudgeted run keeps claiming past where the budget would have stopped it"
+  );
+  assertEquals(
+    d.claimTimes.some((t) => t >= PROD_LIFETIME_MS),
+    true,
+    "and past the wall clock itself, on an isolate the runtime has already killed"
+  );
+  assertEquals(
+    inFlightAt(d.spans, PROD_LIFETIME_MS),
+    SIM_CONCURRENCY,
+    "with a full in-flight set stranded at the kill — read, unarchived, invisible for a whole VT"
+  );
+});
+
+// THE PRIMARY ACCEPTANCE CRITERION, and the one case an injected clock cannot reach.
+//
+// `github-async-worker/index.ts` resets its `started` guard in a `.finally()`, the cron pokes twice
+// a minute, and an idle run returns after its 50s idle budget — so ONE ISOLATE HOSTS A SEQUENCE OF
+// RUNS. A run-scoped deadline passes every other test in this section and changes nothing in
+// production, because the dangerous run is a YOUNG run that starts LATE in the isolate's life: it
+// would be handed a fresh full allowance and killed minutes short of it.
+//
+// So this one injects NOTHING — not the clock, not the anchor. It uses the real `Date.now` and the
+// real module-level capture in orgLeaseRun.ts, which is the only way to tell "the budget is module
+// state that runs draw down" apart from "the budget is per run".
+Deno.test("the budget is module state: a second run in the same isolate inherits what the first spent", async () => {
+  const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  // `base` deliberately does NOT set `now`, so these runs read the real clock and the real
+  // module-level anchor. That is the whole design of this test.
+  const live = base;
+
+  // A budget that expires 300ms from NOW, expressed the only way it can be — as an allowance from
+  // the ISOLATE's start, which is what the worker passes and what every run in this isolate shares.
+  const budgetMs = Date.now() - isolateStartedAtMs() + 300;
+
+  const first = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+  const runA = beginOrgLeaseRun({ ...live, rpc: first.rpc, runBudgetMs: budgetMs });
+  assertNotEquals(await runA.claim(), null, "the first run is inside the budget and claims normally");
+
+  // The isolate ages past the shared deadline. The RUN is brand new; the ISOLATE is not.
+  await realSleep(400);
+
+  const second = fakeRpc({ claim: () => ({ data: [row(2, "acme")], error: null }) });
+  const runB = beginOrgLeaseRun({ ...live, rpc: second.rpc, runBudgetMs: budgetMs });
+  assertEquals(await runB.claim(), null, "the second run inherits the remainder, which is gone");
+  assertEquals(second.claimArgs.length, 0, "and it never reached the RPC at all");
+  assertEquals(runB.shouldContinue(), false, "so it ends rather than holding an admission slot");
+
+  // THE CONTROL THAT MAKES THE ASSERTION ABOVE MEAN SOMETHING. Give a third run exactly what a
+  // RUN-ANCHORED implementation would have given the second — an allowance measured from ITS OWN
+  // start — and it claims happily. The difference between these two runs is the anchor and nothing
+  // else, which is the whole point.
+  const third = fakeRpc({ claim: () => ({ data: [row(3, "acme")], error: null }) });
+  const runC = beginOrgLeaseRun({
+    ...live,
+    rpc: third.rpc,
+    runBudgetMs: Date.now() - isolateStartedAtMs() + 300
+  });
+  assertNotEquals(await runC.claim(), null, "a run-start anchor would have let the late run claim — that is the bug");
+});
+
+// The deterministic sibling of the test above: same claim, injected clock, so the arithmetic is
+// exact rather than timing-dependent. Both are kept — this one pins the SEMANTICS (an absolute
+// deadline shared across runs), that one pins the WIRING (the module capture is really what
+// production uses).
+Deno.test("sequential runs share one deadline, and a late run gets no allowance at all", async () => {
+  let t = 0;
+  const isolateStartedAt = 0;
+  const budgetMs = 330_000;
+  const live = { ...base, now: () => t, isolateStartedAt };
+
+  const a = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+  const runA = beginOrgLeaseRun({ ...live, rpc: a.rpc, runBudgetMs: budgetMs });
+  assertNotEquals(await runA.claim(), null);
+
+  // Run A idles out at its idle budget and returns; the isolate stays alive and takes the next poke.
+  t = 200_000;
+  const b = fakeRpc({ claim: () => ({ data: [row(2, "acme")], error: null }) });
+  const runB = beginOrgLeaseRun({ ...live, rpc: b.rpc, runBudgetMs: budgetMs });
+  assertNotEquals(await runB.claim(), null, "130s of the isolate's budget is left, so this run may use it");
+
+  // ...and the next one after that is past the shared deadline, even though it is seconds old.
+  t = 340_000;
+  const c = fakeRpc({ claim: () => ({ data: [row(3, "acme")], error: null }) });
+  const runC = beginOrgLeaseRun({ ...live, rpc: c.rpc, runBudgetMs: budgetMs });
+  assertEquals(await runC.claim(), null, "a fresh run late in the isolate's life inherits no allowance");
+  assertEquals(c.claimArgs.length, 0);
+  assertEquals(runC.shouldContinue(), false);
+});
+
+// Same rule the deferred-release paths already hold, reached a fourth way. A budget that gave the
+// slot back while `n-1` handlers were still spending this org's GitHub quota would let a second
+// leaseholder in on top of them — the per-org cap this whole feature exists to hold.
+Deno.test("a spent budget does not hand back a slot that still has work under it", async () => {
+  const timers = fakeTimers();
+  const f = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+  let inFlight = 0;
+  let t = 0;
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    leaseTtlMs: 30_000,
+    now: () => t,
+    isolateStartedAt: 0,
+    runBudgetMs: 330_000,
+    inFlightCount: () => inFlight,
+    setIntervalFn: timers.setIntervalFn,
+    clearIntervalFn: timers.clearIntervalFn
+  });
+
+  await run.claim();
+  inFlight = 3;
+  t = 330_001;
+
+  assertEquals(await run.claim(), null, "the budget is spent, so nothing more is claimed");
+  assertEquals(run.shouldContinue(), false);
+  assertEquals(f.releaseCalls, 0, "but the slot stays ours while its messages are still running");
+  assertEquals(run.heldOrg(), "acme");
+
+  // And the lease keeps being renewed past the end of the run, or it lapses mid-drain.
+  t = 340_002;
+  timers.fireAll();
+  await flush();
+  assertEquals(f.renewCalls, 1, "a finished-but-draining run must keep its lease alive");
+
+  inFlight = 0;
+  await run.release();
+  assertEquals(f.releaseCalls, 1, "the drain finishing is what finally gives the slot back");
+});
+
+// The failure direction that is worse than the one the budget fixes. A zero or a NaN arriving from
+// a caller's arithmetic must not mean "already past the deadline": that is an isolate that never
+// claims, i.e. a queue that stops draining while the lease, the heartbeats and the error count all
+// stay green. Unbounded is a known and survivable failure; never claiming is not.
+Deno.test("a budget that is not a usable number leaves the run unbounded rather than instantly over", async () => {
+  for (const runBudgetMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const f = fakeRpc({ claim: () => ({ data: [row(1, "acme")], error: null }) });
+    // `now` far past any plausible deadline, which is exactly what would trip a mis-parsed budget.
+    const run = beginOrgLeaseRun({ ...base, rpc: f.rpc, now: () => 10_000_000, runBudgetMs });
+    assertNotEquals(await run.claim(), null, `runBudgetMs=${runBudgetMs} must not stop the worker claiming`);
+    assertEquals(run.shouldContinue(), true);
+  }
+});
+
+// The wiring mistake the types cannot catch, and the one that would make every test above vacuous:
+// the module anchor is in Date.now()'s epoch, so a deadline built from it and compared against an
+// injected clock starting at 0 sits ~1.7e12 ms in the future and can never be reached.
+Deno.test("an armed budget with an injected clock and no anchor is refused rather than silently inert", () => {
+  const f = fakeRpc();
+  const e = assertThrows(() => beginOrgLeaseRun({ ...base, rpc: f.rpc, now: () => 0, runBudgetMs: 1000 }), Error);
+  assertStringIncludes(e.message, "isolateStartedAt");
+  // And the two legitimate shapes are both still allowed.
+  beginOrgLeaseRun({ ...base, rpc: f.rpc, now: () => 0, isolateStartedAt: 0, runBudgetMs: 1000 });
+  beginOrgLeaseRun({ ...base, rpc: f.rpc, now: () => 0 });
+});
+
+// END TO END THROUGH THE TUNING, because the budget is only worth anything at the number production
+// actually resolves. SIM_ENV is the prod shape — a 480s isolate and a 480s visibility timeout, which
+// is the pair that made a mid-batch kill cost a full VT of invisibility.
+Deno.test("the production tuning resolves a 330s budget, and a drain at it returns before the wall clock", async () => {
+  const tuning = simTuning({ GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP: "8" });
+  assertEquals(tuning.orgSlots.runBudgetSeconds, 330, "480s lifetime - 120s drain-out reserve - 30s margin");
+  assertEquals(
+    tuning.orgSlots.runBudgetSeconds * 1000 + PER_MESSAGE_VT_BUDGET_SECONDS * 1000 < PROD_LIFETIME_MS,
+    true,
+    "and it leaves a whole modelled message behind it, which is what the reserve is for"
+  );
+
+  const d = await drainWithBudget(tuning.orgSlots.runBudgetSeconds * 1000);
+  assertEquals(
+    d.claimTimes.filter((t) => t >= 330_000),
+    [],
+    "nothing is claimed past the resolved budget"
+  );
+  assertEquals(inFlightAt(d.spans, PROD_LIFETIME_MS), 0, "and nothing is stranded at the wall clock");
+});
+
+// ── The stream quantum ─────────────────────────────────────────────────────────
+//
+// The pin keeps the per-org cap honest and, on its own, lets one org hold a leaseholder for as long
+// as it has work: an unpinned claim is the only thing that can move the slot, `claim()` issues one
+// only with nothing in flight, and a deep stream under refill never has nothing in flight.
+// Batch-at-a-time re-probed at every boundary and did not have that property. These tests are about
+// getting it back without ever issuing an unpinned claim while something of ours is running, which
+// is the thing the pin exists to prevent.
+
+/** Base quantum at the `n` these tests use: DEFAULT_STREAM_QUANTUM_REFILLS x drainConcurrency. */
+const QUANTUM_MESSAGES = DEFAULT_STREAM_QUANTUM_REFILLS * SIM_CONCURRENCY;
+
+/**
+ * A stand-in for the ALLOCATOR ON A SATURATED FLEET, which is the shape neither helper above can
+ * express: other holders exist, they occupy `global_cap`, and the winner is chosen by slots held
+ * rather than by backlog depth. Three predicates, all transcribed from the migration rather than
+ * invented, and every one of them load-bearing for what these tests claim:
+ *
+ *   - `a_others` AND THE GLOBAL CAP BOTH EXCLUDE THE CALLER. An existing holder re-pointing its own
+ *     row is therefore never refused by `global_cap` and never counted as its own competitor. That
+ *     asymmetry is the whole reason a starved org can be served while the fleet is full, and a fake
+ *     that counted us would let these tests pass for a reason production does not have.
+ *   - THE WINNER IS `a_others asc`, then org name. Breadth before depth: an org nobody else is
+ *     serving beats one with a deeper backlog.
+ *   - A PIN IS THE ONLY CANDIDATE, with no fall-through to re-picking, as `fakeOrgAllocator` has it.
+ *
+ * `no_capacity` versus `no_demand` follows the SQL too: work exists but nothing qualified is the
+ * first, nothing ready anywhere is the second.
+ */
+function fakeFleetAllocator(init: {
+  clock: VirtualClock;
+  ready: Record<string, number>;
+  /** One entry per live slot row held by ANOTHER holder, naming the org that row is serving. */
+  foreign: string[];
+  maxPerOrg: number;
+  globalCap: number;
+  /** Runs before every claim, so a test can enqueue a new class's work part way through a stream. */
+  beforeClaim?: (servedSoFar: number, ready: Record<string, number>) => void;
+  /** Reads the driver's in-flight set, so a pinned-versus-unpinned claim can be judged against it. */
+  inFlightCount?: () => number;
+}) {
+  const ready: Record<string, number> = { ...init.ready };
+  const served: { org: string; readyLeft: Record<string, number> }[] = [];
+  const claims: { pin: string | undefined; inFlight: number; servedSoFar: number }[] = [];
+  let nextMsgId = 1;
+
+  const aOthers = (org: string) => init.foreign.filter((o) => o === org).length;
+
+  const rpc: OrgSlotRpc = {
+    claim: async (args) => {
+      init.beforeClaim?.(served.length, ready);
+      claims.push({ pin: args.pin_org, inFlight: init.inFlightCount?.() ?? 0, servedSoFar: served.length });
+      await init.clock.sleep(CLAIM_LATENCY_MS);
+      if (args.queue_name !== "async_calls") return { data: statusRow("no_demand"), error: null };
+
+      const demand = Object.keys(ready).filter(
+        (o) => ready[o] > 0 && (args.pin_org === undefined || o === args.pin_org)
+      );
+      if (demand.length === 0) return { data: statusRow("no_demand"), error: null };
+      const admitted = demand
+        .filter((o) => aOthers(o) < init.maxPerOrg && init.foreign.length < init.globalCap)
+        .sort((a, b) => aOthers(a) - aOthers(b) || a.localeCompare(b));
+      if (admitted.length === 0) return { data: statusRow("no_capacity"), error: null };
+
+      const org = admitted[0];
+      const take = Math.min(args.n, ready[org]);
+      ready[org] -= take;
+      const rows: OrgSlotRow[] = [];
+      for (let i = 0; i < take; i++) {
+        rows.push(row(nextMsgId++, org));
+        served.push({ org, readyLeft: { ...ready } });
+      }
+      return { data: rows, error: null };
+    },
+    renew: () => Promise.resolve({ data: true, error: null }),
+    release: () => Promise.resolve({ data: null, error: null })
+  };
+
+  return {
+    rpc,
+    served,
+    claims,
+    /** Index of the first message served for `org`, or -1. This is the latency the quantum bounds. */
+    firstIndexOf: (org: string) => served.findIndex((s) => s.org === org),
+    countFor: (org: string) => served.filter((s) => s.org === org).length
+  };
+}
+
+/**
+ * One leaseholder against a saturated fleet, on virtual time.
+ *
+ * `hog` is the class that won a slot while it was the only one backed up, and it has more work than
+ * a run can drain. `starved` is a class that enqueues afterwards: `alpha`, `bravo` and `charlie` are
+ * at `maxPerOrg` under other holders, so nothing else in the fleet can pick it up, and a fresh
+ * isolate is answered `no_capacity` because it would be counted against `global_cap`. Only this
+ * holder's own unpinned claim can move a slot onto it.
+ */
+const FLEET_HOG_BACKLOG = 240;
+const FLEET_STARVED_BACKLOG = 40;
+/** How many messages of `hog` are drained before the new class shows up. */
+const FLEET_STARVED_APPEARS_AT = 8;
+
+async function drainSaturatedFleet(streamQuantumRefills?: number) {
+  const clock = virtualClock();
+  const inFlight = new Set<Promise<void>>();
+  let starvedAppearedAt = -1;
+  const q = fakeFleetAllocator({
+    clock,
+    ready: { hog: FLEET_HOG_BACKLOG, alpha: 100, bravo: 100, charlie: 100, starved: 0 },
+    // Seven live rows under other holders. `hog` has one, so it is still admissible; the other three
+    // classes are at `maxPerOrg` and cannot take another slot however deep their backlog is.
+    foreign: ["hog", "alpha", "alpha", "bravo", "bravo", "charlie", "charlie"],
+    maxPerOrg: 2,
+    globalCap: 8,
+    inFlightCount: () => inFlight.size,
+    beforeClaim: (servedSoFar, ready) => {
+      if (servedSoFar >= FLEET_STARVED_APPEARS_AT && ready.starved === 0 && starvedAppearedAt < 0) {
+        ready.starved = FLEET_STARVED_BACKLOG;
+        starvedAppearedAt = servedSoFar;
+      }
+    }
+  });
+
+  const run = beginOrgLeaseRun({
+    ...simBase(clock),
+    maxPerOrg: 2,
+    globalCap: 8,
+    rpc: q.rpc,
+    inFlightCount: () => inFlight.size,
+    ...(streamQuantumRefills === undefined ? {} : { streamQuantumRefills })
+  });
+
+  await runOnVirtualTime(
+    clock,
+    (async () => {
+      try {
+        await drainWithContinuousRefill({
+          run,
+          inFlight,
+          maxInFlight: SIM_CONCURRENCY,
+          // A deterministic spread, so a drain-out is a real tail rather than a lockstep finish.
+          process: (message) => clock.sleep((10 + (message.msg_id % 7)) * 1000)
+        });
+      } finally {
+        await run.release();
+      }
+    })()
+  );
+
+  return { ...q, starvedAppearedAt, endedAt: clock.now() };
+}
+
+// THE PROPERTY THE REVIEW ASKED FOR, AND IT IS ASSERTED AS A SLOT ACQUIRED RATHER THAN AS A PROBE
+// ISSUED. "An unpinned claim happened" would pass on a change that probes and throws the answer
+// away; what has to be true is that the waiting class's messages are being WORKED, and that this
+// happened while the class holding the fleet still had a deep backlog, so it is the quantum doing it
+// and not the backlog running out.
+Deno.test(
+  "a starved class gets a slot within one quantum, while the class holding the fleet is still deep",
+  async () => {
+    const d = await drainSaturatedFleet();
+
+    const first = d.firstIndexOf("starved");
+    assertNotEquals(first, -1, "the waiting class must actually be served, not merely probed for");
+    assertEquals(
+      d.starvedAppearedAt >= 0 && first - d.starvedAppearedAt <= QUANTUM_MESSAGES,
+      true,
+      `the waiting class appeared at message ${d.starvedAppearedAt} and was first served at ${first}: ` +
+        `${first - d.starvedAppearedAt} messages, which must be inside the ${QUANTUM_MESSAGES}-message quantum`
+    );
+    // NOT BECAUSE THE BACKLOG DRAINED. If `hog` had simply run out, an unpinned claim would have been
+    // reached the way it always was and this test would be measuring nothing.
+    assertEquals(
+      d.served[first].readyLeft.hog > FLEET_HOG_BACKLOG / 2,
+      true,
+      `hog still had ${d.served[first].readyLeft.hog} of ${FLEET_HOG_BACKLOG} ready when the slot moved`
+    );
+    assertEquals(d.countFor("starved"), FLEET_STARVED_BACKLOG, "and the class is then drained, not sampled");
+  }
+);
+
+// NEGATIVE CONTROL. The same fleet with the quantum switched off is the shipped behaviour, and the
+// waiting class gets NOTHING until the whole backlog in front of it is gone.
+Deno.test("without the quantum the starved class waits out the entire backlog", async () => {
+  const d = await drainSaturatedFleet(Number.POSITIVE_INFINITY);
+
+  const first = d.firstIndexOf("starved");
+  assertEquals(first, FLEET_HOG_BACKLOG, "not one message of the waiting class is served before the backlog ends");
+  assertEquals(
+    d.served[first - 1].readyLeft.hog,
+    0,
+    "the slot moves only when the org holding it has nothing left, which is the defect"
+  );
+  assertEquals(
+    first - d.starvedAppearedAt > QUANTUM_MESSAGES * 5,
+    true,
+    `${first - d.starvedAppearedAt} messages of waiting, against a quantum of ${QUANTUM_MESSAGES}`
+  );
+});
+
+// THE ACCOUNTING, WHICH IS THE PART THAT COULD HAVE BEEN GOT WRONG. The cheap way to reach an
+// unpinned claim mid-stream is to stop sending the pin, and that is exactly the mid-stream rotation
+// the pin_org migration exists to close: the allocator re-points our row while `n-1` of the previous
+// org's messages are still running, and that org reaches `max_per_org x n + (n-1)`. The quantum
+// reaches the same claim by WAITING, so this is checkable rather than merely argued.
+Deno.test("the quantum reaches its unpinned claim by draining out, never by unpinning mid-stream", async () => {
+  const d = await drainSaturatedFleet();
+
+  const unpinned = d.claims.filter((c) => c.pin === undefined);
+  assertEquals(
+    unpinned.every((c) => c.inFlight === 0),
+    true,
+    `unpinned claims were issued with ${[...new Set(unpinned.map((c) => c.inFlight))].join(", ")} in flight; ` +
+      `every one must be zero or the per-org cap stops being counted`
+  );
+  // And not vacuously: there really were reconsiderations part way through a stream, which is what
+  // distinguishes this from the run that simply never quiesces.
+  assertEquals(
+    unpinned.filter((c) => c.servedSoFar > 0 && c.servedSoFar < FLEET_HOG_BACKLOG).length >= 1,
+    true,
+    "at least one unpinned claim landed mid-backlog, so the property above is about the quantum"
+  );
+  assertEquals(
+    d.claims.some((c) => c.pin !== undefined && c.inFlight > 0),
+    true,
+    "and the pinned top-ups are still the ones that carry a stream"
+  );
+});
+
+/** One leaseholder, one class, nothing else in the fleet: the case where a quiesce buys nothing. */
+async function drainSoloBurst(backlog: number) {
+  const clock = virtualClock();
+  const inFlight = new Set<Promise<void>>();
+  const q = fakeFleetAllocator({
+    clock,
+    ready: { solo: backlog },
+    foreign: [],
+    maxPerOrg: 2,
+    globalCap: 8,
+    inFlightCount: () => inFlight.size
+  });
+  const run = beginOrgLeaseRun({
+    ...simBase(clock),
+    maxPerOrg: 2,
+    globalCap: 8,
+    rpc: q.rpc,
+    inFlightCount: () => inFlight.size
+  });
+  await runOnVirtualTime(
+    clock,
+    (async () => {
+      try {
+        await drainWithContinuousRefill({
+          run,
+          inFlight,
+          maxInFlight: SIM_CONCURRENCY,
+          process: (message) => clock.sleep((10 + (message.msg_id % 7)) * 1000)
+        });
+      } finally {
+        await run.release();
+      }
+    })()
+  );
+  // Where in the stream each reconsideration fell. The first is the claim that opens the run.
+  return q.claims.filter((c) => c.pin === undefined).map((c) => c.servedSoFar);
+}
+
+// THE BACKOFF, AND WHY IT IS NOT JUST A TUNING KNOB IN DISGUISE. A reconsideration that comes back
+// with the org it just left paid a whole drain-out to learn that nobody else qualified. On the
+// 190-message single-org fixture that is the entire cost of the quantum and none of its benefit:
+// 99.1% utilization to 93.7% at a flat quantum, against 97.2% with this backoff. So the quantum
+// doubles after an answer that changed nothing, and the cap bounds how far that can go.
+Deno.test("a quantum that finds nobody waiting backs off, instead of paying for the same answer again", async () => {
+  const at = await drainSoloBurst(300);
+
+  assertEquals(at[0], 0, "the first unpinned claim is the one that opens the run");
+  const gaps = at.slice(1).map((v, i) => v - at[i]);
+  assertEquals(gaps.length >= 3, true, `only ${gaps.length} reconsiderations in 300 messages: ${at.join(", ")}`);
+  // Base, then 2x, then the cap at 4x. Asserted as ranges because a top-up claims the SHORTFALL, so
+  // the counter crosses the quantum somewhere inside the last refill rather than exactly on it.
+  assertEquals(
+    gaps[0] >= QUANTUM_MESSAGES && gaps[0] < QUANTUM_MESSAGES + SIM_CONCURRENCY,
+    true,
+    `first gap ${gaps[0]}, expected the base quantum of ${QUANTUM_MESSAGES}`
+  );
+  assertEquals(
+    gaps[1] >= QUANTUM_MESSAGES * 2 && gaps[1] < QUANTUM_MESSAGES * 2 + SIM_CONCURRENCY,
+    true,
+    `second gap ${gaps[1]}, expected the quantum to have doubled to ${QUANTUM_MESSAGES * 2}`
+  );
+  assertEquals(
+    gaps[2] >= QUANTUM_MESSAGES * STREAM_QUANTUM_BACKOFF_CAP,
+    true,
+    `third gap ${gaps[2]}, expected the cap at ${QUANTUM_MESSAGES * STREAM_QUANTUM_BACKOFF_CAP}`
+  );
+});
+
+// THE OTHER HALF OF THE BACKOFF: a reconsideration that PAYS keeps the base quantum, so a contended
+// fleet is not slowly relaxed into the behaviour the quantum exists to fix. Without this the first
+// two stretches would be inherited by the stream that rotated, and the waiting class after that one
+// would wait twice as long for no reason.
+Deno.test("a reconsideration that rotates snaps the quantum back to its base", async () => {
+  const d = await drainSaturatedFleet();
+  const unpinned = d.claims.filter((c) => c.pin === undefined).map((c) => c.servedSoFar);
+  const rotatedAt = d.firstIndexOf("starved");
+
+  const after = unpinned.filter((v) => v > rotatedAt);
+  assertEquals(
+    after.length >= 1,
+    true,
+    `no reconsideration after the rotation at ${rotatedAt}: ${unpinned.join(", ")}`
+  );
+  assertEquals(
+    after[0] - rotatedAt <= QUANTUM_MESSAGES + SIM_CONCURRENCY,
+    true,
+    `the stream that won the rotation ran ${after[0] - rotatedAt} messages before reconsidering; the ` +
+      `base quantum is ${QUANTUM_MESSAGES}, so a backoff carried across the rotation would show here`
+  );
+});
+
+// The quantum must not be able to put a run back in business after its wall-clock deadline, and it
+// must not sit on a slot the budget was about to give back. The deadline gate runs FIRST in
+// `claim()` for exactly this reason: a quiesce returns null too, so a quantum checked ahead of it
+// would swallow the one call per run that ends the run and releases.
+Deno.test("a spent quantum cannot outlive the wall-clock budget, and does not defeat its release", async () => {
+  let t = 0;
+  let inFlight = 0;
+  const f = fakeRpc({
+    claim: () => ({ data: [row(1, "acme"), row(2, "acme"), row(3, "acme"), row(4, "acme")], error: null })
+  });
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    drainConcurrency: 4,
+    now: () => t,
+    isolateStartedAt: 0,
+    runBudgetMs: 100_000,
+    // One refill, so the quantum is spent by the opening batch and the next top-up quiesces.
+    streamQuantumRefills: 1,
+    inFlightCount: () => inFlight
+  });
+
+  assertNotEquals(await run.claim(), null, "the opening batch is claimed normally");
+  assertEquals(f.claimArgs.length, 1);
+
+  inFlight = 3;
+  assertEquals(await run.claim(1), null, "the quantum is spent, so the top-up is skipped");
+  assertEquals(f.claimArgs.length, 1, "and skipped without an RPC, so quiescing cannot spin on the allocator");
+  assertEquals(run.shouldContinue(), true, "quiescing is not the end of the run");
+
+  // The deadline passes while the run is draining out towards its reconsideration.
+  t = 100_001;
+  assertEquals(await run.claim(1), null);
+  assertEquals(run.shouldContinue(), false, "the budget ends the run even though the quantum wanted a drain-out");
+  assertEquals(f.claimArgs.length, 1, "and nothing was claimed past the deadline");
+  assertEquals(f.releaseCalls, 0, "the slot is held while its messages run, exactly as before");
+
+  inFlight = 0;
+  assertEquals(await run.claim(), null, "a drained-out run past its deadline still claims nothing");
+  assertEquals(f.claimArgs.length, 1, "and still reaches no RPC");
+  // The deferral is honoured by the caller's exit release, which is where it was always honoured:
+  // a finished run returns from `claim()` before the deadline gate, so nothing else can pick it up.
+  await run.release();
+  assertEquals(f.releaseCalls, 1, "and the slot the budget deferred comes back once the drain is done");
+});
+
+// Same fail-safe direction as `runBudgetMs`, and for a sharper reason. An unbounded stream is what
+// shipped and costs a waiting class some latency; a quantum that resolved to zero would drain the
+// in-flight set on every single top-up, which is batch-at-a-time with extra steps, on every
+// leaseholder, with nothing in the logs to say why throughput halved.
+Deno.test("an unusable quantum leaves the stream unbounded rather than quiescing on every top-up", async () => {
+  for (const streamQuantumRefills of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    let inFlight = 0;
+    const f = fakeRpc({ claim: () => ({ data: [row(1, "acme"), row(2, "acme")], error: null }) });
+    const run = beginOrgLeaseRun({
+      ...base,
+      rpc: f.rpc,
+      drainConcurrency: 2,
+      streamQuantumRefills,
+      inFlightCount: () => inFlight
+    });
+
+    await run.claim();
+    inFlight = 1;
+    for (let i = 0; i < 50; i++)
+      assertNotEquals(await run.claim(1), null, `refills=${streamQuantumRefills} must keep streaming`);
+    assertEquals(
+      f.claimArgs.slice(1).every((a) => a.pin_org === "acme"),
+      true,
+      `refills=${streamQuantumRefills}: every top-up must still be pinned and still be issued`
+    );
+  }
+});
+
+// ── Review fix: the exported driver enforces its own contract ─────────────────
+//
+// `drainOrgLease` normalizes `maxInFlight` and warns, so production cannot reach this. That made the
+// earlier fix look complete and it was not: `drainWithContinuousRefill` is exported, its loop
+// computes the shortfall from `maxInFlight` while `claim()` clamps only each INDIVIDUAL claim to
+// `drainConcurrency`, and refill closes that gap by accumulation. Thrown rather than coerced, to
+// match `tracksInFlight` ten lines above it: both are wiring mistakes between options on two
+// separate calls, and enforcing one while silently rewriting the other is not a contract.
+Deno.test("the refill driver refuses an in-flight target that is not the run's own concurrency", async () => {
+  for (const maxInFlight of [8, 2, Number.NaN, Number.POSITIVE_INFINITY]) {
+    // One batch and then an empty queue, so a driver that ACCEPTED the mismatch would return
+    // normally and this would fail on the missing rejection rather than by hanging.
+    const f = fakeRpc({
+      claim: (_a, i) =>
+        i === 1 ? { data: [row(1, "acme")], error: null } : { data: statusRow("no_demand"), error: null }
+    });
+    const inFlight = new Set<Promise<void>>();
+    const run = beginOrgLeaseRun({
+      ...base,
+      rpc: f.rpc,
+      drainConcurrency: 4,
+      idleBudgetMs: 0,
+      inFlightCount: () => inFlight.size
+    });
+
+    const e = await assertRejects(
+      () => drainWithContinuousRefill({ run, inFlight, maxInFlight, process: () => Promise.resolve() }),
+      Error
+    );
+    assertStringIncludes(e.message, "drainConcurrency=4");
+    assertEquals(f.claimArgs.length, 0, `maxInFlight=${maxInFlight} must be refused before anything is claimed`);
+  }
+});
+
+// And the matching number is still accepted, or the test above would pass on a driver that refused
+// everything.
+Deno.test("the refill driver accepts the run's own concurrency", async () => {
+  const f = fakeRpc({
+    claim: (_a, i) =>
+      i === 1 ? { data: [row(1, "acme")], error: null } : { data: statusRow("no_demand"), error: null }
+  });
+  const inFlight = new Set<Promise<void>>();
+  const run = beginOrgLeaseRun({
+    ...base,
+    rpc: f.rpc,
+    drainConcurrency: 4,
+    idleBudgetMs: 0,
+    inFlightCount: () => inFlight.size
+  });
+
+  await drainWithContinuousRefill({ run, inFlight, maxInFlight: 4, process: () => Promise.resolve() });
+  assertEquals(f.claimArgs[0].n, 4);
 });

@@ -12,6 +12,7 @@ import { create, verify, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "./SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "./requestScopedAuthOptions.ts";
 
 // Environment variable names.
 //
@@ -212,7 +213,7 @@ export async function isTokenRevoked(tokenId: string): Promise<boolean> {
     throw new MCPConfigError("Server configuration error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
   }
 
-  const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey);
+  const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   const { data, error } = await adminSupabase
     .from("revoked_token_ids")
@@ -287,10 +288,7 @@ export async function createAuthenticatedSupabaseClient(userId: string): Promise
         Authorization: `Bearer ${jwt}`
       }
     },
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false
-    }
+    auth: REQUEST_SCOPED_AUTH_OPTIONS
   });
 }
 
@@ -335,7 +333,7 @@ export async function authenticateMCPRequest(authHeader: string | null): Promise
   }
 
   // Check that user has instructor/grader role somewhere
-  const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey);
+  const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   const { data: roles, error: rolesError } = await adminSupabase
     .from("user_roles")
@@ -426,7 +424,8 @@ export async function updateTokenLastUsed(tokenId: string): Promise<void> {
   try {
     const adminSupabase = createClient<Database>(
       Deno.env.get(SUPABASE_URL_ENV)!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     const { error } = await adminSupabase

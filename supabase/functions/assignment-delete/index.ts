@@ -15,6 +15,7 @@ import {
   selectGitHubCleanupStrategy
 } from "./repositoryCleanup.ts";
 import type { GitHubCleanupStrategy, GitHubRepoTarget } from "./repositoryCleanup.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 interface AssignmentDeleteRequest {
   assignment_id: number;
@@ -202,7 +203,8 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Check if assignment exists and belongs to the specified class

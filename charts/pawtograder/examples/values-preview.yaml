@@ -147,6 +147,10 @@ supavisor:
 # once per cluster via scripts/setup-openbao-redis-shared.sh).
 redis:
   provider: shared
+  shared:
+    # Preview namespaces may not use the cluster-wide `openbao` store; see
+    # docs/operations/preview-isolation.md. preview.yml also sets this.
+    storeName: openbao-preview
 
 edgeFunctions:
   replicas: 1
@@ -245,3 +249,4 @@ seed:
   #   scripts/setup-openbao-preview-shared.sh
   externalSecret:
     enabled: true
+    storeName: openbao-preview

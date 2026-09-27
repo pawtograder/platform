@@ -34,6 +34,7 @@ import { indexSubmission } from "../_shared/CodeSymbolIndexer.ts";
 import { Buffer } from "node:buffer";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 const STAFF_ROLES = new Set(["admin", "instructor", "grader"]);
@@ -551,7 +552,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // Circuit breaker: check if org-level circuit is open for GitHub API calls
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const org = repository.split("/")[0];
@@ -1152,6 +1154,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               }
 
               if (!result.success) {
+                // A course with no allotment makes every assignment-level allowance moot; saying
+                // "only 0 remaining" reads as though the student spent tokens they never had.
+                if ((repoData.assignments.classes?.late_tokens_per_student ?? 0) <= 0) {
+                  throw new UserVisibleError(
+                    `${errorMessage}. This course does not give late tokens, so none could be applied. Contact your instructor if you need an extension.`,
+                    400
+                  );
+                }
                 throw new UserVisibleError(
                   `You don't have enough late tokens to submit. You need ${result.tokens_needed} token(s) but only have ${result.tokens_remaining} remaining.`,
                   400

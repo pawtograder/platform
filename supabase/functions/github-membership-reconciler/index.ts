@@ -5,6 +5,7 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { INVITE_STALE_DAYS } from "../_shared/orgInviteWindow.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 /**
  * GitHub Membership Reconciler
@@ -180,7 +181,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  const supabase = createClient<Database>(supabaseUrl, supabaseKey);
+  const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
     // 1) Re-invite lapsed / never-sent invitations.

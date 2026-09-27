@@ -23,7 +23,7 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "rest") | nindent 4 }}
 spec:
-  replicas: {{ .Values.rest.replicas }}
+  replicas: {{ include "pawtograder.maintenance.writerReplicas" (dict "ctx" . "replicas" .Values.rest.replicas) }}
   {{- include "pawtograder.deploymentStrategy" (dict "component" .Values.rest) | nindent 2 }}
   selector:
     matchLabels:
@@ -46,6 +46,14 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.rest.service.port }}
+            {{- if .Values.rest.adminServer.enabled }}
+            # PostgREST's admin server: /metrics, /live, /ready. Deliberately
+            # NOT added to the Kong-routed rest Service -- it gets its own
+            # metrics-only Service in monitoring.yaml. The admin server has no
+            # authentication of its own, so the port must stay in-cluster.
+            - name: admin
+              containerPort: {{ .Values.rest.adminServer.port }}
+            {{- end }}
           env:
             # POSTGRES_PASSWORD MUST come before PGRST_DB_URI so the
             # `$(POSTGRES_PASSWORD)` reference below substitutes — k8s only
@@ -100,6 +108,10 @@ spec:
               value: {{ .Values.auth.jwtExpiry | quote }}
             - name: PGRST_SERVER_PORT
               value: {{ .Values.rest.service.port | quote }}
+            {{- if .Values.rest.adminServer.enabled }}
+            - name: PGRST_ADMIN_SERVER_PORT
+              value: {{ .Values.rest.adminServer.port | quote }}
+            {{- end }}
           volumeMounts:
             - name: jwks
               mountPath: /etc/postgrest

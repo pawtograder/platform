@@ -554,6 +554,13 @@ gap analysis that drove the production hardening (and the items still
 deferred — automatic postgres failover, per-service metrics auth) lives in
 [PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
 
+**Read the chart version before you upgrade.** A patch bump (`0.3.26` →
+`0.3.27`) leaves Postgres running. A minor or major bump (`0.3.x` → `0.4.0`)
+is the only kind allowed to restart it. Not every one does, so check the
+release's PR for the restart-gate notice before booking a maintenance window.
+CI enforces the rule; see
+[Chart versions and Postgres restarts](../../docs/operations/planned-maintenance.md#chart-versions-and-postgres-restarts).
+
 Key mechanics:
 
 - **`global.environment: production` arms render-time guard rails**

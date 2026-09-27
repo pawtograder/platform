@@ -154,4 +154,23 @@ export type GitHubAsyncEnvelope = {
   log_id?: number;
   repo_id?: number; // Repository ID for create_repo operations
   retry_count?: number;
+  /**
+   * Readiness deferrals for `sync_repo_permissions`, counted SEPARATELY from `retry_count`.
+   *
+   * `retry_count` is the FAILURE budget: the circuit-breaker path DLQs at `retry_count >= 5`, and
+   * the exception paths back off on it. A readiness deferral is not a failure — nothing has gone
+   * wrong, the repository simply is not provisioned yet — so spending that budget on waiting means a
+   * repo that needed five polls arrives at its first real GitHub error with the budget already gone
+   * and gets DLQ'd instead of retried. Two meanings, two counters.
+   */
+  not_ready_count?: number;
+  /**
+   * `enqueued_at` of the FIRST message in this job's chain, carried across requeues.
+   *
+   * `requeueWithDelay` sends a new pgmq message, so `meta.enqueued_at` restarts on every requeue and
+   * `recordMetric` would compute `latency_ms` from the last hop only. The api_gateway_calls row is
+   * opened once for the whole job (it keys on `log_id`), so its latency has to be measured against
+   * the original request or the aggregates under-report every job that ever waited.
+   */
+  original_enqueued_at?: string;
 };

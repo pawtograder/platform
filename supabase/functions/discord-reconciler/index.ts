@@ -5,6 +5,7 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
 // edge runtime, and without it every capture below would be a silent no-op.
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 /**
  * Discord Reconciler
@@ -113,7 +114,7 @@ serveWithSentryFlush(async (req) => {
     });
   }
 
-  const supabase = createClient<Database>(supabaseUrl, supabaseKey);
+  const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
     // 1) Re-enqueue membership checks the hourly sync stopped performing.

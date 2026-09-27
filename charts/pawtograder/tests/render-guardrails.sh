@@ -202,6 +202,33 @@ assert_env_value() {
   fi
 }
 
+# assert_env_absent "<label>" "<template>" "<ENV_NAME>" <extra --set args...>
+# The inverse of assert_env_value: asserts the render SUCCEEDS and does not emit
+# the named env var at all.
+#
+# Absence is a real assertion for exactly one knob in this chart. The org-leased
+# run budget defaults to EMPTY and is rendered conditionally, because
+# asyncWorkerTuning.ts reads a present-but-empty variable as a botched edit and
+# fails it safe to the 120s floor — so `value: ""` for an untouched deployment
+# would cut every drain to two minutes, and assert_env_value cannot tell "not
+# rendered" from "rendered empty" (it fails on both).
+assert_env_absent() {
+  local label="$1" template="$2" envname="$3"; shift 3
+  if ! helm template t "$CHART" "${BASE[@]}" "$@" --show-only "$template" >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  if grep -qE "^[[:space:]]*- name: ${envname}\$" "$OUTFILE"; then
+    echo "FAIL [$label]: $envname is rendered in $template but should be absent"
+    echo "       got: $(grep -A1 -E "^[[:space:]]*- name: ${envname}\$" "$OUTFILE" | tr '\n' ' ')"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+
 # assert_hpa_utilization "<label>" "<memory|cpu>" "<expected>" <extra --set args...>
 # Pins one HPA resource metric's averageUtilization, keyed on the RESOURCE NAME.
 #
@@ -1540,13 +1567,17 @@ assert_env_value "recommended prod cap renders" \
 
 # maxPerOrg x drainConcurrency is in-flight work against ONE org's content
 # limiter (40 concurrent / 40 per minute, shared with org invitations and
-# handout syncs). Past 8 the 40/min reservoir is the binding constraint, and
-# the symptom is students' org invitations convoying behind repo creations —
+# handout syncs). The 40/min RESERVOIR is the binding constraint, and the
+# symptom is students' org invitations convoying behind repo creations —
 # nothing about it looks like a queue problem.
-assert_refused "refuses more than 8 in flight for one org" \
+#
+# The ceiling was 8 until 2026-09-14 and is now 16, so this case is 4 x 8 = 32.
+# The product ceiling is deliberately not drainConcurrency's own maximum of 8:
+# that bounds one isolate's batch, this bounds one org's share of a rate limit.
+assert_refused "refuses more than 16 in flight for one org" \
   "in flight for a SINGLE org" \
   --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
-  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=4 \
   --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
   --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960 \
   --set edgeFunctions.worker.timeoutMs=960000 \
@@ -2031,6 +2062,452 @@ assert_refused "refuses a msg_id critical at or below the warning" \
 assert_renders "permits a msg_id warning inside the band" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps \
   --set monitoring.prometheusRules.queueMsgIdWarning=2000000000000
+
+echo
+
+echo "== the per-org in-flight ceiling is a RANGE (raised 8 -> 16, 2026-09-14) =="
+# orgSlotMaxPerOrg was pinned at 2 (8 in flight at the shipped drainConcurrency
+# of 4), which was simultaneously the measured recommendation AND the hard
+# ceiling — so a deployment whose create_repo is slow had no way to ask for
+# more. The ceiling is now 4 / 16 in flight. What must stay true:
+#
+#   * the new maximum actually renders, or the range is a lie;
+#   * one past it is still refused, or there is no ceiling at all;
+#   * the maxPerOrg x drainConcurrency product is still enforced, at 16 rather
+#     than 8 — the two constraints are independent and only the product moved;
+#   * and the SHIPPED DEFAULTS still pass their own validation, which is the
+#     property that keeps "higher values are expressible" from quietly becoming
+#     "higher values are what you get".
+
+# The new maximum renders AND reaches the container. A range check that passes
+# while the value is dropped on the floor guards nothing.
+assert_env_value "the new maxPerOrg maximum renders and reaches the pod" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_ORG 4 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=4
+
+# One past the ceiling. 5 x 4 = 20 in flight would also trip the product rule,
+# but the RANGE rule runs first and is the one being pinned here.
+assert_refused "refuses maxPerOrg one past the new ceiling" \
+  "is outside 1-4" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=5
+
+# The product ceiling moved WITH the range, not instead of it: 16 in flight is
+# now legal (this is the case that used to be refused), and 24 is not. Both
+# halves matter — asserting only the refusal would pass even if the ceiling had
+# never moved.
+assert_renders "permits exactly 16 in flight for one org" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2 \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960 \
+  --set edgeFunctions.worker.timeoutMs=960000 \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=1000 \
+  --set edgeFunctions.terminationGracePeriodSeconds=1030
+
+assert_refused "enforces the product ceiling at the new value, not the new range" \
+  "above the 16 ceiling" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=3 \
+  --set edgeFunctions.githubAsyncWorker.drainConcurrency=8 \
+  --set edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds=960 \
+  --set edgeFunctions.worker.timeoutMs=960000 \
+  --set edgeFunctions.gracefulExitTimeoutSeconds=1000 \
+  --set edgeFunctions.terminationGracePeriodSeconds=1030
+
+# THE SHIPPED DEFAULTS STILL PASS THEIR OWN VALIDATION. Raising a bound is the
+# classic way to ship a values.yaml that the chart's own rules reject on the
+# next unrelated render, and nothing else here renders the chart with no --set
+# at all.
+assert_renders "the shipped defaults pass the raised validation unchanged" \
+  --set global.environment=production
+assert_env_value "the shipped default is still 1, not the new ceiling" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_ORG 1
+
+# The documented recommendation is also still only a recommendation: 2 is what
+# values.yaml tells an operator to use and it must keep rendering, distinct
+# from the 4 the range now permits.
+assert_env_value "the recommended value (2) is unchanged by the raised ceiling" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_ORG 2 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2
+
+echo
+
+echo
+
+echo "== continuous refill must ship ON and stay switchable without a code deploy =="
+# Continuous refill changes the org-leased drain SHAPE: n messages kept in
+# flight with the shortfall claimed as each settles, instead of a batch drained
+# and re-claimed. It ships on, because the batch shape measured 5.20 effective
+# concurrency of a possible 8.
+#
+# The property this guards is the ROLLBACK PATH. Before this knob, undoing the
+# drain shape meant orgSlotGlobalCap: 0, which also switches off per-org
+# leaseholders and gives back the cross-org throughput that is already working
+# in production. A kill switch that cannot be reached, or that is not actually
+# wired to the pod, is not a rollback path at all.
+
+assert_env_value "continuous refill ships ON" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL 1
+
+# The OFF position must render AND reach the container. This is the assertion
+# that makes it a kill switch rather than a comment: a range check that passes
+# while the value is dropped on the floor rolls nothing back.
+assert_env_value "continuous refill can be switched OFF and reaches the pod" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL 0 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill=0
+
+# Turning refill off must NOT require giving up per-org leaseholders — that is
+# the entire reason the knob exists, so pin the combination explicitly.
+assert_env_value "refill OFF keeps per-org leaseholders ON" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP 8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill=0
+
+# A string boolean is the failure mode this knob is typed against: Boolean("false")
+# is true in JS, so "false" would fail OPEN and the switch would not switch.
+assert_refused "refuses a string boolean, which would fail OPEN at runtime" \
+  "must be the integer 0 or 1" \
+  --set-string edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill=false
+
+# Out of range: 2 is not "extra on". There is no low-water-mark parameter for an
+# intermediate value to mean, so the range is binary on purpose.
+assert_refused "refuses a value outside the binary range" \
+  "is outside 0-1" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill=2
+
+echo
+
+echo "== the org-leased run budget is settable, and its range MOVES with the isolate lifetime =="
+# GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS is when a leaseholder stops
+# claiming new messages and lets the ones in flight finish, so that
+# EDGE_WORKER_TIMEOUT_MS cannot kill the isolate mid-message and hand the work
+# back to pgmq as a redelivery.
+#
+# Two properties are guarded here, and the second is the one that needs a render
+# test rather than a reading of the template:
+#
+#   1. The knob is REACHABLE through the chart at all. It shipped without a
+#      values entry, which meant every Helm-managed deployment was pinned to the
+#      derived default and the only way to shorten the budget was to hand-edit
+#      the Deployment — i.e. off the supported path entirely.
+#   2. The accepted range is DERIVED from edgeFunctions.worker.timeoutMs
+#      (120 .. lifetime-150), not a constant. The A/B below renders the same 330
+#      against two lifetimes and gets opposite answers; a rule that hardcoded
+#      either endpoint would pass one of those cases wrongly.
+
+# Unset is the shipped default, and unset must render NO entry. A rendered ""
+# is not an absence: the worker reads it as a botched edit and fails it safe to
+# the 120s floor, so an untouched deployment would silently stop claiming after
+# two minutes.
+assert_env_absent "the run budget ships unset, so the worker derives it" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS
+assert_env_absent "an explicitly emptied value is still an absence, not a rendered empty string" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS \
+  --set-string edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=
+assert_env_absent "an explicit null is an absence too" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=null
+
+# An in-range value has to reach the CONTAINER, not merely survive validation:
+# a knob that renders nothing is the defect this whole section exists for.
+assert_env_value "a shortened budget reaches the pod" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS 180 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=180
+# ...including with the feature actually on, which is the only configuration
+# where the budget does anything.
+assert_env_value "a shortened budget reaches the pod with per-org leaseholders enabled" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS 200 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotGlobalCap=8 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg=2 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=200
+# The ceiling is inclusive and is the same number the worker would have derived
+# for itself, so spelling out the default explicitly must be accepted.
+assert_env_value "the derived default may be written out explicitly (400s lifetime)" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS 250 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=250
+
+# One second past the ceiling is a budget that intends to still be claiming when
+# the runtime kills the isolate — the defect — so it is REFUSED rather than
+# clamped. Clamping would be worse than useless here: the ceiling IS the
+# default, so an operator who typed 600 would get exactly what not setting the
+# variable gives them, reported and inert.
+assert_refused "one second past the derived ceiling is refused" \
+  "exceeds the 250s ceiling derived from edgeFunctions.worker.timeoutMs=400000" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=251
+# The refusal must name the OTHER value, because the number alone is not wrong —
+# the pairing is. Same contract as the drainConcurrency/timeoutMs rules above.
+assert_refused "the refusal names the coupled remedy, not just the bound" \
+  "raise edgeFunctions.worker.timeoutMs to >= 401000" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=251
+
+# THE A/B THAT PINS THE DERIVATION. 330 is production's budget (it runs
+# EDGE_WORKER_TIMEOUT_MS=480000). Against the chart's 400s lifetime the same
+# number is 80s too long, and the rule has to say so.
+assert_refused "production's 330s budget is refused against the chart's 400s lifetime" \
+  "orgSlotRunBudgetSeconds=330 exceeds the 250s ceiling" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=330
+LIFETIME480=(
+  --set edgeFunctions.worker.timeoutMs=480000
+  --set edgeFunctions.gracefulExitTimeoutSeconds=490
+  --set edgeFunctions.terminationGracePeriodSeconds=510
+)
+assert_env_value "the same 330s budget renders once the isolate lives 480s" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS 330 \
+  "${LIFETIME480[@]}" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=330
+assert_refused "the ceiling still binds at the raised lifetime, one second higher" \
+  "exceeds the 330s ceiling derived from edgeFunctions.worker.timeoutMs=480000" \
+  "${LIFETIME480[@]}" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=331
+# And the floor of the derivation: max(120, lifetime-150) never goes negative,
+# so a very short isolate collapses the range to the single value 120 rather
+# than producing a nonsense bound.
+assert_env_value "a short isolate collapses the range to the 120s floor" \
+  templates/edge-functions.yaml GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS 120 \
+  --set edgeFunctions.worker.timeoutMs=200000 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=120
+assert_refused "a short isolate refuses anything above that floor" \
+  "exceeds the 120s ceiling derived from edgeFunctions.worker.timeoutMs=200000" \
+  --set edgeFunctions.worker.timeoutMs=200000 \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=121
+
+# Below the floor is the silent-stall failure: a leaseholder past its deadline
+# before it has claimed anything drains nothing while every liveness signal
+# stays green.
+assert_refused "a budget below one message's modelled cost is refused" \
+  "orgSlotRunBudgetSeconds=119 is below the 120s floor" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=119
+# 0 must be refused BY NAME and not swallowed as "unset". 0 is falsey in a
+# template, so a `default ""` normalisation would have made an operator's 0
+# render as the derived 250 with no complaint.
+assert_refused "zero is refused as a value, not silently read as unset" \
+  "orgSlotRunBudgetSeconds=0 is below the 120s floor" \
+  --set edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=0
+# Non-integers: the runtime would fail these safe to 120s, which is a real
+# behaviour change the operator did not ask for. Refuse at render time instead.
+assert_refused "a non-numeric budget is refused" \
+  "must be an integer number of seconds or empty" \
+  --set-string edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=off
+assert_refused "a fractional budget is refused" \
+  "must be an integer number of seconds or empty" \
+  --set-string edgeFunctions.githubAsyncWorker.orgSlotRunBudgetSeconds=180.5
+
+echo
+
+echo "== maintenance.active renders exactly the fence maintenance.sh down leaves =="
+
+# ---------------------------------------------------------------------------
+# maintenance.active: the release carries the maintenance posture, so a
+# Postgres-restarting `helm upgrade` can run inside a window without lifting
+# the fence (docs/operations/planned-maintenance.md, "Deploying a
+# Postgres-restarting release in a window").
+#
+# The posture is only safe if it agrees with scripts/maintenance.sh field for
+# field. Where the release and the live object differ, a client-side 3-way merge
+# reverts the live value (writers come back while the primary is rolling), and
+# server-side apply refuses on a field kubectl owns (the upgrade fails mid-window).
+# So the writer set, the CronJob set and the page backend are READ FROM THE
+# SCRIPT below, not restated here. Add a tier to STABLE_WRITERS or a CronJob to
+# SUSPEND_CRONJOBS without teaching the chart about it, and this fails.
+# ---------------------------------------------------------------------------
+MAINT_SH="$CHART/scripts/maintenance.sh"
+# The script's own array/scalar assignments, evaluated in a subshell so nothing
+# else in it runs. Each is a single line of literals; anything fancier and the
+# eval would be the wrong tool, which is itself worth failing on.
+maint_sh_value() {
+  local line
+  line="$(grep -E "^$1=" "$MAINT_SH" | head -1)"
+  [ -n "$line" ] || return 1
+  ( eval "${line%%#*}"; eval "printf '%s\n' \"\${$1[@]}\"" )
+}
+mapfile -t MAINT_WRITERS < <(maint_sh_value STABLE_WRITERS)
+mapfile -t MAINT_CRONJOBS < <(maint_sh_value SUSPEND_CRONJOBS)
+MAINT_SH_PORT="$(maint_sh_value MAINT_PORT | tr -d '"')"
+
+# assert_maintenance_posture "<label>" <extra helm args...>
+# Renders the WHOLE chart as release `pawtograder` (the script's default RELEASE,
+# so every <release>-<x> name it derives lines up) with the posture on, and checks:
+#   - every Deployment/StatefulSet the script's discover_writers() would select
+#     (component in STABLE_WRITERS, or web-*/functions-*) renders replicas: 0.
+#     The one exception is functions under autoscaling, which must render NO
+#     replicas (templates/edge-functions.yaml says why); the script's live 0
+#     then holds.
+#   - no HorizontalPodAutoscaler at all.
+#   - every <release>-<SUSPEND_CRONJOBS> CronJob renders suspend: true.
+#   - the primary web host's "/" and every channel host's "/" route to
+#     <release>-maintenance on MAINT_PORT, the exact value the script patches in.
+#   - the Postgres StatefulSets render byte-identically to the posture off.
+# At least one writer, one CronJob and one Ingress must be seen, so an empty or
+# broken render cannot pass by having nothing to check.
+assert_maintenance_posture() {
+  local label="$1"; shift
+  local rel=pawtograder
+  if [ "${#MAINT_WRITERS[@]}" -eq 0 ] || [ "${#MAINT_CRONJOBS[@]}" -eq 0 ] || [ -z "$MAINT_SH_PORT" ]; then
+    echo "FAIL [$label]: could not read STABLE_WRITERS / SUSPEND_CRONJOBS / MAINT_PORT from $MAINT_SH"
+    FAILED=1
+    return
+  fi
+  if ! helm template "$rel" "$CHART" -n pawtograder-prod "$@" \
+      --set maintenance.enabled=true --set maintenance.active=true >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  local stable_re cron_re
+  stable_re="$(IFS='|'; echo "${MAINT_WRITERS[*]}")"
+  cron_re="$(printf "${rel}-%s|" "${MAINT_CRONJOBS[@]}")"; cron_re="${cron_re%|}"
+  # One line per document: kind, metadata.name, component label, spec.replicas
+  # ("-" when absent), spec.suspend ("-" when absent). Top-level fields only:
+  # metadata/spec children sit at exactly two spaces.
+  local docs
+  docs="$(awk '
+    function flush() { if (kind != "") print kind, name, (comp == "" ? "-" : comp), rep, sus
+                       kind = ""; name = ""; comp = ""; rep = "-"; sus = "-"; sect = "" }
+    BEGIN { rep = "-"; sus = "-" }
+    /^---/ { flush(); next }
+    /^kind: / { kind = $2; next }
+    /^[a-z]/ { sect = $1; next }
+    sect == "metadata:" && /^  name: / && name == "" { name = $2 }
+    sect == "metadata:" && /app\.kubernetes\.io\/component: / && comp == "" { comp = $2 }
+    sect == "spec:" && /^  replicas: / { rep = $2 }
+    sect == "spec:" && /^  suspend: / { sus = $2 }
+    END { flush() }' "$OUTFILE")"
+  local bad=0 writers=0 crons=0 kind name comp rep sus
+  while read -r kind name comp rep sus; do
+    case "$kind" in
+      Deployment | StatefulSet)
+        if [[ "$comp" =~ ^(${stable_re})$ || "$comp" == web-* || "$comp" == functions-* ]]; then
+          writers=$((writers + 1))
+          if [ "$rep" = "0" ]; then :
+          elif [ "$comp" = "functions" ] && [ "$rep" = "-" ]; then :
+          else
+            echo "FAIL [$label]: $kind/$name ($comp) renders replicas $rep, not 0"; bad=1
+          fi
+        fi ;;
+      HorizontalPodAutoscaler)
+        echo "FAIL [$label]: HorizontalPodAutoscaler/$name is rendered; maintenance.sh deletes it"; bad=1 ;;
+      CronJob)
+        if [[ "$name" =~ ^(${cron_re})$ ]]; then
+          crons=$((crons + 1))
+          [ "$sus" = "true" ] || { echo "FAIL [$label]: CronJob/$name renders suspend $sus, not true"; bad=1; }
+        fi ;;
+    esac
+  done <<<"$docs"
+  # The script scales `functions` whether or not an HPA exists, so it must be
+  # here at 0 or unrendered, never at a count, and it must be in the render.
+  grep -qE '^Deployment [^ ]+ functions ' <<<"$docs" \
+    || { echo "FAIL [$label]: no functions Deployment rendered to check"; bad=1; }
+  [ "$writers" -gt 0 ] || { echo "FAIL [$label]: no writer workloads found to check"; bad=1; }
+  [ "$crons" -gt 0 ] || { echo "FAIL [$label]: none of ${MAINT_CRONJOBS[*]} rendered to check"; bad=1; }
+
+  # Page backend: the "/" path of the primary Ingress's rules[0], and of each
+  # channel Ingress, must be the script's value exactly. `- path: /$` matches
+  # "/" only, never an API path like /rest/v1/.
+  local want_backend="${rel}-maintenance:${MAINT_SH_PORT}" ing got n_ing=0
+  for ing in templates/ingress.yaml templates/ingress-channels.yaml; do
+    helm template "$rel" "$CHART" -n pawtograder-prod "$@" \
+      --set maintenance.enabled=true --set maintenance.active=true \
+      --show-only "$ing" >"$OUTFILE.ing" 2>/dev/null || continue
+    # Every "/" path in the channel Ingresses; only the FIRST in the primary one
+    # (rules[0]; the api host's "/" is Kong, and extraHosts stay on web, as the
+    # script leaves them).
+    got="$(grep -A6 -E '^[[:space:]]*- path: /$' "$OUTFILE.ing" \
+            | awk '/^[[:space:]]*name: / { n = $2 } /^[[:space:]]*number: / { print n ":" $2 }')"
+    [ "$ing" = templates/ingress.yaml ] && got="$(head -1 <<<"$got")"
+    while read -r b; do
+      [ -n "$b" ] || continue
+      n_ing=$((n_ing + 1))
+      [ "$b" = "$want_backend" ] || { echo "FAIL [$label]: $ing routes \"/\" to $b, not $want_backend"; bad=1; }
+    done <<<"$got"
+  done
+  rm -f "$OUTFILE.ing"
+  [ "$n_ing" -gt 0 ] || { echo "FAIL [$label]: no web-host \"/\" backend found to check"; bad=1; }
+
+  # And the posture leaves Postgres alone, byte for byte.
+  local pg
+  for pg in templates/postgres-statefulset.yaml templates/postgres-replica.yaml; do
+    helm template "$rel" "$CHART" -n pawtograder-prod "$@" --show-only "$pg" >"$OUTFILE.off" 2>/dev/null || continue
+    helm template "$rel" "$CHART" -n pawtograder-prod "$@" \
+      --set maintenance.enabled=true --set maintenance.active=true \
+      --show-only "$pg" >"$OUTFILE.on" 2>/dev/null
+    cmp -s "$OUTFILE.off" "$OUTFILE.on" || { echo "FAIL [$label]: $pg changes under maintenance.active"; bad=1; }
+  done
+  rm -f "$OUTFILE.off" "$OUTFILE.on"
+
+  if [ "$bad" -ne 0 ]; then FAILED=1; else echo "ok   [$label] ($writers writers, $crons CronJobs, $n_ing page backends)"; fi
+}
+
+# The shipped overlays, pinned just enough to render (the same pins the restart
+# gate's PROD_FIXUPS uses for the prod examples). Staging carries the canary
+# channel (web + functions) and the functions HPA; preview has autoscaling off,
+# so functions renders an explicit 0 there (audit-partitions is switched on so
+# the case has a CronJob to check); prod has the backup drill CronJobs.
+MAINT_PROD_PINS=(
+  --set monitoring.prometheusRules.labels.release=prometheus
+  --set postgres.persistence.storageClass=gate
+  --set postgres.walg.s3Prefix=s3://gate/wal-g
+  --set backup.s3.endpoint=https://s3.gate.invalid
+  --set web.image.tag=v0.0.0-gate
+  --set edgeFunctions.image.tag=v0.0.0-gate
+  --set migrations.image.tag=v0.0.0-gate
+  --set backup.image.tag=v0.0.0-gate
+)
+assert_maintenance_posture "posture: staging overlay (HPA + canary channel)" \
+  -f "$CHART/examples/values-staging.yaml"
+assert_maintenance_posture "posture: preview overlay (functions without an HPA)" \
+  -f "$CHART/examples/values-preview.yaml" --set auditPartitions.enabled=true --set seed.enabled=false
+assert_maintenance_posture "posture: prod overlay (backup drill CronJobs)" \
+  -f "$CHART/examples/values-prod.yaml" "${MAINT_PROD_PINS[@]}"
+MAINT_PROD_OVERLAY="$CHART/../../../prod-charts/values/values-prod.yaml"
+if [ -f "$MAINT_PROD_OVERLAY" ]; then
+  assert_maintenance_posture "posture: prod-charts overlay (real production values)" \
+    -f "$MAINT_PROD_OVERLAY" "${MAINT_PROD_PINS[@]}"
+fi
+
+# Off is off: no marker, the HPA back, nothing suspended. (Byte-identity of the
+# whole default render is proved against the previous chart, not here.)
+assert_rendered_lacks "posture off: no maintenance-active marker on the Ingress" \
+  templates/ingress.yaml "pawtograder.io/maintenance-active"
+assert_rendered_contains "posture off: the functions HPA renders" \
+  templates/edge-functions-hpa.yaml "kind: HorizontalPodAutoscaler" \
+  --set edgeFunctions.autoscaling.enabled=true
+assert_rendered_lacks "posture off: audit-partitions is not suspended" \
+  templates/audit-partitions.yaml "suspend:"
+
+# Refusals.
+assert_refused "posture: active without the page is refused" \
+  "maintenance.active=true requires maintenance.enabled=true" \
+  --set maintenance.active=true
+assert_refused "posture: active with the API on the web host is refused" \
+  "maintenance.active=true requires global.apiOnSeparateHost=true" \
+  --set maintenance.active=true --set maintenance.enabled=true --set global.apiOnSeparateHost=false
+assert_refused "posture: active with a page port maintenance.sh does not patch is refused" \
+  "maintenance.active=true requires maintenance.service.port=8080" \
+  --set maintenance.active=true --set maintenance.enabled=true --set maintenance.service.port=9090
+assert_refused "posture: active with no chart Ingress is refused" \
+  "maintenance.active=true requires ingress.enabled=true" \
+  --set maintenance.active=true --set maintenance.enabled=true --set ingress.enabled=false
+assert_refused "posture: active with the seed hook enabled is refused" \
+  "maintenance.active=true is refused with seed.enabled=true" \
+  --set maintenance.active=true --set maintenance.enabled=true --set seed.enabled=true
+assert_refused "posture: active with web disabled is refused" \
+  "maintenance.active=true requires web.enabled=true" \
+  --set maintenance.active=true --set maintenance.enabled=true --set web.enabled=false
+assert_refused "posture: active with ingress.extraHosts aliases is refused" \
+  "maintenance.active=true is refused while ingress.extraHosts is set" \
+  --set maintenance.active=true --set maintenance.enabled=true --set 'ingress.extraHosts[0]=alias.example.com'
+assert_refused "posture: a user-supplied posture marker annotation is refused" \
+  "ingress.annotations must not set pawtograder.io/maintenance-active" \
+  --set-string 'ingress.annotations.pawtograder\.io/maintenance-active=true'
+
+echo
+
+echo
 
 if [ "$FAILED" -ne 0 ]; then
   echo "GUARD-RAIL TESTS FAILED"
