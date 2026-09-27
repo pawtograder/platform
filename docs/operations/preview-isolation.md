@@ -118,8 +118,13 @@ what the chart renders:
 - Pod: at most 6 containers and 6 init containers (kubelet and runtime work),
   with LimitRange floors of 10m CPU and 16Mi memory per container so they
   cannot be packed in for free.
-- Deployment and StatefulSet: `revisionHistoryLimit` at most 10, the default,
-  so history cannot fill the ReplicaSet and ControllerRevision quotas.
+- Deployment and StatefulSet (`preview-workload-bounds`): at most 3 replicas,
+  and `revisionHistoryLimit` at most 10 (the default), so history cannot fill
+  the ReplicaSet and ControllerRevision quotas.
+- Job: parallelism at most 2, completions at most 4, at most 6 retries. The
+  quota rejects pods past its ceiling, but controllers keep retrying them, so
+  desired sizes are bounded where they are declared. The chart runs everything
+  at 1 replica and 1 pod.
 
 ## Resource ceilings
 

@@ -421,13 +421,19 @@ spec:
   policyName: preview-pod-injection
   validationActions: [Deny]
 ---
-# Deployments and StatefulSets keep revisionHistoryLimit old ReplicaSets or
-# ControllerRevisions. The quota counts both, but a high limit would fill it
-# with history and stall rollouts; the chart uses the default of 10.
+# Workload fan-out. The quota rejects pods beyond its ceiling, but the
+# workload controllers keep retrying them, which is sustained controller,
+# admission and apiserver load that no quota counts. So the desired sizes are
+# bounded here: the chart runs every Deployment and StatefulSet at 1 replica
+# and every Job as 1 pod with at most 3 retries.
+#
+# revisionHistoryLimit is capped too: the quota counts old ReplicaSets and
+# ControllerRevisions, and a high limit would fill it with history and stall
+# rollouts. The chart uses the default of 10.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
-  name: preview-workload-history
+  name: preview-workload-bounds
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -439,16 +445,30 @@ spec:
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
         resources: ["deployments", "statefulsets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs"]
   validations:
-    - expression: "object.spec.?revisionHistoryLimit.orValue(10) <= 10"
-      message: "preview Deployments and StatefulSets may keep at most 10 revisions"
+    - expression: >-
+        request.resource.resource == 'jobs' ||
+        (object.spec.?replicas.orValue(1) <= 3 &&
+         object.spec.?revisionHistoryLimit.orValue(10) <= 10)
+      message: "preview Deployments and StatefulSets may run at most 3 replicas and keep at most 10 revisions"
+    - expression: >-
+        request.resource.resource != 'jobs' || (
+          object.spec.?parallelism.orValue(1) <= 2 &&
+          object.spec.?completions.orValue(1) <= 4 &&
+          object.spec.?backoffLimit.orValue(6) <= 6 &&
+          object.spec.?backoffLimitPerIndex.orValue(0) <= 6)
+      message: "preview Jobs may have parallelism at most 2, completions at most 4 and at most 6 retries"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
-  name: preview-workload-history
+  name: preview-workload-bounds
 spec:
-  policyName: preview-workload-history
+  policyName: preview-workload-bounds
   validationActions: [Deny]
 ---
 # ---------------------------------------------------------------------------
