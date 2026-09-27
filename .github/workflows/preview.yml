@@ -27,10 +27,14 @@ name: Deploy preview
 #   trust  — does the pusher hold write access here (see _trust-gate.yml)
 #   intent — the `preview` label, required on fork PRs only
 #
-# Cluster access: provided via KUBECONFIG_BASE64 repo secret (base64 of a
-# kubeconfig that can helm install + create namespaces in
-# pawtograder-preview-*). The deploy step uses helm directly against the
-# chart in this checkout — no OCI publish step required for previews.
+# Cluster access: OIDC only. Each job exchanges its GitHub OIDC token at
+# OpenBao for a short-lived ServiceAccount token scoped to its tier (see
+# docs/operations/preview-oidc-cluster-credentials.md). There is no static
+# kubeconfig path: the deploy job renders the PR's own chart, and helm's
+# `lookup` would read any object a cluster-wide credential can, so a
+# cluster-admin kubeconfig must never be present in this workflow. The deploy
+# step uses helm directly against the chart in this checkout — no OCI publish
+# step required for previews.
 #
 # Image storage: ghcr.io/pawtograder/{web,edge-functions,migrations}:pr-${id}-${sha}.
 # Ephemeral; cleanup of old tags is out of scope here (use a periodic
@@ -188,8 +192,8 @@ jobs:
       # a reusable-workflow `with:` block. Keep in sync with PREVIEW_LABEL
       # below, which the meta job uses for the same label.
       require_label: preview
-      # Fork previews stay off while the static cluster-admin kubeconfig is
-      # the credential; see the input's description in _trust-gate.yml.
+      # Kept as the switch for fork previews. Every credential in this
+      # workflow is OIDC regardless of this variable (see the header).
       forks_allowed: ${{ vars.PREVIEW_CLUSTER_AUTH == 'oidc' }}
 
   # --------------------------------------------------------------------------
@@ -221,11 +225,9 @@ jobs:
       # dispatch from a ref outside BASE_REFS can start every job here and then
       # fail at `auth/jwt/login` in whichever one mints credentials first,
       # reporting a claim mismatch rather than the actual cause. Fail here, in
-      # the first job, saying what is wrong. Only under `oidc`: the static
-      # kubeconfig is not ref-bound, so any branch works in that mode and this
-      # must not take the capability away before the cutover.
+      # the first job, saying what is wrong.
       - name: Check this ref can mint cluster credentials
-        if: github.event_name == 'workflow_dispatch' && vars.PREVIEW_CLUSTER_AUTH == 'oidc'
+        if: github.event_name == 'workflow_dispatch'
         env:
           # Must match BASE_REFS in scripts/setup-openbao-preview-oidc.sh and
           # the `branches:` filter above.
@@ -423,7 +425,7 @@ jobs:
       - name: Cluster credentials
         uses: ./.github/actions/cluster-credentials
         with:
-          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          mode: oidc
           bao_addr: ${{ vars.BAO_ADDR }}
           bao_role: preview-provision
           k8s_role: preview-provision
@@ -435,7 +437,6 @@ jobs:
           ttl: 20m
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
-          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
       - name: Ensure namespace
         env:
           NS: ${{ needs.meta.outputs.namespace }}
@@ -521,8 +522,8 @@ jobs:
           # `pawtograder-preview-*` glob, so the label is how per-PR namespaces
           # are matched without granting `*`.
           kubectl label namespace "$NS" pawtograder.net/preview=true --overwrite
-          # Pod Security: `preview-deploy` holds `*/*` inside this namespace and
-          # applies the PR's own chart, so without an enforce level a chart
+          # Pod Security: `preview-deploy` creates Deployments, StatefulSets
+          # and Jobs from the PR's own chart, so without an enforce level a chart
           # could run a privileged or hostPath pod and step off the namespace
           # onto the node — RBAC alone does not bound that. The chart passes
           # `baseline` today (checked with a server-side dry run against a live
@@ -551,7 +552,7 @@ jobs:
       - name: Cluster credentials (namespaced secret writer)
         uses: ./.github/actions/cluster-credentials
         with:
-          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          mode: oidc
           bao_addr: ${{ vars.BAO_ADDR }}
           bao_role: preview-provision
           k8s_role: preview-provision-secrets
@@ -559,7 +560,27 @@ jobs:
           ttl: 20m
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
-          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
+      # Kyverno generates preview-quota and preview-limits when the namespace
+      # gets its pawtograder.net/preview label (above), but asynchronously, in
+      # its background controller. Every build and deploy job depends on this
+      # one, so waiting here means the PR's chart is never applied to a
+      # namespace without its ceilings. Fails closed: if Kyverno is down, no
+      # preview. See docs/operations/preview-isolation.md.
+      - name: Wait for resource ceilings
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if kubectl -n "$NS" get resourcequota preview-quota >/dev/null 2>&1 &&
+               kubectl -n "$NS" get limitrange preview-limits >/dev/null 2>&1; then
+              echo "preview-quota and preview-limits present in ${NS}"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error title=No resource ceilings::Kyverno did not generate preview-quota and preview-limits in ${NS} within 2 minutes. Check 'kubectl -n kyverno get pods' and 'kubectl get clusterpolicy preview-resource-ceilings'. Refusing to deploy an unbounded namespace." >&2
+          exit 1
       - name: Ensure secrets in namespace
         env:
           NS: ${{ needs.meta.outputs.namespace }}
@@ -661,15 +682,8 @@ jobs:
   # `kubectl get secret`, so this job asks for the narrowest credential the
   # work needs.
   #
-  # Under `oidc` that is real: it mints kubernetes/creds/preview-publish, a
-  # namespaced Role with `get` on Secrets and nothing else. Under `static` —
-  # which is the mode in effect until PREVIEW_CLUSTER_AUTH is set — it is NOT:
-  # KUBECONFIG_PREVIEW_RO_BASE64 does not exist as a repo secret, so the `||`
-  # below falls through to the full cluster-admin KUBECONFIG_BASE64. Complete
-  # the OIDC cutover (docs/operations/preview-oidc-cluster-credentials.md)
-  # before treating this job as least-privileged. The read-only-kubeconfig
-  # runbook is the alternative if you do not want to stand up the OpenBao
-  # engines, but it is marked superseded — do not follow both.
+  # It mints kubernetes/creds/preview-publish, a namespaced Role with `get` on
+  # Secrets and nothing else.
   #
   # Best-effort by design: Bao downtime or missing config must never break the
   # preview hot path, so the job carries continue-on-error and nothing depends
@@ -701,7 +715,7 @@ jobs:
       - name: Cluster credentials
         uses: ./.github/actions/cluster-credentials
         with:
-          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          mode: oidc
           bao_addr: ${{ vars.BAO_ADDR }}
           # preview-publish, not preview-read: each jwt role binds exactly one
           # `environment` value, and preview-read is bound to preview-build
@@ -715,14 +729,6 @@ jobs:
           ttl: 20m
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
-          # Same caveat as build-web's: under `static` this falls through to
-          # the cluster-admin KUBECONFIG_BASE64, because
-          # KUBECONFIG_PREVIEW_RO_BASE64 is not a secret on this repo. Less
-          # sharp here — this job checks out the BASE ref and runs no
-          # PR-supplied code — but it is the same silent downgrade, and the
-          # job's header comment above says so rather than claiming a
-          # least-privilege property it does not currently have.
-          kubeconfig_base64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
       - name: Publish e2e bundle to OpenBao
         env:
           PREVIEW_ID: ${{ needs.meta.outputs.preview_id }}
@@ -817,7 +823,7 @@ jobs:
       - name: Cluster credentials
         uses: ./.github/actions/cluster-credentials
         with:
-          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          mode: oidc
           bao_addr: ${{ vars.BAO_ADDR }}
           bao_role: preview-read
           k8s_role: preview-read
@@ -831,15 +837,6 @@ jobs:
           ttl: 20m
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
-          # CAVEAT, and it is the load-bearing one for this job: under
-          # `static` — the mode in force until PREVIEW_CLUSTER_AUTH is set —
-          # bao_role, k8s_role, namespace and ttl above are all IGNORED, and
-          # KUBECONFIG_PREVIEW_RO_BASE64 does not exist as a repo secret, so
-          # this `||` falls through to the full cluster-admin
-          # KUBECONFIG_BASE64. Everything above reads as a least-privilege
-          # argument and none of it is in effect. That is why the credential
-          # is discarded below rather than left in $HOME for the build.
-          kubeconfig_base64: ${{ secrets.KUBECONFIG_PREVIEW_RO_BASE64 || secrets.KUBECONFIG_BASE64 }}
       - uses: actions/checkout@v5
         with:
           # Now the PR head, for the build. checkout cleans the workspace,
@@ -858,12 +855,10 @@ jobs:
           # mask-aware but not subject to the cross-job output stripping.
           echo "ANON_KEY=$ANON" >> "$GITHUB_ENV"
       # Immediately after the single read this job needed it for, and BEFORE
-      # any step that touches PR-supplied content. Under `oidc` the token is
-      # narrow and short-lived; under `static` it is the cluster-admin
-      # kubeconfig (see the caveat on the credential step above), and leaving
-      # it at $HOME/.kube/config would mean it is on disk, un-expiring, for
-      # the whole `docker/build-push-action` run against a PR-controlled
-      # Dockerfile and lockfile. Nothing below here uses kubectl.
+      # any step that touches PR-supplied content. The token is narrow and
+      # short-lived, but there is no reason to leave it on disk for the whole
+      # `docker/build-push-action` run against a PR-controlled Dockerfile and
+      # lockfile. Nothing below here uses kubectl.
       - name: Discard the cluster credential
         run: rm -f "$HOME/.kube/config"
       - uses: docker/setup-buildx-action@v3
@@ -1083,7 +1078,7 @@ jobs:
       - name: Cluster credentials
         uses: ./.github/actions/cluster-credentials
         with:
-          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          mode: oidc
           bao_addr: ${{ vars.BAO_ADDR }}
           bao_role: preview-deploy
           k8s_role: preview-deploy
@@ -1091,7 +1086,6 @@ jobs:
           ttl: 50m
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
-          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
       - uses: actions/checkout@v5
         with:
           # The PR head supplies the HELM CHART under review. After the
@@ -1216,6 +1210,16 @@ jobs:
           # postgres,e2e,s3} Secrets created by the `secrets` job.
           # secrets.autogenerate=false: skip the in-cluster bootstrap Job
           # (we already provisioned everything from CI).
+          # *.storeName=openbao-preview: the cluster-wide `openbao` store
+          # refuses preview namespaces (it reads all of kv/apps/*). Set here,
+          # not only in values-preview.yaml, because the chart and its values
+          # come from the PR; the store's own conditions are what enforce it.
+          # See docs/operations/preview-isolation.md.
+          # monitoring.dashboards.*=false: the Grafana sidecar loads dashboard
+          # ConfigMaps from every namespace, keyed by filename, so preview
+          # dashboards (same files, same UIDs) overwrite staging's. The
+          # label is refused in preview namespaces; this keeps the chart
+          # from rendering it.
           helm upgrade --install "$RELEASE" \
             ./charts/pawtograder \
             --namespace "$NAMESPACE" \
@@ -1227,6 +1231,17 @@ jobs:
             --set seed.image.tag="$TAG" \
             --set secrets.autogenerate=false \
             --set secrets.create=false \
+            --set redis.shared.storeName=openbao-preview \
+            --set seed.externalSecret.storeName=openbao-preview \
+            --set secrets.externalSecret.storeName=openbao-preview \
+            --set monitoring.dashboards.stackOverview=false \
+            --set monitoring.dashboards.postgresDeepDive=false \
+            --set monitoring.dashboards.realtimeFanout=false \
+            --set monitoring.dashboards.edgeFunctions=false \
+            --set monitoring.dashboards.appBusiness=false \
+            --set monitoring.dashboards.rateLimiting=false \
+            --set monitoring.dashboards.edgeSoak=false \
+            --set monitoring.dashboards.queuesAndWorkers=false \
             --set-string global.deploy.branch="$SAFE_BRANCH" \
             --set-string global.deploy.pr="$DEPLOY_PR" \
             --set-string global.deploy.runId="$GITHUB_RUN_ID" \
@@ -1514,7 +1529,7 @@ jobs:
       - name: Cluster credentials (cluster scope — namespaces only)
         uses: ./.github/actions/cluster-credentials
         with:
-          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          mode: oidc
           bao_addr: ${{ vars.BAO_ADDR }}
           bao_role: preview-teardown
           k8s_role: preview-teardown
@@ -1523,7 +1538,6 @@ jobs:
           ttl: 20m
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
-          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
 
       - name: Does the preview namespace still exist?
         id: ns
@@ -1603,7 +1617,7 @@ jobs:
         if: steps.ns.outputs.exists == 'true' && steps.supersede.outputs.superseded != 'true'
         uses: ./.github/actions/cluster-credentials
         with:
-          mode: ${{ vars.PREVIEW_CLUSTER_AUTH }}
+          mode: oidc
           bao_addr: ${{ vars.BAO_ADDR }}
           bao_role: preview-teardown
           k8s_role: preview-teardown-ns
@@ -1611,7 +1625,6 @@ jobs:
           ttl: 20m
           api_server: ${{ vars.PREVIEW_CLUSTER_API_SERVER }}
           ca_base64: ${{ vars.PREVIEW_CLUSTER_CA_BASE64 }}
-          kubeconfig_base64: ${{ secrets.KUBECONFIG_BASE64 }}
           kubeconfig_path: ${{ runner.temp }}/kubeconfig-preview-ns
 
       - name: helm uninstall + empty the namespace
