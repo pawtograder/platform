@@ -187,17 +187,13 @@ export async function handleRequest(
     );
   }
 
-  const checkRun = await upsertManualCheckRun({
-    adminSupabase,
-    repoData,
-    commit,
-    triggeredBy: enrollment.private_profile_id
-  });
-
-  // Reserve the pending candidate BEFORE dispatching: this authorizes the
-  // preview (it rejects a stage_only request with no pending candidate in an
-  // open review) and marks the candidate grading. The run itself is dispatched
-  // on refs/tags/pawtograder-preview/<sha>, which is how
+  // Reserve the pending candidate FIRST, before anything is written for this
+  // request: the reservation authorizes the preview (it rejects a stage_only
+  // request with no pending candidate in an open review) and marks the
+  // candidate grading. Reserving before upsertManualCheckRun means a rejected
+  // preview never leaves the sha-wide triggered_by set with no dispatched run
+  // to consume it. The run itself is dispatched on
+  // refs/tags/pawtograder-preview/<sha>, which is how
   // autograder-create-submission knows to stage it.
   let reservation: { candidate_id: number; generation: number } | null = null;
   if (stageOnly) {
@@ -211,7 +207,14 @@ export async function handleRequest(
     reservation = reserved as unknown as { candidate_id: number; generation: number };
   }
 
+  let checkRun: RepositoryCheckRunRow;
   try {
+    checkRun = await upsertManualCheckRun({
+      adminSupabase,
+      repoData,
+      commit,
+      triggeredBy: enrollment.private_profile_id
+    });
     await triggerWorkflow(
       repository,
       commit.sha,

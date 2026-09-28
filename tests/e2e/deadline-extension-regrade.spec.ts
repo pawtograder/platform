@@ -455,8 +455,15 @@ test.describe("Deadline-extension regrade", () => {
         .staged_status;
     const first = await reserve();
     expect(await read()).toBe("grading");
-    // A second instructor reserves too; the first dispatch then fails. Its
-    // release must not clear the second, still in-flight, reservation.
+    // While that preview is live, a second reservation is refused.
+    const overlap = await ADMIN().rpc("regrade_reserve_preview_run", { p_repository_id: repoId, p_sha: fresh.sha });
+    expect(overlap.error?.message).toContain("already being graded");
+    // Past the page's 30-minute stale threshold a retry may reserve; if the
+    // stale first dispatch then reports failure, it must not clear the retry.
+    await ADMIN()
+      .from("deadline_regrade_candidates")
+      .update({ staged_triggered_at: new Date(Date.now() - 31 * 60 * 1000).toISOString() })
+      .eq("id", fresh.id);
     const second = await reserve();
     await release(first);
     expect(await read()).toBe("grading");
@@ -602,5 +609,20 @@ test.describe("Deadline-extension regrade", () => {
     } finally {
       await ADMIN().from("assignments").update({ due_date: originalDue }).eq("id", assignment.id);
     }
+  });
+
+  test("a newer preview result replaces the one attached earlier", async () => {
+    const { candidateId, stagedSubId } = await stagedCandidate();
+    // A retry of the same commit posts its own staged submission afterwards.
+    const retrySubId = await insertSubmission(`late${repoId}`, true);
+    await insertGraderResult(retrySubId, 70);
+    const { data } = await ADMIN()
+      .from("deadline_regrade_candidates")
+      .select("staged_submission_id, staged_score")
+      .eq("id", candidateId)
+      .single();
+    expect(data!.staged_submission_id).toBe(retrySubId);
+    expect(data!.staged_submission_id).not.toBe(stagedSubId);
+    expect(Number(data!.staged_score)).toBe(70);
   });
 });

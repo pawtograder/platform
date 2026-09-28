@@ -775,6 +775,16 @@ begin
   if v_id is null then
     raise exception 'No pending deadline regrade candidate for this commit in an open review';
   end if;
+  -- One live preview per candidate. A second reservation while the first is
+  -- still in flight would let either request's failed dispatch mislabel the
+  -- other's running workflow. After 30 minutes (the review page's stale
+  -- threshold) a retry is allowed.
+  if exists (
+    select 1 from public.deadline_regrade_candidates
+    where id = v_id and staged_status = 'grading' and staged_triggered_at > now() - interval '30 minutes'
+  ) then
+    raise exception 'A preview for this commit is already being graded';
+  end if;
 
   update public.deadline_regrade_candidates
   set staged_triggered_at = now(),
@@ -848,7 +858,11 @@ begin
     and c.assignment_id = v_sub.assignment_id
     and c.sha = v_sub.sha
     and c.decision = 'pending'
-    and (c.staged_submission_id is null or c.staged_submission_id = v_sub.id)
+    -- The newest preview wins: a retry offered after the stale threshold may
+    -- finish after the run it replaced, and its result must not be ignored.
+    -- (Promotion is a compare-and-swap on the page's numbers, so a swap here
+    -- can never be promoted unseen.)
+    and (c.staged_submission_id is null or c.staged_submission_id <= v_sub.id)
     and (
       (v_sub.assignment_group_id is not null and c.assignment_group_id = v_sub.assignment_group_id)
       or (v_sub.assignment_group_id is null and c.profile_id = v_sub.profile_id)
@@ -949,6 +963,28 @@ begin
     and assignment_group_id = v_counter_group
     and profile_id = v_counter_profile
   for update;
+
+  -- A group promotion also demotes members' individual submissions, and
+  -- submission_set_active serializes an individual activation on the
+  -- member's OWN counter. So lock every member's individual counter too
+  -- (profile order, to keep a consistent lock order).
+  if v_cand.assignment_group_id is not null then
+    insert into public.submission_ordinal_counters
+      (assignment_id, assignment_group_id, profile_id, next_ordinal, updated_at)
+    select v_cand.assignment_id, 0, agm.profile_id, 1, now()
+    from public.assignment_groups_members agm
+    where agm.assignment_group_id = v_cand.assignment_group_id
+    on conflict (assignment_id, assignment_group_id, profile_id) do nothing;
+    perform 1 from public.submission_ordinal_counters soc
+    where soc.assignment_id = v_cand.assignment_id
+      and soc.assignment_group_id = 0
+      and soc.profile_id in (
+        select agm.profile_id from public.assignment_groups_members agm
+        where agm.assignment_group_id = v_cand.assignment_group_id
+      )
+    order by soc.profile_id
+    for update;
+  end if;
 
   -- Lock the active submission(s) in scope and the preview. Besides fixing the
   -- rows this promotion updates, FOR UPDATE conflicts with the FOR KEY SHARE
