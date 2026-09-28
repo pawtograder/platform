@@ -2076,6 +2076,7 @@ export type Database = {
           id: number;
           new_due_date: string;
           old_due_date: string;
+          old_minutes_due_after_lab: number | null;
           status: string;
           updated_at: string;
         };
@@ -2087,6 +2088,7 @@ export type Database = {
           id?: number;
           new_due_date: string;
           old_due_date: string;
+          old_minutes_due_after_lab?: number | null;
           status?: string;
           updated_at?: string;
         };
@@ -2098,6 +2100,7 @@ export type Database = {
           id?: number;
           new_due_date?: string;
           old_due_date?: string;
+          old_minutes_due_after_lab?: number | null;
           status?: string;
           updated_at?: string;
         };
@@ -2167,6 +2170,7 @@ export type Database = {
           decision: string;
           id: number;
           profile_id: string | null;
+          pushed_at: string | null;
           repository: string;
           repository_id: number;
           sha: string;
@@ -2189,6 +2193,7 @@ export type Database = {
           decision?: string;
           id?: number;
           profile_id?: string | null;
+          pushed_at?: string | null;
           repository: string;
           repository_id: number;
           sha: string;
@@ -2211,6 +2216,7 @@ export type Database = {
           decision?: string;
           id?: number;
           profile_id?: string | null;
+          pushed_at?: string | null;
           repository?: string;
           repository_id?: number;
           sha?: string;
@@ -12640,10 +12646,23 @@ export type Database = {
         };
         Returns: Json;
       };
-      calculate_effective_due_date: {
-        Args: { assignment_id_param: number; student_profile_id_param: string };
-        Returns: string;
-      };
+      calculate_effective_due_date:
+        | {
+            Args: {
+              assignment_id_param: number;
+              student_profile_id_param: string;
+            };
+            Returns: string;
+          }
+        | {
+            Args: {
+              assignment_id_param: number;
+              base_due_date_param: string;
+              base_minutes_due_after_lab_param: number;
+              student_profile_id_param: string;
+            };
+            Returns: string;
+          };
       calculate_final_due_date: {
         Args: {
           assignment_group_id_param?: number;
@@ -13270,7 +13289,11 @@ export type Database = {
         Returns: undefined;
       };
       enumerate_deadline_regrade_candidates: {
-        Args: { p_assignment_id: number; p_old_due_date: string };
+        Args: {
+          p_assignment_id: number;
+          p_old_due_date: string;
+          p_old_minutes_due_after_lab: number;
+        };
         Returns: number;
       };
       evaluate_error_pin_rule: {

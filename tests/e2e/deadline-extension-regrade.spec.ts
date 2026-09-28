@@ -140,7 +140,8 @@ async function stagedCandidate(): Promise<{ batchId: number; candidateId: number
   await insertCheckRun(`late${repoId}`, "late work", 1);
   const { data: batchId, error } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
     p_assignment_id: assignment.id,
-    p_old_due_date: oldDue
+    p_old_due_date: oldDue,
+    p_old_minutes_due_after_lab: null as unknown as number
   });
   if (error) throw new Error(error.message);
   const candidateId = (await candidatesForBatch(batchId!)).find((c) => c.profile_id === student.private_profile_id)!.id;
@@ -163,14 +164,16 @@ test.describe("Deadline-extension regrade", () => {
     // Non-instructor (service role -> auth.uid() null) is blocked.
     const blocked = await ADMIN().rpc("enumerate_deadline_regrade_candidates", {
       p_assignment_id: assignment.id,
-      p_old_due_date: oldDue
+      p_old_due_date: oldDue,
+      p_old_minutes_due_after_lab: null as unknown as number
     });
     expect(blocked.error).not.toBeNull();
 
     // Instructor enumerates -> exactly the in-window commit.
     const { data: batchId, error } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
       p_assignment_id: assignment.id,
-      p_old_due_date: oldDue
+      p_old_due_date: oldDue,
+      p_old_minutes_due_after_lab: null as unknown as number
     });
     expect(error).toBeNull();
     expect(batchId).not.toBeNull();
@@ -192,7 +195,8 @@ test.describe("Deadline-extension regrade", () => {
 
     const { data: batchId } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
       p_assignment_id: assignment.id,
-      p_old_due_date: oldDue
+      p_old_due_date: oldDue,
+      p_old_minutes_due_after_lab: null as unknown as number
     });
     const candidate = (await candidatesForBatch(batchId!)).find((c) => c.profile_id === student.private_profile_id)!;
     expect(candidate.current_submission_id).toBe(currentSubId);
@@ -253,7 +257,8 @@ test.describe("Deadline-extension regrade", () => {
 
     const { data: batchId } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
       p_assignment_id: assignment.id,
-      p_old_due_date: oldDue
+      p_old_due_date: oldDue,
+      p_old_minutes_due_after_lab: null as unknown as number
     });
     const candidateId = (await candidatesForBatch(batchId!)).find(
       (c) => c.profile_id === student.private_profile_id
@@ -317,7 +322,8 @@ test.describe("Deadline-extension regrade", () => {
   async function enumerate(oldDue: Date): Promise<number> {
     const { data, error } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
       p_assignment_id: assignment.id,
-      p_old_due_date: oldDue.toISOString()
+      p_old_due_date: oldDue.toISOString(),
+      p_old_minutes_due_after_lab: null as unknown as number
     });
     if (error) throw new Error(error.message);
     return data!;
@@ -343,7 +349,8 @@ test.describe("Deadline-extension regrade", () => {
     });
     const { data: batchId, error } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
       p_assignment_id: empty.id,
-      p_old_due_date: subDays(new Date(), 2).toISOString()
+      p_old_due_date: subDays(new Date(), 2).toISOString(),
+      p_old_minutes_due_after_lab: null as unknown as number
     });
     expect(error).toBeNull();
     const { data: batch } = await ADMIN().from("deadline_regrade_batches").select("status").eq("id", batchId!).single();

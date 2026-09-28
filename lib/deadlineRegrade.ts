@@ -29,11 +29,18 @@ type AnyClient = SupabaseClient<Database>;
  */
 export async function enumerateDeadlineRegradeCandidates(
   supabase: AnyClient,
-  params: { assignment_id: number; old_due_date: string }
+  params: {
+    assignment_id: number;
+    old_due_date: string;
+    /** minutes_due_after_lab before the save; null when it was not lab-scheduled. */
+    old_minutes_due_after_lab: number | null;
+  }
 ): Promise<number> {
   const { data, error } = await supabase.rpc("enumerate_deadline_regrade_candidates", {
     p_assignment_id: params.assignment_id,
-    p_old_due_date: params.old_due_date
+    p_old_due_date: params.old_due_date,
+    // The generated Args type marks every parameter non-null; SQL NULL means "not lab-scheduled".
+    p_old_minutes_due_after_lab: params.old_minutes_due_after_lab as number
   });
   if (error) {
     throw new Error(error.message);

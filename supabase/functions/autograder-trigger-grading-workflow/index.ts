@@ -68,7 +68,7 @@ async function upsertManualCheckRun({
   commit: GetCommitResponse["data"];
   triggeredBy: string;
   stageOnly: boolean;
-}): Promise<RepositoryCheckRunRow> {
+}): Promise<{ checkRun: RepositoryCheckRunRow; previousStageOnly: boolean }> {
   // `commit.sha` is the canonical full lowercase sha returned by the GitHub API.
   // Always key DB lookups off it so short / mixed-case input from callers does
   // not produce duplicate rows or break race-recovery against the
@@ -85,7 +85,16 @@ async function upsertManualCheckRun({
   }
   const now = new Date().toISOString();
   if (existing) {
-    return await markCheckRunRequested({ adminSupabase, checkRun: existing, triggeredBy, requestedAt: now, stageOnly });
+    return {
+      checkRun: await markCheckRunRequested({
+        adminSupabase,
+        checkRun: existing,
+        triggeredBy,
+        requestedAt: now,
+        stageOnly
+      }),
+      previousStageOnly: existing.stage_only
+    };
   }
 
   const commitDate = commit.commit.author?.date ?? commit.commit.committer?.date ?? null;
@@ -113,7 +122,7 @@ async function upsertManualCheckRun({
     .select("*")
     .single();
   if (!insertError) {
-    return inserted;
+    return { checkRun: inserted, previousStageOnly: false };
   }
   if (insertError.code !== "23505") {
     throw new SecurityError(`Failed to create repository check run: ${insertError.message}`);
@@ -130,7 +139,10 @@ async function upsertManualCheckRun({
       `Failed to recover raced repository check run insert: ${racedError?.message ?? "not found"}`
     );
   }
-  return await markCheckRunRequested({ adminSupabase, checkRun: raced, triggeredBy, requestedAt: now, stageOnly });
+  return {
+    checkRun: await markCheckRunRequested({ adminSupabase, checkRun: raced, triggeredBy, requestedAt: now, stageOnly }),
+    previousStageOnly: raced.stage_only
+  };
 }
 
 export async function handleRequest(
@@ -192,7 +204,7 @@ export async function handleRequest(
     );
   }
 
-  const checkRun = await upsertManualCheckRun({
+  const { checkRun, previousStageOnly } = await upsertManualCheckRun({
     adminSupabase,
     repoData,
     commit,
@@ -200,7 +212,23 @@ export async function handleRequest(
     stageOnly
   });
 
-  await triggerWorkflow(repository, commit.sha, "grade.yml", scope);
+  try {
+    await triggerWorkflow(repository, commit.sha, "grade.yml", scope);
+  } catch (dispatchError) {
+    // Nothing was dispatched, so a stage_only set by this request must not
+    // outlive it: a later push or retry of this sha would otherwise be staged
+    // (inactive and hidden from the student) with no review to promote it.
+    if (stageOnly && !previousStageOnly) {
+      const { error: rollbackError } = await adminSupabase
+        .from("repository_check_runs")
+        .update({ stage_only: false })
+        .eq("id", checkRun.id);
+      if (rollbackError) {
+        scope?.setTag("stage_only_rollback_error", rollbackError.message);
+      }
+    }
+    throw dispatchError;
+  }
 
   const triggeredAt = new Date().toISOString();
   const { data: latestCheckRun, error: latestCheckRunError } = await adminSupabase

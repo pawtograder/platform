@@ -327,6 +327,9 @@ create table if not exists public.deadline_regrade_batches (
   assignment_id bigint not null references public.assignments(id) on delete cascade,
   created_by uuid references public.profiles(id),
   old_due_date timestamptz not null,
+  -- The assignment's minutes_due_after_lab before the save that extended it
+  -- (the same save can change it); NULL means not lab-scheduled.
+  old_minutes_due_after_lab integer,
   new_due_date timestamptz not null,
   -- open: awaiting instructor review; applied: at least one promotion done and closed;
   -- dismissed: instructor closed without (further) action; superseded: replaced by a newer batch.
@@ -355,6 +358,8 @@ create table if not exists public.deadline_regrade_candidates (
   sha text not null,
   commit_message text,
   commit_date timestamptz,
+  -- When the commit was pushed (check run created_at): what the window is judged on.
+  pushed_at timestamptz,
   -- Snapshot of the currently-active submission at enumeration time (for display).
   current_submission_id bigint references public.submissions(id) on delete set null,
   current_score numeric,
@@ -369,10 +374,10 @@ create index if not exists deadline_regrade_candidates_batch_idx
   on public.deadline_regrade_candidates (batch_id);
 create unique index if not exists deadline_regrade_candidates_unique_target
   on public.deadline_regrade_candidates (batch_id, repository_id);
--- autograder-create-submission checks every run for a pending candidate on its
--- (repository, sha), so keep that lookup to a small partial index.
-create index if not exists deadline_regrade_candidates_pending_commit_idx
-  on public.deadline_regrade_candidates (repository_id, sha) where decision = 'pending';
+-- autograder-create-submission checks every run for a recently dispatched
+-- preview on its (repository, sha).
+create index if not exists deadline_regrade_candidates_commit_idx
+  on public.deadline_regrade_candidates (repository_id, sha, staged_triggered_at);
 
 -- RLS: instructors read; all writes go through SECURITY DEFINER RPCs below.
 alter table public.deadline_regrade_batches enable row level security;
@@ -396,11 +401,12 @@ create policy deadline_regrade_candidates_instructor_select
 --     the extension: the lab meeting is chosen relative to the base due date,
 --     so the result jumps when the base crosses a meeting. The body below is
 --     the current calculate_effective_due_date (20260825140000) with the
---     assignment's due_date replaced by `COALESCE(base_due_date_param,
---     assignment.due_date)`; the two-argument form now delegates with NULL, so
---     there is still one copy of the lab logic and its behaviour is unchanged.
+--     assignment's due_date and minutes_due_after_lab replaced by the supplied
+--     base schedule when one is given; the two-argument form now delegates with
+--     NULLs, so there is still one copy of the lab logic and its behaviour is
+--     unchanged.
 -- =====================================================================
-CREATE OR REPLACE FUNCTION public.calculate_effective_due_date(assignment_id_param bigint, student_profile_id_param uuid, base_due_date_param timestamp with time zone)
+CREATE OR REPLACE FUNCTION public.calculate_effective_due_date(assignment_id_param bigint, student_profile_id_param uuid, base_due_date_param timestamp with time zone, base_minutes_due_after_lab_param integer)
  RETURNS timestamp with time zone
  LANGUAGE plpgsql
  STABLE SECURITY DEFINER
@@ -415,6 +421,7 @@ DECLARE
     lab_meeting_timestamp timestamp with time zone;
     lab_end_time time;
     base_due_date timestamp with time zone;
+    base_minutes_due_after_lab integer;
 BEGIN
     -- Get assignment details
     SELECT * INTO assignment_record
@@ -425,10 +432,19 @@ BEGIN
         RAISE EXCEPTION 'Assignment with id % not found', assignment_id_param;
     END IF;
 
-    base_due_date := COALESCE(base_due_date_param, assignment_record.due_date);
+    -- With no base supplied, use the assignment as it is now. With one, the
+    -- caller supplies the whole old schedule: its due date AND its lab offset
+    -- (NULL offset = not lab-scheduled), since one save can change both.
+    IF base_due_date_param IS NULL THEN
+        base_due_date := assignment_record.due_date;
+        base_minutes_due_after_lab := assignment_record.minutes_due_after_lab;
+    ELSE
+        base_due_date := base_due_date_param;
+        base_minutes_due_after_lab := base_minutes_due_after_lab_param;
+    END IF;
 
     -- If assignment doesn't use lab-based scheduling, return original due date
-    IF assignment_record.minutes_due_after_lab IS NULL THEN
+    IF base_minutes_due_after_lab IS NULL THEN
         RETURN base_due_date;
     END IF;
 
@@ -492,7 +508,7 @@ BEGIN
 
     -- Calculate lab-based due date
     lab_based_due_date := lab_meeting_timestamp
-                         + (assignment_record.minutes_due_after_lab * INTERVAL '1 minute');
+                         + (base_minutes_due_after_lab * INTERVAL '1 minute');
 
     -- Return the lab-based due date
     RETURN lab_based_due_date;
@@ -504,17 +520,18 @@ CREATE OR REPLACE FUNCTION public.calculate_effective_due_date(assignment_id_par
  LANGUAGE sql
  STABLE SECURITY DEFINER
 AS $$
-    SELECT public.calculate_effective_due_date(assignment_id_param, student_profile_id_param, NULL::timestamp with time zone);
+    SELECT public.calculate_effective_due_date(assignment_id_param, student_profile_id_param, NULL::timestamp with time zone, NULL::integer);
 $$;
 
-revoke all on function public.calculate_effective_due_date(bigint, uuid, timestamp with time zone) from public, anon, authenticated;
+revoke all on function public.calculate_effective_due_date(bigint, uuid, timestamp with time zone, integer) from public, anon, authenticated;
 
 -- =====================================================================
 -- 4. Enumerate candidates (creates a batch + candidate rows)
 -- =====================================================================
 create or replace function public.enumerate_deadline_regrade_candidates(
   p_assignment_id bigint,
-  p_old_due_date timestamptz
+  p_old_due_date timestamptz,
+  p_old_minutes_due_after_lab integer
 ) returns bigint
 language plpgsql
 security definer
@@ -525,6 +542,8 @@ declare
   v_new_due_date timestamptz;
   v_has_autograder boolean;
   v_old_due_date timestamptz;
+  v_old_minutes integer;
+  v_earliest record;
   v_creator uuid;
   v_batch_id bigint;
   v_superseded bigint[];
@@ -564,30 +583,40 @@ begin
   -- A second extension before the first review is finished supersedes the open
   -- batch. Widen the window back to the earliest open batch's old deadline so its
   -- unresolved commits are re-enumerated here rather than stranded.
-  select array_agg(id), least(p_old_due_date, min(old_due_date))
-  into v_superseded, v_old_due_date
+  select array_agg(id) into v_superseded
   from public.deadline_regrade_batches
   where assignment_id = p_assignment_id and status = 'open';
-  v_old_due_date := coalesce(v_old_due_date, p_old_due_date);
+  select old_due_date, old_minutes_due_after_lab into v_earliest
+  from public.deadline_regrade_batches
+  where assignment_id = p_assignment_id and status = 'open'
+  order by old_due_date asc
+  limit 1;
+  if v_earliest.old_due_date is not null and v_earliest.old_due_date < p_old_due_date then
+    v_old_due_date := v_earliest.old_due_date;
+    v_old_minutes := v_earliest.old_minutes_due_after_lab;
+  else
+    v_old_due_date := p_old_due_date;
+    v_old_minutes := p_old_minutes_due_after_lab;
+  end if;
 
   update public.deadline_regrade_batches
   set status = 'superseded', updated_at = now()
   where id = any(coalesce(v_superseded, '{}'::bigint[]));
 
   insert into public.deadline_regrade_batches
-    (class_id, assignment_id, created_by, old_due_date, new_due_date, status)
-  values (v_class_id, p_assignment_id, v_creator, v_old_due_date, v_new_due_date, 'open')
+    (class_id, assignment_id, created_by, old_due_date, old_minutes_due_after_lab, new_due_date, status)
+  values (v_class_id, p_assignment_id, v_creator, v_old_due_date, v_old_minutes, v_new_due_date, 'open')
   returning id into v_batch_id;
 
   -- For each repository (one per student or group) compute the per-student
   -- effective window and select the latest commit pushed inside it.
   insert into public.deadline_regrade_candidates
     (batch_id, class_id, assignment_id, profile_id, assignment_group_id,
-     repository_id, repository, sha, commit_message, commit_date,
+     repository_id, repository, sha, commit_message, commit_date, pushed_at,
      current_submission_id, current_score, staged_status, decision)
   select
     v_batch_id, v_class_id, p_assignment_id, r.profile_id, r.assignment_group_id,
-    r.id, r.repository, cand.sha, cand.commit_message, cand.commit_date,
+    r.id, r.repository, cand.sha, cand.commit_message, cand.commit_date, cand.pushed_at,
     act.id, act.score, 'none', 'pending'
   from public.repositories r
   -- Group repositories have no profile_id, but calculate_final_due_date derives
@@ -606,7 +635,7 @@ begin
     ) as new_eff,
     public.calculate_effective_due_date(p_assignment_id, coalesce(r.profile_id, member.profile_id)) as new_base,
     public.calculate_effective_due_date(
-      p_assignment_id, coalesce(r.profile_id, member.profile_id), v_old_due_date
+      p_assignment_id, coalesce(r.profile_id, member.profile_id), v_old_due_date, v_old_minutes
     ) as old_base
   ) eff
   cross join lateral (
@@ -622,7 +651,8 @@ begin
     -- timestamp is kept for display only. #NOT-GRADED commits are practice
     -- runs that must never become the graded submission.
     select cr.sha, cr.commit_message,
-           coalesce((cr.status->>'commit_date')::timestamptz, cr.created_at) as commit_date
+           coalesce((cr.status->>'commit_date')::timestamptz, cr.created_at) as commit_date,
+           cr.created_at as pushed_at
     from public.repository_check_runs cr
     where cr.repository_id = r.id
       and cr.created_at > win.old_eff
@@ -1233,7 +1263,7 @@ $$;
 -- =====================================================================
 -- 9. Grants
 -- =====================================================================
-grant execute on function public.enumerate_deadline_regrade_candidates(bigint, timestamptz) to authenticated;
+grant execute on function public.enumerate_deadline_regrade_candidates(bigint, timestamptz, integer) to authenticated;
 grant execute on function public.regrade_set_candidate_grading(bigint) to authenticated;
 grant execute on function public.apply_deadline_regrade(bigint) to authenticated;
 grant execute on function public.skip_deadline_regrade(bigint) to authenticated;

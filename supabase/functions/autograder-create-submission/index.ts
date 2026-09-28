@@ -36,6 +36,10 @@ import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/sele
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
+// Deadline-regrade preview runs for a commit can still arrive this long after the
+// last preview dispatch (GitHub-hosted jobs are capped at 6h, plus queueing).
+const PREVIEW_RUN_WINDOW_HOURS = 24;
+
 const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 const STAFF_ROLES = new Set(["admin", "instructor", "grader"]);
 
@@ -1034,26 +1038,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // check run.
       let isStagedSubmission = (hasRealCheckRun && checkRun.stage_only === true) || false;
       // The flag is shared by every run of this (repository, sha). A retried
-      // preview can race the original slow run, which clears the flag when it
-      // finishes, so the retry would load stage_only=false and (the deadline now
-      // being extended) become ACTIVE without the instructor promoting it. While
-      // the commit is a pending candidate in an open review, every run for it is
-      // a preview.
+      // preview can race the original slow run, and whichever finishes first
+      // clears the flag, so the other would load stage_only=false and (the
+      // deadline now being extended) become ACTIVE without an instructor
+      // decision -- even after the first run was promoted, when the candidate is
+      // no longer pending. So a run is also a preview while its commit had a
+      // preview dispatched within the last PREVIEW_RUN_WINDOW_HOURS (longer than
+      // a GitHub-hosted run can live), whatever the candidate's decision or
+      // batch status.
       if (!isStagedSubmission && hasRealCheckRun) {
-        const { data: pendingCandidates, error: pendingCandidatesError } = await adminSupabase
+        const recentDispatch = new Date(Date.now() - PREVIEW_RUN_WINDOW_HOURS * 3600 * 1000).toISOString();
+        const { data: previewCandidates, error: previewCandidatesError } = await adminSupabase
           .from("deadline_regrade_candidates")
-          .select("id, deadline_regrade_batches!inner(status)")
+          .select("id")
           .eq("repository_id", repoData.id)
           .eq("sha", sha)
-          .eq("decision", "pending")
-          .eq("deadline_regrade_batches.status", "open")
+          .gt("staged_triggered_at", recentDispatch)
           .limit(1);
-        if (pendingCandidatesError) {
+        if (previewCandidatesError) {
           throw new UserVisibleError(
-            `Internal error: Failed to check for a pending deadline regrade: ${pendingCandidatesError.message}`
+            `Internal error: Failed to check for a deadline regrade preview: ${previewCandidatesError.message}`
           );
         }
-        isStagedSubmission = (pendingCandidates?.length ?? 0) > 0;
+        isStagedSubmission = (previewCandidates?.length ?? 0) > 0;
       }
       scope?.setTag("is_staged", isStagedSubmission.toString());
 

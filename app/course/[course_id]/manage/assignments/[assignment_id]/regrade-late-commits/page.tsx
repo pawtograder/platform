@@ -295,8 +295,11 @@ export default function RegradeLateCommitsPage() {
 
   const pendingCount = candidates.filter((c) => c.decision === "pending").length;
   // Closing the batch stops the backfill trigger from attaching results, so a
-  // preview that finishes afterwards could never be promoted.
-  const anyGrading = candidates.some(isActivelyGrading);
+  // preview that finishes afterwards could never be promoted. That includes a
+  // dispatch still in flight: the candidate stays 'none' until stageCandidate
+  // marks it grading after the workflow is dispatched.
+  const anyGrading =
+    candidates.some(isActivelyGrading) || stagingAll || Object.values(busy).some((b) => b === "staging");
 
   return (
     <VStack align="stretch" gap={4} p={4}>
@@ -370,7 +373,10 @@ export default function RegradeLateCommitsPage() {
                     </Text>
                   </VStack>
                 </Table.Cell>
-                <Table.Cell>{c.commit_date ? <TimeZoneAwareDate date={c.commit_date} /> : "—"}</Table.Cell>
+                <Table.Cell>
+                  {/* The window is judged on push time; the commit's own timestamp can predate the old deadline. */}
+                  {(c.pushed_at ?? c.commit_date) ? <TimeZoneAwareDate date={(c.pushed_at ?? c.commit_date)!} /> : "—"}
+                </Table.Cell>
                 <Table.Cell>
                   {c.current_submission_id ? (
                     <Link href={`${submissionsBase}/${c.current_submission_id}/files`}>

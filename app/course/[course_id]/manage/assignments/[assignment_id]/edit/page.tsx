@@ -626,7 +626,8 @@ export default function EditAssignment() {
           ) {
             const batchId = await enumerateDeadlineRegradeCandidates(supabase, {
               assignment_id: Number.parseInt(assignment_id as string),
-              old_due_date: oldDue
+              old_due_date: oldDue,
+              old_minutes_due_after_lab: queryData?.minutes_due_after_lab ?? null
             });
             const rows = await fetchRegradeCandidates(supabase, batchId);
             if (rows.length > 0) {
@@ -659,6 +660,7 @@ export default function EditAssignment() {
       updateAsync,
       queryData?.has_autograder,
       queryData?.due_date,
+      queryData?.minutes_due_after_lab,
       revalidateServerCaches
     ]
   );
