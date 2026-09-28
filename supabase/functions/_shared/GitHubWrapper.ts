@@ -4814,7 +4814,10 @@ export async function triggerWorkflow(
   repo_full_name: string,
   sha: string,
   workflow_name: string,
-  _scope?: Sentry.Scope
+  _scope?: Sentry.Scope,
+  // The run's OIDC token carries this ref, so a distinct prefix lets the run
+  // identify itself (e.g. "pawtograder-preview" for deadline-regrade previews).
+  refPrefix: "pawtograder-submit" | "pawtograder-preview" = "pawtograder-submit"
 ) {
   const scope = _scope?.clone();
   scope?.setTag("github_operation", "trigger_workflow");
@@ -4827,14 +4830,14 @@ export async function triggerWorkflow(
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
-  const ref = `pawtograder-submit/${sha}`;
+  const ref = `${refPrefix}/${sha}`;
   //Create a tag for this sha to use to trigger the workflow
   try {
     // console.log("created ref", res.data);
     await octokit.request("POST /repos/{owner}/{repo}/git/tags", {
       owner: org,
       repo,
-      tag: `pawtograder-submit/${sha}`,
+      tag: ref,
       message: "pawtograder submission",
       object: sha,
       type: "commit",

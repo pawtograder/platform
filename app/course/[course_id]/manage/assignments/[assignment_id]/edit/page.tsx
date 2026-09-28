@@ -612,35 +612,45 @@ export default function EditAssignment() {
           });
         }
 
-        // If the deadline moved later, offer to re-grade late commits. This is
+        // If the deadline moved later -- through the due date or through the
+        // lab offset alone -- offer to re-grade late commits. This is
         // best-effort: any failure here must not fail the assignment update.
-        try {
-          const oldDue = queryData?.due_date;
-          const newDue = values.due_date as string | undefined;
-          // Only autograded assignments have a grading workflow to re-run.
-          if (
-            (values.has_autograder ?? queryData?.has_autograder) !== false &&
-            oldDue &&
-            newDue &&
-            new Date(newDue).getTime() > new Date(oldDue).getTime()
-          ) {
-            const batchId = await enumerateDeadlineRegradeCandidates(supabase, {
-              assignment_id: Number.parseInt(assignment_id as string),
-              old_due_date: oldDue,
-              old_minutes_due_after_lab: queryData?.minutes_due_after_lab ?? null
-            });
-            const rows = await fetchRegradeCandidates(supabase, batchId);
-            if (rows.length > 0) {
-              setRegradePrompt({ batchId, count: rows.length });
+        const oldDue = queryData?.due_date;
+        const newDue = values.due_date as string | undefined;
+        const oldMinutes = queryData?.minutes_due_after_lab ?? null;
+        const newMinutes = (values.minutes_due_after_lab as number | null | undefined) ?? null;
+        const dueMovedLater = !!oldDue && !!newDue && new Date(newDue).getTime() > new Date(oldDue).getTime();
+        const labOffsetChanged = values.minutes_due_after_lab !== undefined && newMinutes !== oldMinutes;
+        // Only autograded assignments have a grading workflow to re-run.
+        if (
+          (values.has_autograder ?? queryData?.has_autograder) !== false &&
+          oldDue &&
+          (dueMovedLater || labOffsetChanged)
+        ) {
+          // The old schedule is captured here, so a failed scan can be retried
+          // from the toast even after the form reloads with the new values.
+          const scanLateCommits = async () => {
+            try {
+              const batchId = await enumerateDeadlineRegradeCandidates(supabase, {
+                assignment_id: Number.parseInt(assignment_id as string),
+                old_due_date: oldDue,
+                old_minutes_due_after_lab: oldMinutes
+              });
+              const rows = await fetchRegradeCandidates(supabase, batchId);
+              if (rows.length > 0) {
+                setRegradePrompt({ batchId, count: rows.length });
+              }
+            } catch (regradeError) {
+              // Surface softly; the deadline change itself succeeded.
+              toaster.create({
+                title: "Could not scan for late commits",
+                description: regradeError instanceof Error ? regradeError.message : "Unknown error",
+                type: "warning",
+                action: { label: "Retry", onClick: () => void scanLateCommits() }
+              });
             }
-          }
-        } catch (regradeError) {
-          // Surface softly; the deadline change itself succeeded.
-          toaster.create({
-            title: "Could not scan for late commits",
-            description: regradeError instanceof Error ? regradeError.message : "Unknown error",
-            type: "warning"
-          });
+          };
+          await scanLateCommits();
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";

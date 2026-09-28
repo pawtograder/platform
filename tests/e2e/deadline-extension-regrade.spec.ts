@@ -400,39 +400,61 @@ test.describe("Deadline-extension regrade", () => {
     expect(promoted!.is_active).toBe(true);
   });
 
-  test("preview runs are staged only by claiming a reserved slot, idempotently per run", async () => {
+  test("reserving a preview marks the candidate grading without downgrading, and release undoes it", async () => {
     const { candidateId } = await stagedCandidate();
-    const sha = `late${repoId}`;
-    const claim = async (runKey: string) =>
-      (await ADMIN().rpc("regrade_claim_preview_run", { p_repository_id: repoId, p_sha: sha, p_run_key: runKey })).data;
-    const row = async () =>
-      (
-        await ADMIN()
-          .from("deadline_regrade_candidates")
-          .select("staged_status, outstanding_preview_runs")
-          .eq("id", candidateId)
-          .single()
-      ).data!;
+    const status = async () =>
+      (await ADMIN().from("deadline_regrade_candidates").select("staged_status").eq("id", candidateId).single()).data!
+        .staged_status;
 
-    // No slot reserved: an ordinary run of the same sha is not a preview.
-    expect(await claim("100:1")).toBe(false);
-
-    // Reserving on an already-graded candidate never downgrades it.
-    const reserved = await ADMIN().rpc("regrade_reserve_preview_run", { p_repository_id: repoId, p_sha: sha });
+    const reserved = await ADMIN().rpc("regrade_reserve_preview_run", {
+      p_repository_id: repoId,
+      p_sha: `late${repoId}`
+    });
     expect(reserved.error).toBeNull();
     expect(reserved.data).toBe(candidateId);
-    expect(await row()).toEqual({ staged_status: "graded", outstanding_preview_runs: 1 });
+    expect(await status()).toBe("graded");
 
-    // One run claims the slot; its retry gets the same answer; a second run does not.
-    expect(await claim("200:1")).toBe(true);
-    expect(await claim("200:1")).toBe(true);
-    expect(await claim("300:1")).toBe(false);
-    expect((await row()).outstanding_preview_runs).toBe(0);
+    // On an ungraded candidate: reserve -> grading, release (failed dispatch) -> none.
+    await setUpStudent();
+    await insertCheckRun(`fresh${repoId}`, "late", 1);
+    const batch = await enumerate(subDays(new Date(), 2));
+    const fresh = (await mine(batch))[0];
+    await ADMIN().rpc("regrade_reserve_preview_run", { p_repository_id: repoId, p_sha: fresh.sha });
+    const read = async () =>
+      (await ADMIN().from("deadline_regrade_candidates").select("staged_status").eq("id", fresh.id).single()).data!
+        .staged_status;
+    expect(await read()).toBe("grading");
+    await ADMIN().rpc("regrade_release_preview_run", { p_candidate_id: fresh.id });
+    expect(await read()).toBe("none");
+  });
 
-    // A failed dispatch gives its slot back.
-    await ADMIN().rpc("regrade_reserve_preview_run", { p_repository_id: repoId, p_sha: sha });
-    await ADMIN().rpc("regrade_release_preview_run", { p_candidate_id: candidateId });
-    expect(await claim("400:1")).toBe(false);
+  test("an extension through the lab offset alone can be enumerated", async () => {
+    await insertCheckRun("labonly", "late", 1);
+    const { error } = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
+      p_assignment_id: assignment.id,
+      // Same base due date, but the old schedule had a lab offset.
+      p_old_due_date: new Date(assignment.due_date!).toISOString(),
+      p_old_minutes_due_after_lab: 30
+    });
+    expect(error).toBeNull();
+    const unchanged = await instructorClient.rpc("enumerate_deadline_regrade_candidates", {
+      p_assignment_id: assignment.id,
+      p_old_due_date: new Date(assignment.due_date!).toISOString(),
+      p_old_minutes_due_after_lab: null as unknown as number
+    });
+    expect(unchanged.error?.message).toContain("must have moved later");
+  });
+
+  test("submissions_agg neither counts nor surfaces a staged preview", async () => {
+    const { stagedSubId } = await stagedCandidate();
+    const { data } = await ADMIN()
+      .from("submissions_agg")
+      .select("submissioncount, latestsubmissionid")
+      .eq("profile_id", student.private_profile_id)
+      .eq("assignment_id", assignment.id)
+      .single();
+    expect(Number(data!.submissioncount)).toBe(1);
+    expect(data!.latestsubmissionid).not.toBe(stagedSubId);
   });
 
   test("a preview cannot be reserved without a pending candidate, and not by authenticated users", async () => {

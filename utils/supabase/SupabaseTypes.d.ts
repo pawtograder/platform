@@ -2161,7 +2161,6 @@ export type Database = {
           assignment_group_id: number | null;
           assignment_id: number;
           batch_id: number;
-          claimed_preview_runs: string[];
           class_id: number;
           commit_date: string | null;
           commit_message: string | null;
@@ -2170,7 +2169,6 @@ export type Database = {
           current_submission_id: number | null;
           decision: string;
           id: number;
-          outstanding_preview_runs: number;
           profile_id: string | null;
           pushed_at: string | null;
           repository: string;
@@ -2186,7 +2184,6 @@ export type Database = {
           assignment_group_id?: number | null;
           assignment_id: number;
           batch_id: number;
-          claimed_preview_runs?: string[];
           class_id: number;
           commit_date?: string | null;
           commit_message?: string | null;
@@ -2195,7 +2192,6 @@ export type Database = {
           current_submission_id?: number | null;
           decision?: string;
           id?: number;
-          outstanding_preview_runs?: number;
           profile_id?: string | null;
           pushed_at?: string | null;
           repository: string;
@@ -2211,7 +2207,6 @@ export type Database = {
           assignment_group_id?: number | null;
           assignment_id?: number;
           batch_id?: number;
-          claimed_preview_runs?: string[];
           class_id?: number;
           commit_date?: string | null;
           commit_message?: string | null;
@@ -2220,7 +2215,6 @@ export type Database = {
           current_submission_id?: number | null;
           decision?: string;
           id?: number;
-          outstanding_preview_runs?: number;
           profile_id?: string | null;
           pushed_at?: string | null;
           repository?: string;
@@ -14292,10 +14286,6 @@ export type Database = {
           p_profile_id?: string;
         };
         Returns: undefined;
-      };
-      regrade_claim_preview_run: {
-        Args: { p_repository_id: number; p_run_key: string; p_sha: string };
-        Returns: boolean;
       };
       regrade_release_preview_run: {
         Args: { p_candidate_id: number };

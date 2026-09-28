@@ -1029,26 +1029,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         (hasRealCheckRun && checkRun.commit_message && checkRun.commit_message.toUpperCase().includes("#NOT-GRADED")) ||
         false;
 
-      // A deadline-regrade preview is graded but never auto-activated. It can
-      // only be a workflow_dispatch run, and it is one only if it claims a slot
-      // that autograder-trigger-grading-workflow reserved on the pending
-      // candidate before dispatching. A student push, or an ordinary staff
-      // regrade of the same sha once the slots are used, is never staged. The
-      // claim is keyed on run_id:attempt so a retried call gets the same answer.
-      let isStagedSubmission = false;
-      if (decoded.event_name === "workflow_dispatch") {
-        const { data: claimed, error: claimError } = await adminSupabase.rpc("regrade_claim_preview_run", {
-          p_repository_id: repoData.id,
-          p_sha: sha,
-          p_run_key: `${decoded.run_id}:${decoded.run_attempt}`
-        });
-        if (claimError) {
-          throw new UserVisibleError(
-            `Internal error: Failed to check for a deadline regrade preview: ${claimError.message}`
-          );
-        }
-        isStagedSubmission = claimed === true;
-      }
+      // A deadline-regrade preview is graded but never auto-activated. It is
+      // dispatched on its own tag (refs/tags/pawtograder-preview/<sha>) by
+      // autograder-trigger-grading-workflow, after an instructor reserved the
+      // pending candidate, and the run's OIDC token carries that ref. So the
+      // preview status belongs to the run: an ordinary regrade of the same sha
+      // (pawtograder-submit/) or a student push is never staged, however the
+      // runs interleave.
+      const isStagedSubmission =
+        decoded.event_name === "workflow_dispatch" && (decoded.ref ?? "").startsWith("refs/tags/pawtograder-preview/");
       scope?.setTag("is_staged", isStagedSubmission.toString());
 
       scope?.setTag("time_zone", timeZone);

@@ -361,12 +361,6 @@ create table if not exists public.deadline_regrade_candidates (
   staged_score numeric,
   staged_status text not null default 'none' check (staged_status in ('none', 'grading', 'graded', 'error')),
   staged_triggered_at timestamptz,
-  -- Preview workflow runs dispatched for this candidate that have not yet
-  -- reached autograder-create-submission, and the GitHub runs (run_id:attempt)
-  -- that have claimed one. A run is staged only by claiming a slot, so a
-  -- student push or an ordinary staff regrade of the same sha is never staged.
-  outstanding_preview_runs integer not null default 0,
-  claimed_preview_runs text[] not null default '{}',
   decision text not null default 'pending' check (decision in ('pending', 'applied', 'skipped'))
 );
 create index if not exists deadline_regrade_candidates_batch_idx
@@ -541,13 +535,15 @@ declare
   v_has_autograder boolean;
   v_old_due_date timestamptz;
   v_old_minutes integer;
+  v_new_minutes integer;
   v_earliest record;
   v_creator uuid;
   v_batch_id bigint;
   v_superseded bigint[];
   v_count integer;
 begin
-  select class_id, due_date, has_autograder into v_class_id, v_new_due_date, v_has_autograder
+  select class_id, due_date, has_autograder, minutes_due_after_lab
+  into v_class_id, v_new_due_date, v_has_autograder, v_new_minutes
   from public.assignments where id = p_assignment_id;
   if v_class_id is null then
     raise exception 'Assignment % not found', p_assignment_id;
@@ -564,8 +560,14 @@ begin
     raise exception 'Assignment % has no autograder; there is nothing to re-grade', p_assignment_id;
   end if;
 
-  if p_old_due_date is null or v_new_due_date is null or v_new_due_date <= p_old_due_date then
-    raise exception 'The assignment due date must be later than the supplied old due date to enumerate late commits';
+  -- An extension can come from the base due date OR from the lab offset alone
+  -- (minutes_due_after_lab raised, or lab scheduling switched off). Per-student
+  -- windows are computed exactly below, so a student whose deadline did not
+  -- move simply gets an empty window.
+  if p_old_due_date is null or v_new_due_date is null
+     or (v_new_due_date <= p_old_due_date
+         and v_new_minutes is not distinct from p_old_minutes_due_after_lab) then
+    raise exception 'The assignment due date or lab offset must have moved later to enumerate late commits';
   end if;
 
   select private_profile_id into v_creator
@@ -723,13 +725,14 @@ end;
 $$;
 
 -- =====================================================================
--- 5. Preview-run bookkeeping (service role only; called by edge functions)
---    autograder-trigger-grading-workflow reserves a slot before dispatching a
---    preview (and releases it if the dispatch fails); autograder-create-
---    submission stages a workflow_dispatch run only if it claims one. GitHub
---    does not tell the dispatcher the run id, so slots are counted, and a claim
---    is idempotent per run_id:attempt so a retried create-submission call for
---    the same run gets the same answer.
+-- 5. Preview-run reservation (service role only; called by
+--    autograder-trigger-grading-workflow). A preview is dispatched on its own
+--    tag, refs/tags/pawtograder-preview/<sha>, and autograder-create-submission
+--    stages a run only when its OIDC token carries that ref, so the preview
+--    status is bound to the run itself: an ordinary regrade of the same sha
+--    (refs/tags/pawtograder-submit/<sha>) or a student push is never staged.
+--    Reserving first authorizes the preview against a pending candidate in an
+--    open review and marks it grading; release undoes that if the dispatch fails.
 -- =====================================================================
 create or replace function public.regrade_reserve_preview_run(
   p_repository_id bigint,
@@ -754,8 +757,7 @@ begin
   end if;
 
   update public.deadline_regrade_candidates
-  set outstanding_preview_runs = outstanding_preview_runs + 1,
-      staged_triggered_at = now(),
+  set staged_triggered_at = now(),
       -- A run may already have graded the candidate; never downgrade 'graded'.
       staged_status = case when staged_status = 'graded' then 'graded' else 'grading' end,
       updated_at = now()
@@ -773,63 +775,15 @@ set search_path = public, pg_temp
 as $$
 begin
   update public.deadline_regrade_candidates
-  set outstanding_preview_runs = greatest(outstanding_preview_runs - 1, 0),
-      staged_status = case
-        when staged_status = 'grading' and outstanding_preview_runs <= 1 then 'none'
-        else staged_status
-      end,
-      updated_at = now()
-  where id = p_candidate_id;
-end;
-$$;
-
-create or replace function public.regrade_claim_preview_run(
-  p_repository_id bigint,
-  p_sha text,
-  p_run_key text
-) returns boolean
-language plpgsql
-security definer
-set search_path = public, pg_temp
-as $$
-declare
-  v_cand record;
-begin
-  -- Prefer a candidate this run already claimed (idempotent retry); otherwise
-  -- the most recent one with an outstanding slot. The 24h bound retires slots
-  -- whose run failed before it ever reached create-submission.
-  select c.id, p_run_key = any(c.claimed_preview_runs) as already
-  into v_cand
-  from public.deadline_regrade_candidates c
-  where c.repository_id = p_repository_id
-    and c.sha = p_sha
-    and (
-      p_run_key = any(c.claimed_preview_runs)
-      or (c.outstanding_preview_runs > 0 and c.staged_triggered_at > now() - interval '24 hours')
-    )
-  order by (p_run_key = any(c.claimed_preview_runs)) desc, c.staged_triggered_at desc
-  limit 1
-  for update of c;
-  if v_cand.id is null then
-    return false;
-  end if;
-  if not v_cand.already then
-    update public.deadline_regrade_candidates
-    set outstanding_preview_runs = outstanding_preview_runs - 1,
-        claimed_preview_runs = claimed_preview_runs || p_run_key,
-        updated_at = now()
-    where id = v_cand.id;
-  end if;
-  return true;
+  set staged_status = 'none', updated_at = now()
+  where id = p_candidate_id and staged_status = 'grading';
 end;
 $$;
 
 revoke all on function public.regrade_reserve_preview_run(bigint, text) from public, anon, authenticated;
 revoke all on function public.regrade_release_preview_run(bigint) from public, anon, authenticated;
-revoke all on function public.regrade_claim_preview_run(bigint, text, text) from public, anon, authenticated;
 grant execute on function public.regrade_reserve_preview_run(bigint, text) to service_role;
 grant execute on function public.regrade_release_preview_run(bigint) to service_role;
-grant execute on function public.regrade_claim_preview_run(bigint, text, text) to service_role;
 
 -- =====================================================================
 -- 6. Backfill staged result when grading completes
@@ -1014,6 +968,19 @@ begin
       and assignment_group_id = v_cand.assignment_group_id
       and id <> v_staged_id
       and is_active;
+    -- Like a normal group submission (submissions_insert_hook_optimized), also
+    -- demote any straggler active INDIVIDUAL submission of a group member, so
+    -- no student ends up with two active rows. Their gradebook rows are
+    -- recalculated by the loop below, which covers every group member.
+    update public.submissions s
+    set is_active = false
+    from public.assignment_groups_members agm
+    where agm.assignment_id = v_cand.assignment_id
+      and agm.assignment_group_id = v_cand.assignment_group_id
+      and s.assignment_id = v_cand.assignment_id
+      and s.profile_id = agm.profile_id
+      and s.assignment_group_id is null
+      and s.is_active;
   else
     update public.submissions
     set is_active = false
@@ -1368,6 +1335,52 @@ BEGIN
     RETURN TRUE;
 END;
 $$;
+
+-- =====================================================================
+-- 8d. submissions_agg must not count or surface staged previews
+--     (verbatim from 20260122210846_add_review_graded_to_submissions_agg.sql,
+--     with `NOT is_staged` added to the submissions join; same columns, so
+--     CREATE OR REPLACE is enough and dependents are untouched).
+-- =====================================================================
+CREATE OR REPLACE VIEW "public"."submissions_agg" WITH ("security_invoker"='true') AS
+ SELECT "c"."profile_id",
+    "p"."name",
+    "p"."sortable_name",
+    "p"."avatar_url",
+    "groups"."name" AS "groupname",
+    "c"."submissioncount",
+    "c"."latestsubmissionid",
+    "s"."id",
+    "s"."created_at",
+    "s"."assignment_id",
+    "s"."profile_id" AS "user_id",
+    "s"."released",
+    "s"."sha",
+    "s"."repository",
+    "s"."run_attempt",
+    "s"."run_number",
+    "g"."score",
+    "g"."ret_code",
+    "g"."execution_time",
+    CASE 
+      WHEN "sr"."completed_at" IS NOT NULL AND "sr"."completed_by" IS NOT NULL THEN true
+      ELSE false
+    END AS "is_review_graded"
+   FROM (((((( SELECT "count"("submissions"."id") AS "submissioncount",
+            "max"("submissions"."id") AS "latestsubmissionid",
+            "r"."private_profile_id" AS "profile_id"
+           FROM (("public"."user_roles" "r"
+             LEFT JOIN "public"."assignment_groups_members" "m" ON (("m"."profile_id" = "r"."private_profile_id")))
+             LEFT JOIN "public"."submissions" ON (((("submissions"."profile_id" = "r"."private_profile_id") OR ("submissions"."assignment_group_id" = "m"."assignment_group_id")) AND (NOT "submissions"."is_staged"))))
+          WHERE ("r"."disabled" = false)
+          GROUP BY "submissions"."assignment_id", "r"."private_profile_id") "c"
+     LEFT JOIN "public"."submissions" "s" ON (("s"."id" = "c"."latestsubmissionid")))
+     LEFT JOIN "public"."assignment_groups" "groups" ON (("groups"."id" = "s"."assignment_group_id")))
+     LEFT JOIN "public"."grader_results" "g" ON (("g"."submission_id" = "s"."id")))
+     LEFT JOIN "public"."submission_reviews" "sr" ON (("sr"."id" = "s"."grading_review_id")))
+     JOIN "public"."profiles" "p" ON (("p"."id" = "c"."profile_id")));
+
+ALTER VIEW "public"."submissions_agg" OWNER TO "postgres";
 
 -- =====================================================================
 -- 9. Grants

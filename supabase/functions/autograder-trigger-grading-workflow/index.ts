@@ -194,9 +194,11 @@ export async function handleRequest(
     triggeredBy: enrollment.private_profile_id
   });
 
-  // Reserve a preview slot on the pending candidate BEFORE dispatching, so the
-  // run is staged by autograder-create-submission however fast it arrives. This
-  // also rejects a stage_only request with no pending candidate in an open review.
+  // Reserve the pending candidate BEFORE dispatching: this authorizes the
+  // preview (it rejects a stage_only request with no pending candidate in an
+  // open review) and marks the candidate grading. The run itself is dispatched
+  // on refs/tags/pawtograder-preview/<sha>, which is how
+  // autograder-create-submission knows to stage it.
   let previewCandidateId: number | null = null;
   if (stageOnly) {
     const { data: reserved, error: reserveError } = await adminSupabase.rpc("regrade_reserve_preview_run", {
@@ -210,10 +212,15 @@ export async function handleRequest(
   }
 
   try {
-    await triggerWorkflow(repository, commit.sha, "grade.yml", scope);
+    await triggerWorkflow(
+      repository,
+      commit.sha,
+      "grade.yml",
+      scope,
+      stageOnly ? "pawtograder-preview" : "pawtograder-submit"
+    );
   } catch (dispatchError) {
-    // Nothing was dispatched, so give the slot back; otherwise an unrelated
-    // workflow_dispatch run of this sha could claim it and be staged.
+    // Nothing was dispatched, so put the candidate back to ungraded.
     if (previewCandidateId !== null) {
       const { error: releaseError } = await adminSupabase.rpc("regrade_release_preview_run", {
         p_candidate_id: previewCandidateId
