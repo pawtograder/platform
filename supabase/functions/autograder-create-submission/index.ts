@@ -36,10 +36,6 @@ import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/sele
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
-// Deadline-regrade preview runs for a commit can still arrive this long after the
-// last preview dispatch (GitHub-hosted jobs are capped at 6h, plus queueing).
-const PREVIEW_RUN_WINDOW_HOURS = 24;
-
 const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 const STAFF_ROLES = new Set(["admin", "instructor", "grader"]);
 
@@ -1033,34 +1029,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         (hasRealCheckRun && checkRun.commit_message && checkRun.commit_message.toUpperCase().includes("#NOT-GRADED")) ||
         false;
 
-      // A staged submission (deadline-extension regrade preview) is graded but
-      // never auto-activated. `stage_only` is carried on the manually-triggered
-      // check run.
-      let isStagedSubmission = (hasRealCheckRun && checkRun.stage_only === true) || false;
-      // The flag is shared by every run of this (repository, sha). A retried
-      // preview can race the original slow run, and whichever finishes first
-      // clears the flag, so the other would load stage_only=false and (the
-      // deadline now being extended) become ACTIVE without an instructor
-      // decision -- even after the first run was promoted, when the candidate is
-      // no longer pending. So a run is also a preview while its commit had a
-      // preview dispatched within the last PREVIEW_RUN_WINDOW_HOURS (longer than
-      // a GitHub-hosted run can live), whatever the candidate's decision or
-      // batch status.
-      if (!isStagedSubmission && hasRealCheckRun) {
-        const recentDispatch = new Date(Date.now() - PREVIEW_RUN_WINDOW_HOURS * 3600 * 1000).toISOString();
-        const { data: previewCandidates, error: previewCandidatesError } = await adminSupabase
-          .from("deadline_regrade_candidates")
-          .select("id")
-          .eq("repository_id", repoData.id)
-          .eq("sha", sha)
-          .gt("staged_triggered_at", recentDispatch)
-          .limit(1);
-        if (previewCandidatesError) {
+      // A deadline-regrade preview is graded but never auto-activated. It can
+      // only be a workflow_dispatch run, and it is one only if it claims a slot
+      // that autograder-trigger-grading-workflow reserved on the pending
+      // candidate before dispatching. A student push, or an ordinary staff
+      // regrade of the same sha once the slots are used, is never staged. The
+      // claim is keyed on run_id:attempt so a retried call gets the same answer.
+      let isStagedSubmission = false;
+      if (decoded.event_name === "workflow_dispatch") {
+        const { data: claimed, error: claimError } = await adminSupabase.rpc("regrade_claim_preview_run", {
+          p_repository_id: repoData.id,
+          p_sha: sha,
+          p_run_key: `${decoded.run_id}:${decoded.run_attempt}`
+        });
+        if (claimError) {
           throw new UserVisibleError(
-            `Internal error: Failed to check for a deadline regrade preview: ${previewCandidatesError.message}`
+            `Internal error: Failed to check for a deadline regrade preview: ${claimError.message}`
           );
         }
-        isStagedSubmission = (previewCandidates?.length ?? 0) > 0;
+        isStagedSubmission = claimed === true;
       }
       scope?.setTag("is_staged", isStagedSubmission.toString());
 
@@ -1456,7 +1443,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const checkRunUpdate: {
           status: CheckRunStatus;
           triggered_by?: null;
-          stage_only?: boolean;
         } = {
           status: {
             ...(checkRun.status as CheckRunStatus),
@@ -1465,11 +1451,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         };
         if (staffTriggeredBy !== null) {
           checkRunUpdate.triggered_by = null;
-        }
-        // Consume `stage_only` too, so a later real push of the same (repo, sha)
-        // does not inherit staged behavior from this check run.
-        if (isStagedSubmission) {
-          checkRunUpdate.stage_only = false;
         }
         await adminSupabase.from("repository_check_runs").update(checkRunUpdate).eq("id", checkRun.id);
       }

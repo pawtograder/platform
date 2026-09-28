@@ -2161,6 +2161,7 @@ export type Database = {
           assignment_group_id: number | null;
           assignment_id: number;
           batch_id: number;
+          claimed_preview_runs: string[];
           class_id: number;
           commit_date: string | null;
           commit_message: string | null;
@@ -2169,6 +2170,7 @@ export type Database = {
           current_submission_id: number | null;
           decision: string;
           id: number;
+          outstanding_preview_runs: number;
           profile_id: string | null;
           pushed_at: string | null;
           repository: string;
@@ -2184,6 +2186,7 @@ export type Database = {
           assignment_group_id?: number | null;
           assignment_id: number;
           batch_id: number;
+          claimed_preview_runs?: string[];
           class_id: number;
           commit_date?: string | null;
           commit_message?: string | null;
@@ -2192,6 +2195,7 @@ export type Database = {
           current_submission_id?: number | null;
           decision?: string;
           id?: number;
+          outstanding_preview_runs?: number;
           profile_id?: string | null;
           pushed_at?: string | null;
           repository: string;
@@ -2207,6 +2211,7 @@ export type Database = {
           assignment_group_id?: number | null;
           assignment_id?: number;
           batch_id?: number;
+          claimed_preview_runs?: string[];
           class_id?: number;
           commit_date?: string | null;
           commit_message?: string | null;
@@ -2215,6 +2220,7 @@ export type Database = {
           current_submission_id?: number | null;
           decision?: string;
           id?: number;
+          outstanding_preview_runs?: number;
           profile_id?: string | null;
           pushed_at?: string | null;
           repository?: string;
@@ -7490,7 +7496,6 @@ export type Database = {
           repository_id: number;
           requested_grader_sha: string | null;
           sha: string;
-          stage_only: boolean;
           status: Json;
           target_submission_id: number | null;
           triggered_by: string | null;
@@ -7508,7 +7513,6 @@ export type Database = {
           repository_id: number;
           requested_grader_sha?: string | null;
           sha: string;
-          stage_only?: boolean;
           status: Json;
           target_submission_id?: number | null;
           triggered_by?: string | null;
@@ -7526,7 +7530,6 @@ export type Database = {
           repository_id?: number;
           requested_grader_sha?: string | null;
           sha?: string;
-          stage_only?: boolean;
           status?: Json;
           target_submission_id?: number | null;
           triggered_by?: string | null;
@@ -14290,9 +14293,17 @@ export type Database = {
         };
         Returns: undefined;
       };
-      regrade_set_candidate_grading: {
+      regrade_claim_preview_run: {
+        Args: { p_repository_id: number; p_run_key: string; p_sha: string };
+        Returns: boolean;
+      };
+      regrade_release_preview_run: {
         Args: { p_candidate_id: number };
         Returns: undefined;
+      };
+      regrade_reserve_preview_run: {
+        Args: { p_repository_id: number; p_sha: string };
+        Returns: number;
       };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };

@@ -27,13 +27,6 @@ alter table public.submissions
 comment on column public.submissions.is_staged is
   'When true, this submission was created by the deadline-extension regrade flow. It is graded but never auto-activated; an instructor must explicitly promote it (which clears this flag and sets is_active).';
 
--- Carried on the manually-triggered check run so autograder-create-submission
--- knows to mark the resulting submission as staged (graded but not active).
-alter table public.repository_check_runs
-  add column if not exists stage_only boolean not null default false;
-comment on column public.repository_check_runs.stage_only is
-  'When true, a submission created from this check run is marked is_staged=true (deadline-extension regrade preview), instead of becoming the active submission.';
-
 -- Note: the existing partial unique indexes on submissions filter on
 -- `WHERE is_active = true`, and staged submissions are is_active=false, so no
 -- index changes are required - staged rows are naturally excluded.
@@ -368,16 +361,21 @@ create table if not exists public.deadline_regrade_candidates (
   staged_score numeric,
   staged_status text not null default 'none' check (staged_status in ('none', 'grading', 'graded', 'error')),
   staged_triggered_at timestamptz,
+  -- Preview workflow runs dispatched for this candidate that have not yet
+  -- reached autograder-create-submission, and the GitHub runs (run_id:attempt)
+  -- that have claimed one. A run is staged only by claiming a slot, so a
+  -- student push or an ordinary staff regrade of the same sha is never staged.
+  outstanding_preview_runs integer not null default 0,
+  claimed_preview_runs text[] not null default '{}',
   decision text not null default 'pending' check (decision in ('pending', 'applied', 'skipped'))
 );
 create index if not exists deadline_regrade_candidates_batch_idx
   on public.deadline_regrade_candidates (batch_id);
 create unique index if not exists deadline_regrade_candidates_unique_target
   on public.deadline_regrade_candidates (batch_id, repository_id);
--- autograder-create-submission checks every run for a recently dispatched
--- preview on its (repository, sha).
+-- The preview-run RPCs look candidates up by commit.
 create index if not exists deadline_regrade_candidates_commit_idx
-  on public.deadline_regrade_candidates (repository_id, sha, staged_triggered_at);
+  on public.deadline_regrade_candidates (repository_id, sha);
 
 -- RLS: instructors read; all writes go through SECURITY DEFINER RPCs below.
 alter table public.deadline_regrade_batches enable row level security;
@@ -725,36 +723,113 @@ end;
 $$;
 
 -- =====================================================================
--- 5. Mark a candidate as grading (called right after the workflow is triggered)
+-- 5. Preview-run bookkeeping (service role only; called by edge functions)
+--    autograder-trigger-grading-workflow reserves a slot before dispatching a
+--    preview (and releases it if the dispatch fails); autograder-create-
+--    submission stages a workflow_dispatch run only if it claims one. GitHub
+--    does not tell the dispatcher the run id, so slots are counted, and a claim
+--    is idempotent per run_id:attempt so a retried create-submission call for
+--    the same run gets the same answer.
 -- =====================================================================
-create or replace function public.regrade_set_candidate_grading(
+create or replace function public.regrade_reserve_preview_run(
+  p_repository_id bigint,
+  p_sha text
+) returns bigint
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_id bigint;
+begin
+  select c.id into v_id
+  from public.deadline_regrade_candidates c
+  join public.deadline_regrade_batches b on b.id = c.batch_id and b.status = 'open'
+  where c.repository_id = p_repository_id and c.sha = p_sha and c.decision = 'pending'
+  order by c.id desc
+  limit 1
+  for update of c;
+  if v_id is null then
+    raise exception 'No pending deadline regrade candidate for this commit in an open review';
+  end if;
+
+  update public.deadline_regrade_candidates
+  set outstanding_preview_runs = outstanding_preview_runs + 1,
+      staged_triggered_at = now(),
+      -- A run may already have graded the candidate; never downgrade 'graded'.
+      staged_status = case when staged_status = 'graded' then 'graded' else 'grading' end,
+      updated_at = now()
+  where id = v_id;
+  return v_id;
+end;
+$$;
+
+create or replace function public.regrade_release_preview_run(
   p_candidate_id bigint
 ) returns void
 language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
-declare
-  v_class_id bigint;
 begin
-  select class_id into v_class_id
-  from public.deadline_regrade_candidates where id = p_candidate_id;
-  if v_class_id is null then
-    raise exception 'Regrade candidate % not found', p_candidate_id;
-  end if;
-  if not public.authorizeforclassinstructor(v_class_id) then
-    raise exception 'Only instructors can stage regrades' using errcode = 'insufficient_privilege';
-  end if;
-
   update public.deadline_regrade_candidates
-  set staged_status = 'grading',
-      staged_triggered_at = now(),
+  set outstanding_preview_runs = greatest(outstanding_preview_runs - 1, 0),
+      staged_status = case
+        when staged_status = 'grading' and outstanding_preview_runs <= 1 then 'none'
+        else staged_status
+      end,
       updated_at = now()
-  -- The workflow is dispatched before this runs, so a fast run may already
-  -- have graded the candidate; never downgrade 'graded' back to 'grading'.
-  where id = p_candidate_id and decision = 'pending' and staged_status in ('none', 'grading', 'error');
+  where id = p_candidate_id;
 end;
 $$;
+
+create or replace function public.regrade_claim_preview_run(
+  p_repository_id bigint,
+  p_sha text,
+  p_run_key text
+) returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_cand record;
+begin
+  -- Prefer a candidate this run already claimed (idempotent retry); otherwise
+  -- the most recent one with an outstanding slot. The 24h bound retires slots
+  -- whose run failed before it ever reached create-submission.
+  select c.id, p_run_key = any(c.claimed_preview_runs) as already
+  into v_cand
+  from public.deadline_regrade_candidates c
+  where c.repository_id = p_repository_id
+    and c.sha = p_sha
+    and (
+      p_run_key = any(c.claimed_preview_runs)
+      or (c.outstanding_preview_runs > 0 and c.staged_triggered_at > now() - interval '24 hours')
+    )
+  order by (p_run_key = any(c.claimed_preview_runs)) desc, c.staged_triggered_at desc
+  limit 1
+  for update of c;
+  if v_cand.id is null then
+    return false;
+  end if;
+  if not v_cand.already then
+    update public.deadline_regrade_candidates
+    set outstanding_preview_runs = outstanding_preview_runs - 1,
+        claimed_preview_runs = claimed_preview_runs || p_run_key,
+        updated_at = now()
+    where id = v_cand.id;
+  end if;
+  return true;
+end;
+$$;
+
+revoke all on function public.regrade_reserve_preview_run(bigint, text) from public, anon, authenticated;
+revoke all on function public.regrade_release_preview_run(bigint) from public, anon, authenticated;
+revoke all on function public.regrade_claim_preview_run(bigint, text, text) from public, anon, authenticated;
+grant execute on function public.regrade_reserve_preview_run(bigint, text) to service_role;
+grant execute on function public.regrade_release_preview_run(bigint) to service_role;
+grant execute on function public.regrade_claim_preview_run(bigint, text, text) to service_role;
 
 -- =====================================================================
 -- 6. Backfill staged result when grading completes
@@ -802,8 +877,10 @@ end;
 $$;
 
 drop trigger if exists trg_regrade_backfill_staged_result on public.grader_results;
+-- Also on score updates: autograder-submit-feedback resolves a duplicate result
+-- for a submission (a retried preview run) by rewriting the existing row.
 create trigger trg_regrade_backfill_staged_result
-  after insert on public.grader_results
+  after insert or update of score on public.grader_results
   for each row execute function public.regrade_backfill_staged_result();
 
 -- =====================================================================
@@ -826,6 +903,7 @@ declare
   v_counter_group bigint;
   v_counter_profile uuid;
   v_ordinal integer;
+  v_new_score numeric;
   r RECORD;
 begin
   -- Lock the candidate so overlapping calls (double click, two instructors)
@@ -901,19 +979,28 @@ begin
   -- the review was enumerated. The instructor's decision, including the
   -- lower-score confirmation, was made against the old snapshot, so refresh the
   -- snapshot and make them decide again instead of silently replacing it.
+  -- The preview itself can be re-scored the same way, so read it fresh too.
+  select gr.score into v_new_score
+  from public.grader_results gr
+  where gr.submission_id = v_staged_id and gr.rerun_for_submission_id is null
+  order by gr.id desc
+  limit 1;
+
   -- The same submission can also be re-scored (a workflow retry rewrites its
   -- grader result), which changes the comparison just as much.
   if v_old_sub_id is distinct from v_cand.current_submission_id
-     or v_old_score is distinct from v_cand.current_score then
+     or v_old_score is distinct from v_cand.current_score
+     or v_new_score is distinct from v_cand.staged_score then
     update public.deadline_regrade_candidates
-    set current_submission_id = v_old_sub_id, current_score = v_old_score, updated_at = now()
+    set current_submission_id = v_old_sub_id, current_score = v_old_score,
+        staged_score = v_new_score, updated_at = now()
     where id = p_candidate_id;
     return jsonb_build_object(
       'status', 'active_changed',
       'old_submission_id', v_old_sub_id,
       'old_score', v_old_score,
       'new_submission_id', v_staged_id,
-      'new_score', v_cand.staged_score
+      'new_score', v_new_score
     );
   end if;
 
@@ -1177,7 +1264,8 @@ $$;
 -- 8c. submission_set_active must not activate a staged preview
 --     (verbatim copy of the current body from
 --     20250918192649_instructors-can-set-active-submissions.sql with the
---     is_staged check added after the NOT-GRADED one).
+--     is_staged check added after the NOT-GRADED one, and the per-student
+--     submission_ordinal_counters lock taken before any is_active change).
 -- =====================================================================
 CREATE OR REPLACE FUNCTION public.submission_set_active(_submission_id bigint)
  RETURNS boolean
@@ -1232,6 +1320,27 @@ BEGIN
         RETURN FALSE;
     END IF;
 
+    -- Serialize with apply_deadline_regrade and new submissions, which both
+    -- hold this student's (or group's) submission_ordinal_counters row lock
+    -- while they change which submission is active.
+    INSERT INTO public.submission_ordinal_counters
+        (assignment_id, assignment_group_id, profile_id, next_ordinal, updated_at)
+    VALUES (
+        submission_record.assignment_id,
+        COALESCE(submission_record.assignment_group_id, 0),
+        CASE WHEN submission_record.assignment_group_id IS NOT NULL
+             THEN '00000000-0000-0000-0000-000000000000'::uuid
+             ELSE submission_record.profile_id END,
+        1, now())
+    ON CONFLICT (assignment_id, assignment_group_id, profile_id) DO NOTHING;
+    PERFORM 1 FROM public.submission_ordinal_counters
+    WHERE assignment_id = submission_record.assignment_id
+      AND assignment_group_id = COALESCE(submission_record.assignment_group_id, 0)
+      AND profile_id = CASE WHEN submission_record.assignment_group_id IS NOT NULL
+                            THEN '00000000-0000-0000-0000-000000000000'::uuid
+                            ELSE submission_record.profile_id END
+    FOR UPDATE;
+
     -- Set all other submissions for this assignment/student to inactive
     -- Handle individual vs group submissions separately to avoid cross-contamination
     IF submission_record.assignment_group_id IS NOT NULL THEN
@@ -1264,7 +1373,6 @@ $$;
 -- 9. Grants
 -- =====================================================================
 grant execute on function public.enumerate_deadline_regrade_candidates(bigint, timestamptz, integer) to authenticated;
-grant execute on function public.regrade_set_candidate_grading(bigint) to authenticated;
 grant execute on function public.apply_deadline_regrade(bigint) to authenticated;
 grant execute on function public.skip_deadline_regrade(bigint) to authenticated;
 grant execute on function public.dismiss_deadline_regrade_batch(bigint, text) to authenticated;

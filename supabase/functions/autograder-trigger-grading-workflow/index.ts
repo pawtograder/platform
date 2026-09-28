@@ -24,24 +24,17 @@ async function markCheckRunRequested({
   adminSupabase,
   checkRun,
   triggeredBy,
-  requestedAt,
-  stageOnly
+  requestedAt
 }: {
   adminSupabase: SupabaseClient<Database>;
   checkRun: RepositoryCheckRunRow;
   triggeredBy: string;
   requestedAt: string;
-  stageOnly: boolean;
 }): Promise<RepositoryCheckRunRow> {
   const { data: updated, error: updateError } = await adminSupabase
     .from("repository_check_runs")
     .update({
       triggered_by: triggeredBy,
-      // Never clear a pending stage_only: a plain re-trigger of a sha that is
-      // awaiting its staged regrade would otherwise let that run create an
-      // ACTIVE submission, bypassing instructor promotion.
-      // autograder-create-submission clears the flag once the staged row exists.
-      stage_only: stageOnly || checkRun.stage_only,
       status: {
         ...statusObject(checkRun.status),
         requested_at: requestedAt
@@ -60,15 +53,13 @@ async function upsertManualCheckRun({
   adminSupabase,
   repoData,
   commit,
-  triggeredBy,
-  stageOnly
+  triggeredBy
 }: {
   adminSupabase: SupabaseClient<Database>;
   repoData: Database["public"]["Tables"]["repositories"]["Row"];
   commit: GetCommitResponse["data"];
   triggeredBy: string;
-  stageOnly: boolean;
-}): Promise<{ checkRun: RepositoryCheckRunRow; previousStageOnly: boolean }> {
+}): Promise<RepositoryCheckRunRow> {
   // `commit.sha` is the canonical full lowercase sha returned by the GitHub API.
   // Always key DB lookups off it so short / mixed-case input from callers does
   // not produce duplicate rows or break race-recovery against the
@@ -85,16 +76,7 @@ async function upsertManualCheckRun({
   }
   const now = new Date().toISOString();
   if (existing) {
-    return {
-      checkRun: await markCheckRunRequested({
-        adminSupabase,
-        checkRun: existing,
-        triggeredBy,
-        requestedAt: now,
-        stageOnly
-      }),
-      previousStageOnly: existing.stage_only
-    };
+    return await markCheckRunRequested({ adminSupabase, checkRun: existing, triggeredBy, requestedAt: now });
   }
 
   const commitDate = commit.commit.author?.date ?? commit.commit.committer?.date ?? null;
@@ -110,7 +92,6 @@ async function upsertManualCheckRun({
       sha: canonicalSha,
       profile_id: repoData.profile_id,
       triggered_by: triggeredBy,
-      stage_only: stageOnly,
       status: {
         created_at: now,
         commit_author: commitAuthor,
@@ -122,7 +103,7 @@ async function upsertManualCheckRun({
     .select("*")
     .single();
   if (!insertError) {
-    return { checkRun: inserted, previousStageOnly: false };
+    return inserted;
   }
   if (insertError.code !== "23505") {
     throw new SecurityError(`Failed to create repository check run: ${insertError.message}`);
@@ -139,10 +120,7 @@ async function upsertManualCheckRun({
       `Failed to recover raced repository check run insert: ${racedError?.message ?? "not found"}`
     );
   }
-  return {
-    checkRun: await markCheckRunRequested({ adminSupabase, checkRun: raced, triggeredBy, requestedAt: now, stageOnly }),
-    previousStageOnly: raced.stage_only
-  };
+  return await markCheckRunRequested({ adminSupabase, checkRun: raced, triggeredBy, requestedAt: now });
 }
 
 export async function handleRequest(
@@ -169,6 +147,11 @@ export async function handleRequest(
     class_id,
     req.headers.get("Authorization") || ""
   );
+  // A deadline-regrade preview changes what an instructor-only review can
+  // promote, so graders may trigger ordinary grading but not previews.
+  if (stageOnly && enrollment.role !== "instructor") {
+    throw new SecurityError("Only instructors can grade deadline-regrade previews");
+  }
   const { data: repoData, error: repoError } = await supabase
     .from("repositories")
     .select("*")
@@ -204,27 +187,39 @@ export async function handleRequest(
     );
   }
 
-  const { checkRun, previousStageOnly } = await upsertManualCheckRun({
+  const checkRun = await upsertManualCheckRun({
     adminSupabase,
     repoData,
     commit,
-    triggeredBy: enrollment.private_profile_id,
-    stageOnly
+    triggeredBy: enrollment.private_profile_id
   });
+
+  // Reserve a preview slot on the pending candidate BEFORE dispatching, so the
+  // run is staged by autograder-create-submission however fast it arrives. This
+  // also rejects a stage_only request with no pending candidate in an open review.
+  let previewCandidateId: number | null = null;
+  if (stageOnly) {
+    const { data: reserved, error: reserveError } = await adminSupabase.rpc("regrade_reserve_preview_run", {
+      p_repository_id: repoData.id,
+      p_sha: commit.sha
+    });
+    if (reserveError) {
+      throw new UserVisibleError(`Could not start a regrade preview: ${reserveError.message}`);
+    }
+    previewCandidateId = reserved;
+  }
 
   try {
     await triggerWorkflow(repository, commit.sha, "grade.yml", scope);
   } catch (dispatchError) {
-    // Nothing was dispatched, so a stage_only set by this request must not
-    // outlive it: a later push or retry of this sha would otherwise be staged
-    // (inactive and hidden from the student) with no review to promote it.
-    if (stageOnly && !previousStageOnly) {
-      const { error: rollbackError } = await adminSupabase
-        .from("repository_check_runs")
-        .update({ stage_only: false })
-        .eq("id", checkRun.id);
-      if (rollbackError) {
-        scope?.setTag("stage_only_rollback_error", rollbackError.message);
+    // Nothing was dispatched, so give the slot back; otherwise an unrelated
+    // workflow_dispatch run of this sha could claim it and be staged.
+    if (previewCandidateId !== null) {
+      const { error: releaseError } = await adminSupabase.rpc("regrade_release_preview_run", {
+        p_candidate_id: previewCandidateId
+      });
+      if (releaseError) {
+        scope?.setTag("preview_release_error", releaseError.message);
       }
     }
     throw dispatchError;

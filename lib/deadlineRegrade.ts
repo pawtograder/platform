@@ -48,24 +48,15 @@ export async function enumerateDeadlineRegradeCandidates(
   return data;
 }
 
-/** Mark a candidate as "grading" right after its staged grading workflow is triggered. */
-export async function regradeSetCandidateGrading(supabase: AnyClient, candidateId: number): Promise<void> {
-  const { error } = await supabase.rpc("regrade_set_candidate_grading", {
-    p_candidate_id: candidateId
-  });
-  if (error) {
-    throw new Error(error.message);
-  }
-}
-
 /**
  * Trigger staged grading for a candidate commit: dispatch the grading workflow
- * with stage_only=true (so the resulting submission is graded but not active),
- * then mark the candidate as grading.
+ * with stage_only=true. The edge function reserves a preview slot on the
+ * candidate (marking it grading) before dispatching, so the resulting
+ * submission is graded but not active.
  */
 export async function stageCandidate(
   supabase: AnyClient,
-  candidate: Pick<DeadlineRegradeCandidate, "id" | "repository" | "sha" | "class_id">
+  candidate: Pick<DeadlineRegradeCandidate, "repository" | "sha" | "class_id">
 ): Promise<void> {
   await triggerWorkflow(
     {
@@ -76,14 +67,6 @@ export async function stageCandidate(
     },
     supabase
   );
-  // The workflow is already dispatched, so leaving the row at staged_status
-  // 'none' would offer "Grade" again and dispatch a duplicate. Retry once
-  // before surfacing the failure.
-  try {
-    await regradeSetCandidateGrading(supabase, candidate.id);
-  } catch {
-    await regradeSetCandidateGrading(supabase, candidate.id);
-  }
 }
 
 /** Promote a candidate's staged submission to active and notify the student(s). */

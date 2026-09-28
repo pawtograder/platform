@@ -400,16 +400,61 @@ test.describe("Deadline-extension regrade", () => {
     expect(promoted!.is_active).toBe(true);
   });
 
-  test("marking a candidate as grading never downgrades a finished preview", async () => {
+  test("preview runs are staged only by claiming a reserved slot, idempotently per run", async () => {
     const { candidateId } = await stagedCandidate();
-    const { error } = await instructorClient.rpc("regrade_set_candidate_grading", { p_candidate_id: candidateId });
-    expect(error).toBeNull();
-    const { data } = await ADMIN()
+    const sha = `late${repoId}`;
+    const claim = async (runKey: string) =>
+      (await ADMIN().rpc("regrade_claim_preview_run", { p_repository_id: repoId, p_sha: sha, p_run_key: runKey })).data;
+    const row = async () =>
+      (
+        await ADMIN()
+          .from("deadline_regrade_candidates")
+          .select("staged_status, outstanding_preview_runs")
+          .eq("id", candidateId)
+          .single()
+      ).data!;
+
+    // No slot reserved: an ordinary run of the same sha is not a preview.
+    expect(await claim("100:1")).toBe(false);
+
+    // Reserving on an already-graded candidate never downgrades it.
+    const reserved = await ADMIN().rpc("regrade_reserve_preview_run", { p_repository_id: repoId, p_sha: sha });
+    expect(reserved.error).toBeNull();
+    expect(reserved.data).toBe(candidateId);
+    expect(await row()).toEqual({ staged_status: "graded", outstanding_preview_runs: 1 });
+
+    // One run claims the slot; its retry gets the same answer; a second run does not.
+    expect(await claim("200:1")).toBe(true);
+    expect(await claim("200:1")).toBe(true);
+    expect(await claim("300:1")).toBe(false);
+    expect((await row()).outstanding_preview_runs).toBe(0);
+
+    // A failed dispatch gives its slot back.
+    await ADMIN().rpc("regrade_reserve_preview_run", { p_repository_id: repoId, p_sha: sha });
+    await ADMIN().rpc("regrade_release_preview_run", { p_candidate_id: candidateId });
+    expect(await claim("400:1")).toBe(false);
+  });
+
+  test("a preview cannot be reserved without a pending candidate, and not by authenticated users", async () => {
+    await insertCheckRun("nocand", "no candidate", 5);
+    const none = await ADMIN().rpc("regrade_reserve_preview_run", { p_repository_id: repoId, p_sha: "nocand" });
+    expect(none.error?.message).toContain("No pending deadline regrade candidate");
+    const asInstructor = await instructorClient.rpc("regrade_reserve_preview_run", {
+      p_repository_id: repoId,
+      p_sha: "nocand"
+    });
+    expect(asInstructor.error).not.toBeNull();
+  });
+
+  test("a re-scored preview refreshes the candidate and blocks a stale promotion", async () => {
+    const { candidateId, stagedSubId } = await stagedCandidate();
+    await ADMIN().from("grader_results").update({ score: 30 }).eq("submission_id", stagedSubId);
+    const { data: cand } = await ADMIN()
       .from("deadline_regrade_candidates")
-      .select("staged_status")
+      .select("staged_score")
       .eq("id", candidateId)
       .single();
-    expect(data!.staged_status).toBe("graded");
+    expect(Number(cand!.staged_score)).toBe(30);
   });
 
   test("previews take no ordinal until promoted, and submission_set_active cannot promote them", async () => {
