@@ -183,7 +183,7 @@ export default function RegradeLateCommitsPage() {
     async (c: DeadlineRegradeCandidate) => {
       setRowBusy(c.id, "applying");
       try {
-        const res = await applyDeadlineRegrade(supabase, c.id);
+        const res = await applyDeadlineRegrade(supabase, c);
         if (res.status === "active_changed") {
           toaster.create({
             title: "Submission changed since this review started",

@@ -199,7 +199,7 @@ export async function handleRequest(
   // open review) and marks the candidate grading. The run itself is dispatched
   // on refs/tags/pawtograder-preview/<sha>, which is how
   // autograder-create-submission knows to stage it.
-  let previewCandidateId: number | null = null;
+  let reservation: { candidate_id: number; generation: number } | null = null;
   if (stageOnly) {
     const { data: reserved, error: reserveError } = await adminSupabase.rpc("regrade_reserve_preview_run", {
       p_repository_id: repoData.id,
@@ -208,7 +208,7 @@ export async function handleRequest(
     if (reserveError) {
       throw new UserVisibleError(`Could not start a regrade preview: ${reserveError.message}`);
     }
-    previewCandidateId = reserved;
+    reservation = reserved as unknown as { candidate_id: number; generation: number };
   }
 
   try {
@@ -221,9 +221,11 @@ export async function handleRequest(
     );
   } catch (dispatchError) {
     // Nothing was dispatched, so put the candidate back to ungraded.
-    if (previewCandidateId !== null) {
+    // Only this request's reservation: another instructor's may be in flight.
+    if (reservation !== null) {
       const { error: releaseError } = await adminSupabase.rpc("regrade_release_preview_run", {
-        p_candidate_id: previewCandidateId
+        p_candidate_id: reservation.candidate_id,
+        p_generation: reservation.generation
       });
       if (releaseError) {
         scope?.setTag("preview_release_error", releaseError.message);

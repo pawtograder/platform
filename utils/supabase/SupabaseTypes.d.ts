@@ -2173,6 +2173,7 @@ export type Database = {
           pushed_at: string | null;
           repository: string;
           repository_id: number;
+          reservation_generation: number;
           sha: string;
           staged_score: number | null;
           staged_status: string;
@@ -2196,6 +2197,7 @@ export type Database = {
           pushed_at?: string | null;
           repository: string;
           repository_id: number;
+          reservation_generation?: number;
           sha: string;
           staged_score?: number | null;
           staged_status?: string;
@@ -2219,6 +2221,7 @@ export type Database = {
           pushed_at?: string | null;
           repository?: string;
           repository_id?: number;
+          reservation_generation?: number;
           sha?: string;
           staged_score?: number | null;
           staged_status?: string;
@@ -12519,7 +12522,12 @@ export type Database = {
         };
       };
       apply_deadline_regrade: {
-        Args: { p_candidate_id: number };
+        Args: {
+          p_candidate_id: number;
+          p_expected_current_score: number;
+          p_expected_current_submission_id: number;
+          p_expected_staged_score: number;
+        };
         Returns: Json;
       };
       apply_late_token_extension: {
@@ -14288,12 +14296,12 @@ export type Database = {
         Returns: undefined;
       };
       regrade_release_preview_run: {
-        Args: { p_candidate_id: number };
+        Args: { p_candidate_id: number; p_generation: number };
         Returns: undefined;
       };
       regrade_reserve_preview_run: {
         Args: { p_repository_id: number; p_sha: string };
-        Returns: number;
+        Returns: Json;
       };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };

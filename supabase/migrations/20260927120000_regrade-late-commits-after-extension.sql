@@ -361,6 +361,9 @@ create table if not exists public.deadline_regrade_candidates (
   staged_score numeric,
   staged_status text not null default 'none' check (staged_status in ('none', 'grading', 'graded', 'error')),
   staged_triggered_at timestamptz,
+  -- Bumped by every preview reservation; a failed dispatch releases only the
+  -- reservation it made (compare-and-swap on this value).
+  reservation_generation integer not null default 0,
   decision text not null default 'pending' check (decision in ('pending', 'applied', 'skipped'))
 );
 create index if not exists deadline_regrade_candidates_batch_idx
@@ -753,13 +756,14 @@ $$;
 create or replace function public.regrade_reserve_preview_run(
   p_repository_id bigint,
   p_sha text
-) returns bigint
+) returns jsonb
 language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
 declare
   v_id bigint;
+  v_generation integer;
 begin
   select c.id into v_id
   from public.deadline_regrade_candidates c
@@ -776,30 +780,38 @@ begin
   set staged_triggered_at = now(),
       -- A run may already have graded the candidate; never downgrade 'graded'.
       staged_status = case when staged_status = 'graded' then 'graded' else 'grading' end,
+      reservation_generation = reservation_generation + 1,
       updated_at = now()
-  where id = v_id;
-  return v_id;
+  where id = v_id
+  returning reservation_generation into v_generation;
+  return jsonb_build_object('candidate_id', v_id, 'generation', v_generation);
 end;
 $$;
 
 create or replace function public.regrade_release_preview_run(
-  p_candidate_id bigint
+  p_candidate_id bigint,
+  p_generation integer
 ) returns void
 language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
 begin
+  -- Compare-and-swap: only if no other reservation was made since this one.
+  -- Otherwise another instructor's dispatch may be in flight, and clearing
+  -- 'grading' would stop polling and re-enable Finish under it.
   update public.deadline_regrade_candidates
   set staged_status = 'none', updated_at = now()
-  where id = p_candidate_id and staged_status = 'grading';
+  where id = p_candidate_id
+    and reservation_generation = p_generation
+    and staged_status = 'grading';
 end;
 $$;
 
 revoke all on function public.regrade_reserve_preview_run(bigint, text) from public, anon, authenticated;
-revoke all on function public.regrade_release_preview_run(bigint) from public, anon, authenticated;
+revoke all on function public.regrade_release_preview_run(bigint, integer) from public, anon, authenticated;
 grant execute on function public.regrade_reserve_preview_run(bigint, text) to service_role;
-grant execute on function public.regrade_release_preview_run(bigint) to service_role;
+grant execute on function public.regrade_release_preview_run(bigint, integer) to service_role;
 
 -- =====================================================================
 -- 6. Backfill staged result when grading completes
@@ -857,7 +869,13 @@ create trigger trg_regrade_backfill_staged_result
 -- 7. Apply (promote) a candidate's staged submission
 -- =====================================================================
 create or replace function public.apply_deadline_regrade(
-  p_candidate_id bigint
+  p_candidate_id bigint,
+  -- Compare-and-swap: the comparison the instructor was looking at when they
+  -- pressed Promote (and accepted or skipped the lower-score confirmation).
+  -- Promotion goes ahead only if these still hold under lock.
+  p_expected_current_submission_id bigint,
+  p_expected_current_score numeric,
+  p_expected_staged_score numeric
 ) returns jsonb
 language plpgsql
 security definer
@@ -874,6 +892,7 @@ declare
   v_counter_profile uuid;
   v_ordinal integer;
   v_new_score numeric;
+  v_deadline timestamptz;
   r RECORD;
 begin
   -- Lock the candidate so overlapping calls (double click, two instructors)
@@ -931,9 +950,22 @@ begin
     and profile_id = v_counter_profile
   for update;
 
-  -- Lock the grader results of the active submission(s) in scope and of the
-  -- preview, so autograder-submit-feedback cannot rewrite either score
-  -- between the snapshot comparison below and the promotion.
+  -- Lock the active submission(s) in scope and the preview. Besides fixing the
+  -- rows this promotion updates, FOR UPDATE conflicts with the FOR KEY SHARE
+  -- lock that a new grader_results row's foreign-key check takes on its
+  -- submission, so autograder-submit-feedback cannot insert a FIRST result for
+  -- either one between the comparison below and the promotion.
+  perform 1 from public.submissions s
+  where s.assignment_id = v_cand.assignment_id
+    and (s.is_active or s.id = v_staged_id)
+    and (
+      (v_cand.assignment_group_id is not null and s.assignment_group_id = v_cand.assignment_group_id)
+      or (v_cand.assignment_group_id is null and s.profile_id = v_cand.profile_id and s.assignment_group_id is null)
+    )
+  for update of s;
+
+  -- And lock their existing grader results, so neither score can be rewritten
+  -- in that window either.
   perform 1 from public.grader_results gr
   where gr.rerun_for_submission_id is null
     and gr.submission_id in (
@@ -972,11 +1004,14 @@ begin
   order by gr.id desc
   limit 1;
 
-  -- The same submission can also be re-scored (a workflow retry rewrites its
+  -- Compare against what the instructor saw, not against the candidate row:
+  -- the backfill trigger can refresh the row (a re-scored preview) after the
+  -- page loaded, and the decision was made on the page's numbers. Either
+  -- submission can also have been re-scored (a workflow retry rewrites its
   -- grader result), which changes the comparison just as much.
-  if v_old_sub_id is distinct from v_cand.current_submission_id
-     or v_old_score is distinct from v_cand.current_score
-     or v_new_score is distinct from v_cand.staged_score then
+  if v_old_sub_id is distinct from p_expected_current_submission_id
+     or v_old_score is distinct from p_expected_current_score
+     or v_new_score is distinct from p_expected_staged_score then
     update public.deadline_regrade_candidates
     set current_submission_id = v_old_sub_id, current_score = v_old_score,
         staged_score = v_new_score, updated_at = now()
@@ -988,6 +1023,23 @@ begin
       'new_submission_id', v_staged_id,
       'new_score', v_new_score
     );
+  end if;
+
+  -- The deadline may have been shortened again after the review was opened
+  -- (the editor also dismisses the open review then). Promote only a commit
+  -- that is on time under the student's CURRENT deadline.
+  select public.calculate_final_due_date(
+    v_cand.assignment_id,
+    coalesce(v_cand.profile_id, (
+      select agm.profile_id from public.assignment_groups_members agm
+      where agm.assignment_group_id = v_cand.assignment_group_id
+      limit 1
+    )),
+    v_cand.assignment_group_id
+  ) into v_deadline;
+  if coalesce(v_cand.pushed_at, v_cand.commit_date) > v_deadline then
+    raise exception 'Commit % was pushed after the current deadline (%); the extension it relied on is no longer in effect',
+      left(v_cand.sha, 7), v_deadline;
   end if;
 
   -- Promote: deactivate prior active submission(s), activate + un-stage the candidate.
@@ -1416,9 +1468,40 @@ CREATE OR REPLACE VIEW "public"."submissions_agg" WITH ("security_invoker"='true
 ALTER VIEW "public"."submissions_agg" OWNER TO "postgres";
 
 -- =====================================================================
+-- 8e. Only the regrade review can un-stage or activate a preview
+--     The existing "Instructors and graders update" policy lets any grader
+--     update every column of a submission, and staff can read staged rows, so
+--     without this a grader could clear is_staged (or set is_active) on a
+--     preview and bypass the instructor-only promotion and its notification.
+--     Deliberately not SECURITY DEFINER, so current_user is the caller:
+--     PostgREST requests run as authenticated/anon, while
+--     apply_deadline_regrade runs as its owner.
+-- =====================================================================
+create or replace function public.guard_staged_submission_update()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if (not NEW.is_staged or NEW.is_active) and current_user in ('authenticated', 'anon') then
+    raise exception 'A deadline-regrade preview can only be promoted from the regrade review'
+      using errcode = 'insufficient_privilege';
+  end if;
+  return NEW;
+end;
+$$;
+
+drop trigger if exists trg_guard_staged_submission_update on public.submissions;
+create trigger trg_guard_staged_submission_update
+  before update on public.submissions
+  for each row
+  when (OLD.is_staged)
+  execute function public.guard_staged_submission_update();
+
+-- =====================================================================
 -- 9. Grants
 -- =====================================================================
 grant execute on function public.enumerate_deadline_regrade_candidates(bigint, timestamptz, integer) to authenticated;
-grant execute on function public.apply_deadline_regrade(bigint) to authenticated;
+grant execute on function public.apply_deadline_regrade(bigint, bigint, numeric, numeric) to authenticated;
 grant execute on function public.skip_deadline_regrade(bigint) to authenticated;
 grant execute on function public.dismiss_deadline_regrade_batch(bigint, text) to authenticated;

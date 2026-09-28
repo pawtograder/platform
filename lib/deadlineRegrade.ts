@@ -69,10 +69,15 @@ export async function stageCandidate(
   );
 }
 
-/** Promote a candidate's staged submission to active and notify the student(s). */
+/**
+ * Promote a candidate's staged submission to active and notify the student(s).
+ * Compare-and-swap: the candidate's current/staged values are what the page
+ * showed; if either submission changed since, nothing is promoted and the
+ * result is `active_changed` with the fresh numbers.
+ */
 export async function applyDeadlineRegrade(
   supabase: AnyClient,
-  candidateId: number
+  candidate: Pick<DeadlineRegradeCandidate, "id" | "current_submission_id" | "current_score" | "staged_score">
 ): Promise<{
   status: string;
   old_submission_id?: number;
@@ -81,7 +86,11 @@ export async function applyDeadlineRegrade(
   new_score?: number;
 }> {
   const { data, error } = await supabase.rpc("apply_deadline_regrade", {
-    p_candidate_id: candidateId
+    p_candidate_id: candidate.id,
+    // The generated Args type marks every parameter non-null; SQL NULL is a valid expectation here.
+    p_expected_current_submission_id: candidate.current_submission_id as number,
+    p_expected_current_score: candidate.current_score as number,
+    p_expected_staged_score: candidate.staged_score as number
   });
   if (error) {
     throw new Error(error.message);

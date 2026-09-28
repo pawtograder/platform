@@ -2,7 +2,12 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
-import { enumerateDeadlineRegradeCandidates, fetchRegradeCandidates } from "@/lib/deadlineRegrade";
+import {
+  dismissDeadlineRegradeBatch,
+  enumerateDeadlineRegradeCandidates,
+  fetchOpenRegradeBatch,
+  fetchRegradeCandidates
+} from "@/lib/deadlineRegrade";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
@@ -651,6 +656,23 @@ export default function EditAssignment() {
             }
           };
           await scanLateCommits();
+        } else if (oldDue && newDue && new Date(newDue).getTime() < new Date(oldDue).getTime()) {
+          // The deadline was shortened: an open review was built for a longer
+          // one, so close it rather than leave stale candidates on the
+          // dashboard. (Promotion also re-checks each commit against the
+          // current deadline.) Best-effort, like the scan above.
+          try {
+            const openBatch = await fetchOpenRegradeBatch(supabase, Number.parseInt(assignment_id as string));
+            if (openBatch) {
+              await dismissDeadlineRegradeBatch(supabase, openBatch.id);
+            }
+          } catch (dismissError) {
+            toaster.create({
+              title: "Could not close the open late-commit review",
+              description: dismissError instanceof Error ? dismissError.message : "Unknown error",
+              type: "warning"
+            });
+          }
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";

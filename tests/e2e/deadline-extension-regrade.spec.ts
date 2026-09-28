@@ -150,6 +150,33 @@ async function stagedCandidate(): Promise<{ batchId: number; candidateId: number
   return { batchId: batchId!, candidateId, stagedSubId };
 }
 
+/**
+ * Promote as the review page does: the expected values are the candidate's
+ * current snapshot, i.e. what the page would be showing. `expected` overrides
+ * individual values to simulate a page that is out of date.
+ */
+async function applyCandidate(
+  candidateId: number,
+  expected: Partial<{
+    current_submission_id: number | null;
+    current_score: number | null;
+    staged_score: number | null;
+  }> = {}
+) {
+  const { data: c } = await ADMIN()
+    .from("deadline_regrade_candidates")
+    .select("current_submission_id, current_score, staged_score")
+    .eq("id", candidateId)
+    .single();
+  const snap = { ...c!, ...expected };
+  return instructorClient.rpc("apply_deadline_regrade", {
+    p_candidate_id: candidateId,
+    p_expected_current_submission_id: snap.current_submission_id as number,
+    p_expected_current_score: snap.current_score as number,
+    p_expected_staged_score: snap.staged_score as number
+  });
+}
+
 async function regradeNotificationCount(): Promise<number> {
   const { data } = await ADMIN().from("notifications").select("body").eq("user_id", student.user_id);
   return (data ?? []).filter((n) => (n.body as { type?: string }).type === "submission_regraded").length;
@@ -224,9 +251,7 @@ test.describe("Deadline-extension regrade", () => {
     expect(Number(afterBackfill.staged_score)).toBe(80);
 
     // Instructor promotes.
-    const { data: applyResult, error: applyErr } = await instructorClient.rpc("apply_deadline_regrade", {
-      p_candidate_id: candidate.id
-    });
+    const { data: applyResult, error: applyErr } = await applyCandidate(candidate.id);
     expect(applyErr).toBeNull();
     expect((applyResult as { status: string }).status).toBe("applied");
 
@@ -286,7 +311,7 @@ test.describe("Deadline-extension regrade", () => {
     expect(before.error).toBeNull();
     expect(before.data).toHaveLength(0);
 
-    const { error: applyErr } = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    const { error: applyErr } = await applyCandidate(candidateId);
     expect(applyErr).toBeNull();
 
     const after = await studentClient.from("submissions").select("id").eq("id", stagedSubId);
@@ -295,9 +320,9 @@ test.describe("Deadline-extension regrade", () => {
 
   test("a second apply is a no-op and does not notify twice", async () => {
     const { candidateId } = await stagedCandidate();
-    const first = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    const first = await applyCandidate(candidateId);
     expect(first.error).toBeNull();
-    const second = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    const second = await applyCandidate(candidateId);
     expect(second.error).toBeNull();
     expect((second.data as { status: string }).status).toBe("already_applied");
     expect(await regradeNotificationCount()).toBe(1);
@@ -306,15 +331,13 @@ test.describe("Deadline-extension regrade", () => {
   test("apply rejects skipped candidates and candidates in a closed batch", async () => {
     const skipped = await stagedCandidate();
     await instructorClient.rpc("skip_deadline_regrade", { p_candidate_id: skipped.candidateId });
-    const skippedApply = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: skipped.candidateId });
+    const skippedApply = await applyCandidate(skipped.candidateId);
     expect(skippedApply.error?.message).toContain("only pending candidates can be promoted");
 
     await setUpStudent();
     const dismissed = await stagedCandidate();
     await instructorClient.rpc("dismiss_deadline_regrade_batch", { p_batch_id: dismissed.batchId });
-    const dismissedApply = await instructorClient.rpc("apply_deadline_regrade", {
-      p_candidate_id: dismissed.candidateId
-    });
+    const dismissedApply = await applyCandidate(dismissed.candidateId);
     expect(dismissedApply.error?.message).toContain("no longer open");
     expect(await regradeNotificationCount()).toBe(0);
   });
@@ -379,7 +402,7 @@ test.describe("Deadline-extension regrade", () => {
     const newerSubId = await insertSubmission(`newer${repoId}`, false);
     await insertGraderResult(newerSubId, 95);
 
-    const stale = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    const stale = await applyCandidate(candidateId);
     expect(stale.error).toBeNull();
     expect((stale.data as { status: string }).status).toBe("active_changed");
     const { data: stillActive } = await ADMIN().from("submissions").select("is_active").eq("id", newerSubId).single();
@@ -394,7 +417,7 @@ test.describe("Deadline-extension regrade", () => {
     expect(Number(snapshot!.current_score)).toBe(95);
 
     // Having seen the refreshed comparison, the instructor promotes again.
-    const again = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    const again = await applyCandidate(candidateId);
     expect((again.data as { status: string }).status).toBe("applied");
     const { data: promoted } = await ADMIN().from("submissions").select("is_active").eq("id", stagedSubId).single();
     expect(promoted!.is_active).toBe(true);
@@ -411,7 +434,7 @@ test.describe("Deadline-extension regrade", () => {
       p_sha: `late${repoId}`
     });
     expect(reserved.error).toBeNull();
-    expect(reserved.data).toBe(candidateId);
+    expect((reserved.data as { candidate_id: number }).candidate_id).toBe(candidateId);
     expect(await status()).toBe("graded");
 
     // On an ungraded candidate: reserve -> grading, release (failed dispatch) -> none.
@@ -419,12 +442,25 @@ test.describe("Deadline-extension regrade", () => {
     await insertCheckRun(`fresh${repoId}`, "late", 1);
     const batch = await enumerate(subDays(new Date(), 2));
     const fresh = (await mine(batch))[0];
-    await ADMIN().rpc("regrade_reserve_preview_run", { p_repository_id: repoId, p_sha: fresh.sha });
+    const reserve = async () =>
+      (
+        (await ADMIN().rpc("regrade_reserve_preview_run", { p_repository_id: repoId, p_sha: fresh.sha })).data as {
+          generation: number;
+        }
+      ).generation;
+    const release = (generation: number) =>
+      ADMIN().rpc("regrade_release_preview_run", { p_candidate_id: fresh.id, p_generation: generation });
     const read = async () =>
       (await ADMIN().from("deadline_regrade_candidates").select("staged_status").eq("id", fresh.id).single()).data!
         .staged_status;
+    const first = await reserve();
     expect(await read()).toBe("grading");
-    await ADMIN().rpc("regrade_release_preview_run", { p_candidate_id: fresh.id });
+    // A second instructor reserves too; the first dispatch then fails. Its
+    // release must not clear the second, still in-flight, reservation.
+    const second = await reserve();
+    await release(first);
+    expect(await read()).toBe("grading");
+    await release(second);
     expect(await read()).toBe("none");
   });
 
@@ -497,7 +533,7 @@ test.describe("Deadline-extension regrade", () => {
       .single();
     expect(stillStaged).toEqual({ is_active: false, is_staged: true });
 
-    const applied = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    const applied = await applyCandidate(candidateId);
     expect((applied.data as { status: string }).status).toBe("applied");
     // The baseline was ordinal 1; the promoted preview is next, with no gap.
     expect(await ordinalOf(stagedSubId)).toBe(2);
@@ -512,7 +548,7 @@ test.describe("Deadline-extension regrade", () => {
       .single();
     await ADMIN().from("grader_results").update({ score: 90 }).eq("submission_id", cand!.current_submission_id!);
 
-    const stale = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    const stale = await applyCandidate(candidateId);
     expect((stale.data as { status: string }).status).toBe("active_changed");
     expect(Number((stale.data as { old_score: number }).old_score)).toBe(90);
   });
@@ -526,5 +562,45 @@ test.describe("Deadline-extension regrade", () => {
       .eq("class_id", course.id);
     const cands = await mine(await enumerate(subDays(new Date(), 2)));
     expect(cands).toHaveLength(0);
+  });
+
+  test("promotion is a compare-and-swap on what the page showed", async () => {
+    const { candidateId, stagedSubId } = await stagedCandidate();
+    // The preview is re-scored after the page loaded (80 -> 60); the backfill
+    // trigger refreshes the candidate row, but the page still shows 80.
+    await ADMIN().from("grader_results").update({ score: 60 }).eq("submission_id", stagedSubId);
+    const stale = await applyCandidate(candidateId, { staged_score: 80 });
+    expect(stale.error).toBeNull();
+    expect((stale.data as { status: string }).status).toBe("active_changed");
+    expect(Number((stale.data as { new_score: number }).new_score)).toBe(60);
+    const { data: still } = await ADMIN().from("submissions").select("is_staged").eq("id", stagedSubId).single();
+    expect(still!.is_staged).toBe(true);
+  });
+
+  test("staff cannot un-stage or activate a preview directly", async () => {
+    const { stagedSubId } = await stagedCandidate();
+    const unstage = await instructorClient.from("submissions").update({ is_staged: false }).eq("id", stagedSubId);
+    expect(unstage.error?.message).toContain("only be promoted from the regrade review");
+    const activate = await instructorClient.from("submissions").update({ is_active: true }).eq("id", stagedSubId);
+    expect(activate.error?.message).toContain("only be promoted from the regrade review");
+    // Other edits to a preview are still allowed.
+    const released = await instructorClient.from("submissions").update({ released: null }).eq("id", stagedSubId);
+    expect(released.error).toBeNull();
+  });
+
+  test("promotion refuses a commit that is late under a since-shortened deadline", async () => {
+    const { candidateId } = await stagedCandidate();
+    const originalDue = assignment.due_date;
+    // The late push was a day ago; move the deadline back to two days ago.
+    await ADMIN()
+      .from("assignments")
+      .update({ due_date: subDays(new Date(), 2).toISOString() })
+      .eq("id", assignment.id);
+    try {
+      const res = await applyCandidate(candidateId);
+      expect(res.error?.message).toContain("no longer in effect");
+    } finally {
+      await ADMIN().from("assignments").update({ due_date: originalDue }).eq("id", assignment.id);
+    }
   });
 });
