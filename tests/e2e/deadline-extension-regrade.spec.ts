@@ -404,4 +404,42 @@ test.describe("Deadline-extension regrade", () => {
       .single();
     expect(data!.staged_status).toBe("graded");
   });
+
+  test("previews take no ordinal until promoted, and submission_set_active cannot promote them", async () => {
+    const { candidateId, stagedSubId } = await stagedCandidate();
+    const ordinalOf = async (id: number) =>
+      (await ADMIN().from("submissions").select("ordinal").eq("id", id).single()).data!.ordinal;
+    expect(await ordinalOf(stagedSubId)).toBe(0);
+
+    const { data: setActive, error: setActiveErr } = await instructorClient.rpc("submission_set_active", {
+      _submission_id: stagedSubId
+    });
+    expect(setActiveErr).toBeNull();
+    expect(setActive).toBe(false);
+    const { data: stillStaged } = await ADMIN()
+      .from("submissions")
+      .select("is_active, is_staged")
+      .eq("id", stagedSubId)
+      .single();
+    expect(stillStaged).toEqual({ is_active: false, is_staged: true });
+
+    const applied = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    expect((applied.data as { status: string }).status).toBe("applied");
+    // The baseline was ordinal 1; the promoted preview is next, with no gap.
+    expect(await ordinalOf(stagedSubId)).toBe(2);
+  });
+
+  test("apply refuses when the active submission was re-scored after enumeration", async () => {
+    const { candidateId } = await stagedCandidate();
+    const { data: cand } = await ADMIN()
+      .from("deadline_regrade_candidates")
+      .select("current_submission_id")
+      .eq("id", candidateId)
+      .single();
+    await ADMIN().from("grader_results").update({ score: 90 }).eq("submission_id", cand!.current_submission_id!);
+
+    const stale = await instructorClient.rpc("apply_deadline_regrade", { p_candidate_id: candidateId });
+    expect((stale.data as { status: string }).status).toBe("active_changed");
+    expect(Number((stale.data as { old_score: number }).old_score)).toBe(90);
+  });
 });

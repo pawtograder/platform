@@ -87,7 +87,13 @@ DECLARE
 BEGIN
   CASE TG_OP
   WHEN 'INSERT' THEN
-    IF NEW.assignment_group_id IS NOT NULL THEN
+    IF NEW.assignment_group_id IS NOT NULL AND NEW.is_staged THEN
+      -- A staged preview takes no ordinal: a skipped or retried preview would
+      -- otherwise leave a permanent gap in the student's visible numbering.
+      -- apply_deadline_regrade assigns the next ordinal when it promotes.
+      NEW.ordinal = 0;
+      NEW.is_active = false;
+    ELSIF NEW.assignment_group_id IS NOT NULL THEN
       INSERT INTO public.submission_ordinal_counters
         (assignment_id, assignment_group_id, profile_id, next_ordinal, updated_at)
       VALUES
@@ -158,6 +164,13 @@ BEGIN
         END IF;
       END IF;
 
+      IF NEW.is_staged THEN
+        -- No ordinal for a staged preview; see the group branch above.
+        NEW.ordinal = 0;
+        NEW.is_active = false;
+        RETURN NEW;
+      END IF;
+
       INSERT INTO public.submission_ordinal_counters
         (assignment_id, assignment_group_id, profile_id, next_ordinal, updated_at)
       VALUES
@@ -169,9 +182,7 @@ BEGIN
 
       NEW.ordinal = assigned_ordinal;
 
-      IF NEW.is_staged THEN
-        NEW.is_active = false;
-      ELSIF NOT NEW.is_not_graded THEN
+      IF NOT NEW.is_not_graded THEN
         NEW.is_active = true;
         -- `AND is_active` added 20260828: without it every insert rewrote the
         -- student's entire submission history for the assignment.
@@ -782,6 +793,9 @@ declare
   v_old_score numeric;
   v_creator uuid;
   v_creator_name text;
+  v_counter_group bigint;
+  v_counter_profile uuid;
+  v_ordinal integer;
   r RECORD;
 begin
   -- Lock the candidate so overlapping calls (double click, two instructors)
@@ -816,6 +830,29 @@ begin
     raise exception 'Candidate % is a #NOT-GRADED submission and cannot be promoted', p_candidate_id;
   end if;
 
+  -- Take the same per-student (or per-group) submission_ordinal_counters row
+  -- lock that submissions_insert_hook_optimized takes for every insert. That
+  -- serializes this promotion with ordinary submissions: one committed before
+  -- the lock is visible to the snapshot read below, and one arriving later
+  -- waits until this transaction commits. The row is created if the student
+  -- has never submitted (next_ordinal = 1 matches what the hook would assign).
+  if v_cand.assignment_group_id is not null then
+    v_counter_group := v_cand.assignment_group_id;
+    v_counter_profile := '00000000-0000-0000-0000-000000000000'::uuid;
+  else
+    v_counter_group := 0;
+    v_counter_profile := v_cand.profile_id;
+  end if;
+  insert into public.submission_ordinal_counters
+    (assignment_id, assignment_group_id, profile_id, next_ordinal, updated_at)
+  values (v_cand.assignment_id, v_counter_group, v_counter_profile, 1, now())
+  on conflict (assignment_id, assignment_group_id, profile_id) do nothing;
+  perform 1 from public.submission_ordinal_counters
+  where assignment_id = v_cand.assignment_id
+    and assignment_group_id = v_counter_group
+    and profile_id = v_counter_profile
+  for update;
+
   -- Capture the currently-active submission + autograder score (the "before").
   select s.id, gr.score into v_old_sub_id, v_old_score
   from public.submissions s
@@ -834,7 +871,10 @@ begin
   -- the review was enumerated. The instructor's decision, including the
   -- lower-score confirmation, was made against the old snapshot, so refresh the
   -- snapshot and make them decide again instead of silently replacing it.
-  if v_old_sub_id is distinct from v_cand.current_submission_id then
+  -- The same submission can also be re-scored (a workflow retry rewrites its
+  -- grader result), which changes the comparison just as much.
+  if v_old_sub_id is distinct from v_cand.current_submission_id
+     or v_old_score is distinct from v_cand.current_score then
     update public.deadline_regrade_candidates
     set current_submission_id = v_old_sub_id, current_score = v_old_score, updated_at = now()
     where id = p_candidate_id;
@@ -867,8 +907,17 @@ begin
       and is_active;
   end if;
 
+  -- Staged previews do not take an ordinal (see the insert hook), so the
+  -- promoted row gets the next one now, as if it had just been submitted.
+  update public.submission_ordinal_counters
+  set next_ordinal = next_ordinal + 1, updated_at = now()
+  where assignment_id = v_cand.assignment_id
+    and assignment_group_id = v_counter_group
+    and profile_id = v_counter_profile
+  returning next_ordinal - 1 into v_ordinal;
+
   update public.submissions
-  set is_active = true, is_staged = false
+  set is_active = true, is_staged = false, ordinal = v_ordinal
   where id = v_staged_id;
 
   update public.deadline_regrade_candidates
@@ -1091,6 +1140,93 @@ BEGIN
 		v_max_submissions_period_secs as max_submissions_period_secs,
 		v_submissions_count as submissions_used,
 		GREATEST(0, v_max_submissions_count - v_submissions_count) as submissions_remaining;
+END;
+$$;
+
+-- =====================================================================
+-- 8c. submission_set_active must not activate a staged preview
+--     (verbatim copy of the current body from
+--     20250918192649_instructors-can-set-active-submissions.sql with the
+--     is_staged check added after the NOT-GRADED one).
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.submission_set_active(_submission_id bigint)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $$
+DECLARE
+    submission_record RECORD;
+    is_staff boolean;
+    final_due_date timestamp with time zone;
+BEGIN
+    -- Get the submission details
+    SELECT * INTO submission_record 
+    FROM submissions 
+    WHERE id = _submission_id;
+
+    -- Check if submission exists
+    IF NOT FOUND THEN
+        RETURN FALSE;
+    END IF;
+
+    -- Check if user is staff
+    SELECT EXISTS (
+        SELECT 1
+        FROM user_privileges
+        WHERE user_id = auth.uid()
+        AND class_id = submission_record.class_id
+        AND role IN ('instructor','grader')
+    ) INTO is_staff;
+    
+    -- SECURITY CHECK: Verify user has permission to modify this submission
+    IF NOT authorize_for_submission(_submission_id) and NOT is_staff THEN
+        RETURN FALSE;
+    END IF;
+
+    if NOT is_staff THEN
+        -- Only staff can set active submissions after the effective due date
+        final_due_date := public.calculate_final_due_date(submission_record.assignment_id, submission_record.profile_id, submission_record.assignment_group_id);
+        IF NOW() > final_due_date THEN
+            RETURN FALSE;
+        END IF;
+    END IF;
+    
+    -- Prevent NOT-GRADED submissions from becoming active
+    IF submission_record.is_not_graded THEN
+        RETURN FALSE;
+    END IF;
+
+    -- A staged deadline-regrade preview is promoted only by
+    -- apply_deadline_regrade, which records the decision and notifies students.
+    IF submission_record.is_staged THEN
+        RETURN FALSE;
+    END IF;
+
+    -- Set all other submissions for this assignment/student to inactive
+    -- Handle individual vs group submissions separately to avoid cross-contamination
+    IF submission_record.assignment_group_id IS NOT NULL THEN
+        -- Group submission: deactivate other submissions for the same group
+        UPDATE submissions 
+        SET is_active = false 
+        WHERE assignment_id = submission_record.assignment_id 
+        AND assignment_group_id = submission_record.assignment_group_id
+        AND id != _submission_id;
+    ELSE
+        -- Individual submission: deactivate other submissions for the same student
+        UPDATE submissions 
+        SET is_active = false 
+        WHERE assignment_id = submission_record.assignment_id 
+        AND profile_id = submission_record.profile_id
+        AND assignment_group_id IS NULL  -- Ensure we only match individual submissions
+        AND id != _submission_id;
+    END IF;
+    
+    -- Set this submission as active
+    UPDATE submissions 
+    SET is_active = true 
+    WHERE id = _submission_id;
+    
+    RETURN TRUE;
 END;
 $$;
 
