@@ -591,7 +591,11 @@ begin
   where assignment_id = p_assignment_id and status = 'open'
   order by old_due_date asc
   limit 1;
-  if v_earliest.old_due_date is not null and v_earliest.old_due_date < p_old_due_date then
+  -- An open batch's old schedule predates the save being handled now (it was
+  -- the schedule before an earlier, still-unreviewed extension), so always
+  -- keep it whole -- due date AND lab offset -- rather than comparing only the
+  -- due dates, which are equal when the extensions were lab-offset-only.
+  if v_earliest.old_due_date is not null then
     v_old_due_date := v_earliest.old_due_date;
     v_old_minutes := v_earliest.old_minutes_due_after_lab;
   else
@@ -677,6 +681,18 @@ begin
   ) act on true
   where r.assignment_id = p_assignment_id
     and cand.sha is not null
+    -- Only students still enrolled: repositories and their push history
+    -- outlive an SIS drop (user_roles.disabled). A group needs one enabled member.
+    and exists (
+      select 1 from public.user_roles ur
+      where ur.class_id = v_class_id and ur.role = 'student' and not ur.disabled
+        and (
+          ur.private_profile_id = r.profile_id
+          or (r.assignment_group_id is not null and ur.private_profile_id in (
+                select agm.profile_id from public.assignment_groups_members agm
+                where agm.assignment_group_id = r.assignment_group_id))
+        )
+    )
     -- A personal repository retained after its owner joined a group cannot be
     -- graded (autograder-create-submission rejects it); the group repo covers them.
     and not (
@@ -915,6 +931,22 @@ begin
     and profile_id = v_counter_profile
   for update;
 
+  -- Lock the grader results of the active submission(s) in scope and of the
+  -- preview, so autograder-submit-feedback cannot rewrite either score
+  -- between the snapshot comparison below and the promotion.
+  perform 1 from public.grader_results gr
+  where gr.rerun_for_submission_id is null
+    and gr.submission_id in (
+      select s.id from public.submissions s
+      where s.assignment_id = v_cand.assignment_id
+        and (s.is_active or s.id = v_staged_id)
+        and (
+          (v_cand.assignment_group_id is not null and s.assignment_group_id = v_cand.assignment_group_id)
+          or (v_cand.assignment_group_id is null and s.profile_id = v_cand.profile_id and s.assignment_group_id is null)
+        )
+    )
+  for update of gr;
+
   -- Capture the currently-active submission + autograder score (the "before").
   select s.id, gr.score into v_old_sub_id, v_old_score
   from public.submissions s
@@ -1053,6 +1085,7 @@ begin
   from public.user_roles ur
   where ur.class_id = v_cand.class_id
     and ur.role = 'student'
+    and not ur.disabled
     and ur.private_profile_id in (
       SELECT v_cand.profile_id WHERE v_cand.profile_id IS NOT NULL
       UNION

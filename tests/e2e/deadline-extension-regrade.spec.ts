@@ -516,4 +516,15 @@ test.describe("Deadline-extension regrade", () => {
     expect((stale.data as { status: string }).status).toBe("active_changed");
     expect(Number((stale.data as { old_score: number }).old_score)).toBe(90);
   });
+
+  test("students no longer enrolled are not candidates", async () => {
+    await insertCheckRun("dropped", "late", 1);
+    await ADMIN()
+      .from("user_roles")
+      .update({ disabled: true })
+      .eq("private_profile_id", student.private_profile_id)
+      .eq("class_id", course.id);
+    const cands = await mine(await enumerate(subDays(new Date(), 2)));
+    expect(cands).toHaveLength(0);
+  });
 });

@@ -167,6 +167,11 @@ export default function RegradeLateCommitsPage() {
         await refresh(batch);
       } catch (e) {
         toaster.error({ title: "Could not start grading", description: e instanceof Error ? e.message : String(e) });
+        // The dispatch may still have gone out (a later step failed, or the
+        // response was lost) with the candidate reserved as grading, so reload
+        // rather than trusting the local row: that restarts polling and keeps
+        // Finish disabled while the preview is outstanding.
+        await refresh(batch).catch(() => undefined);
       } finally {
         setRowBusy(c.id, undefined);
       }
