@@ -3,7 +3,7 @@ import { GITHUB_BUG_REPORT_URL, useBugReportingAvailable } from "@/lib/bugReport
 import { getLastKnownReportContext } from "@/lib/bugReport/reportContext";
 import { submitReport, type SubmitReportResult } from "@/lib/bugReport/submitFeedback";
 import * as Sentry from "@sentry/nextjs";
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 /**
  * Plain-HTML bug report form. This page renders its own `<html>` outside the root layout,
@@ -32,68 +32,91 @@ function CrashReportForm({ errorID }: { errorID: string }) {
     }
   };
 
-  if (typeof state === "object" && state.status === "sent") {
-    return (
-      <p role="status" style={{ fontSize: "1rem", color: "#22543d", margin: "0 0 1.5rem 0" }}>
-        Thanks, your report was sent. The developers will look into it.
-      </p>
-    );
-  }
+  const sent = typeof state === "object" && state.status === "sent";
+  const problem =
+    typeof state !== "object"
+      ? undefined
+      : state.status === "rate_limited"
+        ? "Too many reports are being sent right now. Try again later."
+        : state.status === "error"
+          ? state.message
+          : undefined;
+
+  // Both live regions are in the page before their text arrives, so screen readers announce
+  // the change. Focus moves to the message: the button that had it is gone (sent) or was
+  // disabled while sending (error), which drops focus to <body>.
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const alertRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (sent) statusRef.current?.focus();
+    else if (problem) alertRef.current?.focus();
+  }, [state, sent, problem]);
 
   return (
-    <form
-      onSubmit={onSubmit}
-      aria-label="Report this error"
-      data-testid="global-error-report-form"
-      style={{ textAlign: "left", margin: "0 0 1.5rem 0" }}
-    >
-      <p style={{ fontSize: "1rem", color: "#4a5568", lineHeight: "1.6", margin: "0 0 0.75rem 0" }}>
-        Tell us what you were doing when this happened. The report is linked to error ID{" "}
-        <code data-testid="global-error-event-id">{errorID}</code> and includes your user ID and course role, not your
-        name or email.
-      </p>
-      <label htmlFor={descriptionId} style={{ display: "block", fontWeight: 600, color: "#1a202c" }}>
-        What happened?
-      </label>
-      <textarea
-        id={descriptionId}
-        name="description"
-        required
-        rows={4}
-        disabled={state === "submitting"}
-        style={{
-          width: "100%",
-          boxSizing: "border-box",
-          margin: "0.25rem 0 0.75rem 0",
-          padding: "0.5rem",
-          borderRadius: "6px",
-          border: "1px solid #a0aec0",
-          font: "inherit"
-        }}
-      />
-      <label htmlFor={contactId} style={{ display: "flex", gap: "0.5rem", alignItems: "center", color: "#1a202c" }}>
-        <input id={contactId} type="checkbox" name="contact_ok" disabled={state === "submitting"} />
-        You may contact me about this
-      </label>
-      {typeof state === "object" && state.status === "rate_limited" && (
-        <p role="alert" style={{ color: "#9b2c2c", margin: "0.75rem 0 0 0" }}>
-          Too many reports are being sent right now. Try again later.
-        </p>
-      )}
-      {typeof state === "object" && state.status === "error" && (
-        <p role="alert" style={{ color: "#9b2c2c", margin: "0.75rem 0 0 0" }}>
-          {state.message}
-        </p>
-      )}
-      <button
-        type="submit"
-        className="error-button-primary"
-        disabled={state === "submitting"}
-        style={{ marginTop: "0.75rem" }}
+    <div style={{ margin: "0 0 1.5rem 0" }}>
+      <p
+        ref={statusRef}
+        role="status"
+        tabIndex={-1}
+        data-testid="global-error-report-status"
+        style={{ fontSize: "1rem", color: "#22543d", margin: 0 }}
       >
-        {state === "submitting" ? "Sending" : "Send report"}
-      </button>
-    </form>
+        {sent ? "Thanks, your report was sent. The developers will look into it." : ""}
+      </p>
+      {!sent && (
+        <form
+          onSubmit={onSubmit}
+          aria-label="Report this error"
+          data-testid="global-error-report-form"
+          style={{ textAlign: "left" }}
+        >
+          <p style={{ fontSize: "1rem", color: "#4a5568", lineHeight: "1.6", margin: "0 0 0.75rem 0" }}>
+            Tell us what you were doing when this happened. The report is linked to error ID{" "}
+            <code data-testid="global-error-event-id">{errorID}</code> and includes your user ID and course role, not
+            your name or email.
+          </p>
+          <label htmlFor={descriptionId} style={{ display: "block", fontWeight: 600, color: "#1a202c" }}>
+            What happened?
+          </label>
+          <textarea
+            id={descriptionId}
+            name="description"
+            required
+            rows={4}
+            disabled={state === "submitting"}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              margin: "0.25rem 0 0.75rem 0",
+              padding: "0.5rem",
+              borderRadius: "6px",
+              border: "1px solid #a0aec0",
+              font: "inherit"
+            }}
+          />
+          <label htmlFor={contactId} style={{ display: "flex", gap: "0.5rem", alignItems: "center", color: "#1a202c" }}>
+            <input id={contactId} type="checkbox" name="contact_ok" disabled={state === "submitting"} />
+            You may contact me about this
+          </label>
+          <p
+            ref={alertRef}
+            role="alert"
+            tabIndex={-1}
+            style={{ color: "#9b2c2c", margin: problem ? "0.75rem 0 0 0" : 0 }}
+          >
+            {problem ?? ""}
+          </p>
+          <button
+            type="submit"
+            className="error-button-primary"
+            disabled={state === "submitting"}
+            style={{ marginTop: "0.75rem" }}
+          >
+            {state === "submitting" ? "Sending" : "Send report"}
+          </button>
+        </form>
+      )}
+    </div>
   );
 }
 
