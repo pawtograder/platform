@@ -6,14 +6,21 @@ import { deflateSync, inflateSync } from "node:zlib";
 import type { FrozenBuffer, FrozenSegment, RecordedEvent } from "@/lib/bugReport/types";
 
 type Response = { statusCode?: number; headers?: Record<string, string | null> };
-type Step = Response | "throw";
+/** "hang": the request never answers; it rejects only if the fetch's signal aborts. */
+type Step = Response | "throw" | "hang";
 
 class FakeTransport {
   sent: unknown[] = [];
   script: Step[] = [];
   inFlight = 0;
   maxInFlight = 0;
+  /** The fetch `signal` each send would have used, read when the send starts. */
+  signals: (AbortSignal | undefined)[] = [];
   async send(envelope: unknown): Promise<Response> {
+    // makeFetchTransport spreads `fetchOptions` into the request synchronously inside send().
+    const last = transportOptions[transportOptions.length - 1] as { fetchOptions?: RequestInit } | undefined;
+    const signal = last?.fetchOptions?.signal ?? undefined;
+    this.signals.push(signal);
     this.inFlight++;
     this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
     try {
@@ -21,6 +28,11 @@ class FakeTransport {
       this.sent.push(envelope);
       const step = this.script.shift() ?? { statusCode: 200 };
       if (step === "throw") throw new TypeError("Failed to fetch");
+      if (step === "hang") {
+        return await new Promise<Response>((_, reject) =>
+          signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))
+        );
+      }
       return step;
     } finally {
       this.inFlight--;
@@ -66,6 +78,7 @@ import { parseEnvelope, payloadJson, splitReplayRecording } from "@/lib/bugRepor
 import {
   MAX_ATTEMPTS,
   MAX_RETRY_AFTER_MS,
+  SEND_TIMEOUT_MS,
   MAX_SEGMENT_COMPRESSED_BYTES,
   planSegments,
   resetUploadStateForTests,
@@ -160,6 +173,7 @@ const noSleep = jest.fn(async (ms: number) => {
 beforeEach(() => {
   transport.sent = [];
   transport.script = [];
+  transport.signals = [];
   transport.maxInFlight = 0;
   noSleep.mockClear();
   resetUploadStateForTests();
@@ -433,6 +447,62 @@ describe("uploadReplay", () => {
     });
     expect(result).toMatchObject({ ok: false, reason: "failed" });
     expect(transport.sent).toHaveLength(1);
+  });
+
+  it(`times out a send after ${SEND_TIMEOUT_MS} ms, aborts its fetch, and retries`, async () => {
+    jest.useFakeTimers();
+    try {
+      transport.script = ["hang", { statusCode: 200 }];
+      let stats: UploadStats | undefined;
+      const pending = uploadReplay(bufferOf([checkout(clock, [])]), tags, {
+        sleep: noSleep,
+        compress,
+        onStats: (s) => (stats = s)
+      });
+      await jest.advanceTimersByTimeAsync(SEND_TIMEOUT_MS - 1);
+      expect(transport.sent).toHaveLength(1);
+      expect(transport.signals[0]?.aborted).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({ ok: true });
+      expect(transport.signals[0]?.aborted).toBe(true);
+      expect(stats?.attempts).toEqual([2]);
+      expect(noSleep.mock.calls).toEqual([[1000]]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("times out an injected transport that ignores the signal", async () => {
+    jest.useFakeTimers();
+    try {
+      const hanging = { send: jest.fn(() => new Promise<never>(() => {})) };
+      const pending = uploadReplay(bufferOf([checkout(clock, [])]), tags, {
+        sleep: noSleep,
+        compress,
+        transport: hanging
+      });
+      await jest.advanceTimersByTimeAsync(SEND_TIMEOUT_MS * MAX_ATTEMPTS);
+      expect(await pending).toMatchObject({ ok: false, reason: "failed" });
+      expect(hanging.send).toHaveBeenCalledTimes(MAX_ATTEMPTS);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("aborts the in-flight request when the signal fires, without retrying", async () => {
+    const controller = new AbortController();
+    transport.script = ["hang"];
+    const pending = uploadReplay(bufferOf([checkout(clock, []), checkout(clock + 60_000, [])]), tags, {
+      sleep: noSleep,
+      compress,
+      signal: controller.signal
+    });
+    while (transport.sent.length === 0) await new Promise((r) => setTimeout(r, 0));
+    controller.abort();
+    expect(await pending).toMatchObject({ ok: false, reason: "failed" });
+    expect(transport.signals[0]?.aborted).toBe(true);
+    expect(transport.sent).toHaveLength(1);
+    expect(noSleep).not.toHaveBeenCalled();
   });
 
   it("sends through a fetch transport to the tunnel with keepalive off", async () => {

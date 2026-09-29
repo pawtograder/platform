@@ -20,7 +20,6 @@ import {
   type RateLimits,
   type ReplayEnvelope,
   type ReplayEvent,
-  type Transport,
   type TransportMakeRequestResponse
 } from "@sentry/core";
 import type { ReplayUploadResult } from "../submitFeedback";
@@ -56,8 +55,13 @@ export type UploadStats = {
   attempts: number[];
 };
 
+/** What segments are sent through: a transport's `send`, given the attempt's abort signal. */
+export type SegmentTransport = {
+  send(envelope: ReplayEnvelope, init: { signal: AbortSignal }): PromiseLike<TransportMakeRequestResponse>;
+};
+
 export type UploadOptions = {
-  /** Aborting stops before the next send or retry and yields `failed`. */
+  /** Aborting cancels the request in flight (or the next send) and yields `failed`, with no retry. */
   signal?: AbortSignal;
   /** Called once the upload finishes, successful or not. For measurements and tests. */
   onStats?: (stats: UploadStats) => void;
@@ -65,7 +69,7 @@ export type UploadOptions = {
   sleep?: (ms: number) => Promise<void>;
   compress?: Compressor;
   maxSegmentCompressedBytes?: number;
-  transport?: Pick<Transport, "send">;
+  transport?: SegmentTransport;
 };
 
 /** Tries per segment, including the first. */
@@ -78,6 +82,11 @@ export const RETRY_BASE_DELAY_MS = 1000;
  * without the replay.
  */
 export const MAX_RETRY_AFTER_MS = 10_000;
+/**
+ * Longest one send attempt may take. A request still open after this is aborted and counts
+ * as a retryable failure, like a network error.
+ */
+export const SEND_TIMEOUT_MS = 30_000;
 
 /**
  * Rate limits Sentry announced to an earlier upload in this page load. The transport keeps its
@@ -93,7 +102,7 @@ export function resetUploadStateForTests(): void {
 
 type Client = NonNullable<ReturnType<typeof Sentry.getClient>>;
 
-const transports = new WeakMap<Client, Transport>();
+const transports = new WeakMap<Client, SegmentTransport>();
 
 /**
  * The client's own transport, rebuilt with `keepalive` off.
@@ -107,18 +116,32 @@ const transports = new WeakMap<Client, Transport>();
  * nothing from keepalive. Same URL (the tunnel), headers and fetch implementation as the
  * client's transport; rate limits are tracked here (`rateLimits`), not shared with it.
  */
-function replayTransport(client: Client): Transport {
+function replayTransport(client: Client): SegmentTransport {
   let transport = transports.get(client);
   if (!transport) {
     const options = client.getOptions();
     const transportOptions = (options.transportOptions ?? {}) as { fetchOptions?: RequestInit };
-    transport = Sentry.makeFetchTransport({
+    const fetchOptions: RequestInit = { ...transportOptions.fetchOptions, keepalive: false };
+    const inner = Sentry.makeFetchTransport({
       tunnel: options.tunnel,
       recordDroppedEvent: client.recordDroppedEvent.bind(client),
       ...transportOptions,
       url: getEnvelopeEndpointWithUrlEncodedAuth(client.getDsn()!, options.tunnel, options._metadata?.sdk),
-      fetchOptions: { ...transportOptions.fetchOptions, keepalive: false }
+      fetchOptions
     });
+    transport = {
+      send(envelope, { signal }) {
+        // The fetch transport spreads `fetchOptions` into the request inside send(), before it
+        // returns (createTransport's promise buffer starts the request at once). So a signal
+        // set around the call reaches this request only. Segments are sent one at a time.
+        fetchOptions.signal = signal;
+        try {
+          return inner.send(envelope);
+        } finally {
+          delete fetchOptions.signal;
+        }
+      }
+    };
     transports.set(client, transport);
   }
   return transport;
@@ -220,7 +243,7 @@ function replayEnvelope(client: Client, event: ReplayEvent, payload: Uint8Array)
  * which counts as one more retry, so the tries still run out into `failed`.
  */
 async function sendSegment(
-  transport: Pick<Transport, "send">,
+  transport: SegmentTransport,
   envelope: ReplayEnvelope,
   sleep: (ms: number) => Promise<void>,
   signal: AbortSignal | undefined
@@ -228,18 +251,32 @@ async function sendSegment(
   for (let attempt = 1; ; attempt++) {
     if (signal?.aborted) return { outcome: "failed", attempts: attempt - 1 };
     if (isRateLimited(rateLimits, "replay")) return { outcome: "rate_limited", attempts: attempt - 1 };
-    let outcome: Outcome;
+    let outcome: Outcome | "aborted";
     let retryAfterMs = 0;
+    // One controller per attempt, aborted by the timeout or by the caller's signal. It aborts
+    // the fetch, and the race below stops waiting even for a transport that ignores it.
+    const attemptController = new AbortController();
+    const abortAttempt = () => attemptController.abort();
+    const timer = setTimeout(abortAttempt, SEND_TIMEOUT_MS);
+    signal?.addEventListener("abort", abortAttempt);
+    const stopped = new Promise<never>((_, reject) =>
+      attemptController.signal.addEventListener("abort", () => reject(new Error("send aborted")), { once: true })
+    );
     try {
-      const response = await transport.send(envelope);
+      const response = await Promise.race([transport.send(envelope, { signal: attemptController.signal }), stopped]);
       recordRateLimits(response);
       outcome = classify(response);
       const retryAfter = response?.headers?.["retry-after"];
       if (outcome === "retry" && retryAfter) retryAfterMs = parseRetryAfterHeader(retryAfter);
     } catch {
-      // fetch rejected: offline, DNS, connection reset.
-      outcome = "retry";
+      // fetch rejected (offline, DNS, connection reset) or the attempt timed out: retry. The
+      // caller aborting is the exception.
+      outcome = signal?.aborted ? "aborted" : "retry";
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abortAttempt);
     }
+    if (outcome === "aborted") return { outcome: "failed", attempts: attempt };
     if (outcome !== "retry") return { outcome, attempts: attempt };
     if (attempt >= MAX_ATTEMPTS) return { outcome: "failed", attempts: attempt };
     const backoff = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
