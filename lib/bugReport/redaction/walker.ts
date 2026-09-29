@@ -374,38 +374,56 @@ class Walker {
     this.removeSubtree(id);
   }
 
-  /** Queue one job per changed block: the text of its inline content, with a piece per text node. */
+  /**
+   * Queue jobs for each changed block: the text of its inline content, with a piece per text
+   * node. Two versions: text nodes joined as they are, so a word split across elements
+   * (`<b>Ja</b>ne`) is whole, and with a space wherever an inline element starts or ends,
+   * so two adjacent links (often laid out apart by flex) don't read as one word. The spaced
+   * version is the one listed in `remaining`.
+   */
   private flush(): void {
     for (const blockId of this.dirty) {
       const block = this.nodes.get(blockId);
       if (!block) continue;
-      const pieces: Piece[] = [];
-      let text = "";
+      const joined: Piece[] = [];
+      const spaced: Piece[] = [];
+      let joinedText = "";
+      let spacedText = "";
+      let boundary = false;
+      const addText = (rec: NodeRecord) => {
+        if (!rec.target || !rec.text) return;
+        const text = rec.text;
+        if (boundary && spacedText && !/\s$/.test(spacedText) && !/^\s/.test(text)) spacedText += " ";
+        boundary = false;
+        joined.push({ start: joinedText.length, end: joinedText.length + text.length, target: rec.target });
+        spaced.push({ start: spacedText.length, end: spacedText.length + text.length, target: rec.target });
+        joinedText += text;
+        spacedText += text;
+      };
       const visit = (rec: NodeRecord) => {
         for (const childId of rec.children) {
           const child = this.nodes.get(childId);
           if (!child) continue;
-          if (child.type === NODE_TEXT) {
-            if (child.target && child.text) {
-              pieces.push({ start: text.length, end: text.length + child.text.length, target: child.target });
-              text += child.text;
-            }
-          } else if (child.type === NODE_ELEMENT) {
+          if (child.type === NODE_TEXT) addText(child);
+          else if (child.type === NODE_ELEMENT) {
             if (this.isBlock(child)) {
-              if (text && !text.endsWith("\n")) text += "\n";
-            } else visit(child);
+              if (joinedText && !joinedText.endsWith("\n")) joinedText += "\n";
+              if (spacedText && !spacedText.endsWith("\n")) spacedText += "\n";
+              boundary = false;
+            } else {
+              boundary = true;
+              visit(child);
+              boundary = true;
+            }
           }
         }
       };
-      if (block.type === NODE_TEXT) {
-        if (block.target && block.text) {
-          pieces.push({ start: 0, end: block.text.length, target: block.target });
-          text = block.text;
-        }
-      } else visit(block);
-      if (pieces.length === 0) continue;
+      if (block.type === NODE_TEXT) addText(block);
+      else visit(block);
+      if (joined.length === 0) continue;
       const kind: RemainingKind = block.tagName === "title" ? "title" : block.tagName === "textarea" ? "input" : "text";
-      this.jobs.push({ text, bounded: false, pieces, kind });
+      this.jobs.push({ text: spacedText, bounded: false, pieces: spaced, kind });
+      if (joinedText !== spacedText) this.jobs.push({ text: joinedText, bounded: false, pieces: joined, kind: null });
     }
     this.dirty = new Set();
   }

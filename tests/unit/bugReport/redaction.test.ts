@@ -114,6 +114,14 @@ describe("text nodes", () => {
     expect(result.stats.redactedSpans).toBe(2);
   });
 
+  it("lists adjacent inline elements with a space between them", async () => {
+    const p = el("p", {}, [el("a", {}, [txt("Email the student")]), el("a", {}, [txt("Profile link")])]);
+    const result = await redact(bufferOf([segment([meta(0), full(1, doc([], [p]))])]));
+    expect(result.remaining.filter((r) => r.kind === "text")).toEqual([
+      { kind: "text", value: "Email the student Profile link", count: 1 }
+    ]);
+  });
+
   it("does not join text across block elements", async () => {
     // "vrael" and "tek-42" in two paragraphs are two blocks, so the handle is not assembled.
     const body = [el("p", {}, [txt("x vrael")]), el("p", {}, [txt("tek-42 y")])];

@@ -20,6 +20,9 @@ export async function enableRecording(page: Page, classId: number, policy?: Rout
   if (policy) await setTestRoutePolicy(page, policy);
 }
 
+/** The spec §7.2 name for `enableRecording`: course flag on, and the test route policy if given. */
+export const enableBugReports = enableRecording;
+
 export async function setTestRoutePolicy(page: Page, policy: RoutePolicyEntry[]): Promise<void> {
   await page.addInitScript(
     ([key, value]) => {

@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ClassRealTimeController } from "./ClassRealTimeController";
 import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 import * as Sentry from "@sentry/nextjs";
+import { bugReportIngest, registerRowSource, unregisterRowSource } from "@/lib/bugReport/ingestGate";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 export type TablesThatHaveAnIDField = {
@@ -844,6 +845,34 @@ export default class TableController<
   private _autoFetchMissingRows: boolean = true;
   /** Debug ID for tracking controller instances in logs */
   readonly _debugID: string = Math.random().toString(36).substring(2, 15);
+  /** This controller's entry in the bug reporter's row-source registry (see bugReportRows). */
+  private _bugReportRef = registerRowSource(this);
+  private _bugReportSelectCache: string | null | undefined;
+
+  /**
+   * For the bug reporter's taint ingest (lib/bugReport/ingestGate.ts): the rows this controller
+   * holds, so a recorder that starts after they loaded can still classify them. Null once closed.
+   */
+  bugReportRows(): { relation: string; rows: readonly unknown[]; select: string | null } | null {
+    if (this._closed) return null;
+    return { relation: this._table, rows: this._rows, select: this._bugReportSelect() };
+  }
+
+  /** The PostgREST select the rows were read with (query and single-row refetch), for the ingest. */
+  private _bugReportSelect(): string | null {
+    if (this._bugReportSelectCache !== undefined) return this._bugReportSelectCache;
+    let select: string | null = null;
+    try {
+      const fromQuery = (this._query as unknown as { url?: URL } | undefined)?.url?.searchParams.get("select");
+      // A key in both keeps the query's embed (the parser's last one wins); that's what most rows hold.
+      const parts = [this._selectForSingleRow, fromQuery].filter((s): s is string => !!s);
+      select = parts.length > 0 ? parts.join(",") : null;
+    } catch {
+      select = null;
+    }
+    this._bugReportSelectCache = select;
+    return select;
+  }
 
   get table() {
     return this._table;
@@ -1824,6 +1853,9 @@ export default class TableController<
         if (initialData) {
           // Use pre-loaded data from server (skip initial fetch)
           dataToLoad = initialData;
+          // Server-hydrated rows never pass the fetch hook; hand them to the taint ingest.
+          const ingest = bugReportIngest.sink;
+          if (ingest) ingest.rows(table, initialData, this._bugReportSelect());
           // We did not hit the database from the browser yet, so we have no
           // guarantee that initialData contains rows inserted just before
           // page load (cache invalidation might still be in flight). Schedule
@@ -1982,6 +2014,8 @@ export default class TableController<
       return;
     }
     this._closed = true;
+    unregisterRowSource(this._bugReportRef);
+    this._bugReportRef = undefined;
 
     // Track controller closure
     const tableName = this._table as string;
@@ -3176,6 +3210,10 @@ export default class TableController<
       }
     }
 
+    // Bug reporter taint ingest; null unless a recorder is running.
+    const ingest = bugReportIngest.sink;
+    if (ingest) ingest.rows(this._table, row, this._bugReportSelect());
+
     this._rows = [...this._rows, row];
     if ("id" in row) {
       this._rowsById.set((row as ResultOne & { id: IDType }).id, row);
@@ -3205,6 +3243,9 @@ export default class TableController<
     if (index === -1) {
       throw new Error("Row not found");
     }
+    // Bug reporter taint ingest; null unless a recorder is running.
+    const ingest = bugReportIngest.sink;
+    if (ingest) ingest.rows(this._table, newRow, this._bugReportSelect());
     const merged = {
       ...this._rows[index],
       ...newRow,
