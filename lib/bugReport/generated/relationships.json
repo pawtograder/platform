@@ -419,6 +419,10 @@
     "kind": "view",
     "fks": [{ "name": "grader_results_class_id_fkey", "columns": ["class_id"], "ref": "classes" }]
   },
+  "bug_report_retention_purges": {
+    "kind": "table",
+    "fks": [{ "name": "bug_report_retention_purges_class_id_fkey", "columns": ["class_id"], "ref": "classes" }]
+  },
   "calendar_events": {
     "kind": "table",
     "fks": [
