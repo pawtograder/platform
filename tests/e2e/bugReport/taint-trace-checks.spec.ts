@@ -89,7 +89,9 @@ test("I2: a key the schema lacks, added to a live response, fails the unmodified
   await page.waitForLoadState("networkidle").catch(() => {});
   await tracer.flush();
   const failures = checkObserved(tracer.observedFlows()).map((f) => f.message);
-  expect(failures.join("\n")).toMatch(/user_roles\.i2_probe_column from rest:\S+ carried a free_text canary on \/course/);
+  expect(failures.join("\n")).toMatch(
+    /user_roles\.i2_probe_column from rest:\S+ carried a free_text canary on \/course/
+  );
 });
 
 test("I3: a name inside data-report-unmask fails, naming the component", async ({ page, context }) => {
