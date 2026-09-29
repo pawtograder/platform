@@ -1,0 +1,4330 @@
+{
+  "active_submissions_for_class": { "kind": "view", "fks": [] },
+  "ai_help_feedback": {
+    "kind": "table",
+    "fks": [{ "name": "ai_help_feedback_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "api_gateway_calls": {
+    "kind": "table",
+    "fks": [{ "name": "api_gateway_calls_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "api_tokens": { "kind": "table", "fks": [] },
+  "assignment_dashboard_views": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "assignment_dashboard_views_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": true
+      },
+      {
+        "name": "assignment_dashboard_views_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": true
+      },
+      {
+        "name": "assignment_dashboard_views_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": true
+      },
+      {
+        "name": "assignment_dashboard_views_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": true
+      },
+      {
+        "name": "assignment_dashboard_views_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_dashboard_views_updated_by_fkey",
+        "columns": ["updated_by"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_dashboard_views_updated_by_fkey",
+        "columns": ["updated_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "assignment_due_date_exceptions": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "assignment_late_exception_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_late_exception_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_late_exception_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_late_exception_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_late_exception_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_late_exception_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_late_exception_instructor_id_fkey",
+        "columns": ["creator_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_late_exception_instructor_id_fkey",
+        "columns": ["creator_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_late_exception_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_late_exception_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "assignment_group_invitations": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "assignment_group_invitation_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_invitation_invitee_fkey",
+        "columns": ["invitee"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_invitation_invitee_fkey",
+        "columns": ["invitee"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_invitation_inviter_fkey",
+        "columns": ["inviter"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_invitation_inviter_fkey",
+        "columns": ["inviter"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_invitations_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      }
+    ]
+  },
+  "assignment_group_join_request": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "assignment_group_join_request_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_decision_maker_fkey",
+        "columns": ["decision_maker"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_decision_maker_fkey",
+        "columns": ["decision_maker"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_profile_id_fkey1",
+        "columns": ["profile_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_profile_id_fkey1",
+        "columns": ["profile_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_group_join_request_profile_id_fkey1",
+        "columns": ["profile_id"],
+        "ref": "user_roles",
+        "oneToOne": false
+      }
+    ]
+  },
+  "assignment_groups": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "assignment_groups_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "assignment_groups_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "assignment_groups_mentor_profile_id_fkey",
+        "columns": ["mentor_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_mentor_profile_id_fkey",
+        "columns": ["mentor_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "assignment_groups_members": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "assignment_groups_members_added_by_fkey",
+        "columns": ["added_by"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_added_by_fkey",
+        "columns": ["added_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_profile_id_fkey1",
+        "columns": ["profile_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_profile_id_fkey1",
+        "columns": ["profile_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_groups_members_profile_id_fkey1",
+        "columns": ["profile_id"],
+        "ref": "user_roles",
+        "oneToOne": false
+      }
+    ]
+  },
+  "assignment_handout_commits": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "assignment_handout_commit_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_handout_commit_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_handout_commit_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_handout_commit_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_handout_commits_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      }
+    ]
+  },
+  "assignment_handout_file_hashes": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "assignment_handout_file_hashes_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_handout_file_hashes_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_handout_file_hashes_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_handout_file_hashes_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_handout_file_hashes_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      }
+    ]
+  },
+  "assignment_leaderboard": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "assignment_leaderboard_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_leaderboard_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_leaderboard_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_leaderboard_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "assignment_leaderboard_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "assignment_leaderboard_public_profile_id_fkey",
+        "columns": ["public_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_leaderboard_public_profile_id_fkey",
+        "columns": ["public_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_leaderboard_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_leaderboard_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_leaderboard_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "assignment_leaderboard_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "assignment_overview": {
+    "kind": "view",
+    "fks": [{ "name": "assignments_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "assignment_self_review_settings": {
+    "kind": "table",
+    "fks": [{ "name": "self_review_settings_class_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "assignments": {
+    "kind": "table",
+    "fks": [
+      { "name": "assignments_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "assignments_meta_grading_rubric_id_fkey",
+        "columns": ["meta_grading_rubric_id"],
+        "ref": "rubrics",
+        "oneToOne": false
+      },
+      { "name": "assignments_rubric_id_fkey", "columns": ["grading_rubric_id"], "ref": "rubrics", "oneToOne": false },
+      {
+        "name": "assignments_self_review_rubric_id_fkey",
+        "columns": ["self_review_rubric_id"],
+        "ref": "rubrics",
+        "oneToOne": false
+      },
+      {
+        "name": "assignments_self_review_setting_fkey",
+        "columns": ["self_review_setting_id"],
+        "ref": "assignment_self_review_settings",
+        "oneToOne": false
+      },
+      {
+        "name": "assignments_source_assignment_id_fkey",
+        "columns": ["source_assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "assignments_source_assignment_id_fkey",
+        "columns": ["source_assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "assignments_source_assignment_id_fkey",
+        "columns": ["source_assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "assignments_source_assignment_id_fkey",
+        "columns": ["source_assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      }
+    ]
+  },
+  "assignments_with_effective_due_dates": {
+    "kind": "view",
+    "fks": [
+      { "name": "assignments_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "assignments_meta_grading_rubric_id_fkey",
+        "columns": ["meta_grading_rubric_id"],
+        "ref": "rubrics",
+        "oneToOne": false
+      },
+      { "name": "assignments_rubric_id_fkey", "columns": ["grading_rubric_id"], "ref": "rubrics", "oneToOne": false },
+      {
+        "name": "assignments_self_review_rubric_id_fkey",
+        "columns": ["self_review_rubric_id"],
+        "ref": "rubrics",
+        "oneToOne": false
+      },
+      {
+        "name": "assignments_self_review_setting_fkey",
+        "columns": ["self_review_setting_id"],
+        "ref": "assignment_self_review_settings",
+        "oneToOne": false
+      },
+      {
+        "name": "user_roles_private_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "profiles",
+        "oneToOne": true
+      },
+      {
+        "name": "user_roles_private_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": true
+      }
+    ]
+  },
+  "async_worker_dlq_messages": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "async_worker_dlq_messages_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      }
+    ]
+  },
+  "async_worker_slots": { "kind": "table", "fks": [] },
+  "audit": {
+    "kind": "table",
+    "fks": [{ "name": "audit_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }]
+  },
+  "audit_legacy": {
+    "kind": "table",
+    "fks": [{ "name": "audit_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }]
+  },
+  "autograder": {
+    "kind": "table",
+    "fks": [
+      { "name": "autograder_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "grader_configs_id_fkey", "columns": ["id"], "ref": "assignment_overview", "oneToOne": true },
+      { "name": "grader_configs_id_fkey", "columns": ["id"], "ref": "assignments", "oneToOne": true },
+      {
+        "name": "grader_configs_id_fkey",
+        "columns": ["id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": true
+      },
+      {
+        "name": "grader_configs_id_fkey",
+        "columns": ["id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": true
+      }
+    ]
+  },
+  "autograder_commits": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "autograder_commits_assignment_id_fkey",
+        "columns": ["autograder_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "autograder_commits_assignment_id_fkey",
+        "columns": ["autograder_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "autograder_commits_assignment_id_fkey",
+        "columns": ["autograder_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "autograder_commits_assignment_id_fkey",
+        "columns": ["autograder_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "autograder_commits_autograder_id_fkey",
+        "columns": ["autograder_id"],
+        "ref": "autograder",
+        "oneToOne": false
+      },
+      { "name": "autograder_commits_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "autograder_commits_class_id_fkey1", "columns": ["class_id"], "ref": "classes", "oneToOne": false }
+    ]
+  },
+  "autograder_regression_test": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "autograder_regression_test_autograder_id_fkey",
+        "columns": ["autograder_id"],
+        "ref": "autograder",
+        "oneToOne": false
+      }
+    ]
+  },
+  "autograder_regression_test_by_grader": {
+    "kind": "view",
+    "fks": [{ "name": "grader_results_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "calendar_events": {
+    "kind": "table",
+    "fks": [
+      { "name": "calendar_events_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "calendar_events_resolved_help_queue_id_fkey",
+        "columns": ["resolved_help_queue_id"],
+        "ref": "help_queues",
+        "oneToOne": false
+      }
+    ]
+  },
+  "calendar_sync_state": {
+    "kind": "table",
+    "fks": [
+      { "name": "calendar_sync_state_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }
+    ]
+  },
+  "class_metrics_totals": {
+    "kind": "table",
+    "fks": [
+      { "name": "class_metrics_totals_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": true }
+    ]
+  },
+  "class_sections": {
+    "kind": "table",
+    "fks": [{ "name": "class_sections_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "class_staff_settings": {
+    "kind": "table",
+    "fks": [
+      { "name": "class_staff_settings_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }
+    ]
+  },
+  "classes": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "classes_discord_server_claimed_by_fkey",
+        "columns": ["discord_server_claimed_by"],
+        "ref": "users",
+        "oneToOne": false
+      },
+      { "name": "classes_gradebook_id_fkey", "columns": ["gradebook_id"], "ref": "gradebooks", "oneToOne": false }
+    ]
+  },
+  "discord_async_errors": { "kind": "table", "fks": [] },
+  "discord_async_worker_dlq_messages": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "discord_async_worker_dlq_messages_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      }
+    ]
+  },
+  "discord_channels": {
+    "kind": "table",
+    "fks": [{ "name": "discord_channels_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "discord_circuit_breakers": { "kind": "table", "fks": [] },
+  "discord_invites": {
+    "kind": "table",
+    "fks": [
+      { "name": "discord_invites_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "discord_invites_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "discord_membership_status": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "discord_membership_status_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      { "name": "discord_membership_status_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "discord_messages": {
+    "kind": "table",
+    "fks": [{ "name": "discord_messages_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "discord_roles": {
+    "kind": "table",
+    "fks": [{ "name": "discord_roles_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "discussion_digest_items": {
+    "kind": "table",
+    "fks": [
+      { "name": "discussion_digest_items_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "discussion_digest_items_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "discussion_digest_send_times": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "discussion_digest_send_times_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      { "name": "discussion_digest_send_times_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "discussion_thread_likes": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "discussion_thread_likes_discussion_thread_fkey",
+        "columns": ["discussion_thread"],
+        "ref": "discussion_threads",
+        "oneToOne": false
+      },
+      { "name": "discussion_thread_likes_user_fkey", "columns": ["creator"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "discussion_thread_likes_user_fkey",
+        "columns": ["creator"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "discussion_thread_ordinal_counters": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "discussion_thread_ordinal_counters_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": true
+      }
+    ]
+  },
+  "discussion_thread_read_status": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "discussion_thread_read_status_discussion_thread_id_fkey",
+        "columns": ["discussion_thread_id"],
+        "ref": "discussion_threads",
+        "oneToOne": false
+      },
+      {
+        "name": "discussion_thread_read_status_discussion_thread_root_id_fkey",
+        "columns": ["discussion_thread_root_id"],
+        "ref": "discussion_threads",
+        "oneToOne": false
+      },
+      {
+        "name": "discussion_thread_read_status_user_id_fkey",
+        "columns": ["user_id"],
+        "ref": "users",
+        "oneToOne": false
+      }
+    ]
+  },
+  "discussion_thread_watcher_cache": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "discussion_thread_watcher_cache_root_id_fkey",
+        "columns": ["discussion_thread_root_id"],
+        "ref": "discussion_threads",
+        "oneToOne": false
+      }
+    ]
+  },
+  "discussion_thread_watchers": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "discussion_thread_watchers_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "discussion_thread_watchers_discussion_thread_root_id_fkey",
+        "columns": ["discussion_thread_root_id"],
+        "ref": "discussion_threads",
+        "oneToOne": false
+      },
+      { "name": "discussion_thread_watchers_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "discussion_threads": {
+    "kind": "table",
+    "fks": [
+      { "name": "dicussion_threads_author_fkey", "columns": ["author"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "dicussion_threads_author_fkey",
+        "columns": ["author"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "dicussion_threads_class_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "dicussion_threads_parent_fkey",
+        "columns": ["parent"],
+        "ref": "discussion_threads",
+        "oneToOne": false
+      },
+      {
+        "name": "discussion_threads_answer_fkey",
+        "columns": ["answer"],
+        "ref": "discussion_threads",
+        "oneToOne": false
+      },
+      { "name": "discussion_threads_root_fkey", "columns": ["root"], "ref": "discussion_threads", "oneToOne": false },
+      {
+        "name": "discussion_threads_topic_id_fkey",
+        "columns": ["topic_id"],
+        "ref": "discussion_topics",
+        "oneToOne": false
+      }
+    ]
+  },
+  "discussion_topic_followers": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "discussion_topic_followers_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "discussion_topic_followers_topic_id_fkey",
+        "columns": ["topic_id"],
+        "ref": "discussion_topics",
+        "oneToOne": false
+      },
+      { "name": "discussion_topic_followers_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "discussion_topics": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "discussion_topics_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "discussion_topics_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "discussion_topics_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "discussion_topics_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "discussion_topics_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }
+    ]
+  },
+  "e2e_github_calls": { "kind": "table", "fks": [] },
+  "email_batches": {
+    "kind": "table",
+    "fks": [{ "name": "email_batches_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "emails": {
+    "kind": "table",
+    "fks": [
+      { "name": "emails_batch_id_fkey", "columns": ["batch_id"], "ref": "email_batches", "oneToOne": false },
+      { "name": "emails_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "emails_users_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "error_pin_rules": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "error_pin_rules_error_pin_id_fkey",
+        "columns": ["error_pin_id"],
+        "ref": "error_pins",
+        "oneToOne": false
+      }
+    ]
+  },
+  "error_pin_submission_matches": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "error_pin_submission_matches_error_pin_id_fkey",
+        "columns": ["error_pin_id"],
+        "ref": "error_pins",
+        "oneToOne": false
+      },
+      {
+        "name": "error_pin_submission_matches_grader_result_test_id_fkey",
+        "columns": ["grader_result_test_id"],
+        "ref": "grader_result_tests",
+        "oneToOne": false
+      },
+      {
+        "name": "error_pin_submission_matches_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "error_pin_submission_matches_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "error_pin_submission_matches_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "error_pin_submission_matches_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "error_pins": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "error_pins_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "error_pins_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "error_pins_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "error_pins_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "error_pins_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "error_pins_created_by_fkey", "columns": ["created_by"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "error_pins_created_by_fkey",
+        "columns": ["created_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "error_pins_discussion_thread_id_fkey",
+        "columns": ["discussion_thread_id"],
+        "ref": "discussion_threads",
+        "oneToOne": false
+      }
+    ]
+  },
+  "flashcard_card_analytics": {
+    "kind": "view",
+    "fks": [
+      {
+        "name": "flashcard_interaction_logs_card_id_fkey",
+        "columns": ["card_id"],
+        "ref": "flashcards",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_deck_id_fkey",
+        "columns": ["deck_id"],
+        "ref": "flashcard_deck_analytics",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_deck_id_fkey",
+        "columns": ["deck_id"],
+        "ref": "flashcard_decks",
+        "oneToOne": false
+      }
+    ]
+  },
+  "flashcard_deck_analytics": {
+    "kind": "view",
+    "fks": [{ "name": "flashcard_decks_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "flashcard_decks": {
+    "kind": "table",
+    "fks": [
+      { "name": "flashcard_decks_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "flashcard_decks_creator_id_fkey", "columns": ["creator_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "flashcard_interaction_logs": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "flashcard_interaction_logs_card_id_fkey",
+        "columns": ["card_id"],
+        "ref": "flashcards",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_deck_id_fkey",
+        "columns": ["deck_id"],
+        "ref": "flashcard_deck_analytics",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_deck_id_fkey",
+        "columns": ["deck_id"],
+        "ref": "flashcard_decks",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "users",
+        "oneToOne": false
+      }
+    ]
+  },
+  "flashcard_student_card_analytics": {
+    "kind": "view",
+    "fks": [
+      {
+        "name": "flashcard_interaction_logs_card_id_fkey",
+        "columns": ["card_id"],
+        "ref": "flashcards",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_deck_id_fkey",
+        "columns": ["deck_id"],
+        "ref": "flashcard_deck_analytics",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_deck_id_fkey",
+        "columns": ["deck_id"],
+        "ref": "flashcard_decks",
+        "oneToOne": false
+      },
+      {
+        "name": "flashcard_interaction_logs_student_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "users",
+        "oneToOne": false
+      }
+    ]
+  },
+  "flashcard_student_deck_analytics": { "kind": "view", "fks": [] },
+  "flashcards": {
+    "kind": "table",
+    "fks": [
+      { "name": "flashcards_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "flashcards_deck_id_fkey",
+        "columns": ["deck_id"],
+        "ref": "flashcard_deck_analytics",
+        "oneToOne": false
+      },
+      { "name": "flashcards_deck_id_fkey", "columns": ["deck_id"], "ref": "flashcard_decks", "oneToOne": false }
+    ]
+  },
+  "github_async_errors": { "kind": "table", "fks": [] },
+  "github_circuit_breaker_events": { "kind": "table", "fks": [] },
+  "github_circuit_breakers": { "kind": "table", "fks": [] },
+  "github_deployments": {
+    "kind": "table",
+    "fks": [
+      { "name": "github_deployments_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "github_deployments_repository_id_fkey",
+        "columns": ["repository_id"],
+        "ref": "repositories",
+        "oneToOne": false
+      }
+    ]
+  },
+  "github_orgs": { "kind": "table", "fks": [] },
+  "gradebook_column_students": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "gradebook_column_students_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "gradebook_column_students_gradebook_column_id_fkey",
+        "columns": ["gradebook_column_id"],
+        "ref": "gradebook_columns",
+        "oneToOne": false
+      },
+      {
+        "name": "gradebook_column_students_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "gradebook_column_students_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "gradebook_column_students_student_id_fkey1",
+        "columns": ["student_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "gradebook_column_students_student_id_fkey1",
+        "columns": ["student_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "gradebook_column_students_student_id_fkey1",
+        "columns": ["student_id"],
+        "ref": "user_roles",
+        "oneToOne": false
+      }
+    ]
+  },
+  "gradebook_columns": {
+    "kind": "table",
+    "fks": [
+      { "name": "gradebook_columns_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "gradebook_columns_gradebook_id_fkey",
+        "columns": ["gradebook_id"],
+        "ref": "gradebooks",
+        "oneToOne": false
+      }
+    ]
+  },
+  "gradebook_row_recalc_state": { "kind": "table", "fks": [] },
+  "gradebooks": {
+    "kind": "table",
+    "fks": [
+      { "name": "gradebooks_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "gradebooks_final_grade_column_fkey",
+        "columns": ["final_grade_column"],
+        "ref": "gradebook_columns",
+        "oneToOne": false
+      }
+    ]
+  },
+  "grader_keys": {
+    "kind": "table",
+    "fks": [{ "name": "grader_keys_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "grader_links_cache": { "kind": "table", "fks": [] },
+  "grader_result_output": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "grader_result_output_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      { "name": "grader_result_output_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "grader_result_output_grader_result_id_fkey",
+        "columns": ["grader_result_id"],
+        "ref": "grader_results",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_output_grader_result_id_fkey",
+        "columns": ["grader_result_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_output_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_output_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "grader_result_test_output": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "grader_result_test_output_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_test_output_grader_result_test_id_fkey",
+        "columns": ["grader_result_test_id"],
+        "ref": "grader_result_tests",
+        "oneToOne": false
+      }
+    ]
+  },
+  "grader_result_tests": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "grader_result_tests_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_grader_result_id_fkey",
+        "columns": ["grader_result_id"],
+        "ref": "grader_results",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_grader_result_id_fkey",
+        "columns": ["grader_result_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "grader_test_results_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }
+    ]
+  },
+  "grader_result_tests_hint_feedback": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "grader_result_tests_hint_feedback_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_hint_feedback_created_by_fkey",
+        "columns": ["created_by"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_hint_feedback_created_by_fkey",
+        "columns": ["created_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_hint_feedback_grader_result_tests_id_fkey",
+        "columns": ["grader_result_tests_id"],
+        "ref": "grader_result_tests",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_hint_feedback_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_hint_feedback_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_hint_feedback_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_result_tests_hint_feedback_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "grader_results": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "grader_results_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_results_autograder_regression_test_fkey",
+        "columns": ["autograder_regression_test"],
+        "ref": "autograder_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_results_autograder_regression_test_fkey",
+        "columns": ["autograder_regression_test"],
+        "ref": "autograder_regression_test_by_grader",
+        "oneToOne": false
+      },
+      { "name": "grader_results_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "grader_results_rerun_for_submission_id_fkey",
+        "columns": ["rerun_for_submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_results_rerun_for_submission_id_fkey",
+        "columns": ["rerun_for_submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_results_rerun_for_submission_id_fkey",
+        "columns": ["rerun_for_submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_results_rerun_for_submission_id_fkey",
+        "columns": ["rerun_for_submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "grader_results_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": true
+      },
+      {
+        "name": "grader_results_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": true
+      },
+      {
+        "name": "grader_results_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": true
+      },
+      {
+        "name": "grader_results_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": true
+      },
+      { "name": "grader_results_user_id_fkey", "columns": ["profile_id"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "grader_results_user_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "grading_conflicts": {
+    "kind": "table",
+    "fks": [
+      { "name": "grading_conflicts_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "grading_conflicts_created_by_profile_id_fkey",
+        "columns": ["created_by_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "grading_conflicts_created_by_profile_id_fkey",
+        "columns": ["created_by_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "grading_conflicts_grader_profile_id_fkey",
+        "columns": ["grader_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "grading_conflicts_grader_profile_id_fkey",
+        "columns": ["grader_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "grading_conflicts_student_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "grading_conflicts_student_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "help_queue_assignments": {
+    "kind": "table",
+    "fks": [
+      { "name": "help_queue_assignments_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "help_queue_assignments_help_queue_id_fkey",
+        "columns": ["help_queue_id"],
+        "ref": "help_queues",
+        "oneToOne": false
+      },
+      {
+        "name": "help_queue_assignments_ta_profile_id_fkey",
+        "columns": ["ta_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "help_queue_assignments_ta_profile_id_fkey",
+        "columns": ["ta_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "help_queues": {
+    "kind": "table",
+    "fks": [{ "name": "help_queues_class_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "help_request_feedback": {
+    "kind": "table",
+    "fks": [
+      { "name": "help_request_feedback_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "help_request_feedback_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_feedback_student_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_feedback_student_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "help_request_file_references": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "help_request_file_references_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_file_references_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_file_references_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_file_references_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_file_references_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_file_references_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_file_references_submission_file_id_fkey",
+        "columns": ["submission_file_id"],
+        "ref": "submission_files",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_file_references_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_file_references_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_file_references_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_file_references_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "help_request_message_read_receipts": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "help_request_message_read_receipts_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_message_read_receipts_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_message_read_receipts_message_id_fkey",
+        "columns": ["message_id"],
+        "ref": "help_request_messages",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_message_read_receipts_viewer_id_fkey",
+        "columns": ["viewer_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_message_read_receipts_viewer_id_fkey",
+        "columns": ["viewer_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "help_request_messages": {
+    "kind": "table",
+    "fks": [
+      { "name": "help_request_messages_author_fkey1", "columns": ["author"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "help_request_messages_author_fkey1",
+        "columns": ["author"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "help_request_messages_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "help_request_messages_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_messages_reply_to_message_id_fkey",
+        "columns": ["reply_to_message_id"],
+        "ref": "help_request_messages",
+        "oneToOne": false
+      }
+    ]
+  },
+  "help_request_moderation": {
+    "kind": "table",
+    "fks": [
+      { "name": "help_request_moderation_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "help_request_moderation_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_moderation_message_id_fkey",
+        "columns": ["message_id"],
+        "ref": "help_request_messages",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_moderation_moderator_profile_id_fkey",
+        "columns": ["moderator_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_moderation_moderator_profile_id_fkey",
+        "columns": ["moderator_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_moderation_student_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_moderation_student_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "help_request_students": {
+    "kind": "table",
+    "fks": [
+      { "name": "help_request_students_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "help_request_students_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_students_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_students_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "help_request_templates": {
+    "kind": "table",
+    "fks": [
+      { "name": "help_request_templates_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "help_request_templates_created_by_id_fkey",
+        "columns": ["created_by_id"],
+        "ref": "users",
+        "oneToOne": false
+      }
+    ]
+  },
+  "help_request_watchers": {
+    "kind": "table",
+    "fks": [
+      { "name": "help_request_watchers_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "help_request_watchers_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests",
+        "oneToOne": false
+      },
+      { "name": "help_request_watchers_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "help_request_work_sessions": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "help_request_work_sessions_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_work_sessions_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_work_sessions_ta_profile_id_fkey",
+        "columns": ["ta_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "help_request_work_sessions_ta_profile_id_fkey",
+        "columns": ["ta_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "help_requests": {
+    "kind": "table",
+    "fks": [
+      { "name": "help_requests_assignee_fkey", "columns": ["assignee"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "help_requests_assignee_fkey",
+        "columns": ["assignee"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "help_requests_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "help_requests_created_by_fkey", "columns": ["created_by"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "help_requests_created_by_fkey",
+        "columns": ["created_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "help_requests_followup_to_fkey",
+        "columns": ["followup_to"],
+        "ref": "help_requests",
+        "oneToOne": false
+      },
+      { "name": "help_requests_help_queue_fkey", "columns": ["help_queue"], "ref": "help_queues", "oneToOne": false },
+      {
+        "name": "help_requests_referenced_submission_id_fkey",
+        "columns": ["referenced_submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "help_requests_referenced_submission_id_fkey",
+        "columns": ["referenced_submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "help_requests_referenced_submission_id_fkey",
+        "columns": ["referenced_submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "help_requests_referenced_submission_id_fkey",
+        "columns": ["referenced_submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "help_requests_resolved_by_fkey", "columns": ["resolved_by"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "help_requests_resolved_by_fkey",
+        "columns": ["resolved_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "help_requests_template_id_fkey",
+        "columns": ["template_id"],
+        "ref": "help_request_templates",
+        "oneToOne": false
+      }
+    ]
+  },
+  "invitations": {
+    "kind": "table",
+    "fks": [
+      { "name": "fk_invitations_class_id", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "fk_invitations_class_section_id",
+        "columns": ["class_section_id"],
+        "ref": "class_sections",
+        "oneToOne": false
+      },
+      { "name": "fk_invitations_invited_by", "columns": ["invited_by"], "ref": "users", "oneToOne": false },
+      {
+        "name": "fk_invitations_lab_section_id",
+        "columns": ["lab_section_id"],
+        "ref": "lab_sections",
+        "oneToOne": false
+      },
+      {
+        "name": "fk_invitations_private_profile_id",
+        "columns": ["private_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "fk_invitations_private_profile_id",
+        "columns": ["private_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "fk_invitations_public_profile_id",
+        "columns": ["public_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "fk_invitations_public_profile_id",
+        "columns": ["public_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "lab_section_leaders": {
+    "kind": "table",
+    "fks": [
+      { "name": "lab_section_leaders_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "lab_section_leaders_lab_section_id_fkey",
+        "columns": ["lab_section_id"],
+        "ref": "lab_sections",
+        "oneToOne": false
+      },
+      {
+        "name": "lab_section_leaders_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "lab_section_leaders_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "lab_section_meetings": {
+    "kind": "table",
+    "fks": [
+      { "name": "lab_section_meetings_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "lab_section_meetings_lab_section_id_fkey",
+        "columns": ["lab_section_id"],
+        "ref": "lab_sections",
+        "oneToOne": false
+      }
+    ]
+  },
+  "lab_sections": {
+    "kind": "table",
+    "fks": [{ "name": "lab_sections_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }]
+  },
+  "live_poll_responses": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "live_poll_responses_live_poll_id_fkey",
+        "columns": ["live_poll_id"],
+        "ref": "live_polls",
+        "oneToOne": false
+      },
+      {
+        "name": "live_poll_responses_public_profile_id_fkey",
+        "columns": ["public_profile_id"],
+        "ref": "user_roles",
+        "oneToOne": false
+      }
+    ]
+  },
+  "live_polls": {
+    "kind": "table",
+    "fks": [
+      { "name": "live_polls_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "live_polls_created_by_fkey", "columns": ["created_by"], "ref": "user_roles", "oneToOne": false }
+    ]
+  },
+  "llm_inference_usage": {
+    "kind": "table",
+    "fks": [
+      { "name": "llm_inference_usage_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "llm_inference_usage_grader_result_test_id_fkey",
+        "columns": ["grader_result_test_id"],
+        "ref": "grader_result_tests",
+        "oneToOne": false
+      },
+      {
+        "name": "llm_inference_usage_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "llm_inference_usage_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "llm_inference_usage_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "llm_inference_usage_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "lti_context_links": {
+    "kind": "table",
+    "fks": [
+      { "name": "lti_context_links_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "lti_context_links_class_section_id_fkey",
+        "columns": ["class_section_id"],
+        "ref": "class_sections",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_context_links_deployment_fkey",
+        "columns": ["platform_id", "deployment_id"],
+        "ref": "lti_deployments",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_context_links_lab_section_id_fkey",
+        "columns": ["lab_section_id"],
+        "ref": "lab_sections",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_context_links_platform_id_fkey",
+        "columns": ["platform_id"],
+        "ref": "lti_platforms",
+        "oneToOne": false
+      }
+    ]
+  },
+  "lti_context_section_map": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "lti_context_section_map_class_section_id_fkey",
+        "columns": ["class_section_id"],
+        "ref": "class_sections",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_context_section_map_context_link_id_fkey",
+        "columns": ["context_link_id"],
+        "ref": "lti_context_links",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_context_section_map_lab_section_id_fkey",
+        "columns": ["lab_section_id"],
+        "ref": "lab_sections",
+        "oneToOne": false
+      }
+    ]
+  },
+  "lti_deployments": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "lti_deployments_platform_id_fkey",
+        "columns": ["platform_id"],
+        "ref": "lti_platforms",
+        "oneToOne": false
+      }
+    ]
+  },
+  "lti_grade_sync_queue": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "lti_grade_sync_queue_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": true
+      },
+      {
+        "name": "lti_grade_sync_queue_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": true
+      },
+      {
+        "name": "lti_grade_sync_queue_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": true
+      },
+      {
+        "name": "lti_grade_sync_queue_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": true
+      },
+      { "name": "lti_grade_sync_queue_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }
+    ]
+  },
+  "lti_grade_sync_state": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "lti_grade_sync_state_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_grade_sync_state_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_grade_sync_state_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_grade_sync_state_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "lti_grade_sync_state_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "lti_grade_sync_state_line_item_id_fkey",
+        "columns": ["line_item_id"],
+        "ref": "lti_line_items",
+        "oneToOne": false
+      }
+    ]
+  },
+  "lti_line_items": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "lti_line_items_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_line_items_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_line_items_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_line_items_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "lti_line_items_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "lti_line_items_context_link_id_fkey",
+        "columns": ["context_link_id"],
+        "ref": "lti_context_links",
+        "oneToOne": false
+      },
+      {
+        "name": "lti_line_items_gradebook_column_id_fkey",
+        "columns": ["gradebook_column_id"],
+        "ref": "gradebook_columns",
+        "oneToOne": false
+      }
+    ]
+  },
+  "lti_nonces": { "kind": "table", "fks": [] },
+  "lti_platforms": { "kind": "table", "fks": [] },
+  "lti_tool_keys": { "kind": "table", "fks": [] },
+  "lti_users": {
+    "kind": "table",
+    "fks": [
+      { "name": "lti_users_platform_id_fkey", "columns": ["platform_id"], "ref": "lti_platforms", "oneToOne": false },
+      { "name": "lti_users_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "name_generation_words": { "kind": "table", "fks": [] },
+  "notification_preferences": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "notification_preferences_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      { "name": "notification_preferences_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "notifications": {
+    "kind": "table",
+    "fks": [
+      { "name": "notifications_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "notifications_user_id_fkey", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "permissions": { "kind": "table", "fks": [] },
+  "pg_buffercache": { "kind": "view", "fks": [] },
+  "pr_base_tree_cache": { "kind": "table", "fks": [] },
+  "profiles": { "kind": "table", "fks": [] },
+  "realtime_channel_subscriptions": { "kind": "table", "fks": [] },
+  "repositories": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "repositories_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "repositories_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "repositories_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "repositories_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "repositories_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "repositories_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "repositories_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "repositories_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      { "name": "repositories_profile_id_fkey", "columns": ["profile_id"], "ref": "user_roles", "oneToOne": false },
+      { "name": "repositories_user_id_fkey1", "columns": ["profile_id"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "repositories_user_id_fkey1",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "repository_analytics_daily": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "repository_analytics_daily_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_daily_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_daily_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_daily_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_daily_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_daily_repository_id_fkey",
+        "columns": ["repository_id"],
+        "ref": "repositories",
+        "oneToOne": false
+      }
+    ]
+  },
+  "repository_analytics_fetch_status": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "repository_analytics_fetch_status_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_fetch_status_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_fetch_status_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_fetch_status_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_fetch_status_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_fetch_status_repository_id_fkey",
+        "columns": ["repository_id"],
+        "ref": "repositories",
+        "oneToOne": false
+      }
+    ]
+  },
+  "repository_analytics_items": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "repository_analytics_items_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_items_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_items_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_items_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_items_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_analytics_items_repository_id_fkey",
+        "columns": ["repository_id"],
+        "ref": "repositories",
+        "oneToOne": false
+      }
+    ]
+  },
+  "repository_analytics_repo_status": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "repository_analytics_repo_status_repository_id_fkey",
+        "columns": ["repository_id"],
+        "ref": "repositories",
+        "oneToOne": true
+      }
+    ]
+  },
+  "repository_check_runs": {
+    "kind": "table",
+    "fks": [
+      { "name": "repository_check_run_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "repository_check_run_repository_id_fkey",
+        "columns": ["repository_id"],
+        "ref": "repositories",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_target_submission_id_fkey",
+        "columns": ["target_submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_target_submission_id_fkey",
+        "columns": ["target_submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_target_submission_id_fkey",
+        "columns": ["target_submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_target_submission_id_fkey",
+        "columns": ["target_submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_triggered_by_fkey",
+        "columns": ["triggered_by"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_triggered_by_fkey",
+        "columns": ["triggered_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_triggered_by_fkey1",
+        "columns": ["triggered_by"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_triggered_by_fkey1",
+        "columns": ["triggered_by"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "repository_check_runs_triggered_by_fkey1",
+        "columns": ["triggered_by"],
+        "ref": "user_roles",
+        "oneToOne": false
+      }
+    ]
+  },
+  "review_assignment_rubric_parts": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "review_assignment_rubric_parts_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignment_rubric_parts_review_assignment_id_fkey",
+        "columns": ["review_assignment_id"],
+        "ref": "review_assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignment_rubric_parts_rubric_part_id_fkey",
+        "columns": ["rubric_part_id"],
+        "ref": "rubric_parts",
+        "oneToOne": false
+      }
+    ]
+  },
+  "review_assignments": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "review_assignments_assignee_profile_id_fkey",
+        "columns": ["assignee_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_assignee_profile_id_fkey",
+        "columns": ["assignee_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "review_assignments_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "review_assignments_completed_by_fkey",
+        "columns": ["completed_by"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_completed_by_fkey",
+        "columns": ["completed_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "review_assignments_rubric_id_fkey", "columns": ["rubric_id"], "ref": "rubrics", "oneToOne": false },
+      {
+        "name": "review_assignments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_submission_review_id_fkey",
+        "columns": ["submission_review_id"],
+        "ref": "submission_reviews",
+        "oneToOne": false
+      }
+    ]
+  },
+  "review_assignments_summary_by_assignee": {
+    "kind": "view",
+    "fks": [
+      {
+        "name": "review_assignments_assignee_profile_id_fkey",
+        "columns": ["assignee_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_assignee_profile_id_fkey",
+        "columns": ["assignee_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "review_assignments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "review_assignments_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }
+    ]
+  },
+  "revoked_token_ids": { "kind": "table", "fks": [] },
+  "rubric_check_references": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "rubric_check_references_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_check_references_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_check_references_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_check_references_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "rubric_check_references_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "rubric_check_references_referenced_rubric_check_id_fkey",
+        "columns": ["referenced_rubric_check_id"],
+        "ref": "rubric_checks",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_check_references_referencing_rubric_check_id_fkey",
+        "columns": ["referencing_rubric_check_id"],
+        "ref": "rubric_checks",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_check_references_rubric_id_fkey",
+        "columns": ["rubric_id"],
+        "ref": "rubrics",
+        "oneToOne": false
+      }
+    ]
+  },
+  "rubric_checks": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "rubric_checks_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_checks_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_checks_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_checks_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "rubric_checks_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "rubric_checks_rubric_criteria_id_fkey",
+        "columns": ["rubric_criteria_id"],
+        "ref": "rubric_criteria",
+        "oneToOne": false
+      },
+      { "name": "rubric_checks_rubric_id_fkey", "columns": ["rubric_id"], "ref": "rubrics", "oneToOne": false }
+    ]
+  },
+  "rubric_criteria": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "rubric_criteria_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_criteria_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_criteria_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_criteria_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "rubric_criteria_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "rubric_criteria_rubric_id_fkey", "columns": ["rubric_id"], "ref": "rubrics", "oneToOne": false },
+      {
+        "name": "rubric_criteria_rubric_part_id_fkey",
+        "columns": ["rubric_part_id"],
+        "ref": "rubric_parts",
+        "oneToOne": false
+      }
+    ]
+  },
+  "rubric_parts": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "rubric_parts_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_parts_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_parts_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "rubric_parts_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "rubric_parts_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "rubric_parts_rubric_id_fkey", "columns": ["rubric_id"], "ref": "rubrics", "oneToOne": false }
+    ]
+  },
+  "rubrics": {
+    "kind": "table",
+    "fks": [
+      { "name": "assignment_rubric_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "rubrics_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      { "name": "rubrics_assignment_id_fkey", "columns": ["assignment_id"], "ref": "assignments", "oneToOne": false },
+      {
+        "name": "rubrics_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "rubrics_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      }
+    ]
+  },
+  "sis_sync_status": {
+    "kind": "table",
+    "fks": [
+      { "name": "sis_sync_status_course_id_fkey", "columns": ["course_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "sis_sync_status_course_section_id_fkey",
+        "columns": ["course_section_id"],
+        "ref": "class_sections",
+        "oneToOne": false
+      },
+      {
+        "name": "sis_sync_status_lab_section_id_fkey",
+        "columns": ["lab_section_id"],
+        "ref": "lab_sections",
+        "oneToOne": false
+      }
+    ]
+  },
+  "student_deadline_extensions": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "student_deadline_extensions_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "student_deadline_extensions_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "student_deadline_extensions_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "student_flashcard_deck_progress": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "student_flashcard_deck_progress_card_id_fkey",
+        "columns": ["card_id"],
+        "ref": "flashcards",
+        "oneToOne": false
+      },
+      {
+        "name": "student_flashcard_deck_progress_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "student_flashcard_deck_progress_student_id_fkey",
+        "columns": ["student_id"],
+        "ref": "users",
+        "oneToOne": false
+      }
+    ]
+  },
+  "student_help_activity": {
+    "kind": "table",
+    "fks": [
+      { "name": "student_help_activity_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "student_help_activity_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "student_help_activity_student_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "student_help_activity_student_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "student_karma_notes": {
+    "kind": "table",
+    "fks": [
+      { "name": "student_karma_notes_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "student_karma_notes_created_by_id_fkey",
+        "columns": ["created_by_id"],
+        "ref": "users",
+        "oneToOne": false
+      },
+      {
+        "name": "student_karma_notes_student_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "student_karma_notes_student_profile_id_fkey",
+        "columns": ["student_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_artifact_comments": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "submission_artifact_comments_author_fkey",
+        "columns": ["author"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_author_fkey",
+        "columns": ["author"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_author_fkey1",
+        "columns": ["author"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_author_fkey1",
+        "columns": ["author"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_class_id_fkey1",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_regrade_request_id_fkey",
+        "columns": ["regrade_request_id"],
+        "ref": "submission_regrade_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_rubric_check_id_fkey",
+        "columns": ["rubric_check_id"],
+        "ref": "rubric_checks",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_rubric_check_id_fkey1",
+        "columns": ["rubric_check_id"],
+        "ref": "rubric_checks",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_artifact_id_fkey",
+        "columns": ["submission_artifact_id"],
+        "ref": "submission_artifacts",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_id_fkey1",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_id_fkey1",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_id_fkey1",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_id_fkey1",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_review_id_fkey",
+        "columns": ["submission_review_id"],
+        "ref": "submission_reviews",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_submission_review_id_fkey1",
+        "columns": ["submission_review_id"],
+        "ref": "submission_reviews",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_target_student_profile_id_fkey",
+        "columns": ["target_student_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifact_comments_target_student_profile_id_fkey",
+        "columns": ["target_student_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_artifacts": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "submission_artifacts_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifacts_autograder_regression_test_id_fkey",
+        "columns": ["autograder_regression_test_id"],
+        "ref": "autograder_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifacts_autograder_regression_test_id_fkey",
+        "columns": ["autograder_regression_test_id"],
+        "ref": "autograder_regression_test_by_grader",
+        "oneToOne": false
+      },
+      { "name": "submission_artifacts_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "submission_artifacts_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifacts_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifacts_submission_file_id_fkey",
+        "columns": ["submission_file_id"],
+        "ref": "submission_files",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifacts_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifacts_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifacts_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_artifacts_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_comments": {
+    "kind": "table",
+    "fks": [
+      { "name": "submission_comments_author_fkey", "columns": ["author"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "submission_comments_author_fkey",
+        "columns": ["author"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "submission_comments_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "submission_comments_regrade_request_id_fkey",
+        "columns": ["regrade_request_id"],
+        "ref": "submission_regrade_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_comments_rubric_check_id_fkey",
+        "columns": ["rubric_check_id"],
+        "ref": "rubric_checks",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_comments_submission_review_id_fkey",
+        "columns": ["submission_review_id"],
+        "ref": "submission_reviews",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_comments_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_comments_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_comments_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_comments_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_comments_target_student_profile_id_fkey",
+        "columns": ["target_student_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_comments_target_student_profile_id_fkey",
+        "columns": ["target_student_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_file_comments": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "submission_file_comments_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_comments_regrade_request_id_fkey",
+        "columns": ["regrade_request_id"],
+        "ref": "submission_regrade_requests",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_comments_rubric_check_id_fkey",
+        "columns": ["rubric_check_id"],
+        "ref": "rubric_checks",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_comments_submission_review_id_fkey",
+        "columns": ["submission_review_id"],
+        "ref": "submission_reviews",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_comments_target_student_profile_id_fkey",
+        "columns": ["target_student_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_comments_target_student_profile_id_fkey",
+        "columns": ["target_student_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "submission_file_lcomments_author_fkey", "columns": ["author"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "submission_file_lcomments_author_fkey",
+        "columns": ["author"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_lcomments_submission_files_id_fkey",
+        "columns": ["submission_file_id"],
+        "ref": "submission_files",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_lcomments_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_lcomments_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_lcomments_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_lcomments_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_file_symbol_index": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "submission_file_symbol_index_class_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_symbol_index_file_fkey",
+        "columns": ["submission_file_id"],
+        "ref": "submission_files",
+        "oneToOne": true
+      },
+      {
+        "name": "submission_file_symbol_index_group_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_symbol_index_profile_fkey",
+        "columns": ["profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_symbol_index_profile_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_symbol_index_submission_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_symbol_index_submission_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_symbol_index_submission_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_file_symbol_index_submission_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_files": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "submission_files_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      { "name": "submission_files_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "submission_files_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_files_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      { "name": "submission_files_profile_id_fkey", "columns": ["profile_id"], "ref": "user_roles", "oneToOne": false },
+      {
+        "name": "submission_files_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_files_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_files_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_files_submissions_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "submission_files_user_id_fkey", "columns": ["profile_id"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "submission_files_user_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_ordinal_counters": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "submission_ordinal_counters_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_ordinal_counters_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_ordinal_counters_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_ordinal_counters_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_pr_links": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "submission_pr_links_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_pr_links_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_pr_links_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_pr_links_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_pr_links_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "submission_pr_links_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "submission_pr_links_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_pr_links_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_regrade_request_comments": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "submission_regrade_request_comments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_author_fkey",
+        "columns": ["author"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_author_fkey",
+        "columns": ["author"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_request_comments_submission_regrade_request_",
+        "columns": ["submission_regrade_request_id"],
+        "ref": "submission_regrade_requests",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_regrade_requests": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "submission_regrade_requests_assignee_fkey",
+        "columns": ["assignee"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_assignee_fkey",
+        "columns": ["assignee"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_closed_by_fkey",
+        "columns": ["closed_by"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_closed_by_fkey",
+        "columns": ["closed_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_last_commented_by_fkey",
+        "columns": ["last_commented_by"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_last_commented_by_fkey",
+        "columns": ["last_commented_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_rubric_check_id_fkey",
+        "columns": ["rubric_check_id"],
+        "ref": "rubric_checks",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_submission_artifact_comment_id_fkey",
+        "columns": ["submission_artifact_comment_id"],
+        "ref": "submission_artifact_comments",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_submission_comment_id_fkey",
+        "columns": ["submission_comment_id"],
+        "ref": "submission_comments",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_submission_file_comment_id_fkey",
+        "columns": ["submission_file_comment_id"],
+        "ref": "submission_file_comments",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_submission_review_id_fkey",
+        "columns": ["submission_review_id"],
+        "ref": "submission_reviews",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_submitted_by_fkey",
+        "columns": ["created_by"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_regrade_requests_submitted_by_fkey",
+        "columns": ["created_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submission_reviews": {
+    "kind": "table",
+    "fks": [
+      { "name": "submission_reviews_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "submission_reviews_completed_by_fkey",
+        "columns": ["completed_by"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_reviews_completed_by_fkey",
+        "columns": ["completed_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "submission_reviews_grader_fkey", "columns": ["grader"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "submission_reviews_grader_fkey",
+        "columns": ["grader"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_reviews_meta_grader_fkey",
+        "columns": ["meta_grader"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_reviews_meta_grader_fkey",
+        "columns": ["meta_grader"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "submission_reviews_rubric_id_fkey", "columns": ["rubric_id"], "ref": "rubrics", "oneToOne": false },
+      {
+        "name": "submission_reviews_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_reviews_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_reviews_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_reviews_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submissions": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "submissio_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      { "name": "submissio_assignment_id_fkey", "columns": ["assignment_id"], "ref": "assignments", "oneToOne": false },
+      {
+        "name": "submissio_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "submissio_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "submissio_user_id_fkey1", "columns": ["profile_id"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "submissio_user_id_fkey1",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submissions_assignment_group_id_fkey",
+        "columns": ["assignment_group_id"],
+        "ref": "assignment_groups",
+        "oneToOne": false
+      },
+      { "name": "submissions_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "submissions_grading_review_id_fkey",
+        "columns": ["grading_review_id"],
+        "ref": "submission_reviews",
+        "oneToOne": false
+      },
+      {
+        "name": "submissions_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      { "name": "submissions_profile_id_fkey", "columns": ["profile_id"], "ref": "submissions_agg", "oneToOne": false },
+      { "name": "submissions_profile_id_fkey", "columns": ["profile_id"], "ref": "user_roles", "oneToOne": false },
+      {
+        "name": "submissions_repository_check_run_id_fkey",
+        "columns": ["repository_check_run_id"],
+        "ref": "repository_check_runs",
+        "oneToOne": false
+      },
+      {
+        "name": "submissions_repository_id_fkey",
+        "columns": ["repository_id"],
+        "ref": "repositories",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submissions_agg": {
+    "kind": "view",
+    "fks": [
+      {
+        "name": "submissio_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      { "name": "submissio_assignment_id_fkey", "columns": ["assignment_id"], "ref": "assignments", "oneToOne": false },
+      {
+        "name": "submissio_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "submissio_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "submissio_user_id_fkey1", "columns": ["user_id"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "submissio_user_id_fkey1",
+        "columns": ["user_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submissions_profile_id_fkey",
+        "columns": ["user_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      { "name": "submissions_profile_id_fkey", "columns": ["user_id"], "ref": "submissions_agg", "oneToOne": false },
+      { "name": "submissions_profile_id_fkey", "columns": ["user_id"], "ref": "user_roles", "oneToOne": false },
+      { "name": "user_roles_private_profile_id_fkey", "columns": ["profile_id"], "ref": "profiles", "oneToOne": true },
+      {
+        "name": "user_roles_private_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": true
+      }
+    ]
+  },
+  "submissions_with_grades_for_assignment_and_regression_test": {
+    "kind": "view",
+    "fks": [
+      { "name": "user_roles_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "user_roles_class_section_id_fkey",
+        "columns": ["class_section_id"],
+        "ref": "class_sections",
+        "oneToOne": false
+      },
+      {
+        "name": "user_roles_lab_section_id_fkey",
+        "columns": ["lab_section_id"],
+        "ref": "lab_sections",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submissions_with_grades_for_assignment_nice": {
+    "kind": "view",
+    "fks": [
+      {
+        "name": "submission_reviews_completed_by_fkey",
+        "columns": ["completed_by"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_reviews_completed_by_fkey",
+        "columns": ["completed_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "submission_reviews_grader_fkey", "columns": ["grader"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "submission_reviews_grader_fkey",
+        "columns": ["grader"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_reviews_meta_grader_fkey",
+        "columns": ["meta_grader"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "submission_reviews_meta_grader_fkey",
+        "columns": ["meta_grader"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "submissions_with_reviews_by_round_for_assignment": { "kind": "view", "fks": [] },
+  "survey_assignments": {
+    "kind": "table",
+    "fks": [
+      { "name": "survey_assignments_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "survey_assignments_profile_id_fkey", "columns": ["profile_id"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "survey_assignments_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "survey_assignments_survey_id_fkey", "columns": ["survey_id"], "ref": "surveys", "oneToOne": false }
+    ]
+  },
+  "survey_responses": {
+    "kind": "table",
+    "fks": [
+      { "name": "survey_responses_profile_id_fkey", "columns": ["profile_id"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "survey_responses_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "survey_responses_survey_id_fkey", "columns": ["survey_id"], "ref": "surveys", "oneToOne": false }
+    ]
+  },
+  "survey_series": {
+    "kind": "table",
+    "fks": [
+      { "name": "survey_series_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "survey_series_created_by_fkey", "columns": ["created_by"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "survey_series_created_by_fkey",
+        "columns": ["created_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "survey_templates": {
+    "kind": "table",
+    "fks": [
+      { "name": "survey_templates_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "survey_templates_created_by_fkey", "columns": ["created_by"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "survey_templates_created_by_fkey",
+        "columns": ["created_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "surveys": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "surveys_assignment_id_fkey",
+        "columns": ["assignment_id", "class_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "surveys_assignment_id_fkey",
+        "columns": ["assignment_id", "class_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "surveys_assignment_id_fkey",
+        "columns": ["assignment_id", "class_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      { "name": "surveys_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "surveys_created_by_fkey", "columns": ["created_by"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "surveys_created_by_fkey",
+        "columns": ["created_by"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "surveys_series_id_fkey", "columns": ["series_id"], "ref": "survey_series", "oneToOne": false }
+    ]
+  },
+  "system_settings": {
+    "kind": "table",
+    "fks": [
+      { "name": "system_settings_created_by_fkey", "columns": ["created_by"], "ref": "users", "oneToOne": false },
+      { "name": "system_settings_updated_by_fkey", "columns": ["updated_by"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "tags": {
+    "kind": "table",
+    "fks": [
+      { "name": "tags_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "tags_creator_fkey", "columns": ["creator_id"], "ref": "users", "oneToOne": false },
+      { "name": "tags_profile_id_fkey", "columns": ["profile_id"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "tags_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "user_privileges": { "kind": "table", "fks": [] },
+  "user_roles": {
+    "kind": "table",
+    "fks": [
+      { "name": "fk_user_roles_invitation_id", "columns": ["invitation_id"], "ref": "invitations", "oneToOne": false },
+      { "name": "user_roles_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "user_roles_class_section_id_fkey",
+        "columns": ["class_section_id"],
+        "ref": "class_sections",
+        "oneToOne": false
+      },
+      {
+        "name": "user_roles_lab_section_id_fkey",
+        "columns": ["lab_section_id"],
+        "ref": "lab_sections",
+        "oneToOne": false
+      },
+      {
+        "name": "user_roles_private_profile_id_fkey",
+        "columns": ["private_profile_id"],
+        "ref": "profiles",
+        "oneToOne": true
+      },
+      {
+        "name": "user_roles_private_profile_id_fkey",
+        "columns": ["private_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": true
+      },
+      {
+        "name": "user_roles_public_profile_id_fkey",
+        "columns": ["public_profile_id"],
+        "ref": "profiles",
+        "oneToOne": true
+      },
+      {
+        "name": "user_roles_public_profile_id_fkey",
+        "columns": ["public_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": true
+      },
+      { "name": "user_roles_user_id_fkey1", "columns": ["user_id"], "ref": "users", "oneToOne": false }
+    ]
+  },
+  "users": { "kind": "table", "fks": [] },
+  "video_meeting_session_users": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "video_meeting_session_users_class_id_fkey",
+        "columns": ["class_id"],
+        "ref": "classes",
+        "oneToOne": false
+      },
+      {
+        "name": "video_meeting_session_users_private_profile_id_fkey",
+        "columns": ["private_profile_id"],
+        "ref": "profiles",
+        "oneToOne": false
+      },
+      {
+        "name": "video_meeting_session_users_private_profile_id_fkey",
+        "columns": ["private_profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      {
+        "name": "video_meeting_session_users_video_meeting_session_id_fkey",
+        "columns": ["video_meeting_session_id"],
+        "ref": "video_meeting_sessions",
+        "oneToOne": false
+      }
+    ]
+  },
+  "video_meeting_sessions": {
+    "kind": "table",
+    "fks": [
+      { "name": "video_meeting_sessions_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "video_meeting_sessions_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests",
+        "oneToOne": false
+      }
+    ]
+  },
+  "workflow_events": {
+    "kind": "table",
+    "fks": [
+      { "name": "workflow_events_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "workflow_events_repository_id_fkey",
+        "columns": ["repository_id"],
+        "ref": "repositories",
+        "oneToOne": false
+      }
+    ]
+  },
+  "workflow_run_error": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "workflow_run_error_autograder_regression_test_id_fkey",
+        "columns": ["autograder_regression_test_id"],
+        "ref": "autograder_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "workflow_run_error_autograder_regression_test_id_fkey",
+        "columns": ["autograder_regression_test_id"],
+        "ref": "autograder_regression_test_by_grader",
+        "oneToOne": false
+      },
+      { "name": "workflow_run_error_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      {
+        "name": "workflow_run_error_repository_id_fkey",
+        "columns": ["repository_id"],
+        "ref": "repositories",
+        "oneToOne": false
+      },
+      {
+        "name": "workflow_run_error_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions",
+        "oneToOne": false
+      },
+      {
+        "name": "workflow_run_error_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      {
+        "name": "workflow_run_error_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "workflow_run_error_submission_id_fkey",
+        "columns": ["submission_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "workflow_runs": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "workflow_runs_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "workflow_runs_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "workflow_runs_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "workflow_runs_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      { "name": "workflow_runs_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false },
+      { "name": "workflow_runs_profile_id_fkey", "columns": ["profile_id"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "workflow_runs_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      }
+    ]
+  },
+  "workflow_timing_summary": {
+    "kind": "view",
+    "fks": [
+      {
+        "name": "repositories_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview",
+        "oneToOne": false
+      },
+      {
+        "name": "repositories_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments",
+        "oneToOne": false
+      },
+      {
+        "name": "repositories_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "repositories_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test",
+        "oneToOne": false
+      },
+      {
+        "name": "repositories_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "assignments_with_effective_due_dates",
+        "oneToOne": false
+      },
+      {
+        "name": "repositories_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_agg",
+        "oneToOne": false
+      },
+      { "name": "repositories_profile_id_fkey", "columns": ["profile_id"], "ref": "user_roles", "oneToOne": false },
+      { "name": "repositories_user_id_fkey1", "columns": ["profile_id"], "ref": "profiles", "oneToOne": false },
+      {
+        "name": "repositories_user_id_fkey1",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice",
+        "oneToOne": false
+      },
+      { "name": "workflow_events_class_id_fkey", "columns": ["class_id"], "ref": "classes", "oneToOne": false }
+    ]
+  }
+}

@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { runBugReportPostprocess } from "./bugReport/privacyArtifacts";
 
 const AUDIT_PARTITION_KEY_PATTERN = /^\s{6}audit_\d{8}:\s\{$/;
 
@@ -37,7 +38,7 @@ function stripAuditPartitions(content: string) {
   return filtered.join("\n");
 }
 
-function run() {
+async function run() {
   const targets = process.argv.slice(2);
   if (targets.length === 0) {
     throw new Error("Usage: npx tsx scripts/PostprocessSupabaseTypes.ts <file-path> [more-file-paths...]");
@@ -55,7 +56,21 @@ function run() {
       // eslint-disable-next-line no-console
       console.log(`No rotating audit partition types found in ${target}`);
     }
+
+    // The bug reporter's privacy classification must cover the public schema (lib/bugReport/privacy.ts).
+    if (path.basename(resolvedPath) === "SupabaseTypes.d.ts") {
+      const error = await runBugReportPostprocess(updated);
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.error(error);
+        process.exitCode = 1;
+      }
+    }
   }
 }
 
-run();
+run().catch((e) => {
+  // eslint-disable-next-line no-console
+  console.error(e);
+  process.exit(1);
+});
