@@ -23,6 +23,35 @@ function MutationStorm() {
   );
 }
 
+/**
+ * Rewrites random, incompressible attribute values on a fixed set of nodes, for the upload
+ * size tests (F2). Attributes other than the text ones are recorded as-is, so the recording
+ * compresses poorly, as a real one full of ids and class names can. The DOM stays the same
+ * size, so every checkout's FullSnapshot does too.
+ */
+function EntropyStorm() {
+  const [values, setValues] = useState<string[]>(() => randomValues());
+  useEffect(() => {
+    const id = setInterval(() => setValues(randomValues()), 250);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <Box data-testid="entropy-storm">
+      {values.map((v, i) => (
+        <Box key={i} data-entropy={v} width="4px" height="4px" />
+      ))}
+    </Box>
+  );
+}
+
+function randomValues(): string[] {
+  return Array.from({ length: 100 }, () => {
+    const bytes = new Uint8Array(1536);
+    crypto.getRandomValues(bytes);
+    return btoa(String.fromCharCode(...bytes));
+  });
+}
+
 function MonacoFixture() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
@@ -97,6 +126,7 @@ export default function BugReportHarness() {
         </Stack>
       )}
       {fixture === "mutations" && <MutationStorm />}
+      {fixture === "entropy" && <EntropyStorm />}
     </Stack>
   );
 }

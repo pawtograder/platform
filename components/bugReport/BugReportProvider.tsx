@@ -40,6 +40,11 @@ export function BugReportProvider({
 
   useEffect(() => {
     installErrorEventTracking();
+    // E2E builds only: the upload test hook (see lib/bugReport/upload/e2eHook.ts). The
+    // condition is a build-time constant, so other builds drop the import and its chunk.
+    if (process.env.BUG_REPORT_E2E === "true") {
+      void import("@/lib/bugReport/upload/e2eHook").then((m) => m.installUploadTestHook());
+    }
   }, []);
 
   const openReportDialog = useCallback((options: OpenReportDialogOptions = {}) => {

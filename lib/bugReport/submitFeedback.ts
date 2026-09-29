@@ -8,15 +8,22 @@ import { getReportContext, type ReportContext } from "./reportContext";
  * only orchestrates: upload first, then feedback that points at the replay.
  */
 export interface ReportReplayUpload {
-  upload(): Promise<ReplayUploadResult>;
+  /** `tags` are the report's tags (`buildReportTags`), for the replay events. */
+  upload(tags: Record<string, string>): Promise<ReplayUploadResult>;
 }
 
 export type ReplayUploadResult =
-  | { ok: true; replayId: string }
+  | {
+      ok: true;
+      replayId: string;
+      segments?: number;
+      /** Events left out because one event alone was over the segment size cap. */
+      dropped?: { events: number; ms: number };
+    }
   /** Sentry answered 429. The whole report stops and the user is told to try later. */
-  | { ok: false; reason: "rate_limited" }
+  | { ok: false; reason: "rate_limited"; replayId?: string }
   /** Retries ran out. Feedback still goes out, without a replay_id, tagged as such. */
-  | { ok: false; reason: "failed" };
+  | { ok: false; reason: "failed"; replayId?: string };
 
 export type SubmitReportInput = {
   description: string;
@@ -97,13 +104,17 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
     return { status: "rate_limited" };
   }
 
+  const tags = buildReportTags(input, client);
+
   let replayId: string | undefined;
   let replayState: "none" | "attached" | "failed" = "none";
   if (input.replay) {
-    const result = await input.replay.upload();
+    const result = await input.replay.upload({ ...tags });
     if (result.ok) {
       replayId = result.replayId;
       replayState = "attached";
+      // Staff should see that the replay has a gap, not wonder what the user skipped.
+      if (result.dropped) tags.replay_truncated = "true";
     } else if (result.reason === "rate_limited") {
       return { status: "rate_limited" };
     } else {
@@ -111,7 +122,6 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
     }
   }
 
-  const tags = buildReportTags(input, client);
   if (replayState === "failed") tags.replay_upload = "failed";
 
   // contexts.feedback.replay_id is how Sentry links the feedback to the replay. Set it in a
