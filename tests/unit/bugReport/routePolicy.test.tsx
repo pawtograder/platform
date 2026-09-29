@@ -21,7 +21,7 @@ import {
   type RoutePolicyEntry
 } from "@/lib/bugReport/routePolicy";
 import appRoutesFile from "@/lib/bugReport/generated/appRoutes.json";
-import { APP_DIR, APP_ROUTES_HINT, collectAppRoutes } from "@/scripts/bugReport/generateAppRoutes";
+import { APP_ROUTES_HINT, collectAppRoutes } from "@/scripts/bugReport/generateAppRoutes";
 import { ReportTaint, serializeTaintPayload } from "@/components/bugReport/ReportTaint";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -174,7 +174,7 @@ describe("routePolicy matching", () => {
 
 describe("generated/appRoutes.json", () => {
   it(`lists every page under app/ (${APP_ROUTES_HINT})`, () => {
-    expect(appRoutesFile).toEqual(collectAppRoutes(APP_DIR));
+    expect(appRoutesFile).toEqual(collectAppRoutes());
   });
 
   it("every ROUTE_POLICY pattern is a real page", () => {

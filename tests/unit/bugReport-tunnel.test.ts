@@ -177,7 +177,7 @@ describe("the tunnel caps the body at 10 MiB", () => {
       body,
       headers,
       duplex: "half"
-    } as RequestInit & { duplex: "half" });
+    } as unknown as ConstructorParameters<typeof NextRequest>[1]);
     return { req, pulled };
   }
 
