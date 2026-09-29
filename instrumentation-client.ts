@@ -32,16 +32,31 @@ if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
 } else {
   console.error("NEXT_PUBLIC_POSTHOG_KEY is not set, posthog will not be initialized");
 }
+// NEXT_PUBLIC_SENTRY_DSN replaced NEXT_PUBLIC_BUGSINK_DSN. The old name is read for one more
+// release so an un-renamed deployment keeps reporting; drop the fallback after that. Inlined
+// rather than imported from lib/bugReport/sentryDsn.ts because of the import warning above.
+const sentryDsn = process.env.NEXT_PUBLIC_SENTRY_DSN || process.env.NEXT_PUBLIC_BUGSINK_DSN;
+if (!process.env.NEXT_PUBLIC_SENTRY_DSN && process.env.NEXT_PUBLIC_BUGSINK_DSN) {
+  // eslint-disable-next-line no-console -- one-release deprecation notice
+  console.warn("NEXT_PUBLIC_BUGSINK_DSN is deprecated and will stop working next release; set NEXT_PUBLIC_SENTRY_DSN");
+}
 Sentry.init({
-  dsn: process.env.NEXT_PUBLIC_BUGSINK_DSN,
+  dsn: sentryDsn,
   tunnel: "/api/tunnel",
+  // The bundler plugin injects the release it uploaded source maps under as
+  // `globalThis.SENTRY_RELEASE`, and the SDK only falls back to it when `release` is absent, so
+  // an explicit `release: undefined` here threw it away. (The SENTRY_RELEASE and VERCEL_*
+  // variables this used to list are not NEXT_PUBLIC_, so they were always undefined in the browser.)
   release:
-    process.env.SENTRY_RELEASE ??
-    process.env.VERCEL_GIT_COMMIT_SHA ??
-    process.env.NEXT_PUBLIC_GIT_COMMIT_SHA ??
-    process.env.npm_package_version,
+    (globalThis as { SENTRY_RELEASE?: { id?: string } }).SENTRY_RELEASE?.id ?? process.env.NEXT_PUBLIC_GIT_COMMIT_SHA,
   environment: process.env.SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV,
-  integrations: [], // bugsink does not support any integrations
+  // An array adds to the SDK's default integrations rather than replacing them, and none of the
+  // defaults records a replay. Nothing replay-related may be added: the bug reporter records with
+  // its own rrweb buffer and uploads only when the user submits a report, while Sentry's
+  // replayIntegration uploads on its own. tests/unit/bugReport-instrumentation-client.test.ts
+  // fails if replayIntegration, a non-zero replay sample rate, or an auto-injected feedback
+  // widget appears here.
+  integrations: [],
   tracesSampleRate: 0,
   sendClientReports: false,
   replaysSessionSampleRate: 0,

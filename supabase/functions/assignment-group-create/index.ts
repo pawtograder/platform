@@ -22,7 +22,7 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   scope?.setTag("function", "assignment-group-create");
   scope?.setTag("course_id", course_id.toString());
   scope?.setTag("assignment_id", assignment_id.toString());
-  scope?.setTag("name", name);
+  scope?.setTag("group_name", name);
   scope?.setTag("invitees", invitees.join(","));
   const trimmedName = name.trim();
   if (trimmedName.length === 0) {

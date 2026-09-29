@@ -46,6 +46,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CreateI
   scope?.setUser({
     id: enrollment.user_id
   });
+  scope?.setTag("role", "instructor");
 
   // Use shared utility to create invitations (set sis_managed = false for manual invitations)
   const result = await createInvitationsBulk(

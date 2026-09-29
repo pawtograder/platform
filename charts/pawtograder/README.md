@@ -346,33 +346,38 @@ docker build \
 
 ### Source map upload (optional)
 
-Every web bundle carries injected debug IDs, but a stack trace in Bugsink stays
+Every web bundle carries injected debug IDs, but a stack trace in Sentry stays
 minified until the matching source maps are uploaded. That upload is off unless
 the build is given somewhere to send them:
 
 ```sh
 docker build \
   --build-arg NEXT_PUBLIC_PAWTOGRADER_WEB_URL=https://staging.pawtograder.net \
-  --build-arg NEXT_PUBLIC_BUGSINK_DSN=$BUGSINK_DSN \
-  --build-arg SENTRY_URL=https://bugsink.example.edu \
+  --build-arg NEXT_PUBLIC_SENTRY_DSN=$SENTRY_DSN \
+  --build-arg SENTRY_URL=https://sentry.example.edu \
+  --build-arg SENTRY_ORG=pawtograder \
   --build-arg SENTRY_PROJECT=pawtograder-web \
   --build-arg SENTRY_UPLOAD_ID=$(date +%s) \
-  --secret id=sentry_auth_token,env=BUGSINK_AUTH_TOKEN \
+  --secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN \
   -t ghcr.io/pawtograder/web:$VERSION .
 ```
 
 - **`sentry_auth_token`** is a BuildKit secret, never a build-arg, so it stays out
-  of the image layers and `docker history`. Create it in the Bugsink UI.
-- **`NEXT_PUBLIC_BUGSINK_DSN`** is what enables the bundler plugin that does the
+  of the image layers and `docker history`. Create it in the Sentry UI (it needs
+  `project:releases`).
+- **`NEXT_PUBLIC_SENTRY_DSN`** is what enables the bundler plugin that does the
   upload, so it is required here even though it is otherwise about runtime error
   reporting. Without it there are no reported errors to symbolicate, so a token
   without a DSN is a misconfiguration and fails the build rather than reporting an
   upload that never happens.
-- **`SENTRY_URL`** — your Bugsink base URL. Required whenever the token is
+- **`SENTRY_URL`** — your Sentry base URL. Required whenever the token is
   present: the bundler plugin reads a missing URL as sentry.io, so the build
   fails rather than shipping your source maps to a third party.
-- **`SENTRY_PROJECT`** — Bugsink ≥ 2.2.0 rejects an upload naming a project slug
-  it does not have. `SENTRY_ORG` is accepted but ignored (Bugsink is single-org).
+- **`SENTRY_ORG`** / **`SENTRY_PROJECT`** — the org and project slugs the maps
+  and release belong to (default `pawtograder` / `pawtograder-web`).
+- **`SENTRY_IS_BUGSINK=1`** — only if the target is still a Bugsink. It skips
+  release create, finalize, and deploy, which Bugsink does not implement; Bugsink
+  also ignores `SENTRY_ORG` and rejects an unknown `SENTRY_PROJECT`.
 - **`SENTRY_UPLOAD_ID`** — cache key for the layer that performs the upload.
   BuildKit deliberately leaves secret *contents* out of the build cache, so
   without a value that changes per build, a layer built before the token existed

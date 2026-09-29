@@ -692,9 +692,10 @@ async function sendEmail(params: {
     );
 
     // Add email context to scope
+    // No address or subject: Sentry events never carry a person's email, and subjects can
+    // include names. The user ID identifies the recipient.
     scope.setContext("email", {
-      recipient: recipient.email,
-      subject: emailContent.subject,
+      recipient_user_id: recipient.user_id,
       cc_count: ccEmails.length,
       template_type: body.type
     });

@@ -13,11 +13,12 @@ const disableSentryComponentAnnotation =
   process.env.SENTRY_DISABLE_COMPONENT_ANNOTATION === "1" || useFastSentryBuildProfile;
 const disableSentryRouteManifestInjection =
   process.env.SENTRY_DISABLE_ROUTE_MANIFEST_INJECTION === "1" || useFastSentryBuildProfile;
-// SENTRY_URL is only set when the build points at a self-hosted Bugsink rather
-// than sentry.io. Bugsink implements the source map upload endpoints that
-// sentry-cli uses (chunk-upload, artifactbundle/assemble) but not the release
-// API, so create/finalize 404 there — default them off when talking to Bugsink.
-const usingBugsink = !!process.env.SENTRY_URL;
+// Bugsink implements the source map upload endpoints that sentry-cli uses
+// (chunk-upload, artifactbundle/assemble) but not the release API, so
+// create/finalize 404 there. SENTRY_URL used to imply Bugsink; now that the
+// target is self-hosted Sentry, which has the release API, a build still
+// uploading to Bugsink says so explicitly with SENTRY_IS_BUGSINK=1.
+const usingBugsink = process.env.SENTRY_IS_BUGSINK === "1";
 const disableSentryReleaseCreate = process.env.SENTRY_DISABLE_RELEASE_CREATE === "1" || usingBugsink;
 const disableSentryReleaseFinalize = process.env.SENTRY_DISABLE_RELEASE_FINALIZE === "1" || usingBugsink;
 // The deploy step is part of that same unimplemented release API. It also has to
@@ -203,13 +204,23 @@ const nextConfig: NextConfig = {
 };
 
 // Skip Sentry webpack integration when DSN is unset (local dev) or explicitly disabled (CI speed).
-const hasSentryDsn = !!process.env.NEXT_PUBLIC_BUGSINK_DSN;
+// NEXT_PUBLIC_BUGSINK_DSN is the pre-rename name, still honored for one release.
+const sentryDsnVariable = process.env.NEXT_PUBLIC_SENTRY_DSN
+  ? "NEXT_PUBLIC_SENTRY_DSN"
+  : process.env.NEXT_PUBLIC_BUGSINK_DSN
+    ? "NEXT_PUBLIC_BUGSINK_DSN"
+    : undefined;
+if (sentryDsnVariable === "NEXT_PUBLIC_BUGSINK_DSN") {
+  // eslint-disable-next-line no-console -- one-release deprecation notice
+  console.warn("NEXT_PUBLIC_BUGSINK_DSN is deprecated and will stop working next release; set NEXT_PUBLIC_SENTRY_DSN");
+}
+const hasSentryDsn = sentryDsnVariable !== undefined;
 
 const sentryConfig = {
-  tunnelRoute: true,
-  // Overridable so a build can target a Bugsink project slug. Bugsink is
-  // single-org and ignores `org` entirely, but since 2.2.0 it rejects an upload
-  // whose `project` does not match an existing project slug.
+  // The client already sends to `tunnel: "/api/tunnel"` (instrumentation-client.ts), a route
+  // that checks the envelope's DSN before forwarding. The plugin's own tunnel route would add a
+  // second, unchecked path to the ingest host.
+  tunnelRoute: false,
   // `||` not `??`: the Dockerfile passes these through as ARGs that default to "".
   org: process.env.SENTRY_ORG || "pawtograder",
   project: process.env.SENTRY_PROJECT || "pawtograder-web",
@@ -234,7 +245,7 @@ const sentryConfig = {
   // release option we passed in favour of a hardcoded
   // `{ inject: false, create: false, finalize: false }` — `deploy` dropped with
   // the rest. The plugin then sees `deploy: undefined`, restores its Vercel
-  // default, and annotates a deploy onto a release Bugsink never created.
+  // default, and annotates a deploy onto a release that was never created.
   // `unstable_sentryWebpackPluginOptions` is spread over the computed options
   // last, so it is the only way into that branch. Mirror the hardcoded block so
   // the override changes nothing but the deploy.
@@ -272,13 +283,13 @@ const sentryPluginEnabled = hasSentryDsn && !disableSentryBundlingPlugin;
 // before spending a build, but the guards belong here too: the upload runs for
 // any `npm run build`, not only the containerized one.
 if (process.env.SENTRY_AUTH_TOKEN && !disableSentrySourcemaps) {
-  // The only symbolication target is the self-hosted Bugsink named by SENTRY_URL;
+  // The only symbolication target is the self-hosted Sentry named by SENTRY_URL;
   // there is no sentry.io account. The bundler plugin normalizes a nullish URL to
   // https://sentry.io, so a token without a URL hands private maps to a third party.
   if (!process.env.SENTRY_URL) {
     throw new Error(
       "SENTRY_AUTH_TOKEN is set but SENTRY_URL is empty: refusing to upload source maps to sentry.io. " +
-        "Set SENTRY_URL to the Bugsink base URL, or unset SENTRY_AUTH_TOKEN to skip the upload."
+        "Set SENTRY_URL to the self-hosted Sentry base URL, or unset SENTRY_AUTH_TOKEN to skip the upload."
     );
   }
   // `withSentryConfig` is what installs the uploader, and the DSN is what turns it
@@ -287,7 +298,7 @@ if (process.env.SENTRY_AUTH_TOKEN && !disableSentrySourcemaps) {
   if (!sentryPluginEnabled) {
     throw new Error(
       "SENTRY_AUTH_TOKEN is set but the Sentry bundler plugin is disabled " +
-        `(${hasSentryDsn ? "NEXT_DISABLE_SENTRY=1" : "NEXT_PUBLIC_BUGSINK_DSN is empty"}), so no source maps ` +
+        `(${hasSentryDsn ? "NEXT_DISABLE_SENTRY=1" : "NEXT_PUBLIC_SENTRY_DSN is empty"}), so no source maps ` +
         "would be uploaded. Pass the DSN the app reports errors to, or unset SENTRY_AUTH_TOKEN to skip the upload."
     );
   }
