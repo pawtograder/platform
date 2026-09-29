@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 import path from "path";
-import { RuleTester } from "eslint";
+import { RuleTester, type Linter, type Rule } from "eslint";
 import tseslint from "typescript-eslint";
 import rule from "@/eslint-rules/pii-render";
 
@@ -32,7 +32,7 @@ declare function Text(p: { children?: unknown; label?: unknown }): null;
 
 const tester = new RuleTester({
   languageOptions: {
-    parser: tseslint.parser,
+    parser: tseslint.parser as Linter.Parser,
     parserOptions: {
       project: "./tsconfig.json",
       tsconfigRootDir: FIXTURES,
@@ -50,7 +50,8 @@ const invalid = (jsx: string, ...messageIds: ("unmasked" | "unblocked")[]) => ({
   errors: messageIds.map((messageId) => ({ messageId }))
 });
 
-tester.run("pii/pii-render", rule, {
+// The rule is typed with typescript-eslint's RuleModule; ESLint's RuleTester wants its own.
+tester.run("pii/pii-render", rule as unknown as Rule.RuleModule, {
   valid: [
     // Names, emails, and handles may be rendered masked; the taint set redacts them.
     valid(`<div>{row.name}</div>`),
