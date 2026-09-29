@@ -812,6 +812,12 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/cli/index.ts"
 
+# Called by pg_cron with the edge-function secret, not a user JWT (see the bug reporter migration).
+[functions.bug-report-retention-purge]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/bug-report-retention-purge/index.ts"
+
 [functions.index-submission]
 enabled = true
 verify_jwt = false
