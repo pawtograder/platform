@@ -130,6 +130,13 @@ export type UploadTracePartial = {
   unscannable: SkippedPage[];
   /** Pages with nothing to upload (no course, recording off), counted by reason */
   skipped: Record<string, number>;
+  /** Routes of course pages with no recorder running, counted */
+  noRecorderRoutes: Record<string, number>;
+  /**
+   * Uploads whose page showed at least one canary when the upload was collected, by route: the
+   * scans where redaction had something to remove.
+   */
+  withCanariesOnPage: Record<string, number>;
   /** Classes whose flag the trace turned on */
   classesEnabled: number;
 };
@@ -353,6 +360,8 @@ export class UploadScanner {
   private readonly hitKeys = new Set<string>();
   private readonly unscannable: SkippedPage[] = [];
   private readonly skipped: Record<string, number> = {};
+  private readonly noRecorderRoutes: Record<string, number> = {};
+  private readonly withCanariesOnPage: Record<string, number> = {};
   private uploadsScanned = 0;
   private bytesScanned = 0;
 
@@ -515,6 +524,7 @@ export class UploadScanner {
     if (!state) return;
     if (state.recorder === null || state.recorder === "stopped") {
       this.skip("no recorder running (course flag off or route not recorded)");
+      this.noRecorderRoutes[route] = (this.noRecorderRoutes[route] ?? 0) + 1;
       return;
     }
     if (!state.hook) {
@@ -547,6 +557,9 @@ export class UploadScanner {
     }
     this.uploadsScanned++;
     this.bytesScanned += json.length;
+    const shown = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+    if (scanForCanaries(shown, this.registry, uploadVariants).length > 0)
+      this.withCanariesOnPage[route] = (this.withCanariesOnPage[route] ?? 0) + 1;
     for (const { hit, leaf } of findUploadHits(json, this.registry)) {
       const key = [hit.canary, hit.matched, route, leaf.where.replace(/^segment \d+ event \d+ /, "")].join("\u0000");
       if (this.hitKeys.has(`${this.currentTest}\u0000${key}`)) continue;
@@ -579,6 +592,8 @@ export class UploadScanner {
       hits: this.hits,
       unscannable: this.unscannable,
       skipped: this.skipped,
+      noRecorderRoutes: this.noRecorderRoutes,
+      withCanariesOnPage: this.withCanariesOnPage,
       classesEnabled: this.enabledClasses.size
     };
   }

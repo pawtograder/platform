@@ -83,13 +83,19 @@ function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
 export function uploadSummary(parts: UploadTracePartial[]) {
   const hits: UploadHit[] = parts.flatMap((p) => p.hits);
   const unscannable = parts.flatMap((p) => p.unscannable);
-  const skipped: Record<string, number> = {};
-  for (const p of parts) for (const [k, n] of Object.entries(p.skipped)) skipped[k] = (skipped[k] ?? 0) + n;
+  const sum = (pick: (p: UploadTracePartial) => Record<string, number> | undefined) => {
+    const out: Record<string, number> = {};
+    for (const p of parts) for (const [k, n] of Object.entries(pick(p) ?? {})) out[k] = (out[k] ?? 0) + n;
+    return Object.fromEntries(Object.entries(out).sort((a, b) => b[1] - a[1]));
+  };
+  const withCanariesOnPage = sum((p) => p.withCanariesOnPage);
   return {
     tests: new Set(parts.flatMap((p) => p.tests)).size,
     uploadsScanned: parts.reduce((n, p) => n + p.uploadsScanned, 0),
     bytesScanned: parts.reduce((n, p) => n + p.bytesScanned, 0),
     classesEnabled: parts.reduce((n, p) => n + p.classesEnabled, 0),
+    uploadsWithCanariesOnPage: Object.values(withCanariesOnPage).reduce((n, c) => n + c, 0),
+    withCanariesOnPage,
     hitCount: hits.length,
     hitsByKind: countBy(hits, (h) => h.kind),
     hitsByColumn: countBy(hits, (h) => h.column),
@@ -99,7 +105,8 @@ export function uploadSummary(parts: UploadTracePartial[]) {
     unscannableCount: unscannable.length,
     unscannableByReason: countBy(unscannable, (u) => u.reason),
     unscannable,
-    skipped
+    skipped: sum((p) => p.skipped),
+    noRecorderRoutes: sum((p) => p.noRecorderRoutes)
   };
 }
 
@@ -165,7 +172,7 @@ export default async function traceTeardown() {
     console.log(`[bug-report-trace] coverage gaps (seeded, never observed): ${cov.gaps.join(", ")}`);
   if (uploadParts.length > 0) {
     console.log(
-      `[bug-report-trace] uploads: ${upload.tests} tests, ${upload.uploadsScanned} uploads scanned (${(upload.bytesScanned / 1e6).toFixed(1)} MB), ${upload.hitCount} canary hits, ${upload.unscannableCount} pages not scannable`
+      `[bug-report-trace] uploads: ${upload.tests} tests, ${upload.uploadsScanned} uploads scanned (${(upload.bytesScanned / 1e6).toFixed(1)} MB; ${upload.uploadsWithCanariesOnPage} with canaries on the page), ${upload.hitCount} canary hits, ${upload.unscannableCount} pages not scannable`
     );
     if (upload.hitCount > 0) {
       console.log(`[bug-report-trace] upload hits by column: ${JSON.stringify(upload.hitsByColumn)}`);
