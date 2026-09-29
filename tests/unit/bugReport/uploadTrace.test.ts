@@ -7,7 +7,7 @@ import type { CanaryRegistry } from "@/tests/e2e/bugReport/canaryRegistry";
 import { findUploadHits, traceLevelFor, traceRoutePolicy, uploadLeaves } from "@/tests/e2e/bugReport/uploadTrace";
 
 const registry: CanaryRegistry = new Map([
-  ["Zorvik Quellmar", { kind: "name", column: "profiles.name", rowId: 1 }],
+  ["Zorvik Quellmar", { kind: "name", column: "profiles.name", rowId: 1, anchors: ["zorvik", "quellmar"] }],
   ["94.56", { kind: "grade", column: "submission_reviews.total_score", rowId: 2 }]
 ]);
 
@@ -95,6 +95,40 @@ describe("findUploadHits", () => {
     };
     const hits = findUploadHits(upload([[meta, css]]), registry);
     expect(hits.map((h) => h.leaf.where)).toEqual(["segment 0 event 1 FullSnapshot text node #4 in <document>"]);
+  });
+
+  test("a value a spec chose matches only whole; only variants with an anchor token count", () => {
+    const chosen: CanaryRegistry = new Map([
+      ["Grade View Student", { kind: "name", column: "profiles.name", rowId: 3 }],
+      [
+        "Xaolgleiske Vrukdrordro",
+        {
+          kind: "name",
+          column: "profiles.name",
+          rowId: 4,
+          realName: "Export Student One",
+          anchors: ["xaolgleiske", "vrukdrordro"]
+        }
+      ]
+    ]);
+    const text = (t: string) => ({
+      type: 3,
+      timestamp: 3,
+      data: { source: 0, texts: [{ id: 1, value: t }], adds: [] }
+    });
+    chosen.set("Commit Zhaxbrou Author", {
+      kind: "name",
+      column: "edge:repository-list-commits $.commits[*].commit.author.name",
+      rowId: 0,
+      anchors: ["zhaxbrou"]
+    });
+    const quiet = [meta, text("Grade breakdown"), text("Student One"), text("one of the students"), text("/commit/")];
+    expect(findUploadHits(upload([quiet]), chosen)).toEqual([]);
+    const loud = findUploadHits(upload([[meta, text("by grade view student"), text("Vrukdrordro")]]), chosen);
+    expect(loud.map((h) => [h.hit.canary, h.hit.entry.kind])).toEqual([
+      ["Grade View Student", "name"],
+      ["Xaolgleiske Vrukdrordro", "name"]
+    ]);
   });
 
   test("uploadLeaves covers the replay event and the feedback", () => {

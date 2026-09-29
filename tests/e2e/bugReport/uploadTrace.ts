@@ -27,8 +27,15 @@ import type { BrowserContext, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { ROUTE_POLICY, type RecordingLevel, type RoutePolicyEntry } from "@/lib/bugReport/routePolicy";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
-import { isNumberFragment, scanForCanaries, type CanaryHit } from "./canaries";
-import { isTraceMode, workerCanaries, type CanaryRegistry } from "./canaryRegistry";
+import { normalizeForMatch, variants } from "@/lib/bugReport/variants";
+import { isNumberFragment, scanForCanaries, type CanaryHit, type VariantsOf } from "./canaries";
+import {
+  isTraceMode,
+  TOKEN_PATTERN_SOURCE,
+  workerCanaries,
+  type CanaryEntry,
+  type CanaryRegistry
+} from "./canaryRegistry";
 import { allRoutePatterns, routePatternFor } from "./routePatterns";
 
 export function isUploadTraceMode(): boolean {
@@ -69,17 +76,23 @@ export function traceRoutePolicy(): RoutePolicyEntry[] {
 
 const managedCache = new Map<string, boolean>();
 
-/** True when a spec turns recording on itself, so the trace must leave its flag and policy alone. */
+/**
+ * True when a spec controls the course flag and route policy itself, so the trace must leave them
+ * alone: the bug reporter's own specs under `tests/e2e/bugReport/` (several assert what happens
+ * with the flag off or a route unlisted), except the trace tour, and any other spec that turns
+ * recording on.
+ */
 export function managesRecording(specFile: string): boolean {
   let managed = managedCache.get(specFile);
   if (managed === undefined) {
+    const own = /\/tests\/e2e\/bugReport\//.test(specFile) && !/trace-tour\.spec\.ts$/.test(specFile);
     let source = "";
     try {
       source = readFileSync(specFile, "utf8");
     } catch {
       /* unknown file: treat as not managing */
     }
-    managed = /\benableBugReports\b|\benableRecording\b|BUG_REPORT_RECORDING|bug-report-recording/.test(source);
+    managed = own || /\benableBugReports\b|\benableRecording\b|BUG_REPORT_RECORDING|bug-report-recording/.test(source);
     managedCache.set(specFile, managed);
   }
   return managed;
@@ -256,13 +269,29 @@ export function uploadLeaves(upload: { replay_event?: unknown; recording?: unkno
 }
 
 /**
+ * The forms of each canary the upload scan looks for. A generated canary's variants that contain
+ * one of its invented anchor tokens: "Last, First", the first and last tokens, and the
+ * `name (real_name)` form, but not the tokens of a real name or of words around the anchor
+ * ("Student", "One", "Commit"), which are everywhere in a page. A value a spec chose itself
+ * ("Grade View Student") is matched only whole, the way the trace's own matcher treats it.
+ */
+export const uploadVariants: VariantsOf = (canary, entry) => {
+  const anchors = (entry as CanaryEntry).anchors;
+  if (!anchors?.length) return [normalizeForMatch(canary)];
+  const tokenRe = new RegExp(TOKEN_PATTERN_SOURCE, "gu");
+  return variants(canary, { kind: entry.kind, realName: entry.realName }).filter((v) =>
+    [...v.matchAll(tokenRe)].some((m) => anchors.includes(m[0]))
+  );
+};
+
+/**
  * Canary hits in one upload, each with the string it sits in. A grade canary inside a longer
  * number or inside stylesheet text (a font metric such as "ascent-override: 94.56%") is a
  * coincidence, not a grade, and is dropped. Hits the per-string pass can't place (the upload was
  * not JSON) are kept with their offset.
  */
 export function findUploadHits(json: string, registry: CanaryRegistry): { hit: CanaryHit; leaf: Leaf }[] {
-  const raw = scanForCanaries(json, registry).filter((h) => !isNumberFragment(json, h));
+  const raw = scanForCanaries(json, registry, uploadVariants).filter((h) => !isNumberFragment(json, h));
   if (raw.length === 0) return [];
   let leaves: Leaf[];
   try {
@@ -274,7 +303,7 @@ export function findUploadHits(json: string, registry: CanaryRegistry): { hit: C
   for (const leaf of leaves) {
     // One hit per canary per string: the longest variant that matched ("Jane Doe" over "Jane").
     const best = new Map<string, CanaryHit>();
-    for (const hit of scanForCanaries(leaf.value, registry)) {
+    for (const hit of scanForCanaries(leaf.value, registry, uploadVariants)) {
       if (isNumberFragment(leaf.value, hit)) continue;
       if (hit.entry.kind === "grade" && leaf.css) continue;
       const prior = best.get(hit.canary);
