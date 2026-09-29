@@ -179,15 +179,20 @@ test.describe("bug report recorder performance", () => {
   test.beforeAll(async () => {
     test.setTimeout(600_000);
     gradebookCourse = await createClass({ name: "Bug Report K Gradebook" });
-    const users = await createUsersInClass([
-      { role: "instructor", class_id: gradebookCourse.id, name: "K Gradebook Instructor", useMagicLink: true },
-      ...Array.from({ length: 200 }, (_, i) => ({
-        role: "student" as const,
-        class_id: gradebookCourse.id,
-        name: `K Student ${String(i).padStart(3, "0")}`
-      }))
+    [gradebookInstructor] = await createUsersInClass([
+      { role: "instructor", class_id: gradebookCourse.id, name: "K Gradebook Instructor", useMagicLink: true }
     ]);
-    gradebookInstructor = users[0];
+    // In batches: createUsersInClass looks existing users up with one GET, whose URL gets too
+    // long past a few dozen emails.
+    for (let batch = 0; batch < 200; batch += 25) {
+      await createUsersInClass(
+        Array.from({ length: 25 }, (_, i) => ({
+          role: "student" as const,
+          class_id: gradebookCourse.id,
+          name: `K Student ${String(batch + i).padStart(3, "0")}`
+        }))
+      );
+    }
     await createAssignmentsAndGradebookColumns({
       class_id: gradebookCourse.id,
       numAssignments: 5,
