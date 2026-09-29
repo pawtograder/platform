@@ -56,7 +56,7 @@ test.describe("G1: Sentry envelopes carry no email", () => {
     await stub?.close();
   });
 
-  test("client and server errors identify the user by ID only", async ({ page, browserName }) => {
+  test("client and server errors identify the user by ID only", async ({ page, browserName }, testInfo) => {
     test.skip(browserName !== "chromium", "binds a fixed port; runs in one project");
     test.setTimeout(120_000);
     await loginAsUser(page, student, course);
@@ -93,6 +93,21 @@ test.describe("G1: Sentry envelopes carry no email", () => {
       new TextDecoder().decode(e.raw).toLowerCase().includes(email)
     );
     expect(offenders.map((e) => `${e.url} ${JSON.stringify(e.header)}`)).toEqual([]);
+
+    const summary = [clientAtStub, serverEnvelope].map((e) => {
+      const event = eventOf(e) as (EventPayload & { release?: string; environment?: string }) | undefined;
+      return {
+        url: e.url,
+        release: event?.release,
+        environment: event?.environment,
+        user: event?.user,
+        tags: event?.tags
+      };
+    });
+    await testInfo.attach("g1-events.json", {
+      body: JSON.stringify(summary, null, 2),
+      contentType: "application/json"
+    });
 
     await tunnel.stop();
   });
