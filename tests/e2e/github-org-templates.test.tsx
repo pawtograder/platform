@@ -163,6 +163,47 @@ test.describe("GitHub org template configuration", () => {
     const row = (data ?? []).find((o) => o.org_name === uniqueOrg);
     expect(row?.default_handout_template_repo).toBe(newHandout);
     expect(row?.default_solution_template_repo).toBe(newSolution);
+    // Typed values are stored as this org's own choice, not just resolved for display.
+    expect(row?.override_handout_template_repo).toBe(newHandout);
+    expect(row?.override_solution_template_repo).toBe(newSolution);
+
+    // Clearing the fields hands the org back to the deployment default, and a subsequent save must
+    // not re-pin it. The page renders the stored override (blank) rather than the resolved value,
+    // so saving again -- here, after only touching an unrelated field -- leaves the override NULL.
+    // Storing the resolved string instead would read identically today and silently stop tracking
+    // the deployment default from then on.
+    await page.getByLabel("Default handout template repository").fill("");
+    await page.getByLabel("Default solution (grader) template repository").fill("");
+    await page.getByRole("button", { name: "Save defaults" }).click();
+    await expect
+      .poll(
+        async () => {
+          const { data: cleared } = await supabase.rpc("admin_get_github_orgs");
+          return (cleared ?? []).find((o) => o.org_name === uniqueOrg)?.override_handout_template_repo;
+        },
+        { timeout: 15_000 }
+      )
+      .toBeNull();
+
+    await page.getByLabel("Permission sync exemptions").fill("octocat");
+    await page.getByRole("button", { name: "Save defaults" }).click();
+    await expect
+      .poll(
+        async () => {
+          const { data: after } = await supabase.rpc("admin_get_github_orgs");
+          return (after ?? []).find((o) => o.org_name === uniqueOrg)?.permission_sync_exempt_users;
+        },
+        { timeout: 15_000 }
+      )
+      .toEqual(["octocat"]);
+
+    const { data: finalData } = await supabase.rpc("admin_get_github_orgs");
+    const finalRow = (finalData ?? []).find((o) => o.org_name === uniqueOrg);
+    expect(finalRow?.override_handout_template_repo).toBeNull();
+    expect(finalRow?.override_solution_template_repo).toBeNull();
+    // Still reports something usable to the resolver, just no longer pinned to this org.
+    expect(finalRow?.default_handout_template_repo).toBe(DEFAULT_HANDOUT);
+    expect(finalRow?.default_solution_template_repo).toBe(DEFAULT_SOLUTION);
   });
 
   test("non-admin instructor cannot access the GitHub Orgs dashboard", async ({ page }) => {

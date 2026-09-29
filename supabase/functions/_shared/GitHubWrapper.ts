@@ -797,8 +797,23 @@ export async function updateAutograderWorkflowHash(
    * NEW workflow's hash against the OLD tree that students receive, so their Actions
    * submissions failed the hash check until another push repaired both values.
    */
-  ref?: string
+  ref?: string,
+  options?: {
+    /**
+     * Write only rows still pinned to `ref` whose stored hash is not for some other revision
+     * (see set_workflow_sha_at_pinned_revision). For a caller that pins its OWN pointer to `ref`
+     * before hashing: the handout push webhook writes a newer revision's hash before it advances
+     * `latest_template_sha`, so rows that still read as pinned to `ref` can already carry that
+     * newer hash, and writing ours over it fails their Actions submissions once the webhook
+     * finishes. Callers that hash first and pin afterwards must NOT set it, since their rows do
+     * not carry `ref` yet.
+     */
+    onlyRowsPinnedToRef?: boolean;
+  }
 ) {
+  if (options?.onlyRowsPinnedToRef && !ref) {
+    throw new Error("updateAutograderWorkflowHash: onlyRowsPinnedToRef requires a ref");
+  }
   if (isGithubStubEnabled()) {
     await recordE2eGithubCall("updateAutograderWorkflowHash", { repoName, ref });
     return null;
@@ -817,14 +832,31 @@ export async function updateAutograderWorkflowHash(
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   console.log("updating autograder workflow hash", hashStr, repoName);
+  if (options?.onlyRowsPinnedToRef) {
+    // One conditional statement in the database rather than select-ids-then-update: the check has
+    // to be on the row being written, so that a webhook write landing first is seen and respected.
+    const { error: pinnedError } = await adminSupabase.rpc("set_workflow_sha_at_pinned_revision", {
+      p_template_repo: repoName,
+      p_ref: ref!,
+      p_workflow_sha: hashStr
+    });
+    if (pinnedError) {
+      console.error(pinnedError);
+      throw new Error("Failed to update autograder workflow hash");
+    }
+    return hash;
+  }
   const { data: assignments } = await adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
   if (!assignments) {
     throw new Error("Assignment not found");
   }
-  const { data, error } = await adminSupabase
+  const { error } = await adminSupabase
     .from("autograder")
     .update({
-      workflow_sha: hashStr
+      workflow_sha: hashStr,
+      // The revision this hash describes, which set_workflow_sha_at_pinned_revision relies on. NULL
+      // ("unknown") when the caller hashed the unqualified head without resolving it.
+      workflow_sha_ref: ref ?? null
     })
     .in(
       "id",
@@ -958,6 +990,26 @@ export async function writeFileToRepo(
  * returns no commit sha, yet the assignment still needs a `latest_template_sha` to give
  * student syncs a target.
  */
+/**
+ * The repo's default branch name.
+ *
+ * Resolved rather than assumed for the reason createRepo already documents: a fork inherits the
+ * UPSTREAM's default branch and a template-generated repo inherits the template's, so either can be
+ * `master`. The webhook handlers all learned this the hard way — a grader/solution repo on `master`
+ * had every push ignored until they started reading `payload.repository.default_branch`. A caller
+ * with no push payload to read it from needs to ask GitHub.
+ */
+export async function getDefaultBranch(repoName: string, scope?: Sentry.Scope): Promise<string> {
+  scope?.setTag("github_operation", "get_default_branch");
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error("No octokit found for repository " + repoName);
+  }
+  const [owner, repo] = repoName.split("/");
+  const repoData = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+  return repoData.data.default_branch || "main";
+}
+
 export async function getDefaultBranchHeadSha(repoName: string, scope?: Sentry.Scope): Promise<string | undefined> {
   scope?.setTag("github_operation", "get_default_branch_head");
   scope?.setTag("repository", repoName);
@@ -1398,7 +1450,7 @@ export type CreateRepoOptions = {
 //                                            mergeForkUpstream return shape so
 //                                            tests can exercise the fallback.
 // -----------------------------------------------------------------------------
-function isGithubStubEnabled(): boolean {
+export function isGithubStubEnabled(): boolean {
   return Deno.env.get("PAWTOGRADER_GITHUB_STUB") === "1";
 }
 
@@ -3630,7 +3682,12 @@ function readOrgPermissionSyncExemptions(org: string): Promise<string[]> {
     const { data, error } = await adminSupabase
       .from("github_orgs")
       .select("permission_sync_exempt_users")
-      .eq("org_name", org)
+      // Case-insensitive: GitHub org logins are, `github_orgs.org_name` is a case-sensitive text
+      // key, and admin_create_class stores whatever capitalization was typed. An exact miss here
+      // reads as "no exemptions", which is the one wrong answer that costs something — permission
+      // sync would remove the protected accounts. A unique index on lower(org_name) guarantees this
+      // still matches at most one row.
+      .ilike("org_name", org)
       .maybeSingle();
     // maybeSingle: an org with no configuration row is `null` with no error, and that is a real
     // answer (no exemptions). Only a genuine error is unknown.

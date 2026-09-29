@@ -1470,6 +1470,7 @@ export type Database = {
           max_submissions_count: number | null;
           max_submissions_period_secs: number | null;
           workflow_sha: string | null;
+          workflow_sha_ref: string | null;
         };
         Insert: {
           class_id?: number | null;
@@ -1482,6 +1483,7 @@ export type Database = {
           max_submissions_count?: number | null;
           max_submissions_period_secs?: number | null;
           workflow_sha?: string | null;
+          workflow_sha_ref?: string | null;
         };
         Update: {
           class_id?: number | null;
@@ -1494,6 +1496,7 @@ export type Database = {
           max_submissions_count?: number | null;
           max_submissions_period_secs?: number | null;
           workflow_sha?: string | null;
+          workflow_sha_ref?: string | null;
         };
         Relationships: [
           {
@@ -3617,8 +3620,9 @@ export type Database = {
         Row: {
           created_at: string;
           created_by: string | null;
-          default_handout_template_repo: string;
-          default_solution_template_repo: string;
+          default_handout_template_repo: string | null;
+          default_solution_template_repo: string | null;
+          excluded_from_automation: boolean;
           org_name: string;
           permission_sync_exempt_users: string[];
           updated_at: string;
@@ -3627,8 +3631,9 @@ export type Database = {
         Insert: {
           created_at?: string;
           created_by?: string | null;
-          default_handout_template_repo?: string;
-          default_solution_template_repo?: string;
+          default_handout_template_repo?: string | null;
+          default_solution_template_repo?: string | null;
+          excluded_from_automation?: boolean;
           org_name: string;
           permission_sync_exempt_users?: string[];
           updated_at?: string;
@@ -3637,8 +3642,9 @@ export type Database = {
         Update: {
           created_at?: string;
           created_by?: string | null;
-          default_handout_template_repo?: string;
-          default_solution_template_repo?: string;
+          default_handout_template_repo?: string | null;
+          default_solution_template_repo?: string | null;
+          excluded_from_automation?: boolean;
           org_name?: string;
           permission_sync_exempt_users?: string[];
           updated_at?: string;
@@ -12065,8 +12071,11 @@ export type Database = {
           created_at: string;
           default_handout_template_repo: string;
           default_solution_template_repo: string;
+          excluded_from_automation: boolean;
           is_configured: boolean;
           org_name: string;
+          override_handout_template_repo: string;
+          override_solution_template_repo: string;
           permission_sync_exempt_users: string[];
           updated_at: string;
         }[];
@@ -12190,6 +12199,7 @@ export type Database = {
       };
       admin_upsert_github_org: {
         Args: {
+          p_excluded_from_automation?: boolean;
           p_handout?: string;
           p_org_name: string;
           p_permission_sync_exempt_users?: string[];
@@ -13641,6 +13651,19 @@ export type Database = {
         };
         Returns: number;
       };
+      inherit_handout_from_source: {
+        Args: {
+          p_assignment_id: number;
+          p_expected_has_autograder: boolean;
+          p_expected_repo_mode: Database["public"]["Enums"]["assignment_repo_mode"];
+          p_expected_submission_mode: string;
+          p_expected_template_repo?: string;
+          p_source_assignment_id: number;
+          p_source_latest_template_sha: string;
+          p_source_template_repo: string;
+        };
+        Returns: boolean;
+      };
       insert_discord_message: {
         Args: {
           p_class_id: number;
@@ -13900,6 +13923,15 @@ export type Database = {
         };
         Returns: Json;
       };
+      publish_grader_repo: {
+        Args: {
+          p_assignment_id: number;
+          p_expected_grader_repo: string;
+          p_expected_has_autograder?: boolean;
+          p_new_grader_repo: string;
+        };
+        Returns: boolean;
+      };
       queue_repository_syncs: {
         Args: { p_force?: boolean; p_repository_ids: number[] };
         Returns: Json;
@@ -13928,6 +13960,22 @@ export type Database = {
       reconcile_stuck_repo_creations: {
         Args: { p_stale_minutes?: number };
         Returns: number;
+      };
+      record_autograder_head_metadata: {
+        Args: {
+          p_assignment_id: number;
+          p_author: string;
+          p_config: Json;
+          p_expected_config?: Json;
+          p_expected_grader_repo?: string;
+          p_expected_has_autograder?: boolean;
+          p_expected_sha: string;
+          p_message: string;
+          p_new_sha: string;
+          p_points: number;
+          p_ref: string;
+        };
+        Returns: boolean;
       };
       record_discord_async_error: {
         Args: { p_error_data: Json; p_guild_id: string; p_method: string };
@@ -14057,6 +14105,14 @@ export type Database = {
         Args: { p_user_id: string };
         Returns: boolean;
       };
+      set_autograder_points_for_repo: {
+        Args: {
+          p_assignment_id: number;
+          p_expected_grader_repo: string;
+          p_points: number;
+        };
+        Returns: boolean;
+      };
       set_class_template_overrides: {
         Args: { p_class_id: number; p_handout?: string; p_solution?: string };
         Returns: undefined;
@@ -14077,6 +14133,10 @@ export type Database = {
           p_pr_state: string;
         };
         Returns: undefined;
+      };
+      set_workflow_sha_at_pinned_revision: {
+        Args: { p_ref: string; p_template_repo: string; p_workflow_sha: string };
+        Returns: number;
       };
       sis_sync_enrollment: {
         Args: { p_class_id: number; p_roster_data: Json; p_sync_options?: Json };
