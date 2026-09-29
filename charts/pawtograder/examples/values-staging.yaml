@@ -294,7 +294,7 @@ edgeFunctions:
     - pawtograder-e2e
     # Edge functions read SENTRY_DSN for server-side error reporting
     # (_shared/HandlerUtils.ts). The secret also carries the frontend
-    # NEXT_PUBLIC_BUGSINK_* keys, which are inert in the Deno runtime.
+    # NEXT_PUBLIC_SENTRY_DSN key, which is inert in the Deno runtime.
     - pawtograder-sentry
     # The same Secret GoTrue uses. Without it SMTP_HOST is simply unset in the functions
     # environment, which is why notification email never sent: the processor read "no SMTP host"

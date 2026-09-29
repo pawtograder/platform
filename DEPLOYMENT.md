@@ -840,23 +840,26 @@ curl -X POST https://<tool-host>/api/lti/sync-roster \
 
 ---
 
-## Error reporting (Sentry / self-hosted Bugsink)
+## Error reporting (self-hosted Sentry)
 
-Pawtograder reports errors through the Sentry SDK, but the client is configured
-for a **Sentry-compatible** backend and the web app is wired specifically for
-[**Bugsink**](https://www.bugsink.com/) — a lightweight, single-container,
-self-hostable error tracker. If you have only minimal resources, **self-hosting
-Bugsink is the recommended option** (it speaks the Sentry DSN protocol, so the
-same SDK config works against either).
+Pawtograder reports errors through the Sentry SDK to a **self-hosted Sentry**.
+Error reports, bug-report feedback, and (later) redacted replays all go there;
+nothing is sent to sentry.io. The client and server still run with no default
+Sentry integrations, which also keeps the web app working against
+[Bugsink](https://www.bugsink.com/) (it speaks the Sentry DSN protocol) if that
+is all you can host; set `SENTRY_IS_BUGSINK=1` at build time in that case, since
+Bugsink lacks the release API.
 
 Two surfaces, two variables:
 
-- **Web app (build-time).** `NEXT_PUBLIC_BUGSINK_DSN` (and
-  `NEXT_PUBLIC_BUGSINK_HOST`) are `NEXT_PUBLIC_*` vars, so they are **baked into
-  the web image at build time** — pass them as `docker build --build-arg`s, not
-  runtime env. When the DSN is unset the Sentry webpack integration is skipped
-  entirely (fine for local dev). The client posts through a `/api/tunnel` route
-  and runs with no Sentry integrations (Bugsink doesn't support them).
+- **Web app (build-time).** `NEXT_PUBLIC_SENTRY_DSN` is a `NEXT_PUBLIC_*` var,
+  so it is **baked into the web image at build time**: pass it as a
+  `docker build --build-arg`, not runtime env. When the DSN is unset the Sentry
+  webpack integration is skipped entirely (fine for local dev). The client posts
+  through the `/api/tunnel` route, which forwards only to the host and project
+  in this DSN and answers 403 for anything else. The old names
+  `NEXT_PUBLIC_BUGSINK_DSN` (read with a deprecation warning for one release)
+  and `NEXT_PUBLIC_BUGSINK_HOST` (no longer used) are going away.
 - **Edge Functions (runtime).** `SENTRY_DSN` (and optional `SENTRY_DEBUG`) are
   read at runtime from the `sentry` bundle:
 

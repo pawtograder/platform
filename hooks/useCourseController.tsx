@@ -43,6 +43,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import * as Sentry from "@sentry/nextjs";
 import useAuthState from "./useAuthState";
 import { useClassProfiles, useIsReadOnly } from "./useClassProfiles";
 
@@ -1956,6 +1957,15 @@ export function CourseControllerProvider({
       };
     }
   }, [course_id, profile_id, role, userId]);
+
+  // Error events from inside a course carry the viewer's role and the class, never their name or
+  // email (the user itself is set by ID only, in useAuthState).
+  useEffect(() => {
+    Sentry.setTags({ role, class_id: course_id });
+    return () => {
+      Sentry.setTags({ role: undefined, class_id: undefined });
+    };
+  }, [role, course_id]);
 
   if (!courseController || !userId) {
     return (
