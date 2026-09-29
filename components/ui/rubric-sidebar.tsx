@@ -113,6 +113,7 @@ import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
 import RequestRegradeForCheckDialog from "@/components/ui/RequestRegradeForCheckDialog";
 import { Tooltip } from "./tooltip";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Module-stable style — see `components/ui/markdown.tsx` for why
 // `<Markdown style={{...}}>` literals defeat its `memo` wrapper.
@@ -393,13 +394,13 @@ export function RubricCheckComment({
     if (!criteria || criteria.is_additive) {
       pointsText = (
         <>
-          <Icon as={FaCheckCircle} color="green.500" /> + {comment.points}
+          <Icon as={FaCheckCircle} color="green.500" /> + <ReportBlock>{comment.points}</ReportBlock>
         </>
       );
     } else {
       pointsText = (
         <>
-          <Icon as={FaTimesCircle} color="red.500" /> - {comment.points}
+          <Icon as={FaTimesCircle} color="red.500" /> - <ReportBlock>{comment.points}</ReportBlock>
         </>
       );
     }
@@ -498,7 +499,9 @@ export function RubricCheckComment({
                 sendMessage={handleEditComment}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <ReportBlock as="div">
+                <Markdown>{comment.comment}</Markdown>
+              </ReportBlock>
             )}
           </Box>
           {canCreateRegradeRequest && <RequestRegradeDialog comment={comment} />}
@@ -559,13 +562,17 @@ function ReferencedFeedbackDisplay({ referencing_check_id }: { referencing_check
             </VStack>
             <HStack gap={1.5} alignItems="center" mb={1.5}>
               <PersonName uid={instance.author} size="2xs" showAvatar={true} />
-              <Text fontSize="xs" color="fg.muted">
-                {instance.points != null && ` (${instance.points > 0 ? "+" : ""}${instance.points} pts)`}
-              </Text>
+              <ReportBlock>
+                <Text fontSize="xs" color="fg.muted">
+                  {instance.points != null && ` (${instance.points > 0 ? "+" : ""}${instance.points} pts)`}
+                </Text>
+              </ReportBlock>
             </HStack>
-            <Box fontSize="sm">
-              <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{instance.comment}</Markdown>
-            </Box>
+            <ReportBlock>
+              <Box fontSize="sm">
+                <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{instance.comment}</Markdown>
+              </Box>
+            </ReportBlock>
           </Box>
         ))}
       </VStack>
@@ -1353,7 +1360,7 @@ export function RubricCriteria({
       <Fieldset.Root>
         <Heading size="sm">
           <HStack gap={1}>
-            <Fieldset.Legend>{criteria.name}</Fieldset.Legend> {pointsText}
+            <Fieldset.Legend>{criteria.name}</Fieldset.Legend> <ReportBlock>{pointsText}</ReportBlock>
           </HStack>
         </Heading>
 

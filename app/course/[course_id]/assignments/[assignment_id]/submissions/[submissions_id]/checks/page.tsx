@@ -15,6 +15,7 @@ import {
   FaSpinner,
   FaTimesCircle
 } from "react-icons/fa";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // `workflow_events` IS in the generated Database type, so its Row is typed
 // normally. Only the RPC name `get_submission_checks` is not yet generated; we
@@ -152,7 +153,7 @@ export default function SubmissionChecksPage() {
                       <Text fontWeight="medium">{check.workflow_name ?? check.workflow_path ?? check.event_type}</Text>
                       {check.head_branch && (
                         <Text fontSize="xs" color="fg.muted">
-                          {check.head_branch}
+                          <ReportBlock>{check.head_branch}</ReportBlock>
                           {check.run_number ? ` · #${check.run_number}` : ""}
                         </Text>
                       )}

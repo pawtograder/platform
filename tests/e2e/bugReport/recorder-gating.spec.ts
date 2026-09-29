@@ -25,7 +25,6 @@ import {
 type Course = Awaited<ReturnType<typeof createClass>>;
 
 test.describe("bug report recorder gating", () => {
-
   let offCourse: Course;
   let onCourse: Course;
   let offStudent: TestingUser;
@@ -122,7 +121,8 @@ test.describe("bug report recorder gating", () => {
       .filter((e) => e.type === 4)
       .map((e) => new URL((e.data as { href: string }).href).pathname);
     expect(new Set(metaPaths)).toEqual(new Set([`/course/${onCourse.id}/discussion`]));
-    expect(JSON.stringify(buffer)).not.toContain("unlisted route console");    for (const seg of buffer.segments) {
+    expect(JSON.stringify(buffer)).not.toContain("unlisted route console");
+    for (const seg of buffer.segments) {
       expect(seg.events[0].type).toBe(4);
       expect(seg.events[1].type).toBe(2);
     }

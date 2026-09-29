@@ -37,6 +37,7 @@ import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
 import { Fragment, memo, useMemo, useState, type ComponentProps } from "react";
 import { FaFilter, FaHeart, FaPlus, FaThumbtack } from "react-icons/fa";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Module-stable plugin and component overrides for the teaser preview.
 // `<Markdown>` in `components/ui/markdown.tsx` memoizes the underlying
@@ -117,7 +118,7 @@ export const DiscussionThreadTeaser = memo((props: Props) => {
                 flex="1"
                 css={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}
               >
-                #{thread?.ordinal} {thread?.subject}
+                #{thread?.ordinal} <ReportBlock>{thread?.subject}</ReportBlock>
               </Text>
             </HStack>
             {thread?.is_question && !is_answered && (
@@ -131,9 +132,11 @@ export const DiscussionThreadTeaser = memo((props: Props) => {
               </Box>
             )}
             <Box color="fg.subtle" truncate>
-              <Markdown components={TEASER_COMPONENTS} remarkPlugins={TEASER_REMARK_PLUGINS}>
-                {thread?.body}
-              </Markdown>
+              <ReportBlock as="div">
+                <Markdown components={TEASER_COMPONENTS} remarkPlugins={TEASER_REMARK_PLUGINS}>
+                  {thread?.body}
+                </Markdown>
+              </ReportBlock>
               <HStack>
                 <Text fontSize="xs" color="text.muted">
                   {thread?.children_count ?? 0} replies
