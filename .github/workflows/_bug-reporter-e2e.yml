@@ -9,8 +9,8 @@ name: Bug reporter E2E
 #   f8        F8 smoke through /api/tunnel to the dev Sentry. Runs first. If it fails, the lane
 #             stops there and says the fault is infrastructure, not the product.
 #   f7        F7 and the large-segment upload, read back from the dev Sentry.
-#   h         H1-H3, the retention purge against the dev Sentry (skipped without the
-#             SENTRY_PURGE_TOKEN secret, HU3).
+#   h         H1-H3, the retention purge against the dev Sentry, on schedule and workflow_dispatch
+#             runs only (skipped without the SENTRY_PURGE_TOKEN secret, HU3).
 #   contract  ADR 8 contract checks for an SDK or rrweb bump: the envelope and upload Jest suites,
 #             and F1/F2/F5/F6 (upload.spec.ts) on both browsers.
 #   k         K1-K3 and the upload measurement, with BUG_REPORT_NIGHTLY=1, on chromium, one worker.
@@ -107,7 +107,7 @@ jobs:
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
-          SENTRY_PURGE_TOKEN: ${{ secrets.SENTRY_PURGE_TOKEN }}
+          SENTRY_PURGE_TOKEN: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && secrets.SENTRY_PURGE_TOKEN || '' }}
         run: |
           set -euo pipefail
           missing=()
@@ -407,16 +407,20 @@ jobs:
         continue-on-error: true
         run: scripts/bugReport/ci-playwright.sh contract tests/e2e/bugReport/upload.spec.ts
 
+      # The purge token can delete from the dev Sentry, so it never reaches PR-head code: the
+      # callers pass it and the `h` suite only on schedule and workflow_dispatch, and this step
+      # checks again (github.event_name is the caller's event). A PR run that asks for `h` gets
+      # this step skipped, which the verdict reports as a failure.
       - name: "H1-H3: retention purge against Sentry"
         id: h
-        if: contains(env.SUITES, ' h ')
+        if: contains(env.SUITES, ' h ') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         continue-on-error: true
         working-directory: supabase/functions
         env:
           SENTRY_URL: ${{ secrets.SENTRY_URL }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
-          SENTRY_PURGE_TOKEN: ${{ secrets.SENTRY_PURGE_TOKEN }}
+          SENTRY_PURGE_TOKEN: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && secrets.SENTRY_PURGE_TOKEN || '' }}
           SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
         run: |

@@ -5,8 +5,8 @@ name: Bug reporter nightly
 # and who may run it.
 #
 # Two lanes, in parallel, each with its own Supabase stack and full-profile build:
-#   sentry  F8 smoke, then F7 and H1-H3, against the dev Sentry. If F8 fails the lane stops and
-#           reports an infrastructure fault.
+#   sentry  F8 smoke, then F7 and H1-H3 (schedule and dispatch only), against the dev Sentry. If
+#           F8 fails the lane stops and reports an infrastructure fault.
 #   local   K1-K3, then the taint trace over the whole suite (I1-I4). No Sentry secrets at all:
 #           it builds with the stub DSN, so the suite's errors never reach the dev Sentry.
 # F8 gates only the Sentry lane. The local lane never talks to Sentry, so a Sentry outage says
@@ -16,7 +16,9 @@ name: Bug reporter nightly
 #   schedule                          nightly, on the default branch (staging)
 #   workflow_dispatch                 any branch, by anyone with write access
 #   PR labeled `bug-reporter-full`    runs on the PR head; later pushes rerun it while the label
-#                                     stays on
+#                                     stays on. No H1-H3 and no SENTRY_PURGE_TOKEN: the purge
+#                                     token can delete from the dev Sentry, and PR-head code
+#                                     never gets it
 #
 # Fork PRs: the label only asks for a run. _trust-gate.yml decides whether the PR's code may run
 # here at all, as for e2e-local and previews: every principal on the PR must hold write access,
@@ -26,7 +28,7 @@ name: Bug reporter nightly
 #
 # Secrets (repository secrets; HU2 and HU3 in the spec):
 #   SENTRY_URL, SENTRY_ORG, SENTRY_AUTH_TOKEN, NEXT_PUBLIC_SENTRY_DSN   required by the sentry lane
-#   SENTRY_PURGE_TOKEN                                                  H1-H3; skipped when unset
+#   SENTRY_PURGE_TOKEN                                                  H1-H3, schedule and dispatch only; skipped when unset
 # Variable: SENTRY_PROJECT (default pawtograder-web).
 
 on:
@@ -81,14 +83,17 @@ jobs:
       tier: nightly
       lane: sentry
       sentry: true
-      suites: f8 f7 h
+      # H1-H3 and the delete-scoped purge token only on schedule (the default branch) and
+      # workflow_dispatch (someone with write access picking the ref). A labeled PR runs its head's
+      # code, which must never hold a token that can delete from the dev Sentry.
+      suites: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'f8 f7 h' || 'f8 f7' }}
       timeout-minutes: 90
     secrets:
       SENTRY_URL: ${{ secrets.SENTRY_URL }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
-      SENTRY_PURGE_TOKEN: ${{ secrets.SENTRY_PURGE_TOKEN }}
+      SENTRY_PURGE_TOKEN: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && secrets.SENTRY_PURGE_TOKEN || '' }}
 
   local:
     needs: gate
