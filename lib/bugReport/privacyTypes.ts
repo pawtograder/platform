@@ -58,3 +58,12 @@ export function parseJsonPath(path: string): JsonPathSegment[] {
 export function formatJsonPath(segments: readonly JsonPathSegment[]): string {
   return "$" + segments.map((s) => ("key" in s ? `.${s.key}` : "[*]")).join("");
 }
+
+/** Shape of `generated/relationships.json`: each public table and view, with its foreign keys. */
+export type RelationshipsJson = Record<
+  string,
+  { kind: "table" | "view"; fks: { name: string; columns: string[]; ref: string }[] }
+>;
+
+/** Shape of `generated/edgeFunctionWrappers.json`: edge function slug to the wrappers that invoke it. */
+export type EdgeWrappersJson = Record<string, string[]>;

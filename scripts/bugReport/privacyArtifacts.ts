@@ -6,23 +6,14 @@
  */
 import fs from "fs";
 import path from "path";
-import { format, resolveConfig } from "prettier";
 import { COLUMNS, EDGE_FUNCTIONS, RPCS } from "../../lib/bugReport/privacy";
+import type { EdgeWrappersJson, RelationshipsJson } from "../../lib/bugReport/privacyTypes";
 import { readEdgeFunctionWrappers, readSchemaFromSource, type SchemaInfo } from "./schemaReader";
 
 const ROOT = path.resolve(__dirname, "../..");
 export const RELATIONSHIPS_JSON = path.join(ROOT, "lib/bugReport/generated/relationships.json");
 export const EDGE_WRAPPERS_JSON = path.join(ROOT, "lib/bugReport/generated/edgeFunctionWrappers.json");
 export const EDGE_FUNCTIONS_TS = path.join(ROOT, "lib/edgeFunctions.ts");
-
-/** Runtime shape of `relationships.json`, read by `lib/bugReport/selectParser.ts`. */
-export type RelationshipsJson = Record<
-  string,
-  { kind: "table" | "view"; fks: { name: string; columns: string[]; ref: string; oneToOne: boolean }[] }
->;
-
-/** Runtime shape of `edgeFunctionWrappers.json`: edge function slug to the wrappers that invoke it. */
-export type EdgeWrappersJson = Record<string, string[]>;
 
 export function relationshipsJson(schema: SchemaInfo): RelationshipsJson {
   const out: RelationshipsJson = {};
@@ -33,8 +24,7 @@ export function relationshipsJson(schema: SchemaInfo): RelationshipsJson {
       fks: r.relationships.map((fk) => ({
         name: fk.foreignKeyName,
         columns: fk.columns,
-        ref: fk.referencedRelation,
-        oneToOne: fk.isOneToOne
+        ref: fk.referencedRelation
       }))
     };
   }
@@ -54,6 +44,8 @@ export function edgeWrappersJson(edgeFunctionsSource: string): EdgeWrappersJson 
 }
 
 export async function formatJson(filePath: string, value: unknown): Promise<string> {
+  // Loaded lazily: prettier cannot be imported under Jest, which runs this module's checks in CI.
+  const { format, resolveConfig } = await import("prettier");
   const config = (await resolveConfig(filePath)) ?? {};
   return format(JSON.stringify(value), { ...config, filepath: filePath });
 }
