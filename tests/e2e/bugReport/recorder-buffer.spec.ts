@@ -159,7 +159,8 @@ test.describe("bug report recorder buffer", () => {
     const crumbs = breadcrumbs(buffer);
     const consoleCrumbs = crumbs.filter((b) => b.category === "console");
     expect(consoleCrumbs).toContainEqual(
-      expect.objectContaining({ level: "log", message: 'c4-console-marker {"answer":42}' })
+      // Object arguments are listed as their leaves (`key: value`), not as JSON.
+      expect.objectContaining({ level: "log", message: "c4-console-marker answer: 42" })
     );
     expect(consoleCrumbs).toContainEqual(expect.objectContaining({ level: "error", message: "c4-console-error" }));
 
