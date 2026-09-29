@@ -7,6 +7,7 @@ import { routePatternFor } from "@/lib/bugReport/routePattern";
 import { useParams, usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ReportBugDialog, type ReportReplaySlot } from "./ReportBugDialog";
+import { useReplayReview } from "./ReplayReview";
 
 type BugReportContextValue = {
   openReportDialog: (options?: OpenReportDialogOptions) => void;
@@ -19,16 +20,11 @@ const BugReportContext = createContext<BugReportContextValue | null>(null);
  * point (user menu, "Report this" on error toasts, the error page) opens the same dialog.
  * It also keeps the route pattern in the report context current.
  *
- * `replay` is the hook for the recording half: when the recorder is running on this route,
- * pass the review slot and the dialog shows it. Until then reports go without a replay.
+ * The recording half comes from `useReplayReview`: when the recorder is running on this route
+ * at the moment the dialog opens, the dialog gets the review section and attaches the redacted
+ * replay on Submit. Otherwise reports go without one. `replay` overrides it (tests, harnesses).
  */
-export function BugReportProvider({
-  children,
-  replay = null
-}: {
-  children: ReactNode;
-  replay?: ReportReplaySlot | null;
-}) {
+export function BugReportProvider({ children, replay }: { children: ReactNode; replay?: ReportReplaySlot | null }) {
   const [open, setOpen] = useState(false);
   const [eventId, setEventId] = useState<string | undefined>(undefined);
   const pathname = usePathname();
@@ -57,11 +53,17 @@ export function BugReportProvider({
   useEffect(() => registerReportDialogOpener(openReportDialog), [openReportDialog]);
 
   const value = useMemo(() => ({ openReportDialog }), [openReportDialog]);
+  const review = useReplayReview(open && replay === undefined);
 
   return (
     <BugReportContext.Provider value={value}>
       {children}
-      <ReportBugDialog open={open} onOpenChange={setOpen} eventId={eventId} replay={replay} />
+      <ReportBugDialog
+        open={open}
+        onOpenChange={setOpen}
+        eventId={eventId}
+        replay={replay === undefined ? review : replay}
+      />
     </BugReportContext.Provider>
   );
 }

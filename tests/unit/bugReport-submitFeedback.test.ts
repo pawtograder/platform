@@ -62,7 +62,7 @@ import {
   clearReportIdentity,
   getLastKnownReportContext
 } from "@/lib/bugReport/reportContext";
-import { resetSubmitStateForTests, submitReport } from "@/lib/bugReport/submitFeedback";
+import { resetSubmitStateForTests, scrubFeedbackEvent, submitReport } from "@/lib/bugReport/submitFeedback";
 
 beforeEach(() => {
   sentEvents.length = 0;
@@ -202,5 +202,37 @@ describe("report context", () => {
     setReportIdentity({ classId: 7, role: "grader" });
     clearReportIdentity();
     expect(getLastKnownReportContext()).toMatchObject({ classId: 7, role: "grader" });
+  });
+});
+
+describe("scrubFeedbackEvent", () => {
+  it("keeps only the report's own data: no breadcrumbs, extra, request, scope contexts, or user fields", () => {
+    const event = {
+      event_id: "e".repeat(32),
+      type: "feedback",
+      breadcrumbs: [{ category: "ui.click", message: 'button[aria-label="Jane Doe"]' }],
+      extra: { note: "jane@example.edu" },
+      request: { url: "https://app.test/course/1?student=Jane%20Doe", headers: { Referer: "x" } },
+      contexts: {
+        feedback: { message: "it broke", url: "https://app.test/course/1?student=********" },
+        trace: { trace_id: "t" },
+        replay: { replay_id: "r" },
+        os: { name: "Linux" },
+        browser: { name: "Chrome" },
+        device: { family: "Desktop" },
+        react: { version: "19" },
+        state: { profile: "Jane Doe" }
+      },
+      tags: { class_id: "1", from_scope: "Jane Doe" },
+      user: { id: "u1", email: "jane@example.edu", username: "jdoe", ip_address: "1.2.3.4" }
+    };
+    scrubFeedbackEvent(event as never, { class_id: "1", role: "student", contact_ok: "false" });
+    expect(event).not.toHaveProperty("breadcrumbs");
+    expect(event).not.toHaveProperty("extra");
+    expect(event).not.toHaveProperty("request");
+    expect(Object.keys(event.contexts).sort()).toEqual(["browser", "device", "feedback", "os", "replay", "trace"]);
+    expect(event.tags).toEqual({ class_id: "1", role: "student", contact_ok: "false" });
+    expect(event.user).toEqual({ id: "u1", ip_address: null });
+    expect(JSON.stringify(event)).not.toMatch(/Jane|jane|jdoe/);
   });
 });

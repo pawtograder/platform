@@ -6,13 +6,17 @@ import { createClass, createUsersInClass, loginAsUser, TestingUser } from "../Te
 import {
   assertNoReplayUploaded,
   captureTunnel,
+  describeHits,
   payloadJsonOf,
+  scanForCanaries,
+  type CanaryRegistry,
   type CapturedEnvelope,
   type TunnelCapture
 } from "./index";
 
 /**
  * Package 5 (report dialog without replay): E5, E6, E7, E8, E9, E10, and the dialog half of A1.
+ * The same tests with a replay attached (E1-E6) are in review.spec.ts.
  * PR tier: `captureTunnel` answers `/api/tunnel` itself, so nothing reaches Sentry.
  *
  * The build under test must have a valid Sentry DSN baked in (`NEXT_PUBLIC_SENTRY_DSN`, e.g.
@@ -167,8 +171,8 @@ test.describe("Report a bug dialog (no replay)", () => {
     await assertStudentPageAccessible(page, "report-bug dialog");
 
     // Focus is trapped in the dialog; Tab from the description walks the controls in order
-    // and wraps. TODO(pkg 5 replay half): redact controls and the minutes control go between
-    // the checkbox and Cancel.
+    // and wraps. With a replay, the review controls go between the checkbox and Cancel
+    // (review.spec.ts E5).
     const stops = await tabSequence(page, 5);
     const describe = (s: (typeof stops)[number]) => (s.tag === "textarea" ? "description" : s.text || s.tag);
     const names = stops.map(describe);
@@ -219,8 +223,48 @@ test.describe("Report a bug dialog (no replay)", () => {
     expect(feedback[0].tags?.contact_ok).toBe("true");
   });
 
-  test.fixme("E6 (replay half): redact a string from the keyboard before submitting", async () => {
-    // TODO(bug-reporter pkg 5 replay half): needs the recorder (pkg 1) and redaction worker (pkg 3).
+  test("the feedback carries none of the scope's unredacted data (breadcrumbs, extra, request)", async ({ page }) => {
+    const canary = "Quillon Vandermeersch";
+    const registry: CanaryRegistry = new Map([[canary, { kind: "name", column: "e2e.scope_canary", rowId: 1 }]]);
+    const tunnel = await captureTunnel(page);
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/assignments`);
+    await expect(page.locator("#main-content")).toBeVisible();
+    // A console message and a click on an element labelled with the canary: both become SDK
+    // breadcrumbs on the scope.
+    await page.evaluate((name) => {
+      // eslint-disable-next-line no-console
+      console.log("loaded profile", name);
+      const button = document.createElement("button");
+      button.setAttribute("aria-label", name);
+      button.textContent = "x";
+      button.id = "scope-canary-button";
+      document.getElementById("main-content")!.appendChild(button);
+    }, canary);
+    await page.locator("#scope-canary-button").click();
+    // Positive control: an error event sent now does carry those breadcrumbs.
+    await page.evaluate(() => {
+      setTimeout(() => {
+        throw new Error("E2E scope breadcrumb control");
+      }, 0);
+    });
+    await expect.poll(() => errorEventsOf(tunnel).length).toBeGreaterThan(0);
+    const errorItem = tunnel.items("event").at(-1)!;
+    expect(scanForCanaries(decoder.decode(errorItem.payload), registry).length).toBeGreaterThan(0);
+
+    const dialog = await openFromUserMenu(page);
+    await dialog.getByRole("textbox", { name: /What happened/ }).fill("scope data report");
+    await dialog.getByRole("button", { name: "Submit" }).click();
+    await expect(dialog.getByTestId("report-bug-sent")).toBeVisible();
+
+    const [item] = tunnel.items("feedback");
+    const feedback = payloadJsonOf<Record<string, unknown>>(item)!;
+    expect(feedback).not.toHaveProperty("breadcrumbs");
+    expect(feedback).not.toHaveProperty("extra");
+    expect(feedback).not.toHaveProperty("request");
+    expect(feedback.user).toEqual({ id: expect.any(String), ip_address: null });
+    const hits = scanForCanaries(decoder.decode(item.payload), registry);
+    expect(hits, describeHits(hits)).toEqual([]);
   });
 
   test("429: the dialog says try again later and keeps the draft", async ({ page }) => {
@@ -263,6 +307,12 @@ test.describe("Report a bug dialog (no replay)", () => {
     await dialog.getByRole("textbox", { name: /What happened/ }).fill("regrade list failed");
     await dialog.getByRole("button", { name: "Submit" }).click();
     await expect(dialog.getByTestId("report-bug-sent")).toBeVisible();
+    // The toast is gone, so focus returns to the main landmark, not <body>.
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toBeHidden();
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.id || document.activeElement?.tagName))
+      .toBe("main-content");
     const [feedback] = feedbackOf(tunnel);
     expect(feedback.contexts.feedback.associated_event_id).toBe(errorEventId);
     expect(feedback.tags?.linked_event_id).toBe(errorEventId);
