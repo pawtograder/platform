@@ -1,13 +1,15 @@
 /**
  * Leak tests for the taint ingest (package 2, PR tier): D1, D2, D4, D5, D6, D7, D16.
  *
- * Each test opens a page of a canary class with recording on, then checks that every canary the
- * page renders (text and text attributes) is in the recorder's taint set, which is what the
- * redaction walker (package 3) removes from the upload. The final form of these tests,
- * `scanForCanaries(redactedUploadBytes(page)) = []`, needs package 3's helper; until it lands
- * the assertion is at the taint-set level, through the E2E-only `window.__bugReportTaint`.
+ * Each test opens a page of a canary class with recording on and checks two things:
  *
- * Needs a build made with E2E_ENABLE=true (test route policy and the taint hook). No Sentry.
+ * - every canary the page renders (text and text attributes) is in the recorder's taint set,
+ *   through the E2E-only `window.__bugReportTaint`. This pins a leak on the ingest point that
+ *   missed it rather than on the redaction pass;
+ * - `scanForCanaries(redactedUploadBytes(page)) = []`: the would-be upload, redacted by package
+ *   3's worker with this taint set, holds no canary (spec §7.3).
+ *
+ * Needs a build made with E2E_ENABLE=true (test route policy and the test hooks). No Sentry.
  */
 /* eslint-disable no-console -- measurements printed for the run log */
 import type { Page } from "@playwright/test";
@@ -16,9 +18,10 @@ import type { RoutePolicyEntry } from "@/lib/bugReport/routePolicy";
 import { addDays } from "date-fns";
 import { insertAssignment, insertHelpRequest, loginAsUser, supabase, type TestingUser } from "../TestingUtils";
 import { canarySentence, registerCanary, resolveCanary } from "./canaryRegistry";
-import { scanForCanaries } from "./canaries";
+import { describeHits, scanForCanaries } from "./canaries";
 import { seedCanaryClass, type CanarySeed } from "./canarySeed";
 import { enableBugReports, waitForRecorderState } from "./recorderTestUtils";
+import { redactedUploadBytes } from "./report";
 
 test.describe.configure({ mode: "default" });
 
@@ -137,6 +140,13 @@ async function expectRenderedCanariesTainted(page: Page, minHits = 1): Promise<S
   return new Set(byCanary.keys());
 }
 
+/** The spec's final assertion: no canary in any would-be uploaded byte. */
+async function expectNoCanariesUploaded(page: Page): Promise<void> {
+  await settle(page);
+  const hits = scanForCanaries(await redactedUploadBytes(page), seed.registry);
+  expect(hits, describeHits(hits)).toEqual([]);
+}
+
 function canariesOf(column: string): string[] {
   return [...seed.registry].filter(([, e]) => e.column === column).map(([v]) => v);
 }
@@ -154,6 +164,7 @@ test("D1: roster on the instructor enrollments page", async ({ page }) => {
   expect(found.has(seed.students[0].private_profile_name)).toBe(true);
   const stats = await taintStats(page);
   console.log(`D1 enrollments: ${JSON.stringify(stats)}`);
+  await expectNoCanariesUploaded(page);
 });
 
 test("D1: roster hydrated into TableControllers for a student (initialData)", async ({ page }) => {
@@ -164,6 +175,7 @@ test("D1: roster hydrated into TableControllers for a student (initialData)", as
   const stats = await taintStats(page);
   expect(stats.ingest.rowBatches).toBeGreaterThan(0);
   expect(await taintHas(page, [seed.instructor.private_profile_name])).toEqual([]);
+  await expectNoCanariesUploaded(page);
 });
 
 test("D1 + D2: groups page, with the mentor alias embed", async ({ page }) => {
@@ -172,6 +184,7 @@ test("D1 + D2: groups page, with the mentor alias embed", async ({ page }) => {
   await expectRenderedCanariesTainted(page, 2);
   // `mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)` resolved to profiles.name.
   expect(await taintHas(page, [seed.grader.private_profile_name, groupName])).toEqual([]);
+  await expectNoCanariesUploaded(page);
 });
 
 test("D4: a help request created during recording arrives as a full-row broadcast", async ({ page }) => {
@@ -196,6 +209,7 @@ test("D4: a help request created during recording arrives as a full-row broadcas
     before.ingest.broadcasts + before.ingest.responses
   );
   await expectRenderedCanariesTainted(page, 1);
+  await expectNoCanariesUploaded(page);
 });
 
 test("D5: an ID-only gradebook broadcast refetches through the fetch hook", async ({ page }) => {
@@ -231,6 +245,7 @@ test("D5: an ID-only gradebook broadcast refetches through the fetch hook", asyn
     before.ingest.responses + before.ingest.broadcasts
   );
   await expectRenderedCanariesTainted(page, 3);
+  await expectNoCanariesUploaded(page);
 });
 
 test("D6: the student page backed by get_student_summary", async ({ page }) => {
@@ -241,6 +256,7 @@ test("D6: the student page backed by get_student_summary", async ({ page }) => {
   // The help request in the Json summary, whether or not the page shows it.
   expect(await taintHas(page, canariesOf("help_requests.request").slice(0, 1))).toEqual([]);
   console.log(`D6 found ${found.size} canaries`);
+  await expectNoCanariesUploaded(page);
 });
 
 test("D7: an edge-function payload with GitHub usernames (commit history)", async ({ page }) => {
@@ -284,6 +300,7 @@ test("D7: an edge-function payload with GitHub usernames (commit history)", asyn
   await settle(page);
   expect(await taintHas(page, [handle!, authorName])).toEqual([]);
   await expectRenderedCanariesTainted(page, 1);
+  await expectNoCanariesUploaded(page);
 });
 
 test("D16: the reporter's own name and email from the auth session", async ({ page }) => {
@@ -292,4 +309,5 @@ test("D16: the reporter's own name and email from the auth session", async ({ pa
   await settle(page);
   expect(await taintHas(page, [me.email, me.email.split("@")[0], me.private_profile_name])).toEqual([]);
   await expectRenderedCanariesTainted(page, 1);
+  await expectNoCanariesUploaded(page);
 });
