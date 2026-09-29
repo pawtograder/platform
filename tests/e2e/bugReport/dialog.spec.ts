@@ -307,6 +307,12 @@ test.describe("Report a bug dialog (no replay)", () => {
     await dialog.getByRole("textbox", { name: /What happened/ }).fill("regrade list failed");
     await dialog.getByRole("button", { name: "Submit" }).click();
     await expect(dialog.getByTestId("report-bug-sent")).toBeVisible();
+    // The toast is gone, so focus returns to the main landmark, not <body>.
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toBeHidden();
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.id || document.activeElement?.tagName))
+      .toBe("main-content");
     const [feedback] = feedbackOf(tunnel);
     expect(feedback.contexts.feedback.associated_event_id).toBe(errorEventId);
     expect(feedback.tags?.linked_event_id).toBe(errorEventId);

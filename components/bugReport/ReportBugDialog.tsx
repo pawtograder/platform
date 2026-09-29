@@ -57,6 +57,15 @@ type Phase =
   | { kind: "rate_limited" }
   | { kind: "error"; message: string };
 
+/**
+ * On close, focus goes back to what opened the dialog. When that element is gone (the toast
+ * whose "Report this" opened it has been dismissed) or was <body>, it goes to the page's main
+ * landmark instead, so keyboard users don't land on <body>.
+ */
+function fallbackFocusTarget(): HTMLElement | null {
+  return document.getElementById("main-content") ?? document.querySelector<HTMLElement>("main, [role='main']");
+}
+
 export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportBugDialogProps) {
   const [description, setDescription] = useState("");
   const [contactOk, setContactOk] = useState(false);
@@ -65,7 +74,18 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const doneRef = useRef<HTMLButtonElement>(null);
   const submitRef = useRef<HTMLButtonElement>(null);
+  // Where focus was when the dialog opened, to return it there on close. Read during the render
+  // that opens the dialog, before the dialog's focus trap moves focus.
+  const openerRef = useRef<Element | null>(null);
+  const wasOpen = useRef(false);
+  if (open && !wasOpen.current && typeof document !== "undefined") openerRef.current = document.activeElement;
+  wasOpen.current = open;
   const announce = useAnnouncer();
+  const returnFocusTarget = useCallback((): HTMLElement | null => {
+    const opener = openerRef.current;
+    if (opener instanceof HTMLElement && opener.isConnected && opener !== document.body) return opener;
+    return fallbackFocusTarget();
+  }, []);
 
   // Each opening starts from a blank form. Nothing typed is kept or sent after Cancel.
   useEffect(() => {
@@ -120,6 +140,7 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
       // when the focused element leaves the DOM (Submit swapped for Close, a redacted string's
       // button), sometimes with a stale closure, and throws if it gets null.
       initialFocusEl={() => doneRef.current ?? descriptionRef.current ?? submitRef.current}
+      finalFocusEl={returnFocusTarget}
       closeOnInteractOutside={!submitting}
       size={{ base: "full", md: replay ? "lg" : "md" }}
       scrollBehavior="inside"
