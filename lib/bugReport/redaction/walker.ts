@@ -92,6 +92,13 @@ const INPUT_TAGS = new Set(["input", "textarea", "select", "option"]);
 
 const HAS_WORD_CHAR = /[\p{L}\p{N}]/u;
 
+/**
+ * Strings rrweb writes in place of content it doesn't record. A script's text is recorded as
+ * `SCRIPT_PLACEHOLDER`, and a script added after the snapshot arrives as a text node under an
+ * ignored parent (id -2), so the walker can't always tell from the tree. Never listed.
+ */
+const RRWEB_SENTINELS = new Set(["SCRIPT_PLACEHOLDER"]);
+
 type Holder = Record<string | number, unknown>;
 
 /** A string field in the copied events that redactions are written into. */
@@ -506,7 +513,7 @@ class Walker {
       // One entry per run of inline text: a nested block (the "\n" separators) starts a new one.
       for (const line of value.split("\n")) {
         const trimmed = line.trim();
-        if (!HAS_WORD_CHAR.test(trimmed)) continue;
+        if (!HAS_WORD_CHAR.test(trimmed) || RRWEB_SENTINELS.has(trimmed)) continue;
         const key = `${job.kind}\u0000${trimmed}`;
         const existing = groups.get(key);
         if (existing) existing.count++;
