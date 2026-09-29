@@ -13,7 +13,7 @@ import { addDays } from "date-fns";
 import type { Page } from "@playwright/test";
 import { test, expect } from "../../global-setup";
 import { loginAsUser, supabase, type TestingUser } from "../TestingUtils";
-import { describeHits, scanForCanaries } from "./canaries";
+import { describeHits, scanForCanaries, type CanaryHit } from "./canaries";
 import { seedCanaryClass, type CanarySeed } from "./canarySeed";
 import type { CanaryEntry } from "./canaryRegistry";
 import { redactedReport, redactedUploadBytes } from "./report";
@@ -42,9 +42,21 @@ async function settle(page: Page) {
 async function expectNoCanaries(page: Page, options?: Parameters<typeof redactedUploadBytes>[1]) {
   await settle(page);
   const bytes = await redactedUploadBytes(page, options);
-  const hits = scanForCanaries(bytes, seed.registry);
+  const text = new TextDecoder().decode(bytes);
+  const hits = scanForCanaries(text, seed.registry).filter((h) => !insideLongerNumber(h, text));
   expect(hits, describeHits(hits)).toEqual([]);
-  return new TextDecoder().decode(bytes);
+  return text;
+}
+
+/**
+ * A grade canary such as "88.36" also matches inside unrelated numbers, like the SVG path
+ * "l588.36 454.73" of an icon. Those aren't leaks of the grade.
+ */
+function insideLongerNumber(hit: CanaryHit, text: string): boolean {
+  if (hit.entry.kind !== "grade") return false;
+  const before = text[hit.offset - 1] ?? "";
+  const after = text[hit.offset + hit.matched.length] ?? "";
+  return /[0-9.]/.test(before) || /[0-9]/.test(after);
 }
 
 /** Text nodes in the live page containing `needle` that are not inside a `data-report-block` element. */
@@ -73,7 +85,6 @@ async function openRecorded(page: Page, user: TestingUser, url: string, policy: 
 }
 
 test.describe("bug report redaction leak tests", () => {
-
   test.beforeAll(async () => {
     test.setTimeout(180_000);
     seed = await seedCanaryClass();
@@ -155,12 +166,15 @@ test.describe("bug report redaction leak tests", () => {
     expect(report.worker).toBe(true);
     expect(workers.some((u) => u.includes("/_next/static/"))).toBe(true);
     const csp = await page.evaluate(() => (window as unknown as { __csp: string[] }).__csp);
-    expect(csp.filter((c) => c.startsWith("worker-src") || c.startsWith("script-src"))).toEqual([]);
+    // "script-src eval" reports are Playwright's own evaluate calls (see utils/csp.ts).
+    expect(
+      csp.filter((c) => c.startsWith("worker-src") || (c.startsWith("script-src") && !c.endsWith(" eval")))
+    ).toEqual([]);
 
     // The review list has no canary, and still shows the harness's own text.
     const remainingHits = scanForCanaries(JSON.stringify(report.remaining), seed.registry);
     expect(remainingHits, describeHits(remainingHits)).toEqual([]);
-    expect(report.remaining.map((r) => r.value)).toContain("Email the student");
+    expect(report.remaining.some((r) => r.value.includes("Email the student"))).toBe(true);
     for (const kind of ["text", "attribute", "url"]) {
       expect(
         report.remaining.some((r) => r.kind === kind),

@@ -484,12 +484,15 @@ class Walker {
         if (typeof current === "string") value += current;
         at = p.end;
       }
-      value = value.trim();
-      if (!HAS_WORD_CHAR.test(value)) continue;
-      const key = `${job.kind}\u0000${value}`;
-      const existing = groups.get(key);
-      if (existing) existing.count++;
-      else groups.set(key, { value, kind: job.kind, count: 1 });
+      // One entry per run of inline text: a nested block (the "\n" separators) starts a new one.
+      for (const line of value.split("\n")) {
+        const trimmed = line.trim();
+        if (!HAS_WORD_CHAR.test(trimmed)) continue;
+        const key = `${job.kind}\u0000${trimmed}`;
+        const existing = groups.get(key);
+        if (existing) existing.count++;
+        else groups.set(key, { value: trimmed, kind: job.kind, count: 1 });
+      }
     }
     const order: RemainingKind[] = ["text", "title", "attribute", "input", "url", "console", "breadcrumb"];
     return [...groups.values()].sort(
