@@ -298,6 +298,28 @@ describe("attributes, inputs, breadcrumbs, URLs", () => {
     expect(map.starts[5]).toBe(7);
     expect(map.ends[5]).toBe(13);
   });
+
+  it("decodes a doubly encoded URL, mapping back to the original bytes", () => {
+    const map = decodeUrlWithMap("a%2540b");
+    expect(map.text).toBe("a@b");
+    expect([map.starts[1], map.ends[1]]).toEqual([1, 6]);
+    expect([map.starts[2], map.ends[2]]).toEqual([6, 7]);
+    // At most three passes.
+    expect(decodeUrlWithMap("%25252540").text).toBe("%40");
+    expect(decodeUrlWithMap("plain").text).toBe("plain");
+  });
+
+  it("redacts names and emails in a URL nested in a query parameter", async () => {
+    const href =
+      "http://localhost/course/1/x?next=%2Fsearch%3Fq%3DZorvik%2520Quellmar%26e%3Dkvounder%2540pawtograder.net";
+    const result = await redact(bufferOf([segment([meta(0, href), full(1, doc([], []))])], [href]));
+    const out = uploaded(result);
+    expect(out).not.toMatch(/Zorvik|Quellmar|kvounder|pawtograder\.net/);
+    expect(out).toContain("http://localhost/course/1/x?next=");
+    getTaintSet().add("name", NAME);
+    expect(redactReportUrl(href, getTaintSet())).not.toMatch(/Zorvik|Quellmar|kvounder/);
+    getTaintSet().clear();
+  });
 });
 
 describe("options", () => {
