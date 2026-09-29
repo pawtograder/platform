@@ -59,3 +59,14 @@ These choices affect many entries. The draft makes a call on each, and a reviewe
 ## Keeping it current
 
 `npm run client` and `npm run client-local` fail when the schema gains a column, view field, or RPC that `privacy.ts` lacks, or when `lib/edgeFunctions.ts` gains a wrapper; the unit test `tests/unit/bugReport/privacyExhaustive.test.ts` fails in CI for the same reasons. To fix either, run `npx tsx scripts/bugReport/generatePrivacyDraft.ts`. It keeps every existing entry, including hand edits, adds `// DRAFT` entries for new keys, and drops entries for keys that no longer exist. Review the new entries, then rerun `npm run client-local`. `--fresh` rebuilds every entry from the sources above and discards hand edits.
+
+## Checking the classification against real traffic (package 2a)
+
+The taint trace runs the E2E suite with synthetic canary data and records where each canary actually arrives in the browser and where it renders. Its two outputs are committed next to the classification:
+
+- `generated/privacy.observed.json` lists every observed flow as `{source, key, kind, firstSeenIn, test}`. `source` is how the value arrived (`rest:<relation>`, `rpc:<function>`, `edge:<wrapper>`, `realtime:<table>`, `rsc:<route>`, `api:<route>`), `key` is the `table.column` or JSONPath that carried it, and `kind` is the kind of the canary seen there.
+- `generated/pii-sinks.json` maps each route pattern to the components (by `data-sentry-component`) that rendered a canary, with the kinds they rendered. A component key ending in `[data-report-unmask by X]` means the text was inside an unmasked element.
+
+`npx tsx scripts/bugReport/checkTrace.ts` and `tests/unit/bugReport/traceCheck.test.ts` fail when an observed flow has no classification, when it is classified `none`, or when PII rendered inside `data-report-unmask`. Text that a server component renders straight into the RSC payload is reported as a warning: `privacy.ts` can't classify it, and its route needs a taint block (`ssrTaint`) before it may record.
+
+To regenerate both files, build with the full Sentry profile (`SENTRY_BUILD_PROFILE=full` and any DSN, so components are annotated) and run the suite with `BUG_REPORT_TRACE=1`. `BUG_REPORT_TRACE_MERGE=1` adds a partial run to the committed files instead of replacing them; `BUG_REPORT_TRACE_STRICT=1` fails each test that observes a problem. `tests/e2e/bugReport/traceFixture.ts` has the details.
