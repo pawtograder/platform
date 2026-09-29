@@ -75,9 +75,39 @@ function uploadedEvents(capture: TunnelCapture): unknown[][] {
     .map((s) => s.recording.recordingEvents as unknown[]);
 }
 
+/** A value Sentry's server-side scrubbing put in place of the original ("[Filtered]", "[email]", ...). */
+const SCRUBBED = /\[(Filtered|email|ip|creditcard|password|auth)\]/i;
+
+/**
+ * Compares what Sentry stored with what was uploaded. They must be the same structure with the
+ * same values, except strings Sentry's data scrubber replaced (it filters, for example, URLs
+ * containing "auth"). Returns the paths that differ in any other way, and how many were scrubbed.
+ */
+function compareStored(stored: unknown, sent: unknown, path = "$"): { mismatches: string[]; scrubbed: string[] } {
+  const out = { mismatches: [] as string[], scrubbed: [] as string[] };
+  const walk = (a: unknown, b: unknown, p: string) => {
+    if (typeof a === "string" && typeof b === "string") {
+      if (a !== b) (SCRUBBED.test(a) ? out.scrubbed : out.mismatches).push(p);
+      return;
+    }
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) out.mismatches.push(`${p} (length ${a.length} vs ${b.length})`);
+      else a.forEach((x, i) => walk(x, b[i], `${p}[${i}]`));
+      return;
+    }
+    if (a && b && typeof a === "object" && typeof b === "object") {
+      const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+      for (const k of keys) walk((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], `${p}.${k}`);
+      return;
+    }
+    if (a !== b) out.mismatches.push(p);
+  };
+  walk(stored, sent, path);
+  return out;
+}
+
 test.describe("replay upload to the dev Sentry (F7)", () => {
   test.skip(!sentry, "SENTRY_URL / SENTRY_ORG / SENTRY_PROJECT / SENTRY_AUTH_TOKEN not set");
-  test.describe.configure({ mode: "serial" });
 
   let seed: CanarySeed;
 
@@ -188,7 +218,9 @@ test.describe("replay upload to the dev Sentry (F7)", () => {
     // Recording, downloaded from Sentry: every segment, byte-for-byte what was sent, starting
     // with a checkout, and no canary anywhere in it.
     const { bytes, segments: stored } = await downloadSegments(api, out.replayId);
-    expect(stored).toEqual(uploadedEvents(capture));
+    const diff = compareStored(stored, uploadedEvents(capture));
+    expect(diff.mismatches, diff.mismatches.slice(0, 20).join("\n")).toEqual([]);
+    evidence.scrubbedBySentry = diff.scrubbed.length;
     expect((stored[0][0] as { type: number }).type).toBe(4);
     expect((stored[0][1] as { type: number }).type).toBe(2);
     const hits = scanForCanaries(bytes, seed.registry as unknown as CanaryRegistry);
@@ -240,8 +272,10 @@ test.describe("replay upload to the dev Sentry (F7)", () => {
     expect(replay.count_segments).toBe(segments.length);
     const { segments: stored } = await downloadSegments(api, out.replayId);
     expect(stored.length).toBe(segments.length);
-    expect(stored).toEqual(uploadedEvents(capture));
+    const diff = compareStored(stored, uploadedEvents(capture));
+    expect(diff.mismatches, diff.mismatches.slice(0, 20).join("\n")).toEqual([]);
     const evidence = {
+      scrubbedBySentry: diff.scrubbed.length,
       replayId: out.replayId,
       segments: segments.length,
       compressedKiB: segments.map((s) => Math.round(s.compressedBytes / 1024)),
