@@ -58,6 +58,9 @@ const encoder = new TextEncoder();
  */
 const SPLIT_TARGET_FRACTION = 0.85;
 
+/** Meta + FullSnapshot: the events that open a checkout and must stay in one piece. */
+const CHECKOUT_HEAD = 2;
+
 type Piece = { events: RecordedEvent[]; compressed: Uint8Array };
 
 function jsonArray(json: string[]): Uint8Array {
@@ -87,14 +90,17 @@ async function fit(
     out.push({ events: events.slice(from, to), compressed });
     return;
   }
-  if (to - from === 1) throw new OversizedEvent(from);
+  // The checkout's Meta + FullSnapshot (indexes 0 and 1) are never split; if the pair alone is
+  // over the cap, the whole checkout is dropped.
+  const firstMid = from === 0 ? CHECKOUT_HEAD : from + 1;
+  if (to <= firstMid) throw new OversizedEvent(from);
   // Bisect by characters, not by count: one FullSnapshot can outweigh thousands of mouse moves.
   let total = 0;
   for (let i = from; i < to; i++) total += json[i].length;
-  let mid = from + 1;
-  for (let acc = json[from].length; mid < to - 1 && acc + json[mid].length <= total / 2; mid++) {
-    acc += json[mid].length;
-  }
+  let acc = 0;
+  for (let i = from; i < firstMid; i++) acc += json[i].length;
+  let mid = firstMid;
+  for (; mid < to - 1 && acc + json[mid].length <= total / 2; mid++) acc += json[mid].length;
   await fit(events, json, from, mid, max, compress, out);
   await fit(events, json, mid, to, max, compress, out);
 }
@@ -121,7 +127,9 @@ async function packCheckout(
   const bounds: number[] = [0];
   let acc = 0;
   for (let i = 0; i < json.length; i++) {
-    if (acc > 0 && acc + json[i].length > targetChars) {
+    // A snapshot that compresses far better than the rest can make targetChars smaller than
+    // Meta + FullSnapshot; the first cut still comes after them.
+    if (i >= CHECKOUT_HEAD && acc > 0 && acc + json[i].length > targetChars) {
       bounds.push(i);
       acc = 0;
     }

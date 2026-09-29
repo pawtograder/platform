@@ -6,14 +6,21 @@ import { deflateSync, inflateSync } from "node:zlib";
 import type { FrozenBuffer, FrozenSegment, RecordedEvent } from "@/lib/bugReport/types";
 
 type Response = { statusCode?: number; headers?: Record<string, string | null> };
-type Step = Response | "throw";
+/** "hang": the request never answers; it rejects only if the fetch's signal aborts. */
+type Step = Response | "throw" | "hang";
 
 class FakeTransport {
   sent: unknown[] = [];
   script: Step[] = [];
   inFlight = 0;
   maxInFlight = 0;
+  /** The fetch `signal` each send would have used, read when the send starts. */
+  signals: (AbortSignal | undefined)[] = [];
   async send(envelope: unknown): Promise<Response> {
+    // makeFetchTransport spreads `fetchOptions` into the request synchronously inside send().
+    const last = transportOptions[transportOptions.length - 1] as { fetchOptions?: RequestInit } | undefined;
+    const signal = last?.fetchOptions?.signal ?? undefined;
+    this.signals.push(signal);
     this.inFlight++;
     this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
     try {
@@ -21,6 +28,11 @@ class FakeTransport {
       this.sent.push(envelope);
       const step = this.script.shift() ?? { statusCode: 200 };
       if (step === "throw") throw new TypeError("Failed to fetch");
+      if (step === "hang") {
+        return await new Promise<Response>((_, reject) =>
+          signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))
+        );
+      }
       return step;
     } finally {
       this.inFlight--;
@@ -65,6 +77,8 @@ import { serializeEnvelope } from "@sentry/core";
 import { parseEnvelope, payloadJson, splitReplayRecording } from "@/lib/bugReport/envelope";
 import {
   MAX_ATTEMPTS,
+  MAX_RETRY_AFTER_MS,
+  SEND_TIMEOUT_MS,
   MAX_SEGMENT_COMPRESSED_BYTES,
   planSegments,
   resetUploadStateForTests,
@@ -159,6 +173,7 @@ const noSleep = jest.fn(async (ms: number) => {
 beforeEach(() => {
   transport.sent = [];
   transport.script = [];
+  transport.signals = [];
   transport.maxInFlight = 0;
   noSleep.mockClear();
   resetUploadStateForTests();
@@ -195,6 +210,42 @@ describe("planSegments", () => {
     expect(flat).toEqual(buf.segments.flatMap((s) => s.events));
     // Each body inflates to its events.
     for (const s of plan.segments) expect(JSON.parse(inflateSync(s.compressed).toString())).toEqual(s.events);
+  });
+
+  it("never cuts between Meta and FullSnapshot when the snapshot is most of the characters but compresses well", async () => {
+    // The snapshot is ~540k characters that deflate to almost nothing, so the whole checkout's
+    // ratio puts the first estimated cut right after Meta.
+    const max = 100_000;
+    const events = Array.from({ length: 300 }, (_, i) => mutation(clock + 10 + i, noise(1_000)));
+    const big: FrozenSegment = {
+      ...checkout(clock, []),
+      events: [meta(clock), snapshot(clock + 1, "<div class=row>masked</div>".repeat(20_000)), ...events]
+    };
+    const buf = bufferOf([big, checkout(clock + 60_000, [mutation(clock + 60_010)])]);
+    const plan = await planSegments(buf, compress, max);
+    expect(plan.segments.length).toBeGreaterThan(2);
+    expect(plan.segments[0].events[0].type).toBe(4);
+    expect(plan.segments[0].events[1].type).toBe(2);
+    // No piece is a lone Meta, and every later piece of the first checkout is a continuation.
+    for (const s of plan.segments) {
+      expect(s.compressed.length).toBeLessThanOrEqual(max);
+      if (s.events[0].type === 4) expect(s.events[1]?.type).toBe(2);
+    }
+    expect(plan.segments.filter((s) => s.events[0].type === 4)).toHaveLength(2);
+    expect(plan.segments.flatMap((s) => s.events)).toEqual(buf.segments.flatMap((s) => s.events));
+    expect(plan.dropped).toEqual([]);
+  });
+
+  it("never bisects between Meta and FullSnapshot", async () => {
+    // A compressor that reports every piece of 3+ events as over the cap forces `fit` to bisect
+    // down to its smallest pieces; the first must still hold Meta + FullSnapshot together.
+    const buf = bufferOf([checkout(clock, [mutation(clock + 10), mutation(clock + 20)])]);
+    const counting: Compressor = async (bytes) => {
+      const n = (JSON.parse(new TextDecoder().decode(bytes)) as unknown[]).length;
+      return n >= 3 ? new Uint8Array(10_000) : compress(bytes);
+    };
+    const plan = await planSegments(buf, counting, 5_000);
+    expect(plan.segments.map((s) => s.events.map((e) => e.type))).toEqual([[4, 2], [3], [3]]);
   });
 
   it("drops a checkout whose FullSnapshot alone is over the cap", async () => {
@@ -299,6 +350,37 @@ describe("uploadReplay", () => {
     expect(transport.sent.map((e) => parseSent(e).segmentId)).toEqual([0, 1, 1]);
   });
 
+  it("waits out a 5xx's Retry-After before retrying, and does not treat it as a rate limit", async () => {
+    transport.script = [{ statusCode: 503, headers: { "retry-after": "5" } }, { statusCode: 200 }];
+    const buf = bufferOf([checkout(clock, [])]);
+    expect(await uploadReplay(buf, tags, { sleep: noSleep, compress })).toMatchObject({ ok: true });
+    expect(noSleep.mock.calls).toEqual([[5000]]);
+    expect(transport.sent).toHaveLength(2);
+  });
+
+  it(`caps a 5xx's Retry-After at ${MAX_RETRY_AFTER_MS} ms`, async () => {
+    transport.script = [{ statusCode: 503, headers: { "retry-after": "3600" } }, { statusCode: 200 }];
+    expect(await uploadReplay(bufferOf([checkout(clock, [])]), tags, { sleep: noSleep, compress })).toMatchObject({
+      ok: true
+    });
+    expect(noSleep.mock.calls).toEqual([[MAX_RETRY_AFTER_MS]]);
+  });
+
+  it("fails (not rate_limited) when every try is a 5xx with Retry-After, and the next upload still sends", async () => {
+    const busy = { statusCode: 503, headers: { "retry-after": "2" } };
+    transport.script = [busy, busy, busy];
+    const buf = bufferOf([checkout(clock, [])]);
+    expect(await uploadReplay(buf, tags, { sleep: noSleep, compress })).toEqual({
+      ok: false,
+      reason: "failed",
+      replayId: buf.replayId
+    });
+    expect(transport.sent).toHaveLength(MAX_ATTEMPTS);
+    expect(noSleep.mock.calls).toEqual([[2000], [2000]]);
+    expect(await uploadReplay(buf, tags, { sleep: noSleep, compress })).toMatchObject({ ok: true });
+    expect(transport.sent).toHaveLength(MAX_ATTEMPTS + 1);
+  });
+
   it("retries network errors and transport drops (no status)", async () => {
     transport.script = ["throw", {}, { statusCode: 200 }];
     const result = await uploadReplay(bufferOf([checkout(clock, [])]), tags, { sleep: noSleep, compress });
@@ -365,6 +447,62 @@ describe("uploadReplay", () => {
     });
     expect(result).toMatchObject({ ok: false, reason: "failed" });
     expect(transport.sent).toHaveLength(1);
+  });
+
+  it(`times out a send after ${SEND_TIMEOUT_MS} ms, aborts its fetch, and retries`, async () => {
+    jest.useFakeTimers();
+    try {
+      transport.script = ["hang", { statusCode: 200 }];
+      let stats: UploadStats | undefined;
+      const pending = uploadReplay(bufferOf([checkout(clock, [])]), tags, {
+        sleep: noSleep,
+        compress,
+        onStats: (s) => (stats = s)
+      });
+      await jest.advanceTimersByTimeAsync(SEND_TIMEOUT_MS - 1);
+      expect(transport.sent).toHaveLength(1);
+      expect(transport.signals[0]?.aborted).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({ ok: true });
+      expect(transport.signals[0]?.aborted).toBe(true);
+      expect(stats?.attempts).toEqual([2]);
+      expect(noSleep.mock.calls).toEqual([[1000]]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("times out an injected transport that ignores the signal", async () => {
+    jest.useFakeTimers();
+    try {
+      const hanging = { send: jest.fn(() => new Promise<never>(() => {})) };
+      const pending = uploadReplay(bufferOf([checkout(clock, [])]), tags, {
+        sleep: noSleep,
+        compress,
+        transport: hanging
+      });
+      await jest.advanceTimersByTimeAsync(SEND_TIMEOUT_MS * MAX_ATTEMPTS);
+      expect(await pending).toMatchObject({ ok: false, reason: "failed" });
+      expect(hanging.send).toHaveBeenCalledTimes(MAX_ATTEMPTS);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("aborts the in-flight request when the signal fires, without retrying", async () => {
+    const controller = new AbortController();
+    transport.script = ["hang"];
+    const pending = uploadReplay(bufferOf([checkout(clock, []), checkout(clock + 60_000, [])]), tags, {
+      sleep: noSleep,
+      compress,
+      signal: controller.signal
+    });
+    while (transport.sent.length === 0) await new Promise((r) => setTimeout(r, 0));
+    controller.abort();
+    expect(await pending).toMatchObject({ ok: false, reason: "failed" });
+    expect(transport.signals[0]?.aborted).toBe(true);
+    expect(transport.sent).toHaveLength(1);
+    expect(noSleep).not.toHaveBeenCalled();
   });
 
   it("sends through a fetch transport to the tunnel with keepalive off", async () => {

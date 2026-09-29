@@ -44,6 +44,9 @@ const ISSUE_DELETE_BATCH = 100;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** One list's items. `complete` is false when the page cap cut it short. */
+export type Listing<T> = { items: T[]; complete: boolean };
+
 export type PurgeCandidate = { class_id: number; end_date: string };
 
 export type SentryPurgeConfig = {
@@ -178,31 +181,39 @@ export class SentryPurgeApi {
     return { body: (await res.json()) as T, link: res.headers.get("link") };
   }
 
-  /** Lists every page of a cursor-paginated endpoint. Returns null when the page cap is hit. */
+  /**
+   * Lists every page of a cursor-paginated endpoint. `complete` is false when the page cap was
+   * hit or `outOfTime` said stop between pages; `items` then holds the pages listed so far, which
+   * the caller still acts on.
+   */
   private async listAll<T>(
     step: string,
     path: string,
     params: [string, string][],
-    items: (body: unknown) => T[]
-  ): Promise<T[] | null> {
+    items: (body: unknown) => T[],
+    outOfTime: () => boolean
+  ): Promise<Listing<T>> {
     const out: T[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < MAX_PAGES; page++) {
+      if (page > 0 && outOfTime()) return { items: out, complete: false };
       const p: [string, string][] = cursor ? [...params, ["cursor", cursor]] : params;
       let res: { body: unknown; link: string | null };
       try {
         res = await this.json<unknown>(step, path, p);
       } catch (e) {
         // Sentry answers 404 for an environment it has never seen, which means nothing to delete.
-        if (e instanceof SentryApiError && e.status === 404 && this.cfg.environment && page === 0) return [];
+        if (e instanceof SentryApiError && e.status === 404 && this.cfg.environment && page === 0) {
+          return { items: [], complete: true };
+        }
         throw e;
       }
       const { body, link } = res;
       out.push(...items(body));
       cursor = nextCursor(link);
-      if (!cursor) return out;
+      if (!cursor) return { items: out, complete: true };
     }
-    return null;
+    return { items: out, complete: false };
   }
 
   private scopeParams(): [string, string][] {
@@ -222,7 +233,7 @@ export class SentryPurgeApi {
   }
 
   /** Feedback issue ids whose search matches the class. The caller still checks the tag per issue. */
-  async listFeedbackIssues(classId: number) {
+  async listFeedbackIssues(classId: number, outOfTime: () => boolean = () => false) {
     return await this.listAll<{ id: string; category: string | undefined }>(
       "list_feedback",
       `/organizations/${encodeURIComponent(this.cfg.org)}/issues/`,
@@ -238,7 +249,8 @@ export class SentryPurgeApi {
               id: String(i.id),
               category: i.issueCategory
             }))
-          : []
+          : [],
+      outOfTime
     );
   }
 
@@ -274,7 +286,7 @@ export class SentryPurgeApi {
     }
   }
 
-  async listReplays(projectId: string, classId: number) {
+  async listReplays(projectId: string, classId: number, outOfTime: () => boolean = () => false) {
     return await this.listAll<{ id: string; classIds: unknown }>(
       "list_replays",
       `/organizations/${encodeURIComponent(this.cfg.org)}/replays/`,
@@ -289,7 +301,8 @@ export class SentryPurgeApi {
       (body) => {
         const data = (body as { data?: { id: string; tags?: Record<string, unknown> }[] })?.data;
         return Array.isArray(data) ? data.map((r) => ({ id: String(r.id), classIds: r.tags?.class_id })) : [];
-      }
+      },
+      outOfTime
     );
   }
 
@@ -309,45 +322,91 @@ function replayTagMatches(classIds: unknown, classId: number): boolean {
   return values.length > 0 && values.every((v) => v === String(classId));
 }
 
-export type ClassPurgeResult = { feedbackDeleted: number; replaysDeleted: number; skippedTagMismatch: number };
+export type ClassPurgeResult = {
+  feedbackDeleted: number;
+  replaysDeleted: number;
+  skippedTagMismatch: number;
+  /**
+   * Why the class stopped short, or null when both lists were complete and every listed item was
+   * handled. A class that stopped is left unrecorded and picked up again next run; what it deleted
+   * is still counted. `page_cap`: a list hit MAX_PAGES (the deleted items drop out of the next
+   * run's list, so each run gets further). `time_budget`: the run's time was up; the run stops.
+   */
+  stopped: "page_cap" | "time_budget" | null;
+};
+
+export function emptyClassResult(): ClassPurgeResult {
+  return { feedbackDeleted: 0, replaysDeleted: 0, skippedTagMismatch: 0, stopped: null };
+}
+
+export type PurgeClassOptions = {
+  /** Counted into as the class goes; the caller passes one to read it after an error. */
+  result?: ClassPurgeResult;
+  /** Checked before each Sentry request after the first list page; true stops the class. */
+  outOfTime?: () => boolean;
+};
 
 /**
- * Deletes one class's feedback and replays. Returns null when a list hit the page cap, so the class
- * is left unrecorded and picked up again next run.
+ * Deletes one class's feedback and replays, counting into `result` as it goes (so a caller that
+ * catches an error mid-class still knows what was deleted). When a list hits the page cap, the
+ * items it did list are still deleted and `stopped` says so.
+ *
+ * Feedback is checked and deleted in batches of ISSUE_DELETE_BATCH, so a class too big for one
+ * run's time still loses some of it each run. When time runs out partway through a batch, the ids
+ * already checked are deleted (one more request) before stopping, so the checks aren't wasted.
  */
 export async function purgeClass(
   api: SentryPurgeApi,
   replayProjectId: string,
-  classId: number
-): Promise<ClassPurgeResult | null> {
-  let skippedTagMismatch = 0;
+  classId: number,
+  opts: PurgeClassOptions = {}
+): Promise<ClassPurgeResult> {
+  const result = opts.result ?? emptyClassResult();
+  const outOfTime = opts.outOfTime ?? (() => false);
+  const stopForTime = () => {
+    result.stopped = "time_budget";
+    return result;
+  };
 
-  const issues = await api.listFeedbackIssues(classId);
-  if (issues === null) return null;
-  const feedbackIds: string[] = [];
-  for (const issue of issues) {
+  const issues = await api.listFeedbackIssues(classId, outOfTime);
+  if (!issues.complete) result.stopped = outOfTime() ? "time_budget" : "page_cap";
+  let pending: string[] = [];
+  const flush = async () => {
+    if (pending.length === 0) return;
+    await api.deleteIssues(pending);
+    result.feedbackDeleted += pending.length;
+    pending = [];
+  };
+  for (const issue of issues.items) {
+    if (outOfTime()) {
+      await flush();
+      return stopForTime();
+    }
     if (issue.category !== "feedback") {
-      skippedTagMismatch++;
+      result.skippedTagMismatch++;
       continue;
     }
-    if (await api.feedbackTagMatches(issue.id, classId)) feedbackIds.push(issue.id);
-    else skippedTagMismatch++;
+    if (await api.feedbackTagMatches(issue.id, classId)) {
+      pending.push(issue.id);
+      if (pending.length >= ISSUE_DELETE_BATCH) await flush();
+    } else result.skippedTagMismatch++;
   }
-  await api.deleteIssues(feedbackIds);
+  await flush();
+  if (result.stopped === "time_budget" || outOfTime()) return stopForTime();
 
-  const replays = await api.listReplays(replayProjectId, classId);
-  if (replays === null) return null;
-  let replaysDeleted = 0;
-  for (const replay of replays) {
+  const replays = await api.listReplays(replayProjectId, classId, outOfTime);
+  if (!replays.complete) result.stopped = outOfTime() ? "time_budget" : "page_cap";
+  for (const replay of replays.items) {
+    if (outOfTime()) return stopForTime();
     if (!replayTagMatches(replay.classIds, classId)) {
-      skippedTagMismatch++;
+      result.skippedTagMismatch++;
       continue;
     }
     await api.deleteReplay(replay.id);
-    replaysDeleted++;
+    result.replaysDeleted++;
   }
 
-  return { feedbackDeleted: feedbackIds.length, replaysDeleted, skippedTagMismatch };
+  return result;
 }
 
 export type PurgeRunSummary = {
@@ -356,6 +415,8 @@ export type PurgeRunSummary = {
   classes_failed: number;
   /** Not started (time budget or a fatal error) or stopped at the page cap; retried next run. */
   classes_deferred: number;
+  /** Deferred classes that had reports deleted before they stopped (counted in the totals below). */
+  classes_partial: number;
   /** Returned by the candidate query but not past retention by this file's own check. */
   classes_not_due: number;
   feedback_deleted: number;
@@ -371,7 +432,11 @@ export type PurgeRunDeps = {
   /** Persists a finished class, so the next run knows when it was last swept. */
   recordPurged: (classId: number, result: ClassPurgeResult) => Promise<void>;
   now?: () => Date;
-  /** Stop starting classes after this many ms, so the function returns inside the runtime's wall clock. */
+  /**
+   * Stop after this many ms, so the function returns inside the runtime's wall clock. Checked
+   * before each class and inside a class between Sentry requests; a class cut short stays
+   * unrecorded.
+   */
   timeBudgetMs?: number;
 };
 
@@ -379,11 +444,13 @@ export async function runPurge(deps: PurgeRunDeps): Promise<PurgeRunSummary> {
   const now = deps.now ?? (() => new Date());
   const started = now().getTime();
   const budget = deps.timeBudgetMs ?? 100_000;
+  const outOfTime = () => now().getTime() - started > budget;
   const summary: PurgeRunSummary = {
     classes_considered: deps.candidates.length,
     classes_purged: 0,
     classes_failed: 0,
     classes_deferred: 0,
+    classes_partial: 0,
     classes_not_due: 0,
     feedback_deleted: 0,
     replays_deleted: 0,
@@ -405,20 +472,23 @@ export async function runPurge(deps: PurgeRunDeps): Promise<PurgeRunSummary> {
   }
 
   for (let i = 0; i < due.length; i++) {
-    if (now().getTime() - started > budget) {
+    if (outOfTime()) {
       summary.classes_deferred += due.length - i;
       break;
     }
     const c = due[i];
+    const result = emptyClassResult();
     try {
-      const result = await purgeClass(deps.api, projectId, c.class_id);
-      if (result === null) {
+      await purgeClass(deps.api, projectId, c.class_id, { result, outOfTime });
+      if (result.stopped !== null) {
         summary.classes_deferred++;
+        if (result.feedbackDeleted + result.replaysDeleted > 0) summary.classes_partial++;
+        if (result.stopped === "time_budget") {
+          summary.classes_deferred += due.length - i - 1;
+          break;
+        }
         continue;
       }
-      summary.feedback_deleted += result.feedbackDeleted;
-      summary.replays_deleted += result.replaysDeleted;
-      summary.skipped_tag_mismatch += result.skippedTagMismatch;
       await deps.recordPurged(c.class_id, result);
       summary.classes_purged++;
     } catch (e) {
@@ -429,6 +499,11 @@ export async function runPurge(deps: PurgeRunDeps): Promise<PurgeRunSummary> {
         break;
       }
       console.error(`[bug-report-retention-purge] class failed: ${describe(e)}`);
+    } finally {
+      // Deleted is deleted, whether the class finished, stopped short or failed partway.
+      summary.feedback_deleted += result.feedbackDeleted;
+      summary.replays_deleted += result.replaysDeleted;
+      summary.skipped_tag_mismatch += result.skippedTagMismatch;
     }
   }
   return summary;
