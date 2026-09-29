@@ -54,7 +54,7 @@ const MINUTE = 60_000;
 
 /** Shown when the taint set hit a size budget, so some names may have been missed. */
 export const TAINT_SATURATED_WARNING =
-  "Some names on this page may not be redacted in the recording. Review it carefully, or remove the recording.";
+  "Some names on this page may not be redacted in the recording. Check the list below and redact anything sensitive before you submit.";
 
 /** The active recorder, if any, kept current as it starts and stops. */
 function useActiveRecorder(): BugReportRecorder | undefined {
