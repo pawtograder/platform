@@ -1,3 +1,4 @@
+import { CourseBugReportIdentity } from "@/components/bugReport/CourseBugReportIdentity";
 import SessionUserRecovery from "@/components/SessionUserRecovery";
 import { AuthStateProvider } from "@/hooks/useAuthState";
 import { ClassProfileProvider } from "@/hooks/useClassProfiles";
@@ -13,7 +14,10 @@ export default async function AuthedLayout({ children }: { children: React.React
   return (
     <AuthStateProvider user={user?.user}>
       <SessionUserRecovery userId={user.user.id} />
-      <ClassProfileProvider>{children}</ClassProfileProvider>
+      <ClassProfileProvider>
+        <CourseBugReportIdentity />
+        {children}
+      </ClassProfileProvider>
     </AuthStateProvider>
   );
 }

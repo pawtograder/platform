@@ -1,6 +1,100 @@
 "use client";
+import { getLastKnownReportContext } from "@/lib/bugReport/reportContext";
+import { submitReport, type SubmitReportResult } from "@/lib/bugReport/submitFeedback";
 import * as Sentry from "@sentry/nextjs";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
+
+/**
+ * Plain-HTML bug report form. This page renders its own `<html>` outside the root layout,
+ * so Chakra and the report dialog are not available here.
+ */
+function CrashReportForm({ errorID }: { errorID: string }) {
+  const [state, setState] = useState<"editing" | "submitting" | SubmitReportResult>("editing");
+  const descriptionId = useId();
+  const contactId = useId();
+
+  const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    setState("submitting");
+    try {
+      setState(
+        await submitReport({
+          description: String(form.get("description") ?? ""),
+          contactOk: form.get("contact_ok") === "on",
+          eventId: errorID,
+          context: getLastKnownReportContext()
+        })
+      );
+    } catch {
+      setState({ status: "error", message: "The report did not go through. Try again." });
+    }
+  };
+
+  if (typeof state === "object" && state.status === "sent") {
+    return (
+      <p role="status" style={{ fontSize: "1rem", color: "#22543d", margin: "0 0 1.5rem 0" }}>
+        Thanks, your report was sent. The developers will look into it.
+      </p>
+    );
+  }
+
+  return (
+    <form
+      onSubmit={onSubmit}
+      aria-label="Report this error"
+      data-testid="global-error-report-form"
+      style={{ textAlign: "left", margin: "0 0 1.5rem 0" }}
+    >
+      <p style={{ fontSize: "1rem", color: "#4a5568", lineHeight: "1.6", margin: "0 0 0.75rem 0" }}>
+        Tell us what you were doing when this happened. The report is linked to error ID{" "}
+        <code data-testid="global-error-event-id">{errorID}</code> and includes your user ID and course role, not your
+        name or email.
+      </p>
+      <label htmlFor={descriptionId} style={{ display: "block", fontWeight: 600, color: "#1a202c" }}>
+        What happened?
+      </label>
+      <textarea
+        id={descriptionId}
+        name="description"
+        required
+        rows={4}
+        disabled={state === "submitting"}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          margin: "0.25rem 0 0.75rem 0",
+          padding: "0.5rem",
+          borderRadius: "6px",
+          border: "1px solid #a0aec0",
+          font: "inherit"
+        }}
+      />
+      <label htmlFor={contactId} style={{ display: "flex", gap: "0.5rem", alignItems: "center", color: "#1a202c" }}>
+        <input id={contactId} type="checkbox" name="contact_ok" disabled={state === "submitting"} />
+        You may contact me about this
+      </label>
+      {typeof state === "object" && state.status === "rate_limited" && (
+        <p role="alert" style={{ color: "#9b2c2c", margin: "0.75rem 0 0 0" }}>
+          Too many reports are being sent right now. Try again later.
+        </p>
+      )}
+      {typeof state === "object" && state.status === "error" && (
+        <p role="alert" style={{ color: "#9b2c2c", margin: "0.75rem 0 0 0" }}>
+          {state.message}
+        </p>
+      )}
+      <button
+        type="submit"
+        className="error-button-primary"
+        disabled={state === "submitting"}
+        style={{ marginTop: "0.75rem" }}
+      >
+        {state === "submitting" ? "Sending" : "Send report"}
+      </button>
+    </form>
+  );
+}
 
 export default function GlobalError({ error }: { error: Error & { digest?: string } }) {
   const [errorID, setErrorID] = useState<string | undefined>(undefined);
@@ -106,20 +200,7 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
               It looks like a husky encountered a bug and buried it... a little too well! This error has been
               automatically reported to our pack of developers.
             </p>
-            {errorID && (
-              <p style={{ fontSize: "1rem", color: "#4a5568", marginBottom: "1.5rem", lineHeight: "1.6" }}>
-                If you continue to experience this error, please{" "}
-                <a
-                  href={`https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  report it on our issue tracker
-                </a>
-                , and include the error ID: {errorID}. Any additional information that you can provide about how you
-                reached this error will help us fix it faster.
-              </p>
-            )}
+            {errorID && <CrashReportForm errorID={errorID} />}
             <button type="button" onClick={() => window.location.reload()} className="error-button-primary">
               Try Again
             </button>
