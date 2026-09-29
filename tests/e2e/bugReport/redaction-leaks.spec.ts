@@ -73,7 +73,6 @@ async function openRecorded(page: Page, user: TestingUser, url: string, policy: 
 }
 
 test.describe("bug report redaction leak tests", () => {
-  test.describe.configure({ mode: "serial" });
 
   test.beforeAll(async () => {
     test.setTimeout(180_000);
