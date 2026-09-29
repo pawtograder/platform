@@ -104,14 +104,68 @@ function newReplayId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function stringifyArg(arg: unknown): string {
-  if (typeof arg === "string") return arg;
-  if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
-  try {
-    return JSON.stringify(arg) ?? String(arg);
-  } catch {
-    return String(arg);
+/** Ends a console message that was cut short. */
+const TRUNCATED_MARKER = "[truncated]";
+/** How deep `consoleLeaves` walks into objects and arrays, and how many leaves it takes. */
+const MAX_CONSOLE_DEPTH = 4;
+const MAX_CONSOLE_LEAVES = 200;
+
+/**
+ * The strings in a console argument, one per line. Strings are kept exactly as logged: a JSON
+ * rendering would escape quotes, tabs, and backslashes, and the taint patterns (made from the raw
+ * values) would no longer match them. Object leaves carry their key (`key: value`), so a free-text
+ * line is still a substring of its own line.
+ */
+function consoleLeaves(arg: unknown, out: string[], depth: number, seen: Set<object>, key?: string): void {
+  if (out.length >= MAX_CONSOLE_LEAVES) return;
+  const push = (text: string) => out.push(key === undefined ? text : `${key}: ${text}`);
+  if (typeof arg === "string") return void push(arg);
+  if (arg === null || typeof arg !== "object") {
+    if (typeof arg === "function") return void push(`[function ${arg.name || "anonymous"}]`);
+    return void push(String(arg));
   }
+  if (arg instanceof Error) return void push(`${arg.name}: ${arg.message}`);
+  if (typeof Node !== "undefined" && arg instanceof Node) return void push(`[${arg.nodeName.toLowerCase()}]`);
+  if (depth >= MAX_CONSOLE_DEPTH || seen.has(arg)) return void push(Array.isArray(arg) ? "[Array]" : "[Object]");
+  seen.add(arg);
+  let entries: [string | undefined, unknown][];
+  try {
+    if (Array.isArray(arg)) entries = arg.map((v) => [undefined, v]);
+    else if (arg instanceof Map) entries = Array.from(arg, ([k, v]) => [String(k), v]);
+    else if (arg instanceof Set) entries = Array.from(arg, (v) => [undefined, v]);
+    else entries = Object.entries(arg);
+  } catch {
+    return void push("[Object]");
+  }
+  for (const [k, v] of entries) {
+    consoleLeaves(v, out, depth + 1, seen, k);
+    if (out.length >= MAX_CONSOLE_LEAVES) return;
+  }
+}
+
+/**
+ * A console call's message: string arguments as they are, joined by spaces, and the string leaves
+ * of object arguments on their own lines. Past `MAX_CONSOLE_MESSAGE` it is cut at a line boundary.
+ * A line that doesn't fit is dropped whole, never cut: a cut line would no longer match its taint
+ * pattern, and its readable start would be uploaded.
+ */
+export function consoleMessage(args: readonly unknown[]): string {
+  const parts: string[] = [];
+  for (const arg of args) {
+    const leaves: string[] = [];
+    consoleLeaves(arg, leaves, 0, new Set());
+    parts.push(leaves.join("\n"));
+  }
+  const message = parts.join(" ");
+  if (message.length <= MAX_CONSOLE_MESSAGE) return message;
+  const lines = message.split("\n");
+  let kept = "";
+  for (const line of lines) {
+    const next = kept.length === 0 ? line : `${kept}\n${line}`;
+    if (next.length > MAX_CONSOLE_MESSAGE - TRUNCATED_MARKER.length - 1) break;
+    kept = next;
+  }
+  return kept.length === 0 ? TRUNCATED_MARKER : `${kept}\n${TRUNCATED_MARKER}`;
 }
 
 function describeElement(el: Element): string {
@@ -307,7 +361,7 @@ class Recorder implements BugReportRecorder {
           category: "console",
           timestamp: Date.now() / 1000,
           level,
-          message: args.map(stringifyArg).join(" ").slice(0, MAX_CONSOLE_MESSAGE)
+          message: consoleMessage(args)
         });
         original.apply(console, args);
       };
