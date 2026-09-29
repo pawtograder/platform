@@ -28,15 +28,19 @@ test.describe("taint ingest overhead", () => {
   test.beforeAll(async () => {
     test.setTimeout(600_000);
     course = await createClass({ name: "Bug Report Ingest Gradebook" });
-    const users = await createUsersInClass([
-      { role: "instructor", class_id: course.id, name: "Ingest Gradebook Instructor", useMagicLink: true },
-      ...Array.from({ length: 200 }, (_, i) => ({
-        role: "student" as const,
-        class_id: course.id,
-        name: `Ingest Student ${String(i).padStart(3, "0")}`
-      }))
+    [instructor] = await createUsersInClass([
+      { role: "instructor", class_id: course.id, name: "Ingest Gradebook Instructor", useMagicLink: true }
     ]);
-    instructor = users[0];
+    // In batches: one call with 200 users makes the existing-user lookup URL too long.
+    for (let start = 0; start < 200; start += 50) {
+      await createUsersInClass(
+        Array.from({ length: 50 }, (_, i) => ({
+          role: "student" as const,
+          class_id: course.id,
+          name: `Ingest Student ${String(start + i).padStart(3, "0")}`
+        }))
+      );
+    }
     await createAssignmentsAndGradebookColumns({ class_id: course.id, numAssignments: 5, numManualGradedColumns: 3 });
     await setCourseFeature(course.id, COURSE_FEATURES.BUG_REPORT_RECORDING, true);
   });
