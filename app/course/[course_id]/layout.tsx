@@ -62,17 +62,17 @@ const ProtectedLayout = async ({
   // Get course information for timezone
   const course = await getCourse(Number.parseInt(course_id));
   const courseTimeZone = course?.time_zone || "America/New_York";
+  const bugReportRecording = courseFeatureEnabled(
+    course?.features as { name: string; enabled: boolean }[] | null | undefined,
+    COURSE_FEATURES.BUG_REPORT_RECORDING
+  );
 
   return (
-    <Box minH="100vh">
+    // The attribute is in the server HTML only when the bug report flag is on, so the recorder
+    // mount can see it before this segment hydrates (see components/bugReport/BugReportIngestArm).
+    <Box minH="100vh" data-bug-report-recording={bugReportRecording ? course_id : undefined}>
       {/* Before the controller providers: it must arm during render, ahead of their first fetch. */}
-      <BugReportIngestArm
-        courseId={Number.parseInt(course_id)}
-        recording={courseFeatureEnabled(
-          course?.features as { name: string; enabled: boolean }[] | null | undefined,
-          COURSE_FEATURES.BUG_REPORT_RECORDING
-        )}
-      />
+      <BugReportIngestArm courseId={Number.parseInt(course_id)} recording={bugReportRecording} />
       <NavigationProgressProvider>
         <TimeZoneProvider courseTimeZone={courseTimeZone}>
           <CourseControllerProvider

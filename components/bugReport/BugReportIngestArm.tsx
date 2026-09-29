@@ -4,6 +4,29 @@ import { usePathname } from "next/navigation";
 import { armIngest, ingestTrace } from "@/lib/bugReport/ingestGate";
 import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePolicy";
 
+/** Set by the course layout, in its server HTML, only when the course's bug report flag is on. */
+export const RECORDING_MARKER_ATTRIBUTE = "data-bug-report-recording";
+
+function armIfListed(courseId: number, pathname: string): void {
+  if (courseIdFromPathname(pathname) === courseId && recordingLevelFor(pathname) !== null) armIngest();
+}
+
+/**
+ * Arms the pre-start buffer from the course layout's server-rendered marker, if it is already
+ * in the document. The recorder mount calls it at module load and before its own flag lookup:
+ * the root layout hydrates, and starts fetching, before the course layout segment does, so the
+ * component below would be too late for those requests. With the flag off the marker is absent
+ * and this does nothing.
+ */
+export function armFromRecordingMarker(): void {
+  if (typeof document === "undefined") return;
+  const marker = document.querySelector(`[${RECORDING_MARKER_ATTRIBUTE}]`);
+  const courseId = Number(marker?.getAttribute(RECORDING_MARKER_ATTRIBUTE));
+  if (!marker || !Number.isFinite(courseId)) return;
+  ingestTrace("marker");
+  armIfListed(courseId, window.location.pathname);
+}
+
 /**
  * Arms the taint ingest's pre-start fetch buffer (lib/bugReport/ingestGate.ts) when this course's
  * `bug-report-recording` flag is on and the route is listed in the route policy.
@@ -19,8 +42,6 @@ import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePo
 export function BugReportIngestArm({ courseId, recording }: { courseId: number; recording: boolean }) {
   const pathname = usePathname();
   ingestTrace(`render ${recording}`);
-  if (recording && courseIdFromPathname(pathname) === courseId && recordingLevelFor(pathname) !== null) {
-    armIngest();
-  }
+  if (recording) armIfListed(courseId, pathname);
   return null;
 }
