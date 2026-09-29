@@ -53,6 +53,11 @@ test.describe("bug report recorder gating", () => {
 
   test("A1: with the flag off, the recorder chunk is never requested", async ({ page }) => {
     const scripts = collectScripts(page);
+    // The course layout read the flag on the server; the mount must not query it again.
+    const flagQueries: string[] = [];
+    page.on("request", (r) => {
+      if (/\/rest\/v1\/classes\?/.test(r.url()) && r.url().includes("select=features")) flagQueries.push(r.url());
+    });
     await loginAsUser(page, offStudent, offCourse);
     // Five pages, listed and unlisted, by full load and by client navigation.
     await page.goto(`/course/${offCourse.id}/discussion`);
@@ -70,6 +75,7 @@ test.describe("bug report recorder gating", () => {
     expect(await recorderDefined(page)).toBe(false);
     expect(scripts.urls.length).toBeGreaterThan(0);
     expect(await recorderChunkRequested(scripts)).toBe(false);
+    expect(flagQueries, "no client-side flag query on listed routes with the flag off").toEqual([]);
   });
 
   // TODO(package 5): open "Report a bug" from the user menu, submit, and assert the dialog has

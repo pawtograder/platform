@@ -74,6 +74,27 @@ export function liveRowSources(): IngestRowSource[] {
   return out;
 }
 
+// --- The server's flag value ------------------------------------------------------------------
+
+/**
+ * The `bug-report-recording` flag as the course layout read it on the server, by course. The
+ * recorder mount reads it to skip its own flag query while no recorder runs: with the flag off,
+ * a navigation between listed routes then costs no request at all. The value is as of the last
+ * layout render, so turning the flag on takes effect on the next page load; turning it off is
+ * caught by the mount's own query, which it still runs while a recorder exists (test A6).
+ */
+const serverFlags = new Map<number, boolean>();
+
+/** Called by `<BugReportIngestArm>` on every render. */
+export function noteServerRecordingFlag(courseId: number, enabled: boolean): void {
+  serverFlags.set(courseId, enabled);
+}
+
+/** The server's value for `courseId`, or undefined when no course layout has rendered it. */
+export function serverRecordingFlag(courseId: number): boolean | undefined {
+  return serverFlags.get(courseId);
+}
+
 // --- Pre-start fetch buffer ---------------------------------------------------------------------
 
 export type BufferedResponse = { method: string; url: string; response: Response };

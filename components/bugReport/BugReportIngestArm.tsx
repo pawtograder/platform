@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { armIngest } from "@/lib/bugReport/ingestGate";
+import { armIngest, noteServerRecordingFlag } from "@/lib/bugReport/ingestGate";
 import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePolicy";
 
 /**
@@ -16,11 +16,14 @@ import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePo
  * Fetches made before the course layout renders (the flag lookup, ClassProfileProvider's roles)
  * are not buffered; the roles register themselves as a row source instead (useClassProfiles).
  *
- * The flag here is the server's value at render time. The recorder mount still re-reads it on
- * every navigation and disarms the buffer when it finds the flag off (test A6).
+ * The flag here is the server's value at render time. It is also handed to the recorder mount
+ * (`noteServerRecordingFlag`), which skips its own flag query when the server said off and no
+ * recorder runs. While a recorder runs, the mount re-reads the flag on every navigation and
+ * stops it when it finds the flag off (test A6).
  */
 export function BugReportIngestArm({ courseId, recording }: { courseId: number; recording: boolean }) {
   const pathname = usePathname();
+  noteServerRecordingFlag(courseId, recording);
   if (recording && courseIdFromPathname(pathname) === courseId && recordingLevelFor(pathname) !== null) {
     armIngest(courseId);
   }

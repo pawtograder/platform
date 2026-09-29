@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { getActiveRecorder } from "@/lib/bugReport/activeRecorder";
 import { installFetchHook } from "@/lib/bugReport/fetchHook";
-import { disarmIngest, ingestTrace } from "@/lib/bugReport/ingestGate";
+import { disarmIngest, ingestTrace, serverRecordingFlag } from "@/lib/bugReport/ingestGate";
 import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePolicy";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { createClient } from "@/utils/supabase/client";
@@ -29,9 +29,11 @@ async function recordingFlagEnabled(courseId: number): Promise<boolean> {
  * the root layout; renders nothing.
  *
  * The recorder chunk (rrweb) is imported only when the route is listed in the route policy
- * and the course flag is on. The flag is re-read on every navigation inside the course while
- * a recorder exists, so turning it off takes effect on the next navigation: the recorder stops
- * and its buffer is discarded. Moving to another course stops it as well.
+ * and the course flag is on. When the course layout rendered the flag as off and no recorder
+ * runs, nothing is queried. Otherwise the flag is read from the database before a start and on
+ * every navigation inside the course while a recorder exists, so turning it off takes effect on
+ * the next navigation: the recorder stops and its buffer is discarded. Moving to another course
+ * stops it as well.
  */
 export default function BugReportRecorder() {
   const pathname = usePathname();
@@ -53,6 +55,12 @@ export default function BugReportRecorder() {
     // Pause or resume right away; the flag check below can only stop it.
     recorder?.onNavigate(pathname);
     if (courseId === null || (!recorder && level === null)) {
+      disarmIngest();
+      return;
+    }
+    // With no recorder running, the course layout's server-side flag read is enough to stay
+    // off; the query below runs only to confirm a start, or to catch the flag turned off.
+    if (!recorder && serverRecordingFlag(courseId) === false) {
       disarmIngest();
       return;
     }
