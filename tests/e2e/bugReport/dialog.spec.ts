@@ -15,8 +15,9 @@ import {
  * Package 5 (report dialog without replay): E5, E6, E7, E8, E9, E10, and the dialog half of A1.
  * PR tier: `captureTunnel` answers `/api/tunnel` itself, so nothing reaches Sentry.
  *
- * The build under test must have a Sentry DSN baked in (`NEXT_PUBLIC_SENTRY_DSN`, any value such
- * as `STUB_SENTRY_DSN`), or the SDK never sends and every submit fails with "not configured".
+ * The build under test must have a valid Sentry DSN baked in (`NEXT_PUBLIC_SENTRY_DSN`, e.g.
+ * `http://pawtogradere2e@127.0.0.1:54399/1`), or the SDK never sends and every submit fails with
+ * "not configured". The browser SDK rejects a public key with a hyphen as an invalid DSN.
  */
 
 type FeedbackEvent = {
