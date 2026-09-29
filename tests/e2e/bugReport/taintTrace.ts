@@ -348,6 +348,7 @@ function installSinkScanner(args: {
         await (w[args.sinksBinding] as (path: string, hits: unknown[]) => Promise<void>)(location.pathname, fresh);
     } catch (e) {
       // Never break the page under test; the tracer reports this console line.
+      // eslint-disable-next-line no-console
       console.warn("[bug-report-trace] DOM scan failed:", String(e));
     } finally {
       running = false;

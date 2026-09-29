@@ -353,6 +353,7 @@ export async function seedCanaryClass({ studentCount = 3 }: { studentCount?: num
  */
 export const canaryTest = test.extend<{ canarySeed: CanarySeed }>({
   canarySeed: async ({}, use) => {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- Playwright fixture, not a React hook
     await use(await seedCanaryClass());
   }
 });

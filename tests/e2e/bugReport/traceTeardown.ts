@@ -10,6 +10,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import * as prettier from "prettier";
 import {
   blockCandidates,
   checkObserved,
@@ -91,8 +92,13 @@ export default async function traceTeardown() {
   const priorSinks = merge ? readJson<PiiSinks>(SINKS_PATH, {}) : {};
   const observed = normalizeObserved([...priorObserved, ...partials.flatMap((p) => p.observed)]);
   const sinks = normalizeSinks(priorSinks, ...partials.map((p) => p.sinks));
-  writeFileSync(OBSERVED_PATH, stableJson(observed));
-  writeFileSync(SINKS_PATH, stableJson(sinks));
+  // Written as `npm run format` would leave them, so a trace run and a format run never fight.
+  const format = async (file: string, value: unknown) => {
+    const options = (await prettier.resolveConfig(file)) ?? {};
+    writeFileSync(file, await prettier.format(stableJson(value), { ...options, filepath: file }));
+  };
+  await format(OBSERVED_PATH, observed);
+  await format(SINKS_PATH, sinks);
 
   const cov = coverage(partials);
   const failures = [...checkObserved(observed), ...checkSinks(sinks)];
