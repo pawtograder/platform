@@ -844,8 +844,19 @@ curl -X POST https://<tool-host>/api/lti/sync-roster \
 
 Pawtograder reports errors through the Sentry SDK to a **self-hosted Sentry**.
 Error reports, bug-report feedback, and (later) redacted replays all go there;
-nothing is sent to sentry.io. The client and server still run with no default
-Sentry integrations, which also keeps the web app working against
+nothing is sent to sentry.io. The configs pass `integrations: [...]`, which adds
+to the SDK's default integrations rather than replacing them, so the defaults
+are on: in the browser, breadcrumbs for clicks, fetch/xhr, navigation, and
+console, and HttpContext (page URL and Referer); on the server, RequestData,
+Http/NodeFetch request breadcrumbs, and Console; on the edge, fetch and console
+breadcrumbs. None of them records a replay. Their output is scrubbed before it
+leaves the process (`lib/bugReport/sentryScrub.ts`, with an inline copy in
+`instrumentation-client.ts`): RequestData keeps only the method and URL, and
+`beforeSend` removes cookies, headers outside an allowlist (`user-agent`), the
+Referer, and every URL's query and fragment; `beforeBreadcrumb` drops console
+breadcrumbs, strips queries from request and navigation URLs, and removes
+attribute selectors carrying text (`aria-label`, `title`, `alt`, `name`, and
+similar) from click targets. The web app also works against
 [Bugsink](https://www.bugsink.com/) (it speaks the Sentry DSN protocol) if that
 is all you can host; set `SENTRY_IS_BUGSINK=1` at build time in that case, since
 Bugsink lacks the release API.
