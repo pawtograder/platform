@@ -16,8 +16,8 @@
  *
  * Memory is bounded, with separate budgets so free text can never crowd out identities: names,
  * emails, and handles share `MAX_IDENTITY_PATTERNS`; free text has `MAX_FREE_TEXT_PATTERNS` and a
- * character budget. Patterns longer than `MAX_PATTERN_LENGTH` are cut to that length. Past a
- * budget nothing more of that kind is added and the set reports itself saturated (`isSaturated()`),
+ * character budget. A pattern longer than `MAX_PATTERN_LENGTH` is stored as overlapping chunks
+ * (`chunkPattern`), which together cover all of it. Past a budget nothing more of that kind is added and the set reports itself saturated (`isSaturated()`),
  * so the review dialog can warn that the automatic redaction is incomplete.
  */
 import { matchPatterns, normalizeForMatch } from "./variants";
@@ -65,7 +65,7 @@ export interface TaintSet {
   flush(): void;
 }
 
-/** Longest pattern kept; longer ones are cut, which still matches the text they start. */
+/** Longest pattern stored; longer ones are stored as overlapping chunks (`chunkPattern`). */
 export const MAX_PATTERN_LENGTH = 512;
 /** Cap on distinct name, email, and handle patterns together. Free text never counts against it. */
 export const MAX_IDENTITY_PATTERNS = 200_000;
@@ -77,6 +77,36 @@ export const MAX_FREE_TEXT_CHARS = 4_000_000;
 export const DRAIN_SLICE_MS = 8;
 /** Raw values remembered to skip re-expanding a repeat; a cache, cleared when full. */
 const MAX_SEEN = 100_000;
+
+/**
+ * Splits a normalized pattern longer than `MAX_PATTERN_LENGTH` into chunks of at most that length.
+ * Each chunk ends at a space when there is one in its second half, and the next chunk starts about
+ * halfway through the previous one, at a word start. So consecutive chunks overlap, every
+ * character is in at least one chunk, and text showing the whole line has all of it matched.
+ * A shorter pattern is returned as is.
+ */
+export function chunkPattern(pattern: string): string[] {
+  if (pattern.length <= MAX_PATTERN_LENGTH) return [pattern];
+  const out: string[] = [];
+  const half = MAX_PATTERN_LENGTH / 2;
+  let start = 0;
+  for (;;) {
+    let end = Math.min(start + MAX_PATTERN_LENGTH, pattern.length);
+    if (end < pattern.length) {
+      const space = pattern.lastIndexOf(" ", end);
+      if (space > start + half) end = space;
+    }
+    const chunk = pattern.slice(start, end).trim();
+    if (chunk.length > 0) out.push(chunk);
+    if (end >= pattern.length) return out;
+    // Start the next chunk at the first word start past the middle of this one. `next < end`, so
+    // the chunks overlap and nothing between them is skipped.
+    let next = start + Math.floor((end - start) / 2);
+    const space = pattern.indexOf(" ", next);
+    if (space !== -1 && space + 1 < end) next = space + 1;
+    start = next;
+  }
+}
 
 /** Free text waiting to be expanded, consumed line by line from `offset`. */
 type QueuedText = { value: string; offset: number };
@@ -137,7 +167,7 @@ class PatternTaintSet implements TaintSet {
       this.scheduleDrain();
       return;
     }
-    for (const p of matchPatterns(value, kind)) this.addPattern(kind, p.slice(0, MAX_PATTERN_LENGTH).trim());
+    for (const p of matchPatterns(value, kind)) this.addPatterns(kind, p);
   }
 
   /**
@@ -161,9 +191,11 @@ class PatternTaintSet implements TaintSet {
   }
 
   private addLine(line: string): void {
-    for (const p of matchPatterns(line, "free_text")) {
-      this.addPattern("free_text", p.slice(0, MAX_PATTERN_LENGTH).trim());
-    }
+    for (const p of matchPatterns(line, "free_text")) this.addPatterns("free_text", p);
+  }
+
+  private addPatterns(kind: TaintKind, pattern: string): void {
+    for (const chunk of chunkPattern(pattern)) this.addPattern(kind, chunk);
   }
 
   private scheduleDrain(): void {

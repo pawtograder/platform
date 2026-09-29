@@ -3,7 +3,13 @@
  * pattern-length cut, and the taint block reader.
  */
 import { taintSnapshot } from "@/lib/bugReport/redaction/taintSnapshot";
-import { createTaintSet, MAX_PATTERN_LENGTH, readTaintBlocks, TAINT_BLOCK_ID } from "@/lib/bugReport/taint";
+import {
+  chunkPattern,
+  createTaintSet,
+  MAX_PATTERN_LENGTH,
+  readTaintBlocks,
+  TAINT_BLOCK_ID
+} from "@/lib/bugReport/taint";
 
 /** About 4 MB of code-like text in 18-character lines, like a large `submission_files.contents`. */
 function bigSubmission(): string {
@@ -41,7 +47,7 @@ describe("taint set", () => {
     expect(set.size).toBe(0);
   });
 
-  it("splits free text into lines and cuts long lines", () => {
+  it("splits free text into lines and chunks long lines", () => {
     const set = createTaintSet();
     set.add("free_text", "First line of a post\n\nSecond line");
     expect(set.has("first line of a post")).toBe(true);
@@ -77,6 +83,48 @@ describe("taint set", () => {
     expect(set.size).toBe(0);
     set.add("name", "Zorvik Canary");
     expect(set.size).toBeGreaterThan(0);
+  });
+});
+
+describe("chunkPattern", () => {
+  /** Offsets of each chunk in `line`, found left to right. */
+  function spans(line: string, chunks: string[]): [number, number][] {
+    let from = 0;
+    return chunks.map((c) => {
+      const at = line.indexOf(c, from);
+      expect(at).toBeGreaterThanOrEqual(0);
+      from = at + 1;
+      return [at, at + c.length];
+    });
+  }
+
+  it("covers a long line with overlapping chunks cut on word boundaries", () => {
+    const line = ("secretpost " + "alpha beta gamma delta ".repeat(30) + "tailcanary end").trim();
+    expect(line.length).toBe(715);
+    const chunks = chunkPattern(line);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(MAX_PATTERN_LENGTH);
+    const ranges = spans(line, chunks);
+    expect(ranges[0][0]).toBe(0);
+    expect(ranges[ranges.length - 1][1]).toBe(line.length);
+    for (let i = 1; i < ranges.length; i++) expect(ranges[i][0]).toBeLessThan(ranges[i - 1][1]);
+    // Cut on word boundaries: every chunk starts and ends at a whole word.
+    for (const [start, end] of ranges) {
+      expect(start === 0 || line[start - 1] === " ").toBe(true);
+      expect(end === line.length || line[end] === " ").toBe(true);
+    }
+  });
+
+  it("covers a long line with no spaces", () => {
+    let line = "";
+    for (let i = 0; line.length < 1300; i++) line += String(i);
+    const ranges = spans(line, chunkPattern(line));
+    expect(ranges[ranges.length - 1][1]).toBe(line.length);
+    for (let i = 1; i < ranges.length; i++) expect(ranges[i][0]).toBeLessThan(ranges[i - 1][1]);
+  });
+
+  it("leaves short patterns whole", () => {
+    expect(chunkPattern("a short line")).toEqual(["a short line"]);
   });
 });
 

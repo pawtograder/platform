@@ -76,7 +76,10 @@ const NAME = "Zorvik Quellmar";
 const HANDLE = "vraeltek-42";
 const EMAIL = "kvounder@pawtograder.net";
 const taint: TaintSnapshot = [
-  ...["zorvik quellmar", "zorvik", "quellmar", "quellmar, zorvik"].map((pattern) => ({ kind: "name" as const, pattern })),
+  ...["zorvik quellmar", "zorvik", "quellmar", "quellmar, zorvik"].map((pattern) => ({
+    kind: "name" as const,
+    pattern
+  })),
   { kind: "handle", pattern: HANDLE },
   { kind: "email", pattern: EMAIL },
   { kind: "email", pattern: "kvounder" }
@@ -190,7 +193,10 @@ describe("text nodes", () => {
   });
 
   it("treats <title> text as the title and style text as CSS", async () => {
-    const head = [el("title", {}, [txt(`${NAME} - Submission`)]), el("style", {}, [txt(".zorvik{color:red}", undefined, true)])];
+    const head = [
+      el("title", {}, [txt(`${NAME} - Submission`)]),
+      el("style", {}, [txt(".zorvik{color:red}", undefined, true)])
+    ];
     const result = await redact(bufferOf([segment([meta(0), full(1, doc(head, [el("p", {}, [txt("hello")])]))])]));
     const out = uploaded(result);
     expect(out).toContain("****** ******** - Submission");
@@ -217,7 +223,9 @@ describe("attributes, inputs, breadcrumbs, URLs", () => {
         segment([
           meta(0),
           full(1, doc([], [link, img, field, box])),
-          mutation(2, { attributes: [{ id: box.id, attributes: { "aria-label": `Row for ${NAME}`, style: { content: HANDLE } } }] })
+          mutation(2, {
+            attributes: [{ id: box.id, attributes: { "aria-label": `Row for ${NAME}`, style: { content: HANDLE } } }]
+          })
         ])
       ])
     );
@@ -397,6 +405,27 @@ describe("taint snapshot and detectors", () => {
     const out = redactReportUrl(url, set);
     expect(out).toBe(`http://localhost/course/1/x?who=${"*".repeat(17)}&mail=${"*".repeat(EMAIL.length)}`);
     expect(redactReportUrl("http://localhost/course/1/x", set)).toBe("http://localhost/course/1/x");
+  });
+
+  it("redacts all of a free-text line longer than the pattern cap, in text and console output", async () => {
+    const set = getTaintSet();
+    const line = "Secretpost " + "alpha beta gamma delta ".repeat(30) + "TAILCANARY end";
+    expect(line.length).toBe(715);
+    set.add("free_text", line);
+    const result = await redactBuffer(
+      bufferOf([
+        segment([
+          meta(0),
+          full(1, doc([], [el("div", { "data-report-unmask": "" }, [txt(line)])])),
+          crumb(2, { category: "console", level: "log", timestamp: 1, message: line })
+        ])
+      ]),
+      { taintPatterns: taintSnapshot(set) }
+    );
+    const out = uploaded(result);
+    expect(out).not.toContain("TAILCANARY");
+    expect(out).not.toContain("Secretpost");
+    expect(out).not.toMatch(/alpha|gamma/);
   });
 
   it("matches taint case- and whitespace-insensitively", () => {
