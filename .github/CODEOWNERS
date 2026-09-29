@@ -1,0 +1,17 @@
+# Bug reporter privacy guardrails (ADR 6 in the bug reporter spec).
+#
+# PLACEHOLDER OWNER: replace @pawtograder/REPLACE-ME-report-unmask-owners with the real unmask
+# owners team, which is a human decision. GitHub ignores a line whose owner does not exist, so
+# these entries do nothing until the handle is real. The same team should be the required
+# reviewers of the `report-unmask-review` environment (.github/workflows/report-unmask-review.yml),
+# which covers the content rule CODEOWNERS cannot express: any diff adding `data-report-unmask`.
+#
+# These paths decide what the recorder may record as text and how that is checked, so changing
+# them needs the same owners.
+/lib/bugReport/privacy.ts @pawtograder/REPLACE-ME-report-unmask-owners
+/eslint-rules/ @pawtograder/REPLACE-ME-report-unmask-owners
+/eslint.pii.config.mjs @pawtograder/REPLACE-ME-report-unmask-owners
+/scripts/bugReport/brandPiiColumns.ts @pawtograder/REPLACE-ME-report-unmask-owners
+/scripts/bugReport/piiLintRatchet.mjs @pawtograder/REPLACE-ME-report-unmask-owners
+/.github/workflows/report-unmask-review.yml @pawtograder/REPLACE-ME-report-unmask-owners
+/.github/CODEOWNERS @pawtograder/REPLACE-ME-report-unmask-owners

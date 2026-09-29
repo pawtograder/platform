@@ -1,11 +1,12 @@
 import { AhoCorasick } from "@/lib/bugReport/ahoCorasick";
+import type { PiiKind } from "@/lib/bugReport/privacyTypes";
 import { variants } from "@/lib/bugReport/variants";
 
 export { variants };
 
 /** What a canary stands for: its PII kind, the `table.column` it was seeded into, and the row. */
 export type CanaryEntry = {
-  kind: "name" | "email" | "handle" | "grade" | "free_text" | (string & {});
+  kind: Exclude<PiiKind, "none">;
   /** "table.column", e.g. "profiles.name" */
   column: string;
   rowId: string | number;

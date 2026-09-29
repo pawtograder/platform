@@ -105,7 +105,7 @@ describe("scanForCanaries", () => {
     );
     expect(hits.map((h) => [h.source, h.canary, h.matched])).toEqual(
       expect.arrayContaining([
-        [0, "Quillon Vantrees", "Vantrees, Quillon"],
+        [0, "Quillon Vantrees", "vantrees, quillon"],
         [1, "qv-canary-7781@example.edu", "qv-canary-7781@example.edu"],
         [2, "87.31", "87.31"]
       ])

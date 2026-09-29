@@ -6,7 +6,8 @@
  * needs the spans in the ORIGINAL text so it can map them back to rrweb nodes, so matching runs
  * on a normalized copy that keeps an offset map back to the input.
  *
- * Normalization: lower case, and every run of whitespace becomes one space. Patterns shorter
+ * Normalization: NFKC per code point (so fullwidth or ligature forms match their plain spelling),
+ * lower case, and every run of whitespace becomes one space. Patterns shorter
  * than MIN_MATCH_LENGTH after normalization are dropped; short strings (initials, grades like
  * "A") are blocked structurally instead, because matching them as text would redact half the page.
  */
@@ -23,7 +24,7 @@ export type NormalizedText = {
 
 const WHITESPACE = /\s/;
 
-/** Lower-cases and collapses whitespace runs, keeping a map back to the original offsets. */
+/** NFKC-normalizes, lower-cases, and collapses whitespace runs, keeping a map back to the original offsets. */
 export function normalizeForMatch(input: string): NormalizedText {
   let text = "";
   const starts: number[] = [];
@@ -42,9 +43,9 @@ export function normalizeForMatch(input: string): NormalizedText {
       i = j;
       continue;
     }
-    // toLowerCase can change length ("İ" becomes two code units); every resulting unit maps
-    // back to the whole original character.
-    const lowered = char.toLowerCase();
+    // NFKC and toLowerCase can change length ("ﬁ" becomes "fi", "İ" two code units); every
+    // resulting unit maps back to the whole original character.
+    const lowered = char.normalize("NFKC").toLowerCase();
     for (let k = 0; k < lowered.length; k++) {
       starts.push(i);
       ends.push(i + width);
@@ -57,7 +58,9 @@ export function normalizeForMatch(input: string): NormalizedText {
 
 /** Normalizes a pattern the same way as searched text, without the offset map. */
 export function normalizePattern(pattern: string): string {
-  return pattern.toLowerCase().replace(/\s+/g, " ");
+  let out = "";
+  for (const char of pattern) out += char.normalize("NFKC").toLowerCase();
+  return out.replace(/\s+/g, " ");
 }
 
 export type Match<T> = {
