@@ -18,7 +18,7 @@ import type { RoutePolicyEntry } from "@/lib/bugReport/routePolicy";
 import { addDays } from "date-fns";
 import { insertAssignment, insertHelpRequest, loginAsUser, supabase, type TestingUser } from "../TestingUtils";
 import { canarySentence, registerCanary, resolveCanary } from "./canaryRegistry";
-import { describeHits, scanForCanaries } from "./canaries";
+import { describeHits, scanForCanaries, type CanaryHit } from "./canaries";
 import { seedCanaryClass, type CanarySeed } from "./canarySeed";
 import { enableBugReports, waitForRecorderState } from "./recorderTestUtils";
 import { redactedUploadBytes } from "./report";
@@ -143,8 +143,27 @@ async function expectRenderedCanariesTainted(page: Page, minHits = 1): Promise<S
 /** The spec's final assertion: no canary in any would-be uploaded byte. */
 async function expectNoCanariesUploaded(page: Page): Promise<void> {
   await settle(page);
-  const hits = scanForCanaries(await redactedUploadBytes(page), seed.registry);
+  const bytes = new TextDecoder().decode(await redactedUploadBytes(page));
+  const hits = scanForCanaries(bytes, seed.registry).filter((h) => !numberFragment(bytes, h));
   expect(hits, describeHits(hits)).toEqual([]);
+}
+
+/**
+ * A grade canary such as "72.52" found inside a longer number (an SVG path's "M572.52 241.4") is
+ * a coincidence, not the grade: the scan matches substrings. Only grade hits with a digit, or a
+ * digit-and-dot, right next to them are dropped.
+ */
+function numberFragment(text: string, hit: CanaryHit): boolean {
+  if (hit.entry.kind !== "grade") return false;
+  const before = text[hit.offset - 1] ?? "";
+  const after = text[hit.offset + hit.matched.length] ?? "";
+  return /[\d.]/.test(before) || /\d/.test(after);
+}
+
+/** The seeded discussion thread's subject, which the discussion page lists once it has loaded. */
+async function waitForDiscussion(page: Page): Promise<void> {
+  const subject = canariesOf("discussion_threads.subject")[0];
+  await expect(page.getByText(subject).filter({ visible: true }).first()).toBeVisible({ timeout: 30_000 });
 }
 
 function canariesOf(column: string): string[] {
@@ -169,6 +188,7 @@ test("D1: roster on the instructor enrollments page", async ({ page }) => {
 
 test("D1: roster hydrated into TableControllers for a student (initialData)", async ({ page }) => {
   await openRecorded(page, seed.students[0], seed.routes.discussion);
+  await waitForDiscussion(page);
   await expectRenderedCanariesTainted(page, 1);
   // The start-up backfill of live controllers ran, and the staff's names from the server-hydrated
   // roster are in the set whether or not this page shows them.
@@ -306,6 +326,7 @@ test("D7: an edge-function payload with GitHub usernames (commit history)", asyn
 test("D16: the reporter's own name and email from the auth session", async ({ page }) => {
   const me = seed.students[1];
   await openRecorded(page, me, seed.routes.discussion);
+  await waitForDiscussion(page);
   await settle(page);
   expect(await taintHas(page, [me.email, me.email.split("@")[0], me.private_profile_name])).toEqual([]);
   await expectRenderedCanariesTainted(page, 1);
