@@ -14,7 +14,7 @@ import { parseCapturedEnvelope, type CapturedEnvelope } from "./tunnel";
 /** Port and DSN a PR-tier build points at. CI's e2e-local build uses the same value. */
 export const STUB_SENTRY_PORT = Number(process.env.BUG_REPORT_STUB_SENTRY_PORT ?? 54399);
 export const STUB_SENTRY_PROJECT_ID = "1";
-export const STUB_SENTRY_DSN = `http://pawtograder-e2e@127.0.0.1:${STUB_SENTRY_PORT}/${STUB_SENTRY_PROJECT_ID}`;
+export const STUB_SENTRY_DSN = `http://e2epublickey@127.0.0.1:${STUB_SENTRY_PORT}/${STUB_SENTRY_PROJECT_ID}`;
 
 export type StubSentry = {
   readonly dsn: string;
@@ -55,7 +55,7 @@ export async function startStubSentry(port = STUB_SENTRY_PORT): Promise<StubSent
   });
 
   return {
-    dsn: `http://pawtograder-e2e@127.0.0.1:${port}/${STUB_SENTRY_PROJECT_ID}`,
+    dsn: `http://e2epublickey@127.0.0.1:${port}/${STUB_SENTRY_PROJECT_ID}`,
     envelopes,
     waitForEnvelope: (predicate, timeoutMs = 20_000) => {
       const existing = envelopes.find(predicate);

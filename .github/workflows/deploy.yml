@@ -403,7 +403,7 @@ jobs:
           # a stub ingest on this port and checks the envelopes the browser and server send.
           # Outside that test nothing listens, so reports fail to send and are dropped. Must match
           # STUB_SENTRY_DSN in tests/e2e/bugReport/stubSentry.ts.
-          NEXT_PUBLIC_SENTRY_DSN: http://pawtograder-e2e@127.0.0.1:54399/1
+          NEXT_PUBLIC_SENTRY_DSN: http://e2epublickey@127.0.0.1:54399/1
         run: npm run build
 
       # This job does NOT write the .next/cache entry, and that is structural
