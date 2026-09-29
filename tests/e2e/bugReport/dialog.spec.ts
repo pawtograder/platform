@@ -242,7 +242,10 @@ test.describe("Report a bug dialog (no replay)", () => {
       document.getElementById("main-content")!.appendChild(button);
     }, canary);
     await page.locator("#scope-canary-button").click();
-    // Positive control: an error event sent now does carry those breadcrumbs.
+    // Positive control: an error event sent now carries the scope's breadcrumbs, the click
+    // included. The client's beforeBreadcrumb has already dropped the console text and cut the
+    // aria-label out of the click's selector (instrumentation-client.ts), so the canary is in
+    // neither.
     await page.evaluate(() => {
       setTimeout(() => {
         throw new Error("E2E scope breadcrumb control");
@@ -250,7 +253,12 @@ test.describe("Report a bug dialog (no replay)", () => {
     });
     await expect.poll(() => errorEventsOf(tunnel).length).toBeGreaterThan(0);
     const errorItem = tunnel.items("event").at(-1)!;
-    expect(scanForCanaries(decoder.decode(errorItem.payload), registry).length).toBeGreaterThan(0);
+    const errorEvent = payloadJsonOf<{ breadcrumbs?: { category?: string; message?: string }[] }>(errorItem)!;
+    expect(errorEvent.breadcrumbs ?? []).toContainEqual(
+      expect.objectContaining({ category: "ui.click", message: expect.stringContaining("#scope-canary-button") })
+    );
+    const errorHits = scanForCanaries(decoder.decode(errorItem.payload), registry);
+    expect(errorHits, describeHits(errorHits)).toEqual([]);
 
     const dialog = await openFromUserMenu(page);
     await dialog.getByRole("textbox", { name: /What happened/ }).fill("scope data report");
