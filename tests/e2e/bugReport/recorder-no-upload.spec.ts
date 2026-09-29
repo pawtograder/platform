@@ -5,14 +5,15 @@
  * STUB_SENTRY_DSN), so the browser SDK sends envelopes to /api/tunnel. `captureTunnel` answers
  * them locally; nothing leaves the machine.
  *
- * B2 and B3 open the review dialog, which package 5 builds. Until it exists they stand in for
- * "open the dialog" with `freeze()`, the only recorder call the dialog makes before submit.
+ * B2 and B3 run twice: once with `freeze()` alone (the only recorder call the dialog makes
+ * before submit), and once through the real review dialog (package 5b).
  */
 import { test, expect } from "../../global-setup";
 import type { Page } from "@playwright/test";
 import { createClass, createUsersInClass, loginAsUser, type TestingUser } from "../TestingUtils";
 import { assertNoReplayUploaded, captureTunnel, payloadJsonOf, type CapturedEnvelope } from "./index";
 import { clickNavLink, enableRecording, freeze, recorderStats, waitForRecorderState } from "./recorderTestUtils";
+import { openReportDialog, waitForReviewReady } from "./report";
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 
@@ -158,8 +159,23 @@ test.describe("bug report recorder uploads nothing before submit", () => {
     assertNoReplayUploaded(capture);
   });
 
-  // TODO(package 5): open "Report a bug" from the user menu, press Cancel; assert the same.
-  test.fixme("B2 (package 5): open the review dialog, then Cancel", async () => {});
+  test("B2 (dialog): open the review dialog, then Cancel: nothing uploaded, recording continues", async ({ page }) => {
+    const capture = await startRecording(page);
+    const dialog = await openReportDialog(page);
+    await dialog.getByRole("textbox", { name: /What happened/ }).fill("cancelled with a replay");
+    await waitForReviewReady(dialog);
+    const statsBefore = await recorderStats(page);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+
+    await page.mouse.move(60, 60);
+    await page.mouse.move(420, 320);
+    await page.evaluate(() => document.body.appendChild(document.createElement("section")));
+    await expect.poll(async () => (await recorderStats(page)).events).toBeGreaterThan(statsBefore.events);
+    expect(await page.evaluate(() => window.__bugReportRecorder!.getState())).toBe("recording");
+    assertNoReplayUploaded(capture);
+    expect(capture.items("feedback")).toHaveLength(0);
+  });
 
   test("B3: navigating away or closing after freezing sends no beacon or keepalive", async ({ page, context }) => {
     const capture = await startRecording(page);
@@ -178,8 +194,35 @@ test.describe("bug report recorder uploads nothing before submit", () => {
     expect(beacons).toEqual([]);
   });
 
-  // TODO(package 5): with the review dialog open, navigate away and close the tab.
-  test.fixme("B3 (package 5): navigate away or close with the review dialog open", async () => {});
+  test("B3 (dialog): navigating away or closing with the review dialog open sends nothing", async ({
+    page,
+    context
+  }) => {
+    const capture = await startRecording(page);
+    let dialog = await openReportDialog(page);
+    await dialog.getByRole("textbox", { name: /What happened/ }).fill("left with the dialog open");
+    await waitForReviewReady(dialog);
+    // A full navigation away with the dialog open.
+    await page.goto(`/course/${course.id}/assignments`);
+    await expect(page.getByRole("dialog", { name: "Report a bug" })).toHaveCount(0);
+
+    // A second tab: open the review, then close the tab (running beforeunload handlers).
+    const second = await context.newPage();
+    await second.goto(`/course/${course.id}/gradebook`);
+    await waitForRecorderState(second, "recording");
+    dialog = await openReportDialog(second);
+    await waitForReviewReady(dialog);
+    await second.close({ runBeforeUnload: true });
+
+    // Give any beacon or keepalive request a page load to show up in.
+    const other = await context.newPage();
+    await other.goto(`/course/${course.id}`);
+    await other.waitForLoadState("load");
+    assertNoReplayUploaded(capture);
+    expect(capture.items("feedback")).toHaveLength(0);
+    const beacons = capture.requests.filter((r) => r.resourceType === "ping" || r.resourceType === "beacon");
+    expect(beacons).toEqual([]);
+  });
 
   test("B4: Sentry flush, close, and a direct feedback event carry no replay", async ({ page }) => {
     const capture = await startRecording(page);
@@ -200,6 +243,17 @@ test.describe("bug report recorder uploads nothing before submit", () => {
     }
   });
 
-  // TODO(package 5): call Sentry.sendFeedback itself once the dialog's code path bundles it.
-  test.fixme("B4 (package 5): Sentry.sendFeedback directly", async () => {});
+  test("B4: Sentry.sendFeedback itself, with its default includeReplay, carries no replay", async ({ page }) => {
+    const capture = await startRecording(page);
+    await page.waitForFunction(() => window.__bugReportE2E !== undefined);
+    await page.evaluate(() => window.__bugReportE2E!.sendFeedback("B4 sendFeedback"));
+    const envelope = await capture.waitForEnvelope((e) => e.items.some((i) => i.header.type === "feedback"));
+    const feedback = payloadJsonOf<ErrorPayload>(envelope.items.find((i) => i.header.type === "feedback")!);
+    const context = feedback?.contexts?.feedback as { message?: string; replay_id?: string } | undefined;
+    expect(context?.message).toBe("B4 sendFeedback");
+    expect(context?.replay_id).toBeUndefined();
+    await sentryCall(page, "flush");
+    assertNoReplayUploaded(capture);
+    expect(envelope.items.map((i) => i.header.type)).toEqual(["feedback"]);
+  });
 });

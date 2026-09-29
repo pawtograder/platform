@@ -13,6 +13,7 @@ import {
 
 /**
  * Package 5 (report dialog without replay): E5, E6, E7, E8, E9, E10, and the dialog half of A1.
+ * The same tests with a replay attached (E1-E6) are in review.spec.ts.
  * PR tier: `captureTunnel` answers `/api/tunnel` itself, so nothing reaches Sentry.
  *
  * The build under test must have a valid Sentry DSN baked in (`NEXT_PUBLIC_SENTRY_DSN`, e.g.
@@ -167,8 +168,8 @@ test.describe("Report a bug dialog (no replay)", () => {
     await assertStudentPageAccessible(page, "report-bug dialog");
 
     // Focus is trapped in the dialog; Tab from the description walks the controls in order
-    // and wraps. TODO(pkg 5 replay half): redact controls and the minutes control go between
-    // the checkbox and Cancel.
+    // and wraps. With a replay, the review controls go between the checkbox and Cancel
+    // (review.spec.ts E5).
     const stops = await tabSequence(page, 5);
     const describe = (s: (typeof stops)[number]) => (s.tag === "textarea" ? "description" : s.text || s.tag);
     const names = stops.map(describe);
@@ -217,10 +218,6 @@ test.describe("Report a bug dialog (no replay)", () => {
     expect(feedback).toHaveLength(1);
     expect(feedback[0].contexts.feedback.message).toBe("keyboard report");
     expect(feedback[0].tags?.contact_ok).toBe("true");
-  });
-
-  test.fixme("E6 (replay half): redact a string from the keyboard before submitting", async () => {
-    // TODO(bug-reporter pkg 5 replay half): needs the recorder (pkg 1) and redaction worker (pkg 3).
   });
 
   test("429: the dialog says try again later and keeps the draft", async ({ page }) => {

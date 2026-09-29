@@ -1,5 +1,6 @@
 /**
- * Package 1 gating tests (PR tier): A1, A2, A4, A6.
+ * Package 1 gating tests (PR tier): A1, A2, A4, A6, with the report dialog halves of A1 and A6
+ * (package 5b).
  *
  * Needs a build made with E2E_ENABLE=true (so the test route policy is honored). No Sentry.
  */
@@ -21,6 +22,10 @@ import {
   setTestRoutePolicy,
   waitForRecorderState
 } from "./recorderTestUtils";
+import { assertNoReplayUploaded, captureTunnel, payloadJsonOf } from "./tunnel";
+import { openReportDialog } from "./report";
+
+type FeedbackPayload = { contexts?: { feedback?: Record<string, unknown> } };
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 
@@ -72,9 +77,34 @@ test.describe("bug report recorder gating", () => {
     expect(await recorderChunkRequested(scripts)).toBe(false);
   });
 
-  // TODO(package 5): open "Report a bug" from the user menu, submit, and assert the dialog has
-  // no replay section and the feedback carries no replay_id. The dialog doesn't exist yet.
-  test.fixme("A1 (package 5): the report dialog has no replay section and feedback has no replay_id", async () => {});
+  test("A1 (dialog): with the flag off, a report has no replay section and no replay_id", async ({ page }) => {
+    const scripts = collectScripts(page);
+    const capture = await captureTunnel(page);
+    await loginAsUser(page, offStudent, offCourse);
+    await page.goto(`/course/${offCourse.id}/discussion`);
+    await clickNavLink(page, `/course/${offCourse.id}/gradebook`);
+    await page.evaluate(() => {
+      setTimeout(() => {
+        throw new Error("A1 dialog synthetic error");
+      }, 0);
+    });
+    await expect.poll(() => capture.items("event").length).toBeGreaterThan(0);
+
+    const dialog = await openReportDialog(page);
+    await expect(dialog.getByTestId("report-bug-replay-section")).toHaveCount(0);
+    await expect(dialog.getByTestId("report-bug-replay-notice")).toHaveCount(0);
+    await dialog.getByRole("textbox", { name: /What happened/ }).fill("A1 flag off report");
+    await dialog.getByRole("button", { name: "Submit" }).click();
+    await expect(dialog.getByTestId("report-bug-sent")).toBeVisible();
+
+    const feedback = capture.items("feedback").map((i) => payloadJsonOf<FeedbackPayload>(i)!);
+    expect(feedback).toHaveLength(1);
+    expect(feedback[0].contexts?.feedback).not.toHaveProperty("replay_id");
+    assertNoReplayUploaded(capture);
+    expect(await recorderDefined(page)).toBe(false);
+    // Neither the recorder nor the player (both rrweb) loaded for the report.
+    expect(await recorderChunkRequested(scripts)).toBe(false);
+  });
 
   test("A2: not recording on an unlisted route; the buffer has no events from one", async ({ page }) => {
     const scripts = collectScripts(page);
@@ -185,8 +215,37 @@ test.describe("bug report recorder gating", () => {
     expect(await recorderDefined(page)).toBe(false);
   });
 
-  // TODO(package 5): after A6, open "Report a bug" and submit; the feedback has no replay_id.
-  test.fixme("A6 (package 5): a report after the flag is turned off has no replay", async () => {});
+  test("A6 (dialog): a report after the flag is turned off has no replay", async ({ page }) => {
+    const course = await createClass({ name: "Bug Report Flag Flip Report Course" });
+    const [student] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Flag Flip Reporter", useMagicLink: true }
+    ]);
+    const capture = await captureTunnel(page);
+    await enableRecording(page, course.id);
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/discussion`);
+    await waitForRecorderState(page, "recording");
+    // Positive control: while recording, the dialog has the review.
+    let dialog = await openReportDialog(page);
+    await expect(dialog.getByTestId("report-bug-replay-section")).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+
+    await setCourseFeature(course.id, COURSE_FEATURES.BUG_REPORT_RECORDING, false);
+    await clickNavLink(page, `/course/${course.id}/office-hours`);
+    await page.waitForFunction(() => window.__bugReportRecorder === undefined);
+
+    dialog = await openReportDialog(page);
+    await expect(dialog.getByTestId("report-bug-replay-section")).toHaveCount(0);
+    await expect(dialog.getByTestId("report-bug-replay-notice")).toHaveCount(0);
+    await dialog.getByRole("textbox", { name: /What happened/ }).fill("A6 report after flag off");
+    await dialog.getByRole("button", { name: "Submit" }).click();
+    await expect(dialog.getByTestId("report-bug-sent")).toBeVisible();
+    const feedback = capture.items("feedback").map((i) => payloadJsonOf<FeedbackPayload>(i)!);
+    expect(feedback).toHaveLength(1);
+    expect(feedback[0].contexts?.feedback).not.toHaveProperty("replay_id");
+    assertNoReplayUploaded(capture);
+  });
 
   test("recording starts after a client navigation from an unlisted route to a listed one", async ({ page }) => {
     await setTestRoutePolicy(page, []);
