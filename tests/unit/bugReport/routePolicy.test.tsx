@@ -16,9 +16,12 @@ import {
   ROUTE_POLICY,
   courseIdFromPathname,
   recordingLevelFor,
+  resolveAppRoute,
   routePolicyEntryFor,
   type RoutePolicyEntry
 } from "@/lib/bugReport/routePolicy";
+import appRoutesFile from "@/lib/bugReport/generated/appRoutes.json";
+import { APP_ROUTES_HINT, collectAppRoutes } from "@/scripts/bugReport/generateAppRoutes";
 import { ReportTaint, serializeTaintPayload } from "@/components/bugReport/ReportTaint";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -121,19 +124,44 @@ describe("routePolicy matching", () => {
     expect(recordingLevelFor("/course/1/manage/gradebook")).toBeNull();
   });
 
-  it("matches [...param] to the rest of the path, and the most specific pattern wins", () => {
+  it("resolves [...param] and [[...param]] to the rest of the path, and the most specific route wins", () => {
+    const routes = [
+      "/course/[course_id]/files/[...path]",
+      "/course/[course_id]/files/[kind]/readme",
+      "/course/[course_id]/files/[kind]",
+      "/course/[course_id]/files/static/[...path]",
+      "/docs/[[...slug]]"
+    ];
+    expect(resolveAppRoute("/course/1/files", routes)).toBeNull();
+    expect(resolveAppRoute("/course/1/files/a", routes)).toBe("/course/[course_id]/files/[kind]");
+    expect(resolveAppRoute("/course/1/files/a/b/c", routes)).toBe("/course/[course_id]/files/[...path]");
+    expect(resolveAppRoute("/course/1/files/a/readme", routes)).toBe("/course/[course_id]/files/[kind]/readme");
+    expect(resolveAppRoute("/course/1/files/static/x", routes)).toBe("/course/[course_id]/files/static/[...path]");
+    expect(resolveAppRoute("/docs", routes)).toBe("/docs/[[...slug]]");
+    expect(resolveAppRoute("/docs/a/b", routes)).toBe("/docs/[[...slug]]");
+  });
+
+  it("never records an unlisted static sibling of a listed [param] route", () => {
+    // Listed: discussion/[root_id] and office-hours/[queue_id]. These are other pages.
+    expect(resolveAppRoute("/course/1/discussion/new")).toBe("/course/[course_id]/discussion/new");
+    expect(recordingLevelFor("/course/1/discussion/new")).toBeNull();
+    expect(recordingLevelFor("/course/1/discussion/%6Eew")).toBeNull();
+    expect(recordingLevelFor("/course/1/office-hours/search")).toBeNull();
+    // No page at office-hours/request, so Next renders the [queue_id] page for it, as here.
+    expect(resolveAppRoute("/course/1/office-hours/request")).toBe("/course/[course_id]/office-hours/[queue_id]");
+    expect(recordingLevelFor("/course/1/discussion/9")).toBe("structure");
+  });
+
+  it("applies the same resolution to the test policy", () => {
     process.env.BUG_REPORT_E2E = "true";
-    policy([
-      { pattern: "/course/[course_id]/files/[...path]", level: "structure" },
-      { pattern: "/course/[course_id]/files/[kind]/readme", level: "full" },
-      { pattern: "/course/[course_id]/files/[kind]", level: "full" },
-      { pattern: "/course/[course_id]/files/static/[...path]", level: "full" }
-    ]);
-    expect(routePolicyEntryFor("/course/1/files")).toBeNull();
-    expect(routePolicyEntryFor("/course/1/files/a")?.pattern).toBe("/course/[course_id]/files/[kind]");
-    expect(routePolicyEntryFor("/course/1/files/a/b/c")?.pattern).toBe("/course/[course_id]/files/[...path]");
-    expect(routePolicyEntryFor("/course/1/files/a/readme")?.pattern).toBe("/course/[course_id]/files/[kind]/readme");
-    expect(routePolicyEntryFor("/course/1/files/static/x")?.pattern).toBe("/course/[course_id]/files/static/[...path]");
+    policy([{ pattern: "/course/[course_id]/manage/office-hours/request/[request_id]", level: "structure" }]);
+    expect(recordingLevelFor("/course/1/manage/office-hours/request/5")).toBe("structure");
+    expect(routePolicyEntryFor("/course/1/manage/office-hours/request/5")?.pattern).toBe(
+      "/course/[course_id]/manage/office-hours/request/[request_id]"
+    );
+    // A test entry for a pattern that isn't a real page matches nothing.
+    policy([{ pattern: "/course/[course_id]/[anything]", level: "structure" }]);
+    expect(recordingLevelFor("/course/1/manage")).toBeNull();
   });
 
   it("parses the course id", () => {
@@ -141,6 +169,61 @@ describe("routePolicy matching", () => {
     expect(courseIdFromPathname("/course/42")).toBe(42);
     expect(courseIdFromPathname("/course/canvas-classes")).toBeNull();
     expect(courseIdFromPathname("/admin")).toBeNull();
+  });
+});
+
+describe("generated/appRoutes.json", () => {
+  it(`lists every page under app/ (${APP_ROUTES_HINT})`, () => {
+    expect(appRoutesFile).toEqual(collectAppRoutes());
+  });
+
+  it("every ROUTE_POLICY pattern is a real page", () => {
+    expect(ROUTE_POLICY.map((e) => e.pattern).filter((p) => !appRoutesFile.includes(p))).toEqual([]);
+  });
+
+  it("walks every real page: each resolves to itself, and only the listed ones record", () => {
+    const listed = new Map(ROUTE_POLICY.map((e) => [e.pattern, e.level]));
+    const concrete = (pattern: string) =>
+      pattern
+        .replace(/\/\[\[\.\.\.[^\]]+\]\]/g, "/x7/y7")
+        .replace(/\[\.\.\.[^\]]+\]/g, "x7/y7")
+        .replace(/\[[^\]]+\]/g, "7") || "/";
+    const recorded: string[] = [];
+    for (const pattern of appRoutesFile) {
+      const pathname = concrete(pattern);
+      expect([pathname, resolveAppRoute(pathname)]).toEqual([pathname, pattern]);
+      const level = recordingLevelFor(pathname);
+      expect([pattern, level]).toEqual([pattern, listed.get(pattern) ?? null]);
+      if (level) recorded.push(pattern);
+    }
+    expect(recorded.sort()).toEqual([...listed.keys()].sort());
+  });
+
+  it("collects pages, leaving out route groups, slots, private folders, and intercepts", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "app-routes-"));
+    const page = (route: string, file = "page.tsx") => {
+      fs.mkdirSync(path.join(dir, route), { recursive: true });
+      fs.writeFileSync(path.join(dir, route, file), "export default function P() { return null; }\n");
+    };
+    try {
+      page("");
+      page("(auth-pages)/sign-in");
+      page("course/[course_id]/discussion/new", "page.ts");
+      page("course/[course_id]/@modal/settings");
+      page("course/[course_id]/_components/fake");
+      page("course/[course_id]/(.)photo/[id]");
+      page("docs/[[...slug]]");
+      page("api/thing", "route.ts");
+      expect(collectAppRoutes(dir)).toEqual([
+        "/",
+        "/course/[course_id]/discussion/new",
+        "/course/[course_id]/settings",
+        "/docs/[[...slug]]",
+        "/sign-in"
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

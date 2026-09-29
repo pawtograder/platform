@@ -9,10 +9,11 @@ import {
   type StubSentry,
   type TunnelCapture
 } from "./index";
+import { sessionLeaks } from "./sessionLeaks";
 
 /**
  * G1 (spec §7.3, ADR 3), PR tier: errors reported from the browser and from the Next server
- * identify the user by ID, and no envelope contains the user's email.
+ * identify the user by ID, and no envelope contains the user's email or session (cookie, tokens).
  *
  * Needs a build whose NEXT_PUBLIC_SENTRY_DSN is STUB_SENTRY_DSN (CI's e2e-local build sets it).
  * The server SDK then posts straight to the stub started here, and the browser posts to
@@ -93,6 +94,17 @@ test.describe("G1: Sentry envelopes carry no email", () => {
       new TextDecoder().decode(e.raw).toLowerCase().includes(email)
     );
     expect(offenders.map((e) => `${e.url} ${JSON.stringify(e.header)}`)).toEqual([]);
+
+    // Nor the session: no cookie key, no sb- auth-token cookie, no JWT, no base64 of the email
+    // (the Supabase session cookie is base64 JSON holding both tokens and the user's email).
+    const sessionOffenders = [...tunnel.envelopes, ...stub.envelopes].flatMap((e) =>
+      sessionLeaks(new TextDecoder().decode(e.raw), email).map((leak) => `${e.url}: ${leak}`)
+    );
+    expect(sessionOffenders).toEqual([]);
+    // The server event came from a request carrying that cookie, so the check above is not vacuous.
+    const serverRequest = (eventOf(serverEnvelope) as { request?: { url?: string; headers?: object } }).request;
+    expect(serverRequest?.url ?? "").not.toMatch(/[?#]/);
+    expect(Object.keys(serverRequest?.headers ?? {}).map((h) => h.toLowerCase())).not.toContain("cookie");
 
     const summary = [clientAtStub, serverEnvelope].map((e) => {
       const event = eventOf(e) as (EventPayload & { release?: string; environment?: string }) | undefined;

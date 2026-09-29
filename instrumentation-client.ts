@@ -40,6 +40,56 @@ if (!process.env.NEXT_PUBLIC_SENTRY_DSN && process.env.NEXT_PUBLIC_BUGSINK_DSN) 
   // eslint-disable-next-line no-console -- one-release deprecation notice
   console.warn("NEXT_PUBLIC_BUGSINK_DSN is deprecated and will stop working next release; set NEXT_PUBLIC_SENTRY_DSN");
 }
+// Names, emails, and queries out of error events (ADR 3). The default integrations record click
+// targets as selectors carrying aria-label/title/alt/name text, fetch/xhr/navigation URLs with
+// their queries, and console text, and HttpContext copies the page URL and the Referer onto every
+// event. These are inline copies of the rules in lib/bugReport/sentryScrub.ts, which this file
+// can't import (see above); tests/unit/bugReport-clientScrub.test.ts runs both on the same cases.
+const stripQueryAndFragment = (url: string): string => {
+  const cut = url.search(/[?#]/);
+  return (cut === -1 ? url : url.slice(0, cut)).replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+};
+const TEXT_ATTRIBUTE_SELECTOR =
+  /\[(?:aria-label|title|alt|name|placeholder|value|data-[^=\]\s]*)=(?:"(?:[^"]|"(?!\]))*"\]|"[^"]*$|'[^']*'\]|[^\]"']*\])/gi;
+const URL_BREADCRUMB_CATEGORIES = new Set(["fetch", "xhr", "http", "navigation", "history"]);
+const scrubBreadcrumb = (breadcrumb: Sentry.Breadcrumb): Sentry.Breadcrumb | null => {
+  const category = breadcrumb.category ?? "";
+  if (category === "console") return null;
+  if (category.startsWith("ui.") && typeof breadcrumb.message === "string") {
+    breadcrumb.message = breadcrumb.message.replace(TEXT_ATTRIBUTE_SELECTOR, "");
+  }
+  if (URL_BREADCRUMB_CATEGORIES.has(category)) {
+    if (breadcrumb.data) {
+      for (const key of ["url", "from", "to"]) {
+        const value = breadcrumb.data[key];
+        if (typeof value === "string") breadcrumb.data[key] = stripQueryAndFragment(value);
+      }
+      delete breadcrumb.data["http.query"];
+      delete breadcrumb.data["http.fragment"];
+    }
+    if (typeof breadcrumb.message === "string") {
+      breadcrumb.message = breadcrumb.message.replace(/[?#][^\s"'<>]*/g, "");
+    }
+  }
+  return breadcrumb;
+};
+const scrubEvent = <E extends Sentry.ErrorEvent>(event: E): E => {
+  if (event.request) {
+    if (typeof event.request.url === "string") event.request.url = stripQueryAndFragment(event.request.url);
+    delete event.request.query_string;
+    delete event.request.cookies;
+    if (event.request.headers) {
+      for (const name of Object.keys(event.request.headers)) {
+        if (/^(referer|cookie|authorization)$/i.test(name)) delete event.request.headers[name];
+      }
+    }
+  }
+  if (event.breadcrumbs) {
+    event.breadcrumbs = event.breadcrumbs.map(scrubBreadcrumb).filter((b): b is Sentry.Breadcrumb => b !== null);
+  }
+  return event;
+};
+
 Sentry.init({
   dsn: sentryDsn,
   tunnel: "/api/tunnel",
@@ -61,6 +111,7 @@ Sentry.init({
   sendClientReports: false,
   replaysSessionSampleRate: 0,
   replaysOnErrorSampleRate: 0,
+  beforeBreadcrumb: scrubBreadcrumb,
   beforeSend(event) {
     // Filter React hydration mismatch errors — typically caused by browser extensions
     // (Grammarly, Google Translate, ad blockers, etc.) modifying the DOM before React hydrates.
@@ -211,7 +262,7 @@ Sentry.init({
         }
       }
     }
-    return event; // Send other events
+    return scrubEvent(event); // Send other events, without names, emails, or queries
   }
 });
 
