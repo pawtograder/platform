@@ -12,8 +12,9 @@ import type { PiiKind } from "./privacyTypes";
 export { MIN_MATCH_LENGTH };
 
 /**
- * Lower case, NFKC, runs of whitespace collapsed to one space, trimmed. The same normalization
- * `AhoCorasick` applies to the text it scans, so patterns built here match what it sees.
+ * Lower case, NFKD with combining marks dropped, runs of whitespace collapsed to one space,
+ * trimmed. The same normalization `AhoCorasick` applies to the text it scans, so patterns built
+ * here match what it sees.
  */
 export function normalizeForMatch(text: string): string {
   return normalizePattern(text).trim();

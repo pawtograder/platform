@@ -18,11 +18,42 @@ describe("normalizeForMatch", () => {
     expect(input.slice(n.starts[5], n.ends[7])).toBe("DOE");
   });
 
-  it("keeps offsets right when lower-casing changes length", () => {
-    const input = "xİstanbul";
+  it("keeps offsets right when folding changes length", () => {
+    const input = "xﬁle";
     const n = normalizeForMatch(input);
-    expect(n.text.length).toBe(input.length + 1);
+    expect(n.text).toBe("xfile");
     expect(n.starts[n.text.length - 1]).toBe(input.length - 1);
+    expect(input.slice(n.starts[1], n.ends[2])).toBe("ﬁ");
+    // Lower-casing "İ" adds a combining dot, which is dropped.
+    expect(normalizeForMatch("İstanbul").text).toBe("istanbul");
+  });
+
+  it("drops combining marks and adds them to the span of the character before", () => {
+    const nfd = "Zoë".normalize("NFD");
+    expect(nfd.length).toBe(4);
+    const n = normalizeForMatch(nfd);
+    expect(n.text).toBe("zoe");
+    expect(nfd.slice(n.starts[2], n.ends[2])).toBe("ë".normalize("NFD"));
+    expect(normalizeForMatch("Zoë".normalize("NFC")).text).toBe("zoe");
+  });
+});
+
+describe("composition-insensitive matching", () => {
+  const name = "Zoë Ångström";
+  const nfc = name.normalize("NFC");
+  const nfd = name.normalize("NFD");
+
+  it.each([
+    ["NFC pattern", "NFD text", nfc, nfd],
+    ["NFD pattern", "NFC text", nfd, nfc],
+    ["NFC pattern", "NFC text", nfc, nfc],
+    ["NFD pattern", "NFD text", nfd, nfd]
+  ])("%s matches %s, spanning every original code unit", (_p, _t, pattern, form) => {
+    const ac = new AhoCorasick<string>([[pattern, "name"]]);
+    const text = `by ${form}.`;
+    const [m] = ac.search(text);
+    expect(m).toBeDefined();
+    expect(text.slice(m.start, m.end)).toBe(form);
   });
 });
 

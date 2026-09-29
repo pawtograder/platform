@@ -432,4 +432,23 @@ describe("taint snapshot and detectors", () => {
     const detect = taintDetector(taint);
     expect(detect("by ZORVIK   quellmar.")).toEqual(expect.arrayContaining([{ start: 3, end: 20, kind: "name" }]));
   });
+
+  it.each([
+    ["NFC", "NFD"],
+    ["NFD", "NFC"]
+  ] as const)("redacts a name tainted in %s and rendered in %s, marks included", async (tainted, rendered) => {
+    const set = getTaintSet();
+    set.add("name", "Zoë Ångström".normalize(tainted));
+    const shown = "Zoë Ångström".normalize(rendered);
+    const result = await redactBuffer(
+      bufferOf([
+        segment([meta(0), full(1, doc([], [el("div", { "data-report-unmask": "", title: shown }, [txt(shown)])]))])
+      ]),
+      { taintPatterns: taintSnapshot(set) }
+    );
+    const out = uploaded(result).normalize("NFC");
+    expect(out).not.toMatch(/Zo|ngstr/);
+    // No combining mark is left over the masked letters.
+    expect(uploaded(result)).not.toMatch(/\p{M}/u);
+  });
 });
