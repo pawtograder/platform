@@ -1,11 +1,44 @@
 "use client";
 
+import { currentTaskErrorEventId, ensureEventIdForReport } from "@/lib/bugReport/errorEventLink";
+import { openReportDialog } from "@/lib/bugReport/reportDialog";
 import { Toaster as ChakraToaster, Portal, Spinner, Stack, Toast, createToaster } from "@chakra-ui/react";
 
 export const toaster = createToaster({
   placement: "bottom-end",
   pauseOnPageIdle: true
 });
+
+type ToastOptions = Parameters<typeof toaster.create>[0];
+
+/**
+ * Every error toast gets a "Report this" action that opens the bug report dialog linked to
+ * the Sentry event behind the error. The link is resolved when the toast is created: an
+ * explicit `meta.sentryEventId`, else the error event captured earlier in the same task
+ * (the usual `Sentry.captureException(e); toaster.error(...)` pattern). If there is none,
+ * clicking the action captures one. Callers that set their own `action`, or pass
+ * `meta: { reportable: false }`, keep their toast as is.
+ */
+function withReportAction(options: ToastOptions): ToastOptions {
+  if (options.action || options.meta?.reportable === false) return options;
+  const linked: string | undefined = options.meta?.sentryEventId ?? currentTaskErrorEventId();
+  return {
+    ...options,
+    action: {
+      label: "Report this",
+      onClick: () => {
+        openReportDialog({ eventId: ensureEventIdForReport(linked) });
+      }
+    }
+  };
+}
+
+const createToast = toaster.create;
+const createErrorToast = toaster.error;
+const updateToast = toaster.update;
+toaster.create = (options) => createToast(options.type === "error" ? withReportAction(options) : options);
+toaster.error = (options) => createErrorToast(withReportAction(options));
+toaster.update = (id, options) => updateToast(id, options.type === "error" ? withReportAction(options) : options);
 
 export const Toaster = () => {
   return (
