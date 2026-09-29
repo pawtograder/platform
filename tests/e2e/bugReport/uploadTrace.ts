@@ -25,10 +25,8 @@
  */
 import type { BrowserContext, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { normalizePattern } from "@/lib/bugReport/ahoCorasick";
 import { ROUTE_POLICY, type RecordingLevel, type RoutePolicyEntry } from "@/lib/bugReport/routePolicy";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
-import { setCourseFeature } from "../TestingUtils";
 import { isNumberFragment, scanForCanaries, type CanaryHit } from "./canaries";
 import { isTraceMode, workerCanaries, type CanaryRegistry } from "./canaryRegistry";
 import { allRoutePatterns, routePatternFor } from "./routePatterns";
@@ -152,7 +150,8 @@ const INCREMENTAL_SOURCES: Record<number, string> = {
   16: "CustomElement"
 };
 
-type Leaf = { value: string; where: string; recordedRoute: string | null };
+/** One string of the upload, where it sits, and whether it is stylesheet text. */
+export type Leaf = { value: string; where: string; recordedRoute: string | null; css?: boolean };
 
 type SNode = {
   id?: number;
@@ -161,7 +160,12 @@ type SNode = {
   attributes?: Record<string, unknown>;
   childNodes?: SNode[];
   textContent?: string;
+  isStyle?: boolean;
 };
+
+/** rrweb sources whose payload is CSS */
+const CSS_SOURCES = new Set([8, 13, 15]);
+const CSS_ATTRIBUTES = new Set(["_cssText", "style"]);
 
 function routeOfHref(href: unknown): string | null {
   if (typeof href !== "string") return null;
@@ -172,25 +176,35 @@ function routeOfHref(href: unknown): string | null {
   }
 }
 
-function genericLeaves(value: unknown, where: string, route: string | null, out: Leaf[]) {
+function genericLeaves(value: unknown, where: string, route: string | null, out: Leaf[], css = false) {
   if (value === null || value === undefined) return;
-  if (typeof value === "string") out.push({ value, where, recordedRoute: route });
-  else if (typeof value === "number") out.push({ value: String(value), where, recordedRoute: route });
-  else if (Array.isArray(value)) value.forEach((v, i) => genericLeaves(v, `${where}[${i}]`, route, out));
+  if (typeof value === "string") out.push({ value, where, recordedRoute: route, css });
+  else if (typeof value === "number") out.push({ value: String(value), where, recordedRoute: route, css });
+  else if (Array.isArray(value)) value.forEach((v, i) => genericLeaves(v, `${where}[${i}]`, route, out, css));
   else if (typeof value === "object")
     for (const [k, v] of Object.entries(value as Record<string, unknown>))
-      genericLeaves(v, where ? `${where}.${k}` : k, route, out);
+      genericLeaves(v, where ? `${where}.${k}` : k, route, out, css);
 }
 
 function nodeLeaves(node: SNode | undefined, prefix: string, parentTag: string, route: string | null, out: Leaf[]) {
   if (!node || typeof node !== "object") return;
   const id = node.id ?? "?";
   if (typeof node.textContent === "string")
-    out.push({ value: node.textContent, where: `${prefix} text node #${id} in <${parentTag}>`, recordedRoute: route });
+    out.push({
+      value: node.textContent,
+      where: `${prefix} ${node.isStyle ? "style text" : "text node"} #${id} in <${parentTag}>`,
+      recordedRoute: route,
+      css: node.isStyle === true || parentTag === "style"
+    });
   const tag = node.tagName ?? parentTag;
   for (const [name, v] of Object.entries(node.attributes ?? {})) {
     if (typeof v === "string")
-      out.push({ value: v, where: `${prefix} node #${id} <${tag}> [${name}]`, recordedRoute: route });
+      out.push({
+        value: v,
+        where: `${prefix} node #${id} <${tag}> [${name}]`,
+        recordedRoute: route,
+        css: CSS_ATTRIBUTES.has(name)
+      });
   }
   for (const child of node.childNodes ?? []) nodeLeaves(child, prefix, tag, route, out);
 }
@@ -220,13 +234,13 @@ export function uploadLeaves(upload: { replay_event?: unknown; recording?: unkno
               out.push({ value: t.value, where: `${at} Mutation text #${t.id}`, recordedRoute: route });
           for (const a of (data.attributes as { id?: number; attributes?: Record<string, unknown> }[]) ?? [])
             for (const [name, v] of Object.entries(a.attributes ?? {}))
-              genericLeaves(v, `${at} Mutation attribute #${a.id} [${name}]`, route, out);
+              genericLeaves(v, `${at} Mutation attribute #${a.id} [${name}]`, route, out, CSS_ATTRIBUTES.has(name));
           for (const add of (data.adds as { parentId?: number; node?: SNode }[]) ?? [])
             nodeLeaves(add.node, `${at} Mutation add (parent #${add.parentId})`, "?", route, out);
         } else if (data.source === 5) {
           genericLeaves(data.text, `${at} Input #${String(data.id)}`, route, out);
         } else {
-          genericLeaves(data, `${at} ${source}`, route, out);
+          genericLeaves(data, `${at} ${source}`, route, out, CSS_SOURCES.has(data.source as number));
         }
       } else if (e.type === 5) {
         const tag = typeof data.tag === "string" ? data.tag : "custom";
@@ -241,11 +255,34 @@ export function uploadLeaves(upload: { replay_event?: unknown; recording?: unkno
   return out;
 }
 
-/** The leaf holding a hit, or a note that the hit spans several strings. */
-function locate(leaves: Leaf[], hit: CanaryHit): Leaf {
-  const needle = normalizePattern(hit.matched);
-  const leaf = leaves.find((l) => normalizePattern(l.value).includes(needle));
-  return leaf ?? { value: "", where: `(spans several strings; offset ${hit.offset})`, recordedRoute: null };
+/**
+ * Canary hits in one upload, each with the string it sits in. A grade canary inside a longer
+ * number or inside stylesheet text (a font metric such as "ascent-override: 94.56%") is a
+ * coincidence, not a grade, and is dropped. Hits the per-string pass can't place (the upload was
+ * not JSON) are kept with their offset.
+ */
+export function findUploadHits(json: string, registry: CanaryRegistry): { hit: CanaryHit; leaf: Leaf }[] {
+  const raw = scanForCanaries(json, registry).filter((h) => !isNumberFragment(json, h));
+  if (raw.length === 0) return [];
+  let leaves: Leaf[];
+  try {
+    leaves = uploadLeaves(JSON.parse(json));
+  } catch {
+    return raw.map((hit) => ({ hit, leaf: { value: "", where: `(offset ${hit.offset})`, recordedRoute: null } }));
+  }
+  const out: { hit: CanaryHit; leaf: Leaf }[] = [];
+  for (const leaf of leaves) {
+    // One hit per canary per string: the longest variant that matched ("Jane Doe" over "Jane").
+    const best = new Map<string, CanaryHit>();
+    for (const hit of scanForCanaries(leaf.value, registry)) {
+      if (isNumberFragment(leaf.value, hit)) continue;
+      if (hit.entry.kind === "grade" && leaf.css) continue;
+      const prior = best.get(hit.canary);
+      if (!prior || hit.matched.length > prior.matched.length) best.set(hit.canary, hit);
+    }
+    for (const hit of best.values()) out.push({ hit, leaf });
+  }
+  return out;
 }
 
 type PageState = { course: boolean; recorder: string | null; hook: boolean };
@@ -339,7 +376,10 @@ export class UploadScanner {
     if (this.enabledClasses.has(classId) || this.failedClasses.has(classId)) return;
     let pending = this.enabling.get(classId);
     if (!pending) {
-      pending = setCourseFeature(classId, COURSE_FEATURES.BUG_REPORT_RECORDING, true)
+      // Imported on use: TestingUtils builds a service-role client, which the unit tests of this
+      // module have no environment for.
+      pending = import("../TestingUtils")
+        .then(({ setCourseFeature }) => setCourseFeature(classId, COURSE_FEATURES.BUG_REPORT_RECORDING, true))
         .then(() => {
           this.enabledClasses.add(classId);
         })
@@ -478,16 +518,7 @@ export class UploadScanner {
     }
     this.uploadsScanned++;
     this.bytesScanned += json.length;
-    const hits = scanForCanaries(json, this.registry).filter((h) => !isNumberFragment(json, h));
-    if (hits.length === 0) return;
-    let leaves: Leaf[] = [];
-    try {
-      leaves = uploadLeaves(JSON.parse(json));
-    } catch {
-      /* not JSON; every hit reports its offset */
-    }
-    for (const hit of hits) {
-      const leaf = locate(leaves, hit);
+    for (const { hit, leaf } of findUploadHits(json, this.registry)) {
       const key = [hit.canary, hit.matched, route, leaf.where.replace(/^segment \d+ event \d+ /, "")].join("\u0000");
       if (this.hitKeys.has(`${this.currentTest}\u0000${key}`)) continue;
       this.hitKeys.add(`${this.currentTest}\u0000${key}`);
