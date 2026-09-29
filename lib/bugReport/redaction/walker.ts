@@ -21,6 +21,7 @@
  * character of the encoded range becomes `*`.
  */
 import { RRWEB_EVENT_TYPE, type FrozenBuffer } from "../types";
+import { linkedErrorsSince } from "../errorLinks";
 import { mergeSpans, onWordBoundaries, type DetectorChain } from "./detectors";
 import type { RemainingKind, RemainingString, Span } from "./types";
 import { decodeUrlWithMap, toEncodedRange, urlDetectionText, type DecodedUrl } from "./urlText";
@@ -576,8 +577,11 @@ export function keepLast(buffer: FrozenBuffer, keepLastMs: number | undefined): 
   // when that URL was also visited earlier, this keeps a few URLs from before the window.
   const startHref = (segments[0].events[0]?.data as { href?: unknown } | undefined)?.href;
   const at = typeof startHref === "string" ? buffer.urls.indexOf(startHref) : -1;
+  // Link only the errors inside the new window. A buffer without timestamps keeps its ids.
+  const linked = buffer.errors ? linkedErrorsSince(buffer.errors, segments[0].startTimestamp) : null;
   return {
     ...buffer,
+    ...(linked ?? {}),
     segments,
     startTimestamp: segments[0].startTimestamp,
     urls: at === -1 ? buffer.urls : buffer.urls.slice(at),

@@ -14,6 +14,7 @@
 import { addCustomEvent, record, takeFullSnapshot } from "@sentry-internal/rrweb";
 import * as Sentry from "@sentry/nextjs";
 import { setActiveRecorder } from "./activeRecorder";
+import { linkedErrorsSince, noteLinkedError } from "./errorLinks";
 import { onFetch, type FetchObservation } from "./fetchHook";
 import { startIngest, type IngestHandle, type IngestStats } from "./ingest";
 import { RingBuffer } from "./ringBuffer";
@@ -25,6 +26,7 @@ import {
   type BugReportRecorder,
   type ConsoleBreadcrumb,
   type FrozenBuffer,
+  type LinkedError,
   type RecordedEvent,
   type RecorderStartOptions,
   type RecorderState
@@ -226,8 +228,7 @@ class Recorder implements BugReportRecorder {
   private readonly buffer: RingBuffer;
   private stopRrweb: (() => void) | undefined;
   private readonly visits: UrlVisit[] = [];
-  private readonly errorIds: string[] = [];
-  private readonly traceIds: string[] = [];
+  private readonly errors: LinkedError[] = [];
   private readonly cleanups: (() => void)[] = [];
   /** Pathname whose level was last checked in `onEvent`, so the check runs once per route. */
   private checkedPath: string | null = null;
@@ -422,8 +423,7 @@ class Recorder implements BugReportRecorder {
 
   /** Called from the Sentry event processor. */
   noteError(eventId: string | undefined, traceId: string | undefined): void {
-    if (eventId && !this.errorIds.includes(eventId)) this.errorIds.push(eventId);
-    if (traceId && !this.traceIds.includes(traceId)) this.traceIds.push(traceId);
+    noteLinkedError(this.errors, { eventId, traceId, at: Date.now() });
   }
 
   // Public API
@@ -438,6 +438,8 @@ class Recorder implements BugReportRecorder {
     let firstKept = this.visits.findIndex((v) => v.at > startTimestamp);
     if (firstKept === -1) firstKept = this.visits.length;
     const kept = segments.length ? this.visits.slice(Math.max(0, firstKept - 1)) : [];
+    // Errors in the kept window only; an empty buffer links none.
+    const linked = linkedErrorsSince(this.errors, segments.length ? startTimestamp : Infinity);
     return {
       replayId: this.replayId,
       level: this.level,
@@ -445,8 +447,9 @@ class Recorder implements BugReportRecorder {
       startTimestamp,
       endTimestamp,
       urls: Array.from(new Set(kept.map((v) => v.url))),
-      errorIds: [...this.errorIds],
-      traceIds: [...this.traceIds],
+      errorIds: linked.errorIds,
+      traceIds: linked.traceIds,
+      errors: linked.errors,
       size: segments.reduce((n, s) => n + s.size, 0)
     };
   }
@@ -456,11 +459,11 @@ class Recorder implements BugReportRecorder {
   }
 
   getErrorIds(): string[] {
-    return [...this.errorIds];
+    return linkedErrorsSince(this.errors, 0).errorIds;
   }
 
   getTraceIds(): string[] {
-    return [...this.traceIds];
+    return linkedErrorsSince(this.errors, 0).traceIds;
   }
 
   getUrls(): string[] {
@@ -523,8 +526,7 @@ class Recorder implements BugReportRecorder {
     this.ingest = undefined;
     this.buffer.clear();
     this.visits.length = 0;
-    this.errorIds.length = 0;
-    this.traceIds.length = 0;
+    this.errors.length = 0;
     getTaintSet().clear();
     if (current === this) current = null;
     setActiveRecorder(undefined);

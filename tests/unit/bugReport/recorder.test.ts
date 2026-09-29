@@ -154,6 +154,70 @@ describe("taint blocks", () => {
   });
 });
 
+describe("linked errors", () => {
+  type WithNoteError = BugReportRecorder & { noteError(eventId?: string, traceId?: string): void };
+
+  it("links only errors inside the kept window, and caps the list", async () => {
+    let now = 0;
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+    window.history.pushState({}, "", "/course/1/discussion");
+    const r = startRecorder({ courseId: 1, level: "full", limits: { maxAgeMs: 10_000, checkoutEveryMs: 5_000 } });
+    recorder = r;
+    const rec = r as WithNoteError;
+    now = 1_000;
+    rec.noteError("e-old", "t-old");
+    // A checkout 20 s in: the first segment is past the age limit and is dropped.
+    now = 20_000;
+    (jest.requireMock("@sentry-internal/rrweb") as { takeFullSnapshot(): void }).takeFullSnapshot();
+    now = 21_000;
+    rec.noteError("e-new", "t-new");
+    rec.noteError("e-new", "t-new");
+    const frozen = r.freeze();
+    expect(frozen.startTimestamp).toBe(20_000);
+    expect(frozen.errorIds).toEqual(["e-new"]);
+    expect(frozen.traceIds).toEqual(["t-new"]);
+
+    for (let i = 0; i < 150; i++) rec.noteError(`e${i}`, `t${i}`);
+    expect(r.getErrorIds()).toHaveLength(100);
+    expect(r.getErrorIds()[99]).toBe("e149");
+  });
+
+  it("keepLastMs drops the errors before the trimmed start", async () => {
+    const seg = (t: number) => ({
+      events: [
+        { type: 4, timestamp: t, data: { href: "http://localhost/course/1/x", width: 1, height: 1 } },
+        {
+          type: 2,
+          timestamp: t,
+          data: { node: { type: 0, id: 1, childNodes: [] }, initialOffset: { top: 0, left: 0 } }
+        }
+      ] as unknown as RecordedEvent[],
+      startTimestamp: t,
+      endTimestamp: t + 1,
+      size: 1,
+      level: "full" as const
+    });
+    const buffer: FrozenBuffer = {
+      replayId: "0".repeat(32),
+      level: "full",
+      segments: [seg(0), seg(60_000)],
+      startTimestamp: 0,
+      endTimestamp: 60_001,
+      urls: ["http://localhost/course/1/x"],
+      errorIds: ["e-old", "e-new"],
+      traceIds: ["t-old", "t-new"],
+      errors: [
+        { eventId: "e-old", traceId: "t-old", at: 10 },
+        { eventId: "e-new", traceId: "t-new", at: 60_000 }
+      ],
+      size: 2
+    };
+    const { buffer: trimmed } = await redactBuffer(buffer, { taintPatterns: [], keepLastMs: 30_000 });
+    expect(trimmed.errorIds).toEqual(["e-new"]);
+    expect(trimmed.traceIds).toEqual(["t-new"]);
+  });
+});
+
 describe("snapshots", () => {
   it("keeps the segment when rrweb logs from inside a checkout snapshot", () => {
     const r = start();
