@@ -35,15 +35,19 @@ test.describe("replay upload size and time on the gradebook", () => {
   test.beforeAll(async () => {
     test.setTimeout(600_000);
     course = await createClass({ name: "Bug Report Upload Measure" });
-    const users = await createUsersInClass([
-      { role: "instructor", class_id: course.id, name: "Measure Instructor", useMagicLink: true },
-      ...Array.from({ length: 200 }, (_, i) => ({
-        role: "student" as const,
-        class_id: course.id,
-        name: `M Student ${String(i).padStart(3, "0")}`
-      }))
+    [instructor] = await createUsersInClass([
+      { role: "instructor", class_id: course.id, name: "Measure Instructor", useMagicLink: true }
     ]);
-    instructor = users[0];
+    // In batches: one call with 200 users makes a lookup URL too long for PostgREST.
+    for (let b = 0; b < 200; b += 50) {
+      await createUsersInClass(
+        Array.from({ length: 50 }, (_, i) => ({
+          role: "student" as const,
+          class_id: course.id,
+          name: `M Student ${String(b + i).padStart(3, "0")}`
+        }))
+      );
+    }
     await createAssignmentsAndGradebookColumns({ class_id: course.id, numAssignments: 5, numManualGradedColumns: 3 });
     await setCourseFeature(course.id, COURSE_FEATURES.BUG_REPORT_RECORDING, true);
   });
