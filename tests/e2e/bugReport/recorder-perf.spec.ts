@@ -37,7 +37,17 @@ test.skip(process.env.BUG_REPORT_NIGHTLY !== "1", "nightly tier: set BUG_REPORT_
 
 type Loaf = { start: number; duration: number; blocking: number; scripts: { url: string; duration: number }[] };
 
+/** Script URLs of the recorder and rrweb chunks, per page; collected from before the first load. */
+const recorderUrlsByPage = new WeakMap<Page, Set<string>>();
+
 async function installPerfObservers(page: Page) {
+  const recorderUrls = new Set<string>();
+  recorderUrlsByPage.set(page, recorderUrls);
+  page.on("response", async (r) => {
+    if (!/\.js(\?|$)/.test(r.url())) return;
+    const body = await r.text().catch(() => "");
+    if (body.includes(RECORDER_MARKER) || body.includes("rr_mediaState")) recorderUrls.add(r.url());
+  });
   await page.addInitScript(() => {
     const w = window as unknown as { __perf: { longTasks: { start: number; duration: number }[]; loaf: Loaf[] } };
     type Loaf = { start: number; duration: number; blocking: number; scripts: { url: string; duration: number }[] };
@@ -122,12 +132,8 @@ async function measure(
   minutes: number,
   scroller: string | null
 ): Promise<Measurement> {
-  const recorderUrls = new Set<string>();
-  page.on("response", async (r) => {
-    if (!/\.js(\?|$)/.test(r.url())) return;
-    const body = await r.text().catch(() => "");
-    if (body.includes(RECORDER_MARKER) || body.includes("rr_mediaState")) recorderUrls.add(r.url());
-  });
+  const recorderUrls = recorderUrlsByPage.get(page) ?? new Set<string>();
+  if (recording) expect(recorderUrls.size).toBeGreaterThan(0);
   const t0 = await page.evaluate(() => performance.now());
   const bufferAt: Measurement["bufferAt"] = {};
   await scriptedUse(page, scroller, minutes, async (m) => {

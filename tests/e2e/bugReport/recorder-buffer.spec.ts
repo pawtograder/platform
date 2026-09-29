@@ -26,7 +26,6 @@ type Course = Awaited<ReturnType<typeof createClass>>;
 const HARNESS = "/course/[course_id]/e2e-harness/bug-report";
 
 test.describe("bug report recorder buffer", () => {
-
   let course: Course;
   let student: TestingUser;
 

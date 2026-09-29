@@ -22,6 +22,8 @@ type Segment = {
   endTimestamp: number;
   size: number;
   level: RecordingLevel;
+  /** Size of the Meta + FullSnapshot that open the segment. */
+  snapshotSize: number;
   /** Set once this segment has asked for an early checkout, so it asks only once. */
   checkoutRequested: boolean;
 };
@@ -32,7 +34,7 @@ export type PushResult = {
 };
 
 /**
- * A segment larger than this share of the cap asks for an early checkout. Keeping segments
+ * A segment whose incremental events pass this share of the cap asks for an early checkout. Keeping segments
  * well under the cap is what lets dropping whole segments hold the total under it.
  */
 const EARLY_CHECKOUT_FRACTION = 4;
@@ -64,6 +66,7 @@ export class RingBuffer {
         endTimestamp: ts,
         size: 0,
         level,
+        snapshotSize: 0,
         checkoutRequested: false
       });
       this.awaitingCheckout = false;
@@ -76,6 +79,7 @@ export class RingBuffer {
     current.size += json.length;
     current.endTimestamp = Math.max(current.endTimestamp, ts);
     this.total += json.length;
+    if (current.events.length <= 2) current.snapshotSize = current.size;
 
     let requestCheckout = false;
     this.trimToSize();
@@ -87,7 +91,9 @@ export class RingBuffer {
     } else if (
       !current.checkoutRequested &&
       current.events.length > 2 &&
-      current.size > this.limits.maxSize / EARLY_CHECKOUT_FRACTION
+      // Counts only what came after the snapshot: on a page whose snapshot alone is near the
+      // threshold, counting it would check out again on every few mutations.
+      current.size - current.snapshotSize > this.limits.maxSize / EARLY_CHECKOUT_FRACTION
     ) {
       current.checkoutRequested = true;
       requestCheckout = true;

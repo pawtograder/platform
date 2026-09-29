@@ -75,6 +75,15 @@ describe("RingBuffer", () => {
     expect(buf.push(inc(3, 10)).requestCheckout).toBe(false);
   });
 
+  it("does not count the snapshot toward the early-checkout threshold", () => {
+    const buf = new RingBuffer({ maxSize: 10_000 });
+    // A snapshot just under a quarter of the cap, then small mutations: no churn.
+    expect(checkout(buf, 0, 2400).requestCheckout).toBe(false);
+    expect(buf.push(inc(1, 100)).requestCheckout).toBe(false);
+    expect(buf.push(inc(2, 100)).requestCheckout).toBe(false);
+    expect(buf.push(inc(3, 2500)).requestCheckout).toBe(true);
+  });
+
   it("drops a lone segment that outgrows the cap and waits for the next checkout", () => {
     const buf = new RingBuffer({ maxSize: 5_000 });
     checkout(buf, 0, 100);
