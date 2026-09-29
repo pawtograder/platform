@@ -19,3 +19,5 @@
 /lib/bugReport/routePolicy.ts @pawtograder/REPLACE-ME-report-unmask-owners
 /lib/bugReport/redaction/ @pawtograder/REPLACE-ME-report-unmask-owners
 /components/bugReport/ReportBlock.tsx @pawtograder/REPLACE-ME-report-unmask-owners
+/lib/bugReport/generated/appRoutes.json @pawtograder/REPLACE-ME-report-unmask-owners
+/scripts/bugReport/generateAppRoutes.ts @pawtograder/REPLACE-ME-report-unmask-owners

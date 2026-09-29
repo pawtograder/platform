@@ -15,7 +15,10 @@ const GOVERNED = [
   "lib/bugReport/routePolicy.ts",
   "lib/bugReport/redaction/",
   "lib/bugReport/privacy.ts",
-  "components/bugReport/ReportBlock.tsx"
+  "components/bugReport/ReportBlock.tsx",
+  // Removing a static route from this list makes its sibling resolve to a listed [param] page.
+  "lib/bugReport/generated/appRoutes.json",
+  "scripts/bugReport/generateAppRoutes.ts"
 ];
 
 function codeOwners(): Map<string, string[]> {
