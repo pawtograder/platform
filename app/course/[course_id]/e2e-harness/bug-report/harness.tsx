@@ -6,6 +6,8 @@ import { Box, Heading, Stack, Text } from "@chakra-ui/react";
 import Editor, { loader } from "@monaco-editor/react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import BugReportUnmaskHarness from "@/app/e2e-harness/bug-report-unmask/BugReportUnmaskHarness";
+import { parseLeakValues, type LeakValues } from "./leakValues";
 
 /** Grows and rewrites a large block of text on every tick, for the size-cap test (C2). */
 function MutationStorm() {
@@ -50,8 +52,61 @@ function MonacoFixture() {
   );
 }
 
+/**
+ * Canary values on every surface the redaction walker covers (D8-D12, D15, D17), all inside
+ * `data-report-unmask` so rrweb records them as text and only the walker stands between them
+ * and an upload.
+ */
+function LeakFixture({ v }: { v: LeakValues }) {
+  const [first, ...rest] = v.name.split(" ");
+  const last = rest.join(" ");
+  const [late, setLate] = useState<string | null>(null);
+  useEffect(() => {
+    document.title = `${v.name} | Bug report harness`;
+    const id = setTimeout(() => setLate(v.otherName), 30_000);
+    return () => clearTimeout(id);
+  }, [v]);
+  return (
+    <Stack gap={2} data-report-unmask="" data-testid="leak-fixture">
+      <Text data-testid="d8-split">
+        <b>{first}</b> {last}
+      </Text>
+      <Text data-testid="d8-handle">
+        <span>{v.handle.slice(0, 3)}</span>
+        <i>{v.handle.slice(3)}</i>
+      </Text>
+      <Text data-testid="d9-sortable">
+        {last}, {first}
+      </Text>
+      <Text data-testid="d9-person-name">
+        {v.name}
+        <span> ({v.otherName})</span>
+      </Text>
+      <Text data-testid="d9-case">
+        {v.handle.toUpperCase()} {v.name.toLowerCase()} {v.email.toUpperCase()}
+      </Text>
+      <Box data-testid="d10-attrs" title={v.name} aria-label={`Row for ${v.name}`}>
+        attributes
+      </Box>
+      <input data-testid="d10-input" aria-label="Contact" placeholder={`e.g. ${v.email}`} />
+      <a data-testid="d10-mailto" href={`mailto:${v.email}`}>
+        Email the student
+      </a>
+      <a data-testid="d10-href" href={`?student=${encodeURIComponent(v.name)}`}>
+        Profile link
+      </a>
+      <Text data-testid="d12-late">Assigned to: {late ?? "nobody yet"}</Text>
+      <Box data-testid="d15-unmask-harness">
+        <BugReportUnmaskHarness name={v.name} />
+      </Box>
+    </Stack>
+  );
+}
+
 export default function BugReportHarness() {
-  const fixture = useSearchParams().get("fixture") ?? "inputs";
+  const params = useSearchParams();
+  const fixture = params.get("fixture") ?? "inputs";
+  const leak = fixture === "leaks" ? parseLeakValues(params.get("v")) : null;
   const [md, setMd] = useState<string | undefined>("markdown canary text");
   return (
     <Stack p={4} gap={4}>
@@ -97,6 +152,7 @@ export default function BugReportHarness() {
         </Stack>
       )}
       {fixture === "mutations" && <MutationStorm />}
+      {leak && <LeakFixture v={leak} />}
     </Stack>
   );
 }

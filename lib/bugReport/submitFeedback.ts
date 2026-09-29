@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/nextjs";
 import type { Event } from "@sentry/nextjs";
+import { redactReportUrl } from "./redaction/reportUrl";
 import { getReportContext, type ReportContext } from "./reportContext";
 
 /**
@@ -140,7 +141,8 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
     Sentry.captureFeedback(
       {
         message,
-        url: typeof window !== "undefined" ? window.location.href : undefined,
+        // The page URL can carry a name or email in its query; mask it like the replay URLs.
+        url: typeof window !== "undefined" ? redactReportUrl(window.location.href) : undefined,
         source: "bug-report-dialog",
         associatedEventId: input.eventId,
         tags

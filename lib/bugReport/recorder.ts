@@ -443,5 +443,9 @@ export function startRecorder(options: RecorderStartOptions): BugReportRecorder 
   current = recorder;
   recorder.start();
   setActiveRecorder(recorder);
+  // E2E builds only (a build-time constant): the leak tests' redaction hook.
+  if (process.env.BUG_REPORT_E2E === "true") {
+    void import("./redaction/testHook").then((m) => m.installRedactionTestHook());
+  }
   return recorder;
 }
