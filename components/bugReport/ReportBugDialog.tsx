@@ -29,8 +29,12 @@ export type ReportReplaySlot = {
    * description, contact, review controls, Cancel, Submit.
    */
   review: ReactNode;
-  /** Called on Submit, before the feedback is sent. */
-  upload: ReportReplayUpload;
+  /**
+   * Called on Submit, before the feedback is sent. Null when the review has nothing to attach
+   * (redaction failed): the dialog then files the report without a replay and without the
+   * recording notice.
+   */
+  upload: ReportReplayUpload | null;
 };
 
 export type ReportBugDialogProps = {
@@ -53,6 +57,15 @@ type Phase =
   | { kind: "rate_limited" }
   | { kind: "error"; message: string };
 
+/**
+ * On close, focus goes back to what opened the dialog. When that element is gone (the toast
+ * whose "Report this" opened it has been dismissed) or was <body>, it goes to the page's main
+ * landmark instead, so keyboard users don't land on <body>.
+ */
+function fallbackFocusTarget(): HTMLElement | null {
+  return document.getElementById("main-content") ?? document.querySelector<HTMLElement>("main, [role='main']");
+}
+
 export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportBugDialogProps) {
   const [description, setDescription] = useState("");
   const [contactOk, setContactOk] = useState(false);
@@ -61,12 +74,25 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const doneRef = useRef<HTMLButtonElement>(null);
   const submitRef = useRef<HTMLButtonElement>(null);
+  // Where focus was when the dialog opened, to return it there on close. Read during the render
+  // that opens the dialog, before the dialog's focus trap moves focus.
+  const openerRef = useRef<Element | null>(null);
+  const wasOpen = useRef(false);
+  if (open && !wasOpen.current && typeof document !== "undefined") openerRef.current = document.activeElement;
+  wasOpen.current = open;
   const announce = useAnnouncer();
+  const returnFocusTarget = useCallback((): HTMLElement | null => {
+    const opener = openerRef.current;
+    if (opener instanceof HTMLElement && opener.isConnected && opener !== document.body) return opener;
+    return fallbackFocusTarget();
+  }, []);
 
   // Each opening starts from a blank form. Nothing typed is kept or sent after Cancel.
   useEffect(() => {
     if (open) {
       setDescription("");
+      // The field is uncontrolled (see below); clear it directly.
+      if (descriptionRef.current) descriptionRef.current.value = "";
       setContactOk(false);
       setPhase({ kind: "editing" });
       setShowRequired(false);
@@ -88,7 +114,7 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
     setPhase({ kind: "submitting" });
     let result: SubmitReportResult;
     try {
-      result = await submitReport({ description, contactOk, eventId, replay: replay?.upload });
+      result = await submitReport({ description, contactOk, eventId, replay: replay?.upload ?? undefined });
     } catch {
       result = { status: "error", message: "The report did not go through. Try again." };
     }
@@ -110,9 +136,13 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
         if (!e.open && submitting) return;
         onOpenChange(e.open);
       }}
-      initialFocusEl={() => (sent ? doneRef.current : descriptionRef.current)}
+      // Whichever exists: Close once sent, else the description. The focus trap also calls this
+      // when the focused element leaves the DOM (Submit swapped for Close, a redacted string's
+      // button), sometimes with a stale closure, and throws if it gets null.
+      initialFocusEl={() => doneRef.current ?? descriptionRef.current ?? submitRef.current}
+      finalFocusEl={returnFocusTarget}
       closeOnInteractOutside={!submitting}
-      size={{ base: "full", md: "md" }}
+      size={{ base: "full", md: replay ? "lg" : "md" }}
       scrollBehavior="inside"
     >
       <DialogContent data-testid="report-bug-dialog">
@@ -147,9 +177,11 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
                 invalid={showRequired && !description.trim()}
                 errorText="Describe the problem before sending."
               >
+                {/* Uncontrolled: while the replay review loads, the dialog re-renders often, and a
+                    controlled field dropped keystrokes typed during those renders (seen in E6). */}
                 <Textarea
                   ref={descriptionRef}
-                  value={description}
+                  defaultValue=""
                   onChange={(e) => setDescription(e.target.value)}
                   rows={5}
                   disabled={submitting}
@@ -165,9 +197,11 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
               </Checkbox>
               {replay && (
                 <>
-                  <Text fontSize="sm" data-testid="report-bug-replay-notice">
-                    {REPLAY_NOTICE}
-                  </Text>
+                  {replay.upload && (
+                    <Text fontSize="sm" data-testid="report-bug-replay-notice">
+                      {REPLAY_NOTICE}
+                    </Text>
+                  )}
                   <Box data-testid="report-bug-replay-section">{replay.review}</Box>
                 </>
               )}
