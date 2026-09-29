@@ -60,6 +60,15 @@ describe("BugReportRecorder flag query", () => {
     expect(classQueries).toEqual([]);
   });
 
+  it("waits for a course layout that renders after the mount's effect (a streamed full load)", async () => {
+    pathname = "/course/11/discussion";
+    const view = render(<BugReportRecorder />);
+    await new Promise((r) => setTimeout(r, 0));
+    view.rerender(<Page course={11} recording={false} />);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(classQueries).toEqual([]);
+  });
+
   it("queries the flag before starting when the server rendered it on", async () => {
     pathname = "/course/8/discussion";
     render(<Page course={8} recording />);

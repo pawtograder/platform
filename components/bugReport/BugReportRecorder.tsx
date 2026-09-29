@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { getActiveRecorder } from "@/lib/bugReport/activeRecorder";
 import { installFetchHook } from "@/lib/bugReport/fetchHook";
-import { disarmIngest, ingestTrace, serverRecordingFlag } from "@/lib/bugReport/ingestGate";
+import { disarmIngest, ingestTrace, waitForServerRecordingFlag } from "@/lib/bugReport/ingestGate";
 import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePolicy";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { createClient } from "@/utils/supabase/client";
@@ -13,6 +13,9 @@ import { createClient } from "@/utils/supabase/client";
 // be in place before the first one is. `utils/supabase/client.ts` installs it before it builds
 // the client; this call covers any other order. See lib/bugReport/fetchHook.ts.
 installFetchHook();
+
+/** How long to wait for the course layout's flag before querying it instead. */
+const SERVER_FLAG_WAIT_MS = 3_000;
 
 async function recordingFlagEnabled(courseId: number): Promise<boolean> {
   const { data, error } = await createClient().from("classes").select("features").eq("id", courseId).maybeSingle();
@@ -58,14 +61,17 @@ export default function BugReportRecorder() {
       disarmIngest();
       return;
     }
-    // With no recorder running, the course layout's server-side flag read is enough to stay
-    // off; the query below runs only to confirm a start, or to catch the flag turned off.
-    if (!recorder && serverRecordingFlag(courseId) === false) {
-      disarmIngest();
-      return;
-    }
-
     void (async () => {
+      // With no recorder running, the course layout's server-side flag read is enough to stay
+      // off; the query below runs only to confirm a start, or to catch the flag turned off.
+      if (!recorder) {
+        const server = await waitForServerRecordingFlag(courseId, SERVER_FLAG_WAIT_MS);
+        if (seq !== navigation.current) return;
+        if (server === false && !getActiveRecorder()) {
+          disarmIngest();
+          return;
+        }
+      }
       const enabled = await recordingFlagEnabled(courseId).catch(() => false);
       const active = getActiveRecorder();
       ingestTrace(`flag ${enabled}`);

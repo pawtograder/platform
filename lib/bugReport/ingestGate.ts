@@ -84,10 +84,34 @@ export function liveRowSources(): IngestRowSource[] {
  * caught by the mount's own query, which it still runs while a recorder exists (test A6).
  */
 const serverFlags = new Map<number, boolean>();
+const serverFlagWaiters = new Set<(courseId: number) => void>();
 
 /** Called by `<BugReportIngestArm>` on every render. */
 export function noteServerRecordingFlag(courseId: number, enabled: boolean): void {
   serverFlags.set(courseId, enabled);
+  for (const waiter of Array.from(serverFlagWaiters)) waiter(courseId);
+}
+
+/**
+ * The server's value for `courseId` once the course layout has rendered it. On a full load the
+ * root layout's effects can run before the course layout has streamed in, so the mount waits for
+ * it, up to `timeoutMs`, and resolves undefined if it never comes.
+ */
+export function waitForServerRecordingFlag(courseId: number, timeoutMs: number): Promise<boolean | undefined> {
+  const known = serverFlags.get(courseId);
+  if (known !== undefined) return Promise.resolve(known);
+  return new Promise((resolve) => {
+    const done = () => {
+      serverFlagWaiters.delete(waiter);
+      clearTimeout(timer);
+      resolve(serverFlags.get(courseId));
+    };
+    const waiter = (id: number) => {
+      if (id === courseId) done();
+    };
+    const timer = setTimeout(done, timeoutMs);
+    serverFlagWaiters.add(waiter);
+  });
 }
 
 /** The server's value for `courseId`, or undefined when no course layout has rendered it. */
