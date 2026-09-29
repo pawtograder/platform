@@ -15,3 +15,7 @@
 /scripts/bugReport/piiLintRatchet.mjs @pawtograder/REPLACE-ME-report-unmask-owners
 /.github/workflows/report-unmask-review.yml @pawtograder/REPLACE-ME-report-unmask-owners
 /.github/CODEOWNERS @pawtograder/REPLACE-ME-report-unmask-owners
+/lib/bugReport/recorder.ts @pawtograder/REPLACE-ME-report-unmask-owners
+/lib/bugReport/routePolicy.ts @pawtograder/REPLACE-ME-report-unmask-owners
+/lib/bugReport/redaction/ @pawtograder/REPLACE-ME-report-unmask-owners
+/components/bugReport/ReportBlock.tsx @pawtograder/REPLACE-ME-report-unmask-owners
