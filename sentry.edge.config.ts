@@ -1,5 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
-import { REQUEST_DATA_INCLUDE, scrubErrorEvent } from "./lib/bugReport/sentryScrub";
+import { REQUEST_DATA_INCLUDE, scrubBreadcrumb, scrubErrorEvent } from "./lib/bugReport/sentryScrub";
 
 // NEXT_PUBLIC_SENTRY_DSN replaced NEXT_PUBLIC_BUGSINK_DSN; the old name is read for one more release.
 const sentryDsn = process.env.NEXT_PUBLIC_SENTRY_DSN || process.env.NEXT_PUBLIC_BUGSINK_DSN;
@@ -24,5 +24,6 @@ Sentry.init({
   integrations: [Sentry.requestDataIntegration({ include: REQUEST_DATA_INCLUDE })],
   tracesSampleRate: 0,
   sendDefaultPii: false,
-  beforeSend: scrubErrorEvent
+  beforeSend: scrubErrorEvent,
+  beforeBreadcrumb: scrubBreadcrumb
 });

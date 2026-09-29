@@ -79,6 +79,22 @@ async function captureRequestError(runtime: string, options: InitOptions): Promi
         }
       }
     });
+    // What the Http/NodeFetch and Console integrations record, through addBreadcrumb (which runs
+    // beforeBreadcrumb) and straight onto the scope (which doesn't).
+    Sentry.addBreadcrumb({
+      category: "http",
+      type: "http",
+      data: {
+        url: "http://127.0.0.1:54321/rest/v1/users",
+        "http.method": "GET",
+        "http.query": `?select=id&email=in.(${USER_EMAIL})`
+      }
+    });
+    Sentry.addBreadcrumb({ category: "console", level: "log", message: `synced ${USER_EMAIL}` });
+    scope.addBreadcrumb({
+      category: "fetch",
+      data: { url: `http://127.0.0.1:54321/rest/v1/users?email=eq.${USER_EMAIL}` }
+    });
     scope.setContext("nextjs", { request_path: "/course/1/office-hours/search?q=jane", router_kind: "App Router" });
     Sentry.captureException(new Error("g1 scrub boom"));
   });
@@ -113,9 +129,9 @@ describe.each([
     const event = JSON.parse(envelope.split("\n")[2]) as {
       request?: { url?: string; headers?: Record<string, string>; query_string?: unknown };
       contexts?: { nextjs?: { request_path?: string } };
+      breadcrumbs?: unknown[];
     };
-    // Edge doesn't run RequestData unless the config adds it; either way no query survives.
-    if (event.request?.url) expect(event.request.url).toBe("https://app.example/course/1/office-hours/search");
+    expect(event.request?.url).toBe("https://app.example/course/1/office-hours/search");
     expect(event.request?.query_string).toBeUndefined();
     for (const name of Object.keys(event.request?.headers ?? {})) {
       expect(["user-agent"]).toContain(name.toLowerCase());
@@ -124,6 +140,24 @@ describe.each([
     expect(envelope).not.toMatch(/authorization/i);
     expect(envelope).not.toContain("jane");
     expect(event.contexts?.nextjs?.request_path).toBe("/course/1/office-hours/search");
+  });
+
+  it("keeps request breadcrumbs without their queries and drops console ones", () => {
+    const event = JSON.parse(envelope.split("\n")[2]) as { breadcrumbs?: unknown[] };
+    // arrayContaining: the two SDKs share Sentry's global carrier here, so the edge run can also
+    // see the server run's breadcrumbs.
+    expect(event.breadcrumbs?.some((b) => (b as { category?: string }).category === "console")).toBe(false);
+    expect(event.breadcrumbs).toEqual(
+      expect.arrayContaining([
+        {
+          category: "http",
+          type: "http",
+          timestamp: expect.any(Number),
+          data: { url: "http://127.0.0.1:54321/rest/v1/users", "http.method": "GET" }
+        },
+        { category: "fetch", timestamp: expect.any(Number), data: { url: "http://127.0.0.1:54321/rest/v1/users" } }
+      ])
+    );
   });
 });
 
