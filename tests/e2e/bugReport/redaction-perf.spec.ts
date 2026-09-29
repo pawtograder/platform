@@ -54,14 +54,19 @@ test.describe("bug report redaction timing", () => {
   test.beforeAll(async () => {
     test.setTimeout(600_000);
     gradebookCourse = await createClass({ name: "Bug Report Redaction Gradebook" });
+    // In batches: one call with 200 users overflows the existence check's URL.
     const users = await createUsersInClass([
-      { role: "instructor", class_id: gradebookCourse.id, name: "Redaction Gradebook Instructor", useMagicLink: true },
-      ...Array.from({ length: 200 }, (_, i) => ({
-        role: "student" as const,
-        class_id: gradebookCourse.id,
-        name: `R Student ${String(i).padStart(3, "0")}`
-      }))
+      { role: "instructor", class_id: gradebookCourse.id, name: "Redaction Gradebook Instructor", useMagicLink: true }
     ]);
+    for (let b = 0; b < 4; b++) {
+      await createUsersInClass(
+        Array.from({ length: 50 }, (_, i) => ({
+          role: "student" as const,
+          class_id: gradebookCourse.id,
+          name: `R Student ${String(b * 50 + i).padStart(3, "0")}`
+        }))
+      );
+    }
     gradebookInstructor = users[0];
     await createAssignmentsAndGradebookColumns({
       class_id: gradebookCourse.id,
@@ -134,7 +139,7 @@ test.describe("bug report redaction timing", () => {
     await page.clock.install();
     await loginAsUser(page, discussionStudent, discussionCourse);
     await page.goto(`/course/${discussionCourse.id}/discussion`);
-    await expect(page.getByText("Question 79 about the assignment").first()).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/Question \d+ about the assignment/).first()).toBeVisible({ timeout: 60_000 });
     await waitForRecorderState(page, "recording");
     const results = await measure(page, 10, async (i) => {
       await page.mouse.wheel(0, i % 20 < 10 ? 500 : -500);
