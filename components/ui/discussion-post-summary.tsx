@@ -20,6 +20,7 @@ import { BsChat } from "react-icons/bs";
 import { FaCheckCircle, FaHeart, FaRegHeart, FaRegStickyNote } from "react-icons/fa";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { Skeleton } from "./skeleton";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Module-stable references — `<Markdown>` (memoized) keys its internal
 // unified-pipeline cache on prop identity. Re-creating these as inline
@@ -128,13 +129,17 @@ export function DiscussionPostSummary({
             {getIcon()}
           </Badge>
           <Box w="100%">
-            <Text textStyle="lg" fontWeight="semibold" mt="2" truncate display="block" w="100%">
-              {thread.subject}
-            </Text>
+            <ReportBlock>
+              <Text textStyle="lg" fontWeight="semibold" mt="2" truncate display="block" w="100%">
+                {thread.subject}
+              </Text>
+            </ReportBlock>
           </Box>
-          <Markdown components={SUMMARY_COMPONENTS} remarkPlugins={SUMMARY_REMARK_PLUGINS}>
-            {thread.body}
-          </Markdown>
+          <ReportBlock as="div">
+            <Markdown components={SUMMARY_COMPONENTS} remarkPlugins={SUMMARY_REMARK_PLUGINS}>
+              {thread.body}
+            </Markdown>
+          </ReportBlock>
 
           <HStack fontWeight="medium" mt="4">
             {userProfile ? (

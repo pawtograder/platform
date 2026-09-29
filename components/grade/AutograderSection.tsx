@@ -12,6 +12,7 @@ import { TestResultOutput } from "@/components/submission-results/TestResultOutp
 import { GenericBuildError } from "@/components/submission-results/GenericBuildError";
 import type { ErrorPinMatch } from "@/hooks/useErrorPinMatches";
 import type { GraderResultTestExtraData, SubmissionWithGraderResultsAndErrors } from "@/utils/supabase/DatabaseTypes";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 export type AutograderSectionProps = {
   graderResults: SubmissionWithGraderResultsAndErrors["grader_results"] | null;
@@ -97,11 +98,13 @@ function TestRow({
           {test.name}
         </Text>
       </HStack>
-      <Text fontSize="sm" color="fg.muted" flexShrink={0}>
-        <SpokenValue spoken={`${test.score ?? 0} of ${test.max_score ?? 0} points`}>
-          {test.score ?? 0}/{test.max_score ?? 0}
-        </SpokenValue>
-      </Text>
+      <ReportBlock>
+        <Text fontSize="sm" color="fg.muted" flexShrink={0}>
+          <SpokenValue spoken={`${test.score ?? 0} of ${test.max_score ?? 0} points`}>
+            {test.score ?? 0}/{test.max_score ?? 0}
+          </SpokenValue>
+        </Text>
+      </ReportBlock>
     </HStack>
   );
 
@@ -191,9 +194,11 @@ export default function AutograderSection({
                 Only failing
               </Switch>
             )}
-            <Text fontWeight="semibold" fontSize="sm">
-              {graderResults.score ?? 0} / {graderResults.max_score ?? 0}
-            </Text>
+            <ReportBlock>
+              <Text fontWeight="semibold" fontSize="sm">
+                {graderResults.score ?? 0} / {graderResults.max_score ?? 0}
+              </Text>
+            </ReportBlock>
           </HStack>
         </HStack>
 

@@ -17,7 +17,7 @@ import { setActiveRecorder } from "./activeRecorder";
 import { onFetch, type FetchObservation } from "./fetchHook";
 import { RingBuffer } from "./ringBuffer";
 import { courseIdFromPathname, recordingLevelFor, type RecordingLevel } from "./routePolicy";
-import { getTaintSet, readTaintBlocks, type TaintKind } from "./taint";
+import { getTaintSet, readTaintBlocks, TAINT_BLOCK_ID, type TaintKind } from "./taint";
 import {
   BREADCRUMB_TAG,
   type BreadcrumbPayload,
@@ -187,9 +187,31 @@ class Recorder implements BugReportRecorder {
 
   start(): void {
     readTaintBlocks(document, getTaintSet());
+    this.watchTaintBlocks();
     installSentryHooks();
     this.installBreadcrumbs();
     this.startRrweb();
+  }
+
+  /**
+   * A taint block can mount after the recorder starts: the course layout renders the page
+   * client-side once its data has loaded, and a client navigation renders the new page before
+   * or after `onNavigate` runs. Read every block that appears.
+   */
+  private watchTaintBlocks(): void {
+    const selector = `script#${TAINT_BLOCK_ID}`;
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of Array.from(record.addedNodes)) {
+          if (node instanceof Element && (node.matches(selector) || node.querySelector(selector))) {
+            readTaintBlocks(document, getTaintSet());
+            return;
+          }
+        }
+      }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    this.cleanups.push(() => observer.disconnect());
   }
 
   private startRrweb(): void {
@@ -443,5 +465,9 @@ export function startRecorder(options: RecorderStartOptions): BugReportRecorder 
   current = recorder;
   recorder.start();
   setActiveRecorder(recorder);
+  // E2E builds only (a build-time constant): the leak tests' redaction hook.
+  if (process.env.BUG_REPORT_E2E === "true") {
+    void import("./redaction/testHook").then((m) => m.installRedactionTestHook());
+  }
   return recorder;
 }

@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import SurveyAnalytics from "@/components/survey/SurveyAnalytics";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
@@ -622,7 +623,9 @@ export default function SurveyResponsesView({
                         pl={anonymousMode && index === 0 ? 6 : undefined}
                         pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
                       >
-                        <Text color="fg">{formatResponseValue(answers[questionName])}</Text>
+                        <ReportBlock>
+                          <Text color="fg">{formatResponseValue(answers[questionName])}</Text>
+                        </ReportBlock>
                       </Table.Cell>
                     ))}
                   </Table.Row>

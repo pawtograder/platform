@@ -34,6 +34,7 @@ import { AIHelpSubmissionErrorButton } from "@/components/ai-help/AIHelpSubmissi
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { TestResultOutput, format_basic_output } from "@/components/submission-results/TestResultOutput";
 import { GenericBuildError } from "@/components/submission-results/GenericBuildError";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 /** When create-submission already recorded a user-visible message (e.g. grade.yml mismatch), hide the generic missing-grader-result row. */
 function filterWorkflowRunErrorsForDisplay<
@@ -290,13 +291,15 @@ export default function GraderResults() {
                     borderColor="border.error"
                   >
                     <Text fontWeight="bold" color="fg.error" fontSize="sm">
-                      Error: {errorMessage}
+                      Error: <ReportBlock>{errorMessage}</ReportBlock>
                     </Text>
                     {errorDetails && (
                       <Box mt={2} p={2} bg="bg.error" borderRadius="sm">
-                        <Text fontSize="xs" fontFamily="mono" color="fg.error">
-                          {typeof errorDetails === "string" ? errorDetails : JSON.stringify(errorDetails, null, 2)}
-                        </Text>
+                        <ReportBlock>
+                          <Text fontSize="xs" fontFamily="mono" color="fg.error">
+                            {typeof errorDetails === "string" ? errorDetails : JSON.stringify(errorDetails, null, 2)}
+                          </Text>
+                        </ReportBlock>
                       </Box>
                     )}
                     <Text fontSize="xs" color="fg.error" mt={2}>
@@ -366,14 +369,18 @@ export default function GraderResults() {
                   border="1px solid"
                   borderColor="blue.200"
                 >
-                  <Text fontWeight="bold" color="blue.700" fontSize="sm">
-                    {error.name}
-                  </Text>
+                  <ReportBlock>
+                    <Text fontWeight="bold" color="blue.700" fontSize="sm">
+                      {error.name}
+                    </Text>
+                  </ReportBlock>
                   {error.data && error.data !== "{}" && (
                     <Box mt={2} p={2} bg="blue.25" borderRadius="sm">
-                      <Text fontSize="xs" fontFamily="mono" color="blue.600">
-                        {typeof error.data === "string" ? error.data : JSON.stringify(error.data, null, 2)}
-                      </Text>
+                      <ReportBlock>
+                        <Text fontSize="xs" fontFamily="mono" color="blue.600">
+                          {typeof error.data === "string" ? error.data : JSON.stringify(error.data, null, 2)}
+                        </Text>
+                      </ReportBlock>
                     </Box>
                   )}
                   <Text fontSize="xs" color="blue.500" mt={2}>
@@ -589,9 +596,11 @@ export default function GraderResults() {
                               {result.name}
                             </Link>
                           </Table.Cell>
-                          <Table.Cell>
-                            {result.score}/{result.max_score}
-                          </Table.Cell>
+                          <ReportBlock>
+                            <Table.Cell>
+                              {result.score}/{result.max_score}
+                            </Table.Cell>
+                          </ReportBlock>
                         </Table.Row>
                       </Fragment>
                     );
@@ -632,7 +641,7 @@ export default function GraderResults() {
                             (focusable via tabIndex) makes the jump land screen readers on the test
                             name instead of an unlabeled card container (WCAG 1.3.2 / 2.4.3). */}
                         <Heading as="h3" size="lg" color={`fg.${style}`} id={`test-${result.id}`} tabIndex={-1}>
-                          {result.name} {showScore ? result.score + "/" + result.max_score : ""}
+                          {result.name} {showScore ? <ReportBlock>{result.score + "/" + result.max_score}</ReportBlock> : ""}
                         </Heading>
                         {isFailing && result.output && (
                           <AIHelpSubmissionErrorButton

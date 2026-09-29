@@ -53,6 +53,7 @@ import { MultiValue, Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import { CheckCircleIcon, ClockIcon, MinusCircleIcon, XCircleIcon } from "lucide-react";
 import { Fragment, useCallback, useMemo, useState } from "react";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 function showEdgeFunctionErrorToast(e: unknown, fallbackTitle = "Something went wrong") {
   if (e instanceof EdgeFunctionError) {
@@ -391,7 +392,9 @@ function JoinGroupButton({
                         <VStack w="100%" key={g.id}>
                           <HStack>
                             <GroupMember profile_id={g.inviter} />
-                            <Heading size="sm">invites you to join {g.group.name}</Heading>
+                            <Heading size="sm">
+                              invites you to join <ReportBlock>{g.group.name}</ReportBlock>
+                            </Heading>
                           </HStack>
                           <HStack w="100%" justifyContent="start">
                             <Button
@@ -473,7 +476,9 @@ function JoinGroupButton({
                   formatOptionLabel={({ group }) => {
                     return (
                       <HStack>
-                        <Text>{group.name}</Text>
+                        <ReportBlock>
+                          <Text>{group.name}</Text>
+                        </ReportBlock>
                         <Text>{group.assignment_groups_members.length} members:</Text>
                         <GroupMemberList group={group} />
                       </HStack>
@@ -514,7 +519,9 @@ function JoinGroupButton({
                       <Card.Root key={g.id} w="100%" bg={g.status === "pending" ? "bg.muted" : "bg.subtle"}>
                         <Flex flexDirection="row" p={2}>
                           <VStack alignItems="flex-start">
-                            <Card.Title mb={0}>{g.group.name}</Card.Title>
+                            <ReportBlock>
+                              <Card.Title mb={0}>{g.group.name}</Card.Title>
+                            </ReportBlock>
                             <Text fontSize="xs" color="fg.muted">
                               ({formatRelative(g.created_at, new Date())})
                             </Text>
@@ -826,7 +833,9 @@ function GroupDetails({
   return (
     <VStack alignItems="flex-start">
       <VStack alignItems="flex-start" gap={1}>
-        <Heading size="md">You are in group &quot;{group.name}&quot;</Heading>
+        <Heading size="md">
+          You are in group &quot;<ReportBlock>{group.name}</ReportBlock>&quot;
+        </Heading>
         {group.mentor_profile_id && (
           <HStack
             gap={2}
