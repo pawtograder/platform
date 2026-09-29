@@ -224,14 +224,25 @@ test.describe("bug report redaction leak tests", () => {
     await openRecorded(page, student, seed.routes.helpRequest, [
       { pattern: "/course/[course_id]/office-hours/request/[request_id]", level: "structure" }
     ]);
-    const requestAnchor = anchors("help_requests.request")[0];
-    await expect(page.getByText(new RegExp(requestAnchor, "i")).first()).toBeAttached();
+    // The request page shows the chat (the messages); the request body shows in the queue list.
+    const messageAnchor = anchors("help_request_messages.message")[0];
+    await expect(page.getByText(new RegExp(messageAnchor, "i")).first()).toBeAttached();
     for (const a of [...anchors("help_requests.request"), ...anchors("help_request_messages.message")]) {
       expect(await unblockedOccurrences(page, a), `help request text "${a}"`).toEqual([]);
     }
     await settle(page);
     const buffer = (await redactedReport(page)).buffer;
     expect(allSerializedNodes(buffer).some((n) => n.attributes?.rr_width !== undefined)).toBe(true);
+    await expectNoCanaries(page);
+
+    // The request body, in the student's own request list.
+    await page.goto(`${seed.routes.officeHours}?view=my-requests`);
+    await waitForRecorderState(page, "recording");
+    const requestAnchor = anchors("help_requests.request")[0];
+    await expect(page.getByText(new RegExp(requestAnchor, "i")).first()).toBeAttached();
+    for (const a of anchors("help_requests.request")) {
+      expect(await unblockedOccurrences(page, a), `help request body "${a}"`).toEqual([]);
+    }
     await expectNoCanaries(page);
 
     await page.goto(seed.routes.discussionThread);
