@@ -1090,19 +1090,21 @@ function TableByStudents({
                               </Text>
 
                               <NativeSelect.Root disabled={loading}>
-                                <NativeSelect.Field
-                                  value={groupId ?? group?.id ?? ""}
-                                  onChange={(e) => {
-                                    setGroupId(e.target.value);
-                                  }}
-                                >
-                                  <option value="">(No group)</option>
-                                  {groupsData?.map((group) => (
-                                    <option key={group.id} value={group.id}>
-                                      {group.name}
-                                    </option>
-                                  ))}
-                                </NativeSelect.Field>
+                                <ReportBlock>
+                                  <NativeSelect.Field
+                                    value={groupId ?? group?.id ?? ""}
+                                    onChange={(e) => {
+                                      setGroupId(e.target.value);
+                                    }}
+                                  >
+                                    <option value="">(No group)</option>
+                                    {groupsData?.map((group) => (
+                                      <option key={group.id} value={group.id}>
+                                        {group.name}
+                                      </option>
+                                    ))}
+                                  </NativeSelect.Field>
+                                </ReportBlock>
                               </NativeSelect.Root>
 
                               <Dialog.Footer>

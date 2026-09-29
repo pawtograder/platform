@@ -10,6 +10,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import Markdown from "@/components/ui/markdown";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import {
   useHelpQueues,
   useHelpRequests,
@@ -881,12 +882,14 @@ export default function HelpRequestForm({
                 control={control}
                 render={({ field }) => {
                   return (
-                    <Textarea
-                      {...field}
-                      placeholder="Describe your question or issue in detail..."
-                      minHeight="200px"
-                      width="800px"
-                    />
+                    <ReportBlock>
+                      <Textarea
+                        {...field}
+                        placeholder="Describe your question or issue in detail..."
+                        minHeight="200px"
+                        width="800px"
+                      />
+                    </ReportBlock>
                   );
                 }}
               />
@@ -1158,35 +1161,38 @@ export default function HelpRequestForm({
                   name="followup_to"
                   control={control}
                   render={({ field }) => (
-                    <Select
-                      isMulti={false}
-                      isClearable={true}
-                      placeholder="Reference a previous request"
-                      options={userPreviousRequests.map(
-                        (req) =>
-                          ({
-                            label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${formatInTimeZone(new Date(req.resolved_at!), timeZone, "MMM d, yyyy (zzz)")})`,
-                            value: req.id.toString()
-                          }) as SelectOption
-                      )}
-                      value={
-                        field.value
-                          ? (() => {
-                              const request = userPreviousRequests.find((r) => r.id === field.value)?.request;
-                              const computedLabel =
-                                request && request.length > 60 ? request.substring(0, 60) + "..." : request || "";
-                              return {
-                                label: computedLabel,
-                                value: field.value.toString()
-                              } as SelectOption;
-                            })()
-                          : null
-                      }
-                      onChange={(option: SelectOption | null) => {
-                        const val = option?.value ?? "";
-                        field.onChange(val === "" ? undefined : Number.parseInt(val));
-                      }}
-                    />
+                    // react-select doesn't pass data attributes to its DOM, so wrap it.
+                    <ReportBlock as="div">
+                      <Select
+                        isMulti={false}
+                        isClearable={true}
+                        placeholder="Reference a previous request"
+                        options={userPreviousRequests.map(
+                          (req) =>
+                            ({
+                              label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${formatInTimeZone(new Date(req.resolved_at!), timeZone, "MMM d, yyyy (zzz)")})`,
+                              value: req.id.toString()
+                            }) as SelectOption
+                        )}
+                        value={
+                          field.value
+                            ? (() => {
+                                const request = userPreviousRequests.find((r) => r.id === field.value)?.request;
+                                const computedLabel =
+                                  request && request.length > 60 ? request.substring(0, 60) + "..." : request || "";
+                                return {
+                                  label: computedLabel,
+                                  value: field.value.toString()
+                                } as SelectOption;
+                              })()
+                            : null
+                        }
+                        onChange={(option: SelectOption | null) => {
+                          const val = option?.value ?? "";
+                          field.onChange(val === "" ? undefined : Number.parseInt(val));
+                        }}
+                      />
+                    </ReportBlock>
                   )}
                 />
               </Field>

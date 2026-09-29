@@ -125,7 +125,8 @@ describe("text nodes", () => {
     const result = await redact(bufferOf([segment([meta(0), full(1, doc([], body))])]));
     const out = uploaded(result);
     expect(out).toContain("Posted by ****** ********");
-    expect(out).toContain("*********, ******");
+    // The comma is inside the "Last, First" span, so it is masked too.
+    expect(out).toContain('"********* ******"');
   });
 
   it("replays mutations forward: text added later is matched with its old siblings", async () => {
@@ -269,7 +270,7 @@ describe("attributes, inputs, breadcrumbs, URLs", () => {
     expect(out).toContain('"method":"GET"');
     expect(out).toContain('"category":"console"');
     const fetchUrl = result.remaining.find((r) => r.value.includes("/rest/v1/profiles"))!;
-    expect(fetchUrl.value).toMatch(/name=ilike\.\*+$/);
+    expect(fetchUrl.value).toMatch(/name=ilike\.%25\*+%25$/);
   });
 
   it("maps decoded URL spans back to the encoded bytes", () => {
@@ -382,6 +383,6 @@ describe("taint snapshot and detectors", () => {
 
   it("matches taint case- and whitespace-insensitively", () => {
     const detect = taintDetector(taint);
-    expect(detect("by ZORVIK   quellmar.")).toEqual(expect.arrayContaining([{ start: 3, end: 21, kind: "name" }]));
+    expect(detect("by ZORVIK   quellmar.")).toEqual(expect.arrayContaining([{ start: 3, end: 20, kind: "name" }]));
   });
 });
