@@ -5,6 +5,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { AssignmentLeaderboardEntry } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Heading, HStack, Table, Text, VStack } from "@chakra-ui/react";
 import { useMemo } from "react";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 interface AssignmentLeaderboardProps {
   maxEntries?: number;
@@ -90,9 +91,11 @@ export default function AssignmentLeaderboard({ maxEntries = 10 }: AssignmentLea
                     </HStack>
                   </Table.Cell>
                   <Table.Cell textAlign="right">
-                    <Text>
-                      {entry.autograder_score}/{entry.max_score}
-                    </Text>
+                    <ReportBlock>
+                      <Text>
+                        {entry.autograder_score}/{entry.max_score}
+                      </Text>
+                    </ReportBlock>
                   </Table.Cell>
                 </Table.Row>
               );
@@ -110,9 +113,11 @@ export default function AssignmentLeaderboard({ maxEntries = 10 }: AssignmentLea
                 <Text fontWeight="semibold">#{currentUserRank}</Text>
                 <PersonName uid={currentUserEntry.public_profile_id} size="xs" showAvatar={true} />
               </HStack>
-              <Text>
-                {currentUserEntry.autograder_score}/{currentUserEntry.max_score}
-              </Text>
+              <ReportBlock>
+                <Text>
+                  {currentUserEntry.autograder_score}/{currentUserEntry.max_score}
+                </Text>
+              </ReportBlock>
             </HStack>
           </Box>
         )}

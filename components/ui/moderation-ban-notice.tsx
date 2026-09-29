@@ -4,6 +4,7 @@ import { useModerationStatus, formatTimeRemaining } from "@/hooks/useModerationS
 import { Box, VStack, Text, HStack, Icon, Badge, Container, Stack, Separator } from "@chakra-ui/react";
 import { BsClock, BsBan, BsExclamationTriangle, BsShield, BsPersonX, BsInfoCircle } from "react-icons/bs";
 import { useEffect, useState } from "react";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 type ModerationBanNoticeProps = {
   classId: number;
@@ -132,7 +133,9 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
                   Reason for ban:
                 </Text>
                 <Box p={4} borderRadius="xl" borderWidth="1px">
-                  <Text fontWeight="medium">{moderationStatus.activeBan.reason}</Text>
+                  <ReportBlock>
+                    <Text fontWeight="medium">{moderationStatus.activeBan.reason}</Text>
+                  </ReportBlock>
                 </Box>
               </Box>
             )}
@@ -225,7 +228,9 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
                     Most recent warning:
                   </Text>
                   <Box p={3} borderRadius="lg" borderWidth="1px">
-                    <Text fontSize="sm">{moderationStatus.recentWarnings[0].reason}</Text>
+                    <ReportBlock>
+                      <Text fontSize="sm">{moderationStatus.recentWarnings[0].reason}</Text>
+                    </ReportBlock>
                   </Box>
                 </Box>
               )}

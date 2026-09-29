@@ -100,6 +100,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FaCheckCircle, FaColumns, FaDownload, FaEyeSlash, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { Group, Panel, Separator as PanelSeparator } from "react-resizable-panels";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Module-stable style — `<Markdown>` is `memo`-wrapped (see
 // `components/ui/markdown.tsx`); inline literals defeat the memo.
@@ -339,7 +340,9 @@ function ArtifactAnnotation({
                 }}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <ReportBlock as="div">
+                <Markdown>{comment.comment}</Markdown>
+              </ReportBlock>
             )}
           </Box>
         </VStack>
@@ -424,7 +427,9 @@ function ArtifactComment({
                 }}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <ReportBlock as="div">
+                <Markdown>{comment.comment}</Markdown>
+              </ReportBlock>
             )}
           </Box>
         </VStack>

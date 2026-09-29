@@ -11,6 +11,7 @@ import { useParams } from "next/navigation";
 import { useHelpQueues, useHelpQueueAssignments, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 interface EventsByDay {
   [dateKey: string]: CalendarEvent[];
@@ -161,9 +162,11 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
                 borderLeftColor={isCurrentlyHappening ? "green.600" : colors.accent}
                 boxShadow={isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2)" : undefined}
               >
-                <Text fontSize="sm" fontWeight="medium" lineClamp={1}>
-                  {event.organizer_name || event.title}
-                </Text>
+                <ReportBlock>
+                  <Text fontSize="sm" fontWeight="medium" lineClamp={1}>
+                    {event.organizer_name || event.title}
+                  </Text>
+                </ReportBlock>
                 <Text fontSize="xs" color="fg.muted">
                   {formatDateRange(event.start_time, event.end_time)}
                 </Text>
@@ -186,9 +189,11 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
                       Join virtual call
                     </Link>
                   ) : (
-                    <Text fontSize="xs" color="fg.muted" lineClamp={1}>
-                      📍 {event.location}
-                    </Text>
+                    <ReportBlock>
+                      <Text fontSize="xs" color="fg.muted" lineClamp={1}>
+                        📍 {event.location}
+                      </Text>
+                    </ReportBlock>
                   ))}
                 {resolvedQueueName && (
                   <Box

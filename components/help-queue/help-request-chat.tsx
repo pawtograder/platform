@@ -60,6 +60,7 @@ import NotificationPermissionWarning, {
 } from "@/components/notifications/notification-permission-warning";
 import { formatDistanceToNow } from "date-fns";
 import { AIHelpIconButton } from "@/components/ai-help/AIHelpButton";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 /**
  * Office hours form and UI helper types
@@ -677,7 +678,9 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
                                 <HStack justify="space-between" align="center">
                                   <HStack flex={1}>
                                     <Icon as={BsFileEarmark} color="fg.muted" />
-                                    <Text fontWeight="medium">{fileName}</Text>
+                                    <ReportBlock>
+                                      <Text fontWeight="medium">{fileName}</Text>
+                                    </ReportBlock>
                                   </HStack>
                                   <HStack>
                                     <Input
@@ -777,9 +780,11 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
                                 href={`/course/${request.class_id}/assignments/${fileRef?.assignment_id}/submissions/${fileRef?.submission_id}/files?file_id=${fileRef?.submission_file_id}${fileRef?.line_number ? `#L${fileRef.line_number}` : ""}`}
                                 key={fileRef?.id}
                               >
-                                <Text fontSize="sm" _hover={{ textDecoration: "underline" }}>
-                                  {file.name}
-                                </Text>
+                                <ReportBlock>
+                                  <Text fontSize="sm" _hover={{ textDecoration: "underline" }}>
+                                    {file.name}
+                                  </Text>
+                                </ReportBlock>
                               </Link>
                               {fileRef?.line_number && (
                                 <Badge size="sm" variant="outline">
