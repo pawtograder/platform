@@ -37,6 +37,7 @@ import {
   type PagePatterns
 } from "./canaryRegistry";
 import { routePatternFor } from "./routePatterns";
+import type { UploadTracePartial } from "./uploadTrace";
 
 const WRAPPERS_BY_SLUG = edgeWrappers as Record<string, string[]>;
 
@@ -86,6 +87,8 @@ export type TracePartial = {
   seenAtSource: string[];
   seenAtSink: string[];
   pages: { route: string; test: string }[];
+  /** Phase 2 (`BUG_REPORT_TRACE_UPLOAD=1`): the would-be uploads this worker scanned */
+  upload?: UploadTracePartial;
 };
 
 export type TaintTracerOptions = {

@@ -7,6 +7,11 @@
  * The generated files are replaced by this run's results, so a full-suite run can drop stale
  * entries. `BUG_REPORT_TRACE_MERGE=1` instead adds this run's results to the committed files, for
  * building them up from partial runs. `BUG_REPORT_TRACE_STRICT=1` fails the run when a check fails.
+ *
+ * Under `BUG_REPORT_TRACE_UPLOAD=1` (phase 2) the report also gets an `uploads` section: tests run,
+ * uploads scanned, canary hits by kind, column, and route, and the pages that couldn't be scanned
+ * and why. Strict mode fails the run on any hit, including hits no test could fail on (a context
+ * closed in `afterAll`).
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -23,6 +28,7 @@ import {
   type PiiSinks
 } from "@/lib/bugReport/traceCheck";
 import type { TracePartial } from "./taintTrace";
+import type { UploadHit, UploadTracePartial } from "./uploadTrace";
 
 export const OBSERVED_PATH = path.join("lib", "bugReport", "generated", "privacy.observed.json");
 export const SINKS_PATH = path.join("lib", "bugReport", "generated", "pii-sinks.json");
@@ -67,6 +73,36 @@ export function coverage(partials: TracePartial[]) {
   };
 }
 
+function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const x of xs) out[key(x)] = (out[key(x)] ?? 0) + 1;
+  return Object.fromEntries(Object.entries(out).sort((a, b) => b[1] - a[1]));
+}
+
+/** Phase 2's report section, merged from every worker's `upload` partial. */
+export function uploadSummary(parts: UploadTracePartial[]) {
+  const hits: UploadHit[] = parts.flatMap((p) => p.hits);
+  const unscannable = parts.flatMap((p) => p.unscannable);
+  const skipped: Record<string, number> = {};
+  for (const p of parts) for (const [k, n] of Object.entries(p.skipped)) skipped[k] = (skipped[k] ?? 0) + n;
+  return {
+    tests: new Set(parts.flatMap((p) => p.tests)).size,
+    uploadsScanned: parts.reduce((n, p) => n + p.uploadsScanned, 0),
+    bytesScanned: parts.reduce((n, p) => n + p.bytesScanned, 0),
+    classesEnabled: parts.reduce((n, p) => n + p.classesEnabled, 0),
+    hitCount: hits.length,
+    hitsByKind: countBy(hits, (h) => h.kind),
+    hitsByColumn: countBy(hits, (h) => h.column),
+    hitsByRoute: countBy(hits, (h) => h.route),
+    hitsByPlace: countBy(hits, (h) => h.where.replace(/^segment \d+ event \d+ /, "").replace(/#\d+/g, "#")),
+    hits,
+    unscannableCount: unscannable.length,
+    unscannableByReason: countBy(unscannable, (u) => u.reason),
+    unscannable,
+    skipped
+  };
+}
+
 function readJson<T>(file: string, fallback: T): T {
   try {
     return JSON.parse(readFileSync(file, "utf8")) as T;
@@ -101,6 +137,8 @@ export default async function traceTeardown() {
   await format(SINKS_PATH, sinks);
 
   const cov = coverage(partials);
+  const uploadParts = partials.flatMap((p) => (p.upload ? [p.upload] : []));
+  const upload = uploadSummary(uploadParts);
   const failures = [...checkObserved(observed), ...checkSinks(sinks)];
   mkdirSync(dir, { recursive: true });
   writeFileSync(
@@ -109,6 +147,7 @@ export default async function traceTeardown() {
       failures,
       coverage: cov,
       blockCandidates: blockCandidates(sinks),
+      uploads: uploadParts.length > 0 ? upload : undefined,
       pages: partials.flatMap((p) => p.pages),
       sourceDetails: partials.flatMap((p) => p.sourceDetails),
       sinkDetails: partials.flatMap((p) => p.sinkDetails)
@@ -124,6 +163,17 @@ export default async function traceTeardown() {
   );
   if (cov.gaps.length > 0)
     console.log(`[bug-report-trace] coverage gaps (seeded, never observed): ${cov.gaps.join(", ")}`);
+  if (uploadParts.length > 0) {
+    console.log(
+      `[bug-report-trace] uploads: ${upload.tests} tests, ${upload.uploadsScanned} uploads scanned (${(upload.bytesScanned / 1e6).toFixed(1)} MB), ${upload.hitCount} canary hits, ${upload.unscannableCount} pages not scannable`
+    );
+    if (upload.hitCount > 0) {
+      console.log(`[bug-report-trace] upload hits by column: ${JSON.stringify(upload.hitsByColumn)}`);
+      console.log(`[bug-report-trace] upload hits by route: ${JSON.stringify(upload.hitsByRoute)}`);
+    }
+    if (upload.unscannableCount > 0)
+      console.log(`[bug-report-trace] not scannable: ${JSON.stringify(upload.unscannableByReason)}`);
+  }
   const blocking = failures.filter(isBlocking);
   const warnings = failures.filter((f) => !isBlocking(f));
   if (warnings.length > 0) {
@@ -138,4 +188,7 @@ export default async function traceTeardown() {
     }
   }
   console.log(`[bug-report-trace] details: ${path.join(dir, "report.json")}`);
+  if (process.env.BUG_REPORT_TRACE_STRICT === "1" && upload.hitCount > 0) {
+    throw new Error(`bug report taint trace: ${upload.hitCount} canaries in would-be uploads (see report.json)`);
+  }
 }

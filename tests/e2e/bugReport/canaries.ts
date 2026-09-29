@@ -33,13 +33,19 @@ export type CanaryHit = {
 
 type Tagged = { canary: string; variant: string; entry: CanaryEntry };
 
+const automata = new WeakMap<CanaryRegistry, { size: number; ac: AhoCorasick<Tagged> }>();
+
+/** The registry's automaton, rebuilt when it has grown (registries only gain entries). */
 function automatonFor(registry: CanaryRegistry): AhoCorasick<Tagged> {
+  const cached = automata.get(registry);
+  if (cached && cached.size === registry.size) return cached.ac;
   const ac = new AhoCorasick<Tagged>();
   for (const [canary, entry] of registry) {
     for (const variant of variants(canary, { kind: entry.kind, realName: entry.realName })) {
       ac.add(variant, { canary, variant, entry });
     }
   }
+  automata.set(registry, { size: registry.size, ac });
   return ac;
 }
 
@@ -76,6 +82,18 @@ export function scanForCanaries(
     }
   });
   return hits;
+}
+
+/**
+ * A grade canary such as "72.52" found inside a longer number (an SVG path's "M572.52 241.4") is
+ * a coincidence, not the grade: the scan matches substrings. True for grade hits with a digit, or
+ * a digit-and-dot, right next to them in `text` (the decoded source the hit came from).
+ */
+export function isNumberFragment(text: string, hit: CanaryHit): boolean {
+  if (hit.entry.kind !== "grade") return false;
+  const before = text[hit.offset - 1] ?? "";
+  const after = text[hit.offset + hit.matched.length] ?? "";
+  return /[\d.]/.test(before) || /\d/.test(after);
 }
 
 /** Formats hits for an assertion message. */

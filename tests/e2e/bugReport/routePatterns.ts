@@ -36,6 +36,11 @@ function patterns(): Pattern[] {
   return cached;
 }
 
+/** Every app-router page and route handler pattern under `app/`, e.g. "/course/[course_id]/gradebook". */
+export function allRoutePatterns(): string[] {
+  return patterns().map((p) => p.pattern);
+}
+
 function score(p: Pattern, parts: string[]): number | null {
   let s = 0;
   for (let i = 0; i < p.segments.length; i++) {
