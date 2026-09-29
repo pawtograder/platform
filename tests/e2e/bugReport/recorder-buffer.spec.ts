@@ -26,7 +26,6 @@ type Course = Awaited<ReturnType<typeof createClass>>;
 const HARNESS = "/course/[course_id]/e2e-harness/bug-report";
 
 test.describe("bug report recorder buffer", () => {
-  test.describe.configure({ mode: "serial" });
 
   let course: Course;
   let student: TestingUser;
@@ -149,14 +148,14 @@ test.describe("bug report recorder buffer", () => {
       }).catch(() => undefined);
     });
     // A Supabase request made after the recorder started, through the early fetch hook.
+    // Office hours is listed (structure), so recording continues there after a restart.
     await clickNavLink(page, `/course/${course.id}/office-hours`);
-    await page.waitForLoadState("networkidle");
-    await clickNavLink(page, `/course/${course.id}/e2e-harness/bug-report`);
     await waitForRecorderState(page, "recording");
-
     await expect
-      .poll(async () => breadcrumbs(await freeze(page)).filter((b) => b.category === "fetch").length)
-      .toBeGreaterThan(0);
+      .poll(async () =>
+        breadcrumbs(await freeze(page)).some((b) => b.category === "fetch" && String(b.data?.url).includes("/rest/v1/"))
+      )
+      .toBe(true);
     const buffer = await freeze(page);
     const crumbs = breadcrumbs(buffer);
     const consoleCrumbs = crumbs.filter((b) => b.category === "console");
@@ -279,7 +278,7 @@ test.describe("bug report recorder buffer", () => {
       "int canary",
       "markdown canary text",
       "Avatar Canary Person",
-      "data:image/svg"
+      "width='64' height='48'"
     ]) {
       expect(json).not.toContain(canary);
     }

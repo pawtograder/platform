@@ -126,7 +126,7 @@ async function measure(
   page.on("response", async (r) => {
     if (!/\.js(\?|$)/.test(r.url())) return;
     const body = await r.text().catch(() => "");
-    if (body.includes(RECORDER_MARKER)) recorderUrls.add(r.url());
+    if (body.includes(RECORDER_MARKER) || body.includes("rr_mediaState")) recorderUrls.add(r.url());
   });
   const t0 = await page.evaluate(() => performance.now());
   const bufferAt: Measurement["bufferAt"] = {};

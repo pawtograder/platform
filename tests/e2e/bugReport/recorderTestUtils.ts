@@ -114,8 +114,9 @@ export function breadcrumbs(buffer: FrozenBuffer): Breadcrumb[] {
 
 /**
  * Collects the JavaScript the page loads, so a test can say whether the recorder chunk was
- * ever requested. The recorder chunk is the only one containing `RECORDER_CHUNK_MARKER` (from
- * its block selector) together with rrweb's snapshot code.
+ * ever requested. Webpack splits them: the recorder module is the only chunk containing
+ * `RECORDER_CHUNK_MARKER` (from its block selector), and rrweb the only one with `RRWEB_MARKER`
+ * (rrweb-snapshot; the app bundles no other rrweb copy since Sentry replay is not used).
  */
 export const RECORDER_CHUNK_MARKER = "data-report-secret";
 export const RRWEB_MARKER = "rr_mediaState";
@@ -133,7 +134,7 @@ export function collectScripts(page: Page): { urls: string[]; bodies: Promise<st
 
 export async function recorderChunkRequested(collected: { bodies: Promise<string>[] }): Promise<boolean> {
   const bodies = await Promise.all(collected.bodies);
-  return bodies.some((b) => b.includes(RECORDER_CHUNK_MARKER) && b.includes(RRWEB_MARKER));
+  return bodies.some((b) => b.includes(RECORDER_CHUNK_MARKER) || b.includes(RRWEB_MARKER));
 }
 
 /** Click a course nav link (a Next <Link>, so the navigation is client-side). */
