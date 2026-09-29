@@ -47,7 +47,10 @@ const LOG = "[bug-report-retention-purge]";
 const MAX_CLASSES_PER_RUN = 50;
 /** A class swept less than this long ago is skipped, so a retried or doubled cron call does no extra work. */
 const RESWEEP_AFTER_HOURS = 20;
-/** Stop starting classes after this long, well inside the edge runtime's wall-clock limit. */
+/**
+ * Stop after this long, well inside the edge runtime's wall-clock limit. Checked between classes and
+ * between Sentry requests inside a class; a class cut short is left unrecorded for the next run.
+ */
 const TIME_BUDGET_MS = 100_000;
 
 function json(body: unknown, status = 200) {

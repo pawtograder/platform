@@ -428,6 +428,72 @@ Deno.test("page cap on replays after feedback was deleted: the summary counts bo
   assertEquals(recorded, []);
 });
 
+/** A run whose clock moves 1 s per Sentry request, with the 100 s budget. */
+function setupSlow(sentry: FakeSentry) {
+  const recorded: number[] = [];
+  const api = new SentryPurgeApi(CFG, sentry.fetch, async () => {});
+  const run = (candidates: PurgeCandidate[]) =>
+    runPurge({
+      api,
+      candidates,
+      now: () => new Date(NOW.getTime() + sentry.requests.length * 1000),
+      timeBudgetMs: 100_000,
+      recordPurged: async (classId) => {
+        recorded.push(classId);
+      }
+    });
+  return { run, recorded };
+}
+
+Deno.test(
+  "time budget inside a class's feedback: deletes what it verified, stops, leaves the class unrecorded",
+  async () => {
+    const sentry = new FakeSentry();
+    for (let i = 0; i < 300; i++) sentry.addIssue({ id: String(8_000 + i), category: "feedback", classIds: ["88"] });
+    sentry.addReplay({ id: replayId(88), classIds: ["88"] });
+    sentry.addIssue({ id: "8900", category: "feedback", classIds: ["89"] });
+    const { run, recorded } = setupSlow(sentry);
+
+    const summary = await run([
+      { class_id: 88, end_date: daysAgo(31) },
+      { class_id: 89, end_date: daysAgo(31) }
+    ]);
+
+    const left88 = [...sentry.issues.values()].filter((i) => i.classIds[0] === "88").length;
+    assert(summary.feedback_deleted > 0 && summary.feedback_deleted < 300, `deleted ${summary.feedback_deleted}`);
+    assertEquals(summary.feedback_deleted, 300 - left88);
+    assertEquals(sentry.replays.size, 1, "the replays are not reached");
+    assertEquals(sentry.issues.has("8900"), true, "the next class is not started");
+    assertEquals(summary.classes_deferred, 2);
+    assertEquals(summary.classes_partial, 1);
+    assertEquals(summary.classes_purged, 0);
+    assertEquals(summary.stopped_by, null);
+    assertEquals(recorded, []);
+    // Past the budget, the only request is the delete of the ids already checked.
+    const overBudget = sentry.requests.slice(101);
+    assertEquals(
+      overBudget.map((r) => `${r.method} ${r.path}`),
+      ["DELETE /organizations/pawtograder-dev/issues/"]
+    );
+  }
+);
+
+Deno.test("time budget inside a class's replay deletes: stops cleanly and counts what went", async () => {
+  const sentry = new FakeSentry();
+  sentry.addIssue({ id: "9001", category: "feedback", classIds: ["90"] });
+  for (let i = 0; i < 200; i++) sentry.addReplay({ id: replayId(90_000 + i), classIds: ["90"] });
+  const { run, recorded } = setupSlow(sentry);
+
+  const summary = await run([{ class_id: 90, end_date: daysAgo(31) }]);
+
+  assertEquals(summary.feedback_deleted, 1);
+  assert(summary.replays_deleted > 0 && summary.replays_deleted < 200, `deleted ${summary.replays_deleted}`);
+  assertEquals(summary.replays_deleted, 200 - sentry.replays.size);
+  assertEquals(summary.classes_deferred, 1);
+  assertEquals(recorded, []);
+  assert(sentry.requests.length <= 101, `${sentry.requests.length} requests`);
+});
+
 Deno.test("isPastRetention: strictly more than 30 days after end_date", () => {
   assertEquals(isPastRetention(daysAgo(31), NOW), true);
   assertEquals(isPastRetention(daysAgo(29), NOW), false);
