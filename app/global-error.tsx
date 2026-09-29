@@ -1,4 +1,5 @@
 "use client";
+import { GITHUB_BUG_REPORT_URL, useBugReportingAvailable } from "@/lib/bugReport/availability";
 import { getLastKnownReportContext } from "@/lib/bugReport/reportContext";
 import { submitReport, type SubmitReportResult } from "@/lib/bugReport/submitFeedback";
 import * as Sentry from "@sentry/nextjs";
@@ -98,6 +99,7 @@ function CrashReportForm({ errorID }: { errorID: string }) {
 
 export default function GlobalError({ error }: { error: Error & { digest?: string } }) {
   const [errorID, setErrorID] = useState<string | undefined>(undefined);
+  const reportingAvailable = useBugReportingAvailable();
 
   // Call Sentry once per error
   useEffect(() => {
@@ -200,7 +202,17 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
               It looks like a husky encountered a bug and buried it... a little too well! This error has been
               automatically reported to our pack of developers.
             </p>
-            {errorID && <CrashReportForm errorID={errorID} />}
+            {errorID && reportingAvailable && <CrashReportForm errorID={errorID} />}
+            {errorID && !reportingAvailable && (
+              <p style={{ fontSize: "1rem", color: "#4a5568", marginBottom: "1.5rem", lineHeight: "1.6" }}>
+                If you continue to experience this error, please{" "}
+                <a href={GITHUB_BUG_REPORT_URL} target="_blank" rel="noopener noreferrer">
+                  report it on our issue tracker
+                </a>
+                , and include the error ID: {errorID}. Any additional information that you can provide about how you
+                reached this error will help us fix it faster.
+              </p>
+            )}
             <button type="button" onClick={() => window.location.reload()} className="error-button-primary">
               Try Again
             </button>
