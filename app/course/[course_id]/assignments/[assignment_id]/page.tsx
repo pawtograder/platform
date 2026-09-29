@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
@@ -362,41 +363,45 @@ export default function AssignmentPage() {
                       <span>Upload</span>
                     )}
                   </Table.Cell>
-                  <Table.Cell>
-                    <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                      {autograderScoreLabel(submission, noAutograder)}
-                    </Link>
-                  </Table.Cell>
-                  <Table.Cell>
-                    {(() => {
-                      // View-as-student: a real student's RLS hides unreleased reviews, so the
-                      // embedded review comes back null and the score reads "Pending"/"—". An
-                      // instructor masquerading reads the review via the staff RLS path, so mirror
-                      // RLS here and withhold the unreleased grade.
-                      const review =
-                        isReadOnly && submission.submission_reviews && !submission.submission_reviews.released
-                          ? null
-                          : submission.submission_reviews;
-                      const gradeLabel = review?.completed_at
-                        ? `${getDisplayedGradingTotalForStudent(review, private_profile_id) ?? review.total_score ?? "—"}/${assignment.total_points}`
-                        : submission.is_active
-                          ? "Pending"
-                          : submission.is_not_graded
-                            ? "Not for grading"
-                            : "—";
-                      return (
-                        <Link
-                          href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}
-                          // Only fall back to a synthetic accessible name when the visible
-                          // label is the dash placeholder — otherwise the visible text is
-                          // already the link's name (and tests / screen readers expect it).
-                          aria-label={gradeLabel === "—" ? `Submission #${submission.ordinal} grade` : undefined}
-                        >
-                          {gradeLabel}
-                        </Link>
-                      );
-                    })()}
-                  </Table.Cell>
+                  <ReportBlock>
+                    <Table.Cell>
+                      <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
+                        {autograderScoreLabel(submission, noAutograder)}
+                      </Link>
+                    </Table.Cell>
+                  </ReportBlock>
+                  <ReportBlock>
+                    <Table.Cell>
+                      {(() => {
+                        // View-as-student: a real student's RLS hides unreleased reviews, so the
+                        // embedded review comes back null and the score reads "Pending"/"—". An
+                        // instructor masquerading reads the review via the staff RLS path, so mirror
+                        // RLS here and withhold the unreleased grade.
+                        const review =
+                          isReadOnly && submission.submission_reviews && !submission.submission_reviews.released
+                            ? null
+                            : submission.submission_reviews;
+                        const gradeLabel = review?.completed_at
+                          ? `${getDisplayedGradingTotalForStudent(review, private_profile_id) ?? review.total_score ?? "—"}/${assignment.total_points}`
+                          : submission.is_active
+                            ? "Pending"
+                            : submission.is_not_graded
+                              ? "Not for grading"
+                              : "—";
+                        return (
+                          <Link
+                            href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}
+                            // Only fall back to a synthetic accessible name when the visible
+                            // label is the dash placeholder — otherwise the visible text is
+                            // already the link's name (and tests / screen readers expect it).
+                            aria-label={gradeLabel === "—" ? `Submission #${submission.ordinal} grade` : undefined}
+                          >
+                            {gradeLabel}
+                          </Link>
+                        );
+                      })()}
+                    </Table.Cell>
+                  </ReportBlock>
                 </Table.Row>
               ))}
             </Table.Body>

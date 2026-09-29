@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { Box, Text, Icon, Badge, HStack, VStack, Input, Card, Heading, Separator, EmptyState } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
@@ -276,7 +277,9 @@ export default function HelpRequestFeedbackComponent() {
                           Comment:
                         </Text>
                         <Box p={3} borderRadius="md">
-                          <Text>{feedback.comment}</Text>
+                          <ReportBlock>
+                            <Text>{feedback.comment}</Text>
+                          </ReportBlock>
                         </Box>
                       </Box>
                     )}

@@ -32,7 +32,9 @@ export const ROUTE_POLICY: readonly RoutePolicyEntry[] = [
   { pattern: "/course/[course_id]/discussion", level: "structure" },
   { pattern: "/course/[course_id]/discussion/[root_id]", level: "structure" },
   { pattern: "/course/[course_id]/office-hours", level: "structure" },
-  { pattern: "/course/[course_id]/office-hours/[queue_id]", level: "structure" }
+  { pattern: "/course/[course_id]/office-hours/[queue_id]", level: "structure" },
+  // Server-rendered from rows no TableController holds; the page renders <ReportTaint>.
+  { pattern: "/course/[course_id]/manage/surveys/[survey_id]/responses", level: "structure", ssrTaint: true }
 ];
 
 type Segment = { kind: "static"; value: string } | { kind: "param" } | { kind: "catchAll" };

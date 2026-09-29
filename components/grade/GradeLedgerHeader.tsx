@@ -3,6 +3,7 @@
 import { Alert } from "@/components/ui/alert";
 import { Box, Heading, HStack, Progress, Text, VStack } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 export type GradeLedgerHeaderProps = {
   assignmentTitle: string;
@@ -112,21 +113,25 @@ export default function GradeLedgerHeader({
 
         {isGraded ? (
           <VStack align="stretch" gap={2}>
-            <HStack align="baseline" gap={2}>
-              <Text fontSize="3xl" fontWeight="bold" lineHeight="1">
-                {total}
-              </Text>
-              <Text fontSize="xl" color="fg.muted" lineHeight="1">
-                / {totalPossible ?? "?"}
-              </Text>
-            </HStack>
+            <ReportBlock>
+              <HStack align="baseline" gap={2}>
+                <Text fontSize="3xl" fontWeight="bold" lineHeight="1">
+                  {total}
+                </Text>
+                <Text fontSize="xl" color="fg.muted" lineHeight="1">
+                  / {totalPossible ?? "?"}
+                </Text>
+              </HStack>
+            </ReportBlock>
 
             {progressValue !== null ? (
-              <Progress.Root value={progressValue} size="sm" colorPalette="green">
-                <Progress.Track>
-                  <Progress.Range />
-                </Progress.Track>
-              </Progress.Root>
+              <ReportBlock>
+                <Progress.Root value={progressValue} size="sm" colorPalette="green">
+                  <Progress.Track>
+                    <Progress.Range />
+                  </Progress.Track>
+                </Progress.Root>
+              </ReportBlock>
             ) : (
               <Box h="8px" bg="bg.muted" borderRadius="full" overflow="hidden">
                 <Box h="100%" w="100%" bg="green.solid" />
@@ -140,9 +145,11 @@ export default function GradeLedgerHeader({
             )}
 
             {showBreakdown && (
-              <Text fontSize="sm" color="fg.muted">
-                = {breakdownText}
-              </Text>
+              <ReportBlock>
+                <Text fontSize="sm" color="fg.muted">
+                  = {breakdownText}
+                </Text>
+              </ReportBlock>
             )}
           </VStack>
         ) : (
@@ -158,9 +165,11 @@ export default function GradeLedgerHeader({
             {autoEarned !== null && (
               <Text fontSize="sm" color="fg.muted">
                 Autograder subtotal:{" "}
-                <Text as="span" fontWeight="semibold" color="fg.default">
-                  {autoEarned}
-                </Text>
+                <ReportBlock>
+                  <Text as="span" fontWeight="semibold" color="fg.default">
+                    {autoEarned}
+                  </Text>
+                </ReportBlock>
               </Text>
             )}
           </VStack>

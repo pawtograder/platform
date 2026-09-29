@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
@@ -187,9 +188,17 @@ function ScoreLinkWithProfile({
   }
   const label = score !== null && score !== undefined ? score : "—";
   if (submission_id == null) {
-    return <Text fontSize="inherit">{label}</Text>;
+    return (
+      <ReportBlock>
+        <Text fontSize="inherit">{label}</Text>
+      </ReportBlock>
+    );
   }
-  return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>;
+  return (
+    <ReportBlock>
+      <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>
+    </ReportBlock>
+  );
 }
 
 function ScoreLink({
@@ -212,9 +221,17 @@ function ScoreLink({
       return <Skeleton w="50px" h="1em" />;
     }
     if (submission_id == null) {
-      return <Text fontSize="inherit">{label}</Text>;
+      return (
+        <ReportBlock>
+          <Text fontSize="inherit">{label}</Text>
+        </ReportBlock>
+      );
     }
-    return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>;
+    return (
+      <ReportBlock>
+        <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>
+      </ReportBlock>
+    );
   }
   return (
     <ScoreLinkWithProfile
@@ -291,7 +308,7 @@ function TotalScoreCellUnknownStudent({
         assignment_id={assignment_id}
       />
       {hasIndividual && tooltipContent !== "" && (
-        <Tooltip content={`Individual portion(s): ${tooltipContent}`}>
+        <Tooltip content={<ReportBlock>{`Individual portion(s): ${tooltipContent}`}</ReportBlock>}>
           <Text fontSize="xs" color="fg.info" cursor="help">
             ⓘ
           </Text>
@@ -343,7 +360,7 @@ function TotalScoreCellWithStudent({
         assignment_id={assignment_id}
       />
       {showTooltip && (
-        <Tooltip content={tooltipContent}>
+        <Tooltip content={<ReportBlock>{tooltipContent}</ReportBlock>}>
           <Text fontSize="xs" color="fg.info" cursor="help">
             ⓘ
           </Text>

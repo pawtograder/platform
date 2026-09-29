@@ -1,5 +1,6 @@
 import { Container, Heading, Text } from "@chakra-ui/react";
 import { createClient } from "@/utils/supabase/server";
+import { ReportTaint } from "@/components/bugReport/ReportTaint";
 import SurveyResponsesView from "./SurveyResponsesView";
 
 type SurveyResponsesPageProps = {
@@ -10,8 +11,12 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   const { course_id, survey_id } = await params;
   const supabase = await createClient();
 
-  // Fetch class data for timezone
-  const { data: classData } = await supabase.from("classes").select("time_zone").eq("id", Number(course_id)).single();
+  // Fetch class data for timezone, and the course flags for the bug-report taint block
+  const { data: classData } = await supabase
+    .from("classes")
+    .select("time_zone, features")
+    .eq("id", Number(course_id))
+    .single();
   const timezone = classData?.time_zone || "America/New_York";
 
   // Fetch survey data to get title, status, version, JSON, due_date, and assignment mode (latest version)
@@ -109,25 +114,33 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
     assignedStudentCount = count || 0;
   }
 
-  // Pass data to the client component
+  // Pass data to the client component. The responders' names are rendered from server-fetched
+  // rows that no TableController sees, so the taint block hands them to the bug-report recorder.
   return (
-    <SurveyResponsesView
-      courseId={course_id}
-      surveyId={survey_id}
-      surveyDbId={survey.id}
-      surveyTitle={survey.title}
-      surveyVersion={1}
-      surveyStatus={survey.status}
-      surveyJson={survey.json}
-      surveyDueDate={survey.due_date}
-      initialResponses={responses || []}
-      totalStudents={assignedStudentCount}
-      timezone={timezone}
-      analyticsConfig={
-        (survey as { analytics_config?: import("@/types/survey-analytics").SurveyAnalyticsConfig | null })
-          .analytics_config ?? null
-      }
-      seriesId={(survey as { series_id?: string | null }).series_id ?? undefined}
-    />
+    <>
+      <ReportTaint
+        pattern="/course/[course_id]/manage/surveys/[survey_id]/responses"
+        features={classData?.features as { name: string; enabled: boolean }[] | null | undefined}
+        values={{ name: (responses ?? []).map((r) => r.profiles?.name) }}
+      />
+      <SurveyResponsesView
+        courseId={course_id}
+        surveyId={survey_id}
+        surveyDbId={survey.id}
+        surveyTitle={survey.title}
+        surveyVersion={1}
+        surveyStatus={survey.status}
+        surveyJson={survey.json}
+        surveyDueDate={survey.due_date}
+        initialResponses={responses || []}
+        totalStudents={assignedStudentCount}
+        timezone={timezone}
+        analyticsConfig={
+          (survey as { analytics_config?: import("@/types/survey-analytics").SurveyAnalyticsConfig | null })
+            .analytics_config ?? null
+        }
+        seriesId={(survey as { series_id?: string | null }).series_id ?? undefined}
+      />
+    </>
   );
 }

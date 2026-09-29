@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { createClient } from "@/utils/supabase/client";
+import { bugReportIngest } from "@/lib/bugReport/ingestGate";
 import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { useCreate } from "@refinedev/core";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -150,6 +151,8 @@ export function useMeetingWindows() {
         },
         (payload) => {
           const updatedRequest = payload.new as HelpRequest;
+          // Bug reporter taint ingest; null unless a recorder is running.
+          bugReportIngest.sink?.rows("help_requests", updatedRequest);
 
           // Close the meeting window for this help request
           closeMeetingWindow(updatedRequest.class_id, updatedRequest.id);
