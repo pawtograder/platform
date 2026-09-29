@@ -289,6 +289,13 @@ test.describe("Report a bug dialog, replay review", () => {
     const origin = new URL(baseURL!).origin;
     const during: { url: string; method: string; hasBody: boolean }[] = [];
     page.on("request", (r) => during.push({ url: r.url(), method: r.method(), hasBody: r.postDataBuffer() !== null }));
+    // E2E builds send the CSP report-only; the browser still logs each violation, from any frame.
+    const csp: string[] = [];
+    page.on("console", (m) => {
+      const text = m.text();
+      // Playwright's own evaluate calls trip script-src 'unsafe-eval' (see utils/csp.ts).
+      if (/Content Security Policy/i.test(text) && !/evaluate a string as JavaScript/i.test(text)) csp.push(text);
+    });
     const dialog = await openReportDialog(page);
     await waitForReviewReady(dialog);
     await dialog.getByTestId("report-bug-replay-play").click();
@@ -301,6 +308,8 @@ test.describe("Report a bug dialog, replay review", () => {
     const supabase = process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL).origin : "";
     expect(offOrigin.filter((r) => !supabase || !r.url.startsWith(supabase))).toEqual([]);
     expect(during.filter((r) => r.url.includes("/api/tunnel"))).toEqual([]);
+    expect(csp).toEqual([]);
+    console.log(`[bug-report preview requests] ${JSON.stringify(during.map((r) => `${r.method} ${r.url}`))}`);
     expect(capture.items("replay_recording")).toHaveLength(0);
   });
 

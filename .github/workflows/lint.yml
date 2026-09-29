@@ -388,7 +388,8 @@ jobs:
             tests/unit/bugReport-tunnel.test.ts \
             tests/unit/bugReport-routePattern.test.ts \
             tests/unit/bugReport-submitFeedback.test.ts \
-            tests/unit/bugReport-errorToastLink.test.ts
+            tests/unit/bugReport-errorToastLink.test.ts \
+            tests/unit/bugReport/replayReview.test.tsx
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
   # dangerous production values combination (e2e bypasses, plaintext/
