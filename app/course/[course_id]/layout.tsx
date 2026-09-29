@@ -68,9 +68,7 @@ const ProtectedLayout = async ({
   );
 
   return (
-    // The attribute is in the server HTML only when the bug report flag is on, so the recorder
-    // mount can see it before this segment hydrates (see components/bugReport/BugReportIngestArm).
-    <Box minH="100vh" data-bug-report-recording={bugReportRecording ? course_id : undefined}>
+    <Box minH="100vh">
       {/* Before the controller providers: it must arm during render, ahead of their first fetch. */}
       <BugReportIngestArm courseId={Number.parseInt(course_id)} recording={bugReportRecording} />
       <NavigationProgressProvider>

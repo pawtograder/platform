@@ -2,7 +2,6 @@
 
 import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
-import { armFromRecordingMarker } from "@/components/bugReport/BugReportIngestArm";
 import { getActiveRecorder } from "@/lib/bugReport/activeRecorder";
 import { installFetchHook } from "@/lib/bugReport/fetchHook";
 import { disarmIngest, ingestTrace } from "@/lib/bugReport/ingestGate";
@@ -14,10 +13,6 @@ import { createClient } from "@/utils/supabase/client";
 // be in place before the first one is. `utils/supabase/client.ts` installs it before it builds
 // the client; this call covers any other order. See lib/bugReport/fetchHook.ts.
 installFetchHook();
-
-// The course layout's flag marker, if its HTML has arrived: arms the pre-start buffer before the
-// root layout's first fetches. Absent with the flag off.
-armFromRecordingMarker();
 
 async function recordingFlagEnabled(courseId: number): Promise<boolean> {
   const { data, error } = await createClient().from("classes").select("features").eq("id", courseId).maybeSingle();
@@ -61,7 +56,6 @@ export default function BugReportRecorder() {
       disarmIngest();
       return;
     }
-    if (!recorder) armFromRecordingMarker();
 
     void (async () => {
       const enabled = await recordingFlagEnabled(courseId).catch(() => false);

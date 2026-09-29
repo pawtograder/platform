@@ -3,7 +3,7 @@
  * route is listed. With the flag off nothing is armed, so no response is ever cloned.
  */
 import { render } from "@testing-library/react";
-import { armFromRecordingMarker, BugReportIngestArm } from "@/components/bugReport/BugReportIngestArm";
+import { BugReportIngestArm } from "@/components/bugReport/BugReportIngestArm";
 import { disarmIngest, isIngestArmed } from "@/lib/bugReport/ingestGate";
 
 let pathname = "/course/7/discussion";
@@ -27,19 +27,6 @@ describe("BugReportIngestArm", () => {
     pathname = "/course/7/discussion";
     render(<BugReportIngestArm courseId={7} recording />);
     expect(isIngestArmed()).toBe(true);
-  });
-
-  it("arms from the server marker only when it is present and names this path's course", () => {
-    window.history.replaceState(null, "", "/course/7/discussion");
-    armFromRecordingMarker();
-    expect(isIngestArmed()).toBe(false);
-    document.body.innerHTML = `<div data-bug-report-recording="8"></div>`;
-    armFromRecordingMarker();
-    expect(isIngestArmed()).toBe(false);
-    document.body.innerHTML = `<div data-bug-report-recording="7"></div>`;
-    armFromRecordingMarker();
-    expect(isIngestArmed()).toBe(true);
-    document.body.innerHTML = "";
   });
 
   it("does not arm on an unlisted route or another course's path", () => {

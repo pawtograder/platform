@@ -8,7 +8,8 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { registerRowSource, unregisterRowSource, type IngestRowSource } from "@/lib/bugReport/ingestGate";
 import useAuthState from "./useAuthState";
 import { clearViewAsCookie, getViewAsCookie, isSelfViewAsScope, setViewAsCookie } from "@/lib/viewAs";
 type ClassProfileContextType = {
@@ -131,6 +132,9 @@ type UserRoleWithClassAndUser = GetResult<
  *
  * @param children - React child components that will have access to the class profile context
  */
+const USER_ROLES_SELECT =
+  "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes!inner(*), users(*)";
+
 export function ClassProfileProvider({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
   const pathname = usePathname();
@@ -192,9 +196,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         try {
           const { data, error } = await supabase
             .from("user_roles")
-            .select(
-              "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes!inner(*), users(*)"
-            )
+            .select(USER_ROLES_SELECT)
             .eq("user_id", userId)
             .eq("disabled", false)
             .eq("classes.archived", false);
@@ -228,6 +230,24 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       cleanedUp = true;
     };
   }, [userId, retryNonce]);
+
+  // The bug reporter's taint ingest reads these rows (the user's own profiles and user row) if
+  // a recorder starts after they loaded: they are fetched before the course layout renders, so
+  // no pre-start buffer can see them. Registering is one Set entry; nothing is read unless a
+  // recorder starts. The ref keeps the source alive for the registry's WeakRef.
+  const bugReportRowSource = useRef<IngestRowSource | null>(null);
+  useEffect(() => {
+    if (roles.length === 0) return;
+    const source: IngestRowSource = {
+      bugReportRows: () => ({ relation: "user_roles", rows: roles, select: USER_ROLES_SELECT })
+    };
+    bugReportRowSource.current = source;
+    const ref = registerRowSource(source);
+    return () => {
+      unregisterRowSource(ref);
+      if (bugReportRowSource.current === source) bugReportRowSource.current = null;
+    };
+  }, [roles]);
 
   // Determine global admin status independently of the per-course roles query above, which
   // joins classes!inner and filters archived=false — that would drop an admin row whose class
