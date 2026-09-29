@@ -300,7 +300,7 @@ test.describe("Report a bug dialog, replay review", () => {
     expect(feedback.event.contexts?.feedback?.message).toBe("keyboard replay report");
     expect(replaySegments(capture).length).toBeGreaterThan(0);
     const text = uploadText(capture.uploadedBytes());
-    expect(text).toContain("Email the student");
+    expect(text).toContain("Profile link");
     expect(text).not.toContain(target);
   });
 

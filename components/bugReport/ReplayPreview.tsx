@@ -13,6 +13,7 @@ type Replayer = import("./replayPlayerChunk").RrwebReplayer;
 
 /** Tallest the preview gets, in CSS pixels; wide pages scale down to the dialog's width. */
 const MAX_HEIGHT = 360;
+const FALLBACK_WIDTH = 280;
 
 function formatTime(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -52,7 +53,7 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
   const playerRef = useRef<Player | null>(null);
   const [chunk, setChunk] = useState<PlayerChunk | null>(null);
   const [loadError, setLoadError] = useState(false);
-  const [width, setWidth] = useState(0);
+  const [measuredWidth, setWidth] = useState(0);
   const [playing, setPlaying] = useState(false);
   /** Times playback started, for tests waiting on a whole play-through. */
   const [plays, setPlays] = useState(0);
@@ -63,8 +64,10 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
 
   const viewport = useMemo(() => recordedViewport(events), [events]);
   const totalMs = events.length > 1 ? events[events.length - 1].timestamp - events[0].timestamp : 0;
-  const hasWidth = width > 0;
-  const height = hasWidth ? Math.min(MAX_HEIGHT, Math.round((width * viewport.height) / viewport.width)) : 0;
+  // Until the dialog has laid out (or if it measures 0 mid-animation), build at a small default
+  // width; the resize observer corrects it without a rebuild.
+  const width = measuredWidth > 0 ? measuredWidth : FALLBACK_WIDTH;
+  const height = Math.min(MAX_HEIGHT, Math.round((width * viewport.height) / viewport.width));
 
   useEffect(() => {
     let cancelled = false;
@@ -101,7 +104,7 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
   // keep-last-N control each produce a new redacted copy.
   useEffect(() => {
     const host = hostRef.current;
-    if (!chunk || !host || !hasWidth || events.length === 0) return;
+    if (!chunk || !host || events.length === 0) return;
     setReady(false);
     setPlaying(false);
     setCurrentMs(0);
@@ -159,11 +162,11 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
     };
     // `height` follows `width`; a resize is handled below without a rebuild.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chunk, events, hasWidth]);
+  }, [chunk, events]);
 
   useEffect(() => {
     const player = playerRef.current;
-    if (!player || width === 0) return;
+    if (!player) return;
     player.$set({ width, height });
     try {
       player.triggerResize();
@@ -200,7 +203,7 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
         data-playing={playing ? "true" : "false"}
         data-plays={plays}
         width="100%"
-        height={height > 0 ? `${height}px` : "120px"}
+        height={`${height}px`}
         overflow="hidden"
         borderWidth="1px"
         borderRadius="md"
