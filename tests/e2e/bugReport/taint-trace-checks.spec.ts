@@ -112,6 +112,14 @@ test("I3: a name inside data-report-unmask fails, naming the component", async (
   await tracer.attachContext(context);
   await page.goto(`/e2e-harness/bug-report-unmask?name=${encodeURIComponent(person.full)}`);
   await expect(page.getByTestId("unmask-harness-name")).toHaveText(person.full);
+  // Naming the component needs component annotation (`data-sentry-component`), which only the
+  // full build profile has. The PR tier builds with ci-fast, so it skips there; the nightly
+  // trace (BUG_REPORT_TRACE=1, full profile) must not.
+  const annotated = (await page.locator("[data-sentry-component]").count()) > 0;
+  if (!annotated && process.env.BUG_REPORT_TRACE !== "1" && process.env.BUG_REPORT_TRACE !== "true") {
+    test.skip(true, "needs a full-profile build (SENTRY_BUILD_PROFILE=full) for component names");
+  }
+  expect(annotated, "this build has no data-sentry-component annotations (build with the full profile)").toBe(true);
   await tracer.scanNow(context);
   await tracer.flush();
 
