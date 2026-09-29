@@ -7,6 +7,7 @@ import { installFetchHook } from "@/lib/bugReport/fetchHook";
 import { disarmIngest, ingestTrace, waitForServerRecordingFlag } from "@/lib/bugReport/ingestGate";
 import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePolicy";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
+import { isStaleBundleError } from "@/lib/staleBundleRecovery";
 import { createClient } from "@/utils/supabase/client";
 
 // supabase-js captures `fetch` when a client is constructed, so the pass-through hook has to
@@ -61,7 +62,7 @@ export default function BugReportRecorder() {
       disarmIngest();
       return;
     }
-    void (async () => {
+    (async () => {
       // With no recorder running, the course layout's server-side flag read is enough to stay
       // off; the query below runs only to confirm a start, or to catch the flag turned off.
       if (!recorder) {
@@ -90,7 +91,13 @@ export default function BugReportRecorder() {
         return;
       }
       startRecorder({ courseId, level: stillLevel });
-    })();
+    })().catch((error: unknown) => {
+      // The recorder chunk failed to load: a navigation cancelled it (WebKit fails the load) or
+      // the deployment changed under the tab. Recording stays off. Left unhandled, the
+      // ChunkLoadError would make StaleBundleRecovery reload the page on top of the navigation.
+      // Anything else stays an unhandled rejection, so Sentry still reports it.
+      if (!isStaleBundleError(error)) throw error;
+    });
   }, [pathname]);
 
   return null;

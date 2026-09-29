@@ -560,7 +560,8 @@ export function startRecorder(options: RecorderStartOptions): BugReportRecorder 
   setActiveRecorder(recorder);
   // E2E builds only (a build-time constant): the leak tests' redaction hook.
   if (process.env.BUG_REPORT_E2E === "true") {
-    void import("./redaction/testHook").then((m) => m.installRedactionTestHook());
+    // Caught so a chunk load that a navigation cancels doesn't reach StaleBundleRecovery.
+    import("./redaction/testHook").then((m) => m.installRedactionTestHook()).catch(() => {});
   }
   return recorder;
 }

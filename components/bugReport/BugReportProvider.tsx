@@ -38,8 +38,10 @@ export function BugReportProvider({ children, replay }: { children: ReactNode; r
     installErrorEventTracking();
     // E2E builds only: the upload test hook (see lib/bugReport/upload/e2eHook.ts). The
     // condition is a build-time constant, so other builds drop the import and its chunk.
+    // The catch matters: WebKit fails a chunk load that a navigation cancels, and an unhandled
+    // ChunkLoadError makes StaleBundleRecovery reload the page, on top of that navigation.
     if (process.env.BUG_REPORT_E2E === "true") {
-      void import("@/lib/bugReport/upload/e2eHook").then((m) => m.installUploadTestHook());
+      import("@/lib/bugReport/upload/e2eHook").then((m) => m.installUploadTestHook()).catch(() => {});
     }
   }, []);
 
