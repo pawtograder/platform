@@ -33,7 +33,7 @@ export async function redactedUploadBytes(page: Page, options: RedactionTestOpti
 export async function redactedReport(
   page: Page,
   options: RedactionTestOptions = {}
-): Promise<RedactionResult & { worker: boolean; freezeMs: number }> {
+): Promise<RedactionResult & { worker: boolean; freezeMs: number; totalMs: number; events: number }> {
   await waitForHook(page);
   return page.evaluate((o) => window.__bugReportRedaction!.redact(o), options);
 }

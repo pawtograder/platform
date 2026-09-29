@@ -57,7 +57,9 @@ async function unblockedOccurrences(page: Page, needle: string): Promise<string[
       if (!text.toLowerCase().includes(n.toLowerCase())) continue;
       const el = node.parentElement;
       if (!el || el.closest("[data-report-block]") || el.closest("script, style")) continue;
-      out.push(`${el.tagName.toLowerCase()}[data-sentry-component=${el.closest("[data-sentry-component]")?.getAttribute("data-sentry-component") ?? "?"}]: ${text.slice(0, 80)}`);
+      out.push(
+        `${el.tagName.toLowerCase()}[data-sentry-component=${el.closest("[data-sentry-component]")?.getAttribute("data-sentry-component") ?? "?"}]: ${text.slice(0, 80)}`
+      );
     }
     return out;
   }, needle);
@@ -136,7 +138,9 @@ test.describe("bug report redaction leak tests", () => {
     await page.addInitScript(() => {
       const w = window as unknown as { __csp: string[] };
       w.__csp = [];
-      document.addEventListener("securitypolicyviolation", (e) => w.__csp.push(`${e.violatedDirective} ${e.blockedURI}`));
+      document.addEventListener("securitypolicyviolation", (e) =>
+        w.__csp.push(`${e.violatedDirective} ${e.blockedURI}`)
+      );
     });
     const v = await openLeakHarness(page);
     // D10: a value typed into an unmasked input is recorded as an input event.
@@ -159,7 +163,10 @@ test.describe("bug report redaction leak tests", () => {
     expect(remainingHits, describeHits(remainingHits)).toEqual([]);
     expect(report.remaining.map((r) => r.value)).toContain("Email the student");
     for (const kind of ["text", "attribute", "url"]) {
-      expect(report.remaining.some((r) => r.kind === kind), `remaining has ${kind}`).toBe(true);
+      expect(
+        report.remaining.some((r) => r.kind === kind),
+        `remaining has ${kind}`
+      ).toBe(true);
     }
     // D17: the URL (whose query holds every canary) is uploaded with the canaries masked, and
     // the title, when the recording has it, shows only mask characters where the name was.

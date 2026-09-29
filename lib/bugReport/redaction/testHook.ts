@@ -14,12 +14,29 @@ export type RedactionTestOptions = { extraRedactions?: string[]; keepLastMs?: nu
 
 export type RedactionTestHook = {
   /** Freeze and redact; the full result, for assertions on `remaining` and `stats`. */
-  redact(options?: RedactionTestOptions): Promise<RedactionResult & { worker: boolean; freezeMs: number }>;
+  redact(
+    options?: RedactionTestOptions
+  ): Promise<RedactionResult & { worker: boolean; freezeMs: number; totalMs: number; events: number }>;
   /**
    * The bytes a report would upload, as a JSON string: the redacted events, the replay event
    * fields that come from the buffer, and the feedback payload.
    */
   uploadJson(options?: RedactionTestOptions): Promise<string>;
+  /** Timings and sizes only, for measurements on big buffers. */
+  measure(options?: RedactionTestOptions): Promise<RedactionMeasurement>;
+};
+
+export type RedactionMeasurement = {
+  stats: RedactionResult["stats"];
+  freezeMs: number;
+  /** Freeze, post to the worker, redact, and receive the result. */
+  totalMs: number;
+  events: number;
+  segments: number;
+  /** Characters of event JSON in the redacted buffer. */
+  size: number;
+  remaining: number;
+  worker: boolean;
 };
 
 declare global {
@@ -39,12 +56,27 @@ async function redact(options: RedactionTestOptions = {}) {
     extraRedactions: options.extraRedactions,
     keepLastMs: options.keepLastMs
   });
-  return { ...result, worker: typeof Worker !== "undefined", freezeMs };
+  const totalMs = performance.now() - t0;
+  const events = result.buffer.segments.reduce((n, s) => n + s.events.length, 0);
+  return { ...result, worker: typeof Worker !== "undefined", freezeMs, totalMs, events };
 }
 
 export function installRedactionTestHook(): void {
   window.__bugReportRedaction = {
     redact,
+    async measure(options = {}) {
+      const r = await redact(options);
+      return {
+        stats: r.stats,
+        freezeMs: r.freezeMs,
+        totalMs: r.totalMs,
+        events: r.events,
+        segments: r.buffer.segments.length,
+        size: r.buffer.size,
+        remaining: r.remaining.length,
+        worker: r.worker
+      };
+    },
     async uploadJson(options = {}) {
       const { buffer } = await redact(options);
       return JSON.stringify({

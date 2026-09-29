@@ -404,8 +404,7 @@ class Walker {
         }
       } else visit(block);
       if (pieces.length === 0) continue;
-      const kind: RemainingKind =
-        block.tagName === "title" ? "title" : block.tagName === "textarea" ? "input" : "text";
+      const kind: RemainingKind = block.tagName === "title" ? "title" : block.tagName === "textarea" ? "input" : "text";
       this.jobs.push({ text, bounded: false, pieces, kind });
     }
     this.dirty = new Set();
