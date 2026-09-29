@@ -18,7 +18,7 @@ import type { RoutePolicyEntry } from "@/lib/bugReport/routePolicy";
 import { addDays } from "date-fns";
 import { insertAssignment, insertHelpRequest, loginAsUser, supabase, type TestingUser } from "../TestingUtils";
 import { canarySentence, registerCanary, resolveCanary } from "./canaryRegistry";
-import { describeHits, scanForCanaries, type CanaryHit } from "./canaries";
+import { describeHits, scanForCanaries } from "./canaries";
 import { seedCanaryClass, type CanarySeed } from "./canarySeed";
 import { enableBugReports, waitForRecorderState } from "./recorderTestUtils";
 import { redactedUploadBytes } from "./report";
@@ -144,20 +144,8 @@ async function expectRenderedCanariesTainted(page: Page, minHits = 1): Promise<S
 async function expectNoCanariesUploaded(page: Page): Promise<void> {
   await settle(page);
   const bytes = new TextDecoder().decode(await redactedUploadBytes(page));
-  const hits = scanForCanaries(bytes, seed.registry).filter((h) => !numberFragment(bytes, h));
+  const hits = scanForCanaries(bytes, seed.registry);
   expect(hits, describeHits(hits)).toEqual([]);
-}
-
-/**
- * A grade canary such as "72.52" found inside a longer number (an SVG path's "M572.52 241.4") is
- * a coincidence, not the grade: the scan matches substrings. Only grade hits with a digit, or a
- * digit-and-dot, right next to them are dropped.
- */
-function numberFragment(text: string, hit: CanaryHit): boolean {
-  if (hit.entry.kind !== "grade") return false;
-  const before = text[hit.offset - 1] ?? "";
-  const after = text[hit.offset + hit.matched.length] ?? "";
-  return /[\d.]/.test(before) || /\d/.test(after);
 }
 
 /** The seeded discussion thread's subject, which the discussion page lists once it has loaded. */
