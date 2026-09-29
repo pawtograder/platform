@@ -26,7 +26,7 @@ async function instructorCreateAutograderGroup(
   scope?.setTag("function", "assignment-group-instructor-create");
   scope?.setTag("course_id", course_id.toString());
   scope?.setTag("assignment_id", assignment_id.toString());
-  scope?.setTag("name", name);
+  scope?.setTag("group_name", name);
   const { supabase, enrollment } = await assertUserIsInstructor(course_id, req.headers.get("Authorization")!);
   const trimmedName = name.trim();
   if (trimmedName.length === 0) {
