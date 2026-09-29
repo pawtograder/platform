@@ -6,7 +6,7 @@
  * NEXT_PUBLIC_SENTRY_DSN the browser SDK accepts (e.g. `http://pawtogradere2e@127.0.0.1:54399/1`).
  */
 /* eslint-disable no-console -- measurements printed for the run log */
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "../../global-setup";
 import { assertReflowAt320, assertStudentPageAccessible, tabSequence } from "../axeStudentA11y";
 import { createClass, createUsersInClass, loginAsUser, type TestingUser } from "../TestingUtils";
@@ -43,6 +43,18 @@ const REGISTRY: CanaryRegistry = new Map([
 ]);
 
 const decoder = new TextDecoder();
+
+/** Plays the preview from the start to its end and returns the rebuilt page's text there. */
+async function playPreviewToEnd(dialog: Locator): Promise<string> {
+  const play = dialog.getByTestId("report-bug-replay-play");
+  const player = dialog.getByTestId("report-bug-replay-player");
+  await expect(player).toHaveAttribute("data-playing", "false");
+  const plays = Number(await player.getAttribute("data-plays"));
+  await play.click();
+  await expect(player).toHaveAttribute("data-plays", String(plays + 1));
+  await expect(player).toHaveAttribute("data-playing", "false", { timeout: 60_000 });
+  return (await previewText(dialog)) ?? "";
+}
 const uploadText = (bytes: Uint8Array[]) => bytes.map((b) => decoder.decode(b)).join("\n");
 
 let course: Course;
@@ -127,7 +139,7 @@ test.describe("Report a bug dialog, replay review", () => {
       expect(await group.getByRole("listitem").count()).toBeGreaterThan(0);
     }
     const strings = await remainingStrings(dialog);
-    expect(strings.map((s) => s.value)).toContain("Email the student");
+    expect(strings.map((s) => s.value)).toContain("Assigned to: nobody yet");
     const hits = scanForCanaries(JSON.stringify(strings), REGISTRY);
     expect(hits, describeHits(hits)).toEqual([]);
     // The player's accessible name points at the list as its text alternative.
@@ -139,14 +151,17 @@ test.describe("Report a bug dialog, replay review", () => {
   test("E3: a redacted string is gone from the preview, the list, and the upload", async ({ page }) => {
     const capture = await captureTunnel(page);
     await openHarness(page);
-    const target = "Email the student";
+    const target = "Assigned to: nobody yet";
     const dialog = await openReportDialog(page);
     await waitForReviewReady(dialog);
-    await expect.poll(async () => (await previewText(dialog)) ?? "").toContain(target);
+    // The first frame may predate the fixture's render; its end has it.
+    expect(await playPreviewToEnd(dialog)).toContain(target);
 
     await redactInReview(dialog, target);
-    await expect.poll(async () => (await previewText(dialog)) ?? "", { timeout: 20_000 }).not.toContain(target);
-    await expect.poll(async () => (await previewText(dialog)) ?? "").toContain("*".repeat(target.length));
+    const after = await playPreviewToEnd(dialog);
+    expect(after).not.toContain(target);
+    expect(after).toContain("*".repeat(target.length));
+    expect(after).toContain("Unmask harness");
 
     await dialog.getByRole("textbox", { name: /What happened/ }).fill("E3 report");
     await dialog.getByRole("button", { name: "Submit" }).click();
@@ -156,7 +171,7 @@ test.describe("Report a bug dialog, replay review", () => {
     const [feedback] = feedbackEnvelopes(capture);
     expect(feedback.event.contexts?.feedback?.replay_id).toBe(segments[0].event.replay_id);
     const text = uploadText(capture.uploadedBytes());
-    expect(text).toContain("Profile link");
+    expect(text).toContain("Unmask harness");
     expect(text).not.toContain(target);
   });
 
@@ -248,7 +263,7 @@ test.describe("Report a bug dialog, replay review", () => {
     await page.keyboard.type("keyboard replay report");
     await waitForReviewReady(dialog);
 
-    const target = "Profile link";
+    const target = "attributes";
     const redactButton = dialog.getByRole("button", { name: `Redact "${target}"` });
     let reached = false;
     for (let i = 0; i < 60 && !reached; i++) {
@@ -279,7 +294,7 @@ test.describe("Report a bug dialog, replay review", () => {
     expect(feedback.event.contexts?.feedback?.message).toBe("keyboard replay report");
     expect(replaySegments(capture).length).toBeGreaterThan(0);
     const text = uploadText(capture.uploadedBytes());
-    expect(text).toContain("Email the student");
+    expect(text).toContain("Assigned to: nobody yet");
     expect(text).not.toContain(target);
   });
 
@@ -288,7 +303,11 @@ test.describe("Report a bug dialog, replay review", () => {
     await openHarness(page);
     const origin = new URL(baseURL!).origin;
     const during: { url: string; method: string; hasBody: boolean }[] = [];
-    page.on("request", (r) => during.push({ url: r.url(), method: r.method(), hasBody: r.postDataBuffer() !== null }));
+    // Requests the player's iframe makes (the rebuilt page's stylesheets, fonts, images).
+    page.on("request", (r) => {
+      if (r.frame() === page.mainFrame()) return;
+      during.push({ url: r.url(), method: r.method(), hasBody: r.postDataBuffer() !== null });
+    });
     // E2E builds send the CSP report-only; the browser still logs each violation, from any frame.
     const csp: string[] = [];
     page.on("console", (m) => {
@@ -298,16 +317,12 @@ test.describe("Report a bug dialog, replay review", () => {
     });
     const dialog = await openReportDialog(page);
     await waitForReviewReady(dialog);
-    await dialog.getByTestId("report-bug-replay-play").click();
-    await expect(dialog.getByTestId("report-bug-replay-play")).toHaveText(/Pause preview/);
+    await playPreviewToEnd(dialog);
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toBeHidden();
 
-    const offOrigin = during.filter((r) => !r.url.startsWith(origin) && !r.url.startsWith("data:"));
-    // Supabase (auth refresh, realtime) is the app's own traffic, not the player's.
-    const supabase = process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL).origin : "";
-    expect(offOrigin.filter((r) => !supabase || !r.url.startsWith(supabase))).toEqual([]);
-    expect(during.filter((r) => r.url.includes("/api/tunnel"))).toEqual([]);
+    expect(during.filter((r) => !r.url.startsWith(origin) && !r.url.startsWith("data:"))).toEqual([]);
+    expect(during.filter((r) => r.method !== "GET" || r.hasBody)).toEqual([]);
     expect(csp).toEqual([]);
     console.log(`[bug-report preview requests] ${JSON.stringify(during.map((r) => `${r.method} ${r.url}`))}`);
     expect(capture.items("replay_recording")).toHaveLength(0);

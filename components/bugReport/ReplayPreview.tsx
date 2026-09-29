@@ -48,11 +48,14 @@ export type ReplayPreviewProps = {
  */
 export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPreviewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Player | null>(null);
   const [chunk, setChunk] = useState<PlayerChunk | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [width, setWidth] = useState(0);
   const [playing, setPlaying] = useState(false);
+  /** Times playback started, for tests waiting on a whole play-through. */
+  const [plays, setPlays] = useState(0);
   const [currentMs, setCurrentMs] = useState(0);
   const [ready, setReady] = useState(false);
   const onFirstFrameRef = useRef(onFirstFrame);
@@ -84,9 +87,10 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
 
   // Track the width available to the preview, so it scales down to the dialog (and to 320 px).
   useEffect(() => {
-    const host = hostRef.current?.parentElement;
+    const host = wrapRef.current;
     if (!host) return;
-    const measure = () => setWidth(Math.floor(host.clientWidth));
+    // Less the preview's 1px border on each side.
+    const measure = () => setWidth(Math.max(0, Math.floor(host.clientWidth) - 2));
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(host);
@@ -130,6 +134,9 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
     };
     replayer.on("fullsnapshot-rebuilded", onRebuilt);
     replayer.on("finish", () => setPlaying(false));
+    // Show the first frame now. The replayer would do it on a timer of its own, taken from a
+    // throwaway iframe, which a fake clock (Playwright's page.clock) never runs.
+    replayer.pause(0);
     const timer = window.setInterval(() => {
       try {
         setCurrentMs(replayer.getCurrentTime());
@@ -173,11 +180,12 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
       const at = replayer.getCurrentTime();
       replayer.play(at >= totalMs ? 0 : at);
       setPlaying(true);
+      setPlays((n) => n + 1);
     }
   }, [playing, totalMs]);
 
   return (
-    <Box>
+    <Box ref={wrapRef} width="100%" minW={0}>
       <Box
         role="img"
         aria-label="Preview of the redacted recording. The list of text in the recording below describes what it shows."
@@ -185,6 +193,8 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
         data-testid="report-bug-replay-player"
         data-ready={ready ? "true" : "false"}
         data-event-count={events.length}
+        data-playing={playing ? "true" : "false"}
+        data-plays={plays}
         width="100%"
         height={height > 0 ? `${height}px` : "120px"}
         overflow="hidden"
