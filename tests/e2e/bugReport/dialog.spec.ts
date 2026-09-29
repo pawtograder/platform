@@ -6,7 +6,10 @@ import { createClass, createUsersInClass, loginAsUser, TestingUser } from "../Te
 import {
   assertNoReplayUploaded,
   captureTunnel,
+  describeHits,
   payloadJsonOf,
+  scanForCanaries,
+  type CanaryRegistry,
   type CapturedEnvelope,
   type TunnelCapture
 } from "./index";
@@ -218,6 +221,50 @@ test.describe("Report a bug dialog (no replay)", () => {
     expect(feedback).toHaveLength(1);
     expect(feedback[0].contexts.feedback.message).toBe("keyboard report");
     expect(feedback[0].tags?.contact_ok).toBe("true");
+  });
+
+  test("the feedback carries none of the scope's unredacted data (breadcrumbs, extra, request)", async ({ page }) => {
+    const canary = "Quillon Vandermeersch";
+    const registry: CanaryRegistry = new Map([[canary, { kind: "name", column: "e2e.scope_canary", rowId: 1 }]]);
+    const tunnel = await captureTunnel(page);
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/assignments`);
+    await expect(page.locator("#main-content")).toBeVisible();
+    // A console message and a click on an element labelled with the canary: both become SDK
+    // breadcrumbs on the scope.
+    await page.evaluate((name) => {
+      // eslint-disable-next-line no-console
+      console.log("loaded profile", name);
+      const button = document.createElement("button");
+      button.setAttribute("aria-label", name);
+      button.textContent = "x";
+      button.id = "scope-canary-button";
+      document.getElementById("main-content")!.appendChild(button);
+    }, canary);
+    await page.locator("#scope-canary-button").click();
+    // Positive control: an error event sent now does carry those breadcrumbs.
+    await page.evaluate(() => {
+      setTimeout(() => {
+        throw new Error("E2E scope breadcrumb control");
+      }, 0);
+    });
+    await expect.poll(() => errorEventsOf(tunnel).length).toBeGreaterThan(0);
+    const errorItem = tunnel.items("event").at(-1)!;
+    expect(scanForCanaries(decoder.decode(errorItem.payload), registry).length).toBeGreaterThan(0);
+
+    const dialog = await openFromUserMenu(page);
+    await dialog.getByRole("textbox", { name: /What happened/ }).fill("scope data report");
+    await dialog.getByRole("button", { name: "Submit" }).click();
+    await expect(dialog.getByTestId("report-bug-sent")).toBeVisible();
+
+    const [item] = tunnel.items("feedback");
+    const feedback = payloadJsonOf<Record<string, unknown>>(item)!;
+    expect(feedback).not.toHaveProperty("breadcrumbs");
+    expect(feedback).not.toHaveProperty("extra");
+    expect(feedback).not.toHaveProperty("request");
+    expect(feedback.user).toEqual({ id: expect.any(String), ip_address: null });
+    const hits = scanForCanaries(decoder.decode(item.payload), registry);
+    expect(hits, describeHits(hits)).toEqual([]);
   });
 
   test("429: the dialog says try again later and keeps the draft", async ({ page }) => {

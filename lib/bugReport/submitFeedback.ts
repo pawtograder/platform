@@ -139,6 +139,12 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
   // Pick the event ID ourselves (scope.captureEvent honors hint.event_id) so the listener
   // below is registered for the right event before anything is sent.
   const feedbackId = newEventId();
+  // Everything the scope merges into the event (breadcrumbs, extra, request, other contexts,
+  // scope tags and user fields) has not been through redaction. Strip it just before the
+  // envelope is built; `beforeSendFeedback` fires before the scope is applied, so it can't.
+  const stopScrubbing = client.on("beforeSendEvent", (event: Event) => {
+    if (event.event_id === feedbackId) scrubFeedbackEvent(event, tags);
+  });
   let stopListening: () => void = () => {};
   const sent = new Promise<SendResponse | undefined>((resolve) => {
     stopListening = client.on("afterSendEvent", (event: Event, response: SendResponse | undefined) => {
@@ -170,6 +176,7 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
   ]);
   clearTimeout(timer);
   stopListening();
+  stopScrubbing();
 
   if (response === "timeout") {
     return { status: "error", message: "The report did not go through. Check your connection and try again." };
@@ -186,6 +193,29 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
     return { status: "sent", feedbackId, replay: replayState };
   }
   return { status: "error", message: "The report did not go through. Check your connection and try again." };
+}
+
+/** Contexts the feedback event keeps: its own, trace linking, and the SDK's device facts. */
+const FEEDBACK_CONTEXTS = new Set(["feedback", "trace", "replay", "os", "browser", "device"]);
+
+/**
+ * Reduces a feedback event to what the report itself supplies: the feedback context (message,
+ * redacted page URL, replay_id), the report's tags, the user's ID, and trace, replay and device
+ * contexts. The redacted breadcrumbs travel in the replay instead. Exported for unit tests.
+ */
+export function scrubFeedbackEvent(event: Event, tags: Record<string, string>): void {
+  delete event.breadcrumbs;
+  delete event.extra;
+  delete event.request;
+  if (event.contexts) {
+    for (const key of Object.keys(event.contexts)) {
+      if (!FEEDBACK_CONTEXTS.has(key)) delete event.contexts[key];
+    }
+  }
+  event.tags = { ...tags };
+  // As on the replay events: the ID only, and no inferred IP.
+  const id = event.user?.id;
+  event.user = { ...(id !== undefined ? { id: String(id) } : {}), ip_address: null };
 }
 
 function newEventId(): string {
