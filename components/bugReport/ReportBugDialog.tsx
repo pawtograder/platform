@@ -116,7 +116,10 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
         if (!e.open && submitting) return;
         onOpenChange(e.open);
       }}
-      initialFocusEl={() => (sent ? doneRef.current : descriptionRef.current)}
+      // Whichever exists: Close once sent, else the description. The focus trap also calls this
+      // when the focused element leaves the DOM (Submit swapped for Close, a redacted string's
+      // button), sometimes with a stale closure, and throws if it gets null.
+      initialFocusEl={() => doneRef.current ?? descriptionRef.current ?? submitRef.current}
       closeOnInteractOutside={!submitting}
       size={{ base: "full", md: replay ? "lg" : "md" }}
       scrollBehavior="inside"

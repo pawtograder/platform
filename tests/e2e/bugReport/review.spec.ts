@@ -269,7 +269,7 @@ test.describe("Report a bug dialog, replay review", () => {
     await page.keyboard.type("keyboard replay report");
     await waitForReviewReady(dialog);
 
-    const target = "attributes";
+    const target = "Unmask harness";
     const redactButton = dialog.getByRole("button", { name: `Redact ${target}`, exact: true });
     let reached = false;
     for (let i = 0; i < 60 && !reached; i++) {
@@ -300,7 +300,7 @@ test.describe("Report a bug dialog, replay review", () => {
     expect(feedback.event.contexts?.feedback?.message).toBe("keyboard replay report");
     expect(replaySegments(capture).length).toBeGreaterThan(0);
     const text = uploadText(capture.uploadedBytes());
-    expect(text).toContain("Unmask harness");
+    expect(text).toContain("Email the student");
     expect(text).not.toContain(target);
   });
 
@@ -320,7 +320,9 @@ test.describe("Report a bug dialog, replay review", () => {
       const text = m.text();
       // Playwright's own evaluate calls trip script-src 'unsafe-eval' (see utils/csp.ts).
       // "... is ignored when delivered in a report-only policy" is about the policy, not a violation.
+      // WebKit ignores a report-only policy without report-to and says so; that isn't a violation either.
       if (!/Content Security Policy/i.test(text) || /ignored when delivered in a report-only/i.test(text)) return;
+      if (/report-only mode, but does not specify/i.test(text)) return;
       if (!/evaluate a string as JavaScript/i.test(text)) csp.push(text);
     });
     const dialog = await openReportDialog(page);

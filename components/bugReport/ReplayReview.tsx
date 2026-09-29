@@ -8,7 +8,7 @@ import type { RedactionResult, RemainingKind, RemainingString } from "@/lib/bugR
 import type { ReplayUploadResult, ReportReplayUpload } from "@/lib/bugReport/submitFeedback";
 import type { BugReportRecorder, FrozenBuffer, RecordedEvent } from "@/lib/bugReport/types";
 import { Box, Heading, List, NativeSelect, Progress, Stack, Text } from "@chakra-ui/react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ReplayPreview } from "./ReplayPreview";
 
 /**
@@ -334,10 +334,12 @@ function RemainingList({
   );
 
   // Put focus back after the button that had it went away: on the next string's button, or
-  // the list heading when none are left.
-  useEffect(() => {
+  // the list heading when none are left. A layout effect, so it runs before the dialog's focus
+  // trap notices the removal and sends focus to the description.
+  useLayoutEffect(() => {
     const index = focusIndex.current;
     if (index === null) return;
+    focusIndex.current = null;
     const active = document.activeElement;
     if (active && active !== document.body && listRef.current?.contains(active)) return;
     const buttons = listRef.current?.querySelectorAll<HTMLButtonElement>("button[data-redact]") ?? [];
