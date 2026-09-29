@@ -155,6 +155,7 @@ export function armIngest(): void {
   if (armed || bugReportIngest.sink || typeof window === "undefined") return;
   installFetchHook();
   armed = { unsubscribe: onFetch(onPreStartFetch), queue: [], dropped: 0 };
+  ingestTrace("arm");
 }
 
 /** Drop the buffer unread (the flag is off, or the route isn't listed after all). */
@@ -162,6 +163,20 @@ export function disarmIngest(): void {
   if (!armed) return;
   armed.unsubscribe();
   armed = null;
+  ingestTrace("disarm");
+}
+
+declare global {
+  interface Window {
+    /** E2E builds only: when the pre-start buffer was armed, disarmed, and drained. */
+    __bugReportIngestTrace?: { event: string; at: number }[];
+  }
+}
+
+/** Records an arming event for the E2E tests. A build-time no-op outside E2E builds. */
+export function ingestTrace(event: string): void {
+  if (process.env.BUG_REPORT_E2E !== "true" || typeof window === "undefined") return;
+  (window.__bugReportIngestTrace ??= []).push({ event, at: Math.round(performance.now()) });
 }
 
 export function isIngestArmed(): boolean {
@@ -172,6 +187,7 @@ export function isIngestArmed(): boolean {
 export function takeBufferedResponses(): { responses: BufferedResponse[]; dropped: number } {
   if (!armed) return { responses: [], dropped: 0 };
   const { queue, dropped } = armed;
+  ingestTrace(`take ${queue.length}`);
   disarmIngest();
   return { responses: queue, dropped };
 }

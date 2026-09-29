@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { armIngest } from "@/lib/bugReport/ingestGate";
+import { armIngest, ingestTrace } from "@/lib/bugReport/ingestGate";
 import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePolicy";
 
 /**
@@ -18,6 +18,7 @@ import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePo
  */
 export function BugReportIngestArm({ courseId, recording }: { courseId: number; recording: boolean }) {
   const pathname = usePathname();
+  ingestTrace(`render ${recording}`);
   if (recording && courseIdFromPathname(pathname) === courseId && recordingLevelFor(pathname) !== null) {
     armIngest();
   }

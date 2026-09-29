@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { getActiveRecorder } from "@/lib/bugReport/activeRecorder";
 import { installFetchHook } from "@/lib/bugReport/fetchHook";
-import { disarmIngest } from "@/lib/bugReport/ingestGate";
+import { disarmIngest, ingestTrace } from "@/lib/bugReport/ingestGate";
 import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePolicy";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { createClient } from "@/utils/supabase/client";
@@ -60,6 +60,7 @@ export default function BugReportRecorder() {
     void (async () => {
       const enabled = await recordingFlagEnabled(courseId).catch(() => false);
       const active = getActiveRecorder();
+      ingestTrace(`flag ${enabled}`);
       if (!enabled) {
         disarmIngest();
         if (active && active.getCourseId() === courseId) active.stop();

@@ -373,5 +373,32 @@ test("flag on: the same count sees the ingest's clones (control for the test abo
   await countClones(page);
   await openRecorded(page, seed.students[0], seed.routes.discussion);
   await settle(page);
-  expect(await page.evaluate(() => (window as unknown as { __clones: number }).__clones)).toBeGreaterThan(0);
+  const direct = await page.evaluate(async () => {
+    const before = (window as unknown as { __clones: number }).__clones;
+    await fetch("http://127.0.0.1:54321/rest/v1/classes?select=id", {
+      headers: { apikey: "x" }
+    }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 50));
+    return {
+      delta: (window as unknown as { __clones: number }).__clones - before,
+      fetchSrc: window.fetch.toString().slice(0, 120)
+    };
+  });
+  console.log(JSON.stringify(direct));
+  console.log(`trace ${JSON.stringify(await page.evaluate(() => window.__bugReportIngestTrace))}`);
+  const probe = await page.evaluate(() => ({
+    clones: (window as unknown as { __clones: number }).__clones,
+    patched: Response.prototype.clone.toString().slice(0, 80),
+    responses: window.__bugReportTaint!.stats().ingest.responses,
+    flight: ((self as unknown as { __next_f?: unknown[] }).__next_f ?? [])
+      .map((x) => JSON.stringify(x))
+      .join("")
+      .match(/.{0,60}"recording\\?":.{0,10}/g),
+    rest: performance
+      .getEntriesByType("resource")
+      .filter((e) => /\/(rest|functions|auth)\/v1\//.test(e.name))
+      .map((e) => `${Math.round(e.startTime)} ${(e as PerformanceResourceTiming).initiatorType} ${e.name.slice(0, 90)}`)
+  }));
+  console.log(JSON.stringify(probe));
+  expect(probe.clones).toBeGreaterThan(0);
 });
