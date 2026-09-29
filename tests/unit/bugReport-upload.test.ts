@@ -225,7 +225,9 @@ describe("planSegments", () => {
 
 describe("uploadReplay", () => {
   it("sends one replay_event + replay_recording envelope per segment, in order, with the replay fields", async () => {
-    (SentryMock as unknown as { __scope: { setUser: (u: object) => void; addBreadcrumb: (b: object) => void } }).__scope.setUser({
+    (
+      SentryMock as unknown as { __scope: { setUser: (u: object) => void; addBreadcrumb: (b: object) => void } }
+    ).__scope.setUser({
       id: "user-1",
       email: "leak@example.com",
       username: "leaky"

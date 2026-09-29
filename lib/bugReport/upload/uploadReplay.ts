@@ -158,7 +158,12 @@ async function buildReplayEvent(
 
 function replayEnvelope(client: Client, event: ReplayEvent, payload: Uint8Array): ReplayEnvelope {
   return createEnvelope<ReplayEnvelope>(
-    createEventEnvelopeHeaders(event, getSdkMetadataForEnvelopeHeader(event), client.getOptions().tunnel, client.getDsn()),
+    createEventEnvelopeHeaders(
+      event,
+      getSdkMetadataForEnvelopeHeader(event),
+      client.getOptions().tunnel,
+      client.getDsn()
+    ),
     [
       [{ type: "replay_event" }, event],
       [{ type: "replay_recording", length: payload.length }, payload]
