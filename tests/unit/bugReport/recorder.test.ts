@@ -123,6 +123,37 @@ describe("console breadcrumbs", () => {
   });
 });
 
+describe("taint blocks", () => {
+  const block = (names: string[]) => JSON.stringify({ v: 1, values: { name: names } });
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("reads a block that mounts after the start, and one whose text changes in place", async () => {
+    const r = start();
+    const el = document.createElement("script");
+    el.type = "application/json";
+    el.id = "report-taint";
+    el.textContent = block(["Mounted Quellmar"]);
+    document.body.appendChild(el);
+    await tick();
+    expect(getTaintSet().has("Mounted Quellmar")).toBe(true);
+
+    // The same text node, new data (React updating the block's text).
+    (el.firstChild as Text).data = block(["Updated Vrexholm"]);
+    await tick();
+    expect(getTaintSet().has("Updated Vrexholm")).toBe(true);
+
+    // The text node swapped for another.
+    el.textContent = block(["Replaced Tazmerin"]);
+    await tick();
+    expect(getTaintSet().has("Replaced Tazmerin")).toBe(true);
+    expect(r.getState()).toBe("recording");
+  });
+});
+
 describe("snapshots", () => {
   it("keeps the segment when rrweb logs from inside a checkout snapshot", () => {
     const r = start();

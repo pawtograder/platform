@@ -261,6 +261,13 @@ class Recorder implements BugReportRecorder {
     const selector = `script#${TAINT_BLOCK_ID}`;
     const observer = new MutationObserver((records) => {
       for (const record of records) {
+        // A block whose text React replaced in place: a text node's data changed, or its
+        // children were swapped.
+        const target = record.target instanceof Element ? record.target : record.target.parentElement;
+        if (target?.closest(selector)) {
+          readTaintBlocks(document, getTaintSet());
+          return;
+        }
         for (const node of Array.from(record.addedNodes)) {
           if (node instanceof Element && (node.matches(selector) || node.querySelector(selector))) {
             readTaintBlocks(document, getTaintSet());
@@ -269,7 +276,7 @@ class Recorder implements BugReportRecorder {
         }
       }
     });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer.observe(document.documentElement, { childList: true, characterData: true, subtree: true });
     this.cleanups.push(() => observer.disconnect());
   }
 
