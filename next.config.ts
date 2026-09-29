@@ -60,6 +60,12 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/**": ["./cache-handler.cjs"]
   },
+  env: {
+    // Build-time constant for the bug reporter's E2E-only hooks (the localStorage route
+    // policy and the recorder harness page). Client bundles can't read E2E_ENABLE, so it is
+    // inlined here; a build without E2E_ENABLE=true compiles those hooks out.
+    BUG_REPORT_E2E: process.env.E2E_ENABLE === "true" ? "true" : "false"
+  },
   experimental: {
     optimizePackageImports,
     ...(useWebpackBuildWorker ? { webpackBuildWorker: true } : {}),

@@ -11,7 +11,8 @@ export const COURSE_FEATURES = {
   POLLS: "polls",
   GRADEBOOK_WHAT_IF: "gradebook-what-if",
   SUGGESTED_DUE_DATE: "suggested-due-date",
-  DISCORD_STUDENT_JOIN: "discord-student-join"
+  DISCORD_STUDENT_JOIN: "discord-student-join",
+  BUG_REPORT_RECORDING: "bug-report-recording"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -121,6 +122,16 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: false,
     switchLabel: "Let students join this course's Discord server",
     ariaLabel: "Enable student Discord invitations for this course"
+  },
+  {
+    name: COURSE_FEATURES.BUG_REPORT_RECORDING,
+    title: "Bug report recordings",
+    description:
+      "When on, students and staff can attach a redacted recording of their last few minutes on supported pages when they report a bug. Nothing is uploaded unless they submit a report.",
+    defaultWhenMissing: false,
+    navAffectsStaff: false,
+    switchLabel: "Allow redacted recordings in bug reports",
+    ariaLabel: "Enable bug report recordings for this course"
   }
 ];
 
