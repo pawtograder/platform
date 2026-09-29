@@ -154,6 +154,26 @@ describe("submitReport with a replay (package 6 contract)", () => {
     expect(event.contexts.feedback.replay_id).toBe("r".repeat(32));
   });
 
+  it("hands the report tags to the upload and flags a replay with a gap", async () => {
+    setReportRoute("/course/[course_id]/gradebook");
+    setReportIdentity({ classId: 3, role: "grader" });
+    const upload = jest.fn(async (tags: Record<string, string>) => {
+      void tags;
+      return { ok: true as const, replayId: "r".repeat(32), dropped: { events: 4, ms: 1200 } };
+    });
+    await submitReport({ description: "x", contactOk: true, replay: { upload } });
+    expect(upload.mock.calls[0][0]).toMatchObject({
+      class_id: "3",
+      role: "grader",
+      route: "/course/[course_id]/gradebook",
+      release: "abc1234",
+      contact_ok: "true"
+    });
+    const event = sentEvents[0] as { tags: Record<string, string> };
+    expect(event.tags.replay_truncated).toBe("true");
+    expect(upload.mock.calls[0][0]).not.toHaveProperty("replay_truncated");
+  });
+
   it("stops without feedback when the replay upload is rate limited", async () => {
     const result = await submitReport({
       description: "x",
