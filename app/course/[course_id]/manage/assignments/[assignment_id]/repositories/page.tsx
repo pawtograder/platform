@@ -1,7 +1,6 @@
 "use client";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
-import { useBugReport } from "@/components/bugReport/BugReportProvider";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
@@ -47,6 +46,7 @@ import { FaExternalLinkAlt, FaTimes } from "react-icons/fa";
 import { useList, useOne } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { TZDate } from "@date-fns/tz";
+import { SyncReportIssuesLink } from "./SyncReportIssuesLink";
 import { computeSyncStatus, type RepositoryRow, type SyncData } from "./sync-status-utils";
 
 function ResendOrgInvitation({ userId, classId }: { userId?: string; classId?: number }) {
@@ -710,7 +710,6 @@ function HandoutCommitHistory({ assignmentId }: { assignmentId: number }) {
 const joinedSelect = "*, assignment_groups(*), profiles(*), user_roles(*)";
 
 export default function RepositoriesPage() {
-  const { openReportDialog } = useBugReport();
   const { assignment_id, course_id } = useParams();
   const courseController = useCourseController();
 
@@ -1083,21 +1082,7 @@ export default function RepositoriesPage() {
             which will create a pull request to the student repository, auto-merging if there are no conflicts, which
             will create a new submission. This procedure is also heavily rate-limited by GitHub, working at a rate of no
             more than 50 pull requests per-minute per-class. The &quot;Sync&quot; feature is currently in beta, and may
-            not support all use cases; please do not rely heavily on it, and{" "}
-            <Button
-              variant="plain"
-              size="sm"
-              h="auto"
-              p={0}
-              minW={0}
-              verticalAlign="baseline"
-              textDecoration="underline"
-              color="fg.info"
-              onClick={() => openReportDialog()}
-            >
-              report any issues
-            </Button>
-            .
+            not support all use cases; please do not rely heavily on it, and <SyncReportIssuesLink />.
           </Text>
         </Box>
         <HandoutCommitHistory assignmentId={Number(assignment_id)} />
