@@ -25,6 +25,12 @@ describe("nameVariants", () => {
     expect(nameVariants("Canary, Jane").sort()).toEqual(["canary, jane", "jane", "canary", "jane canary"].sort());
   });
 
+  it("never keeps a digit-only token on its own", () => {
+    const got = nameVariants("R Student 000");
+    expect(got).not.toContain("000");
+    expect(got).toContain("r student 000");
+  });
+
   it("drops tokens under 3 characters and initials", () => {
     expect(nameVariants("Al B. Canary").sort()).toEqual(
       ["al b. canary", "canary", "al canary", "canary, al", "canary, al b."].sort()
