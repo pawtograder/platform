@@ -1654,6 +1654,44 @@ export type Database = {
           }
         ];
       };
+      bug_report_retention_purges: {
+        Row: {
+          class_id: number;
+          first_purged_at: string;
+          last_feedback_deleted: number;
+          last_purged_at: string;
+          last_replays_deleted: number;
+          total_feedback_deleted: number;
+          total_replays_deleted: number;
+        };
+        Insert: {
+          class_id: number;
+          first_purged_at?: string;
+          last_feedback_deleted?: number;
+          last_purged_at?: string;
+          last_replays_deleted?: number;
+          total_feedback_deleted?: number;
+          total_replays_deleted?: number;
+        };
+        Update: {
+          class_id?: number;
+          first_purged_at?: string;
+          last_feedback_deleted?: number;
+          last_purged_at?: string;
+          last_replays_deleted?: number;
+          total_feedback_deleted?: number;
+          total_replays_deleted?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "bug_report_retention_purges_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: true;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       calendar_events: {
         Row: {
           calendar_type: string;
@@ -13102,6 +13140,18 @@ export type Database = {
           notification_emails_queue_size: number;
         }[];
       };
+      get_bug_report_retention_purge_candidates: {
+        Args: {
+          p_grace_days: number;
+          p_limit: number;
+          p_lookback_days: number;
+          p_resweep_after_hours: number;
+        };
+        Returns: {
+          class_id: number;
+          end_date: string;
+        }[];
+      };
       get_circuit_breaker_statuses: {
         Args: never;
         Returns: {
@@ -13660,6 +13710,10 @@ export type Database = {
         };
         Returns: undefined;
       };
+      invoke_bug_report_retention_purge_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_calendar_sync_background_task: { Args: never; Returns: undefined };
       invoke_discord_async_worker_background_task: {
         Args: never;
@@ -13937,6 +13991,14 @@ export type Database = {
       reconcile_stuck_repo_creations: {
         Args: { p_stale_minutes?: number };
         Returns: number;
+      };
+      record_bug_report_retention_purge: {
+        Args: {
+          p_class_id: number;
+          p_feedback_deleted: number;
+          p_replays_deleted: number;
+        };
+        Returns: undefined;
       };
       record_discord_async_error: {
         Args: { p_error_data: Json; p_guild_id: string; p_method: string };
