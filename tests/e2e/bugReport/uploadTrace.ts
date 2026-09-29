@@ -523,7 +523,7 @@ export class UploadScanner {
     }
     if (!state) return;
     if (state.recorder === null || state.recorder === "stopped") {
-      this.skip("no recorder running (course flag off or route not recorded)");
+      this.skip("no recorder running (not started yet, course flag off, or route not recorded)");
       this.noRecorderRoutes[route] = (this.noRecorderRoutes[route] ?? 0) + 1;
       return;
     }
