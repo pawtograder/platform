@@ -7,8 +7,10 @@
  * baseline. They take real time on purpose (long tasks can't be measured on a fake clock), so
  * they run only when BUG_REPORT_NIGHTLY=1. Chromium only: WebKit has no long-task APIs.
  *
- * "Recorder long tasks" is the script time attributed to the recorder chunk inside long
- * animation frames (LoAF script attribution), as a share of the wall-clock measurement window.
+ * "Recorder long tasks" is the long-task share of the wall-clock window with recording on (K1)
+ * minus the same page's share with it off (K2, which runs first as the baseline). The result also
+ * reports script time that LoAF attributes to the recorder and rrweb chunks; locally that
+ * attribution came back 0 even with the chunks identified, so it is informational only.
  */
 /* eslint-disable no-console -- page-side console calls are what the tests record, or measurements printed for the run log */
 import { test, expect } from "../../global-setup";
@@ -226,11 +228,19 @@ test.describe("bug report recorder performance", () => {
 
   const results: Measurement[] = [];
 
+  function expectRecorderShareUnderBudget(k1: Measurement) {
+    const k2 = results.find((m) => m.page === k1.page && !m.recording);
+    const delta = k2 ? k1.longTaskShare - k2.longTaskShare : k1.longTaskShare;
+    console.log(`[bug-report K] ${k1.page}: recorder long-task share ${(delta * 100).toFixed(2)}%`);
+    expect(delta).toBeLessThan(0.05);
+  }
+
   test.afterAll(async () => {
     console.log(`[bug-report K summary] ${JSON.stringify(results)}`);
   });
 
-  for (const recording of [true, false]) {
+  // Baseline (K2) first, so K1 can compare against it.
+  for (const recording of [false, true]) {
     const id = recording ? "K1" : "K2";
     const minutes = recording ? MINUTES : BASELINE_MINUTES;
 
@@ -253,7 +263,7 @@ test.describe("bug report recorder performance", () => {
         '[role="region"][aria-label="Instructor Gradebook Table"]'
       );
       results.push(r);
-      if (recording) expect(r.recorderShare).toBeLessThan(0.05);
+      if (recording) expectRecorderShareUnderBudget(r);
     });
 
     test(`${id}: rubric grading page, recording ${recording ? "on" : "off"}`, async ({ page }, testInfo) => {
@@ -273,7 +283,7 @@ test.describe("bug report recorder performance", () => {
       else expect(await page.evaluate(() => window.__bugReportRecorder)).toBeUndefined();
       const r = await measure(page, testInfo, "rubric-grading", recording, minutes, null);
       results.push(r);
-      if (recording) expect(r.recorderShare).toBeLessThan(0.05);
+      if (recording) expectRecorderShareUnderBudget(r);
     });
   }
 });
