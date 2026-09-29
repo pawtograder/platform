@@ -80,6 +80,14 @@ export type FrozenSegment = {
   level: RecordingLevel;
 };
 
+/** A Sentry error captured while recording. */
+export type LinkedError = {
+  eventId?: string;
+  traceId?: string;
+  /** When the recorder saw it (ms since the epoch). */
+  at: number;
+};
+
 /**
  * A deep copy of the ring buffer at the moment the user asked to report. The recorder keeps
  * running and never mutates it. `segments[0]` starts with Meta + FullSnapshot, and so does
@@ -97,10 +105,15 @@ export type FrozenBuffer = {
   endTimestamp: number;
   /** Every URL the recording visited, in order, without duplicates. */
   urls: string[];
-  /** Sentry event ids of errors captured while recording. */
+  /** Sentry event ids of errors captured while recording, inside the kept window. */
   errorIds: string[];
   /** Trace ids of those errors. */
   traceIds: string[];
+  /**
+   * The same errors with the time each was captured, so trimming the buffer (`keepLastMs`) can
+   * drop the ones before the new start. Absent on buffers built by hand.
+   */
+  errors?: LinkedError[];
   /** Total characters of event JSON across `segments`. */
   size: number;
 };
@@ -124,6 +137,11 @@ export interface BugReportRecorder {
   getCourseId(): number;
   /** Add values to this page load's taint set. */
   addTaint(kind: TaintKind, values: Iterable<string>): void;
+  /**
+   * True when the taint set hit a size budget and dropped patterns (`TaintSet.isSaturated`), so
+   * some classified text may be left for the reviewer to find. The review dialog should warn.
+   */
+  isTaintSaturated(): boolean;
   /**
    * Called by the mount on every client navigation. Pauses on unlisted routes (their events
    * never enter the buffer), resumes on listed ones, restarts rrweb when the level changes.

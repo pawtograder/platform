@@ -52,6 +52,10 @@ const KIND_ORDER = Object.keys(KIND_LABELS) as RemainingKind[];
 
 const MINUTE = 60_000;
 
+/** Shown when the taint set hit a size budget, so some names may have been missed. */
+export const TAINT_SATURATED_WARNING =
+  "Some names on this page may not be redacted in the recording. Review it carefully, or remove the recording.";
+
 /** The active recorder, if any, kept current as it starts and stops. */
 function useActiveRecorder(): BugReportRecorder | undefined {
   const [recorder, setRecorder] = useState<BugReportRecorder | undefined>(() => getActiveRecorder());
@@ -71,6 +75,7 @@ export function useReplayReview(open: boolean): ReplayReviewSlot | null {
   const [keepLastMinutes, setKeepLastMinutes] = useState<number | null>(null);
   const [pass, setPass] = useState<Pass>({ kind: "redacting", stage: "loading" });
   const [previewMs, setPreviewMs] = useState<number | null>(null);
+  const [saturated, setSaturated] = useState(false);
   const latest = useRef<Promise<RedactionResult> | null>(null);
   const seq = useRef(0);
 
@@ -102,6 +107,7 @@ export function useReplayReview(open: boolean): ReplayReviewSlot | null {
     setExtraRedactions([]);
     setKeepLastMinutes(null);
     setPreviewMs(null);
+    setSaturated(false);
     setSession({ buffer, openedAt });
     // Only the recorder's state at open counts: one that starts while the dialog is open
     // doesn't attach a replay mid-review.
@@ -126,8 +132,11 @@ export function useReplayReview(open: boolean): ReplayReviewSlot | null {
     const run = (async () => {
       const redaction = await import("@/lib/bugReport/redaction");
       if (id === seq.current) setPass({ kind: "redacting", stage: "redacting" });
+      const taintPatterns = redaction.taintSnapshot();
+      // Read after the snapshot, which expands any queued free text: that is what fills a budget.
+      if (id === seq.current) setSaturated(getActiveRecorder()?.isTaintSaturated() ?? false);
       return redaction.redactBuffer(session.buffer, {
-        taintPatterns: redaction.taintSnapshot(),
+        taintPatterns,
         extraRedactions,
         keepLastMs: keepLastMinutes === null ? undefined : keepLastMinutes * MINUTE
       });
@@ -178,6 +187,7 @@ export function useReplayReview(open: boolean): ReplayReviewSlot | null {
         buffer={session.buffer}
         pass={pass}
         previewMs={previewMs}
+        saturated={saturated}
         onFirstFrame={onFirstFrame}
         extraRedactions={extraRedactions}
         onRedact={(value) => setExtraRedactions((list) => (list.includes(value) ? list : [...list, value]))}
@@ -192,6 +202,8 @@ type SectionProps = {
   buffer: FrozenBuffer;
   pass: Pass;
   previewMs: number | null;
+  /** The taint set dropped patterns (`BugReportRecorder.isTaintSaturated`): warn. */
+  saturated: boolean;
   onFirstFrame: () => void;
   extraRedactions: string[];
   onRedact: (value: string) => void;
@@ -203,6 +215,7 @@ function ReplayReviewSection({
   buffer,
   pass,
   previewMs,
+  saturated,
   onFirstFrame,
   extraRedactions,
   onRedact,
@@ -210,6 +223,7 @@ function ReplayReviewSection({
   onKeepLastMinutes
 }: SectionProps) {
   const listId = useId();
+  const warningId = useId();
   const [lastResult, setLastResult] = useState<RedactionResult | null>(null);
   useEffect(() => {
     if (pass.kind === "ready") setLastResult(pass.result);
@@ -238,7 +252,24 @@ function ReplayReviewSection({
         <RedactionProgress stage={pass.kind === "redacting" ? pass.stage : "redacting"} />
       ) : (
         <>
-          <ReplayPreview events={events} describedBy={listId} onFirstFrame={onFirstFrame} />
+          <ReplayPreview
+            events={events}
+            describedBy={saturated ? `${warningId} ${listId}` : listId}
+            onFirstFrame={onFirstFrame}
+          />
+          {saturated && (
+            // A status region, so it is read with the review when it appears, and it describes
+            // the preview too.
+            <Text
+              id={warningId}
+              role="status"
+              fontSize="sm"
+              color="fg.warning"
+              data-testid="report-bug-taint-saturated"
+            >
+              {TAINT_SATURATED_WARNING}
+            </Text>
+          )}
           {pass.kind === "redacting" && (
             <Text fontSize="sm" color="fg.muted" role="status">
               Updating the recording

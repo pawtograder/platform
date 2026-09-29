@@ -12,12 +12,34 @@ export type DecodedUrl = {
 
 const ESCAPE = /%[0-9a-fA-F]{2}/y;
 
+/** Most decoding passes: enough for a URL nested in a query parameter of a URL in another. */
+export const MAX_DECODE_PASSES = 3;
+
 /**
- * Decodes `%XX` runs (as UTF-8) and `+` (as a space, the form encoding). Every character decoded
- * from a run maps to the whole run, so a span inside a multi-byte character masks all its bytes.
- * A run that is not valid UTF-8 is left as is.
+ * Decodes `%XX` runs (as UTF-8) and `+` (as a space, the form encoding), repeatedly while that
+ * changes the text, at most `MAX_DECODE_PASSES` times. A URL carried in a query parameter is
+ * encoded twice (`%2540` for `@`), and one pass would leave it unreadable to the detectors. The
+ * map always points into `encoded`: every character decoded from a run maps to the whole run, so
+ * a span inside a multi-byte character masks all its bytes. A run that is not valid UTF-8 is left
+ * as is.
  */
 export function decodeUrlWithMap(encoded: string): DecodedUrl {
+  let map = decodeOnce(encoded);
+  for (let pass = 1; pass < MAX_DECODE_PASSES; pass++) {
+    const next = decodeOnce(map.text);
+    if (next.text === map.text) break;
+    // Compose: a unit of `next` spans units of `map.text`, which span bytes of `encoded`.
+    map = {
+      text: next.text,
+      starts: next.starts.map((start) => map.starts[start]),
+      ends: next.ends.map((end) => map.ends[end - 1])
+    };
+  }
+  return map;
+}
+
+/** One decoding pass, mapped to its own input. */
+function decodeOnce(encoded: string): DecodedUrl {
   let text = "";
   const starts: number[] = [];
   const ends: number[] = [];

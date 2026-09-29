@@ -29,6 +29,8 @@ export interface IngestSink {
   rows(relation: string, rows: unknown, select?: string | null): void;
   /** A realtime broadcast payload (`{ table, data, ... }`). */
   broadcast(message: unknown): void;
+  /** The course whose recorder runs this ingest. */
+  readonly courseId: number | null;
 }
 
 /** `sink` is non-null only while the ingest runs. Hot paths check it and nothing else. */
@@ -70,6 +72,51 @@ export function liveRowSources(): IngestRowSource[] {
     else controllers.delete(r);
   }
   return out;
+}
+
+// --- The server's flag value ------------------------------------------------------------------
+
+/**
+ * The `bug-report-recording` flag as the course layout read it on the server, by course. The
+ * recorder mount reads it to skip its own flag query while no recorder runs: with the flag off,
+ * a navigation between listed routes then costs no request at all. The value is as of the last
+ * layout render, so turning the flag on takes effect on the next page load; turning it off is
+ * caught by the mount's own query, which it still runs while a recorder exists (test A6).
+ */
+const serverFlags = new Map<number, boolean>();
+const serverFlagWaiters = new Set<(courseId: number) => void>();
+
+/** Called by `<BugReportIngestArm>` on every render. */
+export function noteServerRecordingFlag(courseId: number, enabled: boolean): void {
+  serverFlags.set(courseId, enabled);
+  for (const waiter of Array.from(serverFlagWaiters)) waiter(courseId);
+}
+
+/**
+ * The server's value for `courseId` once the course layout has rendered it. On a full load the
+ * root layout's effects can run before the course layout has streamed in, so the mount waits for
+ * it, up to `timeoutMs`, and resolves undefined if it never comes.
+ */
+export function waitForServerRecordingFlag(courseId: number, timeoutMs: number): Promise<boolean | undefined> {
+  const known = serverFlags.get(courseId);
+  if (known !== undefined) return Promise.resolve(known);
+  return new Promise((resolve) => {
+    const done = () => {
+      serverFlagWaiters.delete(waiter);
+      clearTimeout(timer);
+      resolve(serverFlags.get(courseId));
+    };
+    const waiter = (id: number) => {
+      if (id === courseId) done();
+    };
+    const timer = setTimeout(done, timeoutMs);
+    serverFlagWaiters.add(waiter);
+  });
+}
+
+/** The server's value for `courseId`, or undefined when no course layout has rendered it. */
+export function serverRecordingFlag(courseId: number): boolean | undefined {
+  return serverFlags.get(courseId);
 }
 
 // --- Pre-start fetch buffer ---------------------------------------------------------------------
@@ -150,9 +197,16 @@ function onPreStartFetch(o: FetchObservation): void {
 /**
  * Start buffering responses for the recorder that may start on this page. Idempotent. The mount
  * calls it when the route is listed; `disarmIngest` or `takeBufferedResponses` ends it.
+ *
+ * A running ingest for the same course makes the buffer unnecessary. One for another course
+ * doesn't: on a client navigation from course A to course B, B's layout renders (and its first
+ * fetches start) while A's recorder still runs. The mount then stops A, which clears the taint set,
+ * and starts B's recorder. The buffer is what carries B's first responses across that switch.
  */
-export function armIngest(): void {
-  if (armed || bugReportIngest.sink || typeof window === "undefined") return;
+export function armIngest(courseId?: number): void {
+  if (armed || typeof window === "undefined") return;
+  const sink = bugReportIngest.sink;
+  if (sink && (courseId === undefined || sink.courseId === courseId)) return;
   installFetchHook();
   armed = { unsubscribe: onFetch(onPreStartFetch), queue: [], dropped: 0 };
   ingestTrace("arm");

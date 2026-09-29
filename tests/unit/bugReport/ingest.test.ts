@@ -263,6 +263,34 @@ describe("pre-start buffer", () => {
     }
   });
 
+  it("carries course B's first responses across a client switch from course A", async () => {
+    // Course A records; its ingest is the sink when course B's layout renders and arms.
+    const a = ingestModule.startIngest({ getSessionUser: noSession, courseId: 1 });
+    let b: ReturnType<typeof ingestModule.startIngest> | undefined;
+    try {
+      gate.armIngest(1);
+      expect(gate.isIngestArmed()).toBe(false);
+      gate.armIngest(2);
+      expect(gate.isIngestArmed()).toBe(true);
+      // B's RPC resolves while A's recorder is still running.
+      routes.push([
+        "/rest/v1/rpc/get_student_summary",
+        json({ help_requests: [{ request: "Course B summary canary Qelvorn" }] })
+      ]);
+      await supabaseClient().rpc("get_student_summary", { p_class_id: 2, p_student_profile_id: "p" });
+      await a.idle();
+      // The mount stops A (which clears the taint set, as Recorder.stop does) and starts B.
+      a.stop();
+      getTaintSet().clear();
+      b = ingestModule.startIngest({ getSessionUser: noSession, courseId: 2 });
+      await b.idle();
+      expect(getTaintSet().has("Course B summary canary Qelvorn")).toBe(true);
+    } finally {
+      a.stop();
+      b?.stop();
+    }
+  });
+
   it("skips URLs that can't carry classified data", () => {
     expect(gate.isIngestUrl(`${SUPABASE}/rest/v1/profiles?select=*`)).toBe(true);
     expect(gate.isIngestUrl(`${SUPABASE}/functions/v1/x`)).toBe(true);

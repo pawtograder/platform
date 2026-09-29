@@ -6,8 +6,12 @@
  * needs the spans in the ORIGINAL text so it can map them back to rrweb nodes, so matching runs
  * on a normalized copy that keeps an offset map back to the input.
  *
- * Normalization: NFKC per code point (so fullwidth or ligature forms match their plain spelling),
- * lower case, and every run of whitespace becomes one space. Patterns shorter
+ * Normalization, per code point: NFKD (so fullwidth or ligature forms match their plain spelling),
+ * lower case, combining marks (\p{M}) dropped, and every run of whitespace becomes one space.
+ * Dropping the marks makes matching composition-insensitive: "Zoë" typed precomposed (NFC) and
+ * as "e" plus a combining diaeresis (NFD) both become "zoe", and so does a pattern in either form.
+ * A dropped mark is added to the span of the character before it, so a match masks it too.
+ * Patterns shorter
  * than MIN_MATCH_LENGTH after normalization are dropped; short strings (initials, grades like
  * "A") are blocked structurally instead, because matching them as text would redact half the page.
  */
@@ -23,8 +27,18 @@ export type NormalizedText = {
 };
 
 const WHITESPACE = /\s/;
+const MARKS = /\p{M}/gu;
 
-/** NFKC-normalizes, lower-cases, and collapses whitespace runs, keeping a map back to the original offsets. */
+/**
+ * One code point, folded: NFKD, lower case, combining marks dropped. Lower-casing can add a mark
+ * ("İ" becomes "i" plus a combining dot), so marks are dropped after it. ASCII takes a fast path.
+ */
+function foldChar(char: string, codePoint: number): string {
+  if (codePoint < 0x80) return codePoint >= 0x41 && codePoint <= 0x5a ? String.fromCharCode(codePoint + 32) : char;
+  return char.normalize("NFKD").toLowerCase().normalize("NFKD").replace(MARKS, "");
+}
+
+/** Folds each code point (`foldChar`) and collapses whitespace runs, keeping a map back to the original offsets. */
 export function normalizeForMatch(input: string): NormalizedText {
   let text = "";
   const starts: number[] = [];
@@ -43,14 +57,19 @@ export function normalizeForMatch(input: string): NormalizedText {
       i = j;
       continue;
     }
-    // NFKC and toLowerCase can change length ("ﬁ" becomes "fi", "İ" two code units); every
-    // resulting unit maps back to the whole original character.
-    const lowered = char.normalize("NFKC").toLowerCase();
-    for (let k = 0; k < lowered.length; k++) {
-      starts.push(i);
-      ends.push(i + width);
+    // Folding can change length ("ﬁ" becomes "fi", a combining mark nothing); every resulting
+    // unit maps back to the whole original character.
+    const folded = foldChar(char, codePoint);
+    if (folded.length === 0) {
+      // A dropped mark belongs to the character before it.
+      if (ends.length > 0) ends[ends.length - 1] = i + width;
+    } else {
+      for (let k = 0; k < folded.length; k++) {
+        starts.push(i);
+        ends.push(i + width);
+      }
+      text += folded;
     }
-    text += lowered;
     i += width;
   }
   return { text, starts, ends };
@@ -59,7 +78,7 @@ export function normalizeForMatch(input: string): NormalizedText {
 /** Normalizes a pattern the same way as searched text, without the offset map. */
 export function normalizePattern(pattern: string): string {
   let out = "";
-  for (const char of pattern) out += char.normalize("NFKC").toLowerCase();
+  for (const char of pattern) out += foldChar(char, char.codePointAt(0)!);
   return out.replace(/\s+/g, " ");
 }
 

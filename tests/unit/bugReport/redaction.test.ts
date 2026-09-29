@@ -298,6 +298,28 @@ describe("attributes, inputs, breadcrumbs, URLs", () => {
     expect(map.starts[5]).toBe(7);
     expect(map.ends[5]).toBe(13);
   });
+
+  it("decodes a doubly encoded URL, mapping back to the original bytes", () => {
+    const map = decodeUrlWithMap("a%2540b");
+    expect(map.text).toBe("a@b");
+    expect([map.starts[1], map.ends[1]]).toEqual([1, 6]);
+    expect([map.starts[2], map.ends[2]]).toEqual([6, 7]);
+    // At most three passes.
+    expect(decodeUrlWithMap("%25252540").text).toBe("%40");
+    expect(decodeUrlWithMap("plain").text).toBe("plain");
+  });
+
+  it("redacts names and emails in a URL nested in a query parameter", async () => {
+    const href =
+      "http://localhost/course/1/x?next=%2Fsearch%3Fq%3DZorvik%2520Quellmar%26e%3Dkvounder%2540pawtograder.net";
+    const result = await redact(bufferOf([segment([meta(0, href), full(1, doc([], []))])], [href]));
+    const out = uploaded(result);
+    expect(out).not.toMatch(/Zorvik|Quellmar|kvounder|pawtograder\.net/);
+    expect(out).toContain("http://localhost/course/1/x?next=");
+    getTaintSet().add("name", NAME);
+    expect(redactReportUrl(href, getTaintSet())).not.toMatch(/Zorvik|Quellmar|kvounder/);
+    getTaintSet().clear();
+  });
 });
 
 describe("options", () => {
@@ -407,8 +429,48 @@ describe("taint snapshot and detectors", () => {
     expect(redactReportUrl("http://localhost/course/1/x", set)).toBe("http://localhost/course/1/x");
   });
 
+  it("redacts all of a free-text line longer than the pattern cap, in text and console output", async () => {
+    const set = getTaintSet();
+    const line = "Secretpost " + "alpha beta gamma delta ".repeat(30) + "TAILCANARY end";
+    expect(line.length).toBe(715);
+    set.add("free_text", line);
+    const result = await redactBuffer(
+      bufferOf([
+        segment([
+          meta(0),
+          full(1, doc([], [el("div", { "data-report-unmask": "" }, [txt(line)])])),
+          crumb(2, { category: "console", level: "log", timestamp: 1, message: line })
+        ])
+      ]),
+      { taintPatterns: taintSnapshot(set) }
+    );
+    const out = uploaded(result);
+    expect(out).not.toContain("TAILCANARY");
+    expect(out).not.toContain("Secretpost");
+    expect(out).not.toMatch(/alpha|gamma/);
+  });
+
   it("matches taint case- and whitespace-insensitively", () => {
     const detect = taintDetector(taint);
     expect(detect("by ZORVIK   quellmar.")).toEqual(expect.arrayContaining([{ start: 3, end: 20, kind: "name" }]));
+  });
+
+  it.each([
+    ["NFC", "NFD"],
+    ["NFD", "NFC"]
+  ] as const)("redacts a name tainted in %s and rendered in %s, marks included", async (tainted, rendered) => {
+    const set = getTaintSet();
+    set.add("name", "Zoë Ångström".normalize(tainted));
+    const shown = "Zoë Ångström".normalize(rendered);
+    const result = await redactBuffer(
+      bufferOf([
+        segment([meta(0), full(1, doc([], [el("div", { "data-report-unmask": "", title: shown }, [txt(shown)])]))])
+      ]),
+      { taintPatterns: taintSnapshot(set) }
+    );
+    const out = uploaded(result).normalize("NFC");
+    expect(out).not.toMatch(/Zo|ngstr/);
+    // No combining mark is left over the masked letters.
+    expect(uploaded(result)).not.toMatch(/\p{M}/u);
   });
 });

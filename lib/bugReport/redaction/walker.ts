@@ -21,6 +21,7 @@
  * character of the encoded range becomes `*`.
  */
 import { RRWEB_EVENT_TYPE, type FrozenBuffer } from "../types";
+import { linkedErrorsSince } from "../errorLinks";
 import { mergeSpans, onWordBoundaries, type DetectorChain } from "./detectors";
 import type { RemainingKind, RemainingString, Span } from "./types";
 import { decodeUrlWithMap, toEncodedRange, urlDetectionText, type DecodedUrl } from "./urlText";
@@ -90,6 +91,13 @@ const STRUCTURAL_ATTRIBUTES = new Set(["class", "style", "_cssText"]);
 const INPUT_TAGS = new Set(["input", "textarea", "select", "option"]);
 
 const HAS_WORD_CHAR = /[\p{L}\p{N}]/u;
+
+/**
+ * Strings rrweb writes in place of content it doesn't record. A script's text is recorded as
+ * `SCRIPT_PLACEHOLDER`, and a script added after the snapshot arrives as a text node under an
+ * ignored parent (id -2), so the walker can't always tell from the tree. Never listed.
+ */
+const RRWEB_SENTINELS = new Set(["SCRIPT_PLACEHOLDER"]);
 
 type Holder = Record<string | number, unknown>;
 
@@ -505,7 +513,7 @@ class Walker {
       // One entry per run of inline text: a nested block (the "\n" separators) starts a new one.
       for (const line of value.split("\n")) {
         const trimmed = line.trim();
-        if (!HAS_WORD_CHAR.test(trimmed)) continue;
+        if (!HAS_WORD_CHAR.test(trimmed) || RRWEB_SENTINELS.has(trimmed)) continue;
         const key = `${job.kind}\u0000${trimmed}`;
         const existing = groups.get(key);
         if (existing) existing.count++;
@@ -576,8 +584,11 @@ export function keepLast(buffer: FrozenBuffer, keepLastMs: number | undefined): 
   // when that URL was also visited earlier, this keeps a few URLs from before the window.
   const startHref = (segments[0].events[0]?.data as { href?: unknown } | undefined)?.href;
   const at = typeof startHref === "string" ? buffer.urls.indexOf(startHref) : -1;
+  // Link only the errors inside the new window. A buffer without timestamps keeps its ids.
+  const linked = buffer.errors ? linkedErrorsSince(buffer.errors, segments[0].startTimestamp) : null;
   return {
     ...buffer,
+    ...(linked ?? {}),
     segments,
     startTimestamp: segments[0].startTimestamp,
     urls: at === -1 ? buffer.urls : buffer.urls.slice(at),

@@ -14,6 +14,7 @@
 import { addCustomEvent, record, takeFullSnapshot } from "@sentry-internal/rrweb";
 import * as Sentry from "@sentry/nextjs";
 import { setActiveRecorder } from "./activeRecorder";
+import { linkedErrorsSince, noteLinkedError } from "./errorLinks";
 import { onFetch, type FetchObservation } from "./fetchHook";
 import { startIngest, type IngestHandle, type IngestStats } from "./ingest";
 import { RingBuffer } from "./ringBuffer";
@@ -25,6 +26,7 @@ import {
   type BugReportRecorder,
   type ConsoleBreadcrumb,
   type FrozenBuffer,
+  type LinkedError,
   type RecordedEvent,
   type RecorderStartOptions,
   type RecorderState
@@ -104,14 +106,68 @@ function newReplayId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function stringifyArg(arg: unknown): string {
-  if (typeof arg === "string") return arg;
-  if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
-  try {
-    return JSON.stringify(arg) ?? String(arg);
-  } catch {
-    return String(arg);
+/** Ends a console message that was cut short. */
+const TRUNCATED_MARKER = "[truncated]";
+/** How deep `consoleLeaves` walks into objects and arrays, and how many leaves it takes. */
+const MAX_CONSOLE_DEPTH = 4;
+const MAX_CONSOLE_LEAVES = 200;
+
+/**
+ * The strings in a console argument, one per line. Strings are kept exactly as logged: a JSON
+ * rendering would escape quotes, tabs, and backslashes, and the taint patterns (made from the raw
+ * values) would no longer match them. Object leaves carry their key (`key: value`), so a free-text
+ * line is still a substring of its own line.
+ */
+function consoleLeaves(arg: unknown, out: string[], depth: number, seen: Set<object>, key?: string): void {
+  if (out.length >= MAX_CONSOLE_LEAVES) return;
+  const push = (text: string) => out.push(key === undefined ? text : `${key}: ${text}`);
+  if (typeof arg === "string") return void push(arg);
+  if (arg === null || typeof arg !== "object") {
+    if (typeof arg === "function") return void push(`[function ${arg.name || "anonymous"}]`);
+    return void push(String(arg));
   }
+  if (arg instanceof Error) return void push(`${arg.name}: ${arg.message}`);
+  if (typeof Node !== "undefined" && arg instanceof Node) return void push(`[${arg.nodeName.toLowerCase()}]`);
+  if (depth >= MAX_CONSOLE_DEPTH || seen.has(arg)) return void push(Array.isArray(arg) ? "[Array]" : "[Object]");
+  seen.add(arg);
+  let entries: [string | undefined, unknown][];
+  try {
+    if (Array.isArray(arg)) entries = arg.map((v) => [undefined, v]);
+    else if (arg instanceof Map) entries = Array.from(arg, ([k, v]) => [String(k), v]);
+    else if (arg instanceof Set) entries = Array.from(arg, (v) => [undefined, v]);
+    else entries = Object.entries(arg);
+  } catch {
+    return void push("[Object]");
+  }
+  for (const [k, v] of entries) {
+    consoleLeaves(v, out, depth + 1, seen, k);
+    if (out.length >= MAX_CONSOLE_LEAVES) return;
+  }
+}
+
+/**
+ * A console call's message: string arguments as they are, joined by spaces, and the string leaves
+ * of object arguments on their own lines. Past `MAX_CONSOLE_MESSAGE` it is cut at a line boundary.
+ * A line that doesn't fit is dropped whole, never cut: a cut line would no longer match its taint
+ * pattern, and its readable start would be uploaded.
+ */
+export function consoleMessage(args: readonly unknown[]): string {
+  const parts: string[] = [];
+  for (const arg of args) {
+    const leaves: string[] = [];
+    consoleLeaves(arg, leaves, 0, new Set());
+    parts.push(leaves.join("\n"));
+  }
+  const message = parts.join(" ");
+  if (message.length <= MAX_CONSOLE_MESSAGE) return message;
+  const lines = message.split("\n");
+  let kept = "";
+  for (const line of lines) {
+    const next = kept.length === 0 ? line : `${kept}\n${line}`;
+    if (next.length > MAX_CONSOLE_MESSAGE - TRUNCATED_MARKER.length - 1) break;
+    kept = next;
+  }
+  return kept.length === 0 ? TRUNCATED_MARKER : `${kept}\n${TRUNCATED_MARKER}`;
 }
 
 function describeElement(el: Element): string {
@@ -172,8 +228,7 @@ class Recorder implements BugReportRecorder {
   private readonly buffer: RingBuffer;
   private stopRrweb: (() => void) | undefined;
   private readonly visits: UrlVisit[] = [];
-  private readonly errorIds: string[] = [];
-  private readonly traceIds: string[] = [];
+  private readonly errors: LinkedError[] = [];
   private readonly cleanups: (() => void)[] = [];
   /** Pathname whose level was last checked in `onEvent`, so the check runs once per route. */
   private checkedPath: string | null = null;
@@ -190,7 +245,7 @@ class Recorder implements BugReportRecorder {
   start(): void {
     // The ingest starts before rrweb takes its first FullSnapshot, so rows already on screen
     // (TableController contents, the pre-start fetch buffer, the session) are tainted too.
-    this.ingest = startIngest();
+    this.ingest = startIngest({ courseId: this.courseId });
     readTaintBlocks(document, getTaintSet());
     this.watchTaintBlocks();
     installSentryHooks();
@@ -207,6 +262,13 @@ class Recorder implements BugReportRecorder {
     const selector = `script#${TAINT_BLOCK_ID}`;
     const observer = new MutationObserver((records) => {
       for (const record of records) {
+        // A block whose text React replaced in place: a text node's data changed, or its
+        // children were swapped.
+        const target = record.target instanceof Element ? record.target : record.target.parentElement;
+        if (target?.closest(selector)) {
+          readTaintBlocks(document, getTaintSet());
+          return;
+        }
         for (const node of Array.from(record.addedNodes)) {
           if (node instanceof Element && (node.matches(selector) || node.querySelector(selector))) {
             readTaintBlocks(document, getTaintSet());
@@ -215,7 +277,7 @@ class Recorder implements BugReportRecorder {
         }
       }
     });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer.observe(document.documentElement, { childList: true, characterData: true, subtree: true });
     this.cleanups.push(() => observer.disconnect());
   }
 
@@ -283,9 +345,14 @@ class Recorder implements BugReportRecorder {
     this.visits.push({ url: window.location.href, at: Date.now() });
   }
 
-  private addBreadcrumb(payload: BreadcrumbPayload): void {
+  /** Whether a breadcrumb would be recorded now. Callers check it before building one. */
+  private takingBreadcrumbs(): boolean {
     // The guard stops a console call made while adding a breadcrumb from adding another.
-    if (this.state !== "recording" || !this.stopRrweb || this.inBreadcrumb) return;
+    return this.state === "recording" && this.stopRrweb !== undefined && !this.inBreadcrumb;
+  }
+
+  private addBreadcrumb(payload: BreadcrumbPayload): void {
+    if (!this.takingBreadcrumbs()) return;
     this.inBreadcrumb = true;
     try {
       addCustomEvent(BREADCRUMB_TAG, payload);
@@ -303,12 +370,15 @@ class Recorder implements BugReportRecorder {
     for (const level of levels) {
       const original = console[level];
       const patched = (...args: unknown[]) => {
-        this.addBreadcrumb({
-          category: "console",
-          timestamp: Date.now() / 1000,
-          level,
-          message: args.map(stringifyArg).join(" ").slice(0, MAX_CONSOLE_MESSAGE)
-        });
+        // Paused on an unlisted route nothing is recorded, so the arguments aren't walked either.
+        if (this.takingBreadcrumbs()) {
+          this.addBreadcrumb({
+            category: "console",
+            timestamp: Date.now() / 1000,
+            level,
+            message: consoleMessage(args)
+          });
+        }
         original.apply(console, args);
       };
       console[level] = patched;
@@ -321,7 +391,7 @@ class Recorder implements BugReportRecorder {
     // Clicks
     const onClick = (e: MouseEvent) => {
       const target = e.target instanceof Element ? e.target : null;
-      if (!target) return;
+      if (!target || !this.takingBreadcrumbs()) return;
       const id = record.mirror.getId(target);
       this.addBreadcrumb({
         category: "ui.click",
@@ -336,7 +406,7 @@ class Recorder implements BugReportRecorder {
     // Fetch: URL, method, status, duration. Never bodies or headers.
     this.cleanups.push(
       onFetch((o: FetchObservation) => {
-        if (o.url.includes("/api/tunnel")) return;
+        if (o.url.includes("/api/tunnel") || !this.takingBreadcrumbs()) return;
         this.addBreadcrumb({
           category: "fetch",
           timestamp: Date.now() / 1000,
@@ -353,13 +423,14 @@ class Recorder implements BugReportRecorder {
 
   /** Called from the Sentry event processor. */
   noteError(eventId: string | undefined, traceId: string | undefined): void {
-    if (eventId && !this.errorIds.includes(eventId)) this.errorIds.push(eventId);
-    if (traceId && !this.traceIds.includes(traceId)) this.traceIds.push(traceId);
+    noteLinkedError(this.errors, { eventId, traceId, at: Date.now() });
   }
 
   // Public API
 
   freeze(): FrozenBuffer {
+    // Free text queued in the taint set is expanded before anything reads the buffer.
+    getTaintSet().flush();
     const segments = this.buffer.freeze();
     const startTimestamp = segments[0]?.startTimestamp ?? 0;
     const endTimestamp = segments[segments.length - 1]?.endTimestamp ?? 0;
@@ -367,6 +438,8 @@ class Recorder implements BugReportRecorder {
     let firstKept = this.visits.findIndex((v) => v.at > startTimestamp);
     if (firstKept === -1) firstKept = this.visits.length;
     const kept = segments.length ? this.visits.slice(Math.max(0, firstKept - 1)) : [];
+    // Errors in the kept window only; an empty buffer links none.
+    const linked = linkedErrorsSince(this.errors, segments.length ? startTimestamp : Infinity);
     return {
       replayId: this.replayId,
       level: this.level,
@@ -374,8 +447,9 @@ class Recorder implements BugReportRecorder {
       startTimestamp,
       endTimestamp,
       urls: Array.from(new Set(kept.map((v) => v.url))),
-      errorIds: [...this.errorIds],
-      traceIds: [...this.traceIds],
+      errorIds: linked.errorIds,
+      traceIds: linked.traceIds,
+      errors: linked.errors,
       size: segments.reduce((n, s) => n + s.size, 0)
     };
   }
@@ -385,11 +459,11 @@ class Recorder implements BugReportRecorder {
   }
 
   getErrorIds(): string[] {
-    return [...this.errorIds];
+    return linkedErrorsSince(this.errors, 0).errorIds;
   }
 
   getTraceIds(): string[] {
-    return [...this.traceIds];
+    return linkedErrorsSince(this.errors, 0).traceIds;
   }
 
   getUrls(): string[] {
@@ -414,11 +488,19 @@ class Recorder implements BugReportRecorder {
     for (const v of values) set.add(kind, v);
   }
 
+  isTaintSaturated(): boolean {
+    return getTaintSet().isSaturated();
+  }
+
   onNavigate(pathname: string): void {
     if (this.state === "stopped") return;
     const level = courseIdFromPathname(pathname) === this.courseId ? recordingLevelFor(pathname) : null;
     if (level === null) {
       if (this.state === "recording") {
+        // rrweb and the breadcrumbs stop; the taint ingest keeps running. Data fetched here can
+        // be rendered on a listed route later without being fetched again (a component's state,
+        // a client cache, the router's), and only a TableController's rows would be found again
+        // on resume. Missing the rest would leave it readable in the recording.
         this.stopRecording();
         this.state = "paused";
       }
@@ -444,8 +526,7 @@ class Recorder implements BugReportRecorder {
     this.ingest = undefined;
     this.buffer.clear();
     this.visits.length = 0;
-    this.errorIds.length = 0;
-    this.traceIds.length = 0;
+    this.errors.length = 0;
     getTaintSet().clear();
     if (current === this) current = null;
     setActiveRecorder(undefined);
