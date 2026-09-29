@@ -386,6 +386,48 @@ Deno.test("an environment Sentry has never seen (404 on the list) counts as noth
   assertEquals(summary.stopped_by, null);
 });
 
+Deno.test("page cap on feedback: deletes what was listed, defers the class, and the next run finishes it", async () => {
+  const sentry = new FakeSentry();
+  // 50 pages of 100 is the cap; 5,100 matching issues need a 51st page.
+  for (let i = 0; i < 5_100; i++) sentry.addIssue({ id: String(100_000 + i), category: "feedback", classIds: ["66"] });
+  sentry.addReplay({ id: replayId(66), classIds: ["66"] });
+  const { run, recorded } = setup(sentry);
+
+  const first = await run([{ class_id: 66, end_date: daysAgo(31) }]);
+
+  assertEquals(first.feedback_deleted, 5_000);
+  assertEquals(sentry.issues.size, 100);
+  assertEquals(first.replays_deleted, 1, "the replays are still purged while the feedback is deferred");
+  assertEquals(first.classes_deferred, 1);
+  assertEquals(first.classes_partial, 1);
+  assertEquals(first.classes_purged, 0);
+  assertEquals(first.stopped_by, null);
+  assertEquals(recorded, []);
+
+  const second = await run([{ class_id: 66, end_date: daysAgo(31) }]);
+
+  assertEquals(second.feedback_deleted, 100);
+  assertEquals(sentry.issues.size, 0);
+  assertEquals(second.classes_purged, 1);
+  assertEquals(recorded, [{ classId: 66, feedback: 100, replays: 0 }]);
+});
+
+Deno.test("page cap on replays after feedback was deleted: the summary counts both", async () => {
+  const sentry = new FakeSentry();
+  for (let i = 0; i < 3; i++) sentry.addIssue({ id: String(700 + i), category: "feedback", classIds: ["77"] });
+  for (let i = 0; i < 5_050; i++) sentry.addReplay({ id: replayId(70_000 + i), classIds: ["77"] });
+  const { run, recorded } = setup(sentry);
+
+  const summary = await run([{ class_id: 77, end_date: daysAgo(31) }]);
+
+  assertEquals(summary.feedback_deleted, 3);
+  assertEquals(summary.replays_deleted, 5_000);
+  assertEquals(sentry.replays.size, 50);
+  assertEquals(summary.classes_deferred, 1);
+  assertEquals(summary.classes_partial, 1);
+  assertEquals(recorded, []);
+});
+
 Deno.test("isPastRetention: strictly more than 30 days after end_date", () => {
   assertEquals(isPastRetention(daysAgo(31), NOW), true);
   assertEquals(isPastRetention(daysAgo(29), NOW), false);

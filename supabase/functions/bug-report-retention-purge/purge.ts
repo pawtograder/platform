@@ -44,6 +44,9 @@ const ISSUE_DELETE_BATCH = 100;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** One list's items. `complete` is false when the page cap cut it short. */
+export type Listing<T> = { items: T[]; complete: boolean };
+
 export type PurgeCandidate = { class_id: number; end_date: string };
 
 export type SentryPurgeConfig = {
@@ -178,13 +181,16 @@ export class SentryPurgeApi {
     return { body: (await res.json()) as T, link: res.headers.get("link") };
   }
 
-  /** Lists every page of a cursor-paginated endpoint. Returns null when the page cap is hit. */
+  /**
+   * Lists every page of a cursor-paginated endpoint. `complete` is false when the page cap was
+   * hit; `items` then holds the pages listed so far, which the caller still acts on.
+   */
   private async listAll<T>(
     step: string,
     path: string,
     params: [string, string][],
     items: (body: unknown) => T[]
-  ): Promise<T[] | null> {
+  ): Promise<Listing<T>> {
     const out: T[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < MAX_PAGES; page++) {
@@ -194,15 +200,17 @@ export class SentryPurgeApi {
         res = await this.json<unknown>(step, path, p);
       } catch (e) {
         // Sentry answers 404 for an environment it has never seen, which means nothing to delete.
-        if (e instanceof SentryApiError && e.status === 404 && this.cfg.environment && page === 0) return [];
+        if (e instanceof SentryApiError && e.status === 404 && this.cfg.environment && page === 0) {
+          return { items: [], complete: true };
+        }
         throw e;
       }
       const { body, link } = res;
       out.push(...items(body));
       cursor = nextCursor(link);
-      if (!cursor) return out;
+      if (!cursor) return { items: out, complete: true };
     }
-    return null;
+    return { items: out, complete: false };
   }
 
   private scopeParams(): [string, string][] {
@@ -309,45 +317,67 @@ function replayTagMatches(classIds: unknown, classId: number): boolean {
   return values.length > 0 && values.every((v) => v === String(classId));
 }
 
-export type ClassPurgeResult = { feedbackDeleted: number; replaysDeleted: number; skippedTagMismatch: number };
+export type ClassPurgeResult = {
+  feedbackDeleted: number;
+  replaysDeleted: number;
+  skippedTagMismatch: number;
+  /**
+   * Why the class stopped short, or null when both lists were complete and every listed item was
+   * handled. A class that stopped is left unrecorded and picked up again next run; what it deleted
+   * is still counted. `page_cap`: a list hit MAX_PAGES (the deleted items drop out of the next
+   * run's list, so each run gets further).
+   */
+  stopped: "page_cap" | null;
+};
+
+export function emptyClassResult(): ClassPurgeResult {
+  return { feedbackDeleted: 0, replaysDeleted: 0, skippedTagMismatch: 0, stopped: null };
+}
 
 /**
- * Deletes one class's feedback and replays. Returns null when a list hit the page cap, so the class
- * is left unrecorded and picked up again next run.
+ * Deletes one class's feedback and replays, counting into `result` as it goes (so a caller that
+ * catches an error mid-class still knows what was deleted). When a list hits the page cap, the
+ * items it did list are still deleted and `stopped` says so.
  */
 export async function purgeClass(
   api: SentryPurgeApi,
   replayProjectId: string,
-  classId: number
-): Promise<ClassPurgeResult | null> {
-  let skippedTagMismatch = 0;
-
+  classId: number,
+  result: ClassPurgeResult = emptyClassResult()
+): Promise<ClassPurgeResult> {
   const issues = await api.listFeedbackIssues(classId);
-  if (issues === null) return null;
-  const feedbackIds: string[] = [];
-  for (const issue of issues) {
+  if (!issues.complete) result.stopped = "page_cap";
+  let pending: string[] = [];
+  const flush = async () => {
+    if (pending.length === 0) return;
+    await api.deleteIssues(pending);
+    result.feedbackDeleted += pending.length;
+    pending = [];
+  };
+  for (const issue of issues.items) {
     if (issue.category !== "feedback") {
-      skippedTagMismatch++;
+      result.skippedTagMismatch++;
       continue;
     }
-    if (await api.feedbackTagMatches(issue.id, classId)) feedbackIds.push(issue.id);
-    else skippedTagMismatch++;
+    if (await api.feedbackTagMatches(issue.id, classId)) {
+      pending.push(issue.id);
+      if (pending.length >= ISSUE_DELETE_BATCH) await flush();
+    } else result.skippedTagMismatch++;
   }
-  await api.deleteIssues(feedbackIds);
+  await flush();
 
   const replays = await api.listReplays(replayProjectId, classId);
-  if (replays === null) return null;
-  let replaysDeleted = 0;
-  for (const replay of replays) {
+  if (!replays.complete) result.stopped = "page_cap";
+  for (const replay of replays.items) {
     if (!replayTagMatches(replay.classIds, classId)) {
-      skippedTagMismatch++;
+      result.skippedTagMismatch++;
       continue;
     }
     await api.deleteReplay(replay.id);
-    replaysDeleted++;
+    result.replaysDeleted++;
   }
 
-  return { feedbackDeleted: feedbackIds.length, replaysDeleted, skippedTagMismatch };
+  return result;
 }
 
 export type PurgeRunSummary = {
@@ -356,6 +386,8 @@ export type PurgeRunSummary = {
   classes_failed: number;
   /** Not started (time budget or a fatal error) or stopped at the page cap; retried next run. */
   classes_deferred: number;
+  /** Deferred classes that had reports deleted before they stopped (counted in the totals below). */
+  classes_partial: number;
   /** Returned by the candidate query but not past retention by this file's own check. */
   classes_not_due: number;
   feedback_deleted: number;
@@ -384,6 +416,7 @@ export async function runPurge(deps: PurgeRunDeps): Promise<PurgeRunSummary> {
     classes_purged: 0,
     classes_failed: 0,
     classes_deferred: 0,
+    classes_partial: 0,
     classes_not_due: 0,
     feedback_deleted: 0,
     replays_deleted: 0,
@@ -410,15 +443,14 @@ export async function runPurge(deps: PurgeRunDeps): Promise<PurgeRunSummary> {
       break;
     }
     const c = due[i];
+    const result = emptyClassResult();
     try {
-      const result = await purgeClass(deps.api, projectId, c.class_id);
-      if (result === null) {
+      await purgeClass(deps.api, projectId, c.class_id, result);
+      if (result.stopped !== null) {
         summary.classes_deferred++;
+        if (result.feedbackDeleted + result.replaysDeleted > 0) summary.classes_partial++;
         continue;
       }
-      summary.feedback_deleted += result.feedbackDeleted;
-      summary.replays_deleted += result.replaysDeleted;
-      summary.skipped_tag_mismatch += result.skippedTagMismatch;
       await deps.recordPurged(c.class_id, result);
       summary.classes_purged++;
     } catch (e) {
@@ -429,6 +461,11 @@ export async function runPurge(deps: PurgeRunDeps): Promise<PurgeRunSummary> {
         break;
       }
       console.error(`[bug-report-retention-purge] class failed: ${describe(e)}`);
+    } finally {
+      // Deleted is deleted, whether the class finished, stopped short or failed partway.
+      summary.feedback_deleted += result.feedbackDeleted;
+      summary.replays_deleted += result.replaysDeleted;
+      summary.skipped_tag_mismatch += result.skippedTagMismatch;
     }
   }
   return summary;
