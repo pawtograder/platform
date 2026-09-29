@@ -45,9 +45,11 @@ jest.mock("@/lib/bugReport/ingest", () => ({
   startIngest: () => ({ stop: () => undefined, stats: () => ({}), idle: async () => undefined })
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// Required after the stubs above exist; the mock factories read them.
+/* eslint-disable @typescript-eslint/no-require-imports */
 const { consoleMessage, startRecorder } =
   require("@/lib/bugReport/recorder") as typeof import("@/lib/bugReport/recorder");
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 type ConsoleCrumb = { category: string; message?: string };
 
