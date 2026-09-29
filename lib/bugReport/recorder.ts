@@ -360,6 +360,8 @@ class Recorder implements BugReportRecorder {
   // Public API
 
   freeze(): FrozenBuffer {
+    // Free text queued in the taint set is expanded before anything reads the buffer.
+    getTaintSet().flush();
     const segments = this.buffer.freeze();
     const startTimestamp = segments[0]?.startTimestamp ?? 0;
     const endTimestamp = segments[segments.length - 1]?.endTimestamp ?? 0;
@@ -412,6 +414,10 @@ class Recorder implements BugReportRecorder {
     if (this.state === "stopped") return;
     const set = getTaintSet();
     for (const v of values) set.add(kind, v);
+  }
+
+  isTaintSaturated(): boolean {
+    return getTaintSet().isSaturated();
   }
 
   onNavigate(pathname: string): void {

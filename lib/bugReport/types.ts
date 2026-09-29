@@ -125,6 +125,11 @@ export interface BugReportRecorder {
   /** Add values to this page load's taint set. */
   addTaint(kind: TaintKind, values: Iterable<string>): void;
   /**
+   * True when the taint set hit a size budget and dropped patterns (`TaintSet.isSaturated`), so
+   * some classified text may be left for the reviewer to find. The review dialog should warn.
+   */
+  isTaintSaturated(): boolean;
+  /**
    * Called by the mount on every client navigation. Pauses on unlisted routes (their events
    * never enter the buffer), resumes on listed ones, restarts rrweb when the level changes.
    */
