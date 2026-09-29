@@ -123,6 +123,19 @@ describe("console breadcrumbs", () => {
   });
 });
 
+describe("snapshots", () => {
+  it("keeps the segment when rrweb logs from inside a checkout snapshot", () => {
+    const r = start();
+    rrweb.snapshotHook = () => console.warn("rrweb: something inside takeFullSnapshot");
+    // rrweb's own periodic checkout (checkoutEveryNms).
+    (jest.requireMock("@sentry-internal/rrweb") as { takeFullSnapshot(): void }).takeFullSnapshot();
+    const frozen = r.freeze();
+    expect(frozen.segments).toHaveLength(2);
+    expect(frozen.segments[1].events.map((e) => e.type)).toEqual([4, 2, 5]);
+    expect(crumbs(frozen)[0].message).toBe("rrweb: something inside takeFullSnapshot");
+  });
+});
+
 describe("paused", () => {
   it("doesn't walk console arguments on an unlisted route, and still takes taint", () => {
     const r = start();

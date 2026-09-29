@@ -21,7 +21,22 @@ function checkout(buf: RingBuffer, t: number, pad = 0) {
   return buf.push(full(t, pad));
 }
 
+const custom = (timestamp: number) =>
+  ({ type: 5, timestamp, data: { tag: "breadcrumb", payload: { category: "console" } } }) as unknown as RecordedEvent;
+
 describe("RingBuffer", () => {
+  it("moves a custom event logged during a snapshot after the FullSnapshot", () => {
+    const buf = new RingBuffer();
+    buf.push(meta(0));
+    buf.push(custom(0));
+    buf.push(full(0));
+    buf.push(inc(1));
+    const [segment, ...rest] = buf.freeze(1);
+    expect(rest).toEqual([]);
+    expect(segment.events.map((e) => e.type)).toEqual([4, 2, 5, 3]);
+    expect(segment.size).toBe(buf.size);
+  });
+
   it("drops events before the first Meta", () => {
     const buf = new RingBuffer();
     buf.push(inc(1));

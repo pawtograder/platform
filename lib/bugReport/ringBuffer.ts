@@ -26,6 +26,8 @@ type Segment = {
   snapshotSize: number;
   /** Set once this segment has asked for an early checkout, so it asks only once. */
   checkoutRequested: boolean;
+  /** Custom events that arrived between the Meta and the FullSnapshot, as JSON. */
+  held: string[];
 };
 
 export type PushResult = {
@@ -67,19 +69,27 @@ export class RingBuffer {
         size: 0,
         level,
         snapshotSize: 0,
-        checkoutRequested: false
+        checkoutRequested: false,
+        held: []
       });
       this.awaitingCheckout = false;
     }
     const current = this.segments[this.segments.length - 1];
     // Nothing before the first Meta, or after an oversized segment was dropped, can replay.
     if (!current || this.awaitingCheckout) return { requestCheckout: false };
+    // rrweb can log from inside a snapshot (a console.warn), and the recorder turns that into a
+    // breadcrumb between the Meta and the FullSnapshot. Hold such events until the FullSnapshot,
+    // so the segment still opens with the pair `freeze()` requires.
+    if (event.type === RRWEB_EVENT_TYPE.Custom && current.events.length === 1) {
+      current.held.push(json);
+      return { requestCheckout: false };
+    }
 
-    current.events.push(json);
-    current.size += json.length;
-    current.endTimestamp = Math.max(current.endTimestamp, ts);
-    this.total += json.length;
+    this.append(current, json, ts);
     if (current.events.length <= 2) current.snapshotSize = current.size;
+    if (event.type === RRWEB_EVENT_TYPE.FullSnapshot && current.held.length > 0) {
+      for (const held of current.held.splice(0)) this.append(current, held, ts);
+    }
 
     let requestCheckout = false;
     this.trimToSize();
@@ -100,6 +110,13 @@ export class RingBuffer {
     }
     this.trimToAge(ts);
     return { requestCheckout };
+  }
+
+  private append(segment: Segment, json: string, ts: number): void {
+    segment.events.push(json);
+    segment.size += json.length;
+    segment.endTimestamp = Math.max(segment.endTimestamp, ts);
+    this.total += json.length;
   }
 
   /** Drop whole oldest segments until the total fits the cap. */
