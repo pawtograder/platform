@@ -3,7 +3,8 @@
  * a replay is offered only while the recorder is recording at open; the upload sends the
  * redacted copy, never the frozen buffer; a failed redaction attaches nothing.
  */
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { setActiveRecorder } from "@/lib/bugReport/activeRecorder";
 import type { BugReportRecorder, FrozenBuffer, RecorderState } from "@/lib/bugReport/types";
 
@@ -20,7 +21,7 @@ jest.mock("@/lib/bugReport/upload", () => ({
 // The preview pulls in the player chunk only when rendered; the hook test never renders it.
 jest.mock("@/components/bugReport/ReplayPreview", () => ({ ReplayPreview: () => null }));
 
-import { useReplayReview } from "@/components/bugReport/ReplayReview";
+import { TAINT_SATURATED_WARNING, useReplayReview } from "@/components/bugReport/ReplayReview";
 
 function frozen(tag: string): FrozenBuffer {
   return {
@@ -44,11 +45,12 @@ function frozen(tag: string): FrozenBuffer {
   };
 }
 
-function fakeRecorder(state: RecorderState = "recording") {
+function fakeRecorder(state: RecorderState = "recording", saturated = false) {
   const buffer = frozen("original");
   const recorder = {
     freeze: jest.fn(() => buffer),
     getState: () => state,
+    isTaintSaturated: () => saturated,
     stop: jest.fn()
   } as unknown as BugReportRecorder & { freeze: jest.Mock; stop: jest.Mock };
   return { recorder, buffer };
@@ -123,5 +125,40 @@ describe("useReplayReview", () => {
     expect(result.current).toBeNull();
     expect(recorder.stop).not.toHaveBeenCalled();
     expect(createReplayUpload).not.toHaveBeenCalled();
+  });
+
+  describe("taint set saturation", () => {
+    function Review() {
+      return <>{useReplayReview(true)?.review}</>;
+    }
+
+    async function renderReview(saturated: boolean) {
+      const { recorder } = fakeRecorder("recording", saturated);
+      setActiveRecorder(recorder);
+      redactBuffer.mockResolvedValue({
+        buffer: frozen("r"),
+        remaining: [{ value: "Some page text", kind: "text", count: 1 }],
+        stats: { textNodes: 1, redactedSpans: 0, ms: 1 }
+      });
+      render(
+        <ChakraProvider value={defaultSystem}>
+          <Review />
+        </ChakraProvider>
+      );
+      await screen.findByText("Some page text");
+    }
+
+    it("warns in a status region with the review when the taint set is saturated", async () => {
+      await renderReview(true);
+      const warning = screen.getByTestId("report-bug-taint-saturated");
+      expect(warning).toHaveTextContent(TAINT_SATURATED_WARNING);
+      expect(warning).toHaveAttribute("role", "status");
+      expect(screen.getByTestId("report-bug-replay-review")).toContainElement(warning);
+    });
+
+    it("shows no warning when it isn't", async () => {
+      await renderReview(false);
+      expect(screen.queryByTestId("report-bug-taint-saturated")).toBeNull();
+    });
   });
 });
