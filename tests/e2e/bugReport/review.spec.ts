@@ -74,6 +74,8 @@ test.afterEach(async ({ logMagicLinksOnFailure }) => {
 async function openHarness(page: Page, fixture: "leaks" | "inputs" = "leaks") {
   await enableRecording(page, course.id, [HARNESS]);
   await loginAsUser(page, student, course);
+  // WebKit: the post-login redirect to the course can still be in flight and interrupt the goto.
+  await page.waitForLoadState("networkidle");
   const query = fixture === "leaks" ? `fixture=leaks&v=${encodeURIComponent(JSON.stringify(LEAK))}` : "fixture=inputs";
   await page.goto(`/course/${course.id}/e2e-harness/bug-report?${query}`);
   await waitForRecorderState(page, "recording");

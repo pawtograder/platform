@@ -64,6 +64,9 @@ test.describe("bug report recorder gating", () => {
     await clickNavLink(page, `/course/${offCourse.id}/office-hours`);
     await clickNavLink(page, `/course/${offCourse.id}/gradebook`);
     await clickNavLink(page, `/course/${offCourse.id}/assignments`);
+    // WebKit: the assignments page can still be finishing its own navigation, which would
+    // interrupt the goto below.
+    await page.waitForLoadState("networkidle");
     await page.goto(`/course/${offCourse.id}/polls`);
     await page.evaluate(() => {
       setTimeout(() => {
