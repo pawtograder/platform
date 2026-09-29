@@ -6,6 +6,7 @@
  */
 import fs from "fs";
 import ts from "typescript";
+import { unbrandTypeText } from "./brandPiiColumns";
 
 export type RelationshipInfo = {
   foreignKeyName: string;
@@ -92,7 +93,8 @@ function readRelationships(node: ts.TypeNode | undefined): RelationshipInfo[] {
 
 function readColumns(node: ts.TypeNode | undefined, sf: ts.SourceFile): Record<string, string> {
   const cols: Record<string, string> = {};
-  for (const [k, v] of members(node)) cols[k] = v.getText(sf);
+  // Plain type text: `Pii<K, T>` brands (scripts/bugReport/brandPiiColumns.ts) are unwrapped to `T`.
+  for (const [k, v] of members(node)) cols[k] = unbrandTypeText(v, sf);
   return cols;
 }
 
