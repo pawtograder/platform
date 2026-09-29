@@ -404,6 +404,13 @@ jobs:
           # Outside that test nothing listens, so reports fail to send and are dropped. Must match
           # STUB_SENTRY_DSN in tests/e2e/bugReport/stubSentry.ts.
           NEXT_PUBLIC_SENTRY_DSN: http://e2epublickey@127.0.0.1:54399/1
+          # The bug reporter's PR tier (spec §7.1) runs here with every other spec. Its test hooks
+          # and harness pages exist only in a build made with E2E_ENABLE=true (next.config.ts
+          # inlines it as BUG_REPORT_E2E). .env.local already sets it; this makes the build not
+          # depend on Next loading that file before next.config.ts. ci-fast is what CI=true picks
+          # anyway; the nightly and release tiers build with `full` instead.
+          E2E_ENABLE: "true"
+          SENTRY_BUILD_PROFILE: ci-fast
         run: npm run build
 
       # This job does NOT write the .next/cache entry, and that is structural
