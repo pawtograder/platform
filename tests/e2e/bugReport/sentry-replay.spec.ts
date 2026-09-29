@@ -27,6 +27,7 @@ import {
 } from "./index";
 import { clickNavLink, enableRecording, recorderStats, waitForRecorderState } from "./recorderTestUtils";
 import { replaySegments, recordMinutes, submitWithReplay, type E2ESubmitOutput } from "./uploadTestUtils";
+import { checkStoredIp } from "./ipCheck";
 
 const sentry = sentryApiFromEnv();
 const HARNESS = "/course/[course_id]/e2e-harness/bug-report";
@@ -40,7 +41,13 @@ type ReplayDetails = {
   trace_ids: string[];
   urls: string[];
   tags: Record<string, string[]>;
-  user: { id?: string | null; email?: string | null; username?: string | null; display_name?: string | null };
+  user: {
+    id?: string | null;
+    email?: string | null;
+    username?: string | null;
+    display_name?: string | null;
+    ip?: string | null;
+  };
   started_at: string;
   finished_at: string;
 };
@@ -243,11 +250,20 @@ test.describe("replay upload to the dev Sentry (F7)", () => {
     expect((errorEvent.contexts?.replay as { replay_id?: string } | undefined)?.replay_id).toBe(out.replayId);
     evidence.linked = { count_errors: linked.count_errors, error_ids: linked.error_ids.length };
 
+    // IP address: relay infers one unless the Sentry setting is on (see ipCheck.ts). Read the
+    // replay again so the check sees the user as last stored.
+    const latest = ((await api.replay(out.replayId))?.data as ReplayDetails | undefined) ?? linked;
+    const ipCheck = checkStoredIp({ replayUser: latest.user, feedbackUser: feedback.user });
+    evidence.ipStoredOn = ipCheck.present;
+    if (ipCheck.annotation) testInfo.annotations.push(ipCheck.annotation);
+
     console.log(`[bug-report F7] ${JSON.stringify(evidence)}`);
     await testInfo.attach("f7-evidence.json", {
       body: JSON.stringify(evidence, null, 2),
       contentType: "application/json"
     });
+    // Last, so a stored IP (with BUG_REPORT_REQUIRE_NO_IP=1) still leaves the evidence attached.
+    expect(ipCheck.failure, ipCheck.failure).toBeUndefined();
   });
 
   test("segments near the size cap pass the tunnel and are stored", async ({ page }, testInfo) => {

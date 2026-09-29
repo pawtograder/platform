@@ -211,7 +211,11 @@ async function buildReplayEvent(
     environment: prepared.environment,
     dist: prepared.dist,
     tags,
-    // ID only (ADR 3). `ip_address: null` tells the SDK and relay not to fill in "{{auto}}".
+    // ID only (ADR 3). `ip_address: null` keeps the SDK from sending "{{auto}}", but it does
+    // not stop relay: on the dev Sentry the stored replay and feedback still get `user.ip`
+    // from the ingress address. Only the org or project setting "Prevent storing of IP
+    // addresses" stops that, and turning it on is a human task. F7 reports whether an IP
+    // was stored (and fails on it with BUG_REPORT_REQUIRE_NO_IP=1).
     user: { ...(userId !== undefined ? { id: String(userId) } : {}), ip_address: null },
     sdk: { name: sdk?.name ?? "sentry.javascript.unknown", version: sdk?.version ?? "0.0.0", integrations: [] },
     ...(userAgent ? { request: { headers: { "User-Agent": userAgent } } } : {}),
