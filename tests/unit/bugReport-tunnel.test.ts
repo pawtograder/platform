@@ -10,7 +10,12 @@ import { NextRequest } from "next/server";
 import { POST } from "@/app/api/tunnel/route";
 import { serializeEnvelope } from "@/lib/bugReport/envelope";
 
-type Received = { url: string; contentType: string | undefined; body: Buffer };
+type Received = {
+  url: string;
+  contentType: string | undefined;
+  forwardedFor: string | string[] | undefined;
+  body: Buffer;
+};
 
 let server: Server;
 let port: number;
@@ -28,7 +33,12 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
 
 beforeAll(async () => {
   server = createServer(async (req, res) => {
-    received.push({ url: req.url ?? "", contentType: req.headers["content-type"], body: await readBody(req) });
+    received.push({
+      url: req.url ?? "",
+      contentType: req.headers["content-type"],
+      forwardedFor: req.headers["x-forwarded-for"],
+      body: await readBody(req)
+    });
     res.writeHead(upstreamStatus, { "content-type": "application/json", "retry-after": "7" });
     res.end('{"id":"stub"}');
   });
@@ -83,6 +93,17 @@ describe("F3: binary envelopes pass through byte for byte", () => {
     expect(received[0].contentType).toBe("application/x-sentry-envelope");
     expect(received[0].body.length).toBe(envelope.length);
     expect(Buffer.compare(received[0].body, Buffer.from(envelope))).toBe(0);
+  });
+
+  it("does not forward the user's IP (ADR 3)", async () => {
+    const req = new NextRequest("http://localhost:3001/api/tunnel", {
+      method: "POST",
+      body: envelopeFor(`http://publickey@127.0.0.1:${port}/42`, randomBytes(16)) as BodyInit,
+      headers: { "x-forwarded-for": "203.0.113.7", "x-real-ip": "203.0.113.7" }
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(received[0].forwardedFor).toBeUndefined();
   });
 
   it("passes the upstream status and back-off headers through", async () => {

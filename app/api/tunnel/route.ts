@@ -62,9 +62,9 @@ export async function POST(request: NextRequest) {
       method: "POST",
       body: body as BodyInit,
       headers: {
-        "Content-Type": "application/x-sentry-envelope",
-        // Forward the original IP for accuracy
-        "X-Forwarded-For": request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown"
+        // No X-Forwarded-For: Sentry would store the user's IP, and events identify users by
+        // Pawtograder ID and role only (bug reporter ADR 3).
+        "Content-Type": "application/x-sentry-envelope"
       }
     });
 
