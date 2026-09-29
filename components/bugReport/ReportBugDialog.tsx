@@ -29,8 +29,12 @@ export type ReportReplaySlot = {
    * description, contact, review controls, Cancel, Submit.
    */
   review: ReactNode;
-  /** Called on Submit, before the feedback is sent. */
-  upload: ReportReplayUpload;
+  /**
+   * Called on Submit, before the feedback is sent. Null when the review has nothing to attach
+   * (redaction failed): the dialog then files the report without a replay and without the
+   * recording notice.
+   */
+  upload: ReportReplayUpload | null;
 };
 
 export type ReportBugDialogProps = {
@@ -88,7 +92,7 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
     setPhase({ kind: "submitting" });
     let result: SubmitReportResult;
     try {
-      result = await submitReport({ description, contactOk, eventId, replay: replay?.upload });
+      result = await submitReport({ description, contactOk, eventId, replay: replay?.upload ?? undefined });
     } catch {
       result = { status: "error", message: "The report did not go through. Try again." };
     }
@@ -112,7 +116,7 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
       }}
       initialFocusEl={() => (sent ? doneRef.current : descriptionRef.current)}
       closeOnInteractOutside={!submitting}
-      size={{ base: "full", md: "md" }}
+      size={{ base: "full", md: replay ? "lg" : "md" }}
       scrollBehavior="inside"
     >
       <DialogContent data-testid="report-bug-dialog">
@@ -165,9 +169,11 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
               </Checkbox>
               {replay && (
                 <>
-                  <Text fontSize="sm" data-testid="report-bug-replay-notice">
-                    {REPLAY_NOTICE}
-                  </Text>
+                  {replay.upload && (
+                    <Text fontSize="sm" data-testid="report-bug-replay-notice">
+                      {REPLAY_NOTICE}
+                    </Text>
+                  )}
                   <Box data-testid="report-bug-replay-section">{replay.review}</Box>
                 </>
               )}

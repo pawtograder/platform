@@ -1,0 +1,218 @@
+"use client";
+
+import { Button } from "@/components/ui/button";
+import type { RecordedEvent } from "@/lib/bugReport/types";
+import { RRWEB_EVENT_TYPE } from "@/lib/bugReport/types";
+import { Box, HStack, Text } from "@chakra-ui/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LuPause, LuPlay } from "react-icons/lu";
+
+type PlayerChunk = typeof import("./replayPlayerChunk");
+type Player = import("./replayPlayerChunk").RrwebPlayer;
+type Replayer = import("./replayPlayerChunk").RrwebReplayer;
+
+/** Tallest the preview gets, in CSS pixels; wide pages scale down to the dialog's width. */
+const MAX_HEIGHT = 360;
+
+function formatTime(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function recordedViewport(events: RecordedEvent[]): { width: number; height: number } {
+  const meta = events.find((e) => e.type === RRWEB_EVENT_TYPE.Meta) as
+    | { data: { width?: number; height?: number } }
+    | undefined;
+  const width = meta?.data.width || 1280;
+  const height = meta?.data.height || 720;
+  return { width, height };
+}
+
+export type ReplayPreviewProps = {
+  /** The redacted events, in order. Never pass unredacted events here. */
+  events: RecordedEvent[];
+  /** Id of the element that is the preview's text alternative (the remaining-strings list). */
+  describedBy?: string;
+  /** Called once the first frame has rendered. */
+  onFirstFrame?: () => void;
+};
+
+/**
+ * Plays a redacted recording with `@sentry-internal/rrweb-player`, loaded on first use.
+ *
+ * The player rebuilds the recorded page in a sandboxed iframe (no scripts). That copy of the page
+ * is inert: its links and buttons can't take focus or clicks, and assistive technology skips it,
+ * because the remaining-strings list next to it says everything it shows in text. The preview
+ * itself is one labelled image, with a Play/Pause button below it. The player's own controller
+ * is off: its icon buttons have no accessible names.
+ */
+export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPreviewProps) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<Player | null>(null);
+  const [chunk, setChunk] = useState<PlayerChunk | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [width, setWidth] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [currentMs, setCurrentMs] = useState(0);
+  const [ready, setReady] = useState(false);
+  const onFirstFrameRef = useRef(onFirstFrame);
+  onFirstFrameRef.current = onFirstFrame;
+
+  const viewport = useMemo(() => recordedViewport(events), [events]);
+  const totalMs = events.length > 1 ? events[events.length - 1].timestamp - events[0].timestamp : 0;
+  const hasWidth = width > 0;
+  const height = hasWidth ? Math.min(MAX_HEIGHT, Math.round((width * viewport.height) / viewport.width)) : 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    import("./replayPlayerChunk")
+      .then((m) => {
+        if (!cancelled) setChunk(m);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // React 18 has no `inert` prop.
+  useEffect(() => {
+    hostRef.current?.setAttribute("inert", "");
+  }, []);
+
+  // Track the width available to the preview, so it scales down to the dialog (and to 320 px).
+  useEffect(() => {
+    const host = hostRef.current?.parentElement;
+    if (!host) return;
+    const measure = () => setWidth(Math.floor(host.clientWidth));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+
+  // (Re)build the player whenever the redacted events change: click-to-redact and the
+  // keep-last-N control each produce a new redacted copy.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!chunk || !host || !hasWidth || events.length === 0) return;
+    setReady(false);
+    setPlaying(false);
+    setCurrentMs(0);
+    const player = new chunk.RrwebPlayer({
+      target: host,
+      props: {
+        events,
+        width,
+        height,
+        maxScale: 1,
+        autoPlay: false,
+        showController: false,
+        skipInactive: true,
+        mouseTail: false,
+        triggerFocus: false
+      }
+    });
+    playerRef.current = player;
+    const replayer: Replayer = player.getReplayer();
+    const iframe = replayer.iframe;
+    iframe.setAttribute("title", "Redacted recording preview");
+    iframe.setAttribute("tabindex", "-1");
+    iframe.setAttribute("aria-hidden", "true");
+    let first = true;
+    const onRebuilt = () => {
+      if (!first) return;
+      first = false;
+      setReady(true);
+      onFirstFrameRef.current?.();
+    };
+    replayer.on("fullsnapshot-rebuilded", onRebuilt);
+    replayer.on("finish", () => setPlaying(false));
+    const timer = window.setInterval(() => {
+      try {
+        setCurrentMs(replayer.getCurrentTime());
+      } catch {
+        // The replayer is being torn down.
+      }
+    }, 250);
+    return () => {
+      window.clearInterval(timer);
+      playerRef.current = null;
+      try {
+        replayer.destroy();
+      } catch {
+        // Already gone.
+      }
+      player.$destroy();
+      host.replaceChildren();
+    };
+    // `height` follows `width`; a resize is handled below without a rebuild.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chunk, events, hasWidth]);
+
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player || width === 0) return;
+    player.$set({ width, height });
+    try {
+      player.triggerResize();
+    } catch {
+      // Not rendered yet; the player scales itself on its first resize event.
+    }
+  }, [width, height]);
+
+  const toggle = useCallback(() => {
+    const replayer = playerRef.current?.getReplayer();
+    if (!replayer) return;
+    if (playing) {
+      replayer.pause();
+      setPlaying(false);
+    } else {
+      const at = replayer.getCurrentTime();
+      replayer.play(at >= totalMs ? 0 : at);
+      setPlaying(true);
+    }
+  }, [playing, totalMs]);
+
+  return (
+    <Box>
+      <Box
+        role="img"
+        aria-label="Preview of the redacted recording. The list of text in the recording below describes what it shows."
+        aria-describedby={describedBy}
+        data-testid="report-bug-replay-player"
+        data-ready={ready ? "true" : "false"}
+        data-event-count={events.length}
+        width="100%"
+        height={height > 0 ? `${height}px` : "120px"}
+        overflow="hidden"
+        borderWidth="1px"
+        borderRadius="md"
+        bg="bg.muted"
+        position="relative"
+        css={{
+          // The player floats and adds a drop shadow; keep it flat inside our border.
+          "& .rr-player": { float: "none", boxShadow: "none", borderRadius: 0, background: "transparent" }
+        }}
+      >
+        <div ref={hostRef} />
+        {!ready && (
+          <Text position="absolute" inset={0} display="flex" alignItems="center" justifyContent="center" fontSize="sm">
+            {loadError ? "The preview could not be loaded." : "Loading preview"}
+          </Text>
+        )}
+      </Box>
+      <HStack mt={2} gap={3} flexWrap="wrap">
+        <Button size="sm" variant="outline" onClick={toggle} disabled={!ready} data-testid="report-bug-replay-play">
+          {playing ? <LuPause aria-hidden /> : <LuPlay aria-hidden />}
+          {playing ? "Pause preview" : "Play preview"}
+        </Button>
+        <Text fontSize="sm" color="fg.muted">
+          {formatTime(currentMs)} / {formatTime(totalMs)}
+        </Text>
+      </HStack>
+    </Box>
+  );
+}

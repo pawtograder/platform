@@ -9,6 +9,7 @@
  * the redaction pass (package 3) and the review step, so it must never exist in a build real
  * users load. Test data is synthetic, and the recorder already masks text at record time.
  */
+import * as Sentry from "@sentry/nextjs";
 import { getActiveRecorder } from "../activeRecorder";
 import { submitReport, type SubmitReportResult } from "../submitFeedback";
 import type { FrozenBuffer } from "../types";
@@ -32,13 +33,21 @@ export type E2ESubmitOutput = {
 
 declare global {
   interface Window {
-    __bugReportE2E?: { submitWithReplay(input: E2ESubmitInput): Promise<E2ESubmitOutput> };
+    __bugReportE2E?: {
+      submitWithReplay(input: E2ESubmitInput): Promise<E2ESubmitOutput>;
+      /**
+       * `Sentry.sendFeedback` as a third party would call it, default options (so
+       * `includeReplay: true`). Test B4 checks it carries no replay.
+       */
+      sendFeedback(message: string): Promise<string>;
+    };
   }
 }
 
 export function installUploadTestHook(): void {
   if (typeof window === "undefined") return;
   window.__bugReportE2E = {
+    sendFeedback: (message) => Sentry.sendFeedback({ message }),
     async submitWithReplay(input) {
       const recorder = getActiveRecorder();
       if (!recorder) throw new Error("no recorder running");
