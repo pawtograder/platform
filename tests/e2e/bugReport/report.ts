@@ -18,8 +18,18 @@ import type { TunnelCapture } from "./tunnel";
 
 export type { RedactionTestOptions };
 
+// Polling with page.evaluate, not page.waitForFunction: waitForFunction evaluates a string in
+// the page, which the app's CSP reports as a script-src eval violation, and the leak tests
+// assert that there are none.
 async function waitForHook(page: Page): Promise<void> {
-  await page.waitForFunction(() => window.__bugReportRedaction !== undefined, undefined, { timeout: 20_000 });
+  await expect
+    .poll(() => page.evaluate(() => window.__bugReportRedaction !== undefined), { timeout: 20_000 })
+    .toBe(true);
+}
+
+/** Waits until the recorder is recording, without page.waitForFunction (see above). */
+export async function waitForRecording(page: Page, timeout = 20_000): Promise<void> {
+  await expect.poll(() => page.evaluate(() => window.__bugReportRecorder?.getState()), { timeout }).toBe("recording");
 }
 
 /** The would-be upload of a report made now, redacted, as UTF-8 JSON bytes. */

@@ -6,11 +6,11 @@
  * (student routes at `full`, class-wide ones at `structure`, as the policy rules allow), and
  * reports per route: canary hits in the redacted upload by kind, and free-text anchors rendered
  * outside a `data-report-block` element. Runs only with BUG_REPORT_SWEEP=1; prints
- * `[bug-report sweep]` lines. It asserts nothing about names: the ingest points that fill the
- * taint set belong to package 2.
+ * `[bug-report sweep]` lines. Only free text fails the test: names depend on the ingest points
+ * that fill the taint set (package 2).
  */
 /* eslint-disable no-console -- results printed for the PR */
-import { test } from "../../global-setup";
+import { test, expect } from "../../global-setup";
 import { loginAsUser } from "../TestingUtils";
 import { scanForCanaries } from "./canaries";
 import { seedCanaryClass, type CanarySeed } from "./canarySeed";
@@ -20,6 +20,31 @@ import { routePatternFor } from "./routePatterns";
 
 test.skip(process.env.BUG_REPORT_SWEEP !== "1", "go/no-go sweep: set BUG_REPORT_SWEEP=1");
 
+const ROUTE_KEYS = [
+  "studentDashboard",
+  "studentAssignments",
+  "studentAssignment",
+  "studentSubmission",
+  "studentGrade",
+  "studentGradebook",
+  "officeHours",
+  "helpRequest",
+  "discussion",
+  "discussionThread",
+  "manageDashboard",
+  "manageAssignments",
+  "manageAssignment",
+  "manageGroups",
+  "graderSubmission",
+  "graderSubmissionFiles",
+  "manageGradebook",
+  "manageEnrollments",
+  "manageStudent",
+  "manageOfficeHours",
+  "manageHelpRequest",
+  "manageDiscussionEngagement"
+] as const;
+
 let seed: CanarySeed;
 
 test.beforeAll(async () => {
@@ -27,54 +52,59 @@ test.beforeAll(async () => {
   seed = await seedCanaryClass();
 });
 
-test("free text with taint set and blocking only", async ({ page }) => {
-  test.setTimeout(1_200_000);
-  const results: Record<string, unknown>[] = [];
-  const freeTextAnchors = [...seed.registry.values()]
-    .filter((e) => e.kind === "free_text")
-    .flatMap((e) => e.anchors ?? []);
-  for (const [key, url] of Object.entries(seed.routes)) {
+for (const key of ROUTE_KEYS) {
+  test(`sweep ${key}`, async ({ page }) => {
+    test.setTimeout(120_000);
+    const url = (seed.routes as Record<string, string>)[key];
     const staff = url.includes("/manage") || url.includes("/grade/");
-    const user = staff ? seed.instructor : seed.students[0];
     const pattern = routePatternFor(url);
-    await page.context().clearCookies();
     await enableRecording(page, seed.course.id, [{ pattern, level: staff ? "structure" : "full" }]);
-    await loginAsUser(page, user, seed.course);
-    const row: Record<string, unknown> = { key, pattern };
-    try {
-      await page.goto(url);
-      await waitForRecorderState(page, "recording");
-      await page.waitForLoadState("networkidle").catch(() => {});
-      const bytes = await redactedUploadBytes(page);
-      const text = new TextDecoder().decode(bytes);
-      const hits = scanForCanaries(text, seed.registry).filter((h) => {
-        if (h.entry.kind !== "grade") return true;
-        return !/[0-9.]/.test(text[h.offset - 1] ?? "") && !/[0-9]/.test(text[h.offset + h.matched.length] ?? "");
-      });
-      const byKind: Record<string, string[]> = {};
-      for (const h of hits)
-        (byKind[h.entry.kind] ??= []).push(`${h.entry.column} "${h.matched}" …${h.context.slice(20, 100)}…`);
-      for (const k of Object.keys(byKind)) byKind[k] = [...new Set(byKind[k])].slice(0, 5);
-      row.uploadHits = byKind;
-      row.unblockedFreeText = await page.evaluate((anchors) => {
-        const out: string[] = [];
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const t = (node.textContent ?? "").toLowerCase();
-          const el = node.parentElement;
-          if (!el || el.closest("[data-report-block], script, style")) continue;
-          const a = anchors.find((x) => t.includes(x));
-          if (a)
-            out.push(
-              `${el.closest("[data-sentry-component]")?.getAttribute("data-sentry-component") ?? el.tagName}: ${t.slice(0, 60)}`
-            );
-        }
-        return out;
-      }, freeTextAnchors);
-    } catch (e) {
-      row.error = e instanceof Error ? e.message.split("\n")[0] : String(e);
+    await loginAsUser(page, staff ? seed.instructor : seed.students[0], seed.course);
+    await page.goto(url);
+    await waitForRecorderState(page, "recording");
+    await page.waitForLoadState("load");
+    // Let the page's data arrive and render; poll until the DOM stops growing.
+    let last = -1;
+    await expect
+      .poll(
+        async () => {
+          const n = await page.evaluate(() => document.body.innerText.length);
+          const stable = n === last;
+          last = n;
+          return stable;
+        },
+        { intervals: [1_000], timeout: 30_000 }
+      )
+      .toBe(true)
+      .catch(() => {});
+    const text = new TextDecoder().decode(await redactedUploadBytes(page));
+    const hits = scanForCanaries(text, seed.registry).filter((h) => {
+      if (h.entry.kind !== "grade") return true;
+      return !/[0-9.]/.test(text[h.offset - 1] ?? "") && !/[0-9]/.test(text[h.offset + h.matched.length] ?? "");
+    });
+    const byKind: Record<string, string[]> = {};
+    for (const h of hits) {
+      (byKind[h.entry.kind] ??= []).push(`${h.entry.column} "${h.matched}" …${h.context.slice(20, 100)}…`);
     }
-    results.push(row);
-    console.log(`[bug-report sweep] ${JSON.stringify(row)}`);
-  }
-});
+    for (const k of Object.keys(byKind)) byKind[k] = [...new Set(byKind[k])].slice(0, 5);
+    const anchors = [...seed.registry.values()].filter((e) => e.kind === "free_text").flatMap((e) => e.anchors ?? []);
+    const unblocked = await page.evaluate((list) => {
+      const out: string[] = [];
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const t = (node.textContent ?? "").toLowerCase();
+        const el = node.parentElement;
+        if (!el || el.closest("[data-report-block], script, style")) continue;
+        if (!list.some((a) => t.includes(a))) continue;
+        const component = el.closest("[data-sentry-component]")?.getAttribute("data-sentry-component") ?? el.tagName;
+        out.push(`${component}: ${t.slice(0, 60)}`);
+      }
+      return out;
+    }, anchors);
+    console.log(
+      `[bug-report sweep] ${JSON.stringify({ key, pattern, uploadHits: byKind, unblockedFreeText: unblocked })}`
+    );
+    expect(byKind.free_text ?? [], "free text in the upload").toEqual([]);
+    expect(unblocked, "free text outside <ReportBlock>").toEqual([]);
+  });
+}

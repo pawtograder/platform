@@ -36,7 +36,6 @@ async function measure(page: Page, minutes: number, step: (i: number) => Promise
     if (elapsed === 180 || elapsed === minutes * 60) {
       // A DOM change after the last tick, so the buffer's last segment is current.
       await page.evaluate(() => document.body.appendChild(document.createElement("span")));
-      await page.waitForFunction(() => window.__bugReportRedaction !== undefined);
       const runs: RedactionMeasurement[] = [];
       for (let r = 0; r < 3; r++) runs.push(await page.evaluate(() => window.__bugReportRedaction!.measure()));
       results[`${elapsed / 60}min`] = runs.sort((a, b) => a.totalMs - b.totalMs)[1];

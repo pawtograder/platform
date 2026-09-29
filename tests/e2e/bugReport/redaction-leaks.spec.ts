@@ -16,8 +16,8 @@ import { loginAsUser, supabase, type TestingUser } from "../TestingUtils";
 import { describeHits, scanForCanaries, type CanaryHit } from "./canaries";
 import { seedCanaryClass, type CanarySeed } from "./canarySeed";
 import type { CanaryEntry } from "./canaryRegistry";
-import { redactedReport, redactedUploadBytes } from "./report";
-import { allSerializedNodes, enableRecording, waitForRecorderState } from "./recorderTestUtils";
+import { redactedReport, redactedUploadBytes, waitForRecording } from "./report";
+import { allSerializedNodes, enableRecording } from "./recorderTestUtils";
 import type { RoutePolicyEntry } from "@/lib/bugReport/routePolicy";
 import { UNMASK_COMPONENT_FILES } from "@/app/course/[course_id]/e2e-harness/bug-report/leakValues";
 
@@ -81,7 +81,7 @@ async function openRecorded(page: Page, user: TestingUser, url: string, policy: 
   await enableRecording(page, seed.course.id, policy);
   await loginAsUser(page, user, seed.course);
   await page.goto(url);
-  await waitForRecorderState(page, "recording");
+  await waitForRecording(page);
 }
 
 test.describe("bug report redaction leak tests", () => {
@@ -166,10 +166,9 @@ test.describe("bug report redaction leak tests", () => {
     expect(report.worker).toBe(true);
     expect(workers.some((u) => u.includes("/_next/static/"))).toBe(true);
     const csp = await page.evaluate(() => (window as unknown as { __csp: string[] }).__csp);
-    // "script-src eval" reports are Playwright's own evaluate calls (see utils/csp.ts).
-    expect(
-      csp.filter((c) => c.startsWith("worker-src") || (c.startsWith("script-src") && !c.endsWith(" eval")))
-    ).toEqual([]);
+    // The worker loads under the app's CSP (report-only in E2E builds, so violations are reported
+    // rather than blocked; the test polls with page.evaluate, which reports nothing).
+    expect(csp).toEqual([]);
 
     // The review list has no canary, and still shows the harness's own text.
     const remainingHits = scanForCanaries(JSON.stringify(report.remaining), seed.registry);
@@ -251,7 +250,7 @@ test.describe("bug report redaction leak tests", () => {
 
     // The request body, in the student's own request list.
     await page.goto(`${seed.routes.officeHours}?view=my-requests`);
-    await waitForRecorderState(page, "recording");
+    await waitForRecording(page);
     const requestAnchor = anchors("help_requests.request")[0];
     await expect(page.getByText(new RegExp(requestAnchor, "i")).first()).toBeAttached();
     for (const a of anchors("help_requests.request")) {
@@ -260,7 +259,7 @@ test.describe("bug report redaction leak tests", () => {
     await expectNoCanaries(page);
 
     await page.goto(seed.routes.discussionThread);
-    await waitForRecorderState(page, "recording");
+    await waitForRecording(page);
     const bodyAnchor = anchors("discussion_threads.body")[0];
     await expect(page.getByText(new RegExp(bodyAnchor, "i")).first()).toBeAttached();
     for (const a of [...anchors("discussion_threads.body"), ...anchors("discussion_threads.subject")]) {
