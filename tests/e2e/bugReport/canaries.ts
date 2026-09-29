@@ -33,13 +33,26 @@ export type CanaryHit = {
 
 type Tagged = { canary: string; variant: string; entry: CanaryEntry };
 
-function automatonFor(registry: CanaryRegistry): AhoCorasick<Tagged> {
+/** The strings a scan looks for, for one canary. */
+export type VariantsOf = (canary: string, entry: CanaryEntry) => string[];
+
+const defaultVariants: VariantsOf = (canary, entry) => variants(canary, { kind: entry.kind, realName: entry.realName });
+
+const automata = new WeakMap<CanaryRegistry, Map<VariantsOf, { size: number; ac: AhoCorasick<Tagged> }>>();
+
+/** The registry's automaton, rebuilt when it has grown (registries only gain entries). */
+function automatonFor(registry: CanaryRegistry, variantsOf: VariantsOf): AhoCorasick<Tagged> {
+  let byVariants = automata.get(registry);
+  if (!byVariants) automata.set(registry, (byVariants = new Map()));
+  const cached = byVariants.get(variantsOf);
+  if (cached && cached.size === registry.size) return cached.ac;
   const ac = new AhoCorasick<Tagged>();
   for (const [canary, entry] of registry) {
-    for (const variant of variants(canary, { kind: entry.kind, realName: entry.realName })) {
+    for (const variant of variantsOf(canary, entry)) {
       ac.add(variant, { canary, variant, entry });
     }
   }
+  byVariants.set(variantsOf, { size: registry.size, ac });
   return ac;
 }
 
@@ -55,9 +68,11 @@ const decoder = new TextDecoder();
  */
 export function scanForCanaries(
   bytes: Uint8Array | string | readonly (Uint8Array | string)[],
-  registry: CanaryRegistry
+  registry: CanaryRegistry,
+  /** Which forms of each canary to look for; by default `variants` of it */
+  variantsOf: VariantsOf = defaultVariants
 ): CanaryHit[] {
-  const ac = automatonFor(registry);
+  const ac = automatonFor(registry, variantsOf);
   const sources = typeof bytes === "string" || bytes instanceof Uint8Array ? [bytes] : bytes;
   const hits: CanaryHit[] = [];
   sources.forEach((source, index) => {
@@ -86,6 +101,14 @@ export function scanForCanaries(
  */
 function insideLongerNumber(text: string, start: number, end: number): boolean {
   return /[\d.]/.test(text[start - 1] ?? "") || /\d/.test(text[end] ?? "");
+}
+
+/**
+ * The same rule for a hit already found, for callers that filter hits from their own scan: true
+ * for a grade hit with a digit, or a digit-and-dot, right next to it in `text`.
+ */
+export function isNumberFragment(text: string, hit: CanaryHit): boolean {
+  return hit.entry.kind === "grade" && insideLongerNumber(text, hit.offset, hit.offset + hit.matched.length);
 }
 
 /** Formats hits for an assertion message. */

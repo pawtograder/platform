@@ -10,13 +10,18 @@
  *
  * I3: a name rendered inside a `data-report-unmask` component (the E2E-only harness page) fails
  * the check, naming the component.
+ *
+ * Phase 2: the upload scan finds a canary that reached a would-be upload (a console breadcrumb no
+ * ingest point saw), and says on which route and where in the upload.
  */
 import { expect, test } from "@/tests/global-setup";
 import { CURRENT_CLASSIFICATION, checkObserved, checkSinks, type Classification } from "@/lib/bugReport/traceCheck";
 import { loginAsUser } from "../TestingUtils";
 import { canaryPersonName, canarySentence, registerCanary, resolveCanary, type CanaryRegistry } from "./canaryRegistry";
 import { seedCanaryClass, type CanarySeed } from "./canarySeed";
+import { waitForRecording } from "./report";
 import { TaintTracer } from "./taintTrace";
+import { describeUploadHits, isUploadTraceMode, UploadScanner } from "./uploadTrace";
 
 test.describe.configure({ mode: "serial" });
 
@@ -117,4 +122,34 @@ test("I3: a name inside data-report-unmask fails, naming the component", async (
   expect(failures[0]).toContain("BugReportUnmaskHarness carries data-report-unmask");
   expect(failures[0]).toContain("name");
   expect(failures[0]).toContain("/e2e-harness/bug-report-unmask");
+});
+
+test("phase 2: a canary that reaches a would-be upload is found, with the route and its place", async ({
+  page,
+  context
+}) => {
+  test.skip(!isUploadTraceMode(), "phase 2 runs only under BUG_REPORT_TRACE_UPLOAD=1 (and needs an E2E_ENABLE build)");
+  // Logged on a recorded page without passing through any ingest point, so nothing taints it and
+  // the console breadcrumb carries it into the upload. Kept out of `workerCanaries`, so the
+  // worker's own scan (and the run's report) never counts this deliberate leak.
+  const probe = canarySentence();
+  const registry: CanaryRegistry = new Map([
+    [probe.text, { kind: "free_text", column: "phase2.console_probe", rowId: 0, anchors: [probe.anchor] }]
+  ]);
+  const scanner = new UploadScanner({ registry });
+  scanner.currentTest = "phase 2 probe";
+  await scanner.attachContext(context, { manage: true });
+  await loginAsUser(page, seed.students[0], seed.course);
+  await page.goto(seed.routes.studentAssignments);
+  await waitForRecording(page);
+  // eslint-disable-next-line no-console
+  await page.evaluate((text) => console.log(text), probe.text);
+
+  await scanner.scanPage(page, "probe");
+  const hits = scanner.hitsFor("phase 2 probe");
+  expect(hits.map((h) => h.column)).toContain("phase2.console_probe");
+  const hit = hits.find((h) => h.column === "phase2.console_probe")!;
+  expect(hit.route).toBe("/course/[course_id]/assignments");
+  expect(hit.where).toMatch(/Custom breadcrumb console/);
+  expect(describeUploadHits([hit])).toContain("phase2.console_probe");
 });
