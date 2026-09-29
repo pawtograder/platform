@@ -133,12 +133,33 @@ export function classificationOf(
   return undefined;
 }
 
-export type TraceFailure = { kind: "unclassified" | "classified-none" | "unmasked"; message: string };
+export type TraceFailure = {
+  kind: "unclassified" | "classified-none" | "unmasked" | "server-rendered";
+  message: string;
+};
 
-/** Fails every observed flow with no classification, or classified `none` although it carried PII. */
+/** Failures that should fail CI. `server-rendered` findings are warnings: see `checkObserved`. */
+export function isBlocking(f: TraceFailure): boolean {
+  return f.kind !== "server-rendered";
+}
+
+/**
+ * Fails every observed flow with no classification, or classified `none` although it carried PII.
+ * Server-rendered text in RSC payloads comes back as `server-rendered` warnings.
+ */
 export function checkObserved(observed: readonly ObservedFlow[], c: Classification = CURRENT_CLASSIFICATION) {
   const failures: TraceFailure[] = [];
   for (const flow of observed) {
+    if (flow.key.startsWith("?rendered:")) {
+      // Text a server component rendered into the RSC payload (React children or attributes), not
+      // row data. privacy.ts can't classify it; the page needs a taint block (ssrTaint) before its
+      // route may record. Reported as a warning.
+      failures.push({
+        kind: "server-rendered",
+        message: `${flow.source} rendered a ${flow.kind} canary on the server (${flow.key.slice(10)}) ${`on ${flow.firstSeenIn} (${flow.test})`}; the route needs ssrTaint before it can be listed`
+      });
+      continue;
+    }
     const classified = classificationOf(flow.source, flow.key, c);
     if (classified !== undefined && classified !== "none") continue;
     const where = `on ${flow.firstSeenIn} (${flow.test})`;

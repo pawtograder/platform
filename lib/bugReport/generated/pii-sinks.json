@@ -1,0 +1,118 @@
+{
+  "/course/[course_id]": {
+    "OfficeHoursStatusCard": ["handle"],
+    "ResendOrgInvitation": ["handle"],
+    "RootLayout": ["handle"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/assignments": {
+    "ResendOrgInvitation": ["handle"],
+    "ResponsiveTable": ["grade", "handle"],
+    "RootLayout": ["handle"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/assignments/[assignment_id]": {
+    "RepositoriesInfo": ["handle"],
+    "ResendOrgInvitation": ["handle"],
+    "ResponsiveTable": ["grade"],
+    "RootLayout": ["handle"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade": {
+    "GradeLedgerHeader": ["grade"],
+    "SubmissionsLayout": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/discussion": {
+    "TopPostsSidebar": ["free_text", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/discussion/[root_id]": {
+    "DiscussionHeader": ["free_text"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "PostRowComponent": ["free_text", "name"],
+    "ThreadHeader": ["free_text", "handle", "name"],
+    "ThreadView": ["free_text", "handle", "name"],
+    "UserMenu": ["handle"],
+    "document.title": ["free_text"]
+  },
+  "/course/[course_id]/grade/assignments/[assignment_id]/submissions/[submissions_id]/files": {
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "PersonName": ["handle", "name"],
+    "RubricView": ["grade"],
+    "SubmissionsLayout": ["name"],
+    "UserMenu": ["handle"],
+    "document.title": ["name"]
+  },
+  "/course/[course_id]/grade/assignments/[assignment_id]/submissions/[submissions_id]/results": {
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "PersonName": ["handle", "name"],
+    "RubricView": ["grade"],
+    "SubmissionsLayout": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/gradebook": {
+    "UserMenu": ["handle"],
+    "WhatIfScoreCell": ["grade"]
+  },
+  "/course/[course_id]/manage/assignments": {
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/assignments/[assignment_id]": {
+    "AssignmentsTable": ["name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "ScoreLinkWithProfile": ["grade"],
+    "StudentNameCell": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/assignments/[assignment_id]/groups": {
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/course/enrollments": {
+    "EnrollmentsTable": ["email", "handle", "name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/discussion-engagement": {
+    "DiscussionEngagementPage": ["name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/gradebook": {
+    "GradebookCell": ["grade"],
+    "GradebookTable": ["name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "StudentNameCell": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/office-hours": {
+    "HelpQueuesDashboard": ["handle"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "RequestRow": ["free_text", "handle", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/office-hours/request/[request_id]": {
+    "ChatMessageItem": ["free_text", "name"],
+    "HelpRequestChat": ["name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "HelpRequestStudents": ["handle", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/student/[student_id]": {
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "StudentPage": ["email", "free_text", "grade", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/office-hours/[queue_id]": {
+    "HelpRequestHistory": ["free_text"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/office-hours/request/[request_id]": {
+    "ChatMessageItem": ["free_text", "name"],
+    "HelpRequestChat": ["name"],
+    "HelpRequestStudents": ["handle", "name"],
+    "UserMenu": ["handle"]
+  }
+}

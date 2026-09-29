@@ -8,6 +8,7 @@
  * rubric comment, a released grade, and a manual gradebook column with a score override note.
  */
 import { addDays } from "date-fns";
+import { test } from "@/tests/global-setup";
 import {
   createClass,
   createUsersInClass,
@@ -345,3 +346,13 @@ export async function seedCanaryClass({ studentCount = 3 }: { studentCount?: num
     }
   };
 }
+
+/**
+ * The shared `test` with a `canarySeed` fixture: a fresh canary class per test. Specs that share
+ * one class across tests call `seedCanaryClass()` in `beforeAll` instead.
+ */
+export const canaryTest = test.extend<{ canarySeed: CanarySeed }>({
+  canarySeed: async ({}, use) => {
+    await use(await seedCanaryClass());
+  }
+});

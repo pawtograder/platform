@@ -94,6 +94,18 @@ export type TaintTracerOptions = {
   ignoreRoutes?: RegExp;
 };
 
+/** Flight properties that hold rendered React content rather than data. */
+const RENDERED_PROPS = new Set([
+  "children",
+  "dangerouslySetInnerHTML",
+  "title",
+  "alt",
+  "aria-label",
+  "placeholder",
+  "value",
+  "defaultValue"
+]);
+
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
 const MAX_DETAILS = 20000;
 let tracerCount = 0;
@@ -334,8 +346,9 @@ function installSinkScanner(args: {
       });
       if (fresh.length)
         await (w[args.sinksBinding] as (path: string, hits: unknown[]) => Promise<void>)(location.pathname, fresh);
-    } catch {
-      /* never break the page under test */
+    } catch (e) {
+      // Never break the page under test; the tracer reports this console line.
+      console.warn("[bug-report-trace] DOM scan failed:", String(e));
     } finally {
       running = false;
     }
@@ -345,6 +358,7 @@ function installSinkScanner(args: {
   let firstPending = 0;
   const schedule = () => {
     const now = Date.now();
+    w.__bugReportTraceLastMutation = now;
     if (!timer) firstPending = now;
     if (timer) clearTimeout(timer);
     const wait = now - firstPending > 1500 ? 0 : 300;
@@ -418,6 +432,16 @@ export class TaintTracer {
       this.recordSinks(pathname, hits);
     });
     await context.addInitScript(installSinkScanner, b);
+    // Context-level, so requests from web and service workers count too.
+    context.on("response", (response) => {
+      let page: Page | null = null;
+      try {
+        page = response.frame().page();
+      } catch {
+        page = context.pages()[0] ?? null;
+      }
+      this.track(this.onResponse(page, response).catch(() => {}));
+    });
     for (const page of context.pages()) this.attachPage(page);
     context.on("page", (page) => this.attachPage(page));
     // Scan once more and drain pending response reads before the context goes away.
@@ -444,6 +468,24 @@ export class TaintTracer {
     );
   }
 
+  /**
+   * Waits until the page's DOM has not changed for `quietMs` (the scanner timestamps every
+   * mutation), then rescans. For tours that visit pages without waiting on specific content.
+   */
+  async settle(page: Page, { quietMs = 1500, timeout = 30_000 } = {}): Promise<void> {
+    await page
+      .waitForFunction(
+        (quiet) => {
+          const last = (window as unknown as { __bugReportTraceLastMutation?: number }).__bugReportTraceLastMutation;
+          return last !== undefined && Date.now() - last > quiet && document.readyState === "complete";
+        },
+        quietMs,
+        { timeout, polling: 250 }
+      )
+      .catch(() => {});
+    await this.scanNow(page.context());
+  }
+
   /** Waits for every response and frame still being read. */
   async flush(): Promise<void> {
     while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
@@ -463,7 +505,9 @@ export class TaintTracer {
   }
 
   private attachPage(page: Page) {
-    page.on("response", (response) => this.track(this.onResponse(page, response).catch(() => {})));
+    page.on("console", (msg) => {
+      if (msg.text().startsWith("[bug-report-trace]")) process.stderr.write(`${msg.text()} (${page.url()})\n`);
+    });
     page.on("websocket", (ws) => this.onWebSocket(page, ws));
     page.on("framenavigated", (frame) => {
       if (frame !== page.mainFrame()) return;
@@ -486,7 +530,7 @@ export class TaintTracer {
     if (this.sourceDetails.length < MAX_DETAILS) this.sourceDetails.push(flow);
   }
 
-  private async onResponse(page: Page, response: Response) {
+  private async onResponse(page: Page | null, response: Response) {
     if (this.registry.size === 0) return;
     const request = response.request();
     const type = request.resourceType();
@@ -496,7 +540,7 @@ export class TaintTracer {
     const url = new URL(response.url());
     if (url.pathname.startsWith("/_next/static") || url.pathname.startsWith("/_next/image")) return;
     const fromSupabase = this.supabase !== null && url.origin === this.supabase;
-    const pageUrl = type === "document" ? response.url() : page.url();
+    const pageUrl = type === "document" || !page ? response.url() : page.url();
     let body: Buffer;
     try {
       body = await response.body();
@@ -604,15 +648,24 @@ export class TaintTracer {
   private emitFlight(text: string, subset: CanaryMatcher, source: string, url: string, pageUrl: string) {
     if (!text) return;
     const lower = text.toLowerCase();
-    for (const hit of subset.find(text)) {
-      const needle = hit.matched;
-      const seenKeys = new Set<string>();
+    const byNeedle = new Map<string, ReturnType<CanaryMatcher["find"]>>();
+    for (const hit of subset.find(text)) byNeedle.set(hit.matched, [...(byNeedle.get(hit.matched) ?? []), hit]);
+    const emitted = new Set<string>();
+    for (const [needle, candidates] of byNeedle) {
       for (let at = lower.indexOf(needle); at >= 0; at = lower.indexOf(needle, at + needle.length)) {
         const prop = propertyBefore(text, at);
-        const seededColumnName = hit.entry.column.split(".").pop();
-        const key = prop && prop === seededColumnName ? hit.entry.column : `?${prop ?? "(markup)"}`;
-        if (seenKeys.has(key)) continue;
-        seenKeys.add(key);
+        // One anchor can stand for several seeded values (a name, its sortable and short forms);
+        // prefer the one whose column the property is named after.
+        const named = candidates.find((c) => prop !== null && c.entry.column.split(".").pop() === prop);
+        const hit = named ?? candidates[0];
+        const key = named
+          ? named.entry.column
+          : prop === null || RENDERED_PROPS.has(prop)
+            ? `?rendered:${prop ?? "markup"}`
+            : `?${prop}`;
+        const id = `${key}\u0000${hit.canary}`;
+        if (emitted.has(id)) continue;
+        emitted.add(id);
         this.addFlow(
           {
             source,

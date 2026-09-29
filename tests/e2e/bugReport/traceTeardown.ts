@@ -13,6 +13,7 @@ import path from "node:path";
 import {
   blockCandidates,
   checkObserved,
+  isBlocking,
   checkSinks,
   normalizeObserved,
   normalizeSinks,
@@ -117,12 +118,17 @@ export default async function traceTeardown() {
   );
   if (cov.gaps.length > 0)
     console.log(`[bug-report-trace] coverage gaps (seeded, never observed): ${cov.gaps.join(", ")}`);
-  if (failures.length > 0) {
+  const blocking = failures.filter(isBlocking);
+  const warnings = failures.filter((f) => !isBlocking(f));
+  if (warnings.length > 0) {
+    console.log(`[bug-report-trace] ${warnings.length} warnings:\n  ${warnings.map((f) => f.message).join("\n  ")}`);
+  }
+  if (blocking.length > 0) {
     console.log(
-      `[bug-report-trace] ${failures.length} check failures:\n  ${failures.map((f) => f.message).join("\n  ")}`
+      `[bug-report-trace] ${blocking.length} check failures:\n  ${blocking.map((f) => f.message).join("\n  ")}`
     );
     if (process.env.BUG_REPORT_TRACE_STRICT === "1") {
-      throw new Error(`bug report taint trace: ${failures.length} check failures (see above)`);
+      throw new Error(`bug report taint trace: ${blocking.length} check failures (see above)`);
     }
   }
   console.log(`[bug-report-trace] details: ${path.join(dir, "report.json")}`);

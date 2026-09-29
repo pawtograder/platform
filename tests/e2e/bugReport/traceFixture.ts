@@ -15,7 +15,7 @@
 import type { Browser, Fixtures, PlaywrightTestArgs, PlaywrightWorkerArgs, TestInfo } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { checkObserved, checkSinks } from "@/lib/bugReport/traceCheck";
+import { checkObserved, checkSinks, isBlocking } from "@/lib/bugReport/traceCheck";
 import { isTraceMode } from "./canaryRegistry";
 import { TaintTracer } from "./taintTrace";
 
@@ -81,7 +81,9 @@ export const traceFixtures: Fixtures<TraceTestFixtures, TraceWorkerFixtures, Pla
           .observedFlows()
           .filter((f) => !before.has(`${f.source}|${f.key}|${f.kind}`) && f.test === workerTracer.currentTest);
         const failures = [
-          ...checkObserved(fresh).map((f) => f.message),
+          ...checkObserved(fresh)
+            .filter(isBlocking)
+            .map((f) => f.message),
           ...checkSinks(workerTracer.sinksFor(workerTracer.currentTest)).map((f) => f.message)
         ];
         if (failures.length > 0) {
