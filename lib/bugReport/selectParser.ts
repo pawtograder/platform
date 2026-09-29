@@ -29,8 +29,16 @@ import {
 
 export type TaintKind = Exclude<PiiKind, "none">;
 
-/** One classified value. `source` names where the kind came from ("profiles.name", "rpc:fn $.x"). */
-export type ClassifiedValue = { value: string; kind: TaintKind; source: string };
+/**
+ * One classified value. `source` names where the kind came from ("profiles.name", "rpc:fn $.x").
+ * `nested` is set when the value sat inside an object or array under the classified column or
+ * path (a Json column, a `text[]`, an RPC path covering a whole subtree), rather than being the
+ * column's or path's own value. The ingest uses it to skip enum-like strings in unknown blobs.
+ */
+export type ClassifiedValue = { value: string; kind: TaintKind; source: string; nested?: true };
+
+/** A string found under a key or path with no classification. */
+export type UnclassifiedValue = { value: string; source: string };
 
 export type ClassifyResult = {
   /** False when the URL is not a PostgREST, RPC, or edge-function URL. */
@@ -38,6 +46,8 @@ export type ClassifyResult = {
   values: ClassifiedValue[];
   /** Keys ("table.column") or paths ("rpc:fn $.x") that have no classification. */
   unclassified: string[];
+  /** Every string found under those keys, for the ingest's conservative fallback. */
+  unclassifiedValues: UnclassifiedValue[];
 };
 
 export type SelectItem = {
@@ -126,24 +136,41 @@ export function resolveEmbed(parent: string, item: SelectItem): string | null {
 
 class Collector {
   values: ClassifiedValue[] = [];
+  unclassifiedValues: UnclassifiedValue[] = [];
   private missing = new Set<string>();
-  unclassified(key: string) {
+  /** Records `key` as unclassified, and every string beneath `value`. */
+  unclassified(key: string, value?: unknown) {
     this.missing.add(key);
+    this.rawLeaves(value, key);
   }
   get unclassifiedKeys() {
     return [...this.missing];
   }
+  /** Strings only: an unclassified number is never string-matched (grades, IDs), and 9-digit IDs meet the regex backstop. */
+  private rawLeaves(v: unknown, source: string) {
+    if (v === null || v === undefined) return;
+    if (typeof v === "string") {
+      if (v.length > 0) this.unclassifiedValues.push({ value: v, source });
+    } else if (Array.isArray(v)) {
+      for (const x of v) this.rawLeaves(x, source);
+    } else if (typeof v === "object") {
+      for (const x of Object.values(v as Record<string, unknown>)) this.rawLeaves(x, source);
+    }
+  }
   /** Emits every string (and, for grades and handles, number) at or beneath `v`. */
-  leaves(v: unknown, kind: PiiKind, source: string) {
+  leaves(v: unknown, kind: PiiKind, source: string, nested = false) {
     if (kind === "none" || v === null || v === undefined) return;
     if (typeof v === "string") {
-      if (v.length > 0) this.values.push({ value: v, kind, source });
+      if (v.length > 0) this.values.push(nested ? { value: v, kind, source, nested } : { value: v, kind, source });
     } else if (typeof v === "number") {
-      if (kind === "grade" || kind === "handle") this.values.push({ value: String(v), kind, source });
+      if (kind === "grade" || kind === "handle") {
+        const value = String(v);
+        this.values.push(nested ? { value, kind, source, nested } : { value, kind, source });
+      }
     } else if (Array.isArray(v)) {
-      for (const x of v) this.leaves(x, kind, source);
+      for (const x of v) this.leaves(x, kind, source, true);
     } else if (typeof v === "object") {
-      for (const x of Object.values(v as Record<string, unknown>)) this.leaves(x, kind, source);
+      for (const x of Object.values(v as Record<string, unknown>)) this.leaves(x, kind, source, true);
     }
   }
 }
@@ -160,7 +187,7 @@ function walkRows(out: Collector, relation: string, rows: unknown, select: Selec
     const item = byKey.get(key);
     if (item?.children) {
       const target = resolveEmbed(relation, item);
-      if (!target) out.unclassified(`${relation}.${key} (embed)`);
+      if (!target) out.unclassified(`${relation}.${key} (embed)`, value);
       else walkRows(out, target, value, item.children);
       continue;
     }
@@ -169,7 +196,7 @@ function walkRows(out: Collector, relation: string, rows: unknown, select: Selec
     const colKey = `${relation}.${column ?? key}`;
     const kind = column !== undefined ? COLUMNS[colKey] : undefined;
     if (kind === undefined) {
-      if (value !== null) out.unclassified(colKey);
+      if (value !== null) out.unclassified(colKey, value);
       continue;
     }
     out.leaves(value, kind, colKey);
@@ -198,9 +225,10 @@ function walkJsonPathMap(
     } else if (typeof node === "object") {
       for (const [k, v] of Object.entries(node as Record<string, unknown>)) visit(v, [...path, { key: k }], kind);
     } else if (kind === undefined) {
-      out.unclassified(`${source} ${p}`);
+      out.unclassified(`${source} ${p}`, node);
     } else {
-      out.leaves(node, kind, `${source} ${p}`);
+      // A value its own path classifies is not nested; one covered by an ancestor's path is.
+      out.leaves(node, kind, `${source} ${p}`, !isPiiKind(here));
     }
   };
   visit(body, [], undefined);
@@ -229,39 +257,44 @@ export function classifyResponse(url: string, method: string, body: unknown): Cl
   try {
     parsed = new URL(url, "http://localhost");
   } catch {
-    return { handled: false, values: [], unclassified: [] };
+    return { handled: false, values: [], unclassified: [], unclassifiedValues: [] };
   }
   const selectParam = parsed.searchParams.get("select");
   const select = selectParam ? parseSelect(selectParam) : null;
   const path = parsed.pathname;
   let m: RegExpMatchArray | null;
   if (method.toUpperCase() === "HEAD" || method.toUpperCase() === "OPTIONS") {
-    return { handled: false, values: [], unclassified: [] };
+    return { handled: false, values: [], unclassified: [], unclassifiedValues: [] };
   } else if ((m = path.match(/\/rest\/v1\/rpc\/([^/]+)\/?$/))) {
     const fn = decodeURIComponent(m[1]);
     const c = RPCS[fn];
-    if (c === undefined) out.unclassified(`rpc:${fn}`);
+    if (c === undefined) out.unclassified(`rpc:${fn}`, body);
     else if (isTableRef(c)) walkRows(out, c.$table, body, select);
     else if (isPiiKind(c)) out.leaves(body, c, `rpc:${fn}`);
     else walkJsonPathMap(out, c, body, `rpc:${fn}`, select);
   } else if ((m = path.match(/\/rest\/v1\/([^/]+)\/?$/))) {
     const relation = decodeURIComponent(m[1]);
-    if (!RELATIONS[relation]) out.unclassified(relation);
+    if (!RELATIONS[relation]) out.unclassified(relation, body);
     else walkRows(out, relation, body, select);
   } else if ((m = path.match(/\/functions\/v1\/([^/]+)/))) {
     const slug = decodeURIComponent(m[1]);
     const map = edgeFunctionMap(slug);
-    if (!map) out.unclassified(`edge:${slug}`);
+    if (!map) out.unclassified(`edge:${slug}`, body);
     else walkJsonPathMap(out, map, body, `edge:${slug}`);
   } else {
-    return { handled: false, values: [], unclassified: [] };
+    return { handled: false, values: [], unclassified: [], unclassifiedValues: [] };
   }
-  return { handled: true, values: out.values, unclassified: out.unclassifiedKeys };
+  return {
+    handled: true,
+    values: out.values,
+    unclassified: out.unclassifiedKeys,
+    unclassifiedValues: out.unclassifiedValues
+  };
 }
 
 /** Classifies rows of a known relation (TableController `initialData`, realtime `postgres_changes`). */
 export function classifyRows(relation: string, rows: unknown): Omit<ClassifyResult, "handled"> {
   const out = new Collector();
   walkRows(out, relation, rows, null);
-  return { values: out.values, unclassified: out.unclassifiedKeys };
+  return { values: out.values, unclassified: out.unclassifiedKeys, unclassifiedValues: out.unclassifiedValues };
 }

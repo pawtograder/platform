@@ -2,9 +2,12 @@
 
 import { Button, VStack } from "@chakra-ui/react";
 import { createBrowserClient } from "@supabase/ssr";
+import { installFetchHook } from "@/lib/bugReport/fetchHook";
 import { BsGithub } from "react-icons/bs";
 import { PopConfirm } from "../ui/popconfirm";
 export default function UnlinkAccount() {
+  // Before the client captures `fetch`: the bug reporter's taint ingest listens through this hook.
+  installFetchHook();
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL || "",
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
