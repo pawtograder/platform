@@ -108,7 +108,7 @@ export type FrozenBuffer = {
 export type RecorderState = "recording" | "paused" | "stopped";
 
 /**
- * The recorder's public API. `window.__bugReportRecorder` holds one while a recorder exists
+ * The recorder's public API. In E2E builds `window.__bugReportRecorder` holds one while a recorder exists
  * for this page load (recording or paused), and is undefined otherwise.
  */
 export interface BugReportRecorder {
