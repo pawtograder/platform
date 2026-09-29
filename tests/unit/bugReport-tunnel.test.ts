@@ -156,3 +156,70 @@ describe("F4: envelopes for another host or project are refused", () => {
     expect(received).toHaveLength(0);
   });
 });
+
+describe("the tunnel caps the body at 10 MiB", () => {
+  const LIMIT = 10 * 1024 * 1024;
+  const dsn = () => `http://publickey@127.0.0.1:${port}/42`;
+
+  /** A streamed body with no Content-Length, counting how many chunks the route pulled. */
+  function streamedRequest(chunks: Uint8Array[], headers: Record<string, string> = {}) {
+    const pulled = { count: 0 };
+    let i = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (i >= chunks.length) return controller.close();
+        pulled.count++;
+        controller.enqueue(chunks[i++]);
+      }
+    });
+    const req = new NextRequest("http://localhost:3001/api/tunnel", {
+      method: "POST",
+      body,
+      headers,
+      duplex: "half"
+    } as RequestInit & { duplex: "half" });
+    return { req, pulled };
+  }
+
+  it("answers 413 when Content-Length is over the limit, without forwarding", async () => {
+    const req = new NextRequest("http://localhost:3001/api/tunnel", {
+      method: "POST",
+      body: envelopeFor(dsn(), randomBytes(16)) as BodyInit,
+      headers: { "content-length": String(LIMIT + 1) }
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(413);
+    expect(received).toHaveLength(0);
+  });
+
+  it("answers 413 for a streamed body with no Content-Length once it passes the limit, and stops reading", async () => {
+    const mib = new Uint8Array(1024 * 1024);
+    const { req, pulled } = streamedRequest([
+      envelopeFor(dsn(), new Uint8Array(0)),
+      ...Array.from({ length: 20 }, () => mib)
+    ]);
+    expect(req.headers.get("content-length")).toBeNull();
+    const res = await POST(req);
+    expect(res.status).toBe(413);
+    expect(received).toHaveLength(0);
+    expect(pulled.count).toBeLessThanOrEqual(12);
+  });
+
+  it("answers 413 when Content-Length understates the body", async () => {
+    const mib = new Uint8Array(1024 * 1024);
+    const { req } = streamedRequest([envelopeFor(dsn(), new Uint8Array(0)), ...Array.from({ length: 11 }, () => mib)], {
+      "content-length": "100"
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(413);
+    expect(received).toHaveLength(0);
+  });
+
+  it("forwards a streamed envelope under the limit", async () => {
+    const envelope = envelopeFor(dsn(), randomBytes(2 * 1024 * 1024));
+    const { req } = streamedRequest([envelope.slice(0, 1000), envelope.slice(1000)]);
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(Buffer.compare(received[0].body, Buffer.from(envelope))).toBe(0);
+  });
+});
