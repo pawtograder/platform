@@ -15,9 +15,10 @@ import { addCustomEvent, record, takeFullSnapshot } from "@sentry-internal/rrweb
 import * as Sentry from "@sentry/nextjs";
 import { setActiveRecorder } from "./activeRecorder";
 import { onFetch, type FetchObservation } from "./fetchHook";
+import { startIngest, type IngestHandle, type IngestStats } from "./ingest";
 import { RingBuffer } from "./ringBuffer";
 import { courseIdFromPathname, recordingLevelFor, type RecordingLevel } from "./routePolicy";
-import { getTaintSet, readTaintBlocks, TAINT_BLOCK_ID, type TaintKind } from "./taint";
+import { getTaintSet, readTaintBlocks, TAINT_BLOCK_ID, type TaintKind, type TaintStats } from "./taint";
 import {
   BREADCRUMB_TAG,
   type BreadcrumbPayload,
@@ -178,6 +179,7 @@ class Recorder implements BugReportRecorder {
   private checkedPath: string | null = null;
   private checkoutScheduled = false;
   private inBreadcrumb = false;
+  private ingest: IngestHandle | undefined;
 
   constructor(options: RecorderStartOptions) {
     this.courseId = options.courseId;
@@ -186,6 +188,9 @@ class Recorder implements BugReportRecorder {
   }
 
   start(): void {
+    // The ingest starts before rrweb takes its first FullSnapshot, so rows already on screen
+    // (TableController contents, the pre-start fetch buffer, the session) are tainted too.
+    this.ingest = startIngest();
     readTaintBlocks(document, getTaintSet());
     this.watchTaintBlocks();
     installSentryHooks();
@@ -435,6 +440,8 @@ class Recorder implements BugReportRecorder {
     this.state = "stopped";
     this.stopRecording();
     for (const cleanup of this.cleanups.splice(0)) cleanup();
+    this.ingest?.stop();
+    this.ingest = undefined;
     this.buffer.clear();
     this.visits.length = 0;
     this.errorIds.length = 0;
@@ -442,6 +449,11 @@ class Recorder implements BugReportRecorder {
     getTaintSet().clear();
     if (current === this) current = null;
     setActiveRecorder(undefined);
+  }
+
+  /** Measurement hook: time spent classifying, and the taint set's size. */
+  ingestStats(): { ingest: IngestStats | null; taint: TaintStats } {
+    return { ingest: this.ingest?.stats() ?? null, taint: getTaintSet().stats() };
   }
 
   /** Test and measurement hook: buffer statistics without a deep copy. */
