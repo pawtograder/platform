@@ -14,6 +14,7 @@ import {
   getEnvelopeEndpointWithUrlEncodedAuth,
   getSdkMetadataForEnvelopeHeader,
   isRateLimited,
+  parseRetryAfterHeader,
   prepareEvent,
   updateRateLimits,
   type RateLimits,
@@ -71,6 +72,12 @@ export type UploadOptions = {
 export const MAX_ATTEMPTS = 3;
 /** Backoff before the 2nd and 3rd try: 1 s, then 2 s. */
 export const RETRY_BASE_DELAY_MS = 1000;
+/**
+ * Longest wait a 5xx's `Retry-After` can ask for between tries. A longer ask still gets this
+ * wait: the report shouldn't hang for minutes, and once the tries run out the feedback goes
+ * without the replay.
+ */
+export const MAX_RETRY_AFTER_MS = 10_000;
 
 /**
  * Rate limits Sentry announced to an earlier upload in this page load. The transport keeps its
@@ -207,7 +214,10 @@ function replayEnvelope(client: Client, event: ReplayEvent, payload: Uint8Array)
 
 /**
  * Sends one segment, retrying 5xx, network errors and transport drops with exponential
- * backoff, up to MAX_ATTEMPTS tries.
+ * backoff, up to MAX_ATTEMPTS tries. A 5xx's `Retry-After` stretches the wait (up to
+ * MAX_RETRY_AFTER_MS). The fetch transport also reads that header as its own limit and drops
+ * sends until it passes; after a longer ask the next try comes back as a drop (no status),
+ * which counts as one more retry, so the tries still run out into `failed`.
  */
 async function sendSegment(
   transport: Pick<Transport, "send">,
@@ -219,17 +229,41 @@ async function sendSegment(
     if (signal?.aborted) return { outcome: "failed", attempts: attempt - 1 };
     if (isRateLimited(rateLimits, "replay")) return { outcome: "rate_limited", attempts: attempt - 1 };
     let outcome: Outcome;
+    let retryAfterMs = 0;
     try {
       const response = await transport.send(envelope);
-      rateLimits = updateRateLimits(rateLimits, response);
+      recordRateLimits(response);
       outcome = classify(response);
+      const retryAfter = response?.headers?.["retry-after"];
+      if (outcome === "retry" && retryAfter) retryAfterMs = parseRetryAfterHeader(retryAfter);
     } catch {
       // fetch rejected: offline, DNS, connection reset.
       outcome = "retry";
     }
     if (outcome !== "retry") return { outcome, attempts: attempt };
     if (attempt >= MAX_ATTEMPTS) return { outcome: "failed", attempts: attempt };
-    await sleep(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+    const backoff = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+    await sleep(Math.max(backoff, Math.min(retryAfterMs, MAX_RETRY_AFTER_MS)));
+  }
+}
+
+/**
+ * Keeps the limits Sentry announces on a 429, or in `X-Sentry-Rate-Limits` on a success. A 5xx
+ * is left out: `updateRateLimits` reads its `Retry-After` as a limit on every category, which
+ * would turn a transient server error into "try again later" for the whole report. A 5xx's
+ * `Retry-After` is only the wait before the next try (see `sendSegment`).
+ */
+function recordRateLimits(response: TransportMakeRequestResponse | undefined): void {
+  const status = response?.statusCode;
+  if (status === 429) rateLimits = updateRateLimits(rateLimits, response!);
+  else if (status !== undefined && status >= 200 && status < 300) {
+    const header = response?.headers?.["x-sentry-rate-limits"];
+    if (header) {
+      rateLimits = updateRateLimits(rateLimits, {
+        statusCode: status,
+        headers: { "x-sentry-rate-limits": header, "retry-after": null }
+      });
+    }
   }
 }
 

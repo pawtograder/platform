@@ -65,6 +65,7 @@ import { serializeEnvelope } from "@sentry/core";
 import { parseEnvelope, payloadJson, splitReplayRecording } from "@/lib/bugReport/envelope";
 import {
   MAX_ATTEMPTS,
+  MAX_RETRY_AFTER_MS,
   MAX_SEGMENT_COMPRESSED_BYTES,
   planSegments,
   resetUploadStateForTests,
@@ -333,6 +334,37 @@ describe("uploadReplay", () => {
     expect(stats?.attempts).toEqual([1, 2]);
     expect(noSleep.mock.calls).toEqual([[1000]]);
     expect(transport.sent.map((e) => parseSent(e).segmentId)).toEqual([0, 1, 1]);
+  });
+
+  it("waits out a 5xx's Retry-After before retrying, and does not treat it as a rate limit", async () => {
+    transport.script = [{ statusCode: 503, headers: { "retry-after": "5" } }, { statusCode: 200 }];
+    const buf = bufferOf([checkout(clock, [])]);
+    expect(await uploadReplay(buf, tags, { sleep: noSleep, compress })).toMatchObject({ ok: true });
+    expect(noSleep.mock.calls).toEqual([[5000]]);
+    expect(transport.sent).toHaveLength(2);
+  });
+
+  it(`caps a 5xx's Retry-After at ${MAX_RETRY_AFTER_MS} ms`, async () => {
+    transport.script = [{ statusCode: 503, headers: { "retry-after": "3600" } }, { statusCode: 200 }];
+    expect(await uploadReplay(bufferOf([checkout(clock, [])]), tags, { sleep: noSleep, compress })).toMatchObject({
+      ok: true
+    });
+    expect(noSleep.mock.calls).toEqual([[MAX_RETRY_AFTER_MS]]);
+  });
+
+  it("fails (not rate_limited) when every try is a 5xx with Retry-After, and the next upload still sends", async () => {
+    const busy = { statusCode: 503, headers: { "retry-after": "2" } };
+    transport.script = [busy, busy, busy];
+    const buf = bufferOf([checkout(clock, [])]);
+    expect(await uploadReplay(buf, tags, { sleep: noSleep, compress })).toEqual({
+      ok: false,
+      reason: "failed",
+      replayId: buf.replayId
+    });
+    expect(transport.sent).toHaveLength(MAX_ATTEMPTS);
+    expect(noSleep.mock.calls).toEqual([[2000], [2000]]);
+    expect(await uploadReplay(buf, tags, { sleep: noSleep, compress })).toMatchObject({ ok: true });
+    expect(transport.sent).toHaveLength(MAX_ATTEMPTS + 1);
   });
 
   it("retries network errors and transport drops (no status)", async () => {

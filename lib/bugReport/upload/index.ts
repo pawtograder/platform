@@ -2,6 +2,7 @@
 export {
   createReplayUpload,
   MAX_ATTEMPTS,
+  MAX_RETRY_AFTER_MS,
   RETRY_BASE_DELAY_MS,
   resetUploadStateForTests,
   uploadReplay,
