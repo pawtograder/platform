@@ -22,7 +22,7 @@ import {
   canarySentence,
   registerCanary,
   resolveCanary,
-  variants,
+  canaryVariants,
   type CanaryEntry,
   type CanaryRegistry
 } from "./canaryRegistry";
@@ -335,7 +335,7 @@ export async function seedCanaryClass({ studentCount = 3 }: { studentCount?: num
     grader,
     students,
     registry,
-    variants: (value: string) => variants(value, registry.get(value)),
+    variants: (value: string) => canaryVariants(value, registry.get(value)),
     routes,
     ids: {
       assignmentId: assignment.id,

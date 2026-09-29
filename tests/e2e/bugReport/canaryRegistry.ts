@@ -11,18 +11,18 @@
  * `scanForCanaries(bytes, registry)` takes, so the same registry feeds the upload leak tests.
  */
 import { randomInt } from "node:crypto";
-import { matchPatterns, normalizeForMatch, personNameVariants } from "@/lib/bugReport/variants";
+import { normalizeForMatch, variants } from "@/lib/bugReport/variants";
+import type { CanaryEntry as BaseCanaryEntry } from "./canaries";
 
 export type CanaryKind = "name" | "email" | "handle" | "grade" | "free_text";
 
-/** What a canary stands for: its PII kind, the `table.column` it was seeded into, and the row. */
-export type CanaryEntry = {
+/**
+ * What a canary stands for: package 0's `CanaryEntry` (kind, `table.column`, row, real name),
+ * narrowed to the PII kinds and with the anchor tokens the trace matches on. A registry of these is
+ * assignable to package 0's `CanaryRegistry`, so `scanForCanaries` takes it.
+ */
+export type CanaryEntry = BaseCanaryEntry & {
   kind: CanaryKind;
-  /** "table.column", e.g. "profiles.name" */
-  column: string;
-  rowId: string | number;
-  /** For a pseudonymous profile name: the real name it stands in for, to add the PersonName form */
-  realName?: string;
   /**
    * Invented tokens (lower case) that only this seed run produced. A scan finds the canary through
    * any of them. Absent for values a spec chose itself, which are matched as whole phrases.
@@ -188,15 +188,12 @@ export function canaryGrade(max = 100): { value: number; text: string } {
 // --- variants and matching ----------------------------------------------------------------------
 
 /**
- * The strings a canary can appear as, normalized: the product's taint-set patterns
- * (`matchPatterns`, `personNameVariants`), plus the value itself for grades, which the product
- * never string-matches but the trace looks for.
+ * The strings a canary can appear as (package 0's `variants`, the one `scanForCanaries` expands
+ * canaries with): the value, and for names the first and last tokens, "Last, First", and the
+ * `name (real_name)` display form.
  */
-export function variants(value: string, entry?: Pick<CanaryEntry, "kind" | "realName">): string[] {
-  const kind = entry?.kind ?? "name";
-  if (kind === "grade") return [normalizeForMatch(value)];
-  if (kind === "name" && entry?.realName) return personNameVariants(value, entry.realName);
-  return matchPatterns(value, kind);
+export function canaryVariants(value: string, entry?: Pick<CanaryEntry, "kind" | "realName">): string[] {
+  return variants(value, { kind: entry?.kind ?? "name", realName: entry?.realName });
 }
 
 /** Token pattern shared by the Node matcher and the in-page scanner. Keeps "87.31" whole. */

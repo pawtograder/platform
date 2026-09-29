@@ -70,11 +70,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       throw new Error("Authentication failed");
     }
 
-    console.log("=== USER DEBUG ===");
-    console.log(user.email);
-    console.log("=== END USER DEBUG ===");
-
-    scope?.setUser({ id: user.id, email: user.email });
+    // ID only: Sentry events never carry a user's name or email.
+    scope?.setUser({ id: user.id });
 
     // Get the access token from request body
     const { accessToken } = (await req.json()) as FetchAzureProfileRequest;
