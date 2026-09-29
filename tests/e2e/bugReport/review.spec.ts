@@ -219,7 +219,7 @@ test.describe("Report a bug dialog, replay review", () => {
       if (s.tag === "textarea") return "description";
       if (s.tag === "input") return "contact";
       if (s.tag === "select") return "minutes";
-      if (s.ariaLabel?.startsWith("Redact ")) return "redact";
+      if (s.text === "Redact") return "redact";
       return s.text || s.tag;
     };
     const names = stops.map(describe);
@@ -264,7 +264,7 @@ test.describe("Report a bug dialog, replay review", () => {
     await waitForReviewReady(dialog);
 
     const target = "attributes";
-    const redactButton = dialog.getByRole("button", { name: `Redact "${target}"` });
+    const redactButton = dialog.getByRole("button", { name: `Redact ${target}`, exact: true });
     let reached = false;
     for (let i = 0; i < 60 && !reached; i++) {
       await page.keyboard.press("Tab");
@@ -313,7 +313,9 @@ test.describe("Report a bug dialog, replay review", () => {
     page.on("console", (m) => {
       const text = m.text();
       // Playwright's own evaluate calls trip script-src 'unsafe-eval' (see utils/csp.ts).
-      if (/Content Security Policy/i.test(text) && !/evaluate a string as JavaScript/i.test(text)) csp.push(text);
+      // "... is ignored when delivered in a report-only policy" is about the policy, not a violation.
+      if (!/Content Security Policy/i.test(text) || /ignored when delivered in a report-only/i.test(text)) return;
+      if (!/evaluate a string as JavaScript/i.test(text)) csp.push(text);
     });
     const dialog = await openReportDialog(page);
     await waitForReviewReady(dialog);

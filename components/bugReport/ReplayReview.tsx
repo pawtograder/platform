@@ -59,10 +59,6 @@ function useActiveRecorder(): BugReportRecorder | undefined {
   return recorder;
 }
 
-function shortLabel(value: string): string {
-  return value.length > 60 ? `${value.slice(0, 57)}...` : value;
-}
-
 /**
  * Returns the dialog's replay slot while `open` and a recording is running on this route, and
  * null otherwise (flag off, route unlisted, or the dialog closed). Closing drops the frozen
@@ -379,6 +375,8 @@ function RemainingList({
               <List.Root variant="plain" gap={1}>
                 {group.items.map((item) => {
                   const index = flatIndex++;
+                  const valueId = `${id}-v${index}`;
+                  const buttonId = `${id}-b${index}`;
                   return (
                     <List.Item
                       key={`${item.kind}:${item.value}`}
@@ -387,7 +385,7 @@ function RemainingList({
                       gap={2}
                       data-testid="report-bug-remaining-item"
                     >
-                      <Text as="span" flex="1" minW={0} fontSize="sm" wordBreak="break-word" data-value="">
+                      <Text as="span" id={valueId} flex="1" minW={0} fontSize="sm" wordBreak="break-word" data-value="">
                         {item.value}
                       </Text>
                       {item.count > 1 && (
@@ -400,7 +398,11 @@ function RemainingList({
                         variant="outline"
                         flexShrink={0}
                         data-redact=""
-                        aria-label={`Redact "${shortLabel(item.value)}"`}
+                        id={buttonId}
+                        // Named "Redact <string>" by reference, not with aria-label: Sentry's
+                        // click breadcrumbs copy an element's aria-label, and the string must
+                        // not leave in one after the user redacted it.
+                        aria-labelledby={`${buttonId} ${valueId}`}
                         onClick={() => redact(item.value, index)}
                       >
                         Redact

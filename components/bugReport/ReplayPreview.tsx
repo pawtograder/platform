@@ -134,9 +134,11 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
     };
     replayer.on("fullsnapshot-rebuilded", onRebuilt);
     replayer.on("finish", () => setPlaying(false));
-    // Show the first frame now. The replayer would do it on a timer of its own, taken from a
-    // throwaway iframe, which a fake clock (Playwright's page.clock) never runs.
-    replayer.pause(0);
+    // Show the first frame now, by seeking just past the first FullSnapshot (events before the
+    // seek point are applied synchronously). The replayer would do it on a timer of its own,
+    // taken from a throwaway iframe, which a fake clock (Playwright's page.clock) never runs.
+    const firstSnapshot = events.find((e) => e.type === RRWEB_EVENT_TYPE.FullSnapshot);
+    replayer.pause(firstSnapshot ? firstSnapshot.timestamp - events[0].timestamp + 1 : 0);
     const timer = window.setInterval(() => {
       try {
         setCurrentMs(replayer.getCurrentTime());
@@ -185,7 +187,9 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
   }, [playing, totalMs]);
 
   return (
-    <Box ref={wrapRef} width="100%" minW={0}>
+    // `contain` keeps the player's fixed pixel width from widening the dialog: the width is
+    // measured here and handed to the player, never the other way round.
+    <Box ref={wrapRef} width="100%" minW={0} css={{ contain: "inline-size" }}>
       <Box
         role="img"
         aria-label="Preview of the redacted recording. The list of text in the recording below describes what it shows."
