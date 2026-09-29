@@ -337,9 +337,14 @@ class Recorder implements BugReportRecorder {
     this.visits.push({ url: window.location.href, at: Date.now() });
   }
 
-  private addBreadcrumb(payload: BreadcrumbPayload): void {
+  /** Whether a breadcrumb would be recorded now. Callers check it before building one. */
+  private takingBreadcrumbs(): boolean {
     // The guard stops a console call made while adding a breadcrumb from adding another.
-    if (this.state !== "recording" || !this.stopRrweb || this.inBreadcrumb) return;
+    return this.state === "recording" && this.stopRrweb !== undefined && !this.inBreadcrumb;
+  }
+
+  private addBreadcrumb(payload: BreadcrumbPayload): void {
+    if (!this.takingBreadcrumbs()) return;
     this.inBreadcrumb = true;
     try {
       addCustomEvent(BREADCRUMB_TAG, payload);
@@ -357,12 +362,15 @@ class Recorder implements BugReportRecorder {
     for (const level of levels) {
       const original = console[level];
       const patched = (...args: unknown[]) => {
-        this.addBreadcrumb({
-          category: "console",
-          timestamp: Date.now() / 1000,
-          level,
-          message: consoleMessage(args)
-        });
+        // Paused on an unlisted route nothing is recorded, so the arguments aren't walked either.
+        if (this.takingBreadcrumbs()) {
+          this.addBreadcrumb({
+            category: "console",
+            timestamp: Date.now() / 1000,
+            level,
+            message: consoleMessage(args)
+          });
+        }
         original.apply(console, args);
       };
       console[level] = patched;
@@ -375,7 +383,7 @@ class Recorder implements BugReportRecorder {
     // Clicks
     const onClick = (e: MouseEvent) => {
       const target = e.target instanceof Element ? e.target : null;
-      if (!target) return;
+      if (!target || !this.takingBreadcrumbs()) return;
       const id = record.mirror.getId(target);
       this.addBreadcrumb({
         category: "ui.click",
@@ -390,7 +398,7 @@ class Recorder implements BugReportRecorder {
     // Fetch: URL, method, status, duration. Never bodies or headers.
     this.cleanups.push(
       onFetch((o: FetchObservation) => {
-        if (o.url.includes("/api/tunnel")) return;
+        if (o.url.includes("/api/tunnel") || !this.takingBreadcrumbs()) return;
         this.addBreadcrumb({
           category: "fetch",
           timestamp: Date.now() / 1000,
@@ -479,6 +487,10 @@ class Recorder implements BugReportRecorder {
     const level = courseIdFromPathname(pathname) === this.courseId ? recordingLevelFor(pathname) : null;
     if (level === null) {
       if (this.state === "recording") {
+        // rrweb and the breadcrumbs stop; the taint ingest keeps running. Data fetched here can
+        // be rendered on a listed route later without being fetched again (a component's state,
+        // a client cache, the router's), and only a TableController's rows would be found again
+        // on resume. Missing the rest would leave it readable in the recording.
         this.stopRecording();
         this.state = "paused";
       }

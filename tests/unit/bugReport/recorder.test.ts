@@ -122,4 +122,30 @@ describe("console breadcrumbs", () => {
     expect(out).not.toContain("secretcan");
   });
 });
+
+describe("paused", () => {
+  it("doesn't walk console arguments on an unlisted route, and still takes taint", () => {
+    const r = start();
+    window.history.pushState({}, "", "/course/1/manage/course/lti");
+    r.onNavigate(window.location.pathname);
+    expect(r.getState()).toBe("paused");
+    let reads = 0;
+    const logged = {
+      get body() {
+        reads++;
+        return "read while paused";
+      }
+    };
+    console.log(logged);
+    expect(reads).toBe(0);
+    // Values that reach the page while paused can be rendered after resuming.
+    r.addTaint("name", ["Paused Quellmar"]);
+    window.history.pushState({}, "", "/course/1/discussion");
+    r.onNavigate(window.location.pathname);
+    expect(r.getState()).toBe("recording");
+    console.log(logged);
+    expect(reads).toBe(1);
+    expect(getTaintSet().has("Paused Quellmar")).toBe(true);
+  });
+});
 /* eslint-enable no-console */
