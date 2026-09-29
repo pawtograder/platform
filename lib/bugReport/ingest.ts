@@ -235,9 +235,9 @@ class Ingest implements IngestSink {
 
   private async ingestResponse(method: string, url: string, response: Response): Promise<void> {
     if (this.stopped) return;
-    const started = performance.now();
     let body: unknown;
     try {
+      // Reading waits on the network; only the parse below costs main-thread time.
       const text = await response.text();
       if (text.length > MAX_INGEST_BODY_BYTES) {
         this.counters.skippedBodies++;
@@ -245,11 +245,14 @@ class Ingest implements IngestSink {
         return;
       }
       if (text.length === 0) return;
-      body = JSON.parse(text);
+      const started = performance.now();
+      try {
+        body = JSON.parse(text);
+      } finally {
+        this.counters.parseMs += performance.now() - started;
+      }
     } catch {
       return;
-    } finally {
-      this.counters.parseMs += performance.now() - started;
     }
     if (this.stopped) return;
     this.counters.responses++;

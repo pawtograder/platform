@@ -13,13 +13,14 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "@/tests/global-setup";
 import type { RoutePolicyEntry } from "@/lib/bugReport/routePolicy";
-import { insertHelpRequest, loginAsUser, supabase, type TestingUser } from "../TestingUtils";
+import { addDays } from "date-fns";
+import { insertAssignment, insertHelpRequest, loginAsUser, supabase, type TestingUser } from "../TestingUtils";
 import { canarySentence, registerCanary, resolveCanary } from "./canaryRegistry";
 import { scanForCanaries } from "./canaries";
 import { seedCanaryClass, type CanarySeed } from "./canarySeed";
 import { enableBugReports, waitForRecorderState } from "./recorderTestUtils";
 
-test.describe.configure({ mode: "serial" });
+test.describe.configure({ mode: "default" });
 
 const POLICY: RoutePolicyEntry[] = [
   { pattern: "/course/[course_id]/manage/course/enrollments", level: "structure" },
@@ -32,16 +33,26 @@ const POLICY: RoutePolicyEntry[] = [
 
 let seed: CanarySeed;
 let groupName: string;
+let groupsUrl: string;
 
 test.beforeAll(async () => {
   seed = await seedCanaryClass();
   // A group with a mentor, so the groups page's `mentor:profiles!…(name)` embed carries a name.
+  const groupAssignment = await insertAssignment({
+    due_date: addDays(new Date(), 7).toUTCString(),
+    class_id: seed.course.id,
+    name: "Canary Group Assignment",
+    group_config: "groups",
+    min_group_size: 1,
+    max_group_size: 3
+  });
+  groupsUrl = `/course/${seed.course.id}/manage/assignments/${groupAssignment.id}/groups`;
   groupName = `grp-${canarySentence().anchor}`;
   const { data: group, error } = await supabase
     .from("assignment_groups")
     .insert({
       class_id: seed.course.id,
-      assignment_id: seed.ids.assignmentId,
+      assignment_id: groupAssignment.id,
       name: groupName,
       mentor_profile_id: seed.grader.private_profile_id
     })
@@ -50,7 +61,7 @@ test.beforeAll(async () => {
   if (error || !group) throw new Error(`group insert failed: ${error?.message}`);
   const { error: memberError } = await supabase.from("assignment_groups_members").insert({
     class_id: seed.course.id,
-    assignment_id: seed.ids.assignmentId,
+    assignment_id: groupAssignment.id,
     assignment_group_id: group.id,
     profile_id: seed.students[2 % seed.students.length].private_profile_id,
     added_by: seed.instructor.private_profile_id
@@ -136,7 +147,9 @@ test.afterEach(async ({ logMagicLinksOnFailure }) => {
 
 test("D1: roster on the instructor enrollments page", async ({ page }) => {
   await openRecorded(page, seed.instructor, seed.routes.manageEnrollments);
-  await expect(page.getByText(seed.students[0].private_profile_name).first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(seed.students[0].private_profile_name).filter({ visible: true }).first()).toBeVisible({
+    timeout: 30_000
+  });
   const found = await expectRenderedCanariesTainted(page, 3);
   expect(found.has(seed.students[0].private_profile_name)).toBe(true);
   const stats = await taintStats(page);
@@ -154,8 +167,8 @@ test("D1: roster hydrated into TableControllers for a student (initialData)", as
 });
 
 test("D1 + D2: groups page, with the mentor alias embed", async ({ page }) => {
-  await openRecorded(page, seed.instructor, seed.routes.manageGroups);
-  await expect(page.getByText(groupName).first()).toBeVisible({ timeout: 30_000 });
+  await openRecorded(page, seed.instructor, groupsUrl);
+  await expect(page.getByText(groupName).filter({ visible: true }).first()).toBeVisible({ timeout: 30_000 });
   await expectRenderedCanariesTainted(page, 2);
   // `mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)` resolved to profiles.name.
   expect(await taintHas(page, [seed.grader.private_profile_name, groupName])).toEqual([]);
@@ -187,7 +200,9 @@ test("D4: a help request created during recording arrives as a full-row broadcas
 
 test("D5: an ID-only gradebook broadcast refetches through the fetch hook", async ({ page }) => {
   await openRecorded(page, seed.instructor, seed.routes.manageGradebook);
-  await expect(page.getByText(seed.students[0].private_profile_name).first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(seed.students[0].private_profile_name).filter({ visible: true }).first()).toBeVisible({
+    timeout: 30_000
+  });
   await settle(page);
   const before = await taintStats(page);
   const note = canarySentence();
