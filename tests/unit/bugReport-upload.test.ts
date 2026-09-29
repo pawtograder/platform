@@ -197,6 +197,42 @@ describe("planSegments", () => {
     for (const s of plan.segments) expect(JSON.parse(inflateSync(s.compressed).toString())).toEqual(s.events);
   });
 
+  it("never cuts between Meta and FullSnapshot when the snapshot is most of the characters but compresses well", async () => {
+    // The snapshot is ~540k characters that deflate to almost nothing, so the whole checkout's
+    // ratio puts the first estimated cut right after Meta.
+    const max = 100_000;
+    const events = Array.from({ length: 300 }, (_, i) => mutation(clock + 10 + i, noise(1_000)));
+    const big: FrozenSegment = {
+      ...checkout(clock, []),
+      events: [meta(clock), snapshot(clock + 1, "<div class=row>masked</div>".repeat(20_000)), ...events]
+    };
+    const buf = bufferOf([big, checkout(clock + 60_000, [mutation(clock + 60_010)])]);
+    const plan = await planSegments(buf, compress, max);
+    expect(plan.segments.length).toBeGreaterThan(2);
+    expect(plan.segments[0].events[0].type).toBe(4);
+    expect(plan.segments[0].events[1].type).toBe(2);
+    // No piece is a lone Meta, and every later piece of the first checkout is a continuation.
+    for (const s of plan.segments) {
+      expect(s.compressed.length).toBeLessThanOrEqual(max);
+      if (s.events[0].type === 4) expect(s.events[1]?.type).toBe(2);
+    }
+    expect(plan.segments.filter((s) => s.events[0].type === 4)).toHaveLength(2);
+    expect(plan.segments.flatMap((s) => s.events)).toEqual(buf.segments.flatMap((s) => s.events));
+    expect(plan.dropped).toEqual([]);
+  });
+
+  it("never bisects between Meta and FullSnapshot", async () => {
+    // A compressor that reports every piece of 3+ events as over the cap forces `fit` to bisect
+    // down to its smallest pieces; the first must still hold Meta + FullSnapshot together.
+    const buf = bufferOf([checkout(clock, [mutation(clock + 10), mutation(clock + 20)])]);
+    const counting: Compressor = async (bytes) => {
+      const n = (JSON.parse(new TextDecoder().decode(bytes)) as unknown[]).length;
+      return n >= 3 ? new Uint8Array(10_000) : compress(bytes);
+    };
+    const plan = await planSegments(buf, counting, 5_000);
+    expect(plan.segments.map((s) => s.events.map((e) => e.type))).toEqual([[4, 2], [3], [3]]);
+  });
+
   it("drops a checkout whose FullSnapshot alone is over the cap", async () => {
     const max = 5_000;
     const big: FrozenSegment = {
