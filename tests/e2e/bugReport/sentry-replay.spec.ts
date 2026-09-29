@@ -173,7 +173,7 @@ test.describe("replay upload to the dev Sentry (F7)", () => {
     expect(replay.user.id).toBe(student.user_id);
     expect(replay.user.email ?? null).toBeNull();
     expect(replay.user.username ?? null).toBeNull();
-    expect(replay.urls.some((u) => u.endsWith("/office-hours"))).toBe(true);
+    expect(replay.urls.some((u) => u.includes("/office-hours"))).toBe(true);
     evidence.replay = {
       replay_type: replay.replay_type,
       count_segments: replay.count_segments,

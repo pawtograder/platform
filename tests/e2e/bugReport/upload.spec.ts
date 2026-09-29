@@ -95,7 +95,8 @@ test.describe("bug report replay upload", () => {
       expect(s.event.tags).toEqual({
         class_id: String(course.id),
         role: "student",
-        route: "/course/[course_id]/office-hours",
+        // The office hours link lands on the default queue.
+        route: "/course/[course_id]/office-hours/[queue_id]",
         contact_ok: "true",
         ...(s.event.tags.release ? { release: s.event.tags.release } : {})
       });
@@ -117,7 +118,7 @@ test.describe("bug report replay upload", () => {
     const first = segments[0].event;
     expect(first.urls).toEqual(out.buffer.urls);
     expect(first.urls.some((u) => u.endsWith("/gradebook"))).toBe(true);
-    expect(first.urls.some((u) => u.endsWith("/office-hours"))).toBe(true);
+    expect(first.urls.some((u) => u.includes("/office-hours"))).toBe(true);
     expect(first.error_ids).toEqual(out.buffer.errorIds);
     expect(first.error_ids.length).toBeGreaterThan(0);
     expect(first.trace_ids.length).toBeGreaterThan(0);

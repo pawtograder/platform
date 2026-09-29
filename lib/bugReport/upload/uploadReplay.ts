@@ -1,8 +1,8 @@
 /**
  * Uploads a reviewed, redacted recording as a Sentry replay: one envelope per segment, each a
- * `replay_event` plus a `replay_recording`, sent one after another through the client's
- * transport (so through /api/tunnel). Called only from `submitReport`, after the user presses
- * Submit; nothing here runs before that.
+ * `replay_event` plus a `replay_recording`, sent one after another through Sentry's fetch
+ * transport to the client's endpoint (so through /api/tunnel). Called only from
+ * `submitReport`, after the user presses Submit; nothing here runs before that.
  *
  * The envelopes follow the SDK's own replay integration (`createReplayEnvelope` and
  * `prepareReplayEvent` in @sentry-internal/replay 10.3.0), which is not installed (spec §3).
@@ -11,6 +11,7 @@ import * as Sentry from "@sentry/nextjs";
 import {
   createEnvelope,
   createEventEnvelopeHeaders,
+  getEnvelopeEndpointWithUrlEncodedAuth,
   getSdkMetadataForEnvelopeHeader,
   isRateLimited,
   prepareEvent,
@@ -18,6 +19,7 @@ import {
   type RateLimits,
   type ReplayEnvelope,
   type ReplayEvent,
+  type Transport,
   type TransportMakeRequestResponse
 } from "@sentry/core";
 import type { ReplayUploadResult } from "../submitFeedback";
@@ -62,6 +64,7 @@ export type UploadOptions = {
   sleep?: (ms: number) => Promise<void>;
   compress?: Compressor;
   maxSegmentCompressedBytes?: number;
+  transport?: Pick<Transport, "send">;
 };
 
 /** Tries per segment, including the first. */
@@ -82,6 +85,37 @@ export function resetUploadStateForTests(): void {
 }
 
 type Client = NonNullable<ReturnType<typeof Sentry.getClient>>;
+
+const transports = new WeakMap<Client, Transport>();
+
+/**
+ * The client's own transport, rebuilt with `keepalive` off.
+ *
+ * The browser fetch transport sets `keepalive` on bodies up to 60 KB. Chromium counts a
+ * keepalive request against its 64 KiB in-flight quota until the response body is read, and
+ * the transport never reads it. So a few small segments sent back to back (or a retry right
+ * after a failure) fail with "Failed to fetch" before reaching the network, and so does the
+ * feedback that follows them through the client's transport. Seen in F6; reproduced with
+ * plain `fetch(..., {keepalive: true})`. The upload runs while the page is open, so it gains
+ * nothing from keepalive. Same URL (the tunnel), headers and fetch implementation as the
+ * client's transport; rate limits are tracked here (`rateLimits`), not shared with it.
+ */
+function replayTransport(client: Client): Transport {
+  let transport = transports.get(client);
+  if (!transport) {
+    const options = client.getOptions();
+    const transportOptions = (options.transportOptions ?? {}) as { fetchOptions?: RequestInit };
+    transport = Sentry.makeFetchTransport({
+      tunnel: options.tunnel,
+      recordDroppedEvent: client.recordDroppedEvent.bind(client),
+      ...transportOptions,
+      url: getEnvelopeEndpointWithUrlEncodedAuth(client.getDsn()!, options.tunnel, options._metadata?.sdk),
+      fetchOptions: { ...transportOptions.fetchOptions, keepalive: false }
+    });
+    transports.set(client, transport);
+  }
+  return transport;
+}
 
 type Outcome = "ok" | "retry" | "permanent" | "rate_limited";
 
@@ -176,13 +210,11 @@ function replayEnvelope(client: Client, event: ReplayEvent, payload: Uint8Array)
  * backoff, up to MAX_ATTEMPTS tries.
  */
 async function sendSegment(
-  client: Client,
+  transport: Pick<Transport, "send">,
   envelope: ReplayEnvelope,
   sleep: (ms: number) => Promise<void>,
   signal: AbortSignal | undefined
 ): Promise<{ outcome: Exclude<Outcome, "retry"> | "failed"; attempts: number }> {
-  const transport = client.getTransport();
-  if (!transport) return { outcome: "failed", attempts: 0 };
   for (let attempt = 1; ; attempt++) {
     if (signal?.aborted) return { outcome: "failed", attempts: attempt - 1 };
     if (isRateLimited(rateLimits, "replay")) return { outcome: "rate_limited", attempts: attempt - 1 };
@@ -231,7 +263,8 @@ export async function uploadReplay(
   };
 
   const client = Sentry.getClient();
-  if (!client || !client.getDsn() || !client.getTransport()) return finish({ ok: false, reason: "failed", replayId });
+  if (!client || !client.getDsn()) return finish({ ok: false, reason: "failed", replayId });
+  const transport = opts.transport ?? replayTransport(client);
   if (isRateLimited(rateLimits, "replay")) return finish({ ok: false, reason: "rate_limited", replayId });
 
   const t0 = performance.now();
@@ -248,7 +281,7 @@ export async function uploadReplay(
       const event = await buildReplayEvent(client, buffer, segment, replayStart, tags);
       if (!event) return finish({ ok: false, reason: "failed", replayId });
       const envelope = replayEnvelope(client, event, recordingPayload(segment));
-      const { outcome, attempts } = await sendSegment(client, envelope, sleep, signal);
+      const { outcome, attempts } = await sendSegment(transport, envelope, sleep, signal);
       stats.attempts.push(attempts);
       if (outcome === "rate_limited") return finish({ ok: false, reason: "rate_limited", replayId });
       if (outcome !== "ok") return finish({ ok: false, reason: "failed", replayId });

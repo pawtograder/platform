@@ -32,6 +32,7 @@ class FakeTransport {
 }
 
 const transport = new FakeTransport();
+const transportOptions: unknown[] = [];
 const client = {
   getOptions: () => ({ release: "rel-1", environment: "test", tunnel: "/api/tunnel", integrations: [] }),
   getDsn: () => ({ protocol: "https", publicKey: "pk", host: "sentry.test", port: "", path: "", projectId: "7" }),
@@ -39,7 +40,8 @@ const client = {
   getSdkMetadata: () => ({ sdk: { name: "sentry.javascript.nextjs", version: "10.3.0" } }),
   getEventProcessors: () => [],
   emit: () => {},
-  on: () => () => {}
+  on: () => () => {},
+  recordDroppedEvent: () => {}
 };
 
 jest.mock("@sentry/nextjs", () => {
@@ -48,6 +50,10 @@ jest.mock("@sentry/nextjs", () => {
   const isolation = new core.Scope();
   return {
     getClient: () => client,
+    makeFetchTransport: (options: unknown) => {
+      transportOptions.push(options);
+      return transport;
+    },
     getCurrentScope: () => scope,
     getIsolationScope: () => isolation,
     __scope: scope
@@ -359,6 +365,16 @@ describe("uploadReplay", () => {
     });
     expect(result).toMatchObject({ ok: false, reason: "failed" });
     expect(transport.sent).toHaveLength(1);
+  });
+
+  it("sends through a fetch transport to the tunnel with keepalive off", async () => {
+    await uploadReplay(bufferOf([checkout(clock, [])]), tags, { sleep: noSleep, compress });
+    expect(transportOptions).toHaveLength(1);
+    expect(transportOptions[0]).toMatchObject({
+      tunnel: "/api/tunnel",
+      url: "/api/tunnel",
+      fetchOptions: { keepalive: false }
+    });
   });
 
   it("uses 900 KiB as the default cap", () => {
