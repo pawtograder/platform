@@ -6,17 +6,17 @@
 import { getTaintSet, type TaintSet } from "../taint";
 import { backstopDetector, mergeSpans, taintDetector } from "./detectors";
 import { taintSnapshot } from "./taintSnapshot";
-import { decodeUrlWithMap, toEncodedRange } from "./urlText";
+import { decodeUrlWithMap, toEncodedRange, urlDetectionText } from "./urlText";
 
 /** `url` with every taint or backstop hit (matched raw and percent-decoded) masked with `*`. */
 export function redactReportUrl(url: string, set: TaintSet = getTaintSet()): string {
   const detectors = [taintDetector(taintSnapshot(set)), backstopDetector];
   const ranges: { start: number; end: number }[] = [];
-  for (const d of detectors) ranges.push(...d(url));
+  for (const d of detectors) ranges.push(...d(urlDetectionText(url)));
   const map = decodeUrlWithMap(url);
   if (map.text !== url) {
     for (const d of detectors) {
-      for (const s of d(map.text)) {
+      for (const s of d(urlDetectionText(map.text))) {
         const [start, end] = toEncodedRange(map, s.start, s.end);
         ranges.push({ start, end });
       }

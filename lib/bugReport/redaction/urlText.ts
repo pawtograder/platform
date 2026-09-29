@@ -53,6 +53,15 @@ export function decodeUrlWithMap(encoded: string): DecodedUrl {
   return { text, starts, ends };
 }
 
+/**
+ * The text detectors see for a URL: URL delimiters become spaces, same length, so a match
+ * can't run across components. Without this the email backstop, whose local part allows `/`,
+ * `?`, `=`, and `&`, takes `//host/path?q=a&mail=x@y.org` for one address and masks the URL.
+ */
+export function urlDetectionText(text: string): string {
+  return text.replace(/[/?&=#;:]/g, " ");
+}
+
 /** Maps `[start, end)` in the decoded text back to the encoded string. */
 export function toEncodedRange(map: DecodedUrl, start: number, end: number): [number, number] {
   return [map.starts[start], map.ends[end - 1]];

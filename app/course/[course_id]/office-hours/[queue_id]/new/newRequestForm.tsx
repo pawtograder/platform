@@ -1042,9 +1042,11 @@ export default function HelpRequestForm({
                                 borderRadius="md"
                               >
                                 <Stack direction="row" gap={3} align="center">
-                                  <Text flex={1} fontWeight="medium">
-                                    {fileName}
-                                  </Text>
+                                  <ReportBlock>
+                                    <Text flex={1} fontWeight="medium">
+                                      {fileName}
+                                    </Text>
+                                  </ReportBlock>
                                   <Input
                                     placeholder="Line number (optional)"
                                     type="number"

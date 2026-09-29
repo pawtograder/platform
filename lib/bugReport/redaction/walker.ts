@@ -23,7 +23,7 @@
 import { RRWEB_EVENT_TYPE, type FrozenBuffer } from "../types";
 import { mergeSpans, onWordBoundaries, type DetectorChain } from "./detectors";
 import type { RemainingKind, RemainingString, Span } from "./types";
-import { decodeUrlWithMap, toEncodedRange, type DecodedUrl } from "./urlText";
+import { decodeUrlWithMap, toEncodedRange, urlDetectionText, type DecodedUrl } from "./urlText";
 
 // rrweb-snapshot NodeType and IncrementalSource values used here.
 const NODE_DOCUMENT = 0;
@@ -112,6 +112,8 @@ type Job = {
   pieces: Piece[];
   /** Listed in `remaining` under this kind; null for strings people don't see. */
   kind: RemainingKind | null;
+  /** Run only the click-to-redact detector (a URL's untouched text). */
+  extraOnly?: boolean;
 };
 
 type NodeRecord = {
@@ -171,21 +173,27 @@ class Walker {
     this.jobs.push({ text, bounded, kind, pieces: [{ start: 0, end: text.length, target }] });
   }
 
-  /** Queue a URL field: matched decoded and raw, masked in full. */
+  /**
+   * Queue a URL field, masked in full where it matches. Detectors see it percent-decoded and
+   * raw, with delimiters as spaces (`urlDetectionText`); the click-to-redact strings also see
+   * it untouched, since review lists the URL as it is.
+   */
   url(holder: Holder, key: string | number, kind: RemainingKind | null = "url"): void {
     const text = holder[key];
     if (typeof text !== "string" || text.length === 0) return;
     const target = this.target(holder, key, "all");
+    const whole = [{ start: 0, end: text.length, target }];
     const map = decodeUrlWithMap(text);
     if (map.text !== text) {
       this.jobs.push({
-        text: map.text,
+        text: urlDetectionText(map.text),
         bounded: false,
         kind: null,
         pieces: [{ start: 0, end: map.text.length, target, map }]
       });
     }
-    this.jobs.push({ text, bounded: false, kind, pieces: [{ start: 0, end: text.length, target }] });
+    this.jobs.push({ text: urlDetectionText(text), bounded: false, kind, pieces: whole });
+    this.jobs.push({ text, bounded: false, kind: null, pieces: whole, extraOnly: true });
   }
 
   /** Every string anywhere under `value`, for event data without a known shape. */
@@ -407,16 +415,18 @@ class Walker {
 
   async detect(chain: DetectorChain): Promise<void> {
     const cache = new Map<string, Span[]>();
-    const keyOf = (job: Job) => (job.bounded ? "b" : "t") + job.text;
+    const keyOf = (job: Job) => (job.extraOnly ? "x" : job.bounded ? "b" : "t") + job.text;
     const unique: Job[] = [];
     for (const job of this.jobs) {
       if (!HAS_WORD_CHAR.test(job.text)) continue;
       const key = keyOf(job);
       if (cache.has(key)) continue;
-      const spans: Span[] = [];
-      for (const d of chain.sync) spans.push(...d(job.text));
+      const spans: Span[] = chain.extra(job.text);
+      if (!job.extraOnly) {
+        for (const d of chain.sync) spans.push(...d(job.text));
+        unique.push(job);
+      }
       cache.set(key, spans);
-      unique.push(job);
     }
     for (const d of chain.async) {
       for (const job of unique) cache.get(keyOf(job))!.push(...(await d(job.text)));

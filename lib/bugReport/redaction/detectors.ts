@@ -16,6 +16,8 @@ export type SyncDetector = (text: string) => Span[];
 /** The stages the walker runs, in order. */
 export type DetectorChain = {
   sync: SyncDetector[];
+  /** The user's click-to-redact strings. Also run alone on the untouched text of URLs. */
+  extra: SyncDetector;
   /** Async stages (package 4's model). Run after the sync ones, on the same texts. */
   async: Detector[];
 };
@@ -73,7 +75,8 @@ export function buildDetectorChain(
   model?: Detector
 ): DetectorChain {
   return {
-    sync: [taintDetector(options.taintPatterns), backstopDetector, extraRedactionDetector(options.extraRedactions)],
+    sync: [taintDetector(options.taintPatterns), backstopDetector],
+    extra: extraRedactionDetector(options.extraRedactions),
     async: model ? [model] : []
   };
 }

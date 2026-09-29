@@ -6,6 +6,7 @@
 import { redactBuffer, taintSnapshot } from "@/lib/bugReport/redaction";
 import { extraRedactionDetector, taintDetector } from "@/lib/bugReport/redaction/detectors";
 import type { RedactOptions, TaintSnapshot } from "@/lib/bugReport/redaction/types";
+import { redactReportUrl } from "@/lib/bugReport/redaction/reportUrl";
 import { decodeUrlWithMap } from "@/lib/bugReport/redaction/urlText";
 import { keepLast } from "@/lib/bugReport/redaction/walker";
 import { getTaintSet } from "@/lib/bugReport/taint";
@@ -213,7 +214,7 @@ describe("attributes, inputs, breadcrumbs, URLs", () => {
       ])
     );
     const out = uploaded(result);
-    for (const leak of ["zorvik", "quellmar", "vraeltek", "kvounder", "mailto:"]) expect(out.toLowerCase()).not.toContain(leak);
+    for (const leak of ["zorvik", "quellmar", "vraeltek", "kvounder"]) expect(out.toLowerCase()).not.toContain(leak);
     expect(out).toContain("banner"); // class names survive except whole-word hits
     expect(result.remaining).toEqual(
       expect.arrayContaining([
@@ -379,6 +380,15 @@ describe("taint snapshot and detectors", () => {
       ])
     );
     expect(new Set(snapshot.map((s) => s.pattern)).size).toBe(snapshot.length);
+  });
+
+  it("redacts the feedback page URL, raw and percent-decoded", () => {
+    const set = getTaintSet();
+    set.add("name", NAME);
+    const url = `http://localhost/course/1/x?who=${encodeURIComponent(NAME)}&mail=${EMAIL}`;
+    const out = redactReportUrl(url, set);
+    expect(out).toBe(`http://localhost/course/1/x?who=${"*".repeat(17)}&mail=${"*".repeat(EMAIL.length)}`);
+    expect(redactReportUrl("http://localhost/course/1/x", set)).toBe("http://localhost/course/1/x");
   });
 
   it("matches taint case- and whitespace-insensitively", () => {
