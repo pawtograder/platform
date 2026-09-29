@@ -239,8 +239,14 @@ test.describe("Report a bug dialog, replay review", () => {
     expect(names[cycle]).toBe(names[0]);
 
     await assertReflowAt320(page, "report-bug dialog with replay", { root: '[data-testid="report-bug-dialog"]' });
-    const box = await dialog.getByTestId("report-bug-replay-player").boundingBox();
-    expect(box!.width).toBeLessThanOrEqual(320);
+    // The preview itself scales down with the dialog (assertReflowAt320 restores the size).
+    const original = page.viewportSize()!;
+    await page.setViewportSize({ width: 320, height: 640 });
+    const player = dialog.getByTestId("report-bug-replay-player");
+    await expect.poll(async () => (await player.boundingBox())!.width).toBeLessThanOrEqual(320);
+    const frameWidth = await player.evaluate((el) => el.querySelector(".rr-player")!.getBoundingClientRect().width);
+    expect(frameWidth).toBeLessThanOrEqual(320);
+    await page.setViewportSize(original);
     await expect(dialog).toBeVisible();
   });
 
@@ -294,7 +300,7 @@ test.describe("Report a bug dialog, replay review", () => {
     expect(feedback.event.contexts?.feedback?.message).toBe("keyboard replay report");
     expect(replaySegments(capture).length).toBeGreaterThan(0);
     const text = uploadText(capture.uploadedBytes());
-    expect(text).toContain("Assigned to: nobody yet");
+    expect(text).toContain("Unmask harness");
     expect(text).not.toContain(target);
   });
 

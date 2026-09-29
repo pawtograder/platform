@@ -59,8 +59,6 @@ type Phase =
 
 export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportBugDialogProps) {
   const [description, setDescription] = useState("");
-  /** Bumped on every close, so the next opening mounts the (uncontrolled) description field empty. */
-  const [formKey, setFormKey] = useState(0);
   const [contactOk, setContactOk] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "editing" });
   const [showRequired, setShowRequired] = useState(false);
@@ -73,11 +71,11 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
   useEffect(() => {
     if (open) {
       setDescription("");
+      // The field is uncontrolled (see below); clear it directly.
+      if (descriptionRef.current) descriptionRef.current.value = "";
       setContactOk(false);
       setPhase({ kind: "editing" });
       setShowRequired(false);
-    } else {
-      setFormKey((k) => k + 1);
     }
   }, [open, eventId]);
 
@@ -158,7 +156,6 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
                 {/* Uncontrolled: while the replay review loads, the dialog re-renders often, and a
                     controlled field dropped keystrokes typed during those renders (seen in E6). */}
                 <Textarea
-                  key={formKey}
                   ref={descriptionRef}
                   defaultValue=""
                   onChange={(e) => setDescription(e.target.value)}
