@@ -233,7 +233,8 @@ test.describe("Report a bug dialog (no replay)", () => {
     expect(cycle[3]).toBe("Submit");
     await expect(dialog.locator('input[type="checkbox"]')).toHaveCount(1);
 
-    await assertReflowAt320(page, "report-bug dialog");
+    // An open modal hides <main> from the accessibility tree, so measure the dialog instead.
+    await assertReflowAt320(page, "report-bug dialog", { root: '[data-testid="report-bug-dialog"]' });
     await expect(dialog).toBeVisible();
   });
 
@@ -281,6 +282,7 @@ test.describe("Report a bug dialog (no replay)", () => {
     await dialog.getByRole("textbox", { name: /What happened/ }).fill("rate limited report");
     await dialog.getByRole("button", { name: "Submit" }).click();
     await expect(dialog.getByTestId("report-bug-rate-limited")).toContainText("Try again later");
+    await expect(dialog.getByRole("button", { name: "Submit" })).toBeFocused();
     await expect(dialog.getByRole("textbox", { name: /What happened/ })).toHaveValue("rate limited report");
   });
 
@@ -297,6 +299,9 @@ test.describe("Report a bug dialog (no replay)", () => {
         })
     );
     await page.goto(`/course/${course.id}/regrade-requests`);
+    // The visual-test stylesheet hides the toaster (`data-visual-test="removed"`); this test
+    // needs to click in it.
+    await page.evaluate(() => document.documentElement.removeAttribute("data-visual-tests"));
 
     const toast = page.getByRole("status").filter({ hasText: "Error loading regrade requests" });
     await expect(toast).toBeVisible();
