@@ -1,24 +1,24 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
-import type { Page, Route } from "@playwright/test";
-import { expect, test } from "../global-setup";
-import { assertReflowAt320, assertStudentPageAccessible, tabSequence } from "./axeStudentA11y";
-import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import type { Page } from "@playwright/test";
+import { expect, test } from "../../global-setup";
+import { assertReflowAt320, assertStudentPageAccessible, tabSequence } from "../axeStudentA11y";
+import { createClass, createUsersInClass, loginAsUser, TestingUser } from "../TestingUtils";
+import {
+  assertNoReplayUploaded,
+  captureTunnel,
+  payloadJsonOf,
+  type CapturedEnvelope,
+  type TunnelCapture
+} from "./index";
 
 /**
  * Package 5 (report dialog without replay): E5, E6, E7, E8, E9, E10, and the dialog half of A1.
- * PR tier: the `/api/tunnel` request is captured and answered here, nothing reaches Sentry.
+ * PR tier: `captureTunnel` answers `/api/tunnel` itself, so nothing reaches Sentry.
  *
- * The build under test must have a Sentry DSN baked in (any value, e.g.
- * `http://e2epublickey@localhost:3001/1`), or the SDK never sends and every submit fails
- * with "not configured".
- *
- * TODO(bug-reporter pkg 0): replace `captureTunnel` / `assertNoReplayUploaded` below with
- * the shared fixtures in `tests/e2e/bugReport/` once they land. These local copies only
- * parse what this spec needs.
+ * The build under test must have a Sentry DSN baked in (`NEXT_PUBLIC_SENTRY_DSN`, any value such
+ * as `STUB_SENTRY_DSN`), or the SDK never sends and every submit fails with "not configured".
  */
 
-type EnvelopeItem = { header: Record<string, unknown>; payload: Buffer };
-type Envelope = { header: Record<string, unknown>; items: EnvelopeItem[]; raw: Buffer };
 type FeedbackEvent = {
   event_id: string;
   type: string;
@@ -27,69 +27,16 @@ type FeedbackEvent = {
   contexts: { feedback: Record<string, unknown> };
 };
 
-function parseEnvelope(raw: Buffer): Envelope {
-  let offset = 0;
-  const readLine = () => {
-    const nl = raw.indexOf(0x0a, offset);
-    const end = nl === -1 ? raw.length : nl;
-    const line = raw.subarray(offset, end);
-    offset = end + 1;
-    return line;
-  };
-  const header = JSON.parse(readLine().toString("utf8"));
-  const items: EnvelopeItem[] = [];
-  while (offset < raw.length) {
-    const headerLine = readLine();
-    if (headerLine.length === 0) continue;
-    const itemHeader = JSON.parse(headerLine.toString("utf8")) as Record<string, unknown>;
-    let payload: Buffer;
-    if (typeof itemHeader.length === "number") {
-      payload = raw.subarray(offset, offset + itemHeader.length);
-      offset += itemHeader.length;
-      if (raw[offset] === 0x0a) offset++;
-    } else {
-      payload = readLine();
-    }
-    items.push({ header: itemHeader, payload });
-  }
-  return { header, items, raw };
-}
+const decoder = new TextDecoder();
+const isFeedbackEnvelope = (e: CapturedEnvelope) => e.items.some((i) => i.header.type === "feedback");
+const feedbackOf = (t: TunnelCapture) => t.items("feedback").map((i) => payloadJsonOf<FeedbackEvent>(i)!);
+const errorEventsOf = (t: TunnelCapture) => t.items("event").map((i) => payloadJsonOf<{ event_id: string }>(i)!);
 
-type TunnelResponder = (envelope: Envelope) => { status: number; headers?: Record<string, string> };
-
-async function captureTunnel(page: Page, respond: TunnelResponder = () => ({ status: 200 })) {
-  const envelopes: Envelope[] = [];
-  await page.route("**/api/tunnel", async (route: Route) => {
-    const raw = route.request().postDataBuffer() ?? Buffer.alloc(0);
-    const envelope = parseEnvelope(raw);
-    envelopes.push(envelope);
-    const { status, headers } = respond(envelope);
-    await route.fulfill({ status, headers, body: status === 200 ? "{}" : "" });
-  });
-  const itemsOfType = (type: string) =>
-    envelopes.flatMap((e) => e.items.filter((i) => i.header.type === type).map((i) => i.payload));
-  return {
-    envelopes,
-    feedback: () => itemsOfType("feedback").map((p) => JSON.parse(p.toString("utf8")) as FeedbackEvent),
-    errorEvents: () =>
-      itemsOfType("event").map(
-        (p) => JSON.parse(p.toString("utf8")) as { event_id: string; exception?: unknown; message?: unknown }
-      )
-  };
-}
-
-const isFeedbackEnvelope = (e: Envelope) => e.items.some((i) => i.header.type === "feedback");
-
-/** Local stand-in for the pkg 0 fixture: no replay items and no rrweb event markers anywhere. */
-function assertNoReplayUploaded(envelopes: Envelope[]) {
-  for (const e of envelopes) {
-    for (const item of e.items) {
-      expect(["replay_event", "replay_recording"]).not.toContain(item.header.type);
-    }
-    const text = e.raw.toString("utf8");
-    expect(text).not.toContain("replay_id");
-    // rrweb serialized events carry these keys (FullSnapshot / IncrementalSnapshot payloads).
-    expect(text).not.toMatch(/"initialOffset"|"childNodes"|"rrwebId"/);
+/** The shared check, plus: a report filed without a replay never names one. */
+function assertNoReplayInReport(t: TunnelCapture) {
+  assertNoReplayUploaded(t);
+  for (const f of feedbackOf(t)) {
+    expect(f.contexts.feedback).not.toHaveProperty("replay_id");
   }
 }
 
@@ -144,7 +91,7 @@ test.describe("Report a bug dialog (no replay)", () => {
         throw new Error("E2E A1 thrown error");
       }, 0);
     });
-    await expect.poll(() => tunnel.errorEvents().length).toBeGreaterThan(0);
+    await expect.poll(() => errorEventsOf(tunnel).length).toBeGreaterThan(0);
 
     // Cancel sends nothing: type, cancel, then file a second report. Only the second arrives.
     let dialog = await openFromUserMenu(page);
@@ -160,7 +107,7 @@ test.describe("Report a bug dialog (no replay)", () => {
     await dialog.getByRole("button", { name: "Submit" }).click();
     await expect(dialog.getByTestId("report-bug-sent")).toBeVisible();
 
-    const feedback = tunnel.feedback();
+    const feedback = feedbackOf(tunnel);
     expect(feedback).toHaveLength(1);
     expect(feedback[0].contexts.feedback.message).toBe("A1 report");
     expect(feedback[0].contexts.feedback).not.toHaveProperty("replay_id");
@@ -170,7 +117,7 @@ test.describe("Report a bug dialog (no replay)", () => {
       route: "/course/[course_id]",
       contact_ok: "false"
     });
-    assertNoReplayUploaded(tunnel.envelopes);
+    assertNoReplayInReport(tunnel);
     expect(rrwebRequests).toEqual([]);
     expect(
       await page.evaluate(() => (window as unknown as { __bugReportRecorder?: unknown }).__bugReportRecorder)
@@ -195,7 +142,7 @@ test.describe("Report a bug dialog (no replay)", () => {
     await dialog.getByRole("button", { name: "Submit" }).click();
     await expect(dialog.getByTestId("report-bug-sent")).toBeVisible();
 
-    const feedback = tunnel.feedback();
+    const feedback = feedbackOf(tunnel);
     expect(feedback.map((f) => [f.contexts.feedback.message, f.tags?.contact_ok])).toEqual([
       ["unchecked report", "false"],
       ["checked report", "true"]
@@ -207,7 +154,7 @@ test.describe("Report a bug dialog (no replay)", () => {
       expect(f.user?.email).toBeUndefined();
     }
     for (const e of tunnel.envelopes.filter(isFeedbackEnvelope)) {
-      const text = e.raw.toString("utf8");
+      const text = decoder.decode(e.raw);
       expect(text).not.toContain(student.email);
       expect(text).not.toContain(student.private_profile_name);
     }
@@ -265,7 +212,7 @@ test.describe("Report a bug dialog (no replay)", () => {
     await expect(dialog.getByTestId("report-bug-sent")).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Close" })).toBeFocused();
 
-    const feedback = tunnel.feedback();
+    const feedback = feedbackOf(tunnel);
     expect(feedback).toHaveLength(1);
     expect(feedback[0].contexts.feedback.message).toBe("keyboard report");
     expect(feedback[0].tags?.contact_ok).toBe("true");
@@ -276,7 +223,7 @@ test.describe("Report a bug dialog (no replay)", () => {
   });
 
   test("429: the dialog says try again later and keeps the draft", async ({ page }) => {
-    await captureTunnel(page, (e) => (isFeedbackEnvelope(e) ? { status: 429 } : { status: 200 }));
+    await captureTunnel(page, { respond: (e) => (isFeedbackEnvelope(e) ? { status: 429, body: "" } : undefined) });
     await loginAsUser(page, student, course);
     const dialog = await openFromUserMenu(page);
     await dialog.getByRole("textbox", { name: /What happened/ }).fill("rate limited report");
@@ -305,8 +252,8 @@ test.describe("Report a bug dialog (no replay)", () => {
 
     const toast = page.getByRole("status").filter({ hasText: "Error loading regrade requests" });
     await expect(toast).toBeVisible();
-    await expect.poll(() => tunnel.errorEvents().length).toBeGreaterThan(0);
-    const errorEventId = tunnel.errorEvents().at(-1)!.event_id;
+    await expect.poll(() => errorEventsOf(tunnel).length).toBeGreaterThan(0);
+    const errorEventId = errorEventsOf(tunnel).at(-1)!.event_id;
 
     await toast.getByRole("button", { name: "Report this" }).click();
     const dialog = page.getByRole("dialog", { name: "Report a bug" });
@@ -315,11 +262,11 @@ test.describe("Report a bug dialog (no replay)", () => {
     await dialog.getByRole("textbox", { name: /What happened/ }).fill("regrade list failed");
     await dialog.getByRole("button", { name: "Submit" }).click();
     await expect(dialog.getByTestId("report-bug-sent")).toBeVisible();
-    const [feedback] = tunnel.feedback();
+    const [feedback] = feedbackOf(tunnel);
     expect(feedback.contexts.feedback.associated_event_id).toBe(errorEventId);
     expect(feedback.tags?.linked_event_id).toBe(errorEventId);
     expect(feedback.tags?.route).toBe("/course/[course_id]/regrade-requests");
-    assertNoReplayUploaded(tunnel.envelopes);
+    assertNoReplayInReport(tunnel);
   });
 
   test("E9: a render crash shows the plain global-error form, which files feedback with the error ID", async ({
@@ -332,18 +279,18 @@ test.describe("Report a bug dialog (no replay)", () => {
     await expect(form).toBeVisible();
     const errorId = (await form.getByTestId("global-error-event-id").textContent())!.trim();
     expect(errorId).toMatch(/^[0-9a-f]{32}$/);
-    await expect.poll(() => tunnel.errorEvents().map((e) => e.event_id)).toContain(errorId);
+    await expect.poll(() => errorEventsOf(tunnel).map((e) => e.event_id)).toContain(errorId);
 
     await form.getByLabel("What happened?").fill("page crashed");
     await form.getByLabel("You may contact me about this").check();
     await form.getByRole("button", { name: "Send report" }).click();
     await expect(page.getByText("Thanks, your report was sent.")).toBeVisible();
 
-    const [feedback] = tunnel.feedback();
+    const [feedback] = feedbackOf(tunnel);
     expect(feedback.contexts.feedback.message).toBe("page crashed");
     expect(feedback.contexts.feedback.associated_event_id).toBe(errorId);
     expect(feedback.tags).toMatchObject({ linked_event_id: errorId, contact_ok: "true", route: "/e2e/render-crash" });
     expect(feedback.tags).not.toHaveProperty("class_id");
-    assertNoReplayUploaded(tunnel.envelopes);
+    assertNoReplayInReport(tunnel);
   });
 });
