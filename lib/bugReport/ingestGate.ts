@@ -92,7 +92,8 @@ export function isIngestUrl(url: string): boolean {
   } catch {
     return false;
   }
-  if (/\/(rest|functions|auth)\/v1\//.test(u.pathname)) return supabaseOrigin() === null || u.origin === supabaseOrigin();
+  if (/\/(rest|functions|auth)\/v1\//.test(u.pathname))
+    return supabaseOrigin() === null || u.origin === supabaseOrigin();
   if (typeof window !== "undefined" && u.origin === window.location.origin) {
     return u.pathname.startsWith("/api/") && !u.pathname.startsWith("/api/tunnel");
   }

@@ -126,7 +126,13 @@ class PatternTaintSet implements TaintSet {
   stats(): TaintStats {
     const byKind: Record<TaintKind, number> = { name: 0, email: 0, handle: 0, free_text: 0 };
     for (const kind of this.patterns.values()) byKind[kind]++;
-    return { patterns: this.patterns.size, chars: this.chars, byKind, dropped: this.dropped, saturated: this.dropped > 0 };
+    return {
+      patterns: this.patterns.size,
+      chars: this.chars,
+      byKind,
+      dropped: this.dropped,
+      saturated: this.dropped > 0
+    };
   }
 }
 
