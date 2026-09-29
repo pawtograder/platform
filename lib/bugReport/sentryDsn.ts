@@ -31,7 +31,8 @@ export function parseDsn(dsn: string | undefined | null): ParsedDsn | null {
   const segments = url.pathname.split("/").filter((s) => s.length > 0);
   const projectId = segments.pop();
   if (!projectId || !/^\d+$/.test(projectId)) return null;
-  if (!url.username) return null;
+  // The SDK rejects a DSN whose public key isn't \w+ ("Invalid Sentry Dsn") and then sends nothing.
+  if (!/^\w+$/.test(url.username)) return null;
   return {
     protocol: url.protocol,
     host: url.host,

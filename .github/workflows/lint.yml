@@ -216,6 +216,12 @@ jobs:
           key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
       - name: Run linting check
         run: npm run lint
+      # Typed lint for the bug reporter's pii/pii-render rule (eslint.pii.config.mjs). A separate
+      # pass because it builds the whole TypeScript program, which tripled `next lint` when it ran
+      # inside it. Warn-mode rule with a ratchet: fails only when the violation count rises above
+      # eslint-rules/pii-baseline.json.
+      - name: Check the PII render lint ratchet
+        run: npm run lint:pii
 
   # Jest unit tests (tests/unit).
   #
@@ -379,7 +385,10 @@ jobs:
             tests/unit/bugReport-fixtures.test.ts \
             tests/unit/bugReport-identity.test.ts \
             tests/unit/bugReport-instrumentation-client.test.ts \
-            tests/unit/bugReport-tunnel.test.ts
+            tests/unit/bugReport-tunnel.test.ts \
+            tests/unit/bugReport-routePattern.test.ts \
+            tests/unit/bugReport-submitFeedback.test.ts \
+            tests/unit/bugReport-errorToastLink.test.ts
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
   # dangerous production values combination (e2e bypasses, plaintext/

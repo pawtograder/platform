@@ -1,5 +1,6 @@
 "use client";
 
+import { useBugReport } from "@/components/bugReport/BugReportProvider";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
@@ -706,6 +707,7 @@ function HandoutCommitHistory({ assignmentId }: { assignmentId: number }) {
 const joinedSelect = "*, assignment_groups(*), profiles(*), user_roles(*)";
 
 export default function RepositoriesPage() {
+  const { openReportDialog } = useBugReport();
   const { assignment_id, course_id } = useParams();
   const courseController = useCourseController();
 
@@ -1072,13 +1074,20 @@ export default function RepositoriesPage() {
             which will create a pull request to the student repository, auto-merging if there are no conflicts, which
             will create a new submission. This procedure is also heavily rate-limited by GitHub, working at a rate of no
             more than 50 pull requests per-minute per-class. The &quot;Sync&quot; feature is currently in beta, and may
-            not support all use cases; please do not rely heavily on it, and report any issues{" "}
-            <Link
-              href="https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md"
-              target="_blank"
+            not support all use cases; please do not rely heavily on it, and{" "}
+            <Button
+              variant="plain"
+              size="sm"
+              h="auto"
+              p={0}
+              minW={0}
+              verticalAlign="baseline"
+              textDecoration="underline"
+              color="fg.info"
+              onClick={() => openReportDialog()}
             >
-              on GitHub
-            </Link>
+              report any issues
+            </Button>
             .
           </Text>
         </Box>

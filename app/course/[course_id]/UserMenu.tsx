@@ -1,5 +1,6 @@
 "use client";
 
+import { useBugReport } from "@/components/bugReport/BugReportProvider";
 import NotificationPreferences from "@/components/notifications/notification-preferences";
 import NotificationsBox from "@/components/notifications/notifications-box";
 import { TimeZoneSelector } from "@/components/TimeZoneSelector";
@@ -54,6 +55,7 @@ import MCPTokensMenu from "@/components/settings/MCPTokensMenu";
 
 function SupportMenu() {
   const { openHelp } = useKeyboardShortcuts();
+  const { openReportDialog } = useBugReport();
   // Track whether the build number has been successfully copied
   const [isCopied, setIsCopied] = useState(false);
 
@@ -155,13 +157,8 @@ function SupportMenu() {
                 Request a feature
               </Link>
             </Menu.Item>
-            <Menu.Item value="report-bug">
-              <Link
-                href={"https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md"}
-                target="_blank"
-              >
-                Report a bug
-              </Link>
+            <Menu.Item value="report-bug" onClick={() => openReportDialog()}>
+              Report a bug
             </Menu.Item>
             <Menu.Item value="view-open-bugs">
               <Link href={"https://github.com/pawtograder/platform/issues?q=is%3Aissue%20state%3Aopen"} target="_blank">

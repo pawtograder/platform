@@ -108,23 +108,30 @@ describe("AhoCorasick", () => {
 
 describe("variants", () => {
   it("expands a name into first, last, and 'Last, First'", () => {
-    expect(variants("Quillon Vantrees")).toEqual(["Quillon Vantrees", "Quillon", "Vantrees", "Vantrees, Quillon"]);
+    expect(variants("Quillon Vantrees")).toEqual(["quillon vantrees", "quillon", "vantrees", "vantrees, quillon"]);
   });
 
   it("includes middle names in the long 'Last, First Middle' form", () => {
-    expect(variants("Ada Byron Lovelace")).toContain("Lovelace, Ada Byron");
-    expect(variants("Ada Byron Lovelace")).toContain("Lovelace, Ada");
+    expect(variants("Ada Byron Lovelace")).toContain("lovelace, ada byron");
+    expect(variants("Ada Byron Lovelace")).toContain("lovelace, ada");
   });
 
   it("adds the PersonName pseudonym form when a real name is given", () => {
-    expect(variants("Anon Otter", { realName: "Quillon Vantrees" })).toContain("Anon Otter (Quillon Vantrees)");
+    expect(variants("Anon Otter", { realName: "Quillon Vantrees" })).toContain("anon otter (quillon vantrees)");
+  });
+
+  it("keeps grades, which the redaction pass never string-matches but a leak scan must find", () => {
+    expect(variants("87.31", { kind: "grade" })).toEqual(["87.31"]);
   });
 
   it("never returns strings under the match minimum", () => {
-    expect(variants("Al Xu")).toEqual(["Al Xu", "Xu, Al"]);
+    expect(variants("Al Xu")).toEqual(["al xu", "xu, al"]);
   });
 
-  it("returns only the value itself for kinds other than name", () => {
-    expect(variants("canary.local@example.edu", { kind: "email" })).toEqual(["canary.local@example.edu"]);
+  it("adds the local part for emails", () => {
+    expect(variants("canary.local@example.edu", { kind: "email" })).toEqual([
+      "canary.local@example.edu",
+      "canary.local"
+    ]);
   });
 });

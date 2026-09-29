@@ -127,7 +127,8 @@ describe("F4: envelopes for another host or project are refused", () => {
     ["an empty body", ""],
     ["a non-JSON header", "garbage\n{}"],
     ["a header without a DSN", '{"event_id":"x"}\n'],
-    ["a DSN that is not a URL", '{"dsn":"not a url"}\n']
+    ["a DSN that is not a URL", '{"dsn":"not a url"}\n'],
+    ["a DSN key the SDK would reject", '{"dsn":"http://bad-key@127.0.0.1:1/42"}\n']
   ])("%s gets 400 and is not forwarded", async (_label, body) => {
     const res = await POST(tunnelRequest(body));
     expect(res.status).toBe(400);

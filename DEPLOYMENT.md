@@ -872,6 +872,27 @@ Two surfaces, two variables:
 `SENTRY_RELEASE` / `SENTRY_ENVIRONMENT` are optional on both surfaces for tagging
 releases and environments. Leave everything unset to disable error reporting.
 
+### Bug report retention purge
+
+Bug reports (Sentry feedback and replays) carry the course's `class_id` tag. The
+`bug-report-retention-purge` edge function runs daily from `pg_cron` and deletes
+them once the class's `end_date` is more than 30 days past. Reports without a
+class are left to Sentry's own `sentry.cleanup.days`. The function reads these
+keys from the `sentry` bundle:
+
+| Key                        | Value                                                                                                                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SENTRY_PURGE_TOKEN`       | An internal-integration or user auth token with scopes `org:read`, `project:write` (replay deletes), and `event:admin` (feedback deletes). Keep it out of the web bundle. |
+| `SENTRY_URL`               | Base URL of the Sentry install, without `/api/0`.                                                                                                                         |
+| `SENTRY_ORG`               | Organization slug.                                                                                                                                                        |
+| `SENTRY_PROJECT`           | Slug of the web project, which holds the replays (`pawtograder-web`).                                                                                                     |
+| `SENTRY_PURGE_ENVIRONMENT` | Optional. Limits the purge to one Sentry environment. Set it when several deployments report to one Sentry organization, because their class ids overlap.                 |
+
+Without the token the function does nothing and logs which keys are missing, so
+reports tagged with a class then stay until Sentry's cleanup removes them. Each
+run logs counts only. The table `bug_report_retention_purges` records the last
+sweep per class.
+
 ---
 
 ## Other integrations

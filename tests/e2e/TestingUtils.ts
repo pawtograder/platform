@@ -6,6 +6,7 @@ import {
 } from "@/lib/rubricCommentTargetStudentProfileId";
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { COLUMNS } from "@/lib/bugReport/privacy";
 import { TZDate } from "@date-fns/tz";
 import { expect, Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
@@ -13,6 +14,17 @@ import { addDays, format } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import dotenv from "dotenv";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
+import {
+  canaryEmail,
+  canaryHandle,
+  canaryPersonName,
+  canaryWord,
+  registerCanary,
+  registerChosenValue,
+  resolveCanary,
+  type CanaryOption,
+  type ResolvedCanary
+} from "./bugReport/canaryRegistry";
 dotenv.config({ path: ".env.local", quiet: true });
 
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
@@ -113,11 +125,47 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelayMs = 
   }
   throw new Error("withRetry: unreachable");
 }
+/** The `classes` columns `createClass` writes. */
+const CREATE_CLASS_COLUMNS = [
+  "name",
+  "slug",
+  "github_org",
+  "start_date",
+  "end_date",
+  "late_tokens_per_student",
+  "time_zone"
+] as const;
+
+/** Throws when a column a seed helper writes without a canary is classified as PII. */
+function assertNoUnseededPii(table: string, columns: readonly string[]) {
+  const pii = columns.filter((c) => {
+    const kind = COLUMNS[`${table}.${c}`];
+    return kind !== undefined && kind !== "none";
+  });
+  if (pii.length > 0) {
+    throw new Error(
+      `Canary seed: ${pii.map((c) => `${table}.${c}`).join(", ")} ${pii.length === 1 ? "is" : "are"} classified as PII in lib/bugReport/privacy.ts but seeded without a canary`
+    );
+  }
+}
+
 export async function createClass({
   name,
   rateLimitManager,
-  slugPrefix = "e2e-ignore-"
-}: { name?: string; rateLimitManager?: RateLimitManager; slugPrefix?: string } = {}) {
+  slugPrefix = "e2e-ignore-",
+  canary
+}: {
+  name?: string;
+  rateLimitManager?: RateLimitManager;
+  slugPrefix?: string;
+  /**
+   * Canary mode for the bug reporter's taint trace. No `classes` column this helper writes is
+   * classified as PII, so there is nothing to seed here; the option checks that this stays true, so
+   * a newly classified column fails the seed instead of going untested.
+   */
+  canary?: CanaryOption;
+} = {}) {
+  if (resolveCanary(canary)) assertNoUnseededPii("classes", CREATE_CLASS_COLUMNS);
   return withRetry(async () => {
     const className = name ?? `E2E Test Class`;
     // Final slug pattern is `<prefix><sanitized-name>-<id>`. Demo provisioning sets
@@ -781,6 +829,166 @@ const userIdx = {
   grader: 1,
   admin: 1
 };
+
+/** Canary names and email chosen for one user before its rows are written (bug reporter taint trace). */
+type UserCanaryPlan = {
+  canary: ResolvedCanary;
+  /** Set when the private name was generated rather than chosen by the caller */
+  person?: ReturnType<typeof canaryPersonName>;
+  /** Set when the pseudonym was generated */
+  pseudonym?: ReturnType<typeof canaryPersonName>;
+  /** Set when the email was generated */
+  emailAnchor?: string;
+};
+
+function planUserCanary(
+  option: CanaryOption | undefined,
+  role: string,
+  chosen: { name?: string; public_profile_name?: string; email?: string }
+): (UserCanaryPlan & { email?: string }) | null {
+  const canary = resolveCanary(option);
+  if (!canary) return null;
+  const plan: UserCanaryPlan & { email?: string } = { canary };
+  if (!chosen.name) plan.person = canaryPersonName();
+  if (!chosen.public_profile_name) plan.pseudonym = canaryPersonName();
+  if (!chosen.email) {
+    // Keep the "<role>-" prefix: seed scripts infer a recycled user's role from it.
+    const { email, anchor } = canaryEmail(`${role}-`);
+    plan.email = email;
+    plan.emailAnchor = anchor;
+  }
+  return plan;
+}
+
+/**
+ * Writes the rest of a user's canaries once its profiles exist (sortable and short names, avatars,
+ * `users.name`, and optionally GitHub and Discord usernames) and records every value in the canary
+ * registry. Values the caller chose are registered as phrases when distinctive enough.
+ */
+async function applyUserCanary(
+  plan: UserCanaryPlan,
+  user: {
+    user_id: string;
+    email: string;
+    private_profile_id: string;
+    public_profile_id: string;
+    private_profile_name: string;
+    public_profile_name: string;
+  }
+): Promise<void> {
+  const { canary, person, pseudonym } = plan;
+  const privateAvatar = canaryWord();
+  const publicAvatar = canaryWord();
+  const userAvatar = canaryWord();
+  const avatarUrl = (seed: string) => `https://api.dicebear.com/9.x/identicon/svg?seed=${seed}`;
+  const privateUpdate = person
+    ? {
+        sortable_name: person.sortable,
+        short_name: person.first,
+        avatar_url: avatarUrl(privateAvatar)
+      }
+    : { avatar_url: avatarUrl(privateAvatar) };
+  const { error: privateError } = await supabase
+    .from("profiles")
+    .update(privateUpdate)
+    .eq("id", user.private_profile_id);
+  if (privateError) throw new Error(`Failed to write canary profile: ${privateError.message}`);
+  const { error: publicError } = await supabase
+    .from("profiles")
+    .update({ avatar_url: avatarUrl(publicAvatar) })
+    .eq("id", user.public_profile_id);
+  if (publicError) throw new Error(`Failed to write canary profile: ${publicError.message}`);
+
+  const userUpdate: Database["public"]["Tables"]["users"]["Update"] = {
+    name: user.private_profile_name,
+    avatar_url: avatarUrl(userAvatar)
+  };
+  const github = canary.githubUsername ? canaryHandle() : null;
+  const discord = canary.discordUsername ? canaryHandle() : null;
+  if (github) userUpdate.github_username = github.handle;
+  if (discord) userUpdate.discord_username = discord.handle;
+  const { error: userError } = await supabase.from("users").update(userUpdate).eq("user_id", user.user_id);
+  if (userError) throw new Error(`Failed to write canary user: ${userError.message}`);
+
+  const lower = (w: string) => w.toLowerCase();
+  if (person) {
+    const anchors = [lower(person.first), lower(person.last)];
+    // users.name holds the same value, so the profile entry stands for both.
+    registerCanary(canary, person.full, {
+      kind: "name",
+      column: "profiles.name",
+      rowId: user.private_profile_id,
+      anchors
+    });
+    registerCanary(canary, person.sortable, {
+      kind: "name",
+      column: "profiles.sortable_name",
+      rowId: user.private_profile_id,
+      anchors
+    });
+    registerCanary(canary, person.first, {
+      kind: "name",
+      column: "profiles.short_name",
+      rowId: user.private_profile_id,
+      anchors: [lower(person.first)]
+    });
+  } else {
+    registerChosenValue(canary, user.private_profile_name, {
+      kind: "name",
+      column: "profiles.name",
+      rowId: user.private_profile_id
+    });
+  }
+  if (pseudonym) {
+    registerCanary(canary, pseudonym.full, {
+      kind: "name",
+      column: "profiles.name",
+      rowId: user.public_profile_id,
+      realName: user.private_profile_name,
+      anchors: [lower(pseudonym.first), lower(pseudonym.last)]
+    });
+  } else {
+    registerChosenValue(canary, user.public_profile_name, {
+      kind: "name",
+      column: "profiles.name",
+      rowId: user.public_profile_id,
+      realName: user.private_profile_name
+    });
+  }
+  for (const [seed, column, rowId] of [
+    [privateAvatar, "profiles.avatar_url", user.private_profile_id],
+    [publicAvatar, "profiles.avatar_url", user.public_profile_id],
+    [userAvatar, "users.avatar_url", user.user_id]
+  ] as const) {
+    registerCanary(canary, avatarUrl(seed), { kind: "handle", column, rowId, anchors: [seed] });
+  }
+  if (plan.emailAnchor) {
+    registerCanary(canary, user.email, {
+      kind: "email",
+      column: "users.email",
+      rowId: user.user_id,
+      anchors: [plan.emailAnchor]
+    });
+  } else {
+    registerChosenValue(canary, user.email, { kind: "email", column: "users.email", rowId: user.user_id });
+  }
+  if (github) {
+    registerCanary(canary, github.handle, {
+      kind: "handle",
+      column: "users.github_username",
+      rowId: user.user_id,
+      anchors: [github.anchor]
+    });
+  }
+  if (discord) {
+    registerCanary(canary, discord.handle, {
+      kind: "handle",
+      column: "users.discord_username",
+      rowId: user.user_id,
+      anchors: [discord.anchor]
+    });
+  }
+}
 export async function createUserInClass({
   role,
   class_id,
@@ -791,7 +999,8 @@ export async function createUserInClass({
   public_profile_name: requested_public_profile_name,
   email,
   rateLimitManager,
-  useMagicLink = false
+  useMagicLink = false,
+  canary
 }: {
   role: "student" | "instructor" | "grader" | "admin";
   class_id: number;
@@ -803,13 +1012,24 @@ export async function createUserInClass({
   email?: string;
   rateLimitManager?: RateLimitManager;
   useMagicLink?: boolean;
+  /**
+   * Seed canary values for the bug reporter's taint trace: generated names, pseudonym, email,
+   * sortable and short names, and avatars become unique canaries recorded in the canary registry.
+   * Values passed explicitly are kept. Defaults to on under `BUG_REPORT_TRACE=1`.
+   */
+  canary?: CanaryOption;
 }): Promise<TestingUser> {
   const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 20);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-  const resolvedEmail = email ?? `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
-  const resolvedName = name ? name : `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
+  const canaryPlan = planUserCanary(canary, role, { name, public_profile_name: requested_public_profile_name, email });
+  const resolvedEmail =
+    email ?? canaryPlan?.email ?? `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
+  const resolvedName = name
+    ? name
+    : (canaryPlan?.person?.full ?? `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`);
   const public_profile_name =
     requested_public_profile_name ??
+    canaryPlan?.pseudonym?.full ??
     (name
       ? `Pseudonym #${userIdx[role]}`
       : `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`);
@@ -999,7 +1219,7 @@ export async function createUserInClass({
   // Always return password, magic links will be generated by loginAsUser when needed
   const password = process.env.TEST_PASSWORD || "change-it";
 
-  return {
+  const created = {
     private_profile_name: private_profile_name,
     public_profile_name: public_profile_name,
     email: resolvedEmail,
@@ -1009,6 +1229,8 @@ export async function createUserInClass({
     password: password,
     class_id: class_id
   };
+  if (canaryPlan) await applyUserCanary(canaryPlan, created);
+  return created;
 }
 
 // New wrapper function for batch user creation with existing user detection
@@ -1024,6 +1246,8 @@ export async function createUsersInClass(
     email?: string;
     rateLimitManager?: RateLimitManager;
     useMagicLink?: boolean;
+    /** Seed canary values for the taint trace; see `createUserInClass`. Defaults to on under `BUG_REPORT_TRACE=1`. */
+    canary?: CanaryOption;
   }>,
   rateLimitManager?: RateLimitManager
 ): Promise<TestingUser[]> {
@@ -1032,17 +1256,20 @@ export async function createUsersInClass(
     const roleOrdinal = userIdx[req.role];
     const extra_randomness = req.randomSuffix ?? Math.random().toString(36).substring(2, 20);
     const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-    const resolvedEmail = req.email ?? `${req.role}-${workerIndex}-${extra_randomness}-${roleOrdinal}@pawtograder.net`;
+    const canaryPlan = planUserCanary(req.canary, req.role, req);
+    const resolvedEmail =
+      req.email ?? canaryPlan?.email ?? `${req.role}-${workerIndex}-${extra_randomness}-${roleOrdinal}@pawtograder.net`;
     const resolvedName = req.name
       ? req.name
-      : `${req.role.charAt(0).toUpperCase()}${req.role.slice(1)} #${roleOrdinal}Test`;
+      : (canaryPlan?.person?.full ?? `${req.role.charAt(0).toUpperCase()}${req.role.slice(1)} #${roleOrdinal}Test`);
     userIdx[req.role]++;
 
     return {
       ...req,
       resolvedEmail,
       resolvedName,
-      roleOrdinal
+      roleOrdinal,
+      canaryPlan
     };
   });
 
@@ -1070,6 +1297,7 @@ export async function createUsersInClass(
 
     const public_profile_name =
       request.public_profile_name ??
+      request.canaryPlan?.pseudonym?.full ??
       (request.name
         ? `Pseudonym #${request.roleOrdinal}`
         : `Pseudonym #${request.roleOrdinal} ${role.charAt(0).toUpperCase()}${role.slice(1)}`);
@@ -1222,7 +1450,7 @@ export async function createUsersInClass(
     // Always return password, magic links will be generated by loginAsUser when needed
     const password = process.env.TEST_PASSWORD || "change-it";
 
-    results.push({
+    const created = {
       private_profile_name: private_profile_name,
       public_profile_name: public_profile_name,
       email: resolvedEmail,
@@ -1231,7 +1459,9 @@ export async function createUsersInClass(
       public_profile_id: profileData.public_profile_id,
       password: password,
       class_id: class_id
-    });
+    };
+    if (request.canaryPlan) await applyUserCanary(request.canaryPlan, created);
+    results.push(created);
   }
 
   return results;
@@ -1604,7 +1834,8 @@ export async function insertHelpRequest({
   request,
   help_queue_id,
   status = "open",
-  active_staff_profile_id
+  active_staff_profile_id,
+  canary
 }: {
   class_id: number;
   student_profile_id: string;
@@ -1612,6 +1843,8 @@ export async function insertHelpRequest({
   help_queue_id?: number;
   status?: "open" | "in_progress" | "resolved" | "closed";
   active_staff_profile_id?: string;
+  /** Record `request` in the taint trace's canary registry. Defaults to on under `BUG_REPORT_TRACE=1`. */
+  canary?: CanaryOption;
 }): Promise<{ id: number; help_queue_id: number }> {
   let queueId = help_queue_id;
   if (!queueId) {
@@ -1642,6 +1875,14 @@ export async function insertHelpRequest({
     .single();
   if (requestError || !helpRequest) {
     throw new Error(`Failed to create help request: ${requestError?.message ?? "no row"}`);
+  }
+  const resolvedCanary = resolveCanary(canary);
+  if (resolvedCanary) {
+    registerChosenValue(resolvedCanary, request, {
+      kind: "free_text",
+      column: "help_requests.request",
+      rowId: helpRequest.id
+    });
   }
 
   const { error: studentLinkError } = await supabase.from("help_request_students").insert({

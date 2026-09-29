@@ -42,6 +42,7 @@ import type { CannedArchetype, CannedRepoManifest, FixtureBundle, HandoutStrateg
 import { pushSourceContent, runWithConcurrency, waitForRepo } from "./demo/syncRepos";
 import { assignmentCreateHandoutRepo, assignmentCreateSolutionRepo } from "@/lib/edgeFunctions";
 import { TestingUser } from "@/tests/e2e/TestingUtils";
+import { canaryizeClass } from "@/tests/e2e/bugReport/canaryizeClass";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "@/tests/generator/GenerationUtils";
 
 dotenv.config({ path: ".env.local", quiet: true });
@@ -71,6 +72,9 @@ interface CliArgs {
    * the manifest, NOT the order they appear on the CLI). Combines with
    * --max-assignments: the slug filter is applied first, then truncated. */
   assignmentSlugs?: string[];
+  /** When set, the class's PII is replaced with canaries (bug reporter taint trace, package 2a)
+   * and the canary registry is written to this JSON file as [value, {kind, column, rowId}] pairs. */
+  canary?: string;
 }
 
 const MIRROR_CONCURRENCY = 5;
@@ -159,6 +163,11 @@ function parseArgs(): CliArgs {
         }
         i++;
         break;
+      case "--canary":
+        if (!next || next.startsWith("--")) throw new Error("--canary requires an output path for the registry");
+        out.canary = next;
+        i++;
+        break;
       default:
         if (arg.startsWith("--")) {
           console.warn(`Unknown flag: ${arg}`);
@@ -190,6 +199,8 @@ Optional:
   --graders <N>               Grader fleet size (default 4)
   --max-assignments <N>       Only provision the first N canned assignments (smoke-test shortcut)
   --assignment-slugs <a,b>    Comma-separated slugs to keep (applied before --max-assignments)
+  --canary <registry.json>    Replace the class's names, free text, and manual grades with unique
+                              canaries and write their registry here (bug reporter taint trace)
 `);
 }
 
@@ -830,6 +841,12 @@ async function main() {
 
   const latestClass = await seeder.seed();
   console.log(`✓ Demo class ready: id=${latestClass.id} name="${latestClass.name}"`);
+
+  if (args.canary) {
+    const registry = await canaryizeClass(supabase, latestClass.id);
+    fs.writeFileSync(args.canary, JSON.stringify([...registry], null, 2) + "\n");
+    console.log(`🐤 Canary seed: ${registry.size} canaries written to ${args.canary}`);
+  }
 
   // The slug rewrite and mirror pass run INSIDE the seeder via
   // withOnAfterSubmissions, so by the time we get here grading already used the
