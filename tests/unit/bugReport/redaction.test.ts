@@ -76,7 +76,10 @@ const NAME = "Zorvik Quellmar";
 const HANDLE = "vraeltek-42";
 const EMAIL = "kvounder@pawtograder.net";
 const taint: TaintSnapshot = [
-  ...["zorvik quellmar", "zorvik", "quellmar", "quellmar, zorvik"].map((pattern) => ({ kind: "name" as const, pattern })),
+  ...["zorvik quellmar", "zorvik", "quellmar", "quellmar, zorvik"].map((pattern) => ({
+    kind: "name" as const,
+    pattern
+  })),
   { kind: "handle", pattern: HANDLE },
   { kind: "email", pattern: EMAIL },
   { kind: "email", pattern: "kvounder" }
@@ -190,7 +193,10 @@ describe("text nodes", () => {
   });
 
   it("treats <title> text as the title and style text as CSS", async () => {
-    const head = [el("title", {}, [txt(`${NAME} - Submission`)]), el("style", {}, [txt(".zorvik{color:red}", undefined, true)])];
+    const head = [
+      el("title", {}, [txt(`${NAME} - Submission`)]),
+      el("style", {}, [txt(".zorvik{color:red}", undefined, true)])
+    ];
     const result = await redact(bufferOf([segment([meta(0), full(1, doc(head, [el("p", {}, [txt("hello")])]))])]));
     const out = uploaded(result);
     expect(out).toContain("****** ******** - Submission");
@@ -217,7 +223,9 @@ describe("attributes, inputs, breadcrumbs, URLs", () => {
         segment([
           meta(0),
           full(1, doc([], [link, img, field, box])),
-          mutation(2, { attributes: [{ id: box.id, attributes: { "aria-label": `Row for ${NAME}`, style: { content: HANDLE } } }] })
+          mutation(2, {
+            attributes: [{ id: box.id, attributes: { "aria-label": `Row for ${NAME}`, style: { content: HANDLE } } }]
+          })
         ])
       ])
     );

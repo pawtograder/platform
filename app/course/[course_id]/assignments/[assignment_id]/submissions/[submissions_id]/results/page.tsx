@@ -641,7 +641,8 @@ export default function GraderResults() {
                             (focusable via tabIndex) makes the jump land screen readers on the test
                             name instead of an unlabeled card container (WCAG 1.3.2 / 2.4.3). */}
                         <Heading as="h3" size="lg" color={`fg.${style}`} id={`test-${result.id}`} tabIndex={-1}>
-                          {result.name} {showScore ? <ReportBlock>{result.score + "/" + result.max_score}</ReportBlock> : ""}
+                          {result.name}{" "}
+                          {showScore ? <ReportBlock>{result.score + "/" + result.max_score}</ReportBlock> : ""}
                         </Heading>
                         {isFailing && result.output && (
                           <AIHelpSubmissionErrorButton

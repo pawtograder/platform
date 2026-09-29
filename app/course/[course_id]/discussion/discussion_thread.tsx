@@ -337,8 +337,7 @@ const DiscussionThreadContent = memo(
                           <ReportBlock>
                             <strong>{thread.duplicate_original_subject}</strong>
                           </ReportBlock>{" "}
-                          —{" "}
-                          <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and
+                          — <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and
                           merged it here.
                         </Text>
                       </Box>

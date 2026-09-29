@@ -47,8 +47,8 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
           <ReportBlock>
             <strong>{thread.duplicate_original_subject}</strong>
           </ReportBlock>
-          , then{" "}
-          <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and merged it here.
+          , then <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and merged it
+          here.
         </Text>
       </Box>
     ) : null;
