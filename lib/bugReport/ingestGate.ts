@@ -29,6 +29,8 @@ export interface IngestSink {
   rows(relation: string, rows: unknown, select?: string | null): void;
   /** A realtime broadcast payload (`{ table, data, ... }`). */
   broadcast(message: unknown): void;
+  /** The course whose recorder runs this ingest. */
+  readonly courseId: number | null;
 }
 
 /** `sink` is non-null only while the ingest runs. Hot paths check it and nothing else. */
@@ -150,9 +152,16 @@ function onPreStartFetch(o: FetchObservation): void {
 /**
  * Start buffering responses for the recorder that may start on this page. Idempotent. The mount
  * calls it when the route is listed; `disarmIngest` or `takeBufferedResponses` ends it.
+ *
+ * A running ingest for the same course makes the buffer unnecessary. One for another course
+ * doesn't: on a client navigation from course A to course B, B's layout renders (and its first
+ * fetches start) while A's recorder still runs. The mount then stops A, which clears the taint set,
+ * and starts B's recorder. The buffer is what carries B's first responses across that switch.
  */
-export function armIngest(): void {
-  if (armed || bugReportIngest.sink || typeof window === "undefined") return;
+export function armIngest(courseId?: number): void {
+  if (armed || typeof window === "undefined") return;
+  const sink = bugReportIngest.sink;
+  if (sink && (courseId === undefined || sink.courseId === courseId)) return;
   installFetchHook();
   armed = { unsubscribe: onFetch(onPreStartFetch), queue: [], dropped: 0 };
   ingestTrace("arm");

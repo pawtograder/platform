@@ -190,7 +190,7 @@ class Recorder implements BugReportRecorder {
   start(): void {
     // The ingest starts before rrweb takes its first FullSnapshot, so rows already on screen
     // (TableController contents, the pre-start fetch buffer, the session) are tainted too.
-    this.ingest = startIngest();
+    this.ingest = startIngest({ courseId: this.courseId });
     readTaintBlocks(document, getTaintSet());
     this.watchTaintBlocks();
     installSentryHooks();

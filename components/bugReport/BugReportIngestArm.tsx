@@ -22,7 +22,7 @@ import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePo
 export function BugReportIngestArm({ courseId, recording }: { courseId: number; recording: boolean }) {
   const pathname = usePathname();
   if (recording && courseIdFromPathname(pathname) === courseId && recordingLevelFor(pathname) !== null) {
-    armIngest();
+    armIngest(courseId);
   }
   return null;
 }

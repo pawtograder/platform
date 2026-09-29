@@ -88,6 +88,8 @@ export type StartIngestOptions = {
   /** The session's user. Defaults to the browser Supabase client's `auth.getSession()`. */
   getSessionUser?: () => Promise<AuthUserLike | null | undefined>;
   set?: TaintSet;
+  /** The recorder's course. A pre-start buffer armed for another course is not this ingest's. */
+  courseId?: number;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -136,6 +138,7 @@ class Ingest implements IngestSink {
   private pending = new Set<Promise<void>>();
   private stopped = false;
   private unsubscribeFetch: (() => void) | undefined;
+  readonly courseId: number | null;
   readonly counters: IngestStats = {
     classifyMs: 0,
     parseMs: 0,
@@ -149,8 +152,9 @@ class Ingest implements IngestSink {
     droppedBuffered: 0
   };
 
-  constructor(set: TaintSet) {
+  constructor(set: TaintSet, courseId: number | null) {
     this.set = set;
+    this.courseId = courseId;
   }
 
   start(options: StartIngestOptions): void {
@@ -388,7 +392,7 @@ let running: Ingest | null = null;
  */
 export function startIngest(options: StartIngestOptions = {}): IngestHandle {
   if (!running) {
-    const ingest = new Ingest(options.set ?? getTaintSet());
+    const ingest = new Ingest(options.set ?? getTaintSet(), options.courseId ?? null);
     running = ingest;
     ingest.start(options);
     if (process.env.BUG_REPORT_E2E === "true" && typeof window !== "undefined") {
