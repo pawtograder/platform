@@ -35,10 +35,11 @@ function without(c: Classification, column: string): Classification {
 test("I2: an unclassified rendered column fails, naming the column and page", async ({ page, context }) => {
   const tracer = new TaintTracer({ registry: seed.registry });
   await tracer.attachContext(context);
-  await loginAsUser(page, seed.students[0], seed.course);
-  await page.goto(seed.routes.helpRequest);
+  await loginAsUser(page, seed.instructor, seed.course);
+  await page.goto(seed.routes.manageHelpRequest);
   const request = [...seed.registry].find(([, e]) => e.column === "help_requests.request")![0];
-  await expect(page.getByText(request).first()).toBeVisible();
+  // Rendered (possibly in a collapsed notification), which is what a recording would capture.
+  await expect(page.getByText(request).first()).toBeAttached();
   await tracer.scanNow(context);
   await tracer.flush();
 
@@ -50,7 +51,7 @@ test("I2: an unclassified rendered column fails, naming the column and page", as
   const failures = checkObserved(flows, without(CURRENT_CLASSIFICATION, "help_requests.request"));
   const message = failures.map((f) => f.message).join("\n");
   expect(message).toContain("help_requests.request");
-  expect(message).toContain("/course/[course_id]/office-hours/request/[request_id]");
+  expect(message).toContain("/course/[course_id]/manage/office-hours/request/[request_id]");
   // The value was rendered, not only fetched.
   const rendered = tracer.sinkHits().filter((h) => h.canary === request);
   expect(rendered.length).toBeGreaterThan(0);
@@ -64,13 +65,13 @@ test("I2: a key the schema lacks, added to a live response, fails the unmodified
   const probe = canarySentence();
   registerCanary(resolveCanary({ registry })!, probe.text, {
     kind: "free_text",
-    column: "profiles.i2_probe_column",
+    column: "user_roles.i2_probe_column",
     rowId: 0,
     anchors: [probe.anchor]
   });
   const tracer = new TaintTracer({ registry });
   await tracer.attachContext(context);
-  await context.route("**/rest/v1/profiles?*", async (route) => {
+  await context.route("**/rest/v1/user_roles?*", async (route) => {
     const response = await route.fetch();
     let body: unknown;
     try {
@@ -88,7 +89,7 @@ test("I2: a key the schema lacks, added to a live response, fails the unmodified
   await page.waitForLoadState("networkidle").catch(() => {});
   await tracer.flush();
   const failures = checkObserved(tracer.observedFlows()).map((f) => f.message);
-  expect(failures.join("\n")).toMatch(/profiles\.i2_probe_column from rest:\S+ carried a free_text canary on \/course/);
+  expect(failures.join("\n")).toMatch(/user_roles\.i2_probe_column from rest:\S+ carried a free_text canary on \/course/);
 });
 
 test("I3: a name inside data-report-unmask fails, naming the component", async ({ page, context }) => {
