@@ -8,9 +8,14 @@
  * `<ReportTaint>` so its server-rendered values reach the taint set;
  * `tests/unit/bugReport/routePolicy.test.ts` enforces both rules.
  *
+ * A pathname is resolved to the real page Next.js would render (from generated/appRoutes.json,
+ * written by scripts/bugReport/generateAppRoutes.ts) before the policy is consulted, so listing
+ * `/discussion/[root_id]` doesn't also record its static sibling `/discussion/new`.
+ *
  * This module stays free of rrweb and Sentry imports: the recorder mount reads it on every
  * navigation to decide whether to load the recorder chunk at all.
  */
+import APP_ROUTES from "./generated/appRoutes.json";
 
 /** `full`: masked text plus the `data-report-unmask` allowlist. `structure`: every text node masked. */
 export type RecordingLevel = "full" | "structure";
@@ -37,19 +42,29 @@ export const ROUTE_POLICY: readonly RoutePolicyEntry[] = [
   { pattern: "/course/[course_id]/manage/surveys/[survey_id]/responses", level: "structure", ssrTaint: true }
 ];
 
-type Segment = { kind: "static"; value: string } | { kind: "param" } | { kind: "catchAll" };
+type Segment =
+  | { kind: "static"; value: string }
+  | { kind: "param" }
+  | { kind: "catchAll" }
+  | { kind: "optionalCatchAll" };
 
-type CompiledEntry = {
-  entry: RoutePolicyEntry;
-  segments: Segment[];
-};
+type CompiledRoute = { pattern: string; segments: Segment[] };
 
 function splitPath(path: string): string[] {
   return path.split("/").filter((s) => s.length > 0);
 }
 
+function safeDecode(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 function compilePattern(pattern: string): Segment[] {
   return splitPath(pattern).map((s): Segment => {
+    if (/^\[\[\.\.\.[^\]]+\]\]$/.test(s)) return { kind: "optionalCatchAll" };
     if (/^\[\.\.\.[^\]]+\]$/.test(s)) return { kind: "catchAll" };
     if (/^\[[^\]]+\]$/.test(s)) return { kind: "param" };
     return { kind: "static", value: s };
@@ -59,22 +74,21 @@ function compilePattern(pattern: string): Segment[] {
 function matches(segments: Segment[], path: string[]): boolean {
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    if (seg.kind === "catchAll") {
-      // `[...param]` needs at least one segment, as in Next.js.
-      return path.length > i;
-    }
+    // `[...param]` needs at least one segment and `[[...param]]` none, as in Next.js.
+    if (seg.kind === "catchAll") return path.length > i;
+    if (seg.kind === "optionalCatchAll") return path.length >= i;
     if (i >= path.length) return false;
     if (seg.kind === "static" && seg.value !== path[i]) return false;
   }
   return segments.length === path.length;
 }
 
-const SEGMENT_RANK: Record<Segment["kind"], number> = { static: 3, param: 2, catchAll: 1 };
+const SEGMENT_RANK: Record<Segment["kind"], number> = { static: 4, param: 3, catchAll: 2, optionalCatchAll: 1 };
 
 /**
- * Positive when `a` is more specific than `b`. Compared segment by segment from the left: a
- * static segment beats `[param]`, which beats `[...param]`; when one pattern is a prefix of
- * the other, the longer one wins.
+ * Positive when `a` is more specific than `b`. Compared segment by segment from the left, as
+ * Next.js orders its routes: a static segment beats `[param]`, which beats `[...param]`, which
+ * beats `[[...param]]`; when one pattern is a prefix of the other, the longer one wins.
  */
 function compareSpecificity(a: Segment[], b: Segment[]): number {
   const n = Math.min(a.length, b.length);
@@ -85,10 +99,28 @@ function compareSpecificity(a: Segment[], b: Segment[]): number {
   return a.length - b.length;
 }
 
-let compiledProductionPolicy: CompiledEntry[] | undefined;
+function compileRoutes(patterns: readonly string[]): CompiledRoute[] {
+  return patterns.map((pattern) => ({ pattern, segments: compilePattern(pattern) }));
+}
 
-function compile(policy: readonly RoutePolicyEntry[]): CompiledEntry[] {
-  return policy.map((entry) => ({ entry, segments: compilePattern(entry.pattern) }));
+let compiledAppRoutes: CompiledRoute[] | undefined;
+
+/**
+ * The app-router page Next.js would render for `pathname`, as its pattern, or null when no page
+ * matches. `routes` defaults to every page under `app/` (generated/appRoutes.json).
+ *
+ * The policy is looked up by this pattern, never matched against the pathname itself: a listed
+ * `/discussion/[root_id]` would otherwise also match `/discussion/new`, a different page.
+ */
+export function resolveAppRoute(pathname: string, routes?: readonly string[]): string | null {
+  const compiled = routes ? compileRoutes(routes) : (compiledAppRoutes ??= compileRoutes(APP_ROUTES));
+  const path = splitPath(pathname.split(/[?#]/, 1)[0]).map(safeDecode);
+  let best: CompiledRoute | null = null;
+  for (const candidate of compiled) {
+    if (!matches(candidate.segments, path)) continue;
+    if (!best || compareSpecificity(candidate.segments, best.segments) > 0) best = candidate;
+  }
+  return best?.pattern ?? null;
 }
 
 function isRoutePolicyEntry(value: unknown): value is RoutePolicyEntry {
@@ -124,24 +156,21 @@ function readTestPolicy(): RoutePolicyEntry[] {
   }
 }
 
-function effectivePolicy(): CompiledEntry[] {
-  compiledProductionPolicy ??= compile(ROUTE_POLICY);
-  const testEntries = readTestPolicy();
-  if (testEntries.length === 0) return compiledProductionPolicy;
-  // Test entries are added to the production policy; one with the same pattern replaces it.
-  const overridden = new Set(testEntries.map((e) => e.pattern));
-  return [...compile(testEntries), ...compiledProductionPolicy.filter((c) => !overridden.has(c.entry.pattern))];
-}
+let productionPolicy: Map<string, RoutePolicyEntry> | undefined;
 
-/** The most specific policy entry matching `pathname`, or null when the route isn't listed. */
+/**
+ * The policy entry for `pathname`, or null when the route isn't listed. The pathname is first
+ * resolved to the page Next.js would render (resolveAppRoute), then that exact pattern is looked
+ * up; the E2E test policy, when enabled, is looked up the same way and wins over a production
+ * entry with the same pattern.
+ */
 export function routePolicyEntryFor(pathname: string): RoutePolicyEntry | null {
-  const path = splitPath(pathname.split(/[?#]/, 1)[0]);
-  let best: CompiledEntry | null = null;
-  for (const candidate of effectivePolicy()) {
-    if (!matches(candidate.segments, path)) continue;
-    if (!best || compareSpecificity(candidate.segments, best.segments) > 0) best = candidate;
-  }
-  return best?.entry ?? null;
+  const route = resolveAppRoute(pathname);
+  if (route === null) return null;
+  const testEntry = readTestPolicy().find((e) => e.pattern === route);
+  if (testEntry) return testEntry;
+  productionPolicy ??= new Map(ROUTE_POLICY.map((e) => [e.pattern, e]));
+  return productionPolicy.get(route) ?? null;
 }
 
 /** null = don't record */
