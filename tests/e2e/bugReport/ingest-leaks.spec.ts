@@ -16,7 +16,15 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "@/tests/global-setup";
 import type { RoutePolicyEntry } from "@/lib/bugReport/routePolicy";
 import { addDays } from "date-fns";
-import { insertAssignment, insertHelpRequest, loginAsUser, supabase, type TestingUser } from "../TestingUtils";
+import {
+  createClass,
+  createUsersInClass,
+  insertAssignment,
+  insertHelpRequest,
+  loginAsUser,
+  supabase,
+  type TestingUser
+} from "../TestingUtils";
 import { canarySentence, registerCanary, resolveCanary } from "./canaryRegistry";
 import { describeHits, scanForCanaries } from "./canaries";
 import { seedCanaryClass, type CanarySeed } from "./canarySeed";
@@ -319,4 +327,40 @@ test("D16: the reporter's own name and email from the auth session", async ({ pa
   expect(await taintHas(page, [me.email, me.email.split("@")[0], me.private_profile_name])).toEqual([]);
   await expectRenderedCanariesTainted(page, 1);
   await expectNoCanariesUploaded(page);
+});
+
+/** Counts `Response.prototype.clone` calls from page load on. */
+async function countClones(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __clones: number };
+    w.__clones = 0;
+    const original = Response.prototype.clone;
+    Response.prototype.clone = function (this: Response) {
+      w.__clones++;
+      return original.call(this);
+    };
+  });
+}
+
+test("flag off on a listed route: no response is cloned, nothing is armed", async ({ page }) => {
+  const course = await createClass({ name: "Bug Report Ingest Flag Off" });
+  const [student] = await createUsersInClass([
+    { role: "student", class_id: course.id, name: "Flag Off Student", useMagicLink: true }
+  ]);
+  await countClones(page);
+  await loginAsUser(page, student, course);
+  // Listed in the production policy; the flag is off by default.
+  await page.goto(`/course/${course.id}/discussion`);
+  await page.waitForLoadState("networkidle").catch(() => undefined);
+  expect(await page.evaluate(() => window.__bugReportRecorder)).toBeUndefined();
+  expect(await page.evaluate(() => window.__bugReportTaint)).toBeUndefined();
+  expect(await page.evaluate(() => (window as unknown as { __clones: number }).__clones)).toBe(0);
+});
+
+test("flag on: the same count sees the ingest's clones (control for the test above)", async ({ page }) => {
+  await countClones(page);
+  await openRecorded(page, seed.students[0], seed.routes.discussion);
+  await waitForDiscussion(page);
+  await settle(page);
+  expect(await page.evaluate(() => (window as unknown as { __clones: number }).__clones)).toBeGreaterThan(0);
 });

@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { getActiveRecorder } from "@/lib/bugReport/activeRecorder";
 import { installFetchHook } from "@/lib/bugReport/fetchHook";
-import { armIngest, disarmIngest } from "@/lib/bugReport/ingestGate";
+import { disarmIngest, ingestTrace } from "@/lib/bugReport/ingestGate";
 import { courseIdFromPathname, recordingLevelFor } from "@/lib/bugReport/routePolicy";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { createClient } from "@/utils/supabase/client";
@@ -13,25 +13,6 @@ import { createClient } from "@/utils/supabase/client";
 // be in place before the first one is. `utils/supabase/client.ts` installs it before it builds
 // the client; this call covers any other order. See lib/bugReport/fetchHook.ts.
 installFetchHook();
-
-/** The course whose flag the last lookup found off, so later navigations inside it don't re-arm. */
-let flagOffCourse: number | null = null;
-
-/**
- * Arm the taint ingest's pre-start fetch buffer when `pathname` could start a recorder: a listed
- * route in a course whose flag isn't already known to be off. The recorder chunk (and the ingest)
- * load only after the flag lookup; responses that arrive meanwhile wait in the buffer, unread,
- * and are dropped if the flag is off. See lib/bugReport/ingestGate.ts.
- */
-function armForPath(pathname: string): void {
-  if (getActiveRecorder()) return;
-  const courseId = courseIdFromPathname(pathname);
-  if (courseId === null || courseId === flagOffCourse || recordingLevelFor(pathname) === null) return;
-  armIngest();
-}
-
-// Module evaluation runs before the app renders, so a full page load's first fetches are covered.
-if (typeof window !== "undefined") armForPath(window.location.pathname);
 
 async function recordingFlagEnabled(courseId: number): Promise<boolean> {
   const { data, error } = await createClient().from("classes").select("features").eq("id", courseId).maybeSingle();
@@ -56,9 +37,8 @@ export default function BugReportRecorder() {
   const pathname = usePathname();
   const navigation = useRef(0);
 
-  // In render, not in the effect: on a client navigation the new route renders (and starts
-  // fetching) before this effect runs. Idempotent, and a no-op once a recorder exists.
-  armForPath(pathname);
+  // The pre-start fetch buffer is armed by <BugReportIngestArm> in the course layout, from the
+  // server's flag value; this mount only disarms it when its own flag check says off.
 
   useEffect(() => {
     const seq = ++navigation.current;
@@ -80,7 +60,7 @@ export default function BugReportRecorder() {
     void (async () => {
       const enabled = await recordingFlagEnabled(courseId).catch(() => false);
       const active = getActiveRecorder();
-      flagOffCourse = enabled ? null : courseId;
+      ingestTrace(`flag ${enabled}`);
       if (!enabled) {
         disarmIngest();
         if (active && active.getCourseId() === courseId) active.stop();
