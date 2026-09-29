@@ -88,6 +88,14 @@ describe("assertNoReplayUploaded", () => {
 });
 
 describe("scanForCanaries", () => {
+  it("ignores a grade canary inside a longer number", () => {
+    const registry = new Map([
+      ["87.31", { kind: "grade" as const, column: "gradebook_column_students.score", rowId: 1 }]
+    ]);
+    expect(scanForCanaries("width:187.31%;t=87.319 M987.31", registry)).toEqual([]);
+    expect(scanForCanaries("Score: 87.31 / 100", registry)).toHaveLength(1);
+  });
+
   const registry: CanaryRegistry = new Map([
     ["Quillon Vantrees", { kind: "name", column: "profiles.name", rowId: "p1" }],
     ["qv-canary-7781@example.edu", { kind: "email", column: "users.email", rowId: "u1" }],

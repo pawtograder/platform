@@ -12,11 +12,12 @@
  *
  * - A registry of live TableControllers (a WeakRef each), so the ingest can classify the rows
  *   they already hold, `initialData` included, when it starts.
- * - A pre-start fetch buffer. The mount arms it when the route is listed in the route policy,
- *   before the course flag lookup returns. It keeps a clone of each Supabase or `/api/` response
- *   (unread) until the recorder starts, which classifies them, or the flag turns out to be off,
- *   which drops them unread. Without it, rows fetched outside a TableController in the first
- *   second of a page load would be on screen, in the first FullSnapshot, and never tainted.
+ * - A pre-start fetch buffer. `<BugReportIngestArm>` in the course layout arms it only when the
+ *   server rendered the course flag as on and the route is listed. It keeps a clone of each
+ *   Supabase or `/api/` response (unread) until the recorder starts, which classifies them, or
+ *   the mount's own flag check finds the flag off, which drops them unread. Without it, rows
+ *   fetched outside a TableController in the first second of a page load would be on screen, in
+ *   the first FullSnapshot, and never tainted. With the flag off it is never armed.
  *
  * No rrweb, Sentry, or classification import.
  */
@@ -154,6 +155,7 @@ export function armIngest(): void {
   if (armed || bugReportIngest.sink || typeof window === "undefined") return;
   installFetchHook();
   armed = { unsubscribe: onFetch(onPreStartFetch), queue: [], dropped: 0 };
+  ingestTrace("arm");
 }
 
 /** Drop the buffer unread (the flag is off, or the route isn't listed after all). */
@@ -161,6 +163,20 @@ export function disarmIngest(): void {
   if (!armed) return;
   armed.unsubscribe();
   armed = null;
+  ingestTrace("disarm");
+}
+
+declare global {
+  interface Window {
+    /** E2E builds only: when the pre-start buffer was armed, disarmed, and drained. */
+    __bugReportIngestTrace?: { event: string; at: number }[];
+  }
+}
+
+/** Records an arming event for the E2E tests. A build-time no-op outside E2E builds. */
+export function ingestTrace(event: string): void {
+  if (process.env.BUG_REPORT_E2E !== "true" || typeof window === "undefined") return;
+  (window.__bugReportIngestTrace ??= []).push({ event, at: Math.round(performance.now()) });
 }
 
 export function isIngestArmed(): boolean {
@@ -171,6 +187,7 @@ export function isIngestArmed(): boolean {
 export function takeBufferedResponses(): { responses: BufferedResponse[]; dropped: number } {
   if (!armed) return { responses: [], dropped: 0 };
   const { queue, dropped } = armed;
+  ingestTrace(`take ${queue.length}`);
   disarmIngest();
   return { responses: queue, dropped };
 }

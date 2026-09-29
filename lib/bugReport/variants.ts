@@ -46,8 +46,10 @@ export function nameVariants(name: string): string[] {
   if (tokens.length > 1) {
     const first = tokens[0];
     const last = tokens[tokens.length - 1];
-    keep(out, first);
-    keep(out, last);
+    // A token that is only digits ("Student 000") is a label, not a name. Alone it would mask
+    // every matching number on the page; it stays covered inside the full-name patterns.
+    if (!/^\d+$/.test(first)) keep(out, first);
+    if (!/^\d+$/.test(last)) keep(out, last);
     keep(out, `${first} ${last}`);
     keep(out, `${last}, ${first}`);
     keep(out, `${last}, ${tokens.slice(0, -1).join(" ")}`);

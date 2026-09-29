@@ -64,6 +64,7 @@ export function scanForCanaries(
     const text = typeof source === "string" ? source : decoder.decode(source);
     for (const match of ac.search(text)) {
       for (const tagged of match.values) {
+        if (tagged.entry.kind === "grade" && insideLongerNumber(text, match.start, match.end)) continue;
         hits.push({
           canary: tagged.canary,
           matched: tagged.variant,
@@ -76,6 +77,15 @@ export function scanForCanaries(
     }
   });
   return hits;
+}
+
+/**
+ * A grade canary such as "72.52" inside a longer number (an SVG path's "M572.52", a CSS
+ * "83.333333%", a timestamp) is a coincidence, not the grade: the scan matches substrings. A grade
+ * hit with a digit, or a digit-and-dot, right next to it is not reported.
+ */
+function insideLongerNumber(text: string, start: number, end: number): boolean {
+  return /[\d.]/.test(text[start - 1] ?? "") || /\d/.test(text[end] ?? "");
 }
 
 /** Formats hits for an assertion message. */

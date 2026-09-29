@@ -1,0 +1,105 @@
+name: Bug reporter nightly
+
+# The bug reporter's nightly tier (spec §7.1): the tests that need the real dev Sentry, or that
+# are too slow for every PR. The work is in _bug-reporter-e2e.yml; this file decides when it runs
+# and who may run it.
+#
+# Two lanes, in parallel, each with its own Supabase stack and full-profile build:
+#   sentry  F8 smoke, then F7 and H1-H3, against the dev Sentry. If F8 fails the lane stops and
+#           reports an infrastructure fault.
+#   local   K1-K3, then the taint trace over the whole suite (I1-I4). No Sentry secrets at all:
+#           it builds with the stub DSN, so the suite's errors never reach the dev Sentry.
+# F8 gates only the Sentry lane. The local lane never talks to Sentry, so a Sentry outage says
+# nothing about it, and holding it back would cost a night of K and I results.
+#
+# Triggers:
+#   schedule                          nightly, on the default branch (staging)
+#   workflow_dispatch                 any branch, by anyone with write access
+#   PR labeled `bug-reporter-full`    runs on the PR head; later pushes rerun it while the label
+#                                     stays on
+#
+# Fork PRs: the label only asks for a run. _trust-gate.yml decides whether the PR's code may run
+# here at all, as for e2e-local and previews: every principal on the PR must hold write access,
+# or a ci-approval reviewer approves this one run. The Sentry secrets reach only the sentry lane,
+# which runs only after that verdict. pull_request_target, not pull_request, for the reason
+# _trust-gate.yml gives: this file, and so the gate, is always read from the default branch.
+#
+# Secrets (repository secrets; HU2 and HU3 in the spec):
+#   SENTRY_URL, SENTRY_ORG, SENTRY_AUTH_TOKEN, NEXT_PUBLIC_SENTRY_DSN   required by the sentry lane
+#   SENTRY_PURGE_TOKEN                                                  H1-H3; skipped when unset
+# Variable: SENTRY_PROJECT (default pawtograder-web).
+
+on:
+  schedule:
+    # 07:17 UTC, about 3 a.m. in Boston. Off the hour, when GitHub's scheduler is least loaded.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+  pull_request_target:
+    types: [labeled, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  # A newer push to a labeled PR replaces the run in flight. Adding some OTHER label also fires
+  # this workflow; that run does nothing, and gets its own group so it can't cancel a real one.
+  group: bug-reporter-nightly-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'bug-reporter-full' && format('-noop-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+jobs:
+  gate:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      contains(github.event.pull_request.labels.*.name, 'bug-reporter-full') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'bug-reporter-full')
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: ./.github/workflows/_trust-gate.yml
+    secrets:
+      trust_token: ${{ secrets.CI_TRUST_TOKEN }}
+
+  # Says why nothing ran, rather than leaving a labeled PR with only skipped jobs.
+  untrusted:
+    needs: gate
+    if: ${{ always() && needs.gate.result != 'skipped' && (needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true') }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Refuse an untrusted ref
+        run: |
+          echo "::error title=Untrusted ref::The bug reporter nightly tier cannot run for this PR. Add the contributor to the pawtograder-contributors team, or have a ci-approval reviewer approve the run."
+          exit 1
+
+  sentry:
+    needs: gate
+    if: ${{ !cancelled() && (github.event_name != 'pull_request_target' || (needs.gate.result == 'success' && needs.gate.outputs.trusted == 'true')) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_bug-reporter-e2e.yml
+    with:
+      tier: nightly
+      lane: sentry
+      sentry: true
+      suites: f8 f7 h
+      timeout-minutes: 90
+    secrets:
+      SENTRY_URL: ${{ secrets.SENTRY_URL }}
+      SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+      SENTRY_PURGE_TOKEN: ${{ secrets.SENTRY_PURGE_TOKEN }}
+
+  local:
+    needs: gate
+    if: ${{ !cancelled() && (github.event_name != 'pull_request_target' || (needs.gate.result == 'success' && needs.gate.outputs.trusted == 'true')) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_bug-reporter-e2e.yml
+    with:
+      tier: nightly
+      lane: local
+      sentry: false
+      suites: k i
+      # The trace runs the whole suite on one browser, after about 30 minutes of K tests.
+      timeout-minutes: 240

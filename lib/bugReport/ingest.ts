@@ -36,6 +36,7 @@
 import { onFetch } from "./fetchHook";
 import {
   bugReportIngest,
+  ingestTrace,
   isIngestUrl,
   isJsonResponse,
   liveRowSources,
@@ -164,6 +165,7 @@ class Ingest implements IngestSink {
       }
       this.track(this.ingestResponse(o.method, o.url, clone));
     });
+    ingestTrace("start");
     const { responses, dropped } = takeBufferedResponses();
     this.counters.droppedBuffered += dropped;
     for (const r of responses) this.track(this.ingestResponse(r.method, r.url, r.response));

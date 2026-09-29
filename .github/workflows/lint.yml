@@ -373,6 +373,12 @@ jobs:
       # deploy.yml after a production build, which is now behind the trust
       # gate and so does not run at all for an untrusted PR. This is the
       # cheap guard that catches the regression before the expensive one.
+      #
+      # The bug reporter's suites go in by prefix rather than one by one: jest reads each argument
+      # as a path regex, so `tests/unit/bugReport` covers tests/unit/bugReport-*.test.ts and
+      # everything under tests/unit/bugReport/. Listing them file by file had already left 9 of the
+      # 22 suites running nowhere. They are the PR tier of spec §7.1; its Playwright half
+      # runs in deploy.yml's e2e-local with every other spec.
       - name: Run Jest unit tests
         run: |
           npx jest --runInBand \
@@ -380,16 +386,7 @@ jobs:
             tests/unit/create-repo-step-timings.test.ts \
             tests/unit/repo-not-ready-plan.test.ts \
             tests/unit/prom-client-bundle.test.ts \
-            tests/unit/bugReport-ahoCorasick.test.ts \
-            tests/unit/bugReport-envelope.test.ts \
-            tests/unit/bugReport-fixtures.test.ts \
-            tests/unit/bugReport-identity.test.ts \
-            tests/unit/bugReport-instrumentation-client.test.ts \
-            tests/unit/bugReport-tunnel.test.ts \
-            tests/unit/bugReport-routePattern.test.ts \
-            tests/unit/bugReport-submitFeedback.test.ts \
-            tests/unit/bugReport-errorToastLink.test.ts \
-            tests/unit/bugReport/replayReview.test.tsx
+            tests/unit/bugReport
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
   # dangerous production values combination (e2e bypasses, plaintext/
