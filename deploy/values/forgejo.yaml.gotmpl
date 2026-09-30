@@ -1,0 +1,194 @@
+# Forgejo (code.forgejo.org/forgejo-helm/forgejo). Keys under gitea.config are
+# app.ini sections; secrets arrive through additionalConfigFromEnvs, so none
+# live in this file.
+{{- $f := .Values.forgejo }}
+{{- $db := $f.database }}
+
+strategy:
+  # RWO repo volume: the old pod has to let go before the new one mounts it.
+  type: Recreate
+
+resources:
+  requests: { cpu: 250m, memory: 512Mi }
+  limits: { cpu: "1", memory: 1Gi }
+
+initContainers:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+persistence:
+  enabled: true
+  claimName: forgejo-data
+  size: {{ $f.storage }}
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m"
+  hosts:
+    - host: {{ $f.host }}
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: {{ .Values.tlsSecret }}
+      hosts: [{{ $f.host }}]
+
+# The chart's helm-test pod (busybox:latest, no resources) isn't admitted
+# under a limits-tracking quota and tests nothing ingress doesn't.
+test:
+  enabled: false
+
+gitea:
+  admin:
+    existingSecret: forgejo-admin
+    email: forgejo-admin@{{ .Values.domain }}
+    passwordMode: keepUpdated
+
+  additionalConfigFromEnvs:
+    {{- if eq $db.mode "postgres" }}
+    - name: FORGEJO__DATABASE__PASSWD
+      valueFrom:
+        secretKeyRef: { name: forgejo-db, key: FORGEJO_DB_PASSWORD }
+    {{- end }}
+    - name: FORGEJO__STORAGE__MINIO_ACCESS_KEY_ID
+      valueFrom:
+        secretKeyRef: { name: {{ .Values.s3.credentialsSecret }}, key: AWS_ACCESS_KEY_ID }
+    - name: FORGEJO__STORAGE__MINIO_SECRET_ACCESS_KEY
+      valueFrom:
+        secretKeyRef: { name: {{ .Values.s3.credentialsSecret }}, key: AWS_SECRET_ACCESS_KEY }
+
+  config:
+    APP_NAME: Pawtograder Git
+    server:
+      DOMAIN: {{ $f.host }}
+      ROOT_URL: https://{{ $f.host }}/
+      # Ingress is HTTP(S) only; git goes over HTTPS.
+      DISABLE_SSH: true
+      START_SSH_SERVER: false
+      LFS_START_SERVER: true
+    database:
+      {{- if eq $db.mode "postgres" }}
+      DB_TYPE: postgres
+      HOST: {{ $db.instance }}:5432
+      NAME: forgejo
+      USER: forgejo
+      SSL_MODE: disable
+      {{- else if eq $db.mode "sqlite" }}
+      DB_TYPE: sqlite3
+      {{- else }}
+      {{- fail (printf "forgejo.database.mode must be postgres or sqlite, got %q" $db.mode) }}
+      {{- end }}
+    # Repositories stay on the volume (git wants a filesystem). LFS,
+    # attachments, packages, avatars and Actions logs/artifacts go to S3
+    # under forgejo/.
+    storage:
+      STORAGE_TYPE: minio
+      MINIO_ENDPOINT: {{ .Values.s3.internalHost }}
+      MINIO_USE_SSL: false
+      MINIO_BUCKET: {{ .Values.s3.bucket }}
+      MINIO_BUCKET_LOOKUP: path
+      MINIO_LOCATION: us-east-1
+      MINIO_BASE_PATH: forgejo/
+    actions:
+      ENABLED: true
+      # `uses: pawtograder/assignment-action@v1` and `actions/checkout`
+      # resolve against GitHub, as they do in assignments today.
+      DEFAULT_ACTIONS_URL: https://github.com
+    session:
+      PROVIDER: db
+    cache:
+      ADAPTER: memory
+    queue:
+      TYPE: level
+    indexer:
+      ISSUE_INDEXER_TYPE: bleve
+      REPO_INDEXER_ENABLED: false
+
+{{- if $f.runner.enabled }}
+{{- $r := $f.runner }}
+# Actions runner, host mode: jobs run inside the runner container itself, since
+# the namespace can't run Docker-in-Docker. Image: deploy/forgejo-runner.
+#
+# Registration is offline: the runner and Forgejo share the 40-hex secret in
+# Secret forgejo-runner. The runner side writes .runner from it at start; the
+# Forgejo side is the postsync hook in helmfile.yaml.gotmpl.
+extraDeploy:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: forgejo-runner
+    data:
+      config.yaml: |
+        log:
+          level: info
+        runner:
+          file: /data/.runner
+          capacity: {{ $r.capacity }}
+          timeout: 1h
+          shutdown_timeout: 5m
+          labels:
+            - ubuntu-latest:host
+            - ubuntu-24.04:host
+            - ubuntu-22.04:host
+        cache:
+          enabled: true
+          dir: /data/cache
+        host:
+          workdir_parent: /data/work
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: forgejo-runner
+      labels: { app.kubernetes.io/name: forgejo-runner }
+    spec:
+      replicas: 1
+      # One registration, one identity: never run two pods at once.
+      strategy: { type: Recreate }
+      selector:
+        matchLabels: { app.kubernetes.io/name: forgejo-runner }
+      template:
+        metadata:
+          labels: { app.kubernetes.io/name: forgejo-runner }
+        spec:
+          # Jobs run student code: no Kubernetes credentials in this pod.
+          automountServiceAccountToken: false
+          securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 }
+          initContainers:
+            - name: register
+              image: {{ $r.image }}
+              workingDir: /data
+              args:
+                - forgejo-runner
+                - create-runner-file
+                - --instance=http://forgejo-http:3000
+                - --name={{ $r.name }}
+                - --secret=$(RUNNER_SECRET)
+              env:
+                - name: RUNNER_SECRET
+                  valueFrom:
+                    secretKeyRef: { name: forgejo-runner, key: secret }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { cpu: 200m, memory: 128Mi }
+              volumeMounts:
+                - { name: data, mountPath: /data }
+          containers:
+            - name: runner
+              image: {{ $r.image }}
+              args: [forgejo-runner, daemon, --config, /etc/forgejo-runner/config.yaml]
+              securityContext: { allowPrivilegeEscalation: false }
+              resources:
+                requests: { cpu: "1", memory: 2Gi }
+                limits: { cpu: "2", memory: 4Gi }
+              volumeMounts:
+                - { name: data, mountPath: /data }
+                - { name: config, mountPath: /etc/forgejo-runner, readOnly: true }
+          volumes:
+            - name: config
+              configMap: { name: forgejo-runner }
+            - name: data
+              emptyDir: { sizeLimit: 20Gi }
+{{- end }}

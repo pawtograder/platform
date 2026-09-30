@@ -1,0 +1,71 @@
+# sandbox: the tenant namespace on Ripley we develop and demo in.
+# A prod environment is another file like this one, pointed at its own
+# namespace, context and hostnames. Secrets never go here — see
+# scripts/create-secrets.sh.
+
+namespace: cs4535-workspaces
+kubeContext: cs4535-workspaces
+
+# Public hostnames are <name>.<domain>; the wildcard cert covers one level.
+domain: workspaces.cs4535.ripley.cloud
+tlsSecret: workspaces-wildcard-tls
+
+# Namespace-scoped registry path images are pushed to.
+registry: registry.work.ripley.cloud/cs4535-workspaces
+
+# S3 (MinIO). Credentials are the namespace's `minio-creds` Secret.
+s3:
+  bucket: cs4535-workspaces
+  externalEndpoint: https://s3.talos.ripley.cloud
+  internalHost: minio.minio.svc.cluster.local:9000
+  credentialsSecret: minio-creds
+
+# Postgres instances to run in the namespace (groundhog2k/postgres). Each
+# app's `database.instance` names one; point two apps at the same instance to
+# share it. Empty map = run none (every app on its built-in database).
+postgres:
+  instances:
+    forgejo-db:
+      databases: [forgejo]
+      storage: 5Gi
+    coder-db:
+      databases: [coder]
+      storage: 5Gi
+
+forgejo:
+  enabled: true
+  chartVersion: 17.1.7
+  host: git.workspaces.cs4535.ripley.cloud
+  # postgres: use postgres.instances[instance]. sqlite: Forgejo's built-in
+  # SQLite on the repo volume (single pod, light load only).
+  database:
+    mode: postgres
+    instance: forgejo-db
+  storage: 20Gi
+  runner:
+    enabled: true
+    image: registry.work.ripley.cloud/cs4535-workspaces/forgejo-runner:13.2.0-jdk21
+    name: ripley-host-1
+    capacity: 2
+
+workspaces:
+  enabled: true
+  chartVersion: 2.37.3
+  host: coder.workspaces.cs4535.ripley.cloud
+  # postgres: use postgres.instances[instance]. builtin: coderd's embedded
+  # Postgres on a PVC (single replica, not for production per Coder).
+  database:
+    mode: postgres
+    instance: coder-db
+
+pawtograder:
+  enabled: true
+  host: app.workspaces.cs4535.ripley.cloud
+  # Images for migrations/edge-functions come from ghcr.io at this tag; the web
+  # image is built per install (scripts/build-web-image.sh) from the matching
+  # commit, because NEXT_PUBLIC_* are compiled in. Only some staging commits
+  # publish images — pick one that has staging-<sha7> tags.
+  imageRef: 625a9f81ac23319f32e1bca16e6ad1de9065eabc
+  imageTag: staging-625a9f8
+  webImageRepository: registry.work.ripley.cloud/cs4535-workspaces/pawtograder-web
+  postgresStorage: 20Gi

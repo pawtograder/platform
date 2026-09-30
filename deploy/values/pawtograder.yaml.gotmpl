@@ -1,0 +1,151 @@
+# Pawtograder (../charts/pawtograder), layered the way the chart's examples
+# are: values-prod-noeso.yaml for pre-created secrets and an existing wildcard
+# cert, values-preview.yaml for the flattened API host and MinIO storage, and
+# sizes trimmed to share a tenant quota with Forgejo and Coder.
+{{- $env := .Values }}
+{{- $p := $env.pawtograder }}
+
+global:
+  # `staging` keeps the chart's guard rails (pinned tags, no chart-created
+  # secrets) without production's HA requirements.
+  environment: staging
+  hostname: {{ $p.host }}
+  # api host = app-api.<domain>: one label, so the *.<domain> wildcard cert
+  # covers it. `api.<hostname>` would be two levels deep. Same trick the
+  # platform uses for previews (pr-<id>-api.preview.pawtograder.net).
+  apiOnSeparateHost: true
+  apiHostnameFlatten: true
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "55m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  tls:
+    enabled: true
+    secretName: {{ $env.tlsSecret }}
+
+# Pre-created by deploy/scripts/create-secrets.sh, with the same keys and
+# kubectl create secret calls as .github/workflows/preview.yml.
+secrets:
+  create: false
+  autogenerate: false
+  externalSecret:
+    enabled: false
+
+postgres:
+  persistence:
+    storageClass: ""
+    size: {{ $p.postgresStorage }}
+  resources:
+    requests: { cpu: 500m, memory: 2Gi }
+    limits: { cpu: "2", memory: 4Gi }
+  config:
+    max_connections: "150"
+    shared_buffers: "512MB"
+    effective_cache_size: "2GB"
+
+migrations:
+  image:
+    tag: {{ $p.imageTag | quote }}
+
+supavisor:
+  enabled: false
+
+redis:
+  provider: internal
+  internal:
+    maxmemory: "384mb"
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 250m, memory: 512Mi }
+
+auth:
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+rest:
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+
+realtime:
+  replicas: 1
+  spreadAcrossNodes: false
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+storage:
+  replicas: 1
+  backend: s3
+  s3:
+    # storage-api hard-codes https, so this is the public MinIO endpoint.
+    # Objects land under stub/<bucket>/ in the team bucket.
+    endpoint: {{ $env.s3.externalEndpoint }}
+    bucket: {{ $env.s3.bucket }}
+    forcePathStyle: true
+    region: us-east-1
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+imgproxy:
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+meta:
+  enabled: false
+
+studio:
+  enabled: false
+
+kong:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+edgeFunctions:
+  replicas: 1
+  # maxParallelism x worker.memoryLimitMb (256) = 1Gi, half the 2Gi limit.
+  maxParallelism: 4
+  image:
+    tag: {{ $p.imageTag | quote }}
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "1", memory: 2Gi }
+
+web:
+  replicas: 1
+  workflowMetricsLeader: true
+  image:
+    # Built by deploy/scripts/build-web-image.sh: NEXT_PUBLIC_* (hostnames, anon key)
+    # are compiled into the bundle, so the public ghcr.io image can't be used.
+    repository: {{ $p.webImageRepository }}
+    tag: {{ $p.imageTag | quote }}
+    # Rebuilt under the same tag when keys are recreated.
+    pullPolicy: Always
+  extraEnv:
+    # No Microsoft SSO app for this install; email + password only.
+    - name: BRAND_SSO_PROVIDERS
+      value: "[]"
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "1", memory: 2Gi }
+
+monitoring:
+  enabled: false
+
+backup:
+  enabled: false
+
+tests:
+  smoke:
+    enabled: true

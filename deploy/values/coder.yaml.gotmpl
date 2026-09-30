@@ -1,0 +1,71 @@
+# Coder (helm.coder.com/v2) for Cloud Workspaces. Workspaces are plain runc
+# pods in this same namespace; the chart's Role gives coderd pod/PVC rights
+# here and nowhere else. Templates: deploy/workspaces/templates.
+{{- $w := .Values.workspaces }}
+{{- $db := $w.database }}
+
+coder:
+  env:
+    - name: CODER_ACCESS_URL
+      value: https://{{ $w.host }}
+    # Workspace apps on <app>--<workspace>--<user>.<domain>: one label, so
+    # the namespace's wildcard cert covers them.
+    - name: CODER_WILDCARD_ACCESS_URL
+      value: "*.{{ .Values.domain }}"
+    - name: CODER_TELEMETRY_ENABLE
+      value: "false"
+    {{- if eq $db.mode "postgres" }}
+    - name: CODER_DB_PASSWORD
+      valueFrom:
+        secretKeyRef: { name: coder-db, key: CODER_DB_PASSWORD }
+    - name: CODER_PG_CONNECTION_URL
+      value: postgres://coder:$(CODER_DB_PASSWORD)@{{ $db.instance }}:5432/coder?sslmode=disable
+    {{- else if eq $db.mode "builtin" }}
+    # No CODER_PG_CONNECTION_URL: coderd starts its embedded Postgres under
+    # $HOME/.config/coderv2, which is the PVC below.
+    - name: HOME
+      value: /home/coder
+    {{- else }}
+    {{- fail (printf "workspaces.database.mode must be postgres or builtin, got %q" $db.mode) }}
+    {{- end }}
+
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+  service:
+    # LoadBalancer/NodePort aren't admitted in tenant namespaces; Ingress only.
+    type: ClusterIP
+
+  ingress:
+    enable: true
+    className: nginx
+    host: {{ $w.host }}
+    wildcardHost: "*.{{ .Values.domain }}"
+    tls:
+      enable: true
+      secretName: {{ .Values.tlsSecret }}
+      wildcardSecretName: {{ .Values.tlsSecret }}
+
+  {{- if eq $db.mode "builtin" }}
+  volumes:
+    - name: coder-data
+      persistentVolumeClaim: { claimName: coder-data }
+  volumeMounts:
+    - name: coder-data
+      mountPath: /home/coder/.config
+  {{- end }}
+
+{{- if eq $db.mode "builtin" }}
+extraTemplates:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: coder-data
+      annotations:
+        helm.sh/resource-policy: keep
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests: { storage: 5Gi }
+{{- end }}

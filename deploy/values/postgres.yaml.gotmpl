@@ -1,0 +1,45 @@
+# One Postgres instance (groundhog2k/postgres: official postgres image,
+# non-root, read-only root fs). Rendered once per postgres.instances entry;
+# .Release.Name is the instance name.
+{{- $inst := index .Values.postgres.instances .Release.Name }}
+
+# Superuser password: Secret <instance> key POSTGRES_PASSWORD
+# (scripts/create-secrets.sh).
+settings:
+  existingSecret: {{ .Release.Name }}
+  superuserPassword:
+    secretKey: POSTGRES_PASSWORD
+
+# Each database's owner password: Secret <db>-db key <DB>_DB_PASSWORD. The app
+# reads the same Secret, so the two can't drift.
+extraEnvSecrets:
+{{- range $inst.databases }}
+  - {{ . }}-db
+{{- end }}
+
+# Runs once, on an empty data directory. One role + database per app. To add
+# a database to an instance that already has data, exec this same block by
+# hand (README, "Sharing or splitting a Postgres instance").
+customScripts:
+  01-app-databases.sh: |
+    #!/bin/sh
+    set -eu
+{{- range $inst.databases }}
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
+      --set=pw="${{ upper . }}_DB_PASSWORD" <<'SQL'
+    CREATE ROLE {{ . }} LOGIN PASSWORD :'pw';
+    CREATE DATABASE {{ . }} OWNER {{ . }};
+    SQL
+{{- end }}
+
+storage:
+  requestedSize: {{ $inst.storage }}
+  keepPvc: true
+
+resources:
+  requests: { cpu: 250m, memory: 512Mi }
+  limits: { cpu: 500m, memory: 1Gi }
+
+initResources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { cpu: 250m, memory: 256Mi }

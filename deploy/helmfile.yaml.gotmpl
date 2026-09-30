@@ -1,0 +1,104 @@
+# Self-hosted stack: Forgejo (git + Actions), Coder (Cloud Workspaces) and
+# Pawtograder, for one namespace per environment. See deploy/README.md.
+#
+#   helmfile -e sandbox apply                          # everything
+#   helmfile -e sandbox -l component=forgejo apply     # one component
+
+environments:
+  sandbox:
+    values:
+      - environments/sandbox.yaml
+---
+{{- $env := .Values }}
+{{- $ns := $env.namespace }}
+{{- define "postgresNeeds" }}
+{{- if eq .mode "postgres" }}
+    needs: [{{ .instance }}]
+{{- end }}
+{{- end }}
+
+helmDefaults:
+  kubeContext: {{ $env.kubeContext }}
+  wait: true
+  waitForJobs: true
+  timeout: 1200
+  createNamespace: false
+
+repositories:
+  - name: coder-v2
+    url: https://helm.coder.com/v2
+  - name: groundhog2k
+    url: https://groundhog2k.github.io/helm-charts/
+  - name: forgejo-helm
+    url: code.forgejo.org/forgejo-helm
+    oci: true
+
+commonLabels:
+  app.kubernetes.io/part-of: pawtograder-stack
+
+releases:
+  # --- Databases ---------------------------------------------------------------
+  {{- range $name, $inst := $env.postgres.instances }}
+  - name: {{ $name }}
+    namespace: {{ $ns }}
+    chart: groundhog2k/postgres
+    version: 1.6.8
+    labels: { component: database }
+    values:
+      - values/postgres.yaml.gotmpl
+  {{- end }}
+
+  # --- Forgejo -----------------------------------------------------------------
+  - name: forgejo
+    namespace: {{ $ns }}
+    chart: forgejo-helm/forgejo
+    version: {{ $env.forgejo.chartVersion }}
+    installed: {{ $env.forgejo.enabled }}
+    labels: { component: forgejo }
+    {{- template "postgresNeeds" $env.forgejo.database }}
+    values:
+      - values/forgejo.yaml.gotmpl
+    {{- if $env.forgejo.runner.enabled }}
+      # The Forgejo half of offline runner registration reads the shared
+      # secret from its own env; the runner pod holds the same one.
+      - deployment:
+          env:
+            - name: RUNNER_SECRET
+              valueFrom:
+                secretKeyRef: { name: forgejo-runner, key: secret }
+    hooks:
+      # Idempotent: re-registering the same secret updates the same runner.
+      - events: [postsync]
+        showlogs: true
+        command: kubectl
+        args:
+          - --context={{ $env.kubeContext }}
+          - --namespace={{ $ns }}
+          - exec
+          - deploy/forgejo
+          - --container=forgejo
+          - --
+          - sh
+          - -ec
+          - forgejo forgejo-cli actions register --name {{ $env.forgejo.runner.name }} --secret "$RUNNER_SECRET"
+    {{- end }}
+
+  # --- Cloud Workspaces (Coder) -------------------------------------------------
+  - name: coder
+    namespace: {{ $ns }}
+    chart: coder-v2/coder
+    version: {{ $env.workspaces.chartVersion }}
+    installed: {{ $env.workspaces.enabled }}
+    labels: { component: workspaces }
+    {{- template "postgresNeeds" $env.workspaces.database }}
+    values:
+      - values/coder.yaml.gotmpl
+
+  # --- Pawtograder ---------------------------------------------------------------
+  - name: pawtograder
+    namespace: {{ $ns }}
+    chart: ../charts/pawtograder
+    installed: {{ $env.pawtograder.enabled }}
+    labels: { component: pawtograder }
+    values:
+      - values/pawtograder.yaml.gotmpl
