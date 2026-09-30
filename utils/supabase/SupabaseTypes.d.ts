@@ -14109,6 +14109,10 @@ export type Database = {
         Args: { _submission_id: number };
         Returns: boolean;
       };
+      submission_set_active_service: {
+        Args: { p_submission_id: number };
+        Returns: undefined;
+      };
       submit_ai_help_feedback: {
         Args: {
           p_class_id: number;
