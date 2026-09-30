@@ -888,11 +888,18 @@ jobs:
             NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.event.pull_request.head.sha || github.sha }}
             NEXT_PUBLIC_ENABLE_SIGNUPS=true
             SENTRY_RELEASE=${{ needs.meta.outputs.tag }}
-            # Previews report to the dev Sentry (org pawtograder-dev) when the repo variable is set.
-            # A DSN is a public ingest key that ships in the client bundle anyway, so a variable,
-            # not a secret. Empty = Sentry stays off, as before. Source maps are not uploaded for
-            # previews: that needs an auth token inside a build of PR-controlled code.
+            # Previews report to the dev Sentry (org pawtograder-dev) when the repo variables are set.
+            # A DSN is a public ingest key that ships in the client bundle anyway, so variables, not
+            # secrets. Empty = Sentry stays off, as before. Source maps are not uploaded for previews:
+            # that needs an auth token inside a build of PR-controlled code.
+            # Both DSN names on purpose: the Dockerfile on staging reads NEXT_PUBLIC_BUGSINK_DSN (and
+            # the tunnel forwards to NEXT_PUBLIC_BUGSINK_HOST); the Sentry rename (#1047) reads
+            # NEXT_PUBLIC_SENTRY_DSN and ignores the old names when the new one is set. Whichever
+            # the PR's Dockerfile declares is used; an undeclared build-arg is ignored.
             NEXT_PUBLIC_SENTRY_DSN=${{ vars.PREVIEW_SENTRY_DSN_WEB }}
+            NEXT_PUBLIC_BUGSINK_DSN=${{ vars.PREVIEW_SENTRY_DSN_WEB }}
+            NEXT_PUBLIC_BUGSINK_HOST=${{ vars.PREVIEW_SENTRY_HOST }}
+            NEXT_PUBLIC_SENTRY_ENVIRONMENT=${{ vars.PREVIEW_SENTRY_DSN_WEB != '' && 'preview' || '' }}
             SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
           # Cache image lives in the in-cluster registry (auth seeded into
           # the runner's ~/.docker/config.json by the gha-runner-scale-set
