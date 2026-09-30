@@ -123,6 +123,14 @@ export function ReplayPreview({ events, describedBy, onFirstFrame }: ReplayPrevi
       }
     });
     playerRef.current = player;
+    // The player's template (2.35.0, a Svelte 4 build) renders its root `.rr-player` twice and
+    // mounts the replayer in the second copy; the first stays empty and, in our fixed-height box,
+    // pushes the replay out of view. Take the empty copy out. The player never reads it again
+    // (its element bindings end up on the second copy), and its $destroy only removes nodes that
+    // still have a parent. 2.40.0 fixes the template, but the player stays at the recorder's version.
+    for (const root of Array.from(host.querySelectorAll(":scope > .rr-player"))) {
+      if (!root.querySelector(".replayer-wrapper")) root.remove();
+    }
     const replayer: Replayer = player.getReplayer();
     const iframe = replayer.iframe;
     iframe.setAttribute("title", "Redacted recording preview");

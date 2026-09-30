@@ -9,6 +9,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "../../global-setup";
 import { assertReflowAt320, assertStudentPageAccessible, tabSequence } from "../axeStudentA11y";
+import { visualScreenshot } from "../VisualTestUtils";
 import { createClass, createUsersInClass, loginAsUser, type TestingUser } from "../TestingUtils";
 import type { RoutePolicyEntry } from "@/lib/bugReport/routePolicy";
 import { captureTunnel, describeHits, scanForCanaries, type CanaryRegistry } from "./index";
@@ -114,6 +115,24 @@ test.describe("Report a bug dialog, replay review", () => {
     expect(frame.sandbox).toBe("allow-same-origin");
     expect(frame.title).toBe("Redacted recording preview");
     expect(frame.nodes).toBeGreaterThan(10);
+    // The rebuilt page is what the preview box shows: one player, and its iframe inside the box.
+    // (rrweb-player 2.35.0 renders its root twice, and the empty copy used to fill the box.)
+    const layout = await dialog.getByTestId("report-bug-replay-player").evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const iframe = el.querySelector("iframe")!.getBoundingClientRect();
+      return {
+        players: el.querySelectorAll(".rr-player").length,
+        box: { top: box.top, left: box.left, bottom: box.bottom, right: box.right },
+        iframe: { top: iframe.top, left: iframe.left, bottom: iframe.bottom, right: iframe.right }
+      };
+    });
+    expect(layout.players, JSON.stringify(layout)).toBe(1);
+    expect(layout.iframe.bottom - layout.iframe.top, JSON.stringify(layout)).toBeGreaterThan(0);
+    expect(layout.iframe.right - layout.iframe.left, JSON.stringify(layout)).toBeGreaterThan(0);
+    expect(layout.iframe.top, JSON.stringify(layout)).toBeGreaterThanOrEqual(layout.box.top - 1);
+    expect(layout.iframe.left, JSON.stringify(layout)).toBeGreaterThanOrEqual(layout.box.left - 1);
+    expect(layout.iframe.bottom, JSON.stringify(layout)).toBeLessThanOrEqual(layout.box.bottom + 1);
+    expect(layout.iframe.right, JSON.stringify(layout)).toBeLessThanOrEqual(layout.box.right + 1);
     console.log(`[bug-report E1] events=${events} previewReadyMs(in page)=${previewMs} wallMs=${wallMs}`);
     testInfo.annotations.push({ type: "E1 preview ready", description: `${previewMs} ms in page, ${wallMs} ms wall` });
     // Opening the review sent nothing.
@@ -164,6 +183,10 @@ test.describe("Report a bug dialog, replay review", () => {
     expect(after).not.toContain(target);
     expect(after).toContain("*".repeat(target.length));
     expect(after).toContain("Unmask harness");
+    // The preview's last frame, with the redaction in it (the first frame is the page loading).
+    await visualScreenshot(page, "Report a bug dialog replay preview after a redaction", {
+      element: dialog.getByTestId("report-bug-replay-player")
+    });
 
     await dialog.getByRole("textbox", { name: /What happened/ }).fill("E3 report");
     await dialog.getByRole("button", { name: "Submit" }).click();
