@@ -10,6 +10,7 @@
  * Jest test over the committed files.
  */
 import * as privacy from "./privacy";
+import { ROUTE_POLICY } from "./routePolicy";
 import edgeWrappers from "./generated/edgeFunctionWrappers.json";
 import {
   formatJsonPath,
@@ -134,20 +135,32 @@ export function classificationOf(
 }
 
 export type TraceFailure = {
-  kind: "unclassified" | "classified-none" | "unmasked" | "server-rendered";
+  kind: "unclassified" | "classified-none" | "unmasked" | "server-rendered" | "unlisted-rsc";
   message: string;
 };
 
-/** Failures that should fail CI. `server-rendered` findings are warnings: see `checkObserved`. */
+/**
+ * Failures that should fail CI. `server-rendered` and `unlisted-rsc` findings are warnings: see
+ * `checkObserved`.
+ */
 export function isBlocking(f: TraceFailure): boolean {
-  return f.kind !== "server-rendered";
+  return f.kind !== "server-rendered" && f.kind !== "unlisted-rsc";
 }
+
+const LISTED_ROUTES: ReadonlySet<string> = new Set(ROUTE_POLICY.map((e) => e.pattern));
 
 /**
  * Fails every observed flow with no classification, or classified `none` although it carried PII.
- * Server-rendered text in RSC payloads comes back as `server-rendered` warnings.
+ * Server-rendered text in RSC payloads comes back as `server-rendered` warnings. So does any other
+ * RSC flow the classification can't place, when the payload's route is not in `ROUTE_POLICY`
+ * (`unlisted-rsc`): the recorder never runs there, so it can't reach a recording. Listing the
+ * route turns it into a failure.
  */
-export function checkObserved(observed: readonly ObservedFlow[], c: Classification = CURRENT_CLASSIFICATION) {
+export function checkObserved(
+  observed: readonly ObservedFlow[],
+  c: Classification = CURRENT_CLASSIFICATION,
+  listedRoutes: ReadonlySet<string> = LISTED_ROUTES
+) {
   const failures: TraceFailure[] = [];
   for (const flow of observed) {
     if (flow.key.startsWith("?rendered:")) {
@@ -163,6 +176,14 @@ export function checkObserved(observed: readonly ObservedFlow[], c: Classificati
     const classified = classificationOf(flow.source, flow.key, c);
     if (classified !== undefined && classified !== "none") continue;
     const where = `on ${flow.firstSeenIn} (${flow.test})`;
+    const rscRoute = flow.source.startsWith("rsc:") ? flow.source.slice(4) : null;
+    if (rscRoute !== null && !listedRoutes.has(rscRoute)) {
+      failures.push({
+        kind: "unlisted-rsc",
+        message: `${flow.key} from ${flow.source} carried a ${flow.kind} canary ${where}, and privacy.ts ${classified === undefined ? "has no classification for it" : "classifies it as none"}; ${rscRoute} is not in ROUTE_POLICY, so it can't reach a recording until the route is listed`
+      });
+      continue;
+    }
     failures.push(
       classified === undefined
         ? {

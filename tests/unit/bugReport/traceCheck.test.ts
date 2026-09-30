@@ -98,6 +98,27 @@ describe("I2: an unclassified column fails, naming the column and page", () => {
     expect(failures.map((f) => f.kind)).toEqual(["server-rendered"]);
     expect(failures.filter(isBlocking)).toEqual([]);
   });
+
+  it("warns on an unclassified RSC flow whose route is not in ROUTE_POLICY", () => {
+    const failures = checkObserved([
+      flow({ source: "rsc:/course/[course_id]", key: "?avatar_url", kind: "email", firstSeenIn: "/course" })
+    ]);
+    expect(failures.map((f) => f.kind)).toEqual(["unlisted-rsc"]);
+    expect(failures.filter(isBlocking)).toEqual([]);
+    expect(failures[0].message).toContain("?avatar_url");
+    expect(failures[0].message).toContain("not in ROUTE_POLICY");
+  });
+
+  it("fails an unclassified RSC flow on a listed route", () => {
+    const listed = flow({ source: "rsc:/course/[course_id]/gradebook", key: "?name", kind: "email" });
+    expect(checkObserved([listed]).map((f) => f.kind)).toEqual(["unclassified"]);
+    const failures = checkObserved(
+      [flow({ source: "rsc:/course/[course_id]", key: "?name" })],
+      CURRENT_CLASSIFICATION,
+      new Set(["/course/[course_id]"])
+    );
+    expect(failures.filter(isBlocking).map((f) => f.kind)).toEqual(["unclassified"]);
+  });
 });
 
 describe("I3: PII inside data-report-unmask fails, naming the component", () => {

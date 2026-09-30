@@ -42,8 +42,13 @@ export function isStrictTrace(): boolean {
   return process.env.BUG_REPORT_TRACE_STRICT === "1";
 }
 
-/** The worker's tracer. Test harness pages under /e2e-harness are left out of the committed output. */
-export const workerTracer = new TaintTracer({ ignoreRoutes: /^\/e2e-harness(\/|$)/ });
+/**
+ * The worker's tracer. Test harness pages (`/e2e-harness/*`, `/course/[course_id]/e2e-harness/*`,
+ * `/e2e/*`) are left out of the committed output and the strict checks: they render canaries in
+ * unmasked components on purpose, and their specs assert on that themselves.
+ */
+export const HARNESS_ROUTES = /^(\/course\/\[course_id\])?\/e2e-harness(\/|$)|^\/e2e(\/|$)/;
+export const workerTracer = new TaintTracer({ ignoreRoutes: HARNESS_ROUTES });
 
 /** The worker's phase-2 scanner, used only under `BUG_REPORT_TRACE_UPLOAD=1`. */
 export const workerUploadScanner = new UploadScanner();

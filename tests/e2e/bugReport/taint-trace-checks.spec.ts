@@ -66,9 +66,11 @@ test("I2: a key the schema lacks, added to a live response, fails the unmodified
   page,
   context
 }) => {
+  // A deliberate probe: kept out of `workerCanaries` (as the phase 2 probe is), so the worker's
+  // trace and the run's strict check never count it; only this test's tracer looks for it.
   const registry: CanaryRegistry = new Map(seed.registry);
   const probe = canarySentence();
-  registerCanary(resolveCanary({ registry })!, probe.text, {
+  registry.set(probe.text, {
     kind: "free_text",
     column: "user_roles.i2_probe_column",
     rowId: 0,

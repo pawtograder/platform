@@ -503,7 +503,17 @@ jobs:
                 console.log("");
                 console.log(`**I4:** ${gaps.length} seeded canaries never observed${gaps.length ? ": " + gaps.join(", ") : "."}`);
                 console.log("");
-                console.log(`**Checks:** ${failures.length} findings (see report.json).`);
+                const warningKinds = new Set(["server-rendered", "unlisted-rsc"]);
+                const warnings = failures.filter((f) => warningKinds.has(f.kind));
+                console.log(`**Checks:** ${failures.length - warnings.length} failures, ${warnings.length} warnings (see report.json).`);
+                if (warnings.length > 0) {
+                  console.log("");
+                  console.log("<details><summary>Warnings (server-rendered text, and RSC flows on routes not in ROUTE_POLICY)</summary>");
+                  console.log("");
+                  for (const w of warnings) console.log(`- ${w.message}`);
+                  console.log("");
+                  console.log("</details>");
+                }
               ' "$out/data/report.json"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
