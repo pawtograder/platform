@@ -2067,6 +2067,297 @@ export type Database = {
           }
         ];
       };
+      deadline_regrade_batches: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          created_at: string;
+          created_by: string | null;
+          id: number;
+          new_due_date: string;
+          old_due_date: string;
+          old_minutes_due_after_lab: number | null;
+          status: string;
+          updated_at: string;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          created_at?: string;
+          created_by?: string | null;
+          id?: number;
+          new_due_date: string;
+          old_due_date: string;
+          old_minutes_due_after_lab?: number | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          created_at?: string;
+          created_by?: string | null;
+          id?: number;
+          new_due_date?: string;
+          old_due_date?: string;
+          old_minutes_due_after_lab?: number | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "deadline_regrade_batches_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_batches_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_batches_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_batches_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_batches_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_batches_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_batches_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      deadline_regrade_candidates: {
+        Row: {
+          assignment_group_id: number | null;
+          assignment_id: number;
+          batch_id: number;
+          class_id: number;
+          commit_date: string | null;
+          commit_message: string | null;
+          created_at: string;
+          current_score: number | null;
+          current_submission_id: number | null;
+          decision: string;
+          id: number;
+          profile_id: string | null;
+          pushed_at: string | null;
+          repository: string;
+          repository_id: number;
+          reservation_generation: number;
+          sha: string;
+          staged_score: number | null;
+          staged_status: string;
+          staged_submission_id: number | null;
+          staged_triggered_at: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          assignment_group_id?: number | null;
+          assignment_id: number;
+          batch_id: number;
+          class_id: number;
+          commit_date?: string | null;
+          commit_message?: string | null;
+          created_at?: string;
+          current_score?: number | null;
+          current_submission_id?: number | null;
+          decision?: string;
+          id?: number;
+          profile_id?: string | null;
+          pushed_at?: string | null;
+          repository: string;
+          repository_id: number;
+          reservation_generation?: number;
+          sha: string;
+          staged_score?: number | null;
+          staged_status?: string;
+          staged_submission_id?: number | null;
+          staged_triggered_at?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          assignment_group_id?: number | null;
+          assignment_id?: number;
+          batch_id?: number;
+          class_id?: number;
+          commit_date?: string | null;
+          commit_message?: string | null;
+          created_at?: string;
+          current_score?: number | null;
+          current_submission_id?: number | null;
+          decision?: string;
+          id?: number;
+          profile_id?: string | null;
+          pushed_at?: string | null;
+          repository?: string;
+          repository_id?: number;
+          reservation_generation?: number;
+          sha?: string;
+          staged_score?: number | null;
+          staged_status?: string;
+          staged_submission_id?: number | null;
+          staged_triggered_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "deadline_regrade_candidates_assignment_group_id_fkey";
+            columns: ["assignment_group_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_groups";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_batch_id_fkey";
+            columns: ["batch_id"];
+            isOneToOne: false;
+            referencedRelation: "deadline_regrade_batches";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_current_submission_id_fkey";
+            columns: ["current_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_current_submission_id_fkey";
+            columns: ["current_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_current_submission_id_fkey";
+            columns: ["current_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_current_submission_id_fkey";
+            columns: ["current_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_staged_submission_id_fkey";
+            columns: ["staged_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_staged_submission_id_fkey";
+            columns: ["staged_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_staged_submission_id_fkey";
+            columns: ["staged_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "deadline_regrade_candidates_staged_submission_id_fkey";
+            columns: ["staged_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["activesubmissionid"];
+          }
+        ];
+      };
       discord_async_errors: {
         Row: {
           created_at: string;
@@ -9882,6 +10173,7 @@ export type Database = {
           is_active: boolean;
           is_empty_submission: boolean;
           is_not_graded: boolean;
+          is_staged: boolean;
           ordinal: number;
           pr_number: number | null;
           pr_state: string | null;
@@ -9907,6 +10199,7 @@ export type Database = {
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
+          is_staged?: boolean;
           ordinal?: number;
           pr_number?: number | null;
           pr_state?: string | null;
@@ -9932,6 +10225,7 @@ export type Database = {
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
+          is_staged?: boolean;
           ordinal?: number;
           pr_number?: number | null;
           pr_state?: string | null;
@@ -12227,6 +12521,15 @@ export type Database = {
           isSetofReturn: false;
         };
       };
+      apply_deadline_regrade: {
+        Args: {
+          p_candidate_id: number;
+          p_expected_current_score: number;
+          p_expected_current_submission_id: number;
+          p_expected_staged_score: number;
+        };
+        Returns: Json;
+      };
       apply_late_token_extension: {
         Args: {
           p_assignment_group_id: number;
@@ -12348,10 +12651,23 @@ export type Database = {
         };
         Returns: Json;
       };
-      calculate_effective_due_date: {
-        Args: { assignment_id_param: number; student_profile_id_param: string };
-        Returns: string;
-      };
+      calculate_effective_due_date:
+        | {
+            Args: {
+              assignment_id_param: number;
+              student_profile_id_param: string;
+            };
+            Returns: string;
+          }
+        | {
+            Args: {
+              assignment_id_param: number;
+              base_due_date_param: string;
+              base_minutes_due_after_lab_param: number;
+              student_profile_id_param: string;
+            };
+            Returns: string;
+          };
       calculate_final_due_date: {
         Args: {
           assignment_group_id_param?: number;
@@ -12809,6 +13125,10 @@ export type Database = {
         Args: { p_class_id: number };
         Returns: boolean;
       };
+      dismiss_deadline_regrade_batch: {
+        Args: { p_batch_id: number; p_status?: string };
+        Returns: undefined;
+      };
       dual_active_invariants_version: { Args: never; Returns: number };
       enqueue_autograder_reruns: {
         Args: {
@@ -12972,6 +13292,14 @@ export type Database = {
       enqueue_sync_repo_permissions_for_repo: {
         Args: { p_repo_id: number };
         Returns: undefined;
+      };
+      enumerate_deadline_regrade_candidates: {
+        Args: {
+          p_assignment_id: number;
+          p_old_due_date: string;
+          p_old_minutes_due_after_lab: number;
+        };
+        Returns: number;
       };
       evaluate_error_pin_rule: {
         Args: {
@@ -13967,6 +14295,14 @@ export type Database = {
         };
         Returns: undefined;
       };
+      regrade_release_preview_run: {
+        Args: { p_candidate_id: number; p_generation: number };
+        Returns: undefined;
+      };
+      regrade_reserve_preview_run: {
+        Args: { p_repository_id: number; p_sha: string };
+        Returns: Json;
+      };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
         Returns: number;
@@ -14081,6 +14417,10 @@ export type Database = {
       sis_sync_enrollment: {
         Args: { p_class_id: number; p_roster_data: Json; p_sync_options?: Json };
         Returns: Json;
+      };
+      skip_deadline_regrade: {
+        Args: { p_candidate_id: number };
+        Returns: undefined;
       };
       soft_delete_survey: {
         Args: { p_survey_id: string; p_survey_logical_id: string };

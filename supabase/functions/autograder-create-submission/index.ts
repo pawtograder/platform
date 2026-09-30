@@ -1029,6 +1029,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         (hasRealCheckRun && checkRun.commit_message && checkRun.commit_message.toUpperCase().includes("#NOT-GRADED")) ||
         false;
 
+      // A deadline-regrade preview is graded but never auto-activated. It is
+      // dispatched on its own tag (refs/tags/pawtograder-preview/<sha>) by
+      // autograder-trigger-grading-workflow, after an instructor reserved the
+      // pending candidate, and the run's OIDC token carries that ref. So the
+      // preview status belongs to the run: an ordinary regrade of the same sha
+      // (pawtograder-submit/) or a student push is never staged, however the
+      // runs interleave.
+      const isStagedSubmission =
+        decoded.event_name === "workflow_dispatch" && (decoded.ref ?? "").startsWith("refs/tags/pawtograder-preview/");
+      scope?.setTag("is_staged", isStagedSubmission.toString());
+
       scope?.setTag("time_zone", timeZone);
       scope?.setTag("is_not_graded", isNotGradedSubmission.toString());
       scope?.setTag("user_role", checkRun.user_roles?.role || "unknown");
@@ -1191,6 +1202,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             .select("created_at, grader_results!grader_results_submission_id_fkey(score)")
             .or(ownershipFilter)
             .eq("assignment_id", repoData.assignment_id)
+            // An instructor's staged regrade preview is not a student attempt.
+            .eq("is_staged", false)
             .gte(
               "created_at",
               addSeconds(new Date(), 0 - repoData.assignments.autograder.max_submissions_period_secs).toISOString()
@@ -1387,7 +1400,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               run_attempt: Number.parseInt(decoded.run_attempt),
               class_id: repoData.assignments.class_id!,
               repository_check_run_id: checkRun?.id,
-              is_not_graded: isNotGradedSubmission
+              is_not_graded: isNotGradedSubmission,
+              is_staged: isStagedSubmission
             })
             .select("id")
             .single();

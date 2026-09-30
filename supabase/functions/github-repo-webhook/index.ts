@@ -1831,8 +1831,9 @@ async function handlePushToStudentRepo(
 
   //Get the repo name from the payload
   const repoName = payload.repository.full_name;
-  if (payload.ref.includes("refs/tags/pawtograder-submit/")) {
+  if (payload.ref.includes("refs/tags/pawtograder-submit/") || payload.ref.includes("refs/tags/pawtograder-preview/")) {
     // If we make a #submit commit or otherwise create a submission, it will trigger creating the tag, so don't do anything on the tag push.
+    // pawtograder-preview/ is the same thing for deadline-regrade previews.
     return;
   }
   if (!payload.head_commit) {
