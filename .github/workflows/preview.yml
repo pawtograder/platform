@@ -888,6 +888,11 @@ jobs:
             NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.event.pull_request.head.sha || github.sha }}
             NEXT_PUBLIC_ENABLE_SIGNUPS=true
             SENTRY_RELEASE=${{ needs.meta.outputs.tag }}
+            # Previews report to the dev Sentry (org pawtograder-dev) when the repo variable is set.
+            # A DSN is a public ingest key that ships in the client bundle anyway, so a variable,
+            # not a secret. Empty = Sentry stays off, as before. Source maps are not uploaded for
+            # previews: that needs an auth token inside a build of PR-controlled code.
+            NEXT_PUBLIC_SENTRY_DSN=${{ vars.PREVIEW_SENTRY_DSN_WEB }}
             SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
           # Cache image lives in the in-cluster registry (auth seeded into
           # the runner's ~/.docker/config.json by the gha-runner-scale-set
@@ -1220,12 +1225,27 @@ jobs:
           # the wrong revision. `github.head_ref` above is already the PR's
           # branch, so only the commit was wrong.
           DEPLOY_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Edge-function DSN for the dev Sentry (see the web build-arg above). Empty = off.
+          PREVIEW_SENTRY_DSN_EDGE: ${{ vars.PREVIEW_SENTRY_DSN_EDGE }}
         run: |
           set -euo pipefail
           # helm --set splits on commas and interprets dots as key nesting, so a branch name reaches it
           # only after being reduced to a charset that cannot restructure the flag. Informational tag —
           # dropping an odd character is preferable to a failed deploy.
           SAFE_BRANCH=$(printf '%s' "$DEPLOY_BRANCH" | tr -cd 'A-Za-z0-9._/-' | cut -c1-100)
+          # Sentry wiring for previews, only when the dev-Sentry variable is set. extraEnv is empty
+          # in values-preview.yaml, so indexing into it here doesn't clobber anything.
+          SENTRY_ARGS=()
+          if [ -n "$PREVIEW_SENTRY_DSN_EDGE" ]; then
+            SENTRY_ARGS=(
+              --set-string 'edgeFunctions.extraEnv[0].name=SENTRY_DSN'
+              --set-string "edgeFunctions.extraEnv[0].value=$PREVIEW_SENTRY_DSN_EDGE"
+              --set-string 'edgeFunctions.extraEnv[1].name=SENTRY_ENVIRONMENT'
+              --set-string 'edgeFunctions.extraEnv[1].value=preview'
+              --set-string 'web.extraEnv[0].name=SENTRY_ENVIRONMENT'
+              --set-string 'web.extraEnv[0].value=preview'
+            )
+          fi
           # secrets.create=false: chart consumes the pawtograder-{jwt,
           # postgres,e2e,s3} Secrets created by the `secrets` job.
           # secrets.autogenerate=false: skip the in-cluster bootstrap Job
@@ -1280,6 +1300,7 @@ jobs:
                 --set-string global.deploy.runId="$GITHUB_RUN_ID" \
                 --set-string global.deploy.runAttempt="$GITHUB_RUN_ATTEMPT" \
                 --set-string global.deploy.commit="$DEPLOY_SHA" \
+                "${SENTRY_ARGS[@]}" \
                 --wait --wait-for-jobs --timeout 20m \
               2>&1 | tee "$RUNNER_TEMP/helm-attempt.log"
             rc=${PIPESTATUS[0]}
