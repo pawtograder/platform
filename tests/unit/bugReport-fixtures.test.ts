@@ -13,6 +13,7 @@ import {
   type TunnelCapture
 } from "../e2e/bugReport/tunnel";
 import { scanForCanaries, type CanaryRegistry } from "../e2e/bugReport/canaries";
+import { canaryGrade } from "../e2e/bugReport/canaryRegistry";
 
 const enc = new TextEncoder();
 const rrwebEvents = [
@@ -87,6 +88,20 @@ describe("assertNoReplayUploaded", () => {
   });
 });
 
+describe("canaryGrade", () => {
+  it("keeps the two-decimal format with two distinct, uncommon decimal digits", () => {
+    for (let i = 0; i < 300; i++) {
+      const { text, value } = canaryGrade();
+      expect(text).toMatch(/^\d+\.\d\d$/);
+      expect(Number(text)).toBe(value);
+      const [a, b] = text.slice(-2);
+      expect(a).not.toBe(b);
+      expect(b).not.toBe("0");
+      expect(["12", "25", "37", "62", "67", "75", "87"]).not.toContain(text.slice(-2));
+    }
+  });
+});
+
 describe("scanForCanaries", () => {
   it("ignores a grade canary inside a longer number", () => {
     const registry = new Map([
@@ -94,6 +109,27 @@ describe("scanForCanaries", () => {
     ]);
     expect(scanForCanaries("width:187.31%;t=87.319 M987.31", registry)).toEqual([]);
     expect(scanForCanaries("Score: 87.31 / 100", registry)).toHaveLength(1);
+  });
+
+  it("ignores a grade canary inside SVG path data or a number list", () => {
+    const registry = new Map([
+      ["57.68", { kind: "grade" as const, column: "gradebook_column_students.score", rowId: 1 }]
+    ]);
+    for (const coincidence of [
+      '<path d="M57.68 12L3 4"/>',
+      "l57.68 0",
+      "c1 2 3 4 57.68,9",
+      'points="57.68,12.5"',
+      "0,57.68 ",
+      "10-57.68 ",
+      "a57.68 0"
+    ]) {
+      expect(scanForCanaries(coincidence, registry)).toEqual([]);
+    }
+    // Still the grade: text around it, a word ending in a command letter, a sentence comma.
+    for (const leak of ["Total points57.68", "Grade: 57.68, late", "score -57.68", "(57.68)", "A: 57.68"]) {
+      expect(scanForCanaries(leak, registry)).toHaveLength(1);
+    }
   });
 
   const registry: CanaryRegistry = new Map([

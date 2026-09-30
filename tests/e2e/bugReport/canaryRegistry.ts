@@ -169,15 +169,20 @@ export function canarySentence(): { text: string; anchor: string } {
 
 const issuedGrades = new Set<string>();
 
+/** Decimals that common fractions end in (thirds, quarters, eighths), so often seen in other numbers. */
+const COMMON_CENTS = new Set([12, 25, 37, 62, 67, 75, 87]);
+
 /**
  * A grade with two decimals that no computed score is likely to produce by accident, such as 87.31.
- * Returned as the number and the string a page renders.
+ * The two decimals are distinct digits and not the start of a common fraction (.33, .25, .67), so
+ * the grade is less likely to turn up inside some other number. Returned as the number and the
+ * string a page renders.
  */
 export function canaryGrade(max = 100): { value: number; text: string } {
   for (;;) {
     const whole = randomInt(Math.max(1, Math.floor(max * 0.55)), Math.max(2, Math.floor(max * 0.97)));
     const cents = randomInt(11, 99);
-    if (cents % 10 === 0) continue;
+    if (cents % 10 === 0 || cents % 11 === 0 || COMMON_CENTS.has(cents)) continue;
     const text = `${whole}.${cents}`;
     if (issuedGrades.has(text)) continue;
     issuedGrades.add(text);

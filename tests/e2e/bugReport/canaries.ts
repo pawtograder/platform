@@ -96,16 +96,24 @@ export function scanForCanaries(
 
 /**
  * A grade canary such as "72.52" inside a longer number (an SVG path's "M572.52", a CSS
- * "83.333333%", a timestamp) is a coincidence, not the grade: the scan matches substrings. A grade
- * hit with a digit, or a digit-and-dot, right next to it is not reported.
+ * "83.333333%", a timestamp) or inside SVG path data or a number list ("M57.68", "57.68,12",
+ * "3,57.68", "3-57.68") is a coincidence, not the grade: the scan matches substrings. A grade hit
+ * is not reported when it has a digit or a digit-and-dot right next to it, a path command letter
+ * just before it (only when that letter doesn't end a word, so "points57.68" still counts), a
+ * comma and another number just after it, or a comma or minus sign with a digit before it.
  */
 function insideLongerNumber(text: string, start: number, end: number): boolean {
-  return /[\d.]/.test(text[start - 1] ?? "") || /\d/.test(text[end] ?? "");
+  const before = text[start - 1] ?? "";
+  const beforeThat = text[start - 2] ?? "";
+  if (/[\d.]/.test(before) || /\d/.test(text[end] ?? "")) return true;
+  if (/[MmLlHhVvCcSsQqTtAaZz]/.test(before) && !/[A-Za-z]/.test(beforeThat)) return true;
+  if (text[end] === "," && /[\d.-]/.test(text[end + 1] ?? "")) return true;
+  return /[,-]/.test(before) && /\d/.test(beforeThat);
 }
 
 /**
  * The same rule for a hit already found, for callers that filter hits from their own scan: true
- * for a grade hit with a digit, or a digit-and-dot, right next to it in `text`.
+ * for a grade hit that `insideLongerNumber` treats as part of a longer number or of SVG path data.
  */
 export function isNumberFragment(text: string, hit: CanaryHit): boolean {
   return hit.entry.kind === "grade" && insideLongerNumber(text, hit.offset, hit.offset + hit.matched.length);
