@@ -547,6 +547,12 @@ migrations:
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
     limits: { cpu: "1", memory: "1Gi" }
+  # The wait-for-postgres / wait-for-supabase-services init containers only
+  # poll with pg_isready / psql. Explicit so the Job is admitted by a
+  # ResourceQuota that tracks limits without a LimitRange to fill them in.
+  initResources:
+    requests: { cpu: "10m", memory: "32Mi" }
+    limits: { cpu: "200m", memory: "128Mi" }
   # Hook weight controls ordering relative to other pre-install hooks. Lower
   # numbers run earlier; postgres readiness is verified by the script itself.
   hookWeight: "5"
@@ -1827,6 +1833,11 @@ kong:
   resources:
     requests: { cpu: "200m", memory: "1Gi" }
     limits: { cpu: "2", memory: "6Gi" }
+  # render-config init container (sed over kong.yml). Explicit so the pod is
+  # admitted by a ResourceQuota that tracks limits without a LimitRange.
+  initResources:
+    requests: { cpu: "10m", memory: "16Mi" }
+    limits: { cpu: "100m", memory: "64Mi" }
   service:
     port: 8000
   terminationGracePeriodSeconds: 45
@@ -2119,6 +2130,9 @@ auditPartitions:
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"
+  resources:
+    requests: { cpu: "50m", memory: "64Mi" }
+    limits: { cpu: "500m", memory: "256Mi" }
 
 backup:
   enabled: false
@@ -2127,6 +2141,11 @@ backup:
   # a run that exceeds this fails LOUDLY rather than hanging forever.
   activeDeadlineSeconds: 3600
   startingDeadlineSeconds: 1800
+  # pg_dump + mc upload. pg_dump is single-threaded and streams, so memory
+  # stays modest regardless of DB size; raise cpu to shorten long dumps.
+  resources:
+    requests: { cpu: "250m", memory: "256Mi" }
+    limits: { cpu: "1", memory: "1Gi" }
   # Point this at the image built from
   # charts/pawtograder/images/backup/Dockerfile — supabase/postgres with a
   # pinned mc baked in. That is the supported configuration: it removes a
@@ -2196,6 +2215,10 @@ backup:
     # as the backup itself. Empty → inherit backup.scratchSize/StorageClass.
     scratchSize: ""
     scratchStorageClass: ""
+    # pg_restore --list over the downloaded dump.
+    resources:
+      requests: { cpu: "100m", memory: "128Mi" }
+      limits: { cpu: "1", memory: "512Mi" }
     successfulJobsHistoryLimit: 1
     failedJobsHistoryLimit: 3
   # Restore DRILL: the full-restore rehearsal `verify` stops short of. It

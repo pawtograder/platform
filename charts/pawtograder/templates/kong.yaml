@@ -163,6 +163,8 @@ spec:
       initContainers:
         - name: render-config
           image: alpine:3.20
+          resources:
+            {{- toYaml .Values.kong.initResources | nindent 12 }}
           command:
             - sh
             - -c

@@ -102,6 +102,8 @@ spec:
                   # keeps its claim, so free the space now rather than holding a
                   # dump-sized chunk of the scratch tier until the Job is reaped.
                   rm -f /scratch/latest.dump
+              resources:
+                {{- toYaml .Values.backup.verify.resources | nindent 16 }}
               volumeMounts:
                 - { name: scratch, mountPath: /scratch }
               env:

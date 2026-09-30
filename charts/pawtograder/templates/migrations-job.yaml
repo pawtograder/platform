@@ -28,6 +28,8 @@ spec:
       initContainers:
         - name: wait-for-postgres
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
+          resources:
+            {{- toYaml .Values.migrations.initResources | nindent 12 }}
           command:
             - sh
             - -c
@@ -51,6 +53,8 @@ spec:
         # only exist after each service's migrations have completed.
         - name: wait-for-supabase-services
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
+          resources:
+            {{- toYaml .Values.migrations.initResources | nindent 12 }}
           env:
             - name: PGHOST
               value: {{ include "pawtograder.postgres.host" . }}
