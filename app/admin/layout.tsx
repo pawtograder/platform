@@ -53,7 +53,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
 
   return (
     <TimeZoneProvider courseTimeZone={ADMIN_DISPLAY_TIME_ZONE}>
-      <BugReportIdentity role="admin" />
+      <BugReportIdentity role="admin" userId={user.id} />
       <Box minH="100vh" bg="bg.canvas">
         <Box as="header" bg="bg" shadow="sm" borderBottom="1px" borderColor="border.muted">
           <Box maxW="7xl" mx="auto" px={{ base: 4, sm: 6, lg: 8 }}>

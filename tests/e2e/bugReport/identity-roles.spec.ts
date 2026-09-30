@@ -5,9 +5,10 @@ import { createClass, createUsersInClass, loginAsUser, supabase, TestingUser } f
 import { captureTunnel, payloadJsonOf, type TunnelCapture } from "./index";
 
 /**
- * G2 (spec §7.3, ADR 3), PR tier: a report says who filed it by role only. Reports from a
- * student, a grader, and an instructor on course routes carry their `role` and the `class_id`;
- * a report from an admin route carries `role: "admin"` and no `class_id`. No envelope sent while
+ * G2 (spec §7.3, ADR 3), PR tier: a report says who filed it by user ID and role only. Every
+ * report carries the reporter's auth user ID. Reports from a student, a grader, and an
+ * instructor on course routes carry their `role` and the `class_id`; a report from an admin
+ * route carries `role: "admin"` and no `class_id`. No envelope sent while
  * filing any of them contains the reporter's email or name.
  *
  * `captureTunnel` answers `/api/tunnel` itself, so nothing reaches Sentry. Admin pages have no
@@ -140,12 +141,10 @@ test.describe("G2: reports carry the reporter's role, and the class only on cour
     expect(feedback[0].tags?.role).toBe("admin");
     expect(feedback[0].tags).not.toHaveProperty("class_id");
     expect(feedback[0].tags?.route).toBe("/admin/signup-welcome");
-    // No user ID here: the admin layout doesn't mount AuthStateProvider, so nothing calls
-    // Sentry.setUser on admin pages (as on origin/staging). The report still names no one.
-    expect(feedback[0].user ?? {}).not.toHaveProperty("email");
-    expect(feedback[0].user ?? {}).not.toHaveProperty("username");
-    expect(feedback[0].contexts.feedback.contact_email).toBeUndefined();
-    expect(feedback[0].contexts.feedback.name).toBeUndefined();
+    // Nothing calls Sentry.setUser on admin pages (no AuthStateProvider there); the admin
+    // layout publishes the auth user ID to the report context instead.
+    expect(feedback[0].user?.id).toBe(admin.user_id);
+    assertIdOnly(feedback[0]);
     assertNoIdentity(tunnel, admin);
   });
 });

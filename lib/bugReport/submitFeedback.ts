@@ -106,6 +106,7 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
   }
 
   const tags = buildReportTags(input, client);
+  const contextUserId = (input.context ?? getReportContext()).userId;
 
   let replayId: string | undefined;
   let replayState: "none" | "attached" | "failed" = "none";
@@ -143,7 +144,7 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
   // scope tags and user fields) has not been through redaction. Strip it just before the
   // envelope is built; `beforeSendFeedback` fires before the scope is applied, so it can't.
   const stopScrubbing = client.on("beforeSendEvent", (event: Event) => {
-    if (event.event_id === feedbackId) scrubFeedbackEvent(event, tags);
+    if (event.event_id === feedbackId) scrubFeedbackEvent(event, tags, contextUserId);
   });
   let stopListening: () => void = () => {};
   const sent = new Promise<SendResponse | undefined>((resolve) => {
@@ -201,9 +202,11 @@ const FEEDBACK_CONTEXTS = new Set(["feedback", "trace", "replay", "os", "browser
 /**
  * Reduces a feedback event to what the report itself supplies: the feedback context (message,
  * redacted page URL, replay_id), the report's tags, the user's ID, and trace, replay and device
- * contexts. The redacted breadcrumbs travel in the replay instead. Exported for unit tests.
+ * contexts. The redacted breadcrumbs travel in the replay instead. `fallbackUserId` (from the
+ * report context) fills in the ID where nothing called `Sentry.setUser`, as on admin pages.
+ * Exported for unit tests.
  */
-export function scrubFeedbackEvent(event: Event, tags: Record<string, string>): void {
+export function scrubFeedbackEvent(event: Event, tags: Record<string, string>, fallbackUserId?: string): void {
   delete event.breadcrumbs;
   delete event.extra;
   delete event.request;
@@ -214,7 +217,7 @@ export function scrubFeedbackEvent(event: Event, tags: Record<string, string>): 
   }
   event.tags = { ...tags };
   // As on the replay events: the ID only, and no inferred IP.
-  const id = event.user?.id;
+  const id = event.user?.id ?? fallbackUserId;
   event.user = { ...(id !== undefined ? { id: String(id) } : {}), ip_address: null };
 }
 

@@ -22,6 +22,7 @@ import {
   type ReplayEvent,
   type TransportMakeRequestResponse
 } from "@sentry/core";
+import { getReportContext } from "../reportContext";
 import type { ReplayUploadResult } from "../submitFeedback";
 import type { FrozenBuffer } from "../types";
 import {
@@ -200,7 +201,8 @@ async function buildReplayEvent(
   if (!prepared) return null;
 
   const sdk = client.getSdkMetadata()?.sdk;
-  const userId = prepared.user?.id;
+  // Admin pages never call Sentry.setUser; the report context has the ID there.
+  const userId = prepared.user?.id ?? getReportContext().userId;
   const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : undefined;
   const event: ReplayEvent = {
     ...base,

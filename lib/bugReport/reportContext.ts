@@ -5,7 +5,7 @@
  * so the providers that knew the route, class, and role are gone by the time its form
  * submits. The store keeps the last values they published, and `submitReport` reads it.
  *
- * Identity is the role only (ADR 3). Never put a name or email here.
+ * Identity is the user ID and role only (ADR 3). Never put a name or email here.
  */
 export type ReportRole = "student" | "grader" | "instructor" | "admin";
 
@@ -15,11 +15,17 @@ export type ReportContext = {
   /** Set on course routes only; absent on admin and other non-course routes. */
   classId?: number;
   role?: ReportRole;
+  /**
+   * Supabase auth user ID, the same ID `Sentry.setUser` uses in the middleware and
+   * `AuthStateProvider`. The admin layout has no `AuthStateProvider`, so without this its
+   * reports would carry no user.
+   */
+  userId?: string;
 };
 
 let current: ReportContext = {};
 /** Identity as it was just before the last clear. See `getLastKnownReportContext`. */
-let lastCleared: Pick<ReportContext, "classId" | "role"> = {};
+let lastCleared: Pick<ReportContext, "classId" | "role" | "userId"> = {};
 
 export function getReportContext(): ReportContext {
   return current;
@@ -29,15 +35,19 @@ export function setReportRoute(route: string | undefined): void {
   current = { ...current, route };
 }
 
-export function setReportIdentity(identity: { classId?: number; role?: ReportRole }): void {
-  current = { ...current, classId: identity.classId, role: identity.role };
+export function setReportIdentity(identity: { classId?: number; role?: ReportRole; userId?: string }): void {
+  current = { ...current, classId: identity.classId, role: identity.role, userId: identity.userId };
+}
+
+function hasIdentity(ctx: ReportContext): boolean {
+  return ctx.classId !== undefined || ctx.role !== undefined || ctx.userId !== undefined;
 }
 
 export function clearReportIdentity(): void {
-  if (current.classId !== undefined || current.role !== undefined) {
-    lastCleared = { classId: current.classId, role: current.role };
+  if (hasIdentity(current)) {
+    lastCleared = { classId: current.classId, role: current.role, userId: current.userId };
   }
-  current = { ...current, classId: undefined, role: undefined };
+  current = { ...current, classId: undefined, role: undefined, userId: undefined };
 }
 
 /**
@@ -46,7 +56,7 @@ export function clearReportIdentity(): void {
  * identity from just before that, so the crash report still says who hit it.
  */
 export function getLastKnownReportContext(): ReportContext {
-  if (current.classId !== undefined || current.role !== undefined) return current;
+  if (hasIdentity(current)) return current;
   return { ...current, ...lastCleared };
 }
 

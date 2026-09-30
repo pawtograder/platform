@@ -79,13 +79,13 @@ export function useBugReport(): BugReportContextValue {
 }
 
 /**
- * Publishes who is reporting (role, and class on course routes) for as long as it is
- * mounted. Render it inside the layout that knows the identity.
+ * Publishes who is reporting (auth user ID, role, and class on course routes) for as long as
+ * it is mounted. Render it inside the layout that knows the identity.
  */
-export function BugReportIdentity({ role, classId }: { role?: ReportRole; classId?: number }) {
+export function BugReportIdentity({ role, classId, userId }: { role?: ReportRole; classId?: number; userId?: string }) {
   useEffect(() => {
-    setReportIdentity({ role, classId });
+    setReportIdentity({ role, classId, userId });
     return () => clearReportIdentity();
-  }, [role, classId]);
+  }, [role, classId, userId]);
   return null;
 }

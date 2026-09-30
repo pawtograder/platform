@@ -1,5 +1,6 @@
 "use client";
 
+import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useParams } from "next/navigation";
 import { BugReportIdentity } from "./BugReportProvider";
@@ -13,7 +14,8 @@ import { BugReportIdentity } from "./BugReportProvider";
 export function CourseBugReportIdentity() {
   const { course_id } = useParams();
   const { realRole } = useClassProfiles();
+  const { user } = useAuthState();
   const classId = typeof course_id === "string" ? Number(course_id) : NaN;
   if (!Number.isFinite(classId)) return null;
-  return <BugReportIdentity role={realRole} classId={classId} />;
+  return <BugReportIdentity role={realRole} classId={classId} userId={user?.id} />;
 }

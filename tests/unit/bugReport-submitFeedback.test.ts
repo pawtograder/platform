@@ -48,6 +48,7 @@ jest.mock("@sentry/nextjs", () => ({
     };
     hints.push(hint);
     client.emit("beforeSendFeedback", event, hint);
+    client.emit("beforeSendEvent", event, hint);
     sentEvents.push(event);
     const response = client.nextResponse;
     if (response) Promise.resolve().then(() => client.emit("afterSendEvent", event, response));
@@ -109,6 +110,13 @@ describe("submitReport without a replay", () => {
     expect(event.tags.contact_ok).toBe("true");
     expect(event.tags.linked_event_id).toBe("e".repeat(32));
     expect(event.contexts.feedback.associated_event_id).toBe("e".repeat(32));
+  });
+
+  it("takes the user ID from the report context when nothing set a Sentry user (admin pages)", async () => {
+    setReportRoute("/admin/classes");
+    setReportIdentity({ role: "admin", userId: "auth-user-1" });
+    await submitReport({ description: "x", contactOk: false });
+    expect((sentEvents[0] as { user: unknown }).user).toEqual({ id: "auth-user-1", ip_address: null });
   });
 
   it("refuses an empty description without sending", async () => {
@@ -199,9 +207,9 @@ describe("submitReport with a replay (package 6 contract)", () => {
 
 describe("report context", () => {
   it("keeps the last identity for global-error after the layouts unmount", () => {
-    setReportIdentity({ classId: 7, role: "grader" });
+    setReportIdentity({ classId: 7, role: "grader", userId: "u7" });
     clearReportIdentity();
-    expect(getLastKnownReportContext()).toMatchObject({ classId: 7, role: "grader" });
+    expect(getLastKnownReportContext()).toMatchObject({ classId: 7, role: "grader", userId: "u7" });
   });
 });
 
@@ -234,5 +242,14 @@ describe("scrubFeedbackEvent", () => {
     expect(event.tags).toEqual({ class_id: "1", role: "student", contact_ok: "false" });
     expect(event.user).toEqual({ id: "u1", ip_address: null });
     expect(JSON.stringify(event)).not.toMatch(/Jane|jane|jdoe/);
+  });
+
+  it("uses the fallback ID only when the scope has no user ID, and keeps it ID-only", () => {
+    const bare = { event_id: "e".repeat(32), contexts: {} } as never;
+    scrubFeedbackEvent(bare, {}, "ctx-id");
+    expect((bare as { user: unknown }).user).toEqual({ id: "ctx-id", ip_address: null });
+    const scoped = { event_id: "e".repeat(32), contexts: {}, user: { id: "scope-id", email: "a@b.c" } } as never;
+    scrubFeedbackEvent(scoped, {}, "ctx-id");
+    expect((scoped as { user: unknown }).user).toEqual({ id: "scope-id", ip_address: null });
   });
 });
