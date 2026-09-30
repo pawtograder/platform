@@ -178,16 +178,24 @@ test.describe("bug report recorder performance", () => {
   test.describe.configure({ mode: "serial" });
   test.skip(({ browserName }) => browserName !== "chromium", "long-task APIs are Chromium-only");
 
-  let gradebookCourse: Course;
-  let gradingCourse: Course;
-  let gradebookInstructor: TestingUser;
-  let gradingInstructor: TestingUser;
-  let gradingUrl: string;
+  // One course per recording state, each with the same data. The course layout reads the flag
+  // through getCourse(), cached for up to an hour, and local and CI stacks have no cache
+  // invalidation webhook (no vault `vercel_host`), so a course first rendered with the flag off
+  // keeps rendering it off. The client skips its flag query when the server rendered it off, so
+  // K1 on the course K2 had just loaded would never start recording. Each course gets its flag
+  // before any page loads it.
+  type Setup = {
+    gradebookCourse: Course;
+    gradebookInstructor: TestingUser;
+    gradingInstructor: TestingUser;
+    gradingCourse: Course;
+    gradingUrl: string;
+  };
+  const setups = new Map<boolean, Setup>();
 
-  test.beforeAll(async () => {
-    test.setTimeout(600_000);
-    gradebookCourse = await createClass({ name: "Bug Report K Gradebook" });
-    [gradebookInstructor] = await createUsersInClass([
+  async function createSetup(recording: boolean): Promise<Setup> {
+    const gradebookCourse = await createClass({ name: `Bug Report K Gradebook ${recording ? "on" : "off"}` });
+    const [gradebookInstructor] = await createUsersInClass([
       { role: "instructor", class_id: gradebookCourse.id, name: "K Gradebook Instructor", useMagicLink: true }
     ]);
     // In batches: createUsersInClass looks existing users up with one GET, whose URL gets too
@@ -207,12 +215,11 @@ test.describe("bug report recorder performance", () => {
       numManualGradedColumns: 3
     });
 
-    gradingCourse = await createClass({ name: "Bug Report K Grading" });
-    const [student, instructor] = await createUsersInClass([
+    const gradingCourse = await createClass({ name: `Bug Report K Grading ${recording ? "on" : "off"}` });
+    const [student, gradingInstructor] = await createUsersInClass([
       { role: "student", class_id: gradingCourse.id, name: "K Grading Student", useMagicLink: true },
       { role: "instructor", class_id: gradingCourse.id, name: "K Grading Instructor", useMagicLink: true }
     ]);
-    gradingInstructor = instructor;
     const assignment = await insertAssignment({
       due_date: addDays(new Date(), 1).toUTCString(),
       class_id: gradingCourse.id,
@@ -223,7 +230,20 @@ test.describe("bug report recorder performance", () => {
       assignment_id: assignment.id,
       class_id: gradingCourse.id
     });
-    gradingUrl = `/course/${gradingCourse.id}/assignments/${assignment.id}/submissions/${submission_id}/files`;
+    await setCourseFeature(gradebookCourse.id, COURSE_FEATURES.BUG_REPORT_RECORDING, recording);
+    await setCourseFeature(gradingCourse.id, COURSE_FEATURES.BUG_REPORT_RECORDING, recording);
+    return {
+      gradebookCourse,
+      gradebookInstructor,
+      gradingInstructor,
+      gradingCourse,
+      gradingUrl: `/course/${gradingCourse.id}/assignments/${assignment.id}/submissions/${submission_id}/files`
+    };
+  }
+
+  test.beforeAll(async () => {
+    test.setTimeout(900_000);
+    for (const recording of [false, true]) setups.set(recording, await createSetup(recording));
   });
 
   const results: Measurement[] = [];
@@ -246,7 +266,7 @@ test.describe("bug report recorder performance", () => {
 
     test(`${id}: gradebook, 200 students, recording ${recording ? "on" : "off"}`, async ({ page }, testInfo) => {
       test.setTimeout((minutes + 5) * 60_000);
-      await setCourseFeature(gradebookCourse.id, COURSE_FEATURES.BUG_REPORT_RECORDING, recording);
+      const { gradebookCourse, gradebookInstructor } = setups.get(recording)!;
       await setTestRoutePolicy(page, [{ pattern: "/course/[course_id]/manage/gradebook", level: "structure" }]);
       await installPerfObservers(page);
       await loginAsUser(page, gradebookInstructor, gradebookCourse);
@@ -268,7 +288,7 @@ test.describe("bug report recorder performance", () => {
 
     test(`${id}: rubric grading page, recording ${recording ? "on" : "off"}`, async ({ page }, testInfo) => {
       test.setTimeout((minutes + 5) * 60_000);
-      await setCourseFeature(gradingCourse.id, COURSE_FEATURES.BUG_REPORT_RECORDING, recording);
+      const { gradingInstructor, gradingCourse, gradingUrl } = setups.get(recording)!;
       await setTestRoutePolicy(page, [
         {
           pattern: "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/files",
