@@ -226,6 +226,27 @@ export async function setCourseFeature(classId: number, name: string, enabled: b
   if (error) {
     throw new Error(`setCourseFeature: ${error.message}`);
   }
+  await revalidateCourseCache(classId);
+}
+
+/**
+ * Evicts the server's cached `getCourse()` row for a class, as the production `classes` trigger
+ * does through `/api/cache/invalidate`. Local and CI stacks have no `vercel_host` in the vault,
+ * so that webhook never fires there; without this, a page rendered before a feature change keeps
+ * the old features for the cache's 1-hour TTL. Needs a server started with `E2E_ENABLE=true`.
+ */
+export async function revalidateCourseCache(classId: number): Promise<void> {
+  const baseUrl = process.env.BASE_URL || "http://localhost:3000";
+  const res = await fetch(`${baseUrl}/api/e2e/revalidate-course`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ classId })
+  });
+  if (!res.ok) {
+    throw new Error(
+      `revalidateCourseCache: ${res.status} from ${baseUrl}/api/e2e/revalidate-course (is the server running with E2E_ENABLE=true?)`
+    );
+  }
 }
 
 let sectionIdx = 1;
