@@ -2,6 +2,15 @@ import type { NextConfig } from "next";
 import path from "node:path";
 import { withSentryConfig } from "@sentry/nextjs";
 
+// An E2E build (never production: the chart refuses E2E_ENABLE there) needs a DSN, or the SDK
+// never starts and the bug reporter's specs capture no envelopes. When the build sets none, use
+// the stub those specs listen on (STUB_SENTRY_DSN in tests/e2e/bugReport/stubSentry.ts). This
+// keeps the specs independent of the workflow file, which pull_request_target reads from the
+// default branch.
+if (process.env.E2E_ENABLE === "true" && !process.env.NEXT_PUBLIC_SENTRY_DSN && !process.env.NEXT_PUBLIC_BUGSINK_DSN) {
+  process.env.NEXT_PUBLIC_SENTRY_DSN = "http://e2epublickey@127.0.0.1:54399/1";
+}
+
 const bundlingProfile = process.env.NEXT_BUNDLING_PROFILE ?? "worker";
 const useLegacyWebpackTweaks = bundlingProfile === "legacy";
 const useWebpackBuildWorker = bundlingProfile === "worker";
