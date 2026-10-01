@@ -11,10 +11,16 @@ environments:
 ---
 {{- $env := .Values }}
 {{- $ns := $env.namespace }}
-{{- define "postgresNeeds" }}
-{{- if eq .mode "postgres" }}
-    needs: [{{ .instance }}]
+{{- /* An app's Postgres: its server release must be up first, then
+       ensure-database.sh creates the app's role + database on it. */}}
+{{- define "appDatabase" }}
+    needs: [{{ .server }}]
 {{- end }}
+{{- define "ensureDatabaseHook" }}
+      - events: [presync]
+        showlogs: true
+        command: scripts/ensure-database.sh
+        args: [{{ .env }}, {{ .app }}, {{ .server }}]
 {{- end }}
 
 helmDefaults:
@@ -55,7 +61,7 @@ releases:
     version: {{ $env.forgejo.chartVersion }}
     installed: {{ $env.forgejo.enabled }}
     labels: { component: forgejo }
-    {{- template "postgresNeeds" $env.forgejo.database }}
+    {{- template "appDatabase" $env.forgejo.database }}
     values:
       - values/forgejo.yaml.gotmpl
     {{- if $env.forgejo.runner.enabled }}
@@ -66,7 +72,10 @@ releases:
             - name: RUNNER_SECRET
               valueFrom:
                 secretKeyRef: { name: forgejo-runner, key: secret }
+    {{- end }}
     hooks:
+      {{- template "ensureDatabaseHook" (dict "env" .Environment.Name "app" "forgejo" "server" $env.forgejo.database.server) }}
+      {{- if $env.forgejo.runner.enabled }}
       # Idempotent: re-registering the same secret updates the same runner.
       - events: [postsync]
         showlogs: true
@@ -81,7 +90,7 @@ releases:
           - sh
           - -ec
           - forgejo forgejo-cli actions register --name {{ $env.forgejo.runner.name }} --secret "$RUNNER_SECRET"
-    {{- end }}
+      {{- end }}
 
   # --- Cloud Workspaces (Coder) -------------------------------------------------
   - name: coder
@@ -90,9 +99,11 @@ releases:
     version: {{ $env.workspaces.chartVersion }}
     installed: {{ $env.workspaces.enabled }}
     labels: { component: workspaces }
-    {{- template "postgresNeeds" $env.workspaces.database }}
+    {{- template "appDatabase" $env.workspaces.database }}
     values:
       - values/coder.yaml.gotmpl
+    hooks:
+      {{- template "ensureDatabaseHook" (dict "env" .Environment.Name "app" "coder" "server" $env.workspaces.database.server) }}
 
   # --- Pawtograder ---------------------------------------------------------------
   - name: pawtograder

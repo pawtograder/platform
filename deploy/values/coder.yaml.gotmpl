@@ -2,7 +2,8 @@
 # pods in this same namespace; the chart's Role gives coderd pod/PVC rights
 # here and nowhere else. Templates: deploy/workspaces/templates.
 {{- $w := .Values.workspaces }}
-{{- $db := $w.database }}
+{{- /* database.server: a postgres.instances entry, or the Pawtograder chart's Postgres */}}
+{{- $dbHost := ternary "pawtograder-postgres" $w.database.server (eq $w.database.server "pawtograder") }}
 
 coder:
   env:
@@ -14,20 +15,12 @@ coder:
       value: "*.{{ .Values.domain }}"
     - name: CODER_TELEMETRY_ENABLE
       value: "false"
-    {{- if eq $db.mode "postgres" }}
+    # Role + database made by scripts/ensure-database.sh (presync hook).
     - name: CODER_DB_PASSWORD
       valueFrom:
-        secretKeyRef: { name: coder-db, key: CODER_DB_PASSWORD }
+        secretKeyRef: { name: coder-db-credentials, key: CODER_DB_PASSWORD }
     - name: CODER_PG_CONNECTION_URL
-      value: postgres://coder:$(CODER_DB_PASSWORD)@{{ $db.instance }}:5432/coder?sslmode=disable
-    {{- else if eq $db.mode "builtin" }}
-    # No CODER_PG_CONNECTION_URL: coderd starts its embedded Postgres under
-    # $HOME/.config/coderv2, which is the PVC below.
-    - name: HOME
-      value: /home/coder
-    {{- else }}
-    {{- fail (printf "workspaces.database.mode must be postgres or builtin, got %q" $db.mode) }}
-    {{- end }}
+      value: postgres://coder:$(CODER_DB_PASSWORD)@{{ $dbHost }}:5432/coder?sslmode=disable
 
   resources:
     requests: { cpu: 250m, memory: 512Mi }
@@ -46,26 +39,3 @@ coder:
       enable: true
       secretName: {{ .Values.tlsSecret }}
       wildcardSecretName: {{ .Values.tlsSecret }}
-
-  {{- if eq $db.mode "builtin" }}
-  volumes:
-    - name: coder-data
-      persistentVolumeClaim: { claimName: coder-data }
-  volumeMounts:
-    - name: coder-data
-      mountPath: /home/coder/.config
-  {{- end }}
-
-{{- if eq $db.mode "builtin" }}
-extraTemplates:
-  - apiVersion: v1
-    kind: PersistentVolumeClaim
-    metadata:
-      name: coder-data
-      annotations:
-        helm.sh/resource-policy: keep
-    spec:
-      accessModes: [ReadWriteOnce]
-      resources:
-        requests: { storage: 5Gi }
-{{- end }}

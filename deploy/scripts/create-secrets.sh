@@ -45,10 +45,10 @@ done
 
 # --- Postgres instances and the app databases in them ---------------------
 for instance in $(val '.postgres.instances | keys | .[]'); do
-  create "$instance" --from-literal=POSTGRES_PASSWORD="$(pw)"
+  create "$instance-superuser" --from-literal=POSTGRES_PASSWORD="$(pw)"
 done
-create forgejo-db --from-literal=FORGEJO_DB_PASSWORD="$(pw)"
-create coder-db --from-literal=CODER_DB_PASSWORD="$(pw)"
+create forgejo-db-credentials --from-literal=FORGEJO_DB_PASSWORD="$(pw)"
+create coder-db-credentials --from-literal=CODER_DB_PASSWORD="$(pw)"
 
 # --- Forgejo --------------------------------------------------------------
 create forgejo-admin --from-literal=username=forgejo-admin --from-literal=password="$(pw)"

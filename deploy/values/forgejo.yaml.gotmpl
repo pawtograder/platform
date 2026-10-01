@@ -2,7 +2,8 @@
 # app.ini sections; secrets arrive through additionalConfigFromEnvs, so none
 # live in this file.
 {{- $f := .Values.forgejo }}
-{{- $db := $f.database }}
+{{- /* database.server: a postgres.instances entry, or the Pawtograder chart's Postgres */}}
+{{- $dbHost := ternary "pawtograder-postgres" $f.database.server (eq $f.database.server "pawtograder") }}
 
 strategy:
   # RWO repo volume: the old pod has to let go before the new one mounts it.
@@ -48,11 +49,9 @@ gitea:
     passwordMode: keepUpdated
 
   additionalConfigFromEnvs:
-    {{- if eq $db.mode "postgres" }}
     - name: FORGEJO__DATABASE__PASSWD
       valueFrom:
-        secretKeyRef: { name: forgejo-db, key: FORGEJO_DB_PASSWORD }
-    {{- end }}
+        secretKeyRef: { name: forgejo-db-credentials, key: FORGEJO_DB_PASSWORD }
     - name: FORGEJO__STORAGE__MINIO_ACCESS_KEY_ID
       valueFrom:
         secretKeyRef: { name: {{ .Values.s3.credentialsSecret }}, key: AWS_ACCESS_KEY_ID }
@@ -69,18 +68,13 @@ gitea:
       DISABLE_SSH: true
       START_SSH_SERVER: false
       LFS_START_SERVER: true
+    # Role + database made by scripts/ensure-database.sh (presync hook).
     database:
-      {{- if eq $db.mode "postgres" }}
       DB_TYPE: postgres
-      HOST: {{ $db.instance }}:5432
+      HOST: {{ $dbHost }}:5432
       NAME: forgejo
       USER: forgejo
       SSL_MODE: disable
-      {{- else if eq $db.mode "sqlite" }}
-      DB_TYPE: sqlite3
-      {{- else }}
-      {{- fail (printf "forgejo.database.mode must be postgres or sqlite, got %q" $db.mode) }}
-      {{- end }}
     # Repositories stay on the volume (git wants a filesystem). LFS,
     # attachments, packages, avatars and Actions logs/artifacts go to S3
     # under forgejo/.
