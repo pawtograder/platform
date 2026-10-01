@@ -35,6 +35,8 @@ repositories:
     url: https://helm.coder.com/v2
   - name: groundhog2k
     url: https://groundhog2k.github.io/helm-charts/
+  - name: bedag
+    url: https://bedag.github.io/helm-charts/
   - name: forgejo-helm
     url: code.forgejo.org/forgejo-helm
     oci: true
@@ -65,8 +67,8 @@ releases:
     values:
       - values/forgejo.yaml.gotmpl
     {{- if $env.forgejo.runner.enabled }}
-      # The Forgejo half of offline runner registration reads the shared
-      # secret from its own env; the runner pod holds the same one.
+      # The Forgejo half of offline runner registration (forgejo-runner's
+      # presync hook) reads the shared secret from Forgejo's env.
       - deployment:
           env:
             - name: RUNNER_SECRET
@@ -75,9 +77,19 @@ releases:
     {{- end }}
     hooks:
       {{- template "ensureDatabaseHook" (dict "env" .Environment.Name "app" "forgejo" "server" $env.forgejo.database.server) }}
-      {{- if $env.forgejo.runner.enabled }}
-      # Idempotent: re-registering the same secret updates the same runner.
-      - events: [postsync]
+
+  - name: forgejo-runner
+    namespace: {{ $ns }}
+    chart: bedag/raw
+    version: 2.0.2
+    installed: {{ and $env.forgejo.enabled $env.forgejo.runner.enabled }}
+    labels: { component: forgejo }
+    needs: [forgejo]
+    values:
+      - values/forgejo-runner.yaml.gotmpl
+    hooks:
+      # Idempotent: registering the same secret again updates the same runner.
+      - events: [presync]
         showlogs: true
         command: kubectl
         args:
@@ -90,7 +102,6 @@ releases:
           - sh
           - -ec
           - forgejo forgejo-cli actions register --name {{ $env.forgejo.runner.name }} --secret "$RUNNER_SECRET"
-      {{- end }}
 
   # --- Cloud Workspaces (Coder) -------------------------------------------------
   - name: coder
