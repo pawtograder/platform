@@ -148,7 +148,9 @@ Deno.test("validateOIDCToken: an issuer that isn't configured is rejected, befor
         "https://git.attacker.example/api/actions",
         "https://token.actions.githubusercontent.com.attacker.example",
         `${FORGEJO_URL}/api/actions/extra`,
-        undefined
+        undefined,
+        123,
+        [`${FORGEJO_URL}/api/actions`]
       ]) {
         await assertUntrustedIssuer(() => sign(key, { ...forgejoClaims, iss }).then(validateOIDCToken));
       }
@@ -172,7 +174,11 @@ Deno.test("validateOIDCToken: Forgejo issuer signed by a different key under a p
   const attacker = await signingKey("fj-1");
   await withForgejoUrl(FORGEJO_URL, () =>
     withJwks({ [FORGEJO_JWKS_URL]: [published] }, async () => {
-      await assertRejects(() => sign(attacker, forgejoClaims).then(validateOIDCToken));
+      await assertRejects(
+        () => sign(attacker, forgejoClaims).then(validateOIDCToken),
+        Error,
+        "signature does not match"
+      );
     })
   );
 });
@@ -185,4 +191,42 @@ Deno.test("validateOIDCToken: a token claiming GitHub's issuer but signed by For
       await assertRejects(() => sign(forgejoKey, githubClaims).then(validateOIDCToken), Error, "No public key found");
     })
   );
+});
+
+Deno.test("validateOIDCToken: a token claiming Forgejo's issuer but signed by GitHub's key -> rejected", async () => {
+  const forgejoKey = await signingKey("fj-1");
+  const githubKey = await signingKey("gh-1");
+  await withForgejoUrl(FORGEJO_URL, () =>
+    withJwks({ [GITHUB_JWKS_URL]: [githubKey], [FORGEJO_JWKS_URL]: [forgejoKey] }, async () => {
+      await assertRejects(() => sign(githubKey, forgejoClaims).then(validateOIDCToken), Error, "No public key found");
+    })
+  );
+});
+
+Deno.test("validateOIDCToken: HS256 or alg none under a published kid -> rejected", async () => {
+  const published = await signingKey("gh-1");
+  const hmacKey = await crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign", "verify"]);
+  const now = getNumericDate(0);
+  const claims = { iat: now, nbf: now, exp: now + 3600, ...githubClaims };
+  await withJwks({ [GITHUB_JWKS_URL]: [published] }, async () => {
+    const hs256 = await create({ alg: "HS256", typ: "JWT", kid: "gh-1" }, claims, hmacKey);
+    await assertRejects(() => validateOIDCToken(hs256), Error, "does not match the key's algorithm");
+    const unsigned = await create({ alg: "none", typ: "JWT", kid: "gh-1" }, claims, null);
+    await assertRejects(() => validateOIDCToken(unsigned), Error, "does not allow a key");
+  });
+});
+
+Deno.test("validateOIDCToken: a token expired by more than the one-hour leeway -> rejected", async () => {
+  const key = await signingKey("gh-1");
+  const twoHoursAgo = getNumericDate(-2 * 3600);
+  await withJwks({ [GITHUB_JWKS_URL]: [key] }, async () => {
+    await assertRejects(
+      () =>
+        sign(key, { ...githubClaims, iat: twoHoursAgo - 60, nbf: twoHoursAgo - 60, exp: twoHoursAgo }).then(
+          validateOIDCToken
+        ),
+      Error,
+      "expired"
+    );
+  });
 });

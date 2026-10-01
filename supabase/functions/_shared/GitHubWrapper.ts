@@ -1257,10 +1257,11 @@ const GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com";
  * Picks the provider and key set for a job token's `iss`. Keys are only ever fetched from a URL we
  * configured, never one taken from the token. GitHub enterprises can use issuers under the GitHub
  * host, and those share today's key set. A Forgejo instance is trusted only when FORGEJO_URL is set,
- * and its Actions tokens use `<FORGEJO_URL>/api/actions` as the issuer.
+ * and its Actions tokens use `<FORGEJO_URL>/api/actions` as the issuer. Forgejo signs with RS256
+ * unless its ID_TOKEN_SIGNING_ALGORITHM setting is changed, and any other algorithm fails here.
  */
-function trustedJobTokenIssuer(iss: string | undefined): { provider: JobTokenProvider; jwksUrl: string } | undefined {
-  if (iss === GITHUB_ACTIONS_ISSUER || iss?.startsWith(`${GITHUB_ACTIONS_ISSUER}/`)) {
+function trustedJobTokenIssuer(iss: string): { provider: JobTokenProvider; jwksUrl: string } | undefined {
+  if (iss === GITHUB_ACTIONS_ISSUER || iss.startsWith(`${GITHUB_ACTIONS_ISSUER}/`)) {
     return { provider: "github", jwksUrl: `${GITHUB_ACTIONS_ISSUER}/.well-known/jwks` };
   }
   const forgejoUrl = Deno.env.get("FORGEJO_URL")?.replace(/\/+$/, "");
@@ -1278,10 +1279,10 @@ function trustedJobTokenIssuer(iss: string | undefined): { provider: JobTokenPro
 export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken & { provider: JobTokenProvider }> {
   const decoded = decode(token);
   const { kid } = decoded[0] as { kid: string };
-  const { iss } = decoded[1] as { iss?: string };
-  const issuer = trustedJobTokenIssuer(iss);
+  const iss = (decoded[1] as { iss?: unknown } | null)?.iss;
+  const issuer = typeof iss === "string" ? trustedJobTokenIssuer(iss) : undefined;
   if (!issuer) {
-    throw new SecurityError(`Untrusted OIDC token issuer: ${iss}`);
+    throw new SecurityError(`Untrusted OIDC token issuer: ${String(iss)}`);
   }
   const jwks = await (await fetch(issuer.jwksUrl)).json();
   const publicKey = jwks.keys.find((key: { kid?: string }) => key.kid === kid);
@@ -1336,7 +1337,9 @@ const E2E_ENABLE = Deno.env.get("E2E_ENABLE") === "true";
  * SECURITY: E2E bypass is only enabled if both E2E_ENABLE=true and END_TO_END_SECRET
  * are explicitly set. This prevents accidental use in production.
  */
-export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHubOIDCToken> {
+export async function validateOIDCTokenOrAllowE2E(
+  token: string
+): Promise<GitHubOIDCToken & { provider: JobTokenProvider }> {
   const decoded = decode(token);
   const payload = decoded[1] as GitHubOIDCToken;
   if (payload.repository.startsWith(END_TO_END_REPO_PREFIX)) {
@@ -1368,7 +1371,8 @@ export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHub
     if (header.kid !== END_TO_END_SECRET) {
       throw new SecurityError("E2E repo provided, but secret is incorrect");
     }
-    return payload;
+    // E2E repos live in the GitHub playground org.
+    return { ...payload, provider: "github" };
   }
   return await validateOIDCToken(token);
 }
