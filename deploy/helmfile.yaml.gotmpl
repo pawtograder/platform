@@ -115,6 +115,11 @@ releases:
       - values/coder.yaml.gotmpl
     hooks:
       {{- template "ensureDatabaseHook" (dict "env" .Environment.Name "app" "coder" "server" $env.workspaces.database.server) }}
+      # First owner + workspace templates. Idempotent.
+      - events: [postsync]
+        showlogs: true
+        command: scripts/bootstrap-workspaces.sh
+        args: [{{ .Environment.Name }}]
 
   # --- Pawtograder ---------------------------------------------------------------
   - name: pawtograder

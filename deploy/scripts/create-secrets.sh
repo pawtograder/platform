@@ -55,6 +55,13 @@ create forgejo-admin --from-literal=username=forgejo-admin --from-literal=passwo
 # 40 hex chars, shared by Forgejo and the runner (offline registration).
 create forgejo-runner --from-literal=secret="$(openssl rand -hex 20)"
 
+# --- Cloud Workspaces (Coder) -----------------------------------------------
+# First Coder owner, created by scripts/bootstrap-workspaces.sh.
+create coder-admin \
+  --from-literal=email="coder-admin@$(val .domain)" \
+  --from-literal=username=coder-admin \
+  --from-literal=password="$(pw)"
+
 # --- Pawtograder ------------------------------------------------------------
 atomic=(pawtograder-jwt pawtograder-postgres pawtograder-s3)
 present=0
