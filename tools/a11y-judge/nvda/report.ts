@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AtStepRecord } from "../agent/atHarness";
-import type { NvdaCursorCheck, TypeStepFidelity } from "./nvdaHarness";
+import type { NvdaCursorCheck, SweepMutation, TypeStepFidelity } from "./nvdaHarness";
 
 export const ARTIFACT_ROOT = "a11y-nvda-artifacts";
 
@@ -43,6 +43,11 @@ export interface TaskReport {
    *  passed tasks too — "0 resyncs" was the number that hid run 30483480823's
    *  wrong-element `act`, and these are what make that visible. */
   cursorChecks?: NvdaCursorCheck[];
+  /** One entry per `next`/`previous` step that changed an answer instead of
+   *  reading one. Kept for passed tasks too, for the reason issue #913 exists:
+   *  the survey lane asserted only `is_submitted`, so a sweep that rewrote the
+   *  radio group 27 times left no trace anywhere in a green run. */
+  sweepMutations?: SweepMutation[];
   recordingPath?: string;
   steps: AtStepRecord[];
 }
@@ -90,6 +95,23 @@ export function describeCursorContradiction(c: NvdaCursorCheck): string {
   return (
     `step ${c.stepIndex} (${c.command}): milestone ${JSON.stringify(c.milestone)} [${c.milestoneTokens.join(" ")}] ` +
     `but NVDA's navigator object was ${JSON.stringify(c.reply)} [${c.objectTokens.join(" ")}] — nothing in common`
+  );
+}
+
+/**
+ * One-line rendering of a sweep step that wrote instead of reading, shared by
+ * the console warning and summary.md.
+ *
+ * Both answers are printed, and so is whether the pre-emptive exitFocusMode
+ * fired: "the guard did not run" and "the guard ran and the arrow mutated
+ * anyway" are different bugs, and only the second one means NVDA was still in
+ * focus mode after an Escape.
+ */
+export function describeSweepMutation(m: SweepMutation): string {
+  return (
+    `step ${m.stepIndex} (${m.command}): arrowing past ${m.kind} ${JSON.stringify(m.key)} changed the answer ` +
+    `${JSON.stringify(m.before)} → ${JSON.stringify(m.after)} — this step wrote, it did not read ` +
+    `(left focus mode first: ${m.leftFocusMode}; restore: ${m.restored ? "confirmed" : `FAILED (${m.restore})`})`
   );
 }
 
@@ -175,6 +197,27 @@ export function renderSummary(reports: TaskReport[], meta: Record<string, string
       for (const c of r.cursorChecks!.filter((x) => x.verdict === "contradicted")) {
         lines.push(`- ${describeCursorContradiction(c)}`);
       }
+      lines.push("");
+    }
+  }
+  // Next, because a mutating sweep invalidates the answer a write task then
+  // asserts on — it has to be read before the predicate result is believed.
+  const mutatingReports = reports.filter((r) => (r.sweepMutations ?? []).length > 0);
+  if (mutatingReports.length > 0) {
+    lines.push(
+      "",
+      "## Sweep mutations (a reading step changed the page's answers)",
+      "",
+      "`next`/`previous` are ArrowDown/ArrowUp. In NVDA focus mode an arrow inside a radio group",
+      "moves AND selects, so a sweep looking for a milestone rewrites the answer it is reading.",
+      "Each line below is such a step: the recorded answer is the driver's, not the user's.",
+      "This is issue #913, which was filed against the app as an NVDA announcement bug — NVDA was",
+      "reporting the state correctly every time.",
+      ""
+    );
+    for (const r of mutatingReports) {
+      lines.push(`### ${r.id}`);
+      for (const m of r.sweepMutations!) lines.push(`- ${describeSweepMutation(m)}`);
       lines.push("");
     }
   }
