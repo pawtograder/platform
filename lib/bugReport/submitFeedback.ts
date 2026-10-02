@@ -12,6 +12,11 @@ import { stripQueryAndFragment } from "./sentryScrub";
 export interface ReportReplayUpload {
   /** `tags` are the report's tags (`buildReportTags`), for the replay events. */
   upload(tags: Record<string, string>): Promise<ReplayUploadResult>;
+  /**
+   * The strings the user redacted in review (click-to-redact), for the feedback's page URL.
+   * Read after `upload` settles: they are the ones of the pass it sent.
+   */
+  extraRedactions?(): readonly string[];
 }
 
 export type ReplayUploadResult =
@@ -170,7 +175,10 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
         // Without the query and fragment, as on error events: they can hold a name (a search
         // for a student), and with recording off the taint set is empty, so masking alone
         // would leave it. The path is masked like the replay URLs.
-        url: typeof window !== "undefined" ? stripQueryAndFragment(redactReportUrl(window.location.href)) : undefined,
+        url:
+          typeof window !== "undefined"
+            ? stripQueryAndFragment(redactReportUrl(window.location.href, undefined, input.replay?.extraRedactions?.()))
+            : undefined,
         source: "bug-report-dialog",
         associatedEventId: input.eventId,
         tags

@@ -89,7 +89,7 @@ export function installRedactionTestHook(): void {
         recording: buffer.segments.map((s) => s.events),
         feedback: {
           message: options.description ?? "Something went wrong",
-          url: redactReportUrl(window.location.href),
+          url: redactReportUrl(window.location.href, undefined, options.extraRedactions),
           tags: buildReportTags({ contactOk: false })
         }
       });

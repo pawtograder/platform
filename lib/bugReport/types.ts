@@ -80,6 +80,9 @@ export type FrozenSegment = {
   level: RecordingLevel;
 };
 
+/** A URL the recording was on, from the time it was first seen. */
+export type UrlVisit = { url: string; at: number };
+
 /** A Sentry error captured while recording. */
 export type LinkedError = {
   eventId?: string;
@@ -108,6 +111,11 @@ export type FrozenBuffer = {
   endTimestamp: number;
   /** Every URL the recording visited, in order, without duplicates. */
   urls: string[];
+  /**
+   * The visits behind `urls`, with times, so trimming the buffer (`keepLastMs`) keeps the URLs
+   * of the new window only. Absent on buffers built by hand. The redaction pass removes it.
+   */
+  visits?: UrlVisit[];
   /** Sentry event ids of errors captured while recording, inside the kept window. */
   errorIds: string[];
   /** Trace ids of those errors. */

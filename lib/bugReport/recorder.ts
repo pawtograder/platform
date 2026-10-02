@@ -29,8 +29,10 @@ import {
   type LinkedError,
   type RecordedEvent,
   type RecorderStartOptions,
-  type RecorderState
+  type RecorderState,
+  type UrlVisit
 } from "./types";
+import { visitedUrls, visitsSince } from "./urlVisits";
 
 /**
  * Recorded as sized placeholders (rrweb keeps only the class and the box size): media, code
@@ -195,8 +197,6 @@ function sanitizeUrl(url: string): string {
   }
 }
 
-type UrlVisit = { url: string; at: number };
-
 /** Hooks on the Sentry client are installed once per page load and read the active recorder. */
 let sentryHooksInstalled = false;
 let current: Recorder | null = null;
@@ -327,7 +327,8 @@ class Recorder implements BugReportRecorder {
       }
       this.checkedPath = path;
     }
-    if (this.visits[this.visits.length - 1]?.url !== window.location.href) this.noteUrl();
+    // Timed like the event, so a segment that starts on a new URL counts that URL as current.
+    if (this.visits[this.visits.length - 1]?.url !== window.location.href) this.noteUrl(event.timestamp);
     const { requestCheckout } = this.buffer.push(event, this.level);
     if (requestCheckout) this.scheduleCheckout();
   }
@@ -341,8 +342,8 @@ class Recorder implements BugReportRecorder {
     }, 0);
   }
 
-  private noteUrl(): void {
-    this.visits.push({ url: window.location.href, at: Date.now() });
+  private noteUrl(at = Date.now()): void {
+    this.visits.push({ url: window.location.href, at });
   }
 
   /** Whether a breadcrumb would be recorded now. Callers check it before building one. */
@@ -435,9 +436,7 @@ class Recorder implements BugReportRecorder {
     const startTimestamp = segments[0]?.startTimestamp ?? 0;
     const endTimestamp = segments[segments.length - 1]?.endTimestamp ?? 0;
     // URLs in the kept window: the one current when it starts, and every one after.
-    let firstKept = this.visits.findIndex((v) => v.at > startTimestamp);
-    if (firstKept === -1) firstKept = this.visits.length;
-    const kept = segments.length ? this.visits.slice(Math.max(0, firstKept - 1)) : [];
+    const visits = segments.length ? visitsSince(this.visits, startTimestamp) : [];
     // Errors in the kept window only; an empty buffer links none.
     const linked = linkedErrorsSince(this.errors, segments.length ? startTimestamp : Infinity);
     return {
@@ -446,7 +445,8 @@ class Recorder implements BugReportRecorder {
       segments,
       startTimestamp,
       endTimestamp,
-      urls: Array.from(new Set(kept.map((v) => v.url))),
+      urls: visitedUrls(visits),
+      visits,
       errorIds: linked.errorIds,
       traceIds: linked.traceIds,
       errors: linked.errors,
@@ -471,7 +471,7 @@ class Recorder implements BugReportRecorder {
   }
 
   getUrls(): string[] {
-    return Array.from(new Set(this.visits.map((v) => v.url)));
+    return visitedUrls(this.visits);
   }
 
   getLevel(): RecordingLevel {

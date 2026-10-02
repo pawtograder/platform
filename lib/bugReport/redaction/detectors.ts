@@ -16,7 +16,12 @@ export type SyncDetector = (text: string) => Span[];
 /** The stages the walker runs, in order. */
 export type DetectorChain = {
   sync: SyncDetector[];
-  /** The user's click-to-redact strings. Also run alone on the untouched text of URLs. */
+  /**
+   * The stages that match exact strings (the taint set), for texts the regex backstop must not
+   * read, such as a URL with its delimiters (`urlViews`).
+   */
+  exact: SyncDetector[];
+  /** The user's click-to-redact strings. Run on every text. */
   extra: SyncDetector;
   /** Async stages (package 4's model). Run after the sync ones, on the same texts. */
   async: Detector[];
@@ -74,8 +79,10 @@ export function buildDetectorChain(
   options: { taintPatterns: TaintSnapshot; extraRedactions?: string[] },
   model?: Detector
 ): DetectorChain {
+  const taint = taintDetector(options.taintPatterns);
   return {
-    sync: [taintDetector(options.taintPatterns), backstopDetector],
+    sync: [taint, backstopDetector],
+    exact: [taint],
     extra: extraRedactionDetector(options.extraRedactions),
     async: model ? [model] : []
   };
@@ -96,6 +103,21 @@ export function mergeSpans(spans: readonly { start: number; end: number }[]): [n
     else out.push([s.start, s.end]);
   }
   return out;
+}
+
+/**
+ * `value` with each merged range masked. Every non-space character becomes `*` and whitespace
+ * stays, like rrweb's masking, so a masked string copied from review still finds its original
+ * (see `extraRedactionDetector`).
+ */
+export function maskRanges(value: string, merged: readonly [number, number][]): string {
+  let out = "";
+  let at = 0;
+  for (const [start, end] of merged) {
+    out += value.slice(at, start) + value.slice(start, end).replace(/\S/g, "*");
+    at = end;
+  }
+  return out + value.slice(at);
 }
 
 const WORD_CHAR = /[\p{L}\p{N}]/u;

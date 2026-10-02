@@ -17,14 +17,15 @@
  *   - everything else that holds a string (stylesheet rules and the like), for completeness.
  * URLs are percent-decoded before matching, so `?q=Jane%20Doe` is caught.
  *
- * Redacted characters become `*`, keeping whitespace, like rrweb's own masking; in URLs every
- * character of the encoded range becomes `*`.
+ * Redacted characters become `*`, keeping whitespace, like rrweb's own masking. In a URL, a match
+ * in the decoded text masks every byte that encodes it (`%20` becomes `***`).
  */
 import { RRWEB_EVENT_TYPE, type FrozenBuffer } from "../types";
 import { linkedErrorsSince } from "../errorLinks";
-import { mergeSpans, onWordBoundaries, type DetectorChain } from "./detectors";
+import { visitedUrls, visitsSince } from "../urlVisits";
+import { maskRanges, mergeSpans, onWordBoundaries, type DetectorChain } from "./detectors";
 import type { RemainingKind, RemainingString, Span } from "./types";
-import { decodeUrlWithMap, toEncodedRange, urlDetectionText, type DecodedUrl } from "./urlText";
+import { toEncodedRange, urlViews, type DecodedUrl, type UrlView } from "./urlText";
 
 // rrweb-snapshot NodeType and IncrementalSource values used here.
 const NODE_DOCUMENT = 0;
@@ -36,14 +37,21 @@ const SOURCE_STYLE_SHEET_RULE = 8;
 const SOURCE_ADOPTED_STYLE_SHEET = 15;
 const SOURCE_STYLE_DECLARATION = 13;
 
-/** Elements that don't start a new block of text. Everything else does. */
+/**
+ * Elements that don't start a new block of text. Everything else does. Buttons and SVG text runs
+ * count as inline, so a name split around one (`Graded by <button>Ali</button> Wu`) still reads
+ * as one.
+ */
 const INLINE_TAGS = new Set([
   "a",
   "abbr",
+  "acronym",
   "b",
   "bdi",
   "bdo",
+  "big",
   "br",
+  "button",
   "cite",
   "code",
   "data",
@@ -56,15 +64,25 @@ const INLINE_TAGS = new Set([
   "kbd",
   "label",
   "mark",
+  "nobr",
+  "output",
   "q",
+  "rb",
+  "rp",
+  "rt",
+  "ruby",
   "s",
   "samp",
   "small",
   "span",
+  "strike",
   "strong",
   "sub",
   "sup",
+  "textpath",
   "time",
+  "tspan",
+  "tt",
   "u",
   "var",
   "wbr"
@@ -91,6 +109,8 @@ const STRUCTURAL_ATTRIBUTES = new Set(["class", "style", "_cssText"]);
 const INPUT_TAGS = new Set(["input", "textarea", "select", "option"]);
 
 const HAS_WORD_CHAR = /[\p{L}\p{N}]/u;
+const ESCAPE = /%[0-9a-fA-F]{2}/;
+const MAILTO = /^\s*mailto:/i;
 
 /**
  * Strings rrweb writes in place of content it doesn't record. A script's text is recorded as
@@ -105,8 +125,6 @@ type Holder = Record<string | number, unknown>;
 type Target = {
   holder: Holder;
   key: string | number;
-  /** `text` keeps whitespace when masking, like rrweb; `all` masks every character (URLs). */
-  mode: "text" | "all";
   ranges: [number, number][];
 };
 
@@ -120,8 +138,8 @@ type Job = {
   pieces: Piece[];
   /** Listed in `remaining` under this kind; null for strings people don't see. */
   kind: RemainingKind | null;
-  /** Run only the click-to-redact detector (a URL's untouched text). */
-  extraOnly?: boolean;
+  /** Run only the exact matchers, not the regex backstop (a URL with its delimiters). */
+  exact?: boolean;
 };
 
 type NodeRecord = {
@@ -146,12 +164,14 @@ type SerializedNode = {
   isStyle?: boolean;
 };
 
+type Add = { parentId: number; nextId: number | null; node: SerializedNode };
+
 type MutationData = {
   source: 0;
   texts?: { id: number; value: string | null }[];
   attributes?: { id: number; attributes: Record<string, unknown> }[];
   removes?: { parentId: number; id: number }[];
-  adds?: { parentId: number; nextId: number | null; node: SerializedNode }[];
+  adds?: Add[];
 };
 
 export type WalkResult = { remaining: RemainingString[]; textNodes: number; redactedSpans: number };
@@ -161,47 +181,67 @@ class Walker {
   private readonly jobs: Job[] = [];
   private readonly targets = new Map<Holder, Map<string | number, Target>>();
   private dirty = new Set<number>();
+  /** Each input's values (incremental source 5) in order, by node id. */
+  private readonly inputs = new Map<number, Target[]>();
   textNodes = 0;
 
-  target(holder: Holder, key: string | number, mode: "text" | "all" = "text"): Target {
+  target(holder: Holder, key: string | number): Target {
     let byKey = this.targets.get(holder);
     if (!byKey) this.targets.set(holder, (byKey = new Map()));
     let t = byKey.get(key);
-    if (!t) byKey.set(key, (t = { holder, key, mode, ranges: [] }));
+    if (!t) byKey.set(key, (t = { holder, key, ranges: [] }));
     return t;
   }
 
   // --- string jobs ---------------------------------------------------------------------------
 
-  /** Queue a plain string field. */
+  /**
+   * Queue a plain string field. One that holds percent-escapes (e.g., a logged request URL or a
+   * `data-href`) is also matched decoded, like a URL field.
+   */
   string(holder: Holder, key: string | number, kind: RemainingKind | null, bounded = false): void {
     const text = holder[key];
     if (typeof text !== "string" || text.length === 0) return;
     const target = this.target(holder, key);
     this.jobs.push({ text, bounded, kind, pieces: [{ start: 0, end: text.length, target }] });
+    if (!bounded && ESCAPE.test(text)) {
+      for (const view of urlViews(text)) if (view.map) this.view(view, target, false, null);
+    }
   }
 
-  /**
-   * Queue a URL field, masked in full where it matches. Detectors see it percent-decoded and
-   * raw, with delimiters as spaces (`urlDetectionText`); the click-to-redact strings also see
-   * it untouched, since review lists the URL as it is.
-   */
+  /** Queue every view of a URL field (`urlViews`). The first one is listed in `remaining`. */
   url(holder: Holder, key: string | number, kind: RemainingKind | null = "url"): void {
     const text = holder[key];
     if (typeof text !== "string" || text.length === 0) return;
-    const target = this.target(holder, key, "all");
-    const whole = [{ start: 0, end: text.length, target }];
-    const map = decodeUrlWithMap(text);
-    if (map.text !== text) {
-      this.jobs.push({
-        text: urlDetectionText(map.text),
-        bounded: false,
-        kind: null,
-        pieces: [{ start: 0, end: map.text.length, target, map }]
-      });
-    }
-    this.jobs.push({ text: urlDetectionText(text), bounded: false, kind, pieces: whole });
-    this.jobs.push({ text, bounded: false, kind: null, pieces: whole, extraOnly: true });
+    const target = this.target(holder, key);
+    // The backstop masks a `mailto:` link whole, subject, cc, and display name included. Its
+    // pattern stops at whitespace, which is right in running text but not in a link.
+    if (MAILTO.test(text)) target.ranges.push([0, text.length]);
+    urlViews(text).forEach((view, i) => this.view(view, target, false, i === 0 ? kind : null));
+  }
+
+  private view(view: UrlView, target: Target, bounded: boolean, kind: RemainingKind | null): void {
+    const end = view.map ? view.map.text.length : view.text.length;
+    this.jobs.push({
+      text: view.text,
+      bounded,
+      kind,
+      exact: view.exact,
+      pieces: [{ start: 0, end, target, map: view.map }]
+    });
+  }
+
+  /**
+   * Queue an input event's value. rrweb records the whole value on every keystroke, so a name
+   * typed one key at a time matches only once it is complete. `carryInputMasks` masks the values
+   * typed on the way to it.
+   */
+  input(data: Holder): void {
+    this.string(data, "text", "input");
+    if (typeof data.id !== "number" || typeof data.text !== "string" || data.text.length === 0) return;
+    let values = this.inputs.get(data.id);
+    if (!values) this.inputs.set(data.id, (values = []));
+    values.push(this.target(data, "text"));
   }
 
   /** Every string anywhere under `value`, for event data without a known shape. */
@@ -239,19 +279,25 @@ class Walker {
 
   // --- the node map --------------------------------------------------------------------------
 
+  /**
+   * Record `node`, or update the record of a node already in the map. rrweb serializes a node it
+   * already recorded again, without its children, when the node moves without a removal it
+   * reports, or when a checkout ran between the node's insertion and the mutation that reports
+   * it. Its children stay where they are, and the adds that follow it for them update them.
+   */
   private register(node: SerializedNode, parent: number | null): void {
-    const rec: NodeRecord = {
-      id: node.id,
-      type: node.type,
-      tagName: node.tagName?.toLowerCase(),
-      parent,
-      children: []
-    };
+    const existing = this.nodes.get(node.id);
+    const rec: NodeRecord =
+      existing && existing.type === node.type
+        ? existing
+        : { id: node.id, type: node.type, tagName: node.tagName?.toLowerCase(), parent, children: [] };
+    rec.parent = parent;
     this.nodes.set(node.id, rec);
     if (node.type === NODE_ELEMENT && node.attributes) {
       for (const name of Object.keys(node.attributes)) this.attribute(node.attributes as Holder, name, rec.tagName);
     }
     if (node.type === NODE_TEXT) this.setText(rec, node as unknown as Holder, "textContent", node.isStyle === true);
+    if (node.childNodes?.length) rec.children = [];
     for (const child of node.childNodes ?? []) {
       rec.children.push(child.id);
       this.register(child, node.id);
@@ -269,15 +315,16 @@ class Walker {
     rec.target = undefined;
     const parentTag = this.parentTag(rec);
     rec.isStyle = isStyle || parentTag === "style";
-    if (!rec.text) return;
-    this.textNodes++;
+    if (rec.text) this.textNodes++;
     if (rec.isStyle) {
-      this.string(holder, key, null, true);
+      if (rec.text) this.string(holder, key, null, true);
       return;
     }
     if (parentTag === "script") return;
-    rec.target = this.target(holder, key);
+    // A node emptied in place changes its block as much as a removed one. The text on either
+    // side of it now reads as one, so the block is matched again.
     this.markBlockOf(rec.id);
+    if (rec.text) rec.target = this.target(holder, key);
   }
 
   private isBlock(rec: NodeRecord): boolean {
@@ -330,13 +377,21 @@ class Walker {
       this.removeSubtree(r.id);
     }
 
-    // Adds may arrive before the sibling they're inserted in front of; place them in passes.
-    let pending = [...(data.adds ?? [])];
-    const place = (add: (typeof pending)[number], force: boolean): boolean => {
-      const parent = this.nodes.get(add.parentId);
-      const nextKnown = add.nextId === null || this.nodes.has(add.nextId);
-      if (!force && (!parent || !nextKnown)) return false;
-      if (this.nodes.has(add.node.id)) this.detach(add.node.id);
+    // Place each add once its parent and next sibling are known. rrweb usually lists those first,
+    // but the nodes of a moved subtree can name siblings listed after them, so an add that comes
+    // early waits on the id it lacks and is placed as soon as that node is.
+    const place = (add: Add): void => {
+      let parent = this.nodes.get(add.parentId);
+      const existing = this.nodes.get(add.node.id);
+      if (existing) {
+        this.unlink(existing);
+        // Under its own descendant, which only a stale map could ask for, the node would close a
+        // cycle that the walks up and down the tree never leave. Start it over instead.
+        if (parent && this.within(parent.id, existing.id)) {
+          this.removeSubtree(existing.id);
+          parent = this.nodes.get(add.parentId);
+        }
+      }
       if (parent) {
         const at = add.nextId === null ? -1 : parent.children.indexOf(add.nextId);
         if (at === -1) parent.children.push(add.node.id);
@@ -344,17 +399,45 @@ class Walker {
       }
       this.register(add.node, parent ? parent.id : null);
       if (parent) this.markBlockOf(parent.id);
-      return true;
     };
-    while (pending.length > 0) {
-      const next = pending.filter((add) => !place(add, false));
-      if (next.length === pending.length) {
-        for (const add of next) place(add, true);
-        break;
+    const lacking = (add: Add): number | null => {
+      if (!this.nodes.has(add.parentId)) return add.parentId;
+      return add.nextId !== null && !this.nodes.has(add.nextId) ? add.nextId : null;
+    };
+    const waiting = new Map<number, Add[]>();
+    const placed = new Set<Add>();
+    const settle = (first: Add, force: boolean): void => {
+      const stack = [first];
+      while (stack.length > 0) {
+        const add = stack.pop()!;
+        if (placed.has(add)) continue;
+        const missing = force ? null : lacking(add);
+        force = false;
+        if (missing !== null) {
+          const list = waiting.get(missing);
+          if (list) list.push(add);
+          else waiting.set(missing, [add]);
+          continue;
+        }
+        place(add);
+        placed.add(add);
+        const woken = waiting.get(add.node.id);
+        if (woken) {
+          waiting.delete(add.node.id);
+          for (let i = woken.length - 1; i >= 0; i--) stack.push(woken[i]);
+        }
       }
-      pending = next;
-    }
+    };
+    const adds = data.adds ?? [];
+    for (const add of adds) settle(add, false);
+    // An add still waiting names a node that never came, such as an ignored parent. It is placed
+    // as it is.
+    for (const add of adds) settle(add, true);
 
+    // rrweb lists a node once per change it observed, so a node changed twice before its
+    // observer ran has two entries, and both are uploaded. Match the block with the first one
+    // before the second takes its place.
+    const changed = new Set<number>();
     for (const t of data.texts ?? []) {
       const rec = this.nodes.get(t.id);
       if (!rec) {
@@ -362,6 +445,8 @@ class Walker {
         this.string(t as unknown as Holder, "value", "text");
         continue;
       }
+      if (changed.has(t.id)) this.flush();
+      changed.add(t.id);
       this.setText(rec, t as unknown as Holder, "value", rec.isStyle === true);
     }
 
@@ -372,14 +457,22 @@ class Walker {
     this.flush();
   }
 
-  private detach(id: number): void {
-    const rec = this.nodes.get(id);
-    const parent = rec?.parent != null ? this.nodes.get(rec.parent) : undefined;
-    if (parent) {
-      const i = parent.children.indexOf(id);
-      if (i !== -1) parent.children.splice(i, 1);
+  /** Whether `id` is `ancestor` or a node below it. */
+  private within(id: number, ancestor: number): boolean {
+    for (let rec = this.nodes.get(id); rec; rec = rec.parent === null ? undefined : this.nodes.get(rec.parent)) {
+      if (rec.id === ancestor) return true;
     }
-    this.removeSubtree(id);
+    return false;
+  }
+
+  /** Take a node out of its parent's children, keeping its subtree, before it is placed again. */
+  private unlink(rec: NodeRecord): void {
+    const parent = rec.parent !== null ? this.nodes.get(rec.parent) : undefined;
+    if (!parent) return;
+    const i = parent.children.indexOf(rec.id);
+    if (i !== -1) parent.children.splice(i, 1);
+    // As after a removal, the text on either side of the node now reads as one.
+    this.markBlockOf(parent.id);
   }
 
   /**
@@ -397,16 +490,21 @@ class Walker {
       const spaced: Piece[] = [];
       let joinedText = "";
       let spacedText = "";
+      // The last character of each, kept aside. Reading the end of a string built by `+=`
+      // flattens it, which made long blocks quadratic.
+      let joinedLast = "";
+      let spacedLast = "";
       let boundary = false;
       const addText = (rec: NodeRecord) => {
         if (!rec.target || !rec.text) return;
         const text = rec.text;
-        if (boundary && spacedText && !/\s$/.test(spacedText) && !/^\s/.test(text)) spacedText += " ";
+        if (boundary && spacedText && !/\s/.test(spacedLast) && !/^\s/.test(text)) spacedText += " ";
         boundary = false;
         joined.push({ start: joinedText.length, end: joinedText.length + text.length, target: rec.target });
         spaced.push({ start: spacedText.length, end: spacedText.length + text.length, target: rec.target });
         joinedText += text;
         spacedText += text;
+        joinedLast = spacedLast = text[text.length - 1];
       };
       const visit = (rec: NodeRecord) => {
         for (const childId of rec.children) {
@@ -415,8 +513,8 @@ class Walker {
           if (child.type === NODE_TEXT) addText(child);
           else if (child.type === NODE_ELEMENT) {
             if (this.isBlock(child)) {
-              if (joinedText && !joinedText.endsWith("\n")) joinedText += "\n";
-              if (spacedText && !spacedText.endsWith("\n")) spacedText += "\n";
+              if (joinedText && joinedLast !== "\n") joinedText += joinedLast = "\n";
+              if (spacedText && spacedLast !== "\n") spacedText += spacedLast = "\n";
               boundary = false;
             } else {
               boundary = true;
@@ -439,29 +537,42 @@ class Walker {
   // --- detection and masking -----------------------------------------------------------------
 
   async detect(chain: DetectorChain): Promise<void> {
-    const cache = new Map<string, Span[]>();
-    const keyOf = (job: Job) => (job.extraOnly ? "x" : job.bounded ? "b" : "t") + job.text;
+    // Per distinct text: the user's strings, and what the detectors found.
+    const cache = new Map<string, { user: Span[]; found: Span[] }>();
+    const keyOf = (job: Job) => (job.exact ? "x" : job.bounded ? "b" : "t") + job.text;
     const unique: Job[] = [];
     for (const job of this.jobs) {
       if (!HAS_WORD_CHAR.test(job.text)) continue;
       const key = keyOf(job);
       if (cache.has(key)) continue;
-      const spans: Span[] = chain.extra(job.text);
-      if (!job.extraOnly) {
-        for (const d of chain.sync) spans.push(...d(job.text));
-        unique.push(job);
-      }
-      cache.set(key, spans);
+      // Spans are appended one by one. Spreading them as arguments throws past the engine's
+      // argument limit (about 65k in Safari), which a long text full of matches reaches.
+      const found: Span[] = [];
+      for (const d of job.exact ? chain.exact : chain.sync) for (const s of d(job.text)) found.push(s);
+      unique.push(job);
+      cache.set(key, { user: chain.extra(job.text), found });
     }
     for (const d of chain.async) {
-      for (const job of unique) cache.get(keyOf(job))!.push(...(await d(job.text)));
+      for (const job of unique) {
+        const { found } = cache.get(keyOf(job))!;
+        for (const s of await d(job.text)) found.push(s);
+      }
     }
     for (const job of this.jobs) {
-      let spans = cache.get(keyOf(job));
-      if (!spans || spans.length === 0) continue;
-      if (job.bounded) spans = onWordBoundaries(job.text, spans);
+      const hit = cache.get(keyOf(job));
+      if (!hit) continue;
+      // In class names and CSS only whole-word detector hits count. The user's strings count
+      // wherever they occur, as review promises.
+      const spans = hit.user.concat(job.bounded ? onWordBoundaries(job.text, hit.found) : hit.found);
+      if (spans.length === 0) continue;
+      // The merged spans and a job's pieces are both in order and don't overlap, so one sweep
+      // finds every intersection. Testing each span against every piece was quadratic in a block
+      // holding many matches.
+      let first = 0;
       for (const [start, end] of mergeSpans(spans)) {
-        for (const p of job.pieces) {
+        while (first < job.pieces.length && job.pieces[first].end <= start) first++;
+        for (let i = first; i < job.pieces.length && job.pieces[i].start < end; i++) {
+          const p = job.pieces[i];
           const a = Math.max(start, p.start);
           const b = Math.min(end, p.end);
           if (a >= b) continue;
@@ -471,8 +582,27 @@ class Walker {
     }
   }
 
+  /**
+   * Gives each input value the masks of its neighbors in the input's history, over the text the
+   * two share at the start, back then forward, so the prefixes of a typed name are masked with it.
+   */
+  private carryInputMasks(): void {
+    const carry = (from: Target, to: Target) => {
+      const a = from.holder[from.key] as string;
+      const b = to.holder[to.key] as string;
+      let shared = 0;
+      while (shared < a.length && shared < b.length && a[shared] === b[shared]) shared++;
+      for (const [start, end] of from.ranges) if (start < shared) to.ranges.push([start, Math.min(end, shared)]);
+    };
+    for (const values of this.inputs.values()) {
+      for (let i = values.length - 1; i > 0; i--) carry(values[i], values[i - 1]);
+      for (let i = 1; i < values.length; i++) carry(values[i - 1], values[i]);
+    }
+  }
+
   /** Writes the masks into the events. Returns the number of merged ranges written. */
   apply(): number {
+    this.carryInputMasks();
     let count = 0;
     for (const byKey of this.targets.values()) {
       for (const t of byKey.values()) {
@@ -480,15 +610,7 @@ class Walker {
         const value = t.holder[t.key];
         if (typeof value !== "string") continue;
         const merged = mergeSpans(t.ranges.map(([start, end]) => ({ start, end })));
-        let out = "";
-        let at = 0;
-        for (const [start, end] of merged) {
-          out += value.slice(at, start);
-          const hit = value.slice(start, end);
-          out += t.mode === "all" ? "*".repeat(hit.length) : hit.replace(/\S/g, "*");
-          at = end;
-        }
-        t.holder[t.key] = out + value.slice(at);
+        t.holder[t.key] = maskRanges(value, merged);
         count += merged.length;
       }
     }
@@ -544,7 +666,7 @@ function walkEvent(w: Walker, event: { type: number; data: unknown }): void {
     case RRWEB_EVENT_TYPE.IncrementalSnapshot: {
       const source = data.source as number;
       if (source === SOURCE_MUTATION) w.mutation(data as unknown as MutationData);
-      else if (source === SOURCE_INPUT) w.string(data, "text", "input");
+      else if (source === SOURCE_INPUT) w.input(data);
       else w.deep(data, null, CSS_SOURCES.has(source));
       return;
     }
@@ -580,18 +702,29 @@ export function keepLast(buffer: FrozenBuffer, keepLastMs: number | undefined): 
   if (first === -1) first = buffer.segments.length - 1;
   if (first === 0) return buffer;
   const segments = buffer.segments.slice(first);
-  // `urls` is in visit order without duplicates. Keep it from the URL the window starts on;
-  // when that URL was also visited earlier, this keeps a few URLs from before the window.
-  const startHref = (segments[0].events[0]?.data as { href?: unknown } | undefined)?.href;
-  const at = typeof startHref === "string" ? buffer.urls.indexOf(startHref) : -1;
+  const start = segments[0].startTimestamp;
+  // A buffer with visit times lists the URLs of the new window only. Without them, keep `urls`
+  // from the URL the window starts on; when that URL was also visited earlier, this keeps a few
+  // URLs from before the window.
+  let urls = buffer.urls;
+  let visits = buffer.visits;
+  if (visits) {
+    visits = visitsSince(visits, start);
+    urls = visitedUrls(visits);
+  } else {
+    const startHref = (segments[0].events[0]?.data as { href?: unknown } | undefined)?.href;
+    const at = typeof startHref === "string" ? buffer.urls.indexOf(startHref) : -1;
+    if (at !== -1) urls = buffer.urls.slice(at);
+  }
   // Link only the errors inside the new window. A buffer without timestamps keeps its ids.
-  const linked = buffer.errors ? linkedErrorsSince(buffer.errors, segments[0].startTimestamp) : null;
+  const linked = buffer.errors ? linkedErrorsSince(buffer.errors, start) : null;
   return {
     ...buffer,
     ...(linked ?? {}),
     segments,
-    startTimestamp: segments[0].startTimestamp,
-    urls: at === -1 ? buffer.urls : buffer.urls.slice(at),
+    startTimestamp: start,
+    urls,
+    visits,
     size: segments.reduce((n, s) => n + s.size, 0)
   };
 }

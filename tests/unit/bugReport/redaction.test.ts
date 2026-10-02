@@ -9,7 +9,7 @@ import type { RedactOptions, TaintSnapshot } from "@/lib/bugReport/redaction/typ
 import { redactReportUrl } from "@/lib/bugReport/redaction/reportUrl";
 import { decodeUrlWithMap } from "@/lib/bugReport/redaction/urlText";
 import { keepLast } from "@/lib/bugReport/redaction/walker";
-import { getTaintSet } from "@/lib/bugReport/taint";
+import { createTaintSet, getTaintSet } from "@/lib/bugReport/taint";
 import type { FrozenBuffer, FrozenSegment, RecordedEvent } from "@/lib/bugReport/types";
 
 type Node = {
@@ -210,6 +210,107 @@ describe("text nodes", () => {
     );
     expect(result.remaining.some((r) => r.value.includes("color"))).toBe(false);
   });
+  it("matches both entries rrweb lists for a node changed twice in one mutation", async () => {
+    // rrweb pushes one `texts` entry per change it observed, each with the node's latest text.
+    const t = txt("loading");
+    const p = el("p", { "data-report-unmask": "" }, [t]);
+    const result = await redact(
+      bufferOf([
+        segment([
+          meta(0),
+          full(1, doc([], [p])),
+          mutation(2, {
+            texts: [
+              { id: t.id, value: NAME },
+              { id: t.id, value: NAME }
+            ]
+          })
+        ])
+      ])
+    );
+    expect(uploaded(result)).not.toContain("Zorvik");
+  });
+
+  it("keeps a re-sent node's children when it comes after them in the same mutation", async () => {
+    // A checkout between a node's insertion and the mutation that reports it: the snapshot has
+    // the subtree, and rrweb sends the children first and the parent last, with no removal.
+    const name = txt("Zorvik");
+    const rest = txt(" Quellmar");
+    const b = el("b", {}, [name]);
+    const p = el("p", { "data-report-unmask": "" }, [b, rest]);
+    const after = el("p", {}, []);
+    const body = el("div", {}, [p]);
+    const result = await redact(
+      bufferOf([
+        segment([
+          meta(0),
+          full(1, doc([], [body])),
+          mutation(2, {
+            adds: [
+              { parentId: p.id, nextId: rest.id, node: { ...b, childNodes: [] } },
+              { parentId: b.id, nextId: null, node: { ...name } },
+              { parentId: p.id, nextId: null, node: { ...rest } },
+              { parentId: body.id, nextId: null, node: { ...after } },
+              { parentId: body.id, nextId: after.id, node: { ...p, childNodes: [] } }
+            ]
+          })
+        ])
+      ])
+    );
+    expect(uploaded(result)).not.toMatch(/Zorvik|Quellmar/);
+  });
+
+  it("never places a re-sent node under its own descendant", async () => {
+    // Only a map out of step with the page could ask for this. Between inline elements a cycle
+    // would keep the walk up to the block from ever ending.
+    const inner = el("b", {}, [txt(NAME)]);
+    const outer = el("span", {}, [inner]);
+    const p = el("p", { "data-report-unmask": "" }, [outer]);
+    const result = await redact(
+      bufferOf([
+        segment([
+          meta(0),
+          full(1, doc([], [p])),
+          mutation(2, { adds: [{ parentId: inner.id, nextId: null, node: { ...outer, childNodes: [] } }] }),
+          mutation(3, { texts: [{ id: inner.childNodes![0].id, value: NAME }] })
+        ])
+      ])
+    );
+    expect(uploaded(result)).not.toContain("Zorvik");
+  });
+
+  it("matches a block again when a node in it is emptied or moved out", async () => {
+    // "Bo" and "Li" are under three characters, so only the whole name is a pattern.
+    const short: TaintSnapshot = [{ kind: "name", pattern: "bo li" }];
+    const sep = txt("-x-");
+    const emptied = el("p", {}, [txt("Bo"), el("span", {}, [sep]), txt(" Li")]);
+    const span = el("span", {}, [txt("X")]);
+    const left = el("p", {}, [txt("Bo "), span, txt("Li")]);
+    const other = el("div", {}, []);
+    const result = await redact(
+      bufferOf([
+        segment([
+          meta(0),
+          full(1, doc([], [emptied, left, other])),
+          mutation(2, {
+            texts: [{ id: sep.id, value: "" }],
+            // A move with no `removes` entry for it.
+            adds: [{ parentId: other.id, nextId: null, node: { ...span, childNodes: [] } }]
+          })
+        ])
+      ]),
+      { taintPatterns: short }
+    );
+    expect(uploaded(result)).not.toMatch(/"Bo"|" Li"|"Bo "|"Li"/);
+  });
+
+  it("joins a name around a button and across SVG text runs", async () => {
+    const short: TaintSnapshot = [{ kind: "name", pattern: "bo li" }];
+    const p = el("p", {}, [txt("Graded by "), el("button", {}, [txt("Bo")]), txt(" Li")]);
+    const svg = el("svg", {}, [el("text", {}, [el("tspan", {}, [txt("Bo")]), el("tspan", {}, [txt("Li")])])]);
+    const result = await redact(bufferOf([segment([meta(0), full(1, doc([], [p, svg]))])]), { taintPatterns: short });
+    expect(uploaded(result)).not.toMatch(/"Bo"|"Li"|" Li"/);
+  });
 });
 
 describe("attributes, inputs, breadcrumbs, URLs", () => {
@@ -320,6 +421,76 @@ describe("attributes, inputs, breadcrumbs, URLs", () => {
     expect(redactReportUrl(href, getTaintSet())).not.toMatch(/Zorvik|Quellmar|kvounder/);
     getTaintSet().clear();
   });
+  it("masks the values typed on the way to a name", async () => {
+    const field = el("input", {});
+    const events: RecordedEvent[] = [meta(0), full(1, doc([], [field]))];
+    for (let i = 1; i <= NAME.length; i++) events.push(input(1 + i, field.id, NAME.slice(0, i)));
+    events.push(input(100, field.id, "Hi"));
+    const result = await redact(bufferOf([segment(events)]));
+    const values = result.buffer.segments[0].events.slice(2).map((e) => (e.data as { text: string }).text);
+    expect(values.slice(0, NAME.length).every((v) => /^[\s*]+$/.test(v))).toBe(true);
+    expect(values[NAME.length]).toBe("Hi");
+  });
+
+  it("matches every decoding pass of a URL, so a %2B or %25 the last pass changes is still read", async () => {
+    // URLSearchParams writes "+" as %2B and "%" as %25. A second pass reads the first's "+" as a
+    // space, and the "%00" in "%001234567%" as an escape.
+    const plus = "http://localhost/course/1/x?email=eq.jdoe%2Bcs101%40northeastern.edu";
+    const nuid = new URL("http://127.0.0.1:54321/rest/v1/user_roles");
+    nuid.searchParams.append("sis_user_id", "ilike.%001234567%");
+    const result = await redact(
+      bufferOf(
+        [
+          segment([
+            meta(0, plus),
+            full(1, doc([], [])),
+            crumb(2, {
+              category: "fetch",
+              timestamp: 1,
+              data: { method: "GET", url: nuid.href, status_code: 200, duration: 3 }
+            })
+          ])
+        ],
+        [plus]
+      ),
+      { taintPatterns: [] }
+    );
+    expect(uploaded(result)).not.toMatch(/jdoe|1234567/);
+    expect(redactReportUrl(plus, createTaintSet())).not.toContain("jdoe");
+  });
+
+  it("matches taint lines holding URL delimiters, and percent-escapes outside URL fields", async () => {
+    const set = createTaintSet();
+    set.add("free_text", "Why does test 3 fail?");
+    const href = `http://localhost/course/1/search?q=${encodeURIComponent("Why does test 3 fail?")}&x=1`;
+    const logged = "request failed http://127.0.0.1:54321/rest/v1/profiles?email=eq.quinlan.ostrander%40example.org";
+    const result = await redactBuffer(
+      bufferOf(
+        [
+          segment([
+            meta(0, href),
+            full(1, doc([], [el("p", {}, [txt("x")])])),
+            crumb(2, { category: "console", level: "error", timestamp: 1, message: logged })
+          ])
+        ],
+        [href]
+      ),
+      { taintPatterns: taintSnapshot(set) }
+    );
+    expect(uploaded(result)).not.toMatch(/Why|fail%3F|quinlan/);
+    expect(redactReportUrl(href, set)).not.toMatch(/Why|fail/);
+  });
+
+  it("masks a mailto: href whole, subject and display name included", async () => {
+    const links = [
+      el("a", { href: "mailto:ta@example.test?subject=Regrade%20for%20Plimsoll%20Varn" }, [txt("****")]),
+      el("a", { href: "mailto:Plimsoll Varn <pv@example.test>" }, [txt("****")])
+    ];
+    const result = await redact(bufferOf([segment([meta(0), full(1, doc([], [el("p", {}, links)]))])]), {
+      taintPatterns: []
+    });
+    expect(uploaded(result)).not.toMatch(/Plimsoll|Varn|Regrade/);
+  });
 });
 
 describe("options", () => {
@@ -350,6 +521,32 @@ describe("options", () => {
     // A window shorter than the newest segment keeps just that one.
     expect(keepLast(buffer, 1).segments).toHaveLength(1);
     expect(keepLast(buffer, undefined)).toBe(buffer);
+  });
+
+  it("keepLastMs lists only the URLs of the kept window when visits carry times", async () => {
+    const [a, b, c] = ["a", "gradebook?student=Quinlan%20Ostrander", "c"].map((p) => `http://localhost/course/1/${p}`);
+    const buffer: FrozenBuffer = {
+      ...bufferOf(
+        [0, 60_000, 120_000].map((t, i) =>
+          segment([meta(t, [a, a, c][i]), full(t + 1, doc([], [])), mutation(t + 50_000, {})])
+        ),
+        [b, a, c]
+      ),
+      // B early, A from 10 s, C from 120 s. A window starting at 60 s never showed B.
+      visits: [
+        { url: b, at: 0 },
+        { url: a, at: 10_000 },
+        { url: c, at: 120_000 }
+      ]
+    };
+    const result = await redact(buffer, { keepLastMs: 110_000 });
+    expect(result.buffer.urls).toEqual([a, c]);
+    // A URL revisited inside the window stays even though its first visit was before it.
+    const revisit = keepLast({ ...buffer, visits: [...buffer.visits!, { url: b, at: 130_000 }] }, 110_000);
+    expect(revisit.urls).toEqual([a, c, b]);
+    // The visit list never leaves the pass: it holds the URLs unredacted.
+    expect(result.buffer.visits).toBeUndefined();
+    expect((await redact(buffer, {})).buffer.visits).toBeUndefined();
   });
 
   it("extraRedactions masks every exact occurrence, and * matches an already-masked character", async () => {
@@ -395,6 +592,26 @@ describe("options", () => {
     const result = await redact(buffer);
     expect(JSON.stringify(buffer)).toBe(before);
     expect(uploaded(result)).not.toContain("Zorvik");
+  });
+  it("click-to-redact masks a picked string inside class names and CSS too", async () => {
+    const body = [
+      el("p", { "data-report-unmask": "" }, [txt("Reviewer Kestrel7")]),
+      el("div", { class: "card reviewer-Kestrel7x", style: "--who:Kestrel7a" }, [])
+    ];
+    const result = await redact(bufferOf([segment([meta(0), full(1, doc([], body))])]), {
+      extraRedactions: ["Kestrel7"]
+    });
+    expect(uploaded(result)).not.toContain("Kestrel7");
+  });
+
+  it("click-to-redact finds a URL whose earlier mask covered a space", async () => {
+    const link = el("a", { href: `/course/1/search?q=${NAME}&student=jdoe` }, [txt("****")]);
+    const buffer = bufferOf([segment([meta(0), full(1, doc([], [el("p", {}, [link])]))])]);
+    const first = await redact(buffer);
+    const pick = first.remaining.find((r) => r.kind === "url" && r.value.startsWith("/course"))!.value;
+    expect(pick).toBe("/course/1/search?q=****** ********&student=jdoe");
+    const second = await redact(buffer, { extraRedactions: [pick] });
+    expect(uploaded(second)).not.toContain("jdoe");
   });
 });
 
@@ -472,5 +689,21 @@ describe("taint snapshot and detectors", () => {
     expect(out).not.toMatch(/Zo|ngstr/);
     // No combining mark is left over the masked letters.
     expect(uploaded(result)).not.toMatch(/\p{M}/u);
+  });
+  it("redacts the feedback page URL as the walker redacts the replay's URLs", async () => {
+    const set = getTaintSet();
+    set.add("name", NAME);
+    set.add("name", "Zoë Ångström");
+    set.add("email", EMAIL);
+    const urls = [
+      `http://localhost/course/1/x?q=${encodeURIComponent(NAME)}&h=${HANDLE.toUpperCase()}`,
+      "http://localhost/course/1/x?who=Zo%C3%AB+%C3%85ngstr%C3%B6m",
+      `http://localhost/course/1/x?next=${encodeURIComponent(`/y?e=${EMAIL}`)}`,
+      "http://localhost/course/1/x?n=123456789"
+    ];
+    const { buffer } = await redactBuffer(bufferOf([segment([meta(0), full(1, doc([], []))])], urls), {
+      taintPatterns: taintSnapshot(set)
+    });
+    expect(urls.map((u) => redactReportUrl(u, set))).toEqual(buffer.urls);
   });
 });

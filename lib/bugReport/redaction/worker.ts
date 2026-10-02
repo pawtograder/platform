@@ -18,13 +18,24 @@ const scope = self as unknown as {
   postMessage(message: WorkerResponse): void;
 };
 
+const failure = (id: number, err: unknown): WorkerResponse => ({
+  id,
+  ok: false,
+  error: err instanceof Error ? err.message : String(err)
+});
+
 scope.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   const { id, buffer, opts } = event.data;
   let response: WorkerResponse;
   try {
     response = { id, ok: true, result: await redactOwnedBuffer(buffer, opts) };
   } catch (err) {
-    response = { id, ok: false, error: err instanceof Error ? err.message : String(err) };
+    response = failure(id, err);
   }
-  scope.postMessage(response);
+  try {
+    scope.postMessage(response);
+  } catch (err) {
+    // A result that can't be sent still answers the pass, so `redactBuffer` doesn't wait forever.
+    scope.postMessage(failure(id, err));
+  }
 };

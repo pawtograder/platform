@@ -156,6 +156,24 @@ describe("submitReport without a replay", () => {
     const event = sentEvents[0] as { contexts: { feedback: Record<string, unknown> } };
     expect(event.contexts.feedback.url).toBe("http://localhost/course/5/manage/office-hours/search");
   });
+
+  it("masks the strings the user redacted in review in the page URL", async () => {
+    window.history.pushState({}, "", "/course/5/discussion/4242");
+    try {
+      await submitReport({
+        description: "x",
+        contactOk: false,
+        replay: {
+          upload: async () => ({ ok: false as const, reason: "failed" as const }),
+          extraRedactions: () => ["discussion/4242"]
+        }
+      });
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+    const event = sentEvents[0] as { contexts: { feedback: Record<string, unknown> } };
+    expect(event.contexts.feedback.url).toBe("http://localhost/course/5/***************");
+  });
 });
 
 describe("submitReport with a replay (package 6 contract)", () => {

@@ -127,6 +127,53 @@ describe("useReplayReview", () => {
     expect(createReplayUpload).not.toHaveBeenCalled();
   });
 
+  it("locks the review while the upload runs, and reports the strings of the pass it sent", async () => {
+    const { recorder } = fakeRecorder();
+    setActiveRecorder(recorder);
+    redactBuffer.mockResolvedValue({
+      buffer: frozen("r"),
+      remaining: [
+        { value: "Jane Doe", kind: "text", count: 1 },
+        { value: "Lab 3", kind: "text", count: 1 }
+      ],
+      stats: { textNodes: 1, redactedSpans: 0, ms: 1 }
+    });
+    let finish!: (r: { ok: true; replayId: string }) => void;
+    createReplayUpload.mockReturnValue({ upload: () => new Promise((resolve) => (finish = resolve)) });
+    let slot: ReturnType<typeof useReplayReview> = null;
+    function Review() {
+      slot = useReplayReview(true);
+      return <>{slot?.review}</>;
+    }
+    render(
+      <ChakraProvider value={defaultSystem}>
+        <Review />
+      </ChakraProvider>
+    );
+    await screen.findByText("Jane Doe");
+    act(() => screen.getAllByRole("button", { name: /Redact/ })[1].click());
+    await waitFor(() => expect(redactBuffer).toHaveBeenCalledTimes(2));
+    expect(redactBuffer.mock.calls[1][1]).toMatchObject({ extraRedactions: ["Lab 3"] });
+
+    let sent!: Promise<unknown>;
+    act(() => {
+      sent = slot!.upload!.upload({ contact_ok: "false" });
+    });
+    await waitFor(() => expect(createReplayUpload).toHaveBeenCalled());
+    const redact = screen.getByRole("button", { name: /Redact/ });
+    expect(redact).toBeDisabled();
+    act(() => redact.click());
+    expect(screen.getByText("Jane Doe")).toBeInTheDocument();
+    expect(redactBuffer).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      finish({ ok: true, replayId: "a".repeat(32) });
+      await sent;
+    });
+    expect(slot!.upload!.extraRedactions?.()).toEqual(["Lab 3"]);
+    expect(screen.getByRole("button", { name: /Redact/ })).toBeEnabled();
+  });
+
   describe("taint set saturation", () => {
     function Review() {
       return <>{useReplayReview(true)?.review}</>;

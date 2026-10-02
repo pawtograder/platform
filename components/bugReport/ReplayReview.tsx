@@ -15,7 +15,8 @@ import { ReplayPreview } from "./ReplayPreview";
  * The replay half of the report dialog (spec §5, package 5): freeze the recorder's buffer when
  * the dialog opens, redact the copy in the worker, and let the user review exactly what will be
  * uploaded. Nothing here sends anything; `upload` runs only when the user presses Submit, and it
- * uploads the latest redacted copy, never the frozen original.
+ * uploads the latest redacted copy, never the frozen original. From Submit until the upload
+ * settles the review is locked, so the list never shows a redaction the upload doesn't have.
  *
  * The redaction module and the upload module are imported on demand, so neither (nor the
  * player, see ReplayPreview) is part of the main bundle.
@@ -31,6 +32,9 @@ type Pass =
   | { kind: "redacting"; stage: "loading" | "redacting" }
   | { kind: "ready"; result: RedactionResult }
   | { kind: "error" };
+
+/** A redaction pass and the click-to-redact strings it was run with. */
+type PassRun = { result: Promise<RedactionResult>; extraRedactions: string[] };
 
 type Session = {
   buffer: FrozenBuffer;
@@ -76,8 +80,13 @@ export function useReplayReview(open: boolean): ReplayReviewSlot | null {
   const [pass, setPass] = useState<Pass>({ kind: "redacting", stage: "loading" });
   const [previewMs, setPreviewMs] = useState<number | null>(null);
   const [saturated, setSaturated] = useState(false);
-  const latest = useRef<Promise<RedactionResult> | null>(null);
+  const latest = useRef<PassRun | null>(null);
   const seq = useRef(0);
+  /** Set from Submit until the upload settles; review changes are ignored meanwhile. */
+  const locked = useRef(false);
+  const [sending, setSending] = useState(false);
+  /** The strings of the pass the last upload sent, for the feedback's page URL. */
+  const sentExtras = useRef<string[]>([]);
 
   // Freeze once per opening. Recording continues; the dialog works on the copy.
   useEffect(() => {
@@ -108,6 +117,9 @@ export function useReplayReview(open: boolean): ReplayReviewSlot | null {
     setKeepLastMinutes(null);
     setPreviewMs(null);
     setSaturated(false);
+    locked.current = false;
+    setSending(false);
+    sentExtras.current = [];
     setSession({ buffer, openedAt });
     // Only the recorder's state at open counts: one that starts while the dialog is open
     // doesn't attach a replay mid-review.
@@ -141,7 +153,7 @@ export function useReplayReview(open: boolean): ReplayReviewSlot | null {
         keepLastMs: keepLastMinutes === null ? undefined : keepLastMinutes * MINUTE
       });
     })();
-    latest.current = run;
+    latest.current = { result: run, extraRedactions };
     run.then(
       (result) => {
         if (id === seq.current) setPass({ kind: "ready", result });
@@ -163,18 +175,32 @@ export function useReplayReview(open: boolean): ReplayReviewSlot | null {
     if (!session || pass.kind === "error") return null;
     return {
       async upload(tags): Promise<ReplayUploadResult> {
-        const pending = latest.current;
-        if (!pending) return { ok: false, reason: "failed" };
-        let redacted: RedactionResult;
+        locked.current = true;
+        setSending(true);
         try {
-          redacted = await pending;
-        } catch {
-          // Never fall back to the unredacted buffer.
-          return { ok: false, reason: "failed" };
+          // The newest pass, including one a redaction started just before Submit.
+          let run = latest.current;
+          let redacted: RedactionResult;
+          for (;;) {
+            if (!run) return { ok: false, reason: "failed" };
+            try {
+              redacted = await run.result;
+            } catch {
+              // Never fall back to the unredacted buffer.
+              return { ok: false, reason: "failed" };
+            }
+            if (latest.current === run) break;
+            run = latest.current;
+          }
+          sentExtras.current = run.extraRedactions;
+          const { createReplayUpload } = await import("@/lib/bugReport/upload");
+          return await createReplayUpload(redacted.buffer).upload(tags);
+        } finally {
+          locked.current = false;
+          setSending(false);
         }
-        const { createReplayUpload } = await import("@/lib/bugReport/upload");
-        return createReplayUpload(redacted.buffer).upload(tags);
-      }
+      },
+      extraRedactions: () => sentExtras.current
     };
   }, [session, pass.kind]);
 
@@ -190,9 +216,14 @@ export function useReplayReview(open: boolean): ReplayReviewSlot | null {
         saturated={saturated}
         onFirstFrame={onFirstFrame}
         extraRedactions={extraRedactions}
-        onRedact={(value) => setExtraRedactions((list) => (list.includes(value) ? list : [...list, value]))}
+        sending={sending}
+        onRedact={(value) => {
+          if (!locked.current) setExtraRedactions((list) => (list.includes(value) ? list : [...list, value]));
+        }}
         keepLastMinutes={keepLastMinutes}
-        onKeepLastMinutes={setKeepLastMinutes}
+        onKeepLastMinutes={(minutes) => {
+          if (!locked.current) setKeepLastMinutes(minutes);
+        }}
       />
     )
   };
@@ -206,6 +237,8 @@ type SectionProps = {
   saturated: boolean;
   onFirstFrame: () => void;
   extraRedactions: string[];
+  /** The upload is running: redaction and keep-last are disabled until it settles. */
+  sending: boolean;
   onRedact: (value: string) => void;
   keepLastMinutes: number | null;
   onKeepLastMinutes: (minutes: number | null) => void;
@@ -218,6 +251,7 @@ function ReplayReviewSection({
   saturated,
   onFirstFrame,
   extraRedactions,
+  sending,
   onRedact,
   keepLastMinutes,
   onKeepLastMinutes
@@ -279,6 +313,7 @@ function ReplayReviewSection({
             id={listId}
             remaining={shown.remaining}
             extraRedactions={extraRedactions}
+            disabled={sending}
             onRedact={onRedact}
           />
         </>
@@ -288,7 +323,7 @@ function ReplayReviewSection({
           label="How much of the recording to send"
           helperText="Shorter recordings may leave out what led to the problem."
         >
-          <NativeSelect.Root size="sm" maxW="xs">
+          <NativeSelect.Root size="sm" maxW="xs" disabled={sending}>
             <NativeSelect.Field
               data-testid="report-bug-keep-minutes"
               value={keepLastMinutes === null ? "all" : String(keepLastMinutes)}
@@ -338,11 +373,13 @@ function RemainingList({
   id,
   remaining,
   extraRedactions,
+  disabled,
   onRedact
 }: {
   id: string;
   remaining: RemainingString[];
   extraRedactions: string[];
+  disabled: boolean;
   onRedact: (value: string) => void;
 }) {
   const announce = useAnnouncer();
@@ -432,6 +469,7 @@ function RemainingList({
                         flexShrink={0}
                         data-redact=""
                         id={buttonId}
+                        disabled={disabled}
                         // Named "Redact <string>" by reference, not with aria-label: Sentry's
                         // click breadcrumbs copy an element's aria-label, and the string must
                         // not leave in one after the user redacted it.

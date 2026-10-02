@@ -19,6 +19,8 @@ export function setModelDetector(detector: Detector | undefined): void {
 export async function redactOwnedBuffer(owned: FrozenBuffer, opts: RedactOptions): Promise<RedactionResult> {
   const started = now();
   const buffer = keepLast(owned, opts.keepLastMs);
+  // The visit list holds the same URLs as `urls`, unredacted; trimming was its only use.
+  delete buffer.visits;
   const chain = buildDetectorChain(opts, modelDetector);
   const walked = await walkBuffer(buffer, chain);
   return {

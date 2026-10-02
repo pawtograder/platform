@@ -111,4 +111,31 @@ describe("findBackstopSpans", () => {
     for (let i = 1; i < result.length; i++) expect(result[i].start).toBeGreaterThanOrEqual(result[i - 1].end);
     expect(result.map((s) => s.kind)).toEqual(["email", "nuid", "mailto"]);
   });
+
+  it("finds the emails the plain regex finds", () => {
+    const EMAIL =
+      /[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?(?:\.[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?)*\.\p{L}{2,}/gu;
+    const alphabet = ["a", "b", "Z", "é", "9", ".", "-", "+", "@", "@", " ", "/", "c", "o", "m", "\u{1D49C}"];
+    let seed = 7;
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    for (let i = 0; i < 3000; i++) {
+      let text = "";
+      for (let j = rand(30); j > 0; j--) text += alphabet[rand(alphabet.length)];
+      const expected = [...text.matchAll(EMAIL)].map((m) => [m.index, m.index + m[0].length]);
+      const actual = findBackstopSpans(text)
+        .filter((s) => s.kind === "email")
+        .map((s) => [s.start, s.end]);
+      expect({ text, spans: actual }).toEqual({ text, spans: expected });
+    }
+  });
+
+  it("scans a long run without an @ in linear time", () => {
+    const token = "A".repeat(200_000);
+    const started = performance.now();
+    expect(findBackstopSpans(`${token} ${token}@ ${token}`)).toEqual([]);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
 });

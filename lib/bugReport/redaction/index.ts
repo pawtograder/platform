@@ -24,6 +24,13 @@ export { taintSnapshot } from "./taintSnapshot";
 
 type Pending = { resolve: (r: RedactionResult) => void; reject: (e: Error) => void };
 
+/**
+ * A pass that hasn't answered by now is treated as stuck: the worker is ended and the pass
+ * fails, so the report goes out without a replay instead of holding up Submit. A full 20 MB
+ * buffer redacts in seconds.
+ */
+export const REDACTION_TIMEOUT_MS = 120_000;
+
 let worker: Worker | undefined;
 let nextId = 0;
 const pending = new Map<number, Pending>();
@@ -53,6 +60,12 @@ async function getWorker(): Promise<Worker> {
     w.terminate();
     failAll(new Error(`Redaction worker error: ${event.message || "failed to load"}`));
   };
+  // A reply that can't be read carries no id to settle, and a pass left pending holds up Submit.
+  w.onmessageerror = () => {
+    if (worker === w) worker = undefined;
+    w.terminate();
+    failAll(new Error("Redaction worker sent an unreadable reply"));
+  };
   worker = w;
   return w;
 }
@@ -73,12 +86,26 @@ export async function redactBuffer(buffer: FrozenBuffer, opts: RedactOptions): P
   const w = await getWorker();
   return new Promise<RedactionResult>((resolve, reject) => {
     const id = ++nextId;
-    pending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      if (!pending.has(id)) return;
+      // The worker runs one pass at a time, so a stuck pass blocks every later one too.
+      if (worker === w) worker = undefined;
+      w.terminate();
+      failAll(new Error("Redaction timed out"));
+    }, REDACTION_TIMEOUT_MS);
+    const settle =
+      <T>(fn: (v: T) => void) =>
+      (v: T) => {
+        clearTimeout(timer);
+        fn(v);
+      };
+    pending.set(id, { resolve: settle(resolve), reject: settle(reject) });
     const request: WorkerRequest = { id, buffer, opts };
     try {
       w.postMessage(request);
     } catch (err) {
       pending.delete(id);
+      clearTimeout(timer);
       reject(err instanceof Error ? err : new Error(String(err)));
     }
   });
