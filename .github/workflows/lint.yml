@@ -216,6 +216,12 @@ jobs:
           key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
       - name: Run linting check
         run: npm run lint
+      # Typed lint for the bug reporter's pii/pii-render rule (eslint.pii.config.mjs). A separate
+      # pass because it builds the whole TypeScript program, which tripled `next lint` when it ran
+      # inside it. Warn-mode rule with a ratchet: fails only when the violation count rises above
+      # eslint-rules/pii-baseline.json.
+      - name: Check the PII render lint ratchet
+        run: npm run lint:pii
 
   # Jest unit tests (tests/unit).
   #
@@ -367,13 +373,20 @@ jobs:
       # deploy.yml after a production build, which is now behind the trust
       # gate and so does not run at all for an untrusted PR. This is the
       # cheap guard that catches the regression before the expensive one.
+      #
+      # The bug reporter's suites go in by prefix rather than one by one: jest reads each argument
+      # as a path regex, so `tests/unit/bugReport` covers tests/unit/bugReport-*.test.ts and
+      # everything under tests/unit/bugReport/. Listing them file by file had already left 9 of the
+      # 22 suites running nowhere. They are the PR tier of spec §7.1; its Playwright half
+      # runs in deploy.yml's e2e-local with every other spec.
       - name: Run Jest unit tests
         run: |
           npx jest --runInBand \
             tests/unit/async-worker-tuning.test.ts \
             tests/unit/create-repo-step-timings.test.ts \
             tests/unit/repo-not-ready-plan.test.ts \
-            tests/unit/prom-client-bundle.test.ts
+            tests/unit/prom-client-bundle.test.ts \
+            tests/unit/bugReport
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
   # dangerous production values combination (e2e bypasses, plaintext/

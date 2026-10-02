@@ -2,7 +2,9 @@ import { Box } from "@chakra-ui/react";
 
 import React from "react";
 
+import { BugReportIngestArm } from "@/components/bugReport/BugReportIngestArm";
 import { FloatingHelpRequestWidget } from "@/components/help-queue/floating-help-request-widget";
+import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { GlobalSearchProvider } from "@/components/ui/global-search";
 import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
@@ -60,9 +62,15 @@ const ProtectedLayout = async ({
   // Get course information for timezone
   const course = await getCourse(Number.parseInt(course_id));
   const courseTimeZone = course?.time_zone || "America/New_York";
+  const bugReportRecording = courseFeatureEnabled(
+    course?.features as { name: string; enabled: boolean }[] | null | undefined,
+    COURSE_FEATURES.BUG_REPORT_RECORDING
+  );
 
   return (
     <Box minH="100vh">
+      {/* Before the controller providers: it must arm during render, ahead of their first fetch. */}
+      <BugReportIngestArm courseId={Number.parseInt(course_id)} recording={bugReportRecording} />
       <NavigationProgressProvider>
         <TimeZoneProvider courseTimeZone={courseTimeZone}>
           <CourseControllerProvider

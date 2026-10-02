@@ -3,6 +3,7 @@ import { Button, Tag as ChakraTag, Icon } from "@chakra-ui/react";
 import { useDelete } from "@refinedev/core";
 import { FaX } from "react-icons/fa6";
 import { Tooltip } from "./tooltip";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 export default function TagDisplay({ tag, showRemove }: { tag: TagType; showRemove?: boolean }) {
   const { mutateAsync: removeTag } = useDelete<Tag>({});
@@ -16,7 +17,7 @@ export default function TagDisplay({ tag, showRemove }: { tag: TagType; showRemo
     >
       <ChakraTag.Label>
         {!tag.visible && "~"}
-        {tag.name}
+        <ReportBlock>{tag.name}</ReportBlock>
         {showRemove && (
           <Tooltip content="Remove tag">
             <Button

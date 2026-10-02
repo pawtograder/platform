@@ -25,6 +25,7 @@ import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaHeart, FaRegHeart } from "react-icons/fa";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 export function DiscussionThreadReply({
   thread,
@@ -332,8 +333,11 @@ const DiscussionThreadContent = memo(
                         borderColor="orange.muted"
                       >
                         <Text fontSize="xs" color="fg.default">
-                          Originally <strong>{thread.duplicate_original_subject}</strong> —{" "}
-                          <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and
+                          Originally{" "}
+                          <ReportBlock>
+                            <strong>{thread.duplicate_original_subject}</strong>
+                          </ReportBlock>{" "}
+                          — <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and
                           merged it here.
                         </Text>
                       </Box>
@@ -405,9 +409,11 @@ const DiscussionThreadContent = memo(
                       value={thread.body}
                     />
                   ) : (
-                    <Box textStyle="sm" color="fg.muted">
-                      <Markdown>{thread.body}</Markdown>
-                    </Box>
+                    <ReportBlock>
+                      <Box textStyle="sm" color="fg.muted">
+                        <Markdown>{thread.body}</Markdown>
+                      </Box>
+                    </ReportBlock>
                   )}
                 </Box>
                 <HStack fontWeight="semibold" textStyle="xs" ps="2">

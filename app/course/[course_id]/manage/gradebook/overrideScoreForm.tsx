@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
@@ -101,16 +102,20 @@ export function OverrideScoreForm({
           <HStack gap={2} align="stretch">
             <Field label="Score" errorText={errors.score?.message?.toString()} flexGrow={1}>
               {/* step after register: default step=1 blocks decimals (issue #533) */}
-              <Input type="number" {...register("score", { valueAsNumber: true })} step="any" />
+              <ReportBlock>
+                <Input type="number" {...register("score", { valueAsNumber: true })} step="any" />
+              </ReportBlock>
             </Field>
             {renderer && (
               <Field label="New Score" flexGrow={0} flexShrink={1}>
-                {renderer({
-                  ...studentGradebookColumn,
-                  score:
-                    watchedValues.score === undefined || Number.isNaN(watchedValues.score) ? 0 : watchedValues.score,
-                  max_score: column?.max_score ?? 0
-                })}
+                <ReportBlock>
+                  {renderer({
+                    ...studentGradebookColumn,
+                    score:
+                      watchedValues.score === undefined || Number.isNaN(watchedValues.score) ? 0 : watchedValues.score,
+                    max_score: column?.max_score ?? 0
+                  })}
+                </ReportBlock>
               </Field>
             )}
           </HStack>
@@ -120,7 +125,7 @@ export function OverrideScoreForm({
             <HStack>
               <Separator flex="1" />
               <Heading size="sm" color="fg.warning">
-                Override score from {studentGradebookColumn.score ?? "N/A"}
+                Override score from <ReportBlock>{studentGradebookColumn.score ?? "N/A"}</ReportBlock>
               </Heading>
               <Separator flex="1" />
             </HStack>
@@ -141,27 +146,33 @@ export function OverrideScoreForm({
             </Text>
             <HStack gap={0}>
               <Field label="Score" errorText={errors.score_override?.message?.toString()} flex={1} minW="5em">
-                <Input
-                  type="number"
-                  {...register("score_override", { valueAsNumber: true })}
-                  step="any"
-                  placeholder={studentGradebookColumn.score?.toString()}
-                />
+                <ReportBlock>
+                  <Input
+                    type="number"
+                    {...register("score_override", { valueAsNumber: true })}
+                    step="any"
+                    placeholder={studentGradebookColumn.score?.toString()}
+                  />
+                </ReportBlock>
               </Field>
               {renderer && (
                 <Field label="New Score" flexGrow={0} flexShrink={1}>
-                  {renderer({
-                    ...studentGradebookColumn,
-                    score:
-                      watchedValues.score_override === undefined || Number.isNaN(watchedValues.score_override)
-                        ? (watchedValues.score ?? 0)
-                        : watchedValues.score_override,
-                    max_score: column?.max_score ?? 0
-                  })}
+                  <ReportBlock>
+                    {renderer({
+                      ...studentGradebookColumn,
+                      score:
+                        watchedValues.score_override === undefined || Number.isNaN(watchedValues.score_override)
+                          ? (watchedValues.score ?? 0)
+                          : watchedValues.score_override,
+                      max_score: column?.max_score ?? 0
+                    })}
+                  </ReportBlock>
                 </Field>
               )}
               <Field label="Note" errorText={errors.score_override_note?.message?.toString()} flexGrow={20}>
-                <Input type="text" {...register("score_override_note")} />
+                <ReportBlock>
+                  <Input type="text" {...register("score_override_note")} />
+                </ReportBlock>
               </Field>
             </HStack>
           </Box>

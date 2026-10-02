@@ -23,6 +23,12 @@ export default defineConfig({
      tests/wait-for-schema-cache.ts for the why. Local `supabase start`
      paths short-circuit when SUPABASE_SERVICE_ROLE_KEY is unset. */
   globalSetup: "./tests/wait-for-schema-cache.ts",
+  /* Under BUG_REPORT_TRACE=1 (the bug reporter's taint trace), merge each worker's findings into
+     lib/bugReport/generated/ and print the check results. See tests/e2e/bugReport/traceFixture.ts. */
+  globalTeardown:
+    process.env.BUG_REPORT_TRACE === "1" || process.env.BUG_REPORT_TRACE === "true"
+      ? "./tests/e2e/bugReport/traceTeardown.ts"
+      : undefined,
   /* Run tests in files in parallel */
   fullyParallel: false,
   /* Fail the build on CI if you accidentally left test.only in the source code. */

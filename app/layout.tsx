@@ -11,8 +11,10 @@ import { LiveAnnouncer } from "@/components/ui/live-announcer";
 import SkipNav from "@/components/ui/skip-nav";
 import RouteFocusReset from "@/components/ui/route-focus-reset";
 import StaleBundleRecovery from "@/components/StaleBundleRecovery";
+import BugReportRecorder from "@/components/bugReport/BugReportRecorder";
 import CorruptSessionRecovery from "@/components/CorruptSessionRecovery";
 import { Toaster } from "@/components/ui/toaster";
+import { BugReportProvider } from "@/components/bugReport/BugReportProvider";
 import { BrandingProvider } from "@/components/branding/branding-provider";
 import { getBranding } from "@/lib/branding";
 const defaultUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000";
@@ -55,10 +57,13 @@ export default async function RootLayout({
                 <Toaster />
                 <ColorModeWatcher />
                 <StaleBundleRecovery />
+                <BugReportRecorder />
                 <CorruptSessionRecovery />
                 <RouteFocusReset />
               </ClientOnly>
-              <LiveAnnouncer>{children}</LiveAnnouncer>
+              <LiveAnnouncer>
+                <BugReportProvider>{children}</BugReportProvider>
+              </LiveAnnouncer>
             </Theme>
           </BrandingProvider>
         </Provider>

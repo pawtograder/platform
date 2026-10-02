@@ -1,0 +1,597 @@
+name: Bug reporter E2E
+
+# The body of the bug reporter's nightly and release tiers (spec §7.1), called by
+# bug-reporter-nightly.yml and bug-reporter-release.yml. It is never triggered on its own.
+#
+# One call is one lane: a local Supabase stack, a full-profile Next build (component
+# annotation on, which the taint trace needs), and the test groups named in `suites`:
+#
+#   f8        F8 smoke through /api/tunnel to the dev Sentry. Runs first. If it fails, the lane
+#             stops there and says the fault is infrastructure, not the product.
+#   f7        F7 and the large-segment upload, read back from the dev Sentry.
+#   h         H1-H3, the retention purge against the dev Sentry, on schedule and workflow_dispatch
+#             runs only (skipped without the SENTRY_PURGE_TOKEN secret, HU3).
+#   contract  ADR 8 contract checks for an SDK or rrweb bump: the envelope and upload Jest suites,
+#             and F1/F2/F5/F6 (upload.spec.ts) on both browsers.
+#   k         K1-K3 and the upload measurement, with BUG_REPORT_NIGHTLY=1, on chromium, one worker.
+#   i         I1-I4: the whole Playwright suite on chromium under the taint trace
+#             (BUG_REPORT_TRACE=1, with the phase 2 upload scan BUG_REPORT_TRACE_UPLOAD=1 and
+#             BUG_REPORT_TRACE_STRICT=1). The regenerated lib/bugReport/generated/ files are
+#             diffed against the committed ones; the diff is an artifact and goes in the job
+#             summary for review. Nothing is committed.
+#
+# With `sentry: true` the build and the Sentry groups get the dev Sentry secrets (HU2). With
+# `sentry: false` the lane has no secrets at all: it builds with the same stub DSN as deploy.yml's
+# e2e-local, so the suite's errors go nowhere and identity.spec.ts (G1) still has its stub.
+#
+# SETUP IS COPIED FROM deploy.yml's e2e-local, deliberately, rather than shared through a
+# composite action. e2e-local is a required check that runs under pull_request_target, where a
+# local composite action would be read from the PR's checkout; moving its steps out would change
+# what that job trusts. When you change a setup step in either file, look at the other. The
+# comments on the originals in deploy.yml explain each step; the copies here keep only what
+# differs.
+
+on:
+  workflow_call:
+    inputs:
+      tier:
+        description: nightly or release; names the Sentry release and the artifacts
+        required: true
+        type: string
+      lane:
+        description: short job name, unique within the calling run (sentry, local)
+        required: true
+        type: string
+      sentry:
+        description: build against the real dev Sentry and pass the Sentry secrets to the tests
+        required: true
+        type: boolean
+      suites:
+        description: space-separated test groups (f8 f7 h contract k i); see the header
+        required: true
+        type: string
+      timeout-minutes:
+        required: false
+        type: number
+        default: 120
+    secrets:
+      SENTRY_URL:
+        required: false
+      SENTRY_ORG:
+        required: false
+      SENTRY_AUTH_TOKEN:
+        required: false
+      NEXT_PUBLIC_SENTRY_DSN:
+        required: false
+      SENTRY_PURGE_TOKEN:
+        required: false
+
+permissions: {}
+
+jobs:
+  e2e:
+    name: ${{ inputs.lane }}
+    # The callers only reach this job for a trusted ref (_trust-gate.yml) or a scheduled or
+    # dispatched run on this repository.
+    runs-on: pawtograder-e2e
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    env:
+      # See deploy.yml's CACHE_SCOPE note. These lanes only ever restore.
+      CACHE_SCOPE: ${{ github.event_name == 'push' && 'trunk' || github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || 'untrusted' }}
+      SUPABASE_PROJECT: pawtograder-br-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.lane }}
+      LOCAL_SUPABASE_URL: http://127.0.0.1:54321
+      LOCAL_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      LOCAL_SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      RUN_TMP: /tmp/e2e-br-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.lane }}
+      BASE_URL: http://localhost:3001
+      # Padded so a step can test membership with contains(env.SUITES, ' f7 ').
+      SUITES: " ${{ inputs.suites }} "
+      BUG_REPORT_RESULTS: bug-report-results
+      # Must match STUB_SENTRY_DSN in tests/e2e/bugReport/stubSentry.ts.
+      STUB_SENTRY_DSN: http://e2epublickey@127.0.0.1:54399/1
+      # One release per run, so F8 can check the event carries the release its source maps were
+      # uploaded under. Read by the bundler plugin at build time, the server SDK at run time, and
+      # sentry-smoke.spec.ts.
+      SENTRY_RELEASE: bug-reporter-${{ inputs.tier }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # A plain value, not a secret: the project slug. Override with a repository variable.
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT || 'pawtograder-web' }}
+    steps:
+      # Before anything else, so a missing secret is one clear error rather than a lane of
+      # quietly skipped tests. Names only; values never reach the log.
+      - name: Check the Sentry secrets (HU2)
+        if: inputs.sentry
+        env:
+          SENTRY_URL: ${{ secrets.SENTRY_URL }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          SENTRY_PURGE_TOKEN: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && secrets.SENTRY_PURGE_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in SENTRY_URL SENTRY_ORG SENTRY_AUTH_TOKEN NEXT_PUBLIC_SENTRY_DSN; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error title=Sentry CI secrets missing (HU2)::Create these repository secrets for the dev Sentry: ${missing[*]}"
+            exit 1
+          fi
+          if [[ "$SUITES" == *" h "* && -z "$SENTRY_PURGE_TOKEN" ]]; then
+            echo "::notice title=H1-H3 will be skipped::The SENTRY_PURGE_TOKEN secret (HU3) is not set."
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          # Explicit: under pull_request_target a bare checkout is the BASE branch. The callers
+          # only get here for a PR after _trust-gate.yml admitted its head.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          allow-unsafe-pr-checkout: true
+          persist-credentials: false
+
+      - name: Restore npm dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-${{ env.CACHE_SCOPE }}-node-22-
+            npm-${{ runner.os }}-trunk-node-22-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.105.0
+
+      - uses: denoland/setup-deno@v2
+        if: contains(env.SUITES, ' h ')
+        with:
+          deno-version: v2.x
+
+      # No secret is in the environment here: `npm ci` runs lockfile lifecycle scripts.
+      - name: Install dependencies
+        run: npm ci
+
+      # deploy.yml's .env.local, plus the DSN this lane reports to. It is also the env file for
+      # `supabase functions serve`, so it holds nothing but the DSN from the Sentry secrets.
+      - name: Write .env.local
+        env:
+          APP_SENTRY_DSN: ${{ inputs.sentry && secrets.NEXT_PUBLIC_SENTRY_DSN || env.STUB_SENTRY_DSN }}
+          DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          DEPLOY_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          cat > .env.local <<EOF
+          NEXT_PUBLIC_SUPABASE_URL=${LOCAL_SUPABASE_URL}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=${LOCAL_SUPABASE_ANON_KEY}
+          SUPABASE_URL=${LOCAL_SUPABASE_URL}
+          SUPABASE_ANON_KEY=${LOCAL_SUPABASE_ANON_KEY}
+          SUPABASE_SERVICE_ROLE_KEY=${LOCAL_SUPABASE_SERVICE_ROLE_KEY}
+          ENABLE_SIGNUPS=true
+          NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001
+          E2E_ENABLE=true
+          E2E_MOCK_GITHUB=true
+          END_TO_END_SECRET=not-a-secret
+          EDGE_FUNCTION_SECRET=some-secret-value
+          EVENTBRIDGE_SECRET=some-eventbridge-secret
+          GITHUB_APP_ID=1
+          GITHUB_OAUTH_CLIENT_ID=not-a-real-oauth-client-id
+          GITHUB_OAUTH_CLIENT_SECRET=not-a-real-oauth-client-secret
+          DEPLOY_KIND=bug-reporter-${{ inputs.tier }}
+          DEPLOY_BRANCH=${DEPLOY_BRANCH}
+          DEPLOY_PR=${DEPLOY_PR}
+          DEPLOY_RUN_ID=${GITHUB_RUN_ID}
+          DEPLOY_RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT}
+          GIT_COMMIT_SHA=${GITHUB_SHA}
+          NEXT_PUBLIC_SENTRY_DSN=${APP_SENTRY_DSN}
+          SENTRY_RELEASE=${SENTRY_RELEASE}
+          DISCORD_API_BASE_URL=http://discord-mock:8788/api/v10
+          DISCORD_MOCK_URL=http://127.0.0.1:8788
+          DISCORD_BOT_TOKEN=mock-bot-token
+          DISCORD_APPLICATION_ID=100000000000000001
+          DISCORD_OAUTH_CLIENT_ID=100000000000000001
+          DISCORD_OAUTH_CLIENT_SECRET=mock-client-secret
+          EOF
+          mkdir -p "$RUN_TMP"
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+            -out "$RUN_TMP/dummy-app-key.pem" 2>/dev/null
+          KEY_ESCAPED=$(awk 'BEGIN{ORS=""} {printf "%s\\n", $0}' "$RUN_TMP/dummy-app-key.pem")
+          printf 'GITHUB_PRIVATE_KEY_STRING="%s"\n' "$KEY_ESCAPED" >> .env.local
+
+      - name: Pin supabase project_id per run
+        run: |
+          set -euo pipefail
+          sed -i.bak -E "s|^project_id = .*$|project_id = \"${SUPABASE_PROJECT}\"|" supabase/config.toml
+          grep "^project_id" supabase/config.toml
+
+      - name: Start local Supabase (background, fresh)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUN_TMP"
+          rm -f "$RUN_TMP/supabase-start.exitcode"
+          nohup bash -c '
+            set -uo pipefail
+            reset_supabase() {
+              npx supabase stop --no-backup >/dev/null 2>&1 || true
+              docker ps -aq --filter "label=com.supabase.cli.project=${SUPABASE_PROJECT}" \
+                | xargs -r docker rm -f >/dev/null 2>&1 || true
+              docker volume ls --filter "label=com.supabase.cli.project=${SUPABASE_PROJECT}" -q \
+                | xargs -r docker volume rm >/dev/null 2>&1 || true
+            }
+            reset_supabase
+            for attempt in $(seq 1 5); do
+              echo "=== supabase start attempt ${attempt}/5 ==="
+              if npx supabase start -x analytics,vector; then
+                echo 0 > "${RUN_TMP}/supabase-start.exitcode"
+                exit 0
+              fi
+              echo "supabase start failed on attempt ${attempt}; resetting and retrying"
+              reset_supabase
+              sleep $((attempt * 3))
+            done
+            echo 1 > "${RUN_TMP}/supabase-start.exitcode"
+            exit 1
+          ' > "$RUN_TMP/supabase-start.log" 2>&1 &
+          echo $! > "$RUN_TMP/supabase-start.pid"
+
+      - name: Install Playwright Browsers (background)
+        run: |
+          set -euo pipefail
+          rm -f $RUN_TMP/playwright-install.exitcode
+          nohup bash -c 'npx playwright install --with-deps chromium webkit \
+            > $RUN_TMP/playwright-install.log 2>&1; \
+            echo $? > $RUN_TMP/playwright-install.exitcode' &
+
+      # The full Sentry build profile: component annotation (data-sentry-component, which the taint
+      # trace records) and route manifest injection are on. With the Sentry secrets the bundler
+      # plugin also creates the release and uploads source maps, which F8 checks; a failed upload
+      # fails the build (next.config.ts errorHandler).
+      - name: Build Next.js (full Sentry profile, port 3001)
+        env:
+          NEXT_PUBLIC_PAWTOGRADER_WEB_URL: http://localhost:3001
+          E2E_ENABLE: "true"
+          SENTRY_BUILD_PROFILE: full
+          NEXT_PUBLIC_SENTRY_DSN: ${{ inputs.sentry && secrets.NEXT_PUBLIC_SENTRY_DSN || env.STUB_SENTRY_DSN }}
+          SENTRY_URL: ${{ inputs.sentry && secrets.SENTRY_URL || '' }}
+          SENTRY_ORG: ${{ inputs.sentry && secrets.SENTRY_ORG || '' }}
+          SENTRY_AUTH_TOKEN: ${{ inputs.sentry && secrets.SENTRY_AUTH_TOKEN || '' }}
+        run: npm run build
+
+      - name: Wait for Playwright install
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 600); do
+            [ -f $RUN_TMP/playwright-install.exitcode ] && break
+            sleep 1
+          done
+          rc="$(cat $RUN_TMP/playwright-install.exitcode 2>/dev/null || echo 'timeout')"
+          if [ "$rc" != "0" ]; then
+            echo "playwright install failed (rc=$rc)"
+            cat $RUN_TMP/playwright-install.log || true
+            exit 1
+          fi
+
+      - name: Wait for Supabase + finalize schema
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 600); do
+            if curl -sf -o /dev/null -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" "${LOCAL_SUPABASE_URL}/rest/v1/"; then
+              break
+            fi
+            if [ -f "$RUN_TMP/supabase-start.exitcode" ] \
+               && [ "$(cat "$RUN_TMP/supabase-start.exitcode")" != "0" ]; then
+              echo 'supabase start exhausted its retries and never came up'
+              cat "$RUN_TMP/supabase-start.log" || true
+              exit 1
+            fi
+            sleep 1
+          done
+          curl -sf -o /dev/null -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" "${LOCAL_SUPABASE_URL}/rest/v1/"
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" \
+            psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U supabase_admin -d postgres \
+              -c "ALTER SYSTEM SET synchronous_commit = off" \
+              -c "ALTER SYSTEM SET fsync = off" \
+              -c "ALTER SYSTEM SET full_page_writes = off" \
+              -c "ALTER SYSTEM SET shared_buffers = '512MB'" \
+              -c "ALTER SYSTEM SET work_mem = '32MB'" \
+              -c "ALTER SYSTEM SET maintenance_work_mem = '256MB'" \
+              -c "ALTER SYSTEM SET autovacuum = off"
+          docker restart "supabase_db_${SUPABASE_PROJECT}"
+          for i in $(seq 1 120); do
+            if curl -sf -o /dev/null -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" "${LOCAL_SUPABASE_URL}/rest/v1/"; then
+              break
+            fi
+            sleep 1
+          done
+          curl -sf -o /dev/null -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" "${LOCAL_SUPABASE_URL}/rest/v1/"
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
+            "SELECT public.audit_maintain_partitions();"
+
+      - name: Serve Edge Functions
+        run: |
+          set -euo pipefail
+          nohup npx supabase functions serve --env-file .env.local \
+            > $RUN_TMP/edge-functions.log 2>&1 &
+          echo $! > $RUN_TMP/edge-functions.pid
+          ready=0
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:54321/functions/v1/ || true)
+            if [ -n "$code" ] && [ "$code" != "000" ]; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" != "1" ]; then
+            echo "Edge Functions never became reachable"
+            tail -n 200 $RUN_TMP/edge-functions.log || true
+            exit 1
+          fi
+
+      - name: Start Next.js prod server
+        run: |
+          set -euo pipefail
+          nohup env PORT=3001 CSP_REPORT_ONLY=1 npm run start > $RUN_TMP/next-server.log 2>&1 &
+          echo $! > $RUN_TMP/next-server.pid
+          ready=0
+          for i in $(seq 1 60); do
+            if curl -sf -o /dev/null http://localhost:3001/; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" != "1" ]; then
+            echo "Next.js prod server never became reachable"
+            tail -n 200 $RUN_TMP/next-server.log || true
+            exit 1
+          fi
+
+      # Only the trace runs the whole suite, which includes the Discord specs.
+      - name: Start the mocked Discord API
+        if: contains(env.SUITES, ' i ')
+        run: |
+          set -euo pipefail
+          ./scripts/start-discord-mock.sh
+          curl -sf http://127.0.0.1:8788/__mock/health
+
+      # ---------------------------------------------------------------- test groups
+      # F8 is the only group without continue-on-error: when it fails, every later step is
+      # skipped. The groups after it keep going past each other's failures, so one run reports
+      # all of them, and the verdict step at the end fails the job.
+
+      - name: "F8: Sentry smoke"
+        id: f8
+        if: contains(env.SUITES, ' f8 ')
+        env:
+          SENTRY_URL: ${{ secrets.SENTRY_URL }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        # No retries: sentryApi throws SentryInfrastructureError when the event never shows up,
+        # and a retry would only hide that.
+        run: scripts/bugReport/ci-playwright.sh f8 --project=chromium --retries=0 tests/e2e/bugReport/sentry-smoke.spec.ts
+
+      - name: "F8 failed: infrastructure"
+        if: failure() && steps.f8.outcome == 'failure'
+        run: |
+          msg="The smoke error did not reach the dev Sentry through /api/tunnel, or came back without a resolved stack trace. Treat this as a Sentry infrastructure fault (it has been one before: relay accepting events without forwarding them) and tell whoever runs the dev Sentry. The other bug reporter groups in this lane were skipped."
+          echo "::error title=Sentry infrastructure (F8)::${msg}"
+          { echo "## Sentry infrastructure fault (F8)"; echo; echo "$msg"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "F7: replay upload read back from Sentry"
+        id: f7
+        if: contains(env.SUITES, ' f7 ')
+        continue-on-error: true
+        env:
+          SENTRY_URL: ${{ secrets.SENTRY_URL }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: scripts/bugReport/ci-playwright.sh f7 --project=chromium --retries=1 tests/e2e/bugReport/sentry-replay.spec.ts
+
+      - name: "Contract (ADR 8): envelope and upload unit tests"
+        id: contract-unit
+        if: contains(env.SUITES, ' contract ')
+        continue-on-error: true
+        run: |
+          npx jest --runInBand \
+            tests/unit/bugReport-envelope.test.ts \
+            tests/unit/bugReport-upload.test.ts \
+            tests/unit/bugReport-tunnel.test.ts \
+            tests/unit/bugReport-submitFeedback.test.ts \
+            tests/unit/bugReport-instrumentation-client.test.ts \
+            tests/unit/bugReport-sdkPins.test.ts
+
+      # Both browsers, as in the PR tier. The tunnel is answered locally here (captureTunnel); F7
+      # above is the same upload stored by the real Sentry.
+      - name: "Contract (ADR 8): F1, F2, F5, F6"
+        id: contract-e2e
+        if: contains(env.SUITES, ' contract ')
+        continue-on-error: true
+        run: scripts/bugReport/ci-playwright.sh contract tests/e2e/bugReport/upload.spec.ts
+
+      # The purge token can delete from the dev Sentry, so it never reaches PR-head code: the
+      # callers pass it and the `h` suite only on schedule and workflow_dispatch, and this step
+      # checks again (github.event_name is the caller's event). A PR run that asks for `h` gets
+      # this step skipped, which the verdict reports as a failure.
+      - name: "H1-H3: retention purge against Sentry"
+        id: h
+        if: contains(env.SUITES, ' h ') && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        continue-on-error: true
+        working-directory: supabase/functions
+        env:
+          SENTRY_URL: ${{ secrets.SENTRY_URL }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          SENTRY_PURGE_TOKEN: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && secrets.SENTRY_PURGE_TOKEN || '' }}
+          SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -o pipefail
+          if [ -z "$SENTRY_PURGE_TOKEN" ]; then
+            echo "::notice title=H1-H3 skipped::The SENTRY_PURGE_TOKEN secret (HU3) is not set."
+            echo "- H1-H3 skipped: SENTRY_PURGE_TOKEN (HU3) is not set" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          out="$GITHUB_WORKSPACE/$BUG_REPORT_RESULTS/h"
+          mkdir -p "$out"
+          # --no-check as in `npm run test:functions`: the generated types don't type-check under
+          # Deno. The test logs counts only.
+          deno test --no-check --allow-env --allow-net --allow-read \
+            bug-report-retention-purge/retentionPurge.nightly.ts 2>&1 | tee "$out/output.log"
+
+      - name: "K1-K3: performance"
+        id: k
+        if: contains(env.SUITES, ' k ')
+        continue-on-error: true
+        env:
+          BUG_REPORT_NIGHTLY: "1"
+        # One worker and no retries: these are timings, and K3's 5 s p95 is a hard failure.
+        run: |
+          scripts/bugReport/ci-playwright.sh k --project=chromium --workers=1 --retries=0 \
+            tests/e2e/bugReport/recorder-perf.spec.ts \
+            tests/e2e/bugReport/review-perf.spec.ts \
+            tests/e2e/bugReport/upload-measure.spec.ts
+
+      # The whole suite, so the classification check sees every page any test visits.
+      # traceTeardown.ts rewrites lib/bugReport/generated/ in this checkout and writes report.json.
+      - name: "I1-I4: taint trace over the E2E suite"
+        id: i
+        if: contains(env.SUITES, ' i ')
+        continue-on-error: true
+        env:
+          BUG_REPORT_TRACE: "1"
+          BUG_REPORT_TRACE_UPLOAD: "1"
+          BUG_REPORT_TRACE_STRICT: "1"
+          BUG_REPORT_TRACE_DIR: ${{ github.workspace }}/bug-report-results/trace/data
+          DISCORD_MOCK_REQUIRED: "1"
+          SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.LOCAL_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
+        run: scripts/bugReport/ci-playwright.sh trace --project=chromium
+
+      # I1: the diff is for a human to review (HU6 covers the classification), never committed.
+      # I4: the coverage gaps come from report.json.
+      - name: "I1, I4: generated files diff and coverage gaps"
+        if: always() && steps.i.outcome != 'skipped' && steps.i.outcome != ''
+        run: |
+          set -uo pipefail
+          out="$BUG_REPORT_RESULTS/trace"
+          mkdir -p "$out/generated"
+          git diff -- lib/bugReport/generated/ > "$out/generated.diff" || true
+          cp lib/bugReport/generated/*.json "$out/generated/" 2>/dev/null || true
+          {
+            echo "## Taint trace (I1-I4)"
+            echo
+            if [ ! -s "$out/data/report.json" ]; then
+              echo "No report.json: the trace teardown did not run. See the trace step's log."
+            elif [ -s "$out/generated.diff" ]; then
+              echo "**I1:** the regenerated files differ from the committed ones. Review the diff below"
+              echo "(also in the \`generated.diff\` artifact) and commit it by hand if it is right."
+              echo
+              git diff --stat -- lib/bugReport/generated/
+              echo
+              echo '```diff'
+              head -n 300 "$out/generated.diff"
+              [ "$(wc -l < "$out/generated.diff")" -gt 300 ] && echo "... (truncated; full diff in the artifact)"
+              echo '```'
+            else
+              echo "**I1:** the regenerated files match the committed ones."
+            fi
+            if [ -s "$out/data/report.json" ]; then
+              node -e '
+                const r = require(require("node:path").resolve(process.argv[1]));
+                const gaps = r.coverage?.gaps ?? [];
+                const failures = r.failures ?? [];
+                console.log("");
+                console.log(`**I4:** ${gaps.length} seeded canaries never observed${gaps.length ? ": " + gaps.join(", ") : "."}`);
+                console.log("");
+                const warningKinds = new Set(["server-rendered", "unlisted-rsc"]);
+                const warnings = failures.filter((f) => warningKinds.has(f.kind));
+                console.log(`**Checks:** ${failures.length - warnings.length} failures, ${warnings.length} warnings (see report.json).`);
+                if (warnings.length > 0) {
+                  console.log("");
+                  console.log("<details><summary>Warnings (server-rendered text, and RSC flows on routes not in ROUTE_POLICY)</summary>");
+                  console.log("");
+                  for (const w of warnings) console.log(`- ${w.message}`);
+                  console.log("");
+                  console.log("</details>");
+                }
+              ' "$out/data/report.json"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Measurements to the job summary
+        if: always()
+        run: |
+          shopt -s nullglob
+          files=("$BUG_REPORT_RESULTS"/*/measurements.log)
+          [ ${#files[@]} -gt 0 ] || exit 0
+          {
+            echo "## Measurements"
+            echo
+            echo '```'
+            cat "${files[@]}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verdict
+        if: always()
+        env:
+          OUTCOMES: >-
+            f8=${{ steps.f8.outcome }}
+            f7=${{ steps.f7.outcome }}
+            contract-unit=${{ steps.contract-unit.outcome }}
+            contract-e2e=${{ steps.contract-e2e.outcome }}
+            h=${{ steps.h.outcome }}
+            k=${{ steps.k.outcome }}
+            i=${{ steps.i.outcome }}
+        run: |
+          set -uo pipefail
+          failed=()
+          {
+            echo "## Bug reporter ${{ inputs.tier }} / ${{ inputs.lane }}"
+            echo
+            echo "| group | outcome |"
+            echo "| --- | --- |"
+            for kv in $OUTCOMES; do
+              name="${kv%%=*}"; outcome="${kv#*=}"
+              [[ " $SUITES " == *" ${name%%-*} "* ]] || continue
+              echo "| ${name} | ${outcome:-not reached} |"
+              [ "$outcome" = "success" ] || failed+=("$name")
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error title=Bug reporter ${{ inputs.tier }}::failed or not reached: ${failed[*]}"
+            exit 1
+          fi
+
+      - name: Tail server logs on failure
+        if: failure()
+        run: |
+          echo '--- edge-functions.log ---'; tail -n 500 $RUN_TMP/edge-functions.log || true
+          echo '--- next-server.log ---';    tail -n 500 $RUN_TMP/next-server.log || true
+
+      - name: Stop background services
+        if: always()
+        run: |
+          kill "$(cat $RUN_TMP/edge-functions.pid 2>/dev/null)" 2>/dev/null || true
+          kill "$(cat $RUN_TMP/next-server.pid 2>/dev/null)" 2>/dev/null || true
+          mkdir -p server-logs
+          for c in $(docker ps --filter "label=com.supabase.cli.project=${SUPABASE_PROJECT}" --format '{{.Names}}'); do
+            docker logs "$c" > "server-logs/${c}.log" 2>&1 || true
+          done
+          if [[ "$SUITES" == *" i "* ]]; then
+            docker logs discord-mock > server-logs/discord-mock.log 2>&1 || true
+            ./scripts/start-discord-mock.sh --stop || true
+          fi
+          cp -f $RUN_TMP/edge-functions.log server-logs/edge-functions.log 2>/dev/null || true
+          cp -f $RUN_TMP/next-server.log    server-logs/next-server.log    2>/dev/null || true
+          npx supabase stop --no-backup || true
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bug-reporter-${{ inputs.tier }}-${{ inputs.lane }}
+          path: |
+            bug-report-results/
+            server-logs/
+          retention-days: 30

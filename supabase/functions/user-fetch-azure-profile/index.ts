@@ -70,11 +70,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       throw new Error("Authentication failed");
     }
 
-    console.log("=== USER DEBUG ===");
-    console.log(user.email);
-    console.log("=== END USER DEBUG ===");
-
-    scope?.setUser({ id: user.id, email: user.email });
+    // ID only: Sentry events never carry a user's name or email.
+    scope?.setUser({ id: user.id });
 
     // Get the access token from request body
     const { accessToken } = (await req.json()) as FetchAzureProfileRequest;
@@ -99,9 +96,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       scope?.setContext("user_fetch_error", { error: userFetchError });
       throw new Error("Failed to fetch user data");
     }
-    console.log("=== EXISTING USER DEBUG ===");
-    console.log(existingUser);
-    console.log("=== END EXISTING USER DEBUG ===");
 
     if (existingUser?.sis_user_id) {
       scope?.addBreadcrumb({
@@ -155,14 +149,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
 
     const azureProfile: AzureUserProfile = await graphResponse.json();
-    console.log("=== AZURE PROFILE DEBUG ===");
-    console.log(azureProfile);
-    console.log("=== END AZURE PROFILE DEBUG ===");
 
+    // Facts about the profile only. Its mail and userPrincipalName are the user's email address,
+    // and employeeId is their NUID; Sentry events identify the user by ID only.
     scope?.setContext("azure_profile", {
-      employeeId: azureProfile.employeeId,
-      mail: azureProfile.mail,
-      userPrincipalName: azureProfile.userPrincipalName,
+      hasEmployeeId: Boolean(azureProfile.employeeId),
       accountEnabled: azureProfile.accountEnabled
     });
 
@@ -170,8 +161,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     if (!azureProfile.employeeId) {
       scope?.addBreadcrumb({
         message: "No employeeId found in Azure profile",
-        category: "warning",
-        data: azureProfile
+        category: "warning"
       });
 
       return new Response(

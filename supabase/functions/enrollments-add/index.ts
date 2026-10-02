@@ -14,15 +14,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw new UserVisibleError("Course ID is required", 400);
   }
   scope?.setTag("function", "enrollments-add");
-  scope?.setTag("email", email);
-  scope?.setTag("name", name);
-  scope?.setTag("role", role);
+  // No email or name tags: Sentry events never carry a person's name or email. `role` is the
+  // caller's role (set below); the role being granted is `enrollment_role`.
+  scope?.setTag("enrollment_role", role);
   scope?.setTag("courseId", courseId.toString());
   //Validate that the user is an instructor for this course
   const { enrollment: instructorEnrollment } = await assertUserIsInstructor(
     courseId,
     req.headers.get("Authorization")!
   );
+  // The caller by ID, and their actual role: assertUserIsInstructor also admits platform admins,
+  // and returns their admin row.
+  scope?.setUser({ id: instructorEnrollment.user_id });
+  scope?.setTag("role", instructorEnrollment.role);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,

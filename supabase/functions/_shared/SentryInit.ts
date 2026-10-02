@@ -16,6 +16,9 @@
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { normalizeEventFingerprint } from "./SentryFingerprint.ts";
 import { sentryIdentity } from "./SentryContext.ts";
+// Side effect: drops console breadcrumbs and URL queries from every event in this isolate,
+// including events from a function's own later Sentry.init. See SentryScrub.ts.
+import "./SentryScrub.ts";
 
 let initialized = false;
 

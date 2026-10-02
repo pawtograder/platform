@@ -27,6 +27,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useHelpQueues, useHelpQueueAssignments, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useIsStudent, useIsGraderOrInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
 import { calculateEventLayouts, formatTime, EventLayout } from "./calendar-layout-utils";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 type ViewMode = "today" | "week" | "month";
 
@@ -307,31 +308,35 @@ function TimelineEventBlock({
       )}
 
       {isVeryShort ? (
-        <Text
-          fontSize="xs"
-          fontWeight="medium"
-          overflow="hidden"
-          textOverflow="ellipsis"
-          whiteSpace="nowrap"
-          lineHeight="1.3"
-          width="100%"
-        >
-          {event.title}
-        </Text>
-      ) : isShort ? (
-        <VStack align="stretch" gap={0} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
+        <ReportBlock>
           <Text
             fontSize="xs"
             fontWeight="medium"
             overflow="hidden"
             textOverflow="ellipsis"
             whiteSpace="nowrap"
-            lineHeight="1.2"
+            lineHeight="1.3"
             width="100%"
-            flexShrink={0}
           >
             {event.title}
           </Text>
+        </ReportBlock>
+      ) : isShort ? (
+        <VStack align="stretch" gap={0} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
+          <ReportBlock>
+            <Text
+              fontSize="xs"
+              fontWeight="medium"
+              overflow="hidden"
+              textOverflow="ellipsis"
+              whiteSpace="nowrap"
+              lineHeight="1.2"
+              width="100%"
+              flexShrink={0}
+            >
+              {event.title}
+            </Text>
+          </ReportBlock>
           {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="2xs"
@@ -359,9 +364,28 @@ function TimelineEventBlock({
             {formatTime(event.start_time)} - {formatTime(event.end_time)}
           </Text>
           {event.location && (
+            <ReportBlock>
+              <Text
+                fontSize="2xs"
+                color="fg.muted"
+                overflow="hidden"
+                textOverflow="ellipsis"
+                whiteSpace="nowrap"
+                lineHeight="1.2"
+                width="100%"
+                flexShrink={0}
+              >
+                📍 {event.location}
+              </Text>
+            </ReportBlock>
+          )}
+        </VStack>
+      ) : (
+        <VStack align="stretch" gap={0.5} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
+          <ReportBlock>
             <Text
-              fontSize="2xs"
-              color="fg.muted"
+              fontSize="sm"
+              fontWeight="medium"
               overflow="hidden"
               textOverflow="ellipsis"
               whiteSpace="nowrap"
@@ -369,24 +393,9 @@ function TimelineEventBlock({
               width="100%"
               flexShrink={0}
             >
-              📍 {event.location}
+              {event.title}
             </Text>
-          )}
-        </VStack>
-      ) : (
-        <VStack align="stretch" gap={0.5} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
-          <Text
-            fontSize="sm"
-            fontWeight="medium"
-            overflow="hidden"
-            textOverflow="ellipsis"
-            whiteSpace="nowrap"
-            lineHeight="1.2"
-            width="100%"
-            flexShrink={0}
-          >
-            {event.title}
-          </Text>
+          </ReportBlock>
           {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="xs"
@@ -438,18 +447,20 @@ function TimelineEventBlock({
                 Join virtual call
               </Link>
             ) : (
-              <Text
-                fontSize="xs"
-                color="fg.muted"
-                overflow="hidden"
-                textOverflow="ellipsis"
-                whiteSpace="nowrap"
-                lineHeight="1.2"
-                width="100%"
-                flexShrink={0}
-              >
-                📍 {event.location}
-              </Text>
+              <ReportBlock>
+                <Text
+                  fontSize="xs"
+                  color="fg.muted"
+                  overflow="hidden"
+                  textOverflow="ellipsis"
+                  whiteSpace="nowrap"
+                  lineHeight="1.2"
+                  width="100%"
+                  flexShrink={0}
+                >
+                  📍 {event.location}
+                </Text>
+              </ReportBlock>
             ))}
         </VStack>
       )}
@@ -583,31 +594,35 @@ function CompactTimelineEventBlock({
       )}
 
       {isVeryShort ? (
-        <Text
-          fontSize="2xs"
-          fontWeight="medium"
-          overflow="hidden"
-          textOverflow="ellipsis"
-          whiteSpace="nowrap"
-          lineHeight="1.2"
-          width="100%"
-        >
-          {event.title}
-        </Text>
-      ) : isShort ? (
-        <VStack align="stretch" gap={0} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
+        <ReportBlock>
           <Text
             fontSize="2xs"
             fontWeight="medium"
             overflow="hidden"
             textOverflow="ellipsis"
             whiteSpace="nowrap"
-            lineHeight="1.1"
+            lineHeight="1.2"
             width="100%"
-            flexShrink={0}
           >
             {event.title}
           </Text>
+        </ReportBlock>
+      ) : isShort ? (
+        <VStack align="stretch" gap={0} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
+          <ReportBlock>
+            <Text
+              fontSize="2xs"
+              fontWeight="medium"
+              overflow="hidden"
+              textOverflow="ellipsis"
+              whiteSpace="nowrap"
+              lineHeight="1.1"
+              width="100%"
+              flexShrink={0}
+            >
+              {event.title}
+            </Text>
+          </ReportBlock>
           {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="2xs"
@@ -637,18 +652,20 @@ function CompactTimelineEventBlock({
         </VStack>
       ) : (
         <VStack align="stretch" gap={0} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
-          <Text
-            fontSize="2xs"
-            fontWeight="medium"
-            overflow="hidden"
-            textOverflow="ellipsis"
-            whiteSpace="nowrap"
-            lineHeight="1.1"
-            width="100%"
-            flexShrink={0}
-          >
-            {event.title}
-          </Text>
+          <ReportBlock>
+            <Text
+              fontSize="2xs"
+              fontWeight="medium"
+              overflow="hidden"
+              textOverflow="ellipsis"
+              whiteSpace="nowrap"
+              lineHeight="1.1"
+              width="100%"
+              flexShrink={0}
+            >
+              {event.title}
+            </Text>
+          </ReportBlock>
           {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="2xs"
@@ -676,18 +693,20 @@ function CompactTimelineEventBlock({
             {formatTime(event.start_time)} - {formatTime(event.end_time)}
           </Text>
           {event.location && (
-            <Text
-              fontSize="2xs"
-              color="fg.muted"
-              overflow="hidden"
-              textOverflow="ellipsis"
-              whiteSpace="nowrap"
-              lineHeight="1.1"
-              width="100%"
-              flexShrink={0}
-            >
-              📍 {event.location}
-            </Text>
+            <ReportBlock>
+              <Text
+                fontSize="2xs"
+                color="fg.muted"
+                overflow="hidden"
+                textOverflow="ellipsis"
+                whiteSpace="nowrap"
+                lineHeight="1.1"
+                width="100%"
+                flexShrink={0}
+              >
+                📍 {event.location}
+              </Text>
+            </ReportBlock>
           )}
         </VStack>
       )}
@@ -808,9 +827,11 @@ function CompactDayColumn({
                   _dark={{ bg: colors.bgDark }}
                   fontSize="2xs"
                 >
-                  <Text fontWeight="medium" fontSize="2xs" lineClamp={1} mb={0.5}>
-                    {event.title}
-                  </Text>
+                  <ReportBlock>
+                    <Text fontWeight="medium" fontSize="2xs" lineClamp={1} mb={0.5}>
+                      {event.title}
+                    </Text>
+                  </ReportBlock>
                   {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
                     <Text fontSize="2xs" color="fg.muted" lineClamp={1} mb={0.5}>
                       👤 {event.organizer_name}
@@ -820,9 +841,11 @@ function CompactDayColumn({
                     {format(start, "h:mm a")} - {format(end, "h:mm a")}
                   </Text>
                   {event.location && (
-                    <Text fontSize="2xs" color="fg.muted" mt={0.5} lineClamp={1}>
-                      📍 {event.location}
-                    </Text>
+                    <ReportBlock>
+                      <Text fontSize="2xs" color="fg.muted" mt={0.5} lineClamp={1}>
+                        📍 {event.location}
+                      </Text>
+                    </ReportBlock>
                   )}
                   {resolvedQueueName && (
                     <QueueButton

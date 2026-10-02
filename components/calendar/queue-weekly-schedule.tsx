@@ -8,6 +8,7 @@ import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-
 import { isUrl, CalendarColorPalette, isEventCurrentlyHappening } from "./calendar-utils";
 import { useCalendarColorsFromEvents, getResolvedQueueName } from "./CalendarColorContext";
 import { useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 interface EventsByDay {
   [dateKey: string]: CalendarEvent[];
@@ -85,9 +86,11 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
                 borderLeftColor={isCurrentlyHappening ? "green.600" : colors.accent}
                 boxShadow={isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2)" : undefined}
               >
-                <Text fontSize="sm" fontWeight="medium" lineClamp={1}>
-                  {event.organizer_name || event.title}
-                </Text>
+                <ReportBlock>
+                  <Text fontSize="sm" fontWeight="medium" lineClamp={1}>
+                    {event.organizer_name || event.title}
+                  </Text>
+                </ReportBlock>
                 <Text fontSize="xs" color="fg.muted">
                   {formatDateRange(event.start_time, event.end_time)}
                 </Text>
@@ -110,9 +113,11 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
                       Join virtual call
                     </Link>
                   ) : (
-                    <Text fontSize="xs" color="fg.muted" lineClamp={1}>
-                      📍 {event.location}
-                    </Text>
+                    <ReportBlock>
+                      <Text fontSize="xs" color="fg.muted" lineClamp={1}>
+                        📍 {event.location}
+                      </Text>
+                    </ReportBlock>
                   ))}
               </Box>
             );

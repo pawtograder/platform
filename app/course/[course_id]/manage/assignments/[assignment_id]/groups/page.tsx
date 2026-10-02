@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { toaster } from "@/components/ui/toaster";
 
 import { createClient } from "@/utils/supabase/client";
@@ -534,18 +535,22 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                                 })?.profiles.name
                               }
                             </Table.Cell>
-                            <Table.Cell>
-                              {move.old_group_id === null
-                                ? "not in group"
-                                : groupsData.find((group) => {
-                                    return group.id === move.old_group_id;
-                                  })?.name}
-                            </Table.Cell>
-                            <Table.Cell>
-                              {groupsData.find((group) => {
-                                return group.id === move.new_group_id;
-                              })?.name ?? "not in group"}
-                            </Table.Cell>
+                            <ReportBlock>
+                              <Table.Cell>
+                                {move.old_group_id === null
+                                  ? "not in group"
+                                  : groupsData.find((group) => {
+                                      return group.id === move.old_group_id;
+                                    })?.name}
+                              </Table.Cell>
+                            </ReportBlock>
+                            <ReportBlock>
+                              <Table.Cell>
+                                {groupsData.find((group) => {
+                                  return group.id === move.new_group_id;
+                                })?.name ?? "not in group"}
+                              </Table.Cell>
+                            </ReportBlock>
                             <Table.Cell>
                               <Button
                                 variant={"surface"}
@@ -806,7 +811,9 @@ function TableByGroups({
 
             return (
               <Table.Row key={group.id}>
-                <Table.Cell>{group.name}</Table.Cell>
+                <ReportBlock>
+                  <Table.Cell>{group.name}</Table.Cell>
+                </ReportBlock>
                 <Table.Cell>
                   {group.assignment_groups_members.map((member, key) => {
                     const name =
@@ -1011,20 +1018,24 @@ function TableByStudents({
                   <Flex alignItems={"center"} gap="3px">
                     {!modProfiles.includes(profile.private_profile_id) ? (
                       <>
-                        <Text> {group ? group.name : "no group"}</Text>
+                        <ReportBlock>
+                          <Text> {group ? group.name : "no group"}</Text>
+                        </ReportBlock>
                       </>
                     ) : (
                       <VStack gap={1} textAlign="left" alignItems="flex-start">
-                        <Text
-                          textDecoration={"line-through"}
-                          border="1px solid"
-                          borderColor="border.error"
-                          bg="red.subtle"
-                          borderRadius="md"
-                          p="2"
-                        >
-                          {group ? group.name : "no group"}
-                        </Text>
+                        <ReportBlock>
+                          <Text
+                            textDecoration={"line-through"}
+                            border="1px solid"
+                            borderColor="border.error"
+                            bg="red.subtle"
+                            borderRadius="md"
+                            p="2"
+                          >
+                            {group ? group.name : "no group"}
+                          </Text>
+                        </ReportBlock>
                         <Text
                           border="1px solid"
                           borderColor="border.success"
@@ -1033,7 +1044,7 @@ function TableByStudents({
                           p="2"
                           fontWeight={"bold"}
                         >
-                          {getNewGroup(profile.private_profile_id) ?? ""}
+                          <ReportBlock>{getNewGroup(profile.private_profile_id) ?? ""}</ReportBlock>
                         </Text>
                       </VStack>
                     )}
@@ -1071,26 +1082,29 @@ function TableByStudents({
                             </Dialog.Header>
                             <Dialog.Body>
                               <Text>
-                                <strong>Current group:</strong> {group ? group.name : "no group"}{" "}
+                                <strong>Current group:</strong>{" "}
+                                <ReportBlock>{group ? group.name : "no group"}</ReportBlock>{" "}
                               </Text>
                               <Text>
                                 <strong>Move to:</strong>
                               </Text>
 
                               <NativeSelect.Root disabled={loading}>
-                                <NativeSelect.Field
-                                  value={groupId ?? group?.id ?? ""}
-                                  onChange={(e) => {
-                                    setGroupId(e.target.value);
-                                  }}
-                                >
-                                  <option value="">(No group)</option>
-                                  {groupsData?.map((group) => (
-                                    <option key={group.id} value={group.id}>
-                                      {group.name}
-                                    </option>
-                                  ))}
-                                </NativeSelect.Field>
+                                <ReportBlock>
+                                  <NativeSelect.Field
+                                    value={groupId ?? group?.id ?? ""}
+                                    onChange={(e) => {
+                                      setGroupId(e.target.value);
+                                    }}
+                                  >
+                                    <option value="">(No group)</option>
+                                    {groupsData?.map((group) => (
+                                      <option key={group.id} value={group.id}>
+                                        {group.name}
+                                      </option>
+                                    ))}
+                                  </NativeSelect.Field>
+                                </ReportBlock>
                               </NativeSelect.Root>
 
                               <Dialog.Footer>

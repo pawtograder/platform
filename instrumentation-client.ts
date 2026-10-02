@@ -32,20 +32,113 @@ if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
 } else {
   console.error("NEXT_PUBLIC_POSTHOG_KEY is not set, posthog will not be initialized");
 }
+// NEXT_PUBLIC_SENTRY_DSN replaced NEXT_PUBLIC_BUGSINK_DSN. The old name is read for one more
+// release so an un-renamed deployment keeps reporting; drop the fallback after that. Inlined
+// rather than imported from lib/bugReport/sentryDsn.ts because of the import warning above.
+const sentryDsn = process.env.NEXT_PUBLIC_SENTRY_DSN || process.env.NEXT_PUBLIC_BUGSINK_DSN;
+if (!process.env.NEXT_PUBLIC_SENTRY_DSN && process.env.NEXT_PUBLIC_BUGSINK_DSN) {
+  // eslint-disable-next-line no-console -- one-release deprecation notice
+  console.warn("NEXT_PUBLIC_BUGSINK_DSN is deprecated and will stop working next release; set NEXT_PUBLIC_SENTRY_DSN");
+}
+// Names, emails, and queries out of error events (ADR 3). The default integrations record click
+// targets as selectors carrying aria-label/title/alt/name text, fetch/xhr/navigation URLs with
+// their queries, and console text, and HttpContext copies the page URL and the Referer onto every
+// event. These are inline copies of the rules in lib/bugReport/sentryScrub.ts, which this file
+// can't import (see above); tests/unit/bugReport-clientScrub.test.ts runs both on the same cases.
+const stripQueryAndFragment = (url: string): string => {
+  const cut = url.search(/[?#]/);
+  return (cut === -1 ? url : url.slice(0, cut)).replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+};
+const TEXT_ATTRIBUTE_START = /\[(?:aria-label|title|alt|name|placeholder|value|data-[\w-]*)=/gi;
+const AFTER_SELECTOR = /^(?:$|\[[\w-]+=|\s>\s)/;
+// Values may contain `"]` (the serializer doesn't escape them); see stripTextAttributeSelectors in
+// lib/bugReport/sentryScrub.ts for the rules. Linear: it runs inside the click handler.
+const stripTextAttributeSelectors = (message: string): string => {
+  const lastClose = message.lastIndexOf('"]');
+  let out = "";
+  let at = 0;
+  TEXT_ATTRIBUTE_START.lastIndex = 0;
+  for (let m = TEXT_ATTRIBUTE_START.exec(message); m; m = TEXT_ATTRIBUTE_START.exec(message)) {
+    const valueStart = m.index + m[0].length;
+    let end: number;
+    if (message[valueStart] === '"') {
+      const close = message.indexOf('"]', valueStart + 1);
+      if (close === -1) end = message.length;
+      else end = AFTER_SELECTOR.test(message.slice(close + 2, close + 66)) ? close + 2 : lastClose + 2;
+    } else if (message[valueStart] === "'") {
+      const close = message.indexOf("']", valueStart + 1);
+      end = close === -1 ? message.length : close + 2;
+    } else {
+      const close = message.indexOf("]", valueStart);
+      end = close === -1 ? message.length : close + 1;
+    }
+    out += message.slice(at, m.index);
+    at = end;
+    TEXT_ATTRIBUTE_START.lastIndex = end;
+  }
+  return out + message.slice(at);
+};
+const URL_BREADCRUMB_CATEGORIES = new Set(["fetch", "xhr", "http", "navigation", "history"]);
+const scrubBreadcrumb = (breadcrumb: Sentry.Breadcrumb): Sentry.Breadcrumb | null => {
+  const category = breadcrumb.category ?? "";
+  if (category === "console") return null;
+  if (category.startsWith("ui.") && typeof breadcrumb.message === "string") {
+    breadcrumb.message = stripTextAttributeSelectors(breadcrumb.message);
+  }
+  if (URL_BREADCRUMB_CATEGORIES.has(category)) {
+    if (breadcrumb.data) {
+      for (const key of ["url", "from", "to"]) {
+        const value = breadcrumb.data[key];
+        if (typeof value === "string") breadcrumb.data[key] = stripQueryAndFragment(value);
+      }
+      delete breadcrumb.data["http.query"];
+      delete breadcrumb.data["http.fragment"];
+    }
+    if (typeof breadcrumb.message === "string") {
+      breadcrumb.message = breadcrumb.message.replace(/[?#][^\s"'<>]*/g, "");
+    }
+  }
+  return breadcrumb;
+};
+const scrubEvent = <E extends Sentry.ErrorEvent>(event: E): E => {
+  if (event.request) {
+    if (typeof event.request.url === "string") event.request.url = stripQueryAndFragment(event.request.url);
+    delete event.request.query_string;
+    delete event.request.cookies;
+    if (event.request.headers) {
+      for (const name of Object.keys(event.request.headers)) {
+        if (/^(referer|cookie|authorization)$/i.test(name)) delete event.request.headers[name];
+      }
+    }
+  }
+  if (event.breadcrumbs) {
+    event.breadcrumbs = event.breadcrumbs.map(scrubBreadcrumb).filter((b): b is Sentry.Breadcrumb => b !== null);
+  }
+  return event;
+};
+
 Sentry.init({
-  dsn: process.env.NEXT_PUBLIC_BUGSINK_DSN,
+  dsn: sentryDsn,
   tunnel: "/api/tunnel",
+  // The bundler plugin injects the release it uploaded source maps under as
+  // `globalThis.SENTRY_RELEASE`, and the SDK only falls back to it when `release` is absent, so
+  // an explicit `release: undefined` here threw it away. (The SENTRY_RELEASE and VERCEL_*
+  // variables this used to list are not NEXT_PUBLIC_, so they were always undefined in the browser.)
   release:
-    process.env.SENTRY_RELEASE ??
-    process.env.VERCEL_GIT_COMMIT_SHA ??
-    process.env.NEXT_PUBLIC_GIT_COMMIT_SHA ??
-    process.env.npm_package_version,
+    (globalThis as { SENTRY_RELEASE?: { id?: string } }).SENTRY_RELEASE?.id ?? process.env.NEXT_PUBLIC_GIT_COMMIT_SHA,
   environment: process.env.SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV,
-  integrations: [], // bugsink does not support any integrations
+  // An array adds to the SDK's default integrations rather than replacing them, and none of the
+  // defaults records a replay. Nothing replay-related may be added: the bug reporter records with
+  // its own rrweb buffer and uploads only when the user submits a report, while Sentry's
+  // replayIntegration uploads on its own. tests/unit/bugReport-instrumentation-client.test.ts
+  // fails if replayIntegration, a non-zero replay sample rate, or an auto-injected feedback
+  // widget appears here.
+  integrations: [],
   tracesSampleRate: 0,
   sendClientReports: false,
   replaysSessionSampleRate: 0,
   replaysOnErrorSampleRate: 0,
+  beforeBreadcrumb: scrubBreadcrumb,
   beforeSend(event) {
     // Filter React hydration mismatch errors — typically caused by browser extensions
     // (Grammarly, Google Translate, ad blockers, etc.) modifying the DOM before React hydrates.
@@ -196,7 +289,7 @@ Sentry.init({
         }
       }
     }
-    return event; // Send other events
+    return scrubEvent(event); // Send other events, without names, emails, or queries
   }
 });
 

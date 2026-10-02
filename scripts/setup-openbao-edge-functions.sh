@@ -44,7 +44,10 @@
 #   apps/pawtograder/mcp-<env>           MCP_OAUTH_CLIENT_ID, MCP_OAUTH_CLIENT_SECRET,
 #                                        MCP_OAUTH_ENDPOINT
 #   apps/pawtograder/redis-<env>         UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
-#   apps/pawtograder/sentry-<env>        SENTRY_DSN, SENTRY_DEBUG
+#   apps/pawtograder/sentry-<env>        SENTRY_DSN, SENTRY_DEBUG, and for the
+#                                        bug-report-retention-purge function:
+#                                        SENTRY_PURGE_TOKEN, SENTRY_URL, SENTRY_ORG,
+#                                        SENTRY_PROJECT, SENTRY_PURGE_ENVIRONMENT
 #   apps/pawtograder/misc-<env>          EDGE_FUNCTION_SECRET,
 #                                        ARTIFACT_SERVE_JWT_SECRET, ASSESSMENT_EXPORT_PEPPER,
 #                                        METRICS_TOKEN, SUPPORT_EMAIL, APP_URL,
@@ -93,7 +96,7 @@ declare -A BUNDLE_KEYS=(
   [smtp]="SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASSWORD SMTP_FROM SMTP_REPLY_TO"
   [mcp]="MCP_OAUTH_CLIENT_ID MCP_OAUTH_CLIENT_SECRET MCP_OAUTH_ENDPOINT"
   [redis]="UPSTASH_REDIS_REST_URL UPSTASH_REDIS_REST_TOKEN"
-  [sentry]="SENTRY_DSN SENTRY_DEBUG"
+  [sentry]="SENTRY_DSN SENTRY_DEBUG SENTRY_PURGE_TOKEN SENTRY_URL SENTRY_ORG SENTRY_PROJECT SENTRY_PURGE_ENVIRONMENT"
   [misc]="EDGE_FUNCTION_SECRET ARTIFACT_SERVE_JWT_SECRET ASSESSMENT_EXPORT_PEPPER METRICS_TOKEN SUPPORT_EMAIL APP_URL EDGE_FUNCTIONS_URL PAWTOGRADER_WEBAPP_URL"
 )
 
