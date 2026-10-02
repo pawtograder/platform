@@ -124,9 +124,16 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
   const [errorID, setErrorID] = useState<string | undefined>(undefined);
   const reportingAvailable = useBugReportingAvailable();
 
-  // Call Sentry once per error
+  // Call Sentry once per error. The crash unmounted the layouts, and their cleanups cleared the
+  // scope's role and class tags and its user before this effect runs, so tag the event from the
+  // identity they published, as the report below does.
   useEffect(() => {
-    setErrorID(Sentry.captureException(error));
+    const ctx = getLastKnownReportContext();
+    const tags: Record<string, string | number> = {};
+    if (ctx.role) tags.role = ctx.role;
+    if (ctx.classId !== undefined) tags.class_id = ctx.classId;
+    const user = ctx.userId ? { id: ctx.userId } : undefined;
+    setErrorID(Sentry.captureException(error, { tags, user }));
   }, [error]);
 
   const handleGoBack = () => {

@@ -22,6 +22,7 @@ import {
   type ReplayEvent,
   type TransportMakeRequestResponse
 } from "@sentry/core";
+import { getActiveRecorder } from "../activeRecorder";
 import { getReportContext } from "../reportContext";
 import type { ReplayUploadResult } from "../submitFeedback";
 import type { FrozenBuffer } from "../types";
@@ -365,6 +366,10 @@ export async function uploadReplay(
     }
   } finally {
     stats.sendMs = performance.now() - t1;
+    // Segments may be in Sentry under this ID now, so the next report in this page load must
+    // not reuse it: its segment 0 would overwrite this one's. A retry of this report keeps the
+    // ID, since it uses the same frozen buffer.
+    if (stats.attempts.length > 0) getActiveRecorder()?.rotateReplayId(replayId);
   }
   return finish({
     ok: true,

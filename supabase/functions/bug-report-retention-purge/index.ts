@@ -4,6 +4,8 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+// Side effect: keeps console text and URL queries out of this function's Sentry events.
+import "../_shared/SentryScrub.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 import { RETENTION_GRACE_DAYS, SENTRY_LOOKBACK_DAYS, SentryPurgeApi, runPurge } from "./purge.ts";
 

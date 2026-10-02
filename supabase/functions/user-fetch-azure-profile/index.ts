@@ -96,9 +96,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       scope?.setContext("user_fetch_error", { error: userFetchError });
       throw new Error("Failed to fetch user data");
     }
-    console.log("=== EXISTING USER DEBUG ===");
-    console.log(existingUser);
-    console.log("=== END EXISTING USER DEBUG ===");
 
     if (existingUser?.sis_user_id) {
       scope?.addBreadcrumb({
@@ -152,14 +149,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
 
     const azureProfile: AzureUserProfile = await graphResponse.json();
-    console.log("=== AZURE PROFILE DEBUG ===");
-    console.log(azureProfile);
-    console.log("=== END AZURE PROFILE DEBUG ===");
 
+    // Facts about the profile only. Its mail and userPrincipalName are the user's email address,
+    // and employeeId is their NUID; Sentry events identify the user by ID only.
     scope?.setContext("azure_profile", {
-      employeeId: azureProfile.employeeId,
-      mail: azureProfile.mail,
-      userPrincipalName: azureProfile.userPrincipalName,
+      hasEmployeeId: Boolean(azureProfile.employeeId),
       accountEnabled: azureProfile.accountEnabled
     });
 
@@ -167,8 +161,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     if (!azureProfile.employeeId) {
       scope?.addBreadcrumb({
         message: "No employeeId found in Azure profile",
-        category: "warning",
-        data: azureProfile
+        category: "warning"
       });
 
       return new Response(

@@ -145,6 +145,17 @@ describe("submitReport without a replay", () => {
     const result = await submitReport({ description: "x", contactOk: false });
     expect(result.status).toBe("error");
   });
+
+  it("sends the page URL without its query or fragment, which can hold a name", async () => {
+    window.history.pushState({}, "", "/course/5/manage/office-hours/search?q=jane+doe#top");
+    try {
+      await submitReport({ description: "x", contactOk: false });
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+    const event = sentEvents[0] as { contexts: { feedback: Record<string, unknown> } };
+    expect(event.contexts.feedback.url).toBe("http://localhost/course/5/manage/office-hours/search");
+  });
 });
 
 describe("submitReport with a replay (package 6 contract)", () => {
@@ -203,6 +214,22 @@ describe("submitReport with a replay (package 6 contract)", () => {
     expect(event.contexts.feedback).not.toHaveProperty("replay_id");
     expect(event.tags.replay_upload).toBe("failed");
   });
+
+  it("still sends feedback when the upload throws, e.g. its chunk failed to load", async () => {
+    const result = await submitReport({
+      description: "x",
+      contactOk: false,
+      replay: {
+        upload: async () => {
+          throw Object.assign(new Error("Loading chunk 123 failed."), { name: "ChunkLoadError" });
+        }
+      }
+    });
+    expect(result).toMatchObject({ status: "sent", replay: "failed" });
+    const event = sentEvents[0] as { tags: Record<string, string>; contexts: { feedback: Record<string, unknown> } };
+    expect(event.contexts.feedback).not.toHaveProperty("replay_id");
+    expect(event.tags.replay_upload).toBe("failed");
+  });
 });
 
 describe("report context", () => {
@@ -210,6 +237,23 @@ describe("report context", () => {
     setReportIdentity({ classId: 7, role: "grader", userId: "u7" });
     clearReportIdentity();
     expect(getLastKnownReportContext()).toMatchObject({ classId: 7, role: "grader", userId: "u7" });
+  });
+
+  it("does not hand an earlier page's identity to a crash after navigating away", () => {
+    setReportRoute("/course/[course_id]/gradebook");
+    setReportIdentity({ classId: 5, role: "instructor", userId: "u5" });
+    // The crash itself: the layouts clear the identity, the route stays.
+    clearReportIdentity();
+    expect(getLastKnownReportContext()).toMatchObject({ classId: 5, role: "instructor", userId: "u5" });
+    // A navigation to the course list: the identity clears, then the route changes.
+    setReportIdentity({ classId: 5, role: "instructor", userId: "u5" });
+    clearReportIdentity();
+    setReportRoute("/course");
+    const ctx = getLastKnownReportContext();
+    expect(ctx.route).toBe("/course");
+    expect(ctx).not.toHaveProperty("classId", 5);
+    expect(ctx.role).toBeUndefined();
+    expect(ctx.userId).toBeUndefined();
   });
 });
 
@@ -234,7 +278,7 @@ describe("scrubFeedbackEvent", () => {
       tags: { class_id: "1", from_scope: "Jane Doe" },
       user: { id: "u1", email: "jane@example.edu", username: "jdoe", ip_address: "1.2.3.4" }
     };
-    scrubFeedbackEvent(event as never, { class_id: "1", role: "student", contact_ok: "false" });
+    scrubFeedbackEvent(event as never, { class_id: "1", role: "student", contact_ok: "false" }, undefined, "r");
     expect(event).not.toHaveProperty("breadcrumbs");
     expect(event).not.toHaveProperty("extra");
     expect(event).not.toHaveProperty("request");
@@ -242,6 +286,29 @@ describe("scrubFeedbackEvent", () => {
     expect(event.tags).toEqual({ class_id: "1", role: "student", contact_ok: "false" });
     expect(event.user).toEqual({ id: "u1", ip_address: null });
     expect(JSON.stringify(event)).not.toMatch(/Jane|jane|jdoe/);
+  });
+
+  it("points the envelope's trace header at the attached replay only, without editing the shared DSC", () => {
+    const recordingId = "d".repeat(32);
+    const shared = { trace_id: "t", public_key: "k", replay_id: recordingId };
+    // No replay attached (upload failed, or redaction did): no replay link anywhere.
+    const failed = {
+      event_id: "e".repeat(32),
+      contexts: { feedback: { message: "x" }, replay: { replay_id: recordingId } },
+      sdkProcessingMetadata: { dynamicSamplingContext: shared }
+    };
+    scrubFeedbackEvent(failed as never, {});
+    expect(failed.sdkProcessingMetadata.dynamicSamplingContext).toEqual({ trace_id: "t", public_key: "k" });
+    expect(failed.contexts).not.toHaveProperty("replay");
+    expect(shared.replay_id).toBe(recordingId);
+    // A replay attached: the header names it.
+    const attached = {
+      event_id: "e".repeat(32),
+      contexts: {},
+      sdkProcessingMetadata: { dynamicSamplingContext: shared }
+    };
+    scrubFeedbackEvent(attached as never, {}, undefined, "r".repeat(32));
+    expect(attached.sdkProcessingMetadata.dynamicSamplingContext).toEqual({ ...shared, replay_id: "r".repeat(32) });
   });
 
   it("uses the fallback ID only when the scope has no user ID, and keeps it ID-only", () => {

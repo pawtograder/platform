@@ -51,14 +51,45 @@ function stripQueriesInText(text: string): string {
 }
 
 // Attribute selectors whose value is text a user or the app wrote: Sentry's element serializer
-// always adds aria-label, title, alt, and name, and `serializeAttribute` can add more. A value
-// cut off by the serializer's length limit has no closing `"]`, hence the second alternative.
-const TEXT_ATTRIBUTE_SELECTOR =
-  /\[(?:aria-label|title|alt|name|placeholder|value|data-[^=\]\s]*)=(?:"(?:[^"]|"(?!\]))*"\]|"[^"]*$|'[^']*'\]|[^\]"']*\])/gi;
+// always adds aria-label, title, alt, and name, and `serializeAttribute` can add more.
+const TEXT_ATTRIBUTE_START = /\[(?:aria-label|title|alt|name|placeholder|value|data-[\w-]*)=/gi;
+// What can follow a selector the serializer wrote: the end, the next attribute, or the next element.
+const AFTER_SELECTOR = /^(?:$|\[[\w-]+=|\s>\s)/;
 
-/** Removes text-carrying attribute selectors from a `ui.*` breadcrumb message. */
+/**
+ * Removes text-carrying attribute selectors from a `ui.*` breadcrumb message.
+ *
+ * The serializer writes `[attr="value"]` without escaping, so the value can itself contain `"]`:
+ * a help request's text in an aria-label, such as `d["key"] fails`. A `"]` followed by anything a
+ * selector can't be followed by is inside a value, and then everything up to the message's last
+ * `"]` goes, which may take structure with it but never leaves value text behind. With no closing
+ * quote at all, the rest of the message goes. One pass, linear in the message length: this runs
+ * inside the click handler.
+ */
 export function stripTextAttributeSelectors(message: string): string {
-  return message.replace(TEXT_ATTRIBUTE_SELECTOR, "");
+  const lastClose = message.lastIndexOf('"]');
+  let out = "";
+  let at = 0;
+  TEXT_ATTRIBUTE_START.lastIndex = 0;
+  for (let m = TEXT_ATTRIBUTE_START.exec(message); m; m = TEXT_ATTRIBUTE_START.exec(message)) {
+    const valueStart = m.index + m[0].length;
+    let end: number;
+    if (message[valueStart] === '"') {
+      const close = message.indexOf('"]', valueStart + 1);
+      if (close === -1) end = message.length;
+      else end = AFTER_SELECTOR.test(message.slice(close + 2, close + 66)) ? close + 2 : lastClose + 2;
+    } else if (message[valueStart] === "'") {
+      const close = message.indexOf("']", valueStart + 1);
+      end = close === -1 ? message.length : close + 2;
+    } else {
+      const close = message.indexOf("]", valueStart);
+      end = close === -1 ? message.length : close + 1;
+    }
+    out += message.slice(at, m.index);
+    at = end;
+    TEXT_ATTRIBUTE_START.lastIndex = end;
+  }
+  return out + message.slice(at);
 }
 
 const URL_CATEGORIES = new Set(["fetch", "xhr", "http", "navigation", "history"]);

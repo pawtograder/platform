@@ -22,7 +22,8 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   scope?.setTag("function", "assignment-group-create");
   scope?.setTag("course_id", course_id.toString());
   scope?.setTag("assignment_id", assignment_id.toString());
-  scope?.setTag("group_name", name);
+  // No group name tag: students choose group names, which can contain their names (the privacy
+  // classification marks assignment_groups.name free_text). Sentry events carry IDs only.
   scope?.setTag("invitees", invitees.join(","));
   const trimmedName = name.trim();
   if (trimmedName.length === 0) {

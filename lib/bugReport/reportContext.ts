@@ -24,8 +24,8 @@ export type ReportContext = {
 };
 
 let current: ReportContext = {};
-/** Identity as it was just before the last clear. See `getLastKnownReportContext`. */
-let lastCleared: Pick<ReportContext, "classId" | "role" | "userId"> = {};
+/** Identity as it was just before the last clear, and the route it was cleared on. See `getLastKnownReportContext`. */
+let lastCleared: Pick<ReportContext, "route" | "classId" | "role" | "userId"> = {};
 
 export function getReportContext(): ReportContext {
   return current;
@@ -45,7 +45,7 @@ function hasIdentity(ctx: ReportContext): boolean {
 
 export function clearReportIdentity(): void {
   if (hasIdentity(current)) {
-    lastCleared = { classId: current.classId, role: current.role, userId: current.userId };
+    lastCleared = { route: current.route, classId: current.classId, role: current.role, userId: current.userId };
   }
   current = { ...current, classId: undefined, role: undefined, userId: undefined };
 }
@@ -54,10 +54,16 @@ export function clearReportIdentity(): void {
  * For `app/global-error.tsx`. A render crash unmounts the whole tree, and the layouts that
  * published the identity clear it on unmount before the error page mounts. This returns the
  * identity from just before that, so the crash report still says who hit it.
+ *
+ * Only for a crash on the route the identity was cleared on. A navigation also clears it (from a
+ * course page to the course list, or to sign-in after signing out), and the route it leads to
+ * never publishes one. A crash there must not be filed under the earlier page's class and role:
+ * the retention purge deletes reports by class_id.
  */
 export function getLastKnownReportContext(): ReportContext {
   if (hasIdentity(current)) return current;
-  return { ...current, ...lastCleared };
+  if (lastCleared.route !== current.route) return current;
+  return { ...current, classId: lastCleared.classId, role: lastCleared.role, userId: lastCleared.userId };
 }
 
 /** Test-only reset. */

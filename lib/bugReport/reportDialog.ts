@@ -6,6 +6,11 @@
 export type OpenReportDialogOptions = {
   /** Sentry event ID of the error being reported. Shown in the dialog and sent with the report. */
   eventId?: string;
+  /**
+   * With no `eventId`: capture a stand-in error event on Submit for the report to link to (see
+   * `ensureEventIdForReport`). Not before: Cancel sends nothing.
+   */
+  linkStandInEvent?: boolean;
 };
 
 type Opener = (options: OpenReportDialogOptions) => void;

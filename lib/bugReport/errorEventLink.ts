@@ -10,8 +10,9 @@ import * as Sentry from "@sentry/nextjs";
  * raised in that same task picks it up. Anything captured in an earlier task (an unrelated
  * error minutes ago) is never linked by accident.
  *
- * A toast with no event in its task gets one on demand when the user clicks "Report this"
- * (see `ensureEventIdForReport`), so every report from a toast links to an event.
+ * A toast with no event in its task gets one on demand when the user submits the report its
+ * "Report this" opened (see `ensureEventIdForReport`), so every report from a toast links to an
+ * event. Not on the click itself: Cancel sends nothing.
  */
 let sameTaskEventId: string | undefined;
 let installedOn: object | undefined;

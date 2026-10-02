@@ -1,7 +1,7 @@
 "use client";
 
 import { bugReportingAvailable } from "@/lib/bugReport/availability";
-import { currentTaskErrorEventId, ensureEventIdForReport } from "@/lib/bugReport/errorEventLink";
+import { currentTaskErrorEventId } from "@/lib/bugReport/errorEventLink";
 import { openReportDialog } from "@/lib/bugReport/reportDialog";
 import { Toaster as ChakraToaster, Portal, Spinner, Stack, Toast, createToaster } from "@chakra-ui/react";
 
@@ -17,7 +17,8 @@ type ToastOptions = Parameters<typeof toaster.create>[0];
  * the Sentry event behind the error. The link is resolved when the toast is created: an
  * explicit `meta.sentryEventId`, else the error event captured earlier in the same task
  * (the usual `Sentry.captureException(e); toaster.error(...)` pattern). If there is none,
- * clicking the action captures one. Callers that set their own `action`, or pass
+ * the dialog captures a stand-in event when the report is submitted, never on the click
+ * itself, so Cancel sends nothing. Callers that set their own `action`, or pass
  * `meta: { reportable: false }`, keep their toast as is, and so does every toast on a
  * deployment that can't send reports (no Sentry DSN).
  */
@@ -29,7 +30,7 @@ function withReportAction(options: ToastOptions): ToastOptions {
     action: {
       label: "Report this",
       onClick: () => {
-        openReportDialog({ eventId: ensureEventIdForReport(linked) });
+        openReportDialog(linked ? { eventId: linked } : { linkStandInEvent: true });
       }
     }
   };

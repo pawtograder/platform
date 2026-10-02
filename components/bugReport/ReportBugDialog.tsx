@@ -12,6 +12,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
+import { ensureEventIdForReport } from "@/lib/bugReport/errorEventLink";
 import { submitReport, type ReportReplayUpload, type SubmitReportResult } from "@/lib/bugReport/submitFeedback";
 import { Box, Code, Text, Textarea, VStack } from "@chakra-ui/react";
 import { useAnnouncer } from "@/components/ui/live-announcer";
@@ -42,6 +43,8 @@ export type ReportBugDialogProps = {
   onOpenChange: (open: boolean) => void;
   /** Sentry event ID of the error being reported, when opened from one. */
   eventId?: string;
+  /** With no `eventId`: on Submit, capture a stand-in error event to link the report to. */
+  linkStandInEvent?: boolean;
   replay?: ReportReplaySlot | null;
 };
 
@@ -66,7 +69,7 @@ function fallbackFocusTarget(): HTMLElement | null {
   return document.getElementById("main-content") ?? document.querySelector<HTMLElement>("main, [role='main']");
 }
 
-export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportBugDialogProps) {
+export function ReportBugDialog({ open, onOpenChange, eventId, linkStandInEvent, replay }: ReportBugDialogProps) {
   const [description, setDescription] = useState("");
   const [contactOk, setContactOk] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "editing" });
@@ -74,6 +77,7 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const doneRef = useRef<HTMLButtonElement>(null);
   const submitRef = useRef<HTMLButtonElement>(null);
+  const standInEventId = useRef<string | undefined>(undefined);
   // Where focus was when the dialog opened, to return it there on close. Read during the render
   // that opens the dialog, before the dialog's focus trap moves focus.
   const openerRef = useRef<Element | null>(null);
@@ -90,6 +94,7 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
   // Each opening starts from a blank form. Nothing typed is kept or sent after Cancel.
   useEffect(() => {
     if (open) {
+      standInEventId.current = undefined;
       setDescription("");
       // The field is uncontrolled (see below); clear it directly.
       if (descriptionRef.current) descriptionRef.current.value = "";
@@ -114,7 +119,18 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
     setPhase({ kind: "submitting" });
     let result: SubmitReportResult;
     try {
-      result = await submitReport({ description, contactOk, eventId, replay: replay?.upload ?? undefined });
+      // A toast with no error event behind it gets one now, on Submit, so Cancel sends nothing.
+      // One per opening: a retry after a failed send links the same event.
+      if (!eventId && linkStandInEvent && !standInEventId.current) {
+        standInEventId.current = ensureEventIdForReport(undefined);
+      }
+      const linkedEventId = eventId ?? standInEventId.current;
+      result = await submitReport({
+        description,
+        contactOk,
+        eventId: linkedEventId,
+        replay: replay?.upload ?? undefined
+      });
     } catch {
       result = { status: "error", message: "The report did not go through. Try again." };
     }
@@ -123,7 +139,7 @@ export function ReportBugDialog({ open, onOpenChange, eventId, replay }: ReportB
       announce(SENT_MESSAGE);
     } else if (result.status === "rate_limited") setPhase({ kind: "rate_limited" });
     else setPhase({ kind: "error", message: result.message });
-  }, [announce, contactOk, description, eventId, replay]);
+  }, [announce, contactOk, description, eventId, linkStandInEvent, replay]);
 
   const submitting = phase.kind === "submitting";
   const sent = phase.kind === "sent";

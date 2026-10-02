@@ -49,14 +49,41 @@ const stripQueryAndFragment = (url: string): string => {
   const cut = url.search(/[?#]/);
   return (cut === -1 ? url : url.slice(0, cut)).replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
 };
-const TEXT_ATTRIBUTE_SELECTOR =
-  /\[(?:aria-label|title|alt|name|placeholder|value|data-[^=\]\s]*)=(?:"(?:[^"]|"(?!\]))*"\]|"[^"]*$|'[^']*'\]|[^\]"']*\])/gi;
+const TEXT_ATTRIBUTE_START = /\[(?:aria-label|title|alt|name|placeholder|value|data-[\w-]*)=/gi;
+const AFTER_SELECTOR = /^(?:$|\[[\w-]+=|\s>\s)/;
+// Values may contain `"]` (the serializer doesn't escape them); see stripTextAttributeSelectors in
+// lib/bugReport/sentryScrub.ts for the rules. Linear: it runs inside the click handler.
+const stripTextAttributeSelectors = (message: string): string => {
+  const lastClose = message.lastIndexOf('"]');
+  let out = "";
+  let at = 0;
+  TEXT_ATTRIBUTE_START.lastIndex = 0;
+  for (let m = TEXT_ATTRIBUTE_START.exec(message); m; m = TEXT_ATTRIBUTE_START.exec(message)) {
+    const valueStart = m.index + m[0].length;
+    let end: number;
+    if (message[valueStart] === '"') {
+      const close = message.indexOf('"]', valueStart + 1);
+      if (close === -1) end = message.length;
+      else end = AFTER_SELECTOR.test(message.slice(close + 2, close + 66)) ? close + 2 : lastClose + 2;
+    } else if (message[valueStart] === "'") {
+      const close = message.indexOf("']", valueStart + 1);
+      end = close === -1 ? message.length : close + 2;
+    } else {
+      const close = message.indexOf("]", valueStart);
+      end = close === -1 ? message.length : close + 1;
+    }
+    out += message.slice(at, m.index);
+    at = end;
+    TEXT_ATTRIBUTE_START.lastIndex = end;
+  }
+  return out + message.slice(at);
+};
 const URL_BREADCRUMB_CATEGORIES = new Set(["fetch", "xhr", "http", "navigation", "history"]);
 const scrubBreadcrumb = (breadcrumb: Sentry.Breadcrumb): Sentry.Breadcrumb | null => {
   const category = breadcrumb.category ?? "";
   if (category === "console") return null;
   if (category.startsWith("ui.") && typeof breadcrumb.message === "string") {
-    breadcrumb.message = breadcrumb.message.replace(TEXT_ATTRIBUTE_SELECTOR, "");
+    breadcrumb.message = stripTextAttributeSelectors(breadcrumb.message);
   }
   if (URL_BREADCRUMB_CATEGORIES.has(category)) {
     if (breadcrumb.data) {

@@ -94,7 +94,10 @@ export type LinkedError = {
  * every later segment.
  */
 export type FrozenBuffer = {
-  /** 32 lowercase hex, generated at recorder start and stable for the page load. */
+  /**
+   * 32 lowercase hex: the recorder's replay ID at freeze time. It is generated at recorder start
+   * and replaced after each upload (`rotateReplayId`), so each report is its own replay.
+   */
   replayId: string;
   /** The level at freeze time. Segments recorded on other routes carry their own `level`. */
   level: RecordingLevel;
@@ -128,6 +131,12 @@ export interface BugReportRecorder {
   /** Deep copy of the buffer; recording continues. */
   freeze(): FrozenBuffer;
   getReplayId(): string;
+  /**
+   * Starts a new replay ID if the recorder still uses `used`. Called once a report's segments
+   * went out under `used`: Sentry stores segments by replay ID and segment number, so a second
+   * report in this page load under the same ID would overwrite the first one's recording.
+   */
+  rotateReplayId(used: string): void;
   getErrorIds(): string[];
   getTraceIds(): string[];
   getUrls(): string[];

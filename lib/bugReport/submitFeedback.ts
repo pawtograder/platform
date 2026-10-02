@@ -2,6 +2,7 @@ import * as Sentry from "@sentry/nextjs";
 import type { Event } from "@sentry/nextjs";
 import { redactReportUrl } from "./redaction/reportUrl";
 import { getReportContext, type ReportContext } from "./reportContext";
+import { stripQueryAndFragment } from "./sentryScrub";
 
 /**
  * Uploads the reviewed, redacted replay. Package 6 implements this (segmented
@@ -111,7 +112,15 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
   let replayId: string | undefined;
   let replayState: "none" | "attached" | "failed" = "none";
   if (input.replay) {
-    const result = await input.replay.upload({ ...tags });
+    let result: ReplayUploadResult;
+    try {
+      result = await input.replay.upload({ ...tags });
+    } catch {
+      // The upload threw instead of answering: its chunk failed to load (a deploy since the page
+      // loaded), or the browser has no CompressionStream. The report still goes out, without the
+      // replay, as when the retries run out.
+      result = { ok: false, reason: "failed" };
+    }
     if (result.ok) {
       replayId = result.replayId;
       replayState = "attached";
@@ -144,7 +153,7 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
   // scope tags and user fields) has not been through redaction. Strip it just before the
   // envelope is built; `beforeSendFeedback` fires before the scope is applied, so it can't.
   const stopScrubbing = client.on("beforeSendEvent", (event: Event) => {
-    if (event.event_id === feedbackId) scrubFeedbackEvent(event, tags, contextUserId);
+    if (event.event_id === feedbackId) scrubFeedbackEvent(event, tags, contextUserId, replayId);
   });
   let stopListening: () => void = () => {};
   const sent = new Promise<SendResponse | undefined>((resolve) => {
@@ -158,8 +167,10 @@ export async function submitReport(input: SubmitReportInput): Promise<SubmitRepo
     Sentry.captureFeedback(
       {
         message,
-        // The page URL can carry a name or email in its query; mask it like the replay URLs.
-        url: typeof window !== "undefined" ? redactReportUrl(window.location.href) : undefined,
+        // Without the query and fragment, as on error events: they can hold a name (a search
+        // for a student), and with recording off the taint set is empty, so masking alone
+        // would leave it. The path is masked like the replay URLs.
+        url: typeof window !== "undefined" ? stripQueryAndFragment(redactReportUrl(window.location.href)) : undefined,
         source: "bug-report-dialog",
         associatedEventId: input.eventId,
         tags
@@ -204,9 +215,14 @@ const FEEDBACK_CONTEXTS = new Set(["feedback", "trace", "replay", "os", "browser
  * redacted page URL, replay_id), the report's tags, the user's ID, and trace, replay and device
  * contexts. The redacted breadcrumbs travel in the replay instead. `fallbackUserId` (from the
  * report context) fills in the ID where nothing called `Sentry.setUser`, as on admin pages.
- * Exported for unit tests.
+ * `replayId` is the replay this report attached, if any. Exported for unit tests.
  */
-export function scrubFeedbackEvent(event: Event, tags: Record<string, string>, fallbackUserId?: string): void {
+export function scrubFeedbackEvent(
+  event: Event,
+  tags: Record<string, string>,
+  fallbackUserId?: string,
+  replayId?: string
+): void {
   delete event.breadcrumbs;
   delete event.extra;
   delete event.request;
@@ -214,6 +230,19 @@ export function scrubFeedbackEvent(event: Event, tags: Record<string, string>, f
     for (const key of Object.keys(event.contexts)) {
       if (!FEEDBACK_CONTEXTS.has(key)) delete event.contexts[key];
     }
+    if (!replayId) delete event.contexts.replay;
+  }
+  // The envelope's trace header is the dynamic sampling context, where the recorder's createDsc
+  // hook puts the running recording's ID, and Sentry links an event to the replay named there.
+  // Name the replay this report attached, or none: not one that failed to upload or was never
+  // attached. The DSC can be shared with other events in the trace, so replace it, don't edit it.
+  const metadata = event.sdkProcessingMetadata;
+  const dsc = metadata?.dynamicSamplingContext as Record<string, unknown> | undefined;
+  if (dsc && dsc.replay_id !== replayId) {
+    const corrected = { ...dsc };
+    if (replayId) corrected.replay_id = replayId;
+    else delete corrected.replay_id;
+    event.sdkProcessingMetadata = { ...metadata, dynamicSamplingContext: corrected };
   }
   event.tags = { ...tags };
   // As on the replay events: the ID only, and no inferred IP.

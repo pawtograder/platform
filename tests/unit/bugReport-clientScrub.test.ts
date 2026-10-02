@@ -56,14 +56,25 @@ const cases: [string, Breadcrumb, Breadcrumb | null][] = [
     "alt, name, placeholder, value, and data-* selectors",
     {
       category: "ui.input",
-      message: `img[alt="${NAME}"] input[name="email"][placeholder="${EMAIL}"][value='x'][data-student="${NAME}"]`
+      message: `img[alt="${NAME}"] > input[name="email"][placeholder="${EMAIL}"][value='x'][data-student="${NAME}"]`
     },
-    { category: "ui.input", message: "img input" }
+    { category: "ui.input", message: "img > input" }
   ],
   [
-    "a selector cut off mid-value by the serializer's length limit",
+    "a value with no closing quote",
     { category: "ui.click", message: `div > span[title="${NAME.slice(0, 6)}` },
     { category: "ui.click", message: "div > span" }
+  ],
+  [
+    // The serializer doesn't escape values. A help request's text as an aria-label, with code in it.
+    'a value that itself contains "]',
+    { category: "ui.click", message: `Stack > a[aria-label="d["key"] fails, ask ${NAME}"] > HelpRequestTeaser` },
+    { category: "ui.click", message: "Stack > a > HelpRequestTeaser" }
+  ],
+  [
+    'a value made of "] pairs',
+    { category: "ui.click", message: `a[aria-label="students["${NAME}"]"]` },
+    { category: "ui.click", message: "a" }
   ],
   [
     "a fetch with a PostgREST filter",
@@ -106,6 +117,17 @@ describe("breadcrumb scrubbing: the server module and the client's inline copy a
   it.each(cases)("%s", (_label, input, expected) => {
     expect(serverScrubBreadcrumb(structuredClone(input))).toEqual(expected);
     expect(clientOptions.beforeBreadcrumb(structuredClone(input))).toEqual(expected);
+  });
+
+  it("stays linear on hostile text, since it runs inside the click handler", () => {
+    // Many selector starts with no close after them: a backtracking pattern takes seconds here.
+    const hostile = [`"]${"[title=x".repeat(30_000)}`, `"]${'[title="x'.repeat(30_000)}`, "[data-".repeat(40_000)];
+    for (const message of hostile) {
+      const started = performance.now();
+      serverScrubBreadcrumb({ category: "ui.click", message });
+      clientOptions.beforeBreadcrumb({ category: "ui.click", message });
+      expect(performance.now() - started).toBeLessThan(250);
+    }
   });
 });
 

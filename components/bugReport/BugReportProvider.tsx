@@ -4,6 +4,7 @@ import { installErrorEventTracking } from "@/lib/bugReport/errorEventLink";
 import { clearReportIdentity, setReportIdentity, setReportRoute, type ReportRole } from "@/lib/bugReport/reportContext";
 import { registerReportDialogOpener, type OpenReportDialogOptions } from "@/lib/bugReport/reportDialog";
 import { routePatternFor } from "@/lib/bugReport/routePattern";
+import * as Sentry from "@sentry/nextjs";
 import { useParams, usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ReportBugDialog, type ReportReplaySlot } from "./ReportBugDialog";
@@ -27,6 +28,7 @@ const BugReportContext = createContext<BugReportContextValue | null>(null);
 export function BugReportProvider({ children, replay }: { children: ReactNode; replay?: ReportReplaySlot | null }) {
   const [open, setOpen] = useState(false);
   const [eventId, setEventId] = useState<string | undefined>(undefined);
+  const [linkStandInEvent, setLinkStandInEvent] = useState(false);
   const pathname = usePathname();
   const params = useParams();
 
@@ -47,6 +49,7 @@ export function BugReportProvider({ children, replay }: { children: ReactNode; r
 
   const openReportDialog = useCallback((options: OpenReportDialogOptions = {}) => {
     setEventId(options.eventId);
+    setLinkStandInEvent(!options.eventId && options.linkStandInEvent === true);
     // Let whatever triggered us (a closing menu, a dismissing toast) finish restoring its
     // own focus before the dialog takes it.
     setTimeout(() => setOpen(true), 0);
@@ -64,6 +67,7 @@ export function BugReportProvider({ children, replay }: { children: ReactNode; r
         open={open}
         onOpenChange={setOpen}
         eventId={eventId}
+        linkStandInEvent={linkStandInEvent}
         replay={replay === undefined ? review : replay}
       />
     </BugReportContext.Provider>
@@ -81,11 +85,20 @@ export function useBugReport(): BugReportContextValue {
 /**
  * Publishes who is reporting (auth user ID, role, and class on course routes) for as long as
  * it is mounted. Render it inside the layout that knows the identity.
+ *
+ * It also tags every Sentry error event with the same role and class (ADR 3), so an error and
+ * the report that links to it agree: the real role, not a view-as one. The user itself is set
+ * by ID in useAuthState. `app/global-error.tsx` tags its crash event from the report context,
+ * because these tags are cleared on unmount before it mounts.
  */
 export function BugReportIdentity({ role, classId, userId }: { role?: ReportRole; classId?: number; userId?: string }) {
   useEffect(() => {
     setReportIdentity({ role, classId, userId });
-    return () => clearReportIdentity();
+    Sentry.setTags({ role, class_id: classId });
+    return () => {
+      clearReportIdentity();
+      Sentry.setTags({ role: undefined, class_id: undefined });
+    };
   }, [role, classId, userId]);
   return null;
 }

@@ -23,7 +23,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     courseId,
     req.headers.get("Authorization")!
   );
-  scope?.setTag("role", "instructor");
+  // The caller by ID, and their actual role: assertUserIsInstructor also admits platform admins,
+  // and returns their admin row.
+  scope?.setUser({ id: instructorEnrollment.user_id });
+  scope?.setTag("role", instructorEnrollment.role);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,

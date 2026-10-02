@@ -1,6 +1,7 @@
 /**
  * "Report this" on error toasts: the toast links to the error event captured in the same
- * task, never to an older one, and captures one on click when there is none.
+ * task, never to an older one. When there is none, the dialog it opens captures one on Submit;
+ * the click itself sends nothing, so Cancel sends nothing.
  */
 type Handler = (...args: unknown[]) => void;
 const handlers = new Map<string, Set<Handler>>();
@@ -23,9 +24,9 @@ jest.mock("@sentry/nextjs", () => ({
   }
 }));
 
-const opened: { eventId?: string }[] = [];
+const opened: { eventId?: string; linkStandInEvent?: boolean }[] = [];
 jest.mock("@/lib/bugReport/reportDialog", () => ({
-  openReportDialog: (o: { eventId?: string }) => {
+  openReportDialog: (o: { eventId?: string; linkStandInEvent?: boolean }) => {
     opened.push(o);
     return true;
   }
@@ -64,20 +65,21 @@ it("links the error captured in the same task", () => {
   expect(captureMessageCount).toBe(0);
 });
 
-it("does not link an error captured in an earlier task; captures one on click instead", async () => {
+it("does not link an error captured in an earlier task, and sends nothing on click", async () => {
   emit("preprocessEvent", { event_id: "b".repeat(32) }, {});
   await flushTask();
   const t2 = errorToast({ title: "Could not load" });
   actionOf(t2)!.onClick();
-  expect(opened).toEqual([{ eventId: "m".repeat(32) }]);
-  expect(captureMessageCount).toBe(1);
+  // The dialog captures the stand-in event on Submit; Cancel must send nothing.
+  expect(opened).toEqual([{ linkStandInEvent: true }]);
+  expect(captureMessageCount).toBe(0);
 });
 
 it("ignores non-error events such as feedback", () => {
   emit("preprocessEvent", { event_id: "c".repeat(32), type: "feedback" }, {});
   const t3 = errorToast({ title: "x" });
   actionOf(t3)!.onClick();
-  expect(opened[0].eventId).toBe("m".repeat(32));
+  expect(opened[0]).toEqual({ linkStandInEvent: true });
 });
 
 it("prefers an explicit meta.sentryEventId and respects opt-outs and custom actions", () => {

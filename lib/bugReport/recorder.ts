@@ -224,7 +224,7 @@ class Recorder implements BugReportRecorder {
   private state: RecorderState = "recording";
   private level: RecordingLevel;
   private readonly courseId: number;
-  private readonly replayId = newReplayId();
+  private replayId = newReplayId();
   private readonly buffer: RingBuffer;
   private stopRrweb: (() => void) | undefined;
   private readonly visits: UrlVisit[] = [];
@@ -456,6 +456,10 @@ class Recorder implements BugReportRecorder {
 
   getReplayId(): string {
     return this.replayId;
+  }
+
+  rotateReplayId(used: string): void {
+    if (this.replayId === used) this.replayId = newReplayId();
   }
 
   getErrorIds(): string[] {

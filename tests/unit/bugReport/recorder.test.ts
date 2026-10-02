@@ -220,6 +220,20 @@ describe("linked errors", () => {
   });
 });
 
+describe("replay ID", () => {
+  it("rotates only away from the ID it was given, and freezes under the new one", () => {
+    const r = start();
+    const first = r.getReplayId();
+    expect(first).toMatch(/^[0-9a-f]{32}$/);
+    r.rotateReplayId("0".repeat(32));
+    expect(r.getReplayId()).toBe(first);
+    r.rotateReplayId(first);
+    expect(r.getReplayId()).not.toBe(first);
+    expect(r.getReplayId()).toMatch(/^[0-9a-f]{32}$/);
+    expect(r.freeze().replayId).toBe(r.getReplayId());
+  });
+});
+
 describe("snapshots", () => {
   it("keeps the segment when rrweb logs from inside a checkout snapshot", () => {
     const r = start();

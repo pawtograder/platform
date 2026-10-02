@@ -26,7 +26,8 @@ async function instructorCreateAutograderGroup(
   scope?.setTag("function", "assignment-group-instructor-create");
   scope?.setTag("course_id", course_id.toString());
   scope?.setTag("assignment_id", assignment_id.toString());
-  scope?.setTag("group_name", name);
+  // No group name tag: students choose group names, which can contain their names (the privacy
+  // classification marks assignment_groups.name free_text). Sentry events carry IDs only.
   const { supabase, enrollment } = await assertUserIsInstructor(course_id, req.headers.get("Authorization")!);
   const trimmedName = name.trim();
   if (trimmedName.length === 0) {

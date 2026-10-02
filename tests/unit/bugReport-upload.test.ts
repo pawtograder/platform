@@ -75,6 +75,8 @@ jest.mock("@sentry/nextjs", () => {
 import * as SentryMock from "@sentry/nextjs";
 import { serializeEnvelope } from "@sentry/core";
 import { parseEnvelope, payloadJson, splitReplayRecording } from "@/lib/bugReport/envelope";
+import { setActiveRecorder } from "@/lib/bugReport/activeRecorder";
+import type { BugReportRecorder } from "@/lib/bugReport/types";
 import {
   MAX_ATTEMPTS,
   MAX_RETRY_AFTER_MS,
@@ -517,5 +519,25 @@ describe("uploadReplay", () => {
 
   it("uses 900 KiB as the default cap", () => {
     expect(MAX_SEGMENT_COMPRESSED_BYTES).toBe(900 * 1024);
+  });
+});
+
+describe("replay IDs across reports", () => {
+  afterEach(() => setActiveRecorder(undefined));
+
+  it("moves the recorder to a new replay ID once a report's segments went out", async () => {
+    const buf = bufferOf([checkout(clock, [mutation(clock + 1000)])]);
+    const rotateReplayId = jest.fn();
+    setActiveRecorder({ getReplayId: () => buf.replayId, rotateReplayId } as unknown as BugReportRecorder);
+    expect(await uploadReplay(buf, tags, { sleep: noSleep, compress })).toMatchObject({ ok: true });
+    // Without this, a second report in the page load would send its segment 0 under the same ID.
+    expect(rotateReplayId).toHaveBeenCalledWith(buf.replayId);
+  });
+
+  it("keeps the ID when nothing was sent", async () => {
+    const rotateReplayId = jest.fn();
+    setActiveRecorder({ rotateReplayId } as unknown as BugReportRecorder);
+    expect(await uploadReplay(bufferOf([]), tags, { sleep: noSleep, compress })).toMatchObject({ ok: false });
+    expect(rotateReplayId).not.toHaveBeenCalled();
   });
 });

@@ -554,8 +554,9 @@ async function sendEmailViaTransporter(
     });
     return true;
   } catch (error) {
+    // No recipient address: Sentry events never carry a person's email. The caller's scope
+    // already identifies the recipient by user ID.
     scope.setContext("smtp_error", {
-      recipient: recipient,
       error_message: error instanceof Error ? error.message : String(error),
       smtp_host: Deno.env.get("SMTP_HOST"),
       smtp_port: Deno.env.get("SMTP_PORT")
