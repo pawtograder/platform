@@ -29,7 +29,7 @@ import {
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsStudent } from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembersLoadState } from "@/hooks/useCourseController";
 import {
   useAllCommentsForReview,
@@ -47,7 +47,7 @@ import {
   useSetActiveSubmissionReviewId,
   useSetIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
-import { useNextIncompleteReviewUrl } from "@/hooks/useNextIncompleteReview";
+import { useSubmissionNavigation } from "@/hooks/useNextIncompleteReview";
 import {
   computeRubricGradingCompletion,
   gradeTargetsForSubmission,
@@ -229,6 +229,27 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
 }
 
 /**
+ * After a grader completes a review, open the next submission on the same tab. Students (who
+ * complete self-reviews with these same buttons) stay where they are.
+ */
+function useAdvanceAfterCompletion() {
+  const router = useRouter();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const { nextUrl, isReviewMode } = useSubmissionNavigation();
+  return useCallback(() => {
+    if (!isGraderOrInstructor) return;
+    if (nextUrl) {
+      router.push(nextUrl);
+    } else if (isReviewMode) {
+      toaster.success({
+        title: "All of your assigned reviews are complete",
+        description: "There are no more incomplete reviews assigned to you on this assignment."
+      });
+    }
+  }, [isGraderOrInstructor, isReviewMode, nextUrl, router]);
+}
+
+/**
  * Dialog content for completing a review assignment.
  */
 function CompleteReviewAssignmentDialog({
@@ -237,11 +258,14 @@ function CompleteReviewAssignmentDialog({
   missing_required_criteria,
   isReleased,
   isLoading,
-  setIsLoading
+  setIsLoading,
+  onCompleted
 }: {
   reviewAssignment: {
     id: number;
   };
+  /** Runs after the review assignment is saved as complete (e.g. move on to the next submission). */
+  onCompleted?: () => void;
   missing_required_checks: {
     id: number;
     name: string;
@@ -336,6 +360,7 @@ function CompleteReviewAssignmentDialog({
                     title: "Review assignment marked as complete",
                     description: "Your review assignment has been marked as complete."
                   });
+                  onCompleted?.();
                 } catch (error) {
                   console.error("Error marking review assignment as complete", error);
                   // Extract error message from Supabase error
@@ -373,6 +398,7 @@ export function CompleteReviewAssignmentButton() {
     useMissingRubricChecksForReviewAssignment(activeReviewAssignmentId);
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
+  const advanceAfterCompletion = useAdvanceAfterCompletion();
 
   // gradeTargetsBlocked added for the same reason as CompleteReviewButton: the missing_* checks
   // below are always arrays and so never gated anything.
@@ -416,6 +442,7 @@ export function CompleteReviewAssignmentButton() {
           isReleased={Boolean(activeSubmissionReview?.released)}
           isLoading={isLoading}
           setIsLoading={setIsLoading}
+          onCompleted={advanceAfterCompletion}
         />
       </Popover.Positioner>
     </Popover.Root>
@@ -440,52 +467,46 @@ export function CompleteReviewButton() {
   } = useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
-  const router = useRouter();
-  const nextIncompleteUrl = useNextIncompleteReviewUrl();
+  const { nextUrl } = useSubmissionNavigation();
+  const advanceAfterCompletion = useAdvanceAfterCompletion();
 
-  const markComplete = useCallback(
-    async (advanceAfter: boolean) => {
-      if (!activeSubmissionReview) {
-        toaster.error({
-          title: "Error marking review as complete",
-          description: "No active submission review found."
+  const markComplete = useCallback(async () => {
+    if (!activeSubmissionReview) {
+      toaster.error({
+        title: "Error marking review as complete",
+        description: "No active submission review found."
+      });
+      return;
+    }
+    try {
+      setIsLoading(true);
+      if (activeSubmissionReview.released) {
+        toaster.warning({
+          title: "Grade already released",
+          description: "This grade is already released to students. Marking complete will update grading after release."
         });
-        return;
       }
-      try {
-        setIsLoading(true);
-        if (activeSubmissionReview.released) {
-          toaster.warning({
-            title: "Grade already released",
-            description:
-              "This grade is already released to students. Marking complete will update grading after release."
-          });
-        }
-        await submissionController.submission_reviews.update(activeSubmissionReview.id, {
-          completed_at: new Date().toISOString(),
-          completed_by: private_profile_id
-        });
+      await submissionController.submission_reviews.update(activeSubmissionReview.id, {
+        completed_at: new Date().toISOString(),
+        completed_by: private_profile_id
+      });
 
-        toaster.success({
-          title: "Review marked as complete",
-          description: "Your review has been marked as complete."
-        });
+      toaster.success({
+        title: "Review marked as complete",
+        description: "Your review has been marked as complete."
+      });
 
-        if (advanceAfter && nextIncompleteUrl) {
-          router.push(nextIncompleteUrl);
-        }
-      } catch (error) {
-        console.error("Error marking review as complete", error);
-        toaster.error({
-          title: "Error marking review as complete",
-          description: "An error occurred while marking the review as complete."
-        });
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [activeSubmissionReview, nextIncompleteUrl, private_profile_id, router, submissionController.submission_reviews]
-  );
+      advanceAfterCompletion();
+    } catch (error) {
+      console.error("Error marking review as complete", error);
+      toaster.error({
+        title: "Error marking review as complete",
+        description: "An error occurred while marking the review as complete."
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeSubmissionReview, advanceAfterCompletion, private_profile_id, submissionController.submission_reviews]);
 
   // The old guard tested the truthiness of `missing_*`, which are always arrays from a useMemo, so
   // it never fired. The real not-ready case is group membership: until it loads we cannot tell an
@@ -584,31 +605,14 @@ export function CompleteReviewButton() {
               )}
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
                 <Text>
-                  All checks have been applied. Use Complete + Next to save and open the next pending review when one is
-                  available.
+                  All required checks have been applied.
+                  {nextUrl ? " Completing opens the next submission on this tab." : ""}
                 </Text>
               )}
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
-                <HStack gap={2} w="100%" flexWrap="wrap">
-                  <Button
-                    variant="solid"
-                    colorPalette="green"
-                    loading={isLoading}
-                    onClick={() => void markComplete(false)}
-                  >
-                    Complete
-                  </Button>
-                  {nextIncompleteUrl && (
-                    <Button
-                      variant="solid"
-                      colorPalette="green"
-                      loading={isLoading}
-                      onClick={() => void markComplete(true)}
-                    >
-                      Complete + Next
-                    </Button>
-                  )}
-                </HStack>
+                <Button variant="solid" colorPalette="green" loading={isLoading} onClick={() => void markComplete()}>
+                  {nextUrl ? "Complete and go to next" : "Complete"}
+                </Button>
               )}
             </VStack>
           </Popover.Body>
