@@ -275,8 +275,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
-    await page.getByRole("button", { name: "Complete", exact: true }).click();
-    await expect(page.getByText("Completed by")).toBeVisible();
+    // Completing opens the next submission when there is one ("Complete and go to next"), so this
+    // page's "Completed by" may never render here; the DB poll below is the proof.
+    await page.getByRole("button", { name: /^Complete( and go to next)?$/ }).click();
 
     // "Completed by" appears from the optimistic TableController update (it marks the row
     // __db_pending and renders immediately, before the awaited PATCH to submission_reviews

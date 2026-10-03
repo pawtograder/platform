@@ -2,31 +2,26 @@
 
 import SubmissionAuthorNames from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/submission-author-names";
 import Link from "@/components/ui/link";
-import { useActiveSubmissions, useAssignmentGroups, useMyReviewAssignments } from "@/hooks/useAssignment";
-import { useAllProfilesForClass, useGradersAndInstructors } from "@/hooks/useCourseController";
-import { useNextIncompleteReviewUrl } from "@/hooks/useNextIncompleteReview";
+import { useMyReviewAssignments } from "@/hooks/useAssignment";
+import {
+  type ReviewSubmissionOption,
+  type SubmissionOption,
+  useGroupedSubmissionOptions,
+  useMyReviewSubmissionOptions,
+  useSubmissionNavigation
+} from "@/hooks/useNextIncompleteReview";
 import { Box, HStack, Text } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo } from "react";
 import { FaArrowLeft, FaArrowRight, FaChartBar, FaCheckCircle, FaClock } from "react-icons/fa";
 import { useNavigationProgress } from "@/components/ui/navigation-progress";
 
-interface SubmissionSelectOption {
+type SubmissionSelectOption = ReviewSubmissionOption & {
   // value represents the submission id (submission-centric selection)
   value: number;
   label: string;
-  submissionId: number;
-  // optional review assignment id associated to this submission (prefer incomplete)
-  reviewAssignmentId?: number;
-  // whether there is an incomplete review for me on this submission
-  hasIncompleteReview: boolean;
-  // whether all review assignments for this submission (for me) are complete
-  allReviewsComplete: boolean;
-  // counts for display purposes
-  totalReviews: number;
-  completedReviews: number;
-}
+};
 
 type ReviewToolbarStats = {
   totalReviews: number;
@@ -35,139 +30,55 @@ type ReviewToolbarStats = {
   allComplete: boolean;
 };
 
-// Data types for grouped submission selector
-interface SubmissionOption {
-  value: number;
-  label: string;
-  authorName: string;
-  isStudent: boolean;
-}
-
-interface SubmissionGroup {
-  label: string;
-  options: SubmissionOption[];
-}
-
-interface GroupedSubmissionData {
-  groups: SubmissionGroup[];
-  selectedOption: SubmissionOption | null;
-  placeholder: string;
-}
-
-// Hook that returns grouped submission data for the selector
-function useGroupedSubmissionData(): GroupedSubmissionData {
-  const submissions = useActiveSubmissions();
-  const classProfiles = useAllProfilesForClass();
-  const assignmentGroups = useAssignmentGroups();
-  const staffProfiles = useGradersAndInstructors();
+// Wraps the shared grouping with the currently selected option for the selector.
+function useGroupedSubmissionData() {
+  const groups = useGroupedSubmissionOptions();
   const { submissions_id } = useParams();
 
   return useMemo(() => {
-    const studentSubmissions: SubmissionOption[] = [];
-    const staffSubmissions: SubmissionOption[] = [];
-
-    // Process each submission
-    submissions.forEach((submission) => {
-      // Get author name
-      let authorName = "";
-      if (submission.profile_id) {
-        // Individual submission - get profile name
-        const profile = classProfiles.find((p) => p.id === submission.profile_id);
-        authorName = profile?.name || `Submission ${submission.id}`;
-      } else if (submission.assignment_group_id) {
-        // Group submission - get group name
-        const group = assignmentGroups.find((g) => g.id === submission.assignment_group_id);
-        authorName = group?.name || `Group ${submission.assignment_group_id}`;
-      } else {
-        authorName = `Submission ${submission.id}`;
-      }
-
-      // Determine if author is a student
-      let isStudent = true; // Default to student
-      if (submission.profile_id) {
-        // Check if the profile belongs to a student role
-        const userRole = staffProfiles.find((p) => p.id === submission.profile_id);
-        isStudent = !userRole;
-      }
-
-      const option: SubmissionOption = {
-        value: submission.id,
-        label: authorName,
-        authorName,
-        isStudent
-      };
-
-      if (isStudent) {
-        studentSubmissions.push(option);
-      } else {
-        staffSubmissions.push(option);
-      }
-    });
-
-    // Create grouped options
-    const groups: SubmissionGroup[] = [];
-
-    // Add students group
-    if (studentSubmissions.length > 0) {
-      groups.push({
-        label: "Students",
-        options: studentSubmissions.sort((a, b) => a.label.localeCompare(b.label))
-      });
-    }
-
-    // Add staff group if there are any staff submissions
-    if (staffSubmissions.length > 0) {
-      groups.push({
-        label: "Instructors & Graders",
-        options: staffSubmissions.sort((a, b) => a.label.localeCompare(b.label))
-      });
-    }
-
-    // Find the currently selected option
-    let selectedOption: SubmissionOption | null = null;
     const currentSubmissionId = submissions_id ? parseInt(submissions_id as string) : null;
+    const selectedOption =
+      (currentSubmissionId && groups.flatMap((g) => g.options).find((o) => o.value === currentSubmissionId)) || null;
+    return { groups, selectedOption, placeholder: "Select any submission to view..." };
+  }, [groups, submissions_id]);
+}
 
-    if (currentSubmissionId) {
-      // Search through all groups to find the selected option
-      for (const group of groups) {
-        const found = group.options.find((option) => option.value === currentSubmissionId);
-        if (found) {
-          selectedOption = found;
-          break;
-        }
-      }
-    }
-
-    return {
-      groups,
-      selectedOption,
-      placeholder: "Select any submission to view..."
-    };
-  }, [submissions, classProfiles, assignmentGroups, submissions_id, staffProfiles]);
+/** Previous / next links. Both keep the tab the grader is on (see useSubmissionNavigation). */
+function PreviousNextLinks({ nextLabel }: { nextLabel: string }) {
+  const { previousUrl, nextUrl } = useSubmissionNavigation();
+  return (
+    <HStack gap={3} fontSize="sm" flex="0 0 auto">
+      {previousUrl && (
+        <Link href={previousUrl}>
+          <FaArrowLeft style={{ marginRight: "4px" }} />
+          Previous
+        </Link>
+      )}
+      {nextUrl && (
+        <Link href={nextUrl}>
+          {nextLabel}
+          <FaArrowRight style={{ marginLeft: "4px" }} />
+        </Link>
+      )}
+    </HStack>
+  );
 }
 
 function SubmissionSelector() {
-  const { course_id, assignment_id } = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { groups, selectedOption, placeholder } = useGroupedSubmissionData();
+  const { urlFor } = useSubmissionNavigation();
   const { startNavigation } = useNavigationProgress();
 
   const handleSubmissionSelect = useCallback(
     (option: SubmissionOption | null) => {
       if (option) {
-        const params = new URLSearchParams(searchParams.toString());
-        // Strip review-specific params when navigating generically
-        params.delete("review_assignment_id");
-        params.delete("ignore_review");
-        params.delete("selected_review_id");
-        const qs = params.toString();
-        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.value}/files${qs ? `?${qs}` : ""}`;
+        // urlFor carries no review params, so a stale review assignment never follows a generic jump.
         startNavigation();
-        router.push(url);
+        router.push(urlFor(option.value));
       }
     },
-    [course_id, assignment_id, router, searchParams, startNavigation]
+    [router, startNavigation, urlFor]
   );
 
   if (groups.length === 0) {
@@ -206,20 +117,11 @@ export { SubmissionSelector };
 export default function AssignmentGradingToolbar() {
   const { course_id, assignment_id, submissions_id } = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const myReviewAssignments = useMyReviewAssignments();
+  const reviewOptions = useMyReviewSubmissionOptions();
   const isInReviewMode = myReviewAssignments.length > 0;
+  const { urlFor } = useSubmissionNavigation();
   const { startNavigation } = useNavigationProgress();
-
-  // Group review assignments by submission id
-  const reviewAssignmentsBySubmission = useMemo(() => {
-    const grouped = new Map<number, typeof myReviewAssignments>();
-    myReviewAssignments.forEach((assignment) => {
-      const existing = grouped.get(assignment.submission_id) || [];
-      grouped.set(assignment.submission_id, [...existing, assignment]);
-    });
-    return grouped;
-  }, [myReviewAssignments]);
 
   const { selectOptions, currentlySelected, stats } = useMemo(() => {
     if (!isInReviewMode) {
@@ -230,33 +132,11 @@ export default function AssignmentGradingToolbar() {
       };
     }
 
-    // Build one option per submission that has review assignments for me
-    const options: SubmissionSelectOption[] = Array.from(reviewAssignmentsBySubmission.entries()).map(
-      ([submissionId, assignments]) => {
-        const allComplete = assignments.every((ra) => ra.completed_at);
-        const anyIncomplete = assignments.some((ra) => !ra.completed_at);
-        const primaryAssignment = assignments.find((ra) => !ra.completed_at) || assignments[0];
-        const completedCount = assignments.filter((ra) => ra.completed_at).length;
-
-        return {
-          value: submissionId,
-          label: `Submission ${submissionId}`,
-          submissionId,
-          reviewAssignmentId: primaryAssignment?.id,
-          hasIncompleteReview: anyIncomplete,
-          allReviewsComplete: allComplete,
-          totalReviews: assignments.length,
-          completedReviews: completedCount
-        };
-      }
-    );
-
-    // Sort so that incomplete submissions appear first, stable by submission id
-    options.sort((a, b) => {
-      if (a.hasIncompleteReview && !b.hasIncompleteReview) return -1;
-      if (!a.hasIncompleteReview && b.hasIncompleteReview) return 1;
-      return a.submissionId - b.submissionId;
-    });
+    const options: SubmissionSelectOption[] = reviewOptions.map((opt) => ({
+      ...opt,
+      value: opt.submissionId,
+      label: `Submission ${opt.submissionId}`
+    }));
 
     const currentSubmissionId = submissions_id ? parseInt(submissions_id as string) : undefined;
     const selected = currentSubmissionId
@@ -278,42 +158,29 @@ export default function AssignmentGradingToolbar() {
         allComplete
       }
     };
-  }, [isInReviewMode, reviewAssignmentsBySubmission, submissions_id, myReviewAssignments]);
-
-  const nextIncompleteUrl = useNextIncompleteReviewUrl();
+  }, [isInReviewMode, reviewOptions, submissions_id, myReviewAssignments]);
 
   const handleSubmissionSelect = useCallback(
     (option: SubmissionSelectOption | null) => {
       if (option) {
-        const reviewId = option.reviewAssignmentId;
-        const params = new URLSearchParams(searchParams.toString());
-        // Only set review assignment if it is an incomplete review for this submission
-        if (option.hasIncompleteReview && reviewId) {
-          params.set("review_assignment_id", String(reviewId));
-          params.delete("ignore_review");
-          params.delete("selected_review_id");
-        } else {
-          // Ensure no stale RA id is carried over from a prior selection
-          params.delete("review_assignment_id");
-          params.delete("ignore_review");
-          params.delete("selected_review_id");
-        }
-        const qs = params.toString();
-        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.submissionId}/files${qs ? `?${qs}` : ""}`;
+        // Only carry a review assignment if it is an incomplete review for this submission; urlFor
+        // drops every other query param, so no stale RA id comes along from a prior selection.
+        const reviewAssignmentId = option.hasIncompleteReview ? option.reviewAssignmentId : undefined;
         startNavigation();
-        router.push(url);
+        router.push(urlFor(option.submissionId, reviewAssignmentId));
       }
     },
-    [course_id, assignment_id, router, searchParams, startNavigation]
+    [router, startNavigation, urlFor]
   );
 
   if (!isInReviewMode) {
     return (
-      <HStack p={2} bg="bg.subtle" borderBottom="1px solid" borderColor="border.muted" w="100%">
+      <HStack p={2} bg="bg.subtle" borderBottom="1px solid" borderColor="border.muted" w="100%" gap={4}>
         <Link href={`/course/${course_id}/manage/assignments/${assignment_id}`}>
           <FaArrowLeft /> Back to Assignment Home
         </Link>
         <SubmissionSelector />
+        <PreviousNextLinks nextLabel="Next" />
       </HStack>
     );
   }
@@ -380,21 +247,14 @@ export default function AssignmentGradingToolbar() {
           />
         </Box>
 
-        {/* Right side: Navigation buttons and status badges */}
+        {/* Right side: Previous / Next Incomplete, or the all-done note */}
         <HStack gap={3} flex="0 0 auto">
-          {/* Quick navigation: next incomplete if any, else show all done */}
-          <HStack gap={3} fontSize="sm">
-            {stats && !stats.allComplete && nextIncompleteUrl ? (
-              <Link href={nextIncompleteUrl}>
-                <FaArrowRight style={{ marginRight: "4px" }} />
-                Next Incomplete
-              </Link>
-            ) : stats?.allComplete ? (
-              <Text color="fg.muted" fontSize="sm">
-                All reviews completed!
-              </Text>
-            ) : null}
-          </HStack>
+          {stats?.allComplete && (
+            <Text color="fg.muted" fontSize="sm">
+              All reviews completed!
+            </Text>
+          )}
+          <PreviousNextLinks nextLabel="Next Incomplete" />
         </HStack>
       </HStack>
     </HStack>
