@@ -178,11 +178,18 @@ test.describe("Grading several submissions in a row", () => {
     await expect(panel(page)).not.toContainText(UUID_RE);
   });
 
-  test("a grader with nothing assigned sees who has each submission", async ({ page }) => {
+  test("a grader with nothing assigned is told so, without seeing other graders' assignments", async ({ page }) => {
     await loginAsUser(page, grace, course);
     await page.goto(subUrl(codeAssignment, codeSubs[1]!, "/files"));
-    await expect(panel(page), "a grader with nothing assigned sees who has it").toContainText("Gary Grader");
-    await expect(panel(page)).not.toContainText("(you)");
+    await expect(panel(page)).toContainText("Not assigned to you");
+    await expect(panel(page)).not.toContainText("Gary Grader");
+  });
+
+  test("an instructor sees who each submission is assigned to", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(subUrl(codeAssignment, codeSubs[1]!, "/files"));
+    await expect(panel(page)).toContainText("Gary Grader");
+    await expect(panel(page)).not.toContainText(UUID_RE);
 
     await page.goto(subUrl(codeAssignment, codeSubs[3]!, "/files"));
     await expect(panel(page)).toContainText("Not assigned to anyone");
@@ -227,14 +234,6 @@ test.describe("Grading several submissions in a row", () => {
     await page.getByRole("link", { name: "Previous", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/submissions/${codeSubs[0]!.submission_id}/results`));
     await expect(panel(page)).toContainText("Complete");
-  });
-
-  test("other graders see the assignment but get no way to complete it", async ({ page }) => {
-    await loginAsUser(page, grace, course);
-    await page.goto(subUrl(codeAssignment, codeSubs[2]!, "/files"));
-    const row = page.getByTestId(`review-assignment-${garyCodeReviews[2]}`).filter({ visible: true }).first();
-    await expect(row).toContainText("Gary Grader");
-    await expect(row.getByRole("button")).toHaveCount(0);
   });
 
   test("survey-only assignments open on the Survey tab, and stay there from one submission to the next", async ({

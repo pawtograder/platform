@@ -8,7 +8,7 @@ import {
   useRubricById,
   useRubricParts
 } from "@/hooks/useAssignment";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useGradersAndInstructors } from "@/hooks/useCourseController";
 import { useIsTableControllerReady, useTableControllerTableValues } from "@/lib/TableController";
 import type { ReviewAssignments } from "@/utils/supabase/DatabaseTypes";
@@ -78,15 +78,20 @@ function ReviewAssignmentRow({ reviewAssignment }: { reviewAssignment: ReviewAss
 }
 
 /**
- * Who is assigned to grade this submission, for every staff viewer: the assigned grader, another
- * grader with nothing assigned here, and instructors. Each row names the assignee, the rubric
- * part(s), and the status. Read-only: each grader completes their own assignment from the toolbar.
+ * Who is assigned to grade this submission. Each row names the assignee, the rubric part(s), and
+ * the status; each grader completes their own assignment from the toolbar.
+ *
+ * Instructors see every assignment on the submission. Graders can read only their own
+ * review_assignments rows (RLS), so for them this lists just their own, and says "Not assigned to
+ * you" rather than claiming nobody has the submission.
  */
 export default function SubmissionReviewAssignments({ submissionId }: { submissionId: number }) {
   const controller = useAssignmentController();
-  const allReviewAssignments = controller.allReviewAssignments;
-  const ready = useIsTableControllerReady(allReviewAssignments);
-  const rows = useTableControllerTableValues(allReviewAssignments);
+  const isInstructor = useIsInstructor();
+  // The grader-scoped controller is already loaded for the toolbar; instructors read the full one.
+  const source = isInstructor ? controller.allReviewAssignments : controller.reviewAssignments;
+  const ready = useIsTableControllerReady(source);
+  const rows = useTableControllerTableValues(source);
   const staff = useGradersAndInstructors();
   const { private_profile_id } = useClassProfiles();
 
@@ -123,7 +128,7 @@ export default function SubmissionReviewAssignments({ submissionId }: { submissi
         <Skeleton height="40px" />
       ) : forSubmission.length === 0 ? (
         <Text fontSize="sm" color="fg.muted">
-          Not assigned to anyone.
+          {isInstructor ? "Not assigned to anyone." : "Not assigned to you."}
         </Text>
       ) : (
         <VStack align="start" gap={2} w="100%">
