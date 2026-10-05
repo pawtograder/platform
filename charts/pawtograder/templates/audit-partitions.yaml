@@ -55,6 +55,4 @@ spec:
                     secretKeyRef:
                       name: {{ .Values.secrets.names.postgres }}
                       key: POSTGRES_PASSWORD
-              resources:
-                {{- toYaml .Values.auditPartitions.resources | nindent 16 }}
 {{- end }}

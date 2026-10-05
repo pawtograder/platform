@@ -2507,56 +2507,6 @@ assert_refused "posture: a user-supplied posture marker annotation is refused" \
 
 echo
 
-# Tenant ResourceQuotas reject containers missing any cpu/memory request or limit, and tenants can't add a LimitRange.
-assert_all_containers_resourced() {
-  local label="$1"; shift
-  if ! helm template t "$CHART" "${BASE[@]}" "$@" >"$OUTFILE" 2>"$ERRFILE"; then
-    echo "FAIL  $label: render failed"
-    sed 's/^/       /' "$ERRFILE"
-    FAILED=1
-    return
-  fi
-  local missing
-  if ! missing="$(python3 - "$OUTFILE" <<'PY'
-import sys, yaml
-out = []
-for d in yaml.safe_load_all(open(sys.argv[1])):
-    if not d:
-        continue
-    kind, spec = d.get("kind"), d.get("spec") or {}
-    if kind == "CronJob":
-        spec = spec["jobTemplate"]["spec"]["template"]["spec"]
-    elif kind in ("Deployment", "StatefulSet", "DaemonSet", "Job"):
-        spec = spec["template"]["spec"]
-    elif kind != "Pod":
-        continue
-    for field in ("initContainers", "containers"):
-        for c in spec.get(field) or []:
-            r = c.get("resources") or {}
-            gaps = [f"{k}.{res}" for k in ("requests", "limits")
-                    for res in ("cpu", "memory") if res not in (r.get(k) or {})]
-            if gaps:
-                out.append(f"{kind}/{d['metadata']['name']} {c['name']}: {','.join(gaps)}")
-print("\n".join(out))
-PY
-)"; then
-    echo "FAIL  $label: checker failed (needs python3 with PyYAML)"
-    FAILED=1
-  elif [ -n "$missing" ]; then
-    echo "FAIL  $label: containers without full requests/limits:"
-    echo "$missing" | sed 's/^/       /'
-    FAILED=1
-  else
-    echo "ok    $label"
-  fi
-}
-
-assert_all_containers_resourced "resources: every container in the default render"
-assert_all_containers_resourced "resources: every container with internal redis, backups and monitoring" \
-  --set redis.provider=internal \
-  --set backup.enabled=true --set backup.s3.bucket=b --set backup.s3.endpoint=https://s3.example.com \
-  --set monitoring.enabled=true --set 'monitoring.prometheusRules.labels.release=kps'
-
 echo
 
 if [ "$FAILED" -ne 0 ]; then

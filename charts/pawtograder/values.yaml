@@ -547,9 +547,6 @@ migrations:
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
     limits: { cpu: "1", memory: "1Gi" }
-  initResources:
-    requests: { cpu: "10m", memory: "32Mi" }
-    limits: { cpu: "200m", memory: "128Mi" }
   # Hook weight controls ordering relative to other pre-install hooks. Lower
   # numbers run earlier; postgres readiness is verified by the script itself.
   hookWeight: "5"
@@ -1830,9 +1827,6 @@ kong:
   resources:
     requests: { cpu: "200m", memory: "1Gi" }
     limits: { cpu: "2", memory: "6Gi" }
-  initResources:
-    requests: { cpu: "10m", memory: "16Mi" }
-    limits: { cpu: "100m", memory: "64Mi" }
   service:
     port: 8000
   terminationGracePeriodSeconds: 45
@@ -2125,9 +2119,6 @@ auditPartitions:
   image:
     repository: supabase/postgres
     tag: "17.4.1.075"
-  resources:
-    requests: { cpu: "50m", memory: "64Mi" }
-    limits: { cpu: "500m", memory: "256Mi" }
 
 backup:
   enabled: false
@@ -2136,9 +2127,6 @@ backup:
   # a run that exceeds this fails LOUDLY rather than hanging forever.
   activeDeadlineSeconds: 3600
   startingDeadlineSeconds: 1800
-  resources:
-    requests: { cpu: "250m", memory: "256Mi" }
-    limits: { cpu: "1", memory: "1Gi" }
   # Point this at the image built from
   # charts/pawtograder/images/backup/Dockerfile — supabase/postgres with a
   # pinned mc baked in. That is the supported configuration: it removes a
@@ -2208,9 +2196,6 @@ backup:
     # as the backup itself. Empty → inherit backup.scratchSize/StorageClass.
     scratchSize: ""
     scratchStorageClass: ""
-    resources:
-      requests: { cpu: "100m", memory: "128Mi" }
-      limits: { cpu: "1", memory: "512Mi" }
     successfulJobsHistoryLimit: 1
     failedJobsHistoryLimit: 3
   # Restore DRILL: the full-restore rehearsal `verify` stops short of. It
