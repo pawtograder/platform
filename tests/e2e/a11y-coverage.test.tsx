@@ -219,9 +219,28 @@ test.describe("student pages — WCAG 2.1 AA coverage sweep", () => {
       // collector had to solve.
       await settlePage(page);
 
+      // A row with a `state` is scanned after its interaction, not as loaded.
+      // The marker is checked on both sides of the scan: before, so a click that
+      // did nothing cannot pass as coverage, and after, so a theme switch that
+      // re-rendered the page away from the state cannot either.
+      if (route.state) {
+        await route.state.interact(page);
+        await expect(
+          page.locator(route.state.marker).first(),
+          `[${route.label}] the interaction did not render ${route.state.marker}`
+        ).toBeVisible();
+      }
+
       const perScheme: Record<ColorScheme, Finding[]> = { light: [], dark: [] };
       for (const scheme of SCHEMES) {
         perScheme[scheme] = await collectFindings(page, scheme);
+      }
+
+      if (route.state) {
+        await expect(
+          page.locator(route.state.marker).first(),
+          `[${route.label}] ${route.state.marker} was gone by the end of the scan`
+        ).toBeVisible();
       }
 
       // Structural checks, one baseline key per success criterion. Recorded
