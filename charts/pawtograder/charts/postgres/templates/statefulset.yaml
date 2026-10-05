@@ -1,0 +1,381 @@
+{{- $usedeployment := .Values.useDeployment }}
+{{- $fullname := include "postgres.fullname" . }}
+apiVersion: apps/v1
+{{- if $usedeployment }}
+kind: Deployment
+{{- else }}
+kind: StatefulSet
+{{- end }}
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "postgres.labels" . | nindent 4 }}
+    {{- with .Values.customLabels }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.customAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  {{- if .Values.revisionHistoryLimit }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  {{- end }}
+  {{- if not $usedeployment }}
+  serviceName: {{ $fullname }}
+  podManagementPolicy: {{ .Values.podManagementPolicy }}
+  updateStrategy:
+    type: {{ .Values.updateStrategyType }}
+  {{- if or .Values.storage.persistentVolumeClaimRetentionPolicy.whenDeleted .Values.storage.persistentVolumeClaimRetentionPolicy.whenScaled }}
+  persistentVolumeClaimRetentionPolicy:
+    {{- with .Values.storage.persistentVolumeClaimRetentionPolicy.whenDeleted }}
+    whenDeleted: {{ . }}
+    {{- end }}
+    {{- with .Values.storage.persistentVolumeClaimRetentionPolicy.whenScaled }}
+    whenScaled: {{ . }}
+    {{- end }}
+  {{- end }}
+  {{- else }}
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "postgres.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/customconfig: {{ include (print $.Template.BasePath "/customconfig.yaml") . | sha256sum }}
+        checksum/secureconfig: {{ include (print $.Template.BasePath "/secureconfig.yaml") . | sha256sum }}
+        checksum/customscripts: {{ include (print $.Template.BasePath "/customscripts.yaml") . | sha256sum }}
+        checksum/scripts: {{ include (print $.Template.BasePath "/scripts.yaml") . | sha256sum }}
+      {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "postgres.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "postgres.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: {{ .Chart.Name }}-init
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          volumeMounts:
+            {{- if .Values.extraScripts }}
+            - mountPath: /extrascripts
+              name: extrascripts-volume
+            {{- end }}
+            {{- if .Values.customScripts }}
+            - mountPath: /customscripts
+              name: customscripts-volume
+            {{- end }}
+            {{- if .Values.extraSecretConfigs }}
+            - mountPath: /extraconfigs
+              name: extraconfigs-volume
+            {{- end }}
+            {{- if .Values.customConfig }}
+            - mountPath: /customconfig
+              name: customconfig-volume
+            {{- end }}
+            - mountPath: /initscripts
+              name: initscripts
+            - mountPath: /scripts
+              name: scripts
+            - mountPath: /configs
+              name: configs
+          command: [ "/initscripts/init.sh" ]
+          {{- with .Values.initResources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }} 
+      {{- with .Values.extraInitContainers }}
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            {{- if or (and (.Values.settings.existingSecret) ((.Values.settings.superuser).secretKey)) ((.Values.settings.superuser).value) }}
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "postgres.fullname" .) .Values.settings.existingSecret }}
+                  key: {{ default "POSTGRES_USER" (.Values.settings.superuser).secretKey }}
+            {{- end }}
+            {{- if or (.Values.settings.existingSecret) ((.Values.settings.superuserPassword).value) }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "postgres.fullname" .) .Values.settings.existingSecret }}
+                  key: {{ default "POSTGRES_PASSWORD" (.Values.settings.superuserPassword).secretKey }}
+            {{- end }}
+            {{- with .Values.userDatabase }}
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "postgres.fullname" $) .existingSecret }}
+                  key: {{ default "POSTGRES_DB" .name.secretKey }}
+            - name: USERDB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "postgres.fullname" $) .existingSecret }}
+                  key: {{ default "USERDB_USER" .user.secretKey }}
+            - name: USERDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "postgres.fullname" $) .existingSecret }}
+                  key: {{ default "USERDB_PASSWORD" .password.secretKey }}
+            {{- end }}
+            - name: PGDATA
+              value: {{ printf "%s/%s" .Values.settings.dataDir .Values.settings.pgDir | quote }}
+            {{- if .Values.settings.authMethod }}
+            - name: POSTGRES_HOST_AUTH_METHOD
+              value: {{ .Values.settings.authMethod | quote }}
+            {{- end }}
+            {{- if .Values.settings.initDbArgs }}
+            - name: POSTGRES_INITDB_ARGS
+              value: {{ .Values.settings.initDbArgs | quote }}
+            {{- end }}
+          {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- range .Values.extraEnvSecrets }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          {{- if .Values.customStartupProbe }}
+          startupProbe:
+            {{- toYaml .Values.customStartupProbe | nindent 12 }}
+          {{- else }}
+          {{- if .Values.startupProbe.enabled }}
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -h localhost -U ${POSTGRES_USER:-postgres}
+          {{- with .Values.startupProbe }}
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            timeoutSeconds: {{ .timeoutSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+            successThreshold: {{ .successThreshold }}
+            periodSeconds: {{ .periodSeconds }}                
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- if .Values.customLivenessProbe }}
+          livenessProbe:
+            {{- toYaml .Values.customLivenessProbe | nindent 12 }}
+          {{- else }}
+          {{- if .Values.livenessProbe.enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -h localhost -U ${POSTGRES_USER:-postgres}
+          {{- with .Values.livenessProbe }}
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            timeoutSeconds: {{ .timeoutSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+            successThreshold: {{ .successThreshold }}
+            periodSeconds: {{ .periodSeconds }}                
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- if .Values.customReadinessProbe }}
+          readinessProbe:
+            {{- toYaml .Values.customReadinessProbe | nindent 12 }}
+          {{- else }}
+          {{- if .Values.readinessProbe.enabled }}
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -h localhost -U ${POSTGRES_USER:-postgres}
+          {{- with .Values.readinessProbe }}
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            timeoutSeconds: {{ .timeoutSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+            successThreshold: {{ .successThreshold }}
+            periodSeconds: {{ .periodSeconds }}                
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.args }}
+          args:
+            {{- range .Values.args }}
+            - {{ . }}
+            {{- end }}
+          {{- end }}
+          volumeMounts:
+            - mountPath: /var/run
+              name: run
+            - mountPath: /tmp
+              name: tmp
+            - mountPath: {{ .Values.settings.dataDir }}
+              name: {{ .Values.storage.volumeName }}
+            - mountPath: /docker-entrypoint-initdb.d
+              name: scripts
+            - mountPath: /etc/postgresql
+              name: configs
+            {{- range $secret := .Values.extraSecrets }}
+            - name: {{ $secret.name }}
+              mountPath: {{ $secret.mountPath }}
+            {{- end }}
+            {{- range $config := .Values.extraConfigs }}
+            - name: {{ $config.name }}
+              mountPath: {{ $config.mountPath }}
+            {{- end }}
+            {{- range $storage := .Values.extraStorage }}
+            - name: {{ $storage.name }}
+              mountPath: {{ $storage.mountPath }}
+            {{- end }}
+      {{- with .Values.extraContainers }}
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: scripts
+          emptyDir: {}
+        - name: configs
+          emptyDir: {}
+        - name: initscripts
+          configMap:
+            name: {{ $fullname }}-scripts
+            defaultMode: 0555
+        {{- if .Values.extraScripts }}
+        - name: extrascripts-volume
+          configMap:
+            name: {{ .Values.extraScripts }}
+            defaultMode: 0555
+        {{- end }}
+        {{- if .Values.customScripts }}
+        - name: customscripts-volume
+          configMap:
+            name: {{ $fullname }}-customscripts
+            defaultMode: 0555
+        {{- end }}
+        {{- if .Values.extraSecretConfigs }}
+        - name: extraconfigs-volume
+          secret:
+            secretName: {{ .Values.extraSecretConfigs }}
+        {{- end }}
+        {{- if .Values.customConfig }}
+        - name: customconfig-volume
+          configMap:
+            name: {{ $fullname }}-customconfig
+        {{- end }}
+        {{- range $secret := .Values.extraSecrets }}
+        - name: {{ $secret.name }}
+          secret:
+            secretName: {{ $secret.name }}
+            defaultMode: {{ $secret.defaultMode | default 0440 }}
+        {{- end }}
+        {{- range $config := .Values.extraConfigs }}
+        - name: {{ $config.name }}
+          configMap:
+            name: {{ $config.name }}
+            defaultMode: {{ $config.defaultMode | default 0440 }}
+        {{- end }}
+        {{- range $storage := .Values.extraStorage }}
+        - name: {{ $storage.name }}
+          persistentVolumeClaim:
+            claimName: {{ $storage.pvcName }}
+        {{- end }}
+{{- with .Values.storage }}
+  {{- $createPvc := and (empty .persistentVolumeClaimName) .requestedSize }}
+  {{- if not $createPvc }}
+        - name: {{ .volumeName }}
+        {{- if .persistentVolumeClaimName }}
+          persistentVolumeClaim:
+            claimName: {{ .persistentVolumeClaimName }}
+        {{- else }}
+          emptyDir: {}
+        {{- end }}
+  {{- else }}
+  {{- if $usedeployment }}
+        - name: {{ .volumeName }}
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}
+  {{- else }}
+  volumeClaimTemplates:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: {{ .volumeName }}
+      {{- with .labels }}
+        labels:
+        {{- toYaml . | nindent 10 }}
+      {{- end }}
+      {{- with .annotations }}
+        annotations:
+        {{- toYaml . | nindent 10 }}
+      {{- end }}
+      spec:
+        {{- with .accessModes }}
+        accessModes:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- if .className }}
+        storageClassName: {{ .className }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .requestedSize }}
+  {{- end }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,76 @@
+{{- if and .Values.forgejo.enabled .Values.forgejoRunner.enabled }}
+{{- $r := .Values.forgejoRunner }}
+{{- $config := dict "log" (dict "level" "info") "runner" (dict "file" "/data/.runner" "capacity" $r.capacity "timeout" "1h" "shutdown_timeout" "5m" "labels" $r.labels) "cache" (dict "enabled" true "dir" "/data/cache") "host" (dict "workdir_parent" "/data/work") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
+data:
+  config.yaml: |
+    {{- toYaml $config | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
+spec:
+  replicas: 1
+  # One registration identity: never two pods at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 8 }}
+      annotations:
+        checksum/config: {{ toYaml $config | sha256sum }}
+    spec:
+      # Jobs run student code: no Kubernetes credentials.
+      automountServiceAccountToken: false
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: runner
+          image: "{{ $r.image.repository }}:{{ $r.image.tag }}"
+          imagePullPolicy: {{ $r.image.pullPolicy }}
+          workingDir: /data
+          args: # under the image's dumb-init, which forwards SIGTERM to the daemon
+            - sh
+            - -c
+            # Retries until Forgejo's register-runner sidecar has registered the
+            # secret, so a fresh install neither crash-loops nor blocks --wait.
+            - |
+              forgejo-runner create-runner-file --instance "http://{{ include "pawtograder.forgejo.http" . }}:3000" \
+                --name pawtograder-runner --secret "$RUNNER_SECRET"
+              until forgejo-runner daemon --config /etc/forgejo-runner/config.yaml; do sleep 15; done
+          env:
+            - name: RUNNER_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ .Release.Name }}-forgejo-runner, key: secret }
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            {{- toYaml $r.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: config, mountPath: /etc/forgejo-runner, readOnly: true }
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
+        - name: data
+          emptyDir:
+            sizeLimit: {{ $r.workdirSizeLimit }}
+{{- end }}

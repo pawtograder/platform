@@ -1,0 +1,72 @@
+# Forgejo (git + Actions runner) and Coder (Cloud Workspaces) next to
+# Pawtograder, each on its own Postgres. Layer on top of an environment's
+# values file. Pre-create the Secrets listed in README "Forgejo and Coder".
+# Hosts are one level under a zone a wildcard certificate covers.
+
+forgejo:
+  enabled: true
+  database: own # or: pawtograder, then drop forgejoDb
+  ingress:
+    hosts:
+      - host: git.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: example-wildcard-tls
+        hosts: [git.example.com]
+  gitea:
+    # Keep the chart's two FORGEJO__DATABASE__* entries when extending this list.
+    additionalConfigFromEnvs:
+      - name: FORGEJO__DATABASE__HOST
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-database, key: host }
+      - name: FORGEJO__DATABASE__PASSWD
+        valueFrom:
+          secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+      - name: FORGEJO__STORAGE__MINIO_ACCESS_KEY_ID
+        valueFrom:
+          secretKeyRef: { name: pawtograder-s3, key: AWS_ACCESS_KEY_ID }
+      - name: FORGEJO__STORAGE__MINIO_SECRET_ACCESS_KEY
+        valueFrom:
+          secretKeyRef: { name: pawtograder-s3, key: AWS_SECRET_ACCESS_KEY }
+    config:
+      # LFS, attachments, packages and Actions logs in S3; repos stay on the volume.
+      storage:
+        STORAGE_TYPE: minio
+        MINIO_ENDPOINT: s3.example.com
+        MINIO_USE_SSL: true
+        MINIO_BUCKET: pawtograder
+        MINIO_BUCKET_LOOKUP: path
+        MINIO_LOCATION: us-east-1
+        MINIO_BASE_PATH: forgejo/
+
+forgejoDb:
+  enabled: true
+
+forgejoRunner:
+  enabled: true
+  image:
+    repository: registry.example.com/pawtograder/forgejo-runner
+    tag: 13.2.0-jdk21
+
+coder:
+  enabled: true
+  database: own # or: pawtograder, then drop coderDb
+  coder:
+    env:
+      - name: CODER_ACCESS_URL
+        value: https://coder.example.com
+      # Workspace apps on one-label subdomains of the same zone.
+      - name: CODER_WILDCARD_ACCESS_URL
+        value: "*.example.com"
+    ingress:
+      host: coder.example.com
+      wildcardHost: "*.example.com"
+      tls:
+        enable: true
+        secretName: example-wildcard-tls
+        wildcardSecretName: example-wildcard-tls
+
+coderDb:
+  enabled: true

@@ -1,0 +1,96 @@
+{{- $apps := list }}
+{{- range $app := list "forgejo" "coder" }}
+{{- if (index $.Values $app).enabled }}
+{{- $apps = append $apps $app }}
+{{- end }}
+{{- end }}
+{{- if $apps }}
+{{- if .Values.forgejo.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-forgejo-database
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo") | nindent 4 }}
+data:
+  host: {{ include "pawtograder.appDatabase.host" (dict "ctx" . "app" "forgejo") }}:5432
+---
+{{- end }}
+{{- if .Values.coder.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-coder-env
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder") | nindent 4 }}
+data:
+  # Password comes from PGPASSWORD (Secret <release>-coder-db), which Coder's
+  # Postgres driver reads when the URL has none.
+  CODER_PG_CONNECTION_URL: postgres://coder@{{ include "pawtograder.appDatabase.host" (dict "ctx" . "app" "coder") }}:5432/coder?sslmode=disable
+  CODER_TELEMETRY_ENABLE: "false"
+  # Coder's built-in GitHub OAuth app is on by default with no configuration.
+  CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE: "false"
+  CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS: "false"
+---
+{{- end }}
+# A regular Job, not a hook, for the same reason as migrations: the Postgres
+# servers are regular resources that a pre-install hook would run before.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "app-databases") }}-{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "app-databases") | nindent 4 }}
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "app-databases") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        {{- range $app := $apps }}
+        - name: {{ $app }}
+          image: {{ include "pawtograder.image" (dict "ctx" $ "image" $.Values.postgres.image) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          env:
+            - name: PGHOST
+              value: {{ include "pawtograder.appDatabase.host" (dict "ctx" $ "app" $app) }}
+            - name: PGUSER
+              value: {{ include "pawtograder.appDatabase.superuser" (dict "ctx" $ "app" $app) }}
+            - name: PGDATABASE
+              value: postgres
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pawtograder.appDatabase.superuserSecret" (dict "ctx" $ "app" $app) }}
+                  key: POSTGRES_PASSWORD
+            - name: APP_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $.Release.Name }}-{{ $app }}-db, key: PGPASSWORD }
+          command:
+            - sh
+            - -ec
+            - |
+              until pg_isready -q; do echo "waiting for $PGHOST"; sleep 2; done
+              psql -v ON_ERROR_STOP=1 -qAt <<'SQL'
+              \getenv pw APP_PASSWORD
+              SELECT format('CREATE ROLE %I LOGIN', '{{ $app }}')
+                WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ $app }}') \gexec
+              ALTER ROLE {{ $app }} WITH LOGIN PASSWORD :'pw';
+              SELECT format('CREATE DATABASE %I OWNER %I', '{{ $app }}', '{{ $app }}')
+                WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ $app }}') \gexec
+              SQL
+              echo "database {{ $app }} ready on $PGHOST"
+          resources:
+            {{- toYaml $.Values.appDatabases.resources | nindent 12 }}
+        {{- end }}
+{{- end }}

@@ -2627,3 +2627,197 @@ tests:
     resources:
       requests: { cpu: "10m", memory: "16Mi" }
       limits:   { cpu: "100m", memory: "64Mi" }
+
+# -----------------------------------------------------------------------------
+# Forgejo and Coder (Cloud Workspaces)
+# -----------------------------------------------------------------------------
+# Optional, off by default; README "Forgejo and Coder" covers enabling them,
+# the Secrets to pre-create and the host values an overlay sets. Secret and
+# Service names below assume the release is named `pawtograder`.
+
+# code.forgejo.org/forgejo-helm/forgejo
+forgejo:
+  enabled: false
+  # own: the forgejoDb Postgres (set forgejoDb.enabled). pawtograder: this chart's Postgres.
+  database: own
+  strategy:
+    type: Recreate # RWO repo volume
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  initContainers:
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+  persistence:
+    enabled: true
+    size: 20Gi
+  # The chart's test pod sets no resources, so limit-tracking quotas reject it.
+  test:
+    enabled: false
+  ingress:
+    enabled: true
+    className: nginx
+    # Set in the overlay: [{host: git.example.com, paths: [{path: /, pathType: Prefix}]}].
+    # ROOT_URL, and the FORGEJO_URL edge functions trust, come from the first host.
+    hosts: []
+  gitea:
+    admin:
+      existingSecret: pawtograder-forgejo-admin
+      passwordMode: keepUpdated
+    # An overlay that sets this list must keep these two entries.
+    additionalConfigFromEnvs:
+      - name: FORGEJO__DATABASE__HOST
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-database, key: host }
+      - name: FORGEJO__DATABASE__PASSWD
+        valueFrom:
+          secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+    config:
+      server:
+        DISABLE_SSH: true # Ingress-only clusters serve git over HTTPS
+        START_SSH_SERVER: false
+        LFS_START_SERVER: true
+      database:
+        DB_TYPE: postgres
+        NAME: forgejo
+        USER: forgejo
+        SSL_MODE: disable
+      service:
+        DISABLE_REGISTRATION: true # accounts are provisioned
+      actions:
+        ENABLED: true
+        DEFAULT_ACTIONS_URL: https://github.com # bare `uses:` resolve as on GitHub
+      session:
+        PROVIDER: db
+      cache:
+        ADAPTER: memory
+      queue:
+        TYPE: level
+      indexer:
+        ISSUE_INDEXER_TYPE: bleve
+        REPO_INDEXER_ENABLED: false
+  # Offline registration of forgejoRunner, Forgejo side: forgejo-cli writes to
+  # Forgejo's DB, so it runs next to Forgejo with the same config. Idles when
+  # the runner Secret doesn't exist.
+  extraContainers:
+    - name: register-runner
+      image: code.forgejo.org/forgejo/forgejo:15.0.9-rootless
+      command:
+        - sh
+        - -c
+        - |
+          [ -n "$RUNNER_SECRET" ] || exec sleep 2147483647
+          until forgejo forgejo-cli actions register --name pawtograder-runner --secret "$RUNNER_SECRET"; do sleep 10; done
+          exec sleep 2147483647
+      env:
+        - { name: GITEA_APP_INI, value: /data/gitea/conf/app.ini }
+        - { name: GITEA_CUSTOM, value: /data/gitea }
+        - { name: GITEA_WORK_DIR, value: /data }
+        - { name: GITEA_TEMP, value: /tmp/gitea }
+        - name: RUNNER_SECRET
+          valueFrom:
+            secretKeyRef: { name: pawtograder-forgejo-runner, key: secret, optional: true }
+      securityContext:
+        allowPrivilegeEscalation: false
+      resources:
+        requests: { cpu: 10m, memory: 32Mi }
+        limits: { cpu: 200m, memory: 128Mi }
+      volumeMounts:
+        - { name: data, mountPath: /data }
+        - { name: temp, mountPath: /tmp }
+
+# groundhog2k/postgres for forgejo.database=own: Service pawtograder-forgejo-db.
+forgejoDb:
+  enabled: false
+  nameOverride: forgejo-db
+  settings:
+    existingSecret: pawtograder-forgejo-db-superuser
+    superuserPassword:
+      secretKey: POSTGRES_PASSWORD
+  storage:
+    requestedSize: 5Gi
+    keepPvc: true
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+# Forgejo Actions runner in host mode: jobs run inside its own container, for
+# clusters without Docker-in-Docker. Image: images/forgejo-runner.
+forgejoRunner:
+  enabled: false
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  capacity: 2
+  labels:
+    - ubuntu-latest:host
+    - ubuntu-24.04:host
+    - ubuntu-22.04:host
+  workdirSizeLimit: 20Gi
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "2", memory: 4Gi }
+
+# helm.coder.com/v2
+coder:
+  enabled: false
+  # own: the coderDb Postgres (set coderDb.enabled). pawtograder: this chart's Postgres.
+  database: own
+  coder:
+    # Set CODER_ACCESS_URL and CODER_WILDCARD_ACCESS_URL in the overlay's coder.coder.env.
+    env: []
+    envFrom:
+      - configMapRef: { name: pawtograder-coder-env }
+      - secretRef: { name: pawtograder-coder-db } # PGPASSWORD
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+    service:
+      type: ClusterIP
+    ingress:
+      enable: true
+      className: nginx
+      # Set host and wildcardHost (and tls) in the overlay.
+      host: ""
+      wildcardHost: ""
+    serviceAccount:
+      workspacePerms: true
+      enableDeployments: true
+
+# groundhog2k/postgres for coder.database=own: Service pawtograder-coder-db.
+coderDb:
+  enabled: false
+  nameOverride: coder-db
+  settings:
+    existingSecret: pawtograder-coder-db-superuser
+    superuserPassword:
+      secretKey: POSTGRES_PASSWORD
+  storage:
+    requestedSize: 5Gi
+    keepPvc: true
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+# Post-install/upgrade hook: Coder's first owner from Secret
+# pawtograder-coder-admin, then every template under files/coder-templates.
+coderBootstrap:
+  enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+# Creates each enabled app's role and database on its Postgres; runs on
+# every install and upgrade (idempotent).
+appDatabases:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }
