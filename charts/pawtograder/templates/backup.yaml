@@ -1,4 +1,15 @@
 {{- if and .Values.postgres.enabled .Values.backup.enabled }}
+{{- /* The bucket's whole lifecycle configuration, one expiry rule per tier.
+       The job imports exactly this; see the reconcile step in the script. */ -}}
+{{- $ret := .Values.backup.retention -}}
+{{- $rules := list (dict "ID" "pawtograder-daily" "Status" "Enabled" "Filter" (dict "Prefix" "daily/") "Expiration" (dict "Days" (int $ret.dailyDays))) -}}
+{{- if gt (int $ret.monthlyDays) 0 -}}
+{{- $rules = append $rules (dict "ID" "pawtograder-monthly" "Status" "Enabled" "Filter" (dict "Prefix" "monthly/") "Expiration" (dict "Days" (int $ret.monthlyDays))) -}}
+{{- end -}}
+{{- if gt (int $ret.legacyRootDays) 0 -}}
+{{- /* Root-level keys only: daily/... and monthly/... do not start with "pawtograder-". */ -}}
+{{- $rules = append $rules (dict "ID" "pawtograder-legacy-root" "Status" "Enabled" "Filter" (dict "Prefix" "pawtograder-") "Expiration" (dict "Days" (int $ret.legacyRootDays))) -}}
+{{- end }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -101,28 +112,123 @@ spec:
                     chmod +x /usr/local/bin/mc
                   fi
                   mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
-                  REMOTE="s3/${S3_BUCKET}/$(basename "$FILE")"
-                  mc cp "$FILE" "$REMOTE"
-                  # Post-upload integrity: the object must exist remotely at
-                  # exactly the local size (catches truncated multipart uploads).
                   LOCAL_SIZE=$(stat -c%s "$FILE")
-                  REMOTE_SIZE=$(mc stat --json "$REMOTE" | grep -o '"size":[0-9]*' | head -1 | cut -d: -f2)
-                  if [ "$LOCAL_SIZE" != "$REMOTE_SIZE" ]; then
-                    echo "[backup] FATAL: size mismatch after upload (local=$LOCAL_SIZE remote=${REMOTE_SIZE:-missing})"
-                    exit 1
+                  # upload <remote>: copy the dump up, then require the object
+                  # to exist remotely at exactly the local size (catches
+                  # truncated multipart uploads).
+                  upload() {
+                    mc cp "$FILE" "$1"
+                    REMOTE_SIZE=$(mc stat --json "$1" | grep -o '"size":[0-9]*' | head -1 | cut -d: -f2)
+                    if [ "$LOCAL_SIZE" != "$REMOTE_SIZE" ]; then
+                      echo "[backup] FATAL: size mismatch after upload to $1 (local=$LOCAL_SIZE remote=${REMOTE_SIZE:-missing})"
+                      exit 1
+                    fi
+                    echo "[backup] uploaded + size-verified $1"
+                  }
+                  # daily/ and monthly/ are hardcoded, not values: the
+                  # lifecycle rules below, backup-verify and the restore drill
+                  # all key off them.
+                  upload "s3/${S3_BUCKET}/daily/$(basename "$FILE")"
+                  {{- if gt (int .Values.backup.retention.monthlyDays) 0 }}
+                  # Monthly tier: the first good run of each UTC month keeps a
+                  # second copy. Keyed on "monthly/ has nothing for this month
+                  # yet" rather than "today is the 1st", so a failed run on
+                  # the 1st is covered by the next good one. A failed listing
+                  # reads as "nothing yet" and costs at most one extra copy.
+                  if mc ls "s3/${S3_BUCKET}/monthly/pawtograder-${TS:0:6}" | grep -q '\.dump$'; then
+                    echo "[backup] monthly/ already holds a ${TS:0:6} dump"
+                  else
+                    upload "s3/${S3_BUCKET}/monthly/$(basename "$FILE")"
                   fi
-                  echo "[backup] uploaded + size-verified $REMOTE"
+                  {{- end }}
                   # Drop the local copy now the remote is byte-verified, so a
                   # retained completed pod's PVC doesn't hold a dump-sized chunk
                   # of the scratch tier until the history limit reaps it.
                   rm -f "$FILE"
-                  # Retention is enforced via a bucket ILM expiry rule. Adding
-                  # a duplicate errors, so add only when absent — but a bucket
-                  # with NO expiry rule and a failing add is a hard error
-                  # (silent retention loss otherwise).
-                  if ! mc ilm rule ls "s3/${S3_BUCKET}" 2>/dev/null | grep -qi expir; then
-                    mc ilm rule add --expiry-days {{ .Values.backup.retentionDays }} "s3/${S3_BUCKET}"
-                    echo "[backup] created ILM expiry rule ({{ .Values.backup.retentionDays }}d)"
+                  # Retention: reconcile the bucket's lifecycle rules with
+                  # BACKUP_LIFECYCLE (rendered from backup.retention). The
+                  # chart <= 0.3.27 job only ADDED a rule when none existed,
+                  # so changing retentionDays on a live bucket did nothing.
+                  #
+                  # The job owns rules whose ID starts with "pawtograder-".
+                  # It also removes any bucket-wide expiry rule (no prefix, no
+                  # tag) — the old job's, or one made by hand — because that
+                  # would expire monthly/ too. Every other rule is ops' and is
+                  # kept as exported: a noncurrent-version expiry on a
+                  # versioned bucket is the one that matters, and dropping it
+                  # would let old versions pile up forever.
+                  #
+                  # Owned rules compare on ID, status, prefix and days rather
+                  # than raw JSON, so a server that reorders keys or moves
+                  # Prefix into an And block on export does not look like
+                  # drift. `lifecycle plan` exits 0 = in sync, 10 = prints the
+                  # merged config to import; `lifecycle check` exits 0 when
+                  # the bucket holds exactly the owned rules wanted. Any other
+                  # exit, including an export error other than "no lifecycle
+                  # configuration", stops the job: importing over a config we
+                  # could not read would delete ops' rules.
+                  lifecycle() {
+                    python3 - "$1" "$BACKUP_LIFECYCLE" "$2" <<'PY'
+                  import json, sys
+                  mode, desired_doc, export_doc = sys.argv[1:4]
+                  try:
+                      exported = json.loads(export_doc)
+                  except ValueError:
+                      sys.exit("[backup] FATAL: unparseable lifecycle export: " + export_doc)
+                  if exported.get("status") == "success":
+                      current = (exported.get("config") or {}).get("Rules") or []
+                  elif "NoSuchLifecycleConfiguration" in export_doc:
+                      current = []
+                  else:
+                      sys.exit("[backup] FATAL: could not read the bucket's lifecycle rules: " + export_doc)
+                  def prefix(r):
+                      f = r.get("Filter") or {}
+                      return f.get("Prefix", (f.get("And") or {}).get("Prefix", r.get("Prefix", "")))
+                  def key(r):
+                      return (r.get("ID"), r.get("Status"), prefix(r), (r.get("Expiration") or {}).get("Days"))
+                  def owned(r):
+                      return str(r.get("ID", "")).startswith("pawtograder-")
+                  def bucket_wide_expiry(r):
+                      f = r.get("Filter") or {}
+                      return (not owned(r) and prefix(r) == "" and not f.get("Tag") and not f.get("And")
+                              and bool((r.get("Expiration") or {}).get("Days")))
+                  desired = json.loads(desired_doc)["Rules"]
+                  in_sync = ({key(r) for r in desired} == {key(r) for r in current if owned(r)}
+                             and not any(bucket_wide_expiry(r) for r in current))
+                  if mode == "check":
+                      sys.exit(0 if in_sync else 1)
+                  if in_sync:
+                      sys.exit(0)
+                  for r in current:
+                      if bucket_wide_expiry(r):
+                          print("[backup] removing bucket-wide expiry rule %s (%sd): it would expire monthly/ too"
+                                % (r.get("ID"), r["Expiration"]["Days"]), file=sys.stderr)
+                  kept = [r for r in current if not owned(r) and not bucket_wide_expiry(r)]
+                  for r in kept:
+                      print("[backup] keeping ops-owned lifecycle rule %s" % r.get("ID"), file=sys.stderr)
+                  print(json.dumps({"Rules": kept + desired}))
+                  sys.exit(10)
+                  PY
+                  }
+                  export_rules() { mc ilm rule export --json "s3/${S3_BUCKET}" 2>&1 || true; }
+                  RC=0; MERGED=$(lifecycle plan "$(export_rules)") || RC=$?
+                  if [ "$RC" -eq 0 ]; then
+                    echo "[backup] lifecycle rules already match backup.retention"
+                  elif [ "$RC" -eq 10 ]; then
+                    echo "[backup] importing lifecycle configuration: $MERGED"
+                    printf '%s' "$MERGED" | mc ilm rule import "s3/${S3_BUCKET}"
+                    # Read it back. A server that accepted the import but
+                    # dropped a filter would otherwise expire the wrong
+                    # objects in silence; failing here fires
+                    # PawtograderBackupJobFailed instead.
+                    APPLIED=$(export_rules)
+                    if ! lifecycle check "$APPLIED"; then
+                      echo "[backup] FATAL: lifecycle read back differs from what was imported: $APPLIED"
+                      exit 1
+                    fi
+                    echo "[backup] lifecycle configuration applied and read back"
+                  else
+                    exit 1
                   fi
               volumeMounts:
                 - { name: scratch, mountPath: /scratch }
@@ -144,6 +250,8 @@ spec:
                   value: {{ required "backup.s3.endpoint is required when backup.enabled=true" .Values.backup.s3.endpoint | quote }}
                 - name: S3_BUCKET
                   value: {{ required "backup.s3.bucket is required when backup.enabled=true" .Values.backup.s3.bucket | quote }}
+                - name: BACKUP_LIFECYCLE
+                  value: {{ dict "Rules" $rules | toJson | quote }}
                 - name: AWS_ACCESS_KEY_ID
                   valueFrom:
                     secretKeyRef:

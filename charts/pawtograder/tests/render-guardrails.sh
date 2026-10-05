@@ -527,6 +527,43 @@ assert_renders "prometheus rules with ruleSelector label renders" \
 assert_renders "prometheus rules allowUnselectedRules renders" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.allowUnselectedRules=true
 
+echo "== backup retention tiers (chart 0.3.28) =="
+BACKUP_ON=(--set backup.enabled=true --set backup.s3.endpoint=https://s3.example.com
+  --set backup.image.tag=v1.0.0)
+# The removed key must be refused, not ignored: ignoring it is how a retention
+# change used to look applied while the bucket kept its old rule.
+assert_refused "backup.retentionDays is refused" \
+  "backup.retentionDays was removed in chart 0.3.28" \
+  "${BACKUP_ON[@]}" --set backup.retentionDays=30
+assert_refused "backup.retention.dailyDays=0 is refused" \
+  "backup.retention.dailyDays must be >= 1" \
+  "${BACKUP_ON[@]}" --set backup.retention.dailyDays=0
+assert_refused "negative backup.retention.monthlyDays is refused" \
+  "monthlyDays and legacyRootDays must be >= 0" \
+  "${BACKUP_ON[@]}" --set backup.retention.monthlyDays=-1
+assert_rendered_contains "backup uploads under daily/" templates/backup.yaml \
+  'upload "s3/${S3_BUCKET}/daily/$(basename "$FILE")"' "${BACKUP_ON[@]}"
+assert_rendered_contains "backup reconciles lifecycle by import" templates/backup.yaml \
+  'mc ilm rule import' "${BACKUP_ON[@]}"
+assert_rendered_contains "legacy root rule on by default" templates/backup.yaml \
+  'pawtograder-legacy-root' "${BACKUP_ON[@]}"
+assert_rendered_lacks "legacyRootDays=0 drops the root rule" templates/backup.yaml \
+  'pawtograder-legacy-root' "${BACKUP_ON[@]}" --set backup.retention.legacyRootDays=0
+# monthlyDays=0 (the default) must drop BOTH halves of the tier: an upload with
+# no rule would keep monthly dumps forever.
+assert_rendered_lacks "monthlyDays=0: no monthly rule" templates/backup.yaml \
+  'pawtograder-monthly' "${BACKUP_ON[@]}"
+assert_rendered_lacks "monthlyDays=0: no monthly upload" templates/backup.yaml \
+  '/monthly/$(basename' "${BACKUP_ON[@]}"
+assert_rendered_contains "monthlyDays>0: monthly rule" templates/backup.yaml \
+  'pawtograder-monthly' "${BACKUP_ON[@]}" --set backup.retention.monthlyDays=90
+assert_rendered_contains "monthlyDays>0: monthly upload" templates/backup.yaml \
+  '/monthly/$(basename' "${BACKUP_ON[@]}" --set backup.retention.monthlyDays=90
+assert_rendered_contains "backup-verify reads daily/ first" templates/backup-verify.yaml \
+  'LATEST=$(newest daily/)' "${BACKUP_ON[@]}"
+assert_rendered_contains "restore drill reads daily/ first" templates/backup-restore-drill.yaml \
+  'LATEST=$(newest daily/)' "${BACKUP_ON[@]}" --set backup.restoreDrill.enabled=true
+
 # assert_exporter_metric "<block>" "<column>" [<label>...]
 # postgres_exporter names every custom metric `<block key>_<column name>`, so the
 # queries.yaml block key and the column name TOGETHER are the metric name that

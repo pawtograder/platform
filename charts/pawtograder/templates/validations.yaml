@@ -659,6 +659,26 @@ legitimate outside production (production refuses them outright above).
 {{- end -}}
 
 {{- /*
+Backup retention (chart 0.3.28). backup.retentionDays is GONE, replaced by
+backup.retention.*, and a values file that still sets it is refused rather than
+ignored. Ignoring it is the exact failure this replaced: the old job only added
+an expiry rule when the bucket had none, so editing retentionDays on a live
+bucket looked applied and changed nothing. Any environment.
+*/ -}}
+{{- if .Values.backup.enabled -}}
+{{- if hasKey .Values.backup "retentionDays" -}}
+{{- fail (printf "backup.retentionDays was removed in chart 0.3.28 (got %v). Retention is now tiered by prefix: set backup.retention.dailyDays for nightly dumps, backup.retention.monthlyDays for the monthly tier (0 = none), and backup.retention.legacyRootDays to your OLD retentionDays so dumps the previous chart wrote at the bucket root still expire. The backup job now replaces the bucket's whole lifecycle configuration with these rules." .Values.backup.retentionDays) -}}
+{{- end -}}
+{{- $ret := .Values.backup.retention -}}
+{{- if lt (int $ret.dailyDays) 1 -}}
+{{- fail (printf "backup.retention.dailyDays must be >= 1 (got %v) — 0 would leave daily/ with no expiry rule and the bucket would grow without bound." $ret.dailyDays) -}}
+{{- end -}}
+{{- if or (lt (int $ret.monthlyDays) 0) (lt (int $ret.legacyRootDays) 0) -}}
+{{- fail (printf "backup.retention.monthlyDays and legacyRootDays must be >= 0, where 0 turns the tier off (got monthlyDays=%v legacyRootDays=%v)." $ret.monthlyDays $ret.legacyRootDays) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
 PROMETHEUS RULE THRESHOLDS.
 
 Every value below is interpolated VERBATIM into a PromQL expression or a `for:`
