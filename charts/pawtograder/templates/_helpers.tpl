@@ -293,10 +293,6 @@ Internal service hostnames.
 {{- printf "%s-forgejo-http" .Release.Name -}}
 {{- end -}}
 
-{{/*
-Postgres server for an optional app (forgejo, coder), per its `database`
-value. Call with (dict "ctx" $ "app" "forgejo").
-*/}}
 {{- define "pawtograder.appDatabase.host" -}}
 {{- if eq (index .ctx.Values .app).database "pawtograder" -}}
 {{- include "pawtograder.postgres.host" .ctx -}}

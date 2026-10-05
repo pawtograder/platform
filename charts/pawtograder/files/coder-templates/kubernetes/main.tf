@@ -87,7 +87,6 @@ resource "coder_agent" "main" {
   arch           = "amd64"
   startup_script = <<-EOT
     set -e
-    # code-server in the browser, installed into the persistent home.
     if [ ! -x "$HOME/.local/bin/code-server" ]; then
       curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix="$HOME/.local"
     fi
@@ -160,7 +159,6 @@ resource "kubernetes_pod_v1" "main" {
   }
 
   spec {
-    # Workspaces run student code: no Kubernetes credentials.
     automount_service_account_token = false
     restart_policy                  = "Always"
 

@@ -1,11 +1,8 @@
-# Forgejo (git + Actions runner) and Coder (Cloud Workspaces) next to
-# Pawtograder, each on its own Postgres. Layer on top of an environment's
-# values file. Pre-create the Secrets listed in README "Forgejo and Coder".
-# Hosts are one level under a zone a wildcard certificate covers.
+# Pre-create the Secrets listed in README "Forgejo and Coder".
 
 forgejo:
   enabled: true
-  database: own # or: pawtograder, then drop forgejo-db
+  database: own
   ingress:
     hosts:
       - host: git.example.com
@@ -16,7 +13,6 @@ forgejo:
       - secretName: example-wildcard-tls
         hosts: [git.example.com]
   gitea:
-    # Keep the chart's two FORGEJO__DATABASE__* entries when extending this list.
     additionalConfigFromEnvs:
       - name: FORGEJO__DATABASE__HOST
         valueFrom:
@@ -31,7 +27,6 @@ forgejo:
         valueFrom:
           secretKeyRef: { name: pawtograder-s3, key: AWS_SECRET_ACCESS_KEY }
     config:
-      # LFS, attachments, packages and Actions logs in S3; repos stay on the volume.
       storage:
         STORAGE_TYPE: minio
         MINIO_ENDPOINT: s3.example.com
@@ -52,12 +47,11 @@ forgejoRunner:
 
 coder:
   enabled: true
-  database: own # or: pawtograder, then drop coder-db
+  database: own
   coder:
     env:
       - name: CODER_ACCESS_URL
         value: https://coder.example.com
-      # Workspace apps on one-label subdomains of the same zone.
       - name: CODER_WILDCARD_ACCESS_URL
         value: "*.example.com"
     ingress:

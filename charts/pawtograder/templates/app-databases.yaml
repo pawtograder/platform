@@ -26,8 +26,7 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder") | nindent 4 }}
 data:
-  # Password comes from PGPASSWORD (Secret <release>-coder-db), which Coder's
-  # Postgres driver reads when the URL has none.
+  # No password in the URL: Coder's Postgres driver reads PGPASSWORD (Secret <release>-coder-db).
   CODER_PG_CONNECTION_URL: postgres://coder@{{ include "pawtograder.appDatabase.host" (dict "ctx" . "app" "coder") }}:5432/coder?sslmode=disable
   CODER_TELEMETRY_ENABLE: "false"
   # Coder's built-in GitHub OAuth app is on by default with no configuration.
@@ -35,8 +34,7 @@ data:
   CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS: "false"
 ---
 {{- end }}
-# A regular Job, not a hook, for the same reason as migrations: the Postgres
-# servers are regular resources that a pre-install hook would run before.
+# Not a hook: a pre-install hook would run before the Postgres servers exist.
 apiVersion: batch/v1
 kind: Job
 metadata:

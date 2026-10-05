@@ -1,4 +1,3 @@
-{{- /* Render-time checks for the optional Forgejo and Coder components. */ -}}
 {{- if or .Values.forgejo.enabled .Values.coder.enabled }}
 {{- if ne .Release.Name "pawtograder" }}
 {{- fail (printf "forgejo/coder: the release must be named pawtograder (got %q); their subchart values reference pawtograder-* Secrets and ConfigMaps." .Release.Name) }}

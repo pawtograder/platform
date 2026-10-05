@@ -34,7 +34,6 @@ spec:
       annotations:
         checksum/config: {{ toYaml $config | sha256sum }}
     spec:
-      # Jobs run student code: no Kubernetes credentials.
       automountServiceAccountToken: false
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
       securityContext:
@@ -46,11 +45,10 @@ spec:
           image: "{{ $r.image.repository }}:{{ $r.image.tag }}"
           imagePullPolicy: {{ $r.image.pullPolicy }}
           workingDir: /data
-          args: # under the image's dumb-init, which forwards SIGTERM to the daemon
+          args:
             - sh
             - -c
-            # Retries until Forgejo's register-runner sidecar has registered the
-            # secret, so a fresh install neither crash-loops nor blocks --wait.
+            # Retries until Forgejo's register-runner sidecar has registered the secret.
             - |
               forgejo-runner create-runner-file --instance "http://{{ include "pawtograder.forgejo.http" . }}:3000" \
                 --name pawtograder-runner --secret "$RUNNER_SECRET"

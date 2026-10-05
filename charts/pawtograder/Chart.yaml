@@ -23,8 +23,7 @@ keywords:
   - autograder
 annotations:
   category: Application
-# Optional and off by default (README: "Forgejo and Coder"). Vendored unpacked
-# under charts/ because .helmignore drops *.tgz and CI runs no dependency build.
+# Vendored unpacked under charts/: .helmignore drops *.tgz and CI runs no dependency build.
 dependencies:
   - name: forgejo
     version: 17.1.7

@@ -416,7 +416,6 @@ spec:
               value: "true"
             {{- end }}
             {{- if $ctx.Values.forgejo.enabled }}
-            # Trust this Forgejo's Actions job tokens (issuer <FORGEJO_URL>/api/actions).
             - name: FORGEJO_URL
               value: {{ include "pawtograder.forgejo.url" $ctx | quote }}
             {{- end }}
