@@ -10,8 +10,11 @@ kubeContext: cs4535-workspaces
 domain: workspaces.cs4535.ripley.cloud
 tlsSecret: workspaces-wildcard-tls
 
-# Namespace-scoped registry path images are pushed to.
+# Namespace-scoped registry path images are pushed to, and the pull Secret for
+# it. Only the namespace's default ServiceAccounts carry that Secret, so charts
+# that bring their own ServiceAccount must name it.
 registry: registry.work.ripley.cloud/cs4535-workspaces
+registryPullSecret: registry-creds
 
 # S3 (MinIO). Credentials are the namespace's `minio-creds` Secret.
 s3:

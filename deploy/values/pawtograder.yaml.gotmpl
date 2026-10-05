@@ -15,6 +15,10 @@ global:
   # platform uses for previews (pr-<id>-api.preview.pawtograder.net).
   apiOnSeparateHost: true
   apiHostnameFlatten: true
+  # The chart's own ServiceAccount, unlike the namespace defaults, doesn't
+  # carry the registry pull Secret the web image needs.
+  imagePullSecrets:
+    - name: {{ $env.registryPullSecret }}
 
 ingress:
   enabled: true
