@@ -17,6 +17,7 @@
  * still coverage information — it says "known gap, here's why" — so the
  * registry stays an honest denominator.
  */
+import type { Page } from "@playwright/test";
 import { seedAgentPages, type AgentSeed } from "../a11yAgentSeeding";
 import {
   createClass,
@@ -49,6 +50,15 @@ export type StudentRouteState = {
   expectReflow?: boolean;
   /** Routes that must be visited signed-out. */
   anonymous?: boolean;
+  /**
+   * A state the page only reaches after an interaction, scanned instead of the
+   * page as loaded. `interact` runs once the page has settled; `marker` is a
+   * selector that must be visible before the scan and still visible after it.
+   * Without the marker check, a click that silently did nothing would scan
+   * the load state again, pass, and be recorded as coverage of a state that
+   * never rendered.
+   */
+  state?: { interact: (page: Page) => Promise<void>; marker: string };
 };
 
 export type StudentSurface = AgentSeed & {
@@ -388,6 +398,21 @@ export const STUDENT_ROUTES: StudentRouteState[] = [
     id: "survey-taking",
     label: "survey taking (SurveyJS)",
     path: (s) => `/course/${s.course.id}/surveys/${s.surveyId}`
+  },
+  {
+    // The validation message only exists after Complete is pressed with a
+    // required question empty (q1 in AGENT_SURVEY_JSON), so the load-time row
+    // above never measures it. It draws --sjs-special-red on its own 10% tint,
+    // which failed 1.4.3 in both themes while survey-taking scanned clean.
+    id: "survey-taking-invalid-submit",
+    label: "survey taking, after an invalid submit (SurveyJS)",
+    path: (s) => `/course/${s.course.id}/surveys/${s.surveyId}`,
+    state: {
+      interact: async (page) => {
+        await page.locator("input.sd-navigation__complete-btn").first().click();
+      },
+      marker: ".sd-error"
+    }
   },
   { id: "polls", label: "polls", path: (s) => `/course/${s.course.id}/polls` },
   { id: "flashcards", label: "flashcards", path: (s) => `/course/${s.course.id}/flashcards` },
