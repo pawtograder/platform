@@ -118,6 +118,14 @@ edgeFunctions:
   maxParallelism: 4
   image:
     tag: {{ $p.imageTag | quote }}
+  {{- if $env.forgejo.enabled }}
+  extraEnv:
+    # Trust Actions job tokens from this Forgejo (validateOIDCToken): issuer
+    # <FORGEJO_URL>/api/actions, keys at <FORGEJO_URL>/api/actions/.well-known/keys.
+    # Same host Forgejo's ROOT_URL is built from, so the two can't disagree.
+    - name: FORGEJO_URL
+      value: https://{{ $env.forgejo.host }}
+  {{- end }}
   resources:
     requests: { cpu: 200m, memory: 512Mi }
     limits: { cpu: "1", memory: 2Gi }

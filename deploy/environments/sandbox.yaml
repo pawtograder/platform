@@ -1,6 +1,6 @@
 # sandbox: the tenant namespace on Ripley we develop and demo in.
-# A prod environment is another file like this one, pointed at its own
-# namespace, context and hostnames. Secrets never go here — see
+# A prod environment is another file of the same shape, pointed at its own
+# namespace, context and hostnames. Secrets never go here; see
 # scripts/create-secrets.sh.
 
 namespace: cs4535-workspaces
@@ -58,7 +58,7 @@ pawtograder:
   # Images for migrations/edge-functions come from ghcr.io at this tag; the web
   # image is built per install (scripts/build-web-image.sh) from the matching
   # commit, because NEXT_PUBLIC_* are compiled in. Only some staging commits
-  # publish images — pick one that has staging-<sha7> tags.
+  # publish images, so pick one that has staging-<sha7> tags.
   imageRef: 625a9f81ac23319f32e1bca16e6ad1de9065eabc
   imageTag: staging-625a9f8
   webImageRepository: registry.work.ripley.cloud/cs4535-workspaces/pawtograder-web
