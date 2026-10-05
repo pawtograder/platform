@@ -91,6 +91,10 @@ gitea:
       # `uses: pawtograder/assignment-action@v1` and `actions/checkout`
       # resolve against GitHub, as they do in assignments today.
       DEFAULT_ACTIONS_URL: https://github.com
+    # Accounts are made programmatically (scripts/add-user.sh, and later
+    # Pawtograder), never by self-signup.
+    service:
+      DISABLE_REGISTRATION: true
     session:
       PROVIDER: db
     cache:

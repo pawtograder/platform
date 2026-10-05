@@ -15,6 +15,14 @@ coder:
       value: "*.{{ .Values.domain }}"
     - name: CODER_TELEMETRY_ENABLE
       value: "false"
+    # Accounts are made programmatically (scripts/add-user.sh). Password
+    # signup is already closed once the first owner exists; also turn off
+    # GitHub login through Coder's built-in OAuth app, which would otherwise
+    # be on with no configuration at all.
+    - name: CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE
+      value: "false"
+    - name: CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS
+      value: "false"
     # Role + database made by scripts/ensure-database.sh (presync hook).
     - name: CODER_DB_PASSWORD
       valueFrom:
