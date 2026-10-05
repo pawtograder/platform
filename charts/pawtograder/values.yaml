@@ -2708,7 +2708,9 @@ forgejo:
         - -c
         - |
           [ -n "$RUNNER_SECRET" ] || exec sleep 2147483647
-          until forgejo forgejo-cli actions register --name pawtograder-runner --secret "$RUNNER_SECRET"; do sleep 10; done
+          # Runs on every Forgejo start; without --keep-labels it wipes the labels the runner declared.
+          until forgejo forgejo-cli actions register --name pawtograder-runner --secret "$RUNNER_SECRET" \
+            --keep-labels; do sleep 10; done
           exec sleep 2147483647
       env:
         - { name: GITEA_APP_INI, value: /data/gitea/conf/app.ini }
