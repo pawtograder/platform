@@ -90,7 +90,18 @@ After changing a template, run `scripts/bootstrap-workspaces.sh sandbox` (or `he
 
 ## Pawtograder
 
-TODO: filled in once verified in the sandbox.
+`values/pawtograder.yaml.gotmpl` layers the chart the way its examples do: `values-prod-noeso.yaml` for pre-created Secrets and an existing wildcard certificate, `values-preview.yaml` for MinIO storage and the API host. Sizes are trimmed to share the namespace quota with Forgejo and Coder (one replica each, no Supavisor, Studio or postgres-meta).
+
+The web app is served on `pawtograder.host` and the API on `<first label>-api.<rest of host>` (`app-api.workspaces.cs4535.ripley.cloud` in `sandbox`), the flattened form previews use, so the one-level wildcard certificate covers both.
+
+Two pins move together:
+
+- `pawtograder.imageRef` / `imageTag`: the migrations and edge-functions images come from `ghcr.io/pawtograder` at `imageTag`. Only some staging commits publish images, so pick a commit that has `staging-<sha7>` tags.
+- The web image: Next.js compiles `NEXT_PUBLIC_*` (the hostnames and the anon key) into the bundle, so a staging image can't serve another host. `scripts/build-web-image.sh` builds `imageRef` with this environment's values, the same build arguments as the preview workflow, and pushes it to `webImageRepository`. Run it again after changing `imageRef` or recreating `pawtograder-jwt`.
+
+After a deploy, `helm test pawtograder` runs the chart's smoke Job against the web tier and GoTrue through Kong.
+
+GitHub App credentials in `pawtograder-edge-functions` are stubs, as in previews, so anything that goes through the GitHub App (creating repos, cloning submissions) doesn't work yet. There's no SMTP either, so confirmation and notification emails aren't sent; GoTrue autoconfirms email signups instead.
 
 ## Constraints this works within
 
