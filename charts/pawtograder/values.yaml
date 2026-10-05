@@ -2638,7 +2638,7 @@ tests:
 # code.forgejo.org/forgejo-helm/forgejo
 forgejo:
   enabled: false
-  # own: the forgejoDb Postgres (set forgejoDb.enabled). pawtograder: this chart's Postgres.
+  # own: the forgejo-db Postgres (set forgejo-db.enabled). pawtograder: this chart's Postgres.
   database: own
   strategy:
     type: Recreate # RWO repo volume
@@ -2728,9 +2728,8 @@ forgejo:
         - { name: temp, mountPath: /tmp }
 
 # groundhog2k/postgres for forgejo.database=own: Service pawtograder-forgejo-db.
-forgejoDb:
+forgejo-db:
   enabled: false
-  nameOverride: forgejo-db
   settings:
     existingSecret: pawtograder-forgejo-db-superuser
     superuserPassword:
@@ -2766,7 +2765,7 @@ forgejoRunner:
 # helm.coder.com/v2
 coder:
   enabled: false
-  # own: the coderDb Postgres (set coderDb.enabled). pawtograder: this chart's Postgres.
+  # own: the coder-db Postgres (set coder-db.enabled). pawtograder: this chart's Postgres.
   database: own
   coder:
     # Set CODER_ACCESS_URL and CODER_WILDCARD_ACCESS_URL in the overlay's coder.coder.env.
@@ -2790,9 +2789,8 @@ coder:
       enableDeployments: true
 
 # groundhog2k/postgres for coder.database=own: Service pawtograder-coder-db.
-coderDb:
+coder-db:
   enabled: false
-  nameOverride: coder-db
   settings:
     existingSecret: pawtograder-coder-db-superuser
     superuserPassword:

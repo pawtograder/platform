@@ -618,16 +618,16 @@ The chart can also run [Forgejo](https://forgejo.org) (git hosting and Actions) 
 | Value | What it adds |
 | --- | --- |
 | `forgejo.enabled` | Forgejo (subchart `charts/forgejo`, upstream `forgejo-helm/forgejo`) |
-| `forgejoDb.enabled` | Forgejo's own Postgres (`groundhog2k/postgres`), Service `pawtograder-forgejo-db` |
+| `forgejo-db.enabled` | Forgejo's own Postgres (`groundhog2k/postgres`), Service `pawtograder-forgejo-db` |
 | `forgejoRunner.enabled` | A Forgejo Actions runner in host mode (`templates/forgejo-runner.yaml`) |
 | `coder.enabled` | Coder (subchart `charts/coder`, upstream `helm.coder.com/v2`), plus the post-install hook that creates its first owner and pushes `files/coder-templates/*` |
-| `coderDb.enabled` | Coder's own Postgres, Service `pawtograder-coder-db` |
+| `coder-db.enabled` | Coder's own Postgres, Service `pawtograder-coder-db` |
 
 The release must be named `pawtograder`: subchart values name `pawtograder-*` Secrets and ConfigMaps, and a render with another name fails.
 
 ### Databases
 
-Each app has a `database` value. `own` (the default) uses its `*Db` Postgres, so enable that alongside it. `pawtograder` uses this chart's Postgres instead, with the `*Db` release left off. Either way the app gets its own role and database, created by the `pawtograder-app-databases-<revision>` Job on every install and upgrade. Switching an existing app between the two connects it to an empty database; move the data first.
+Each app has a `database` value. `own` (the default) uses its `*-db` Postgres, so enable that alongside it. `pawtograder` uses this chart's Postgres instead, with the `*-db` release left off. Either way the app gets its own role and database, created by the `pawtograder-app-databases-<revision>` Job on every install and upgrade. Switching an existing app between the two connects it to an empty database; move the data first.
 
 Prefer `own` in production. Sharing this chart's Postgres puts Git and Coder downtime on every Postgres restart, and their connections count against `postgres.config.max_connections`.
 
@@ -639,11 +639,11 @@ Pre-create these alongside the ones under "Required Secrets" (or sync them with 
 | --- | --- | --- |
 | `pawtograder-forgejo-admin` | `username`, `password` | Forgejo's admin account (`admin` is reserved) |
 | `pawtograder-forgejo-db` | `PGPASSWORD` | Forgejo's database role |
-| `pawtograder-forgejo-db-superuser` | `POSTGRES_PASSWORD` | `forgejoDb` |
+| `pawtograder-forgejo-db-superuser` | `POSTGRES_PASSWORD` | `forgejo-db` |
 | `pawtograder-forgejo-runner` | `secret` (40 hex characters) | `forgejoRunner`; the same secret registers the runner on both sides |
 | `pawtograder-coder-admin` | `email`, `username`, `password` | Coder's first owner |
 | `pawtograder-coder-db` | `PGPASSWORD` | Coder's database role |
-| `pawtograder-coder-db-superuser` | `POSTGRES_PASSWORD` | `coderDb` |
+| `pawtograder-coder-db-superuser` | `POSTGRES_PASSWORD` | `coder-db` |
 
 Keep database passwords alphanumeric; Coder's connection settings don't escape them.
 

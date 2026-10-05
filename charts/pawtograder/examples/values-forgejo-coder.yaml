@@ -5,7 +5,7 @@
 
 forgejo:
   enabled: true
-  database: own # or: pawtograder, then drop forgejoDb
+  database: own # or: pawtograder, then drop forgejo-db
   ingress:
     hosts:
       - host: git.example.com
@@ -41,7 +41,7 @@ forgejo:
         MINIO_LOCATION: us-east-1
         MINIO_BASE_PATH: forgejo/
 
-forgejoDb:
+forgejo-db:
   enabled: true
 
 forgejoRunner:
@@ -52,7 +52,7 @@ forgejoRunner:
 
 coder:
   enabled: true
-  database: own # or: pawtograder, then drop coderDb
+  database: own # or: pawtograder, then drop coder-db
   coder:
     env:
       - name: CODER_ACCESS_URL
@@ -68,5 +68,5 @@ coder:
         secretName: example-wildcard-tls
         wildcardSecretName: example-wildcard-tls
 
-coderDb:
+coder-db:
   enabled: true

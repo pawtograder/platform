@@ -35,12 +35,12 @@ dependencies:
     repository: https://helm.coder.com/v2
     condition: coder.enabled
   - name: postgres
-    alias: forgejoDb
+    alias: forgejo-db
     version: 1.6.8
     repository: https://groundhog2k.github.io/helm-charts/
-    condition: forgejoDb.enabled
+    condition: forgejo-db.enabled
   - name: postgres
-    alias: coderDb
+    alias: coder-db
     version: 1.6.8
     repository: https://groundhog2k.github.io/helm-charts/
-    condition: coderDb.enabled
+    condition: coder-db.enabled
