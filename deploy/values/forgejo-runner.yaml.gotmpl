@@ -1,12 +1,4 @@
-# Forgejo Actions runner (bedag/raw: plain manifests), host mode: jobs run
-# inside the runner container itself, since the namespace can't run
-# Docker-in-Docker. Image: deploy/forgejo-runner.
-#
-# Registration is offline: Forgejo and the runner share the 40-hex secret in
-# Secret forgejo-runner. This release's presync hook registers it on the
-# Forgejo side (forgejo-cli writes straight to Forgejo's DB); the runner's init
-# container writes the matching .runner file. A separate release so Forgejo is
-# up before the hook runs, and Forgejo's own rollout never waits on a runner.
+# Separate release so Forgejo is up before the registration hook runs.
 {{- $r := .Values.forgejo.runner }}
 
 resources:
@@ -39,7 +31,7 @@ resources:
       labels: { app.kubernetes.io/name: forgejo-runner }
     spec:
       replicas: 1
-      # One registration, one identity: never run two pods at once.
+      # One registration identity: never run two pods at once.
       strategy: { type: Recreate }
       selector:
         matchLabels: { app.kubernetes.io/name: forgejo-runner }
@@ -47,10 +39,9 @@ resources:
         metadata:
           labels: { app.kubernetes.io/name: forgejo-runner }
           annotations:
-            # Restart on config/image change (the ConfigMap is read once).
             checksum/runner: {{ toJson $r | sha256sum | trunc 16 }}
         spec:
-          # Jobs run student code: no Kubernetes credentials in this pod.
+          # Jobs run student code: no Kubernetes credentials.
           automountServiceAccountToken: false
           securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 }
           initContainers:

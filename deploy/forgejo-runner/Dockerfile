@@ -1,13 +1,4 @@
-# Forgejo Actions runner for host-mode jobs.
-#
-# The namespace can't run Docker-in-Docker, so jobs run directly inside this
-# container (runner label `<name>:host`). Everything a grading workflow needs
-# has to be baked in here: a JDK and Python for assignments, Node for
-# JavaScript actions such as pawtograder/assignment-action, and git.
-#
-# Build and push (nodes are x86_64):
-#   docker buildx build --platform linux/amd64 \
-#     -t <registry>/forgejo-runner:<runner-version>-jdk21 --push deploy/forgejo-runner
+# No Docker-in-Docker in the namespace, so jobs run in this container; build for linux/amd64.
 ARG RUNNER_VERSION=13.2.0
 ARG NODE_VERSION=22
 
@@ -32,7 +23,6 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 COPY --from=runner /bin/forgejo-runner /usr/local/bin/forgejo-runner
 
-# The base image ships an `ubuntu` user at uid 1000; reuse it as the runner.
 RUN usermod -l runner -d /data -m ubuntu && groupmod -n runner ubuntu \
  && mkdir -p /data && chown runner:runner /data
 USER 1000:1000

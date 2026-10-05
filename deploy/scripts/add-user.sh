@@ -1,16 +1,8 @@
 #!/usr/bin/env bash
-# Give someone an account on Forgejo and Coder, with one generated password
-# kept in Secret user-<username> (keys username, email, password). Re-runnable:
-# an existing Secret's password is reused and existing accounts are left as
-# they are, apart from granting admin when --admin is passed.
-#
-# Hand the person this to read their password:
-#   kubectl get secret user-<username> -o jsonpath='{.data.password}' | base64 -d
-#
 # Usage: deploy/scripts/add-user.sh <environment> <username> <email> [--admin]
 set -euo pipefail
 
-[ $# -ge 3 ] || { sed -n '2,10p' "$0" >&2; exit 2; }
+[ $# -ge 3 ] || { sed -n '2p' "$0" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ENV_FILE="$ROOT/deploy/environments/$1.yaml"
 username="$2"; email="$3"; admin=false
@@ -30,11 +22,10 @@ if ! k get secret "user-$username" >/dev/null 2>&1; then
 fi
 password="$(secret "user-$username" password)"
 
-# Request bodies go over stdin so passwords stay out of the process list.
+# Bodies go over stdin to keep passwords out of the process list.
 json() { python3 -c 'import json,sys; print(json.dumps(dict(a.split("=",1) for a in sys.argv[1:])))' "$@"; }
 fix_bools() { sed -e 's/"false"/false/g; s/"true"/true/g'; }
 
-# --- Forgejo ----------------------------------------------------------------
 if [ "$(val .forgejo.enabled)" = true ]; then
   f_url="https://$(val .forgejo.host)"
   f_auth="$(secret forgejo-admin username):$(secret forgejo-admin password)"
@@ -53,7 +44,6 @@ if [ "$(val .forgejo.enabled)" = true ]; then
   fi
 fi
 
-# --- Coder --------------------------------------------------------------------
 if [ "$(val .workspaces.enabled)" = true ]; then
   c_url="https://$(val .workspaces.host)"
   token="$(json email="$(secret coder-admin email)" password="$(secret coder-admin password)" \

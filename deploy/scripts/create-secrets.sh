@@ -1,15 +1,4 @@
 #!/usr/bin/env bash
-# Create every Secret the stack reads, with `kubectl create secret` and fresh
-# random values. Re-runnable: a Secret that already exists is left alone, so
-# this never rotates anything (docs/operations/secrets-rotation.md for that).
-#
-# Pawtograder's follow .github/workflows/preview.yml: keys from
-# scripts/GenerateJwtKeys.ts, and pawtograder-jwt / -postgres / -s3 are
-# all-or-nothing, since rotating one alone breaks every running pod.
-#
-# Nothing is printed. Read a value back with
-#   kubectl get secret <name> -o jsonpath='{.data.<key>}' | base64 -d
-#
 # Usage: deploy/scripts/create-secrets.sh [environment]   (default: sandbox)
 set -euo pipefail
 
@@ -24,7 +13,7 @@ val() { yq -r "$1" "$ENV_FILE"; }
 k() { kubectl --context "$(val .kubeContext)" -n "$(val .namespace)" "$@"; }
 exists() { k get secret "$1" >/dev/null 2>&1; }
 get() { k get secret "$1" -o "jsonpath={.data.$2}" | base64 -d; }
-# URL- and shell-safe: these end up inside connection strings.
+# Alphanumeric only: these end up unquoted in connection strings and SQL.
 pw() { openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | cut -c1-32; }
 
 create() {
@@ -35,7 +24,6 @@ create() {
   echo "created: $name"
 }
 
-# Fail on "can't reach the cluster" here, not later as "Secret missing".
 k get secrets --request-timeout=15s >/dev/null
 
 s3="$(val .s3.credentialsSecret)"
@@ -43,26 +31,21 @@ for s in "$s3" "$(val .tlsSecret)"; do
   exists "$s" || { echo "Secret $s should come with the namespace; ask the cluster operator." >&2; exit 1; }
 done
 
-# --- Postgres instances and the app databases in them ---------------------
 for instance in $(val '.postgres.instances | keys | .[]'); do
   create "$instance-superuser" --from-literal=POSTGRES_PASSWORD="$(pw)"
 done
 create forgejo-db-credentials --from-literal=FORGEJO_DB_PASSWORD="$(pw)"
 create coder-db-credentials --from-literal=CODER_DB_PASSWORD="$(pw)"
 
-# --- Forgejo --------------------------------------------------------------
 create forgejo-admin --from-literal=username=forgejo-admin --from-literal=password="$(pw)"
-# 40 hex chars, shared by Forgejo and the runner (offline registration).
+# Forgejo offline runner registration requires 40 hex chars.
 create forgejo-runner --from-literal=secret="$(openssl rand -hex 20)"
 
-# --- Cloud Workspaces (Coder) -----------------------------------------------
-# First Coder owner, created by scripts/bootstrap-workspaces.sh.
 create coder-admin \
   --from-literal=email="coder-admin@$(val .domain)" \
   --from-literal=username=coder-admin \
   --from-literal=password="$(pw)"
 
-# --- Pawtograder ------------------------------------------------------------
 atomic=(pawtograder-jwt pawtograder-postgres pawtograder-s3)
 present=0
 for s in "${atomic[@]}"; do exists "$s" && present=$((present + 1)); done
@@ -101,8 +84,7 @@ else
   echo "exists:  ${atomic[*]}"
 fi
 
-# Integration bundles the chart mounts envFrom. GitHub App values are stubs,
-# as in preview.yml, until a real App is registered (README).
+# GitHub App values are stubs until a real App is registered.
 create pawtograder-web --from-literal=CACHE_INVALIDATION_SECRET="$(gen CACHE_INVALIDATION_SECRET)"
 create pawtograder-edge-functions \
   --from-literal=EDGE_FUNCTION_SECRET="$(gen EDGE_FUNCTION_SECRET)" \

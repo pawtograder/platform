@@ -1,8 +1,4 @@
-# Forgejo (code.forgejo.org/forgejo-helm/forgejo). Keys under gitea.config are
-# app.ini sections; secrets arrive through additionalConfigFromEnvs, so none
-# live in this file.
 {{- $f := .Values.forgejo }}
-{{- /* database.server: a postgres.instances entry, or the Pawtograder chart's Postgres */}}
 {{- $dbHost := ternary "pawtograder-postgres" $f.database.server (eq $f.database.server "pawtograder") }}
 
 strategy:
@@ -37,8 +33,7 @@ ingress:
     - secretName: {{ .Values.tlsSecret }}
       hosts: [{{ $f.host }}]
 
-# The chart's helm-test pod (busybox:latest, no resources) isn't admitted
-# under a limits-tracking quota and tests nothing ingress doesn't.
+# The chart's helm-test pod sets no resources, so the namespace quota rejects it.
 test:
   enabled: false
 
@@ -68,16 +63,12 @@ gitea:
       DISABLE_SSH: true
       START_SSH_SERVER: false
       LFS_START_SERVER: true
-    # Role + database made by scripts/ensure-database.sh (presync hook).
     database:
       DB_TYPE: postgres
       HOST: {{ $dbHost }}:5432
       NAME: forgejo
       USER: forgejo
       SSL_MODE: disable
-    # Repositories stay on the volume (git wants a filesystem). LFS,
-    # attachments, packages, avatars and Actions logs/artifacts go to S3
-    # under forgejo/.
     storage:
       STORAGE_TYPE: minio
       MINIO_ENDPOINT: {{ .Values.s3.internalHost }}
@@ -88,11 +79,8 @@ gitea:
       MINIO_BASE_PATH: forgejo/
     actions:
       ENABLED: true
-      # `uses: pawtograder/assignment-action@v1` and `actions/checkout`
-      # resolve against GitHub, as they do in assignments today.
+      # Assignment workflows `uses:` actions hosted on GitHub.
       DEFAULT_ACTIONS_URL: https://github.com
-    # Accounts are made programmatically (scripts/add-user.sh, and later
-    # Pawtograder), never by self-signup.
     service:
       DISABLE_REGISTRATION: true
     session:

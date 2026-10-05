@@ -1,11 +1,4 @@
 #!/usr/bin/env bash
-# Coder postsync hook: create the first owner from Secret coder-admin if
-# Coder has no users yet, then push every template in deploy/workspaces/
-# templates. Idempotent: pushing an unchanged template is a no-op version.
-#
-# Needs the `coder` CLI (brew install coder). Uses a throwaway CLI config dir,
-# so it never touches your own `coder login`.
-#
 # Usage: deploy/scripts/bootstrap-workspaces.sh [environment]   (default: sandbox)
 set -euo pipefail
 
@@ -19,7 +12,7 @@ command -v coder >/dev/null || { echo "missing 'coder' CLI (brew install coder)"
 url="https://$(val .workspaces.host)"
 email="$(get email)"; username="$(get username)"; password="$(get password)"
 
-# JSON bodies go over stdin so the password stays out of the process list.
+# Bodies go over stdin to keep the password out of the process list.
 post() { curl -fsS -X POST -H 'Content-Type: application/json' --data-binary @- "$url$1"; }
 
 if curl -fsS "$url/api/v2/users/first" -o /dev/null 2>/dev/null; then

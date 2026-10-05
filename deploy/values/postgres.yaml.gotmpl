@@ -1,15 +1,8 @@
-# One Postgres server (groundhog2k/postgres: official postgres image,
-# non-root, read-only root fs), rendered once per postgres.instances entry.
-# Roles and databases are created by scripts/ensure-database.sh, not at init,
-# so apps can be added to or moved off an instance that already has data.
 {{- $inst := index .Values.postgres.instances .Release.Name }}
 
-# Service, StatefulSet and pod are all named after the instance
-# (forgejo-db, forgejo-db-0), which is what an app's database.server names.
+# ensure-database.sh expects the pod to be <instance>-0.
 fullnameOverride: {{ .Release.Name }}
 
-# Superuser password: Secret <instance>-superuser key POSTGRES_PASSWORD
-# (scripts/create-secrets.sh).
 settings:
   existingSecret: {{ .Release.Name }}-superuser
   superuserPassword:

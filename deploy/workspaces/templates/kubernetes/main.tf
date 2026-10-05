@@ -1,9 +1,4 @@
-# Cloud Workspace: one pod + one home-directory PVC per workspace, in the
-# namespace coderd runs in. Adapted from Coder's upstream `kubernetes` example
-# for a tenant namespace: runc, non-root, no service account token, explicit
-# requests and limits (the namespace ResourceQuota rejects pods without them).
-#
-# Push: coder templates push kubernetes -d deploy/workspaces/templates/kubernetes
+# The namespace ResourceQuota rejects pods without explicit requests and limits.
 
 terraform {
   required_providers {
@@ -16,8 +11,6 @@ terraform {
   }
 }
 
-# coderd's in-cluster service account (the chart's Role scopes it to pods and
-# PVCs in its own namespace).
 provider "kubernetes" {}
 
 variable "namespace" {
@@ -158,7 +151,6 @@ resource "kubernetes_persistent_volume_claim_v1" "home" {
 }
 
 resource "kubernetes_pod_v1" "main" {
-  # Stopped workspaces keep their home PVC and drop the pod.
   count = data.coder_workspace.me.start_count
 
   metadata {
@@ -168,7 +160,7 @@ resource "kubernetes_pod_v1" "main" {
   }
 
   spec {
-    # Workspaces run student code: no Kubernetes API credentials.
+    # Workspaces run student code: no Kubernetes credentials.
     automount_service_account_token = false
     restart_policy                  = "Always"
 

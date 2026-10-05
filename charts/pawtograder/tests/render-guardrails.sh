@@ -2507,13 +2507,7 @@ assert_refused "posture: a user-supplied posture marker annotation is refused" \
 
 echo
 
-# --- every container declares CPU + memory requests AND limits ---------------
-# A namespace ResourceQuota that tracks requests.* and limits.* rejects any pod
-# with a container missing one of the four, unless a LimitRange fills them in.
-# Tenant namespaces (e.g. Ripley's) can't create a LimitRange, so the chart has
-# to be explicit everywhere, init containers and hook Jobs included.
-#
-# assert_all_containers_resourced "<label>" <extra --set args...>
+# Tenant ResourceQuotas reject containers missing any cpu/memory request or limit, and tenants can't add a LimitRange.
 assert_all_containers_resourced() {
   local label="$1"; shift
   if ! helm template t "$CHART" "${BASE[@]}" "$@" >"$OUTFILE" 2>"$ERRFILE"; then

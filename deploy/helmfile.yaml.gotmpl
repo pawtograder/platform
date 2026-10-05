@@ -1,9 +1,3 @@
-# Self-hosted stack: Forgejo (git + Actions), Coder (Cloud Workspaces) and
-# Pawtograder, for one namespace per environment. See deploy/README.md.
-#
-#   helmfile -e sandbox apply                          # everything
-#   helmfile -e sandbox -l component=forgejo apply     # one component
-
 environments:
   sandbox:
     values:
@@ -11,8 +5,6 @@ environments:
 ---
 {{- $env := .Values }}
 {{- $ns := $env.namespace }}
-{{- /* An app's Postgres: its server release must be up first, then
-       ensure-database.sh creates the app's role + database on it. */}}
 {{- define "appDatabase" }}
     needs: [{{ .server }}]
 {{- end }}
@@ -45,7 +37,6 @@ commonLabels:
   app.kubernetes.io/part-of: pawtograder-stack
 
 releases:
-  # --- Databases ---------------------------------------------------------------
   {{- range $name, $inst := $env.postgres.instances }}
   - name: {{ $name }}
     namespace: {{ $ns }}
@@ -56,7 +47,6 @@ releases:
       - values/postgres.yaml.gotmpl
   {{- end }}
 
-  # --- Forgejo -----------------------------------------------------------------
   - name: forgejo
     namespace: {{ $ns }}
     chart: forgejo-helm/forgejo
@@ -67,8 +57,7 @@ releases:
     values:
       - values/forgejo.yaml.gotmpl
     {{- if $env.forgejo.runner.enabled }}
-      # The Forgejo half of offline runner registration (forgejo-runner's
-      # presync hook) reads the shared secret from Forgejo's env.
+      # forgejo-runner's presync registration hook reads RUNNER_SECRET from Forgejo's env.
       - deployment:
           env:
             - name: RUNNER_SECRET
@@ -88,7 +77,7 @@ releases:
     values:
       - values/forgejo-runner.yaml.gotmpl
     hooks:
-      # Idempotent: registering the same secret again updates the same runner.
+      # Re-registering the same secret updates the same runner.
       - events: [presync]
         showlogs: true
         command: kubectl
@@ -103,7 +92,6 @@ releases:
           - -ec
           - forgejo forgejo-cli actions register --name {{ $env.forgejo.runner.name }} --secret "$RUNNER_SECRET"
 
-  # --- Cloud Workspaces (Coder) -------------------------------------------------
   - name: coder
     namespace: {{ $ns }}
     chart: coder-v2/coder
@@ -115,13 +103,11 @@ releases:
       - values/coder.yaml.gotmpl
     hooks:
       {{- template "ensureDatabaseHook" (dict "env" .Environment.Name "app" "coder" "server" $env.workspaces.database.server) }}
-      # First owner + workspace templates. Idempotent.
       - events: [postsync]
         showlogs: true
         command: scripts/bootstrap-workspaces.sh
         args: [{{ .Environment.Name }}]
 
-  # --- Pawtograder ---------------------------------------------------------------
   - name: pawtograder
     namespace: {{ $ns }}
     chart: ../charts/pawtograder

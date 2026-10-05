@@ -1,22 +1,14 @@
-# Pawtograder (../charts/pawtograder), layered the way the chart's examples
-# are: values-prod-noeso.yaml for pre-created secrets and an existing wildcard
-# cert, values-preview.yaml for the flattened API host and MinIO storage, and
-# sizes trimmed to share a tenant quota with Forgejo and Coder.
 {{- $env := .Values }}
 {{- $p := $env.pawtograder }}
 
 global:
-  # `staging` keeps the chart's guard rails (pinned tags, no chart-created
-  # secrets) without production's HA requirements.
+  # staging keeps the chart's guard rails without production's HA requirements.
   environment: staging
   hostname: {{ $p.host }}
-  # api host = app-api.<domain>: one label, so the *.<domain> wildcard cert
-  # covers it. `api.<hostname>` would be two levels deep. Same trick the
-  # platform uses for previews (pr-<id>-api.preview.pawtograder.net).
+  # app-api.<domain> stays one label deep; api.<hostname> would escape the wildcard cert.
   apiOnSeparateHost: true
   apiHostnameFlatten: true
-  # The chart's own ServiceAccount, unlike the namespace defaults, doesn't
-  # carry the registry pull Secret the web image needs.
+  # The chart's own ServiceAccount doesn't carry the namespace's pull Secret.
   imagePullSecrets:
     - name: {{ $env.registryPullSecret }}
 
@@ -31,8 +23,6 @@ ingress:
     enabled: true
     secretName: {{ $env.tlsSecret }}
 
-# Pre-created by deploy/scripts/create-secrets.sh, with the same keys and
-# kubectl create secret calls as .github/workflows/preview.yml.
 secrets:
   create: false
   autogenerate: false
@@ -89,8 +79,7 @@ storage:
   replicas: 1
   backend: s3
   s3:
-    # storage-api hard-codes https, so this is the public MinIO endpoint.
-    # Objects land under stub/<bucket>/ in the team bucket.
+    # storage-api hard-codes https, so this must be the public MinIO endpoint.
     endpoint: {{ $env.s3.externalEndpoint }}
     bucket: {{ $env.s3.bucket }}
     forcePathStyle: true
@@ -118,15 +107,12 @@ kong:
 
 edgeFunctions:
   replicas: 1
-  # maxParallelism x worker.memoryLimitMb (256) = 1Gi, half the 2Gi limit.
   maxParallelism: 4
   image:
     tag: {{ $p.imageTag | quote }}
   {{- if $env.forgejo.enabled }}
   extraEnv:
-    # Trust Actions job tokens from this Forgejo (validateOIDCToken): issuer
-    # <FORGEJO_URL>/api/actions, keys at <FORGEJO_URL>/api/actions/.well-known/keys.
-    # Same host Forgejo's ROOT_URL is built from, so the two can't disagree.
+    # validateOIDCToken trusts Actions job tokens issued by <FORGEJO_URL>/api/actions.
     - name: FORGEJO_URL
       value: https://{{ $env.forgejo.host }}
   {{- end }}
@@ -138,8 +124,7 @@ web:
   replicas: 1
   workflowMetricsLeader: true
   image:
-    # Built by deploy/scripts/build-web-image.sh: NEXT_PUBLIC_* (hostnames, anon key)
-    # are compiled into the bundle, so the public ghcr.io image can't be used.
+    # NEXT_PUBLIC_* are compiled in, so the public ghcr.io image can't serve this host.
     repository: {{ $p.webImageRepository }}
     tag: {{ $p.imageTag | quote }}
     # Rebuilt under the same tag when keys are recreated.

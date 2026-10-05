@@ -1,29 +1,20 @@
-# Coder (helm.coder.com/v2) for Cloud Workspaces. Workspaces are plain runc
-# pods in this same namespace; the chart's Role gives coderd pod/PVC rights
-# here and nowhere else. Templates: deploy/workspaces/templates.
 {{- $w := .Values.workspaces }}
-{{- /* database.server: a postgres.instances entry, or the Pawtograder chart's Postgres */}}
 {{- $dbHost := ternary "pawtograder-postgres" $w.database.server (eq $w.database.server "pawtograder") }}
 
 coder:
   env:
     - name: CODER_ACCESS_URL
       value: https://{{ $w.host }}
-    # Workspace apps on <app>--<workspace>--<user>.<domain>: one label, so
-    # the namespace's wildcard cert covers them.
+    # Workspace app hosts stay one label deep so the wildcard cert covers them.
     - name: CODER_WILDCARD_ACCESS_URL
       value: "*.{{ .Values.domain }}"
     - name: CODER_TELEMETRY_ENABLE
       value: "false"
-    # Accounts are made programmatically (scripts/add-user.sh). Password
-    # signup is already closed once the first owner exists; also turn off
-    # GitHub login through Coder's built-in OAuth app, which would otherwise
-    # be on with no configuration at all.
+    # Coder's built-in GitHub OAuth app is on by default with no configuration.
     - name: CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE
       value: "false"
     - name: CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS
       value: "false"
-    # Role + database made by scripts/ensure-database.sh (presync hook).
     - name: CODER_DB_PASSWORD
       valueFrom:
         secretKeyRef: { name: coder-db-credentials, key: CODER_DB_PASSWORD }
