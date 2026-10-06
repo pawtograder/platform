@@ -69,17 +69,25 @@ spec:
                     chmod +x /usr/local/bin/mc
                   fi
                   mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
+                  # Newest dump under daily/, falling back to the bucket root
+                  # where chart <= 0.3.27 wrote them (drop the fallback once
+                  # backup.retention.legacyRootDays has emptied the root).
                   # Timestamped names sort lexicographically == chronologically.
-                  LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1)
+                  # `|| true`: with pipefail, an empty listing fails grep, and
+                  # that must reach the FATAL below rather than exit silently.
+                  newest() { mc ls "s3/${S3_BUCKET}/$1" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true; }
+                  DIR=daily/
+                  LATEST=$(newest daily/)
+                  if [ -z "$LATEST" ]; then DIR=""; LATEST=$(newest ""); fi
                   if [ -z "$LATEST" ]; then
-                    echo "[verify] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET} — backups are not landing"
+                    echo "[verify] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}/daily/ or the bucket root — backups are not landing"
                     exit 1
                   fi
-                  echo "[verify] newest backup: $LATEST"
+                  echo "[verify] newest backup: ${DIR}${LATEST}"
                   # /scratch, not /tmp — this download is the same ~7 GB
                   # as the dump itself, and on the container writable layer it
                   # was pushing nodes into DiskPressure. See backup.yaml.
-                  mc cp "s3/${S3_BUCKET}/${LATEST}" /scratch/latest.dump
+                  mc cp "s3/${S3_BUCKET}/${DIR}${LATEST}" /scratch/latest.dump
                   # TOC must parse and contain a sane number of entries.
                   ENTRIES=$(pg_restore --list /scratch/latest.dump | grep -c '^[0-9]' || true)
                   echo "[verify] pg_restore --list OK: ${ENTRIES} TOC entries, $(stat -c%s /scratch/latest.dump) bytes"

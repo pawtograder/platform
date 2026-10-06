@@ -89,13 +89,18 @@ spec:
                     chmod +x /usr/local/bin/mc
                   fi
                   mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
-                  LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true)
+                  # Newest dump under daily/, falling back to the bucket root
+                  # (chart <= 0.3.27). Same selection as backup-verify.
+                  newest() { mc ls "s3/${S3_BUCKET}/$1" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true; }
+                  DIR=daily/
+                  LATEST=$(newest daily/)
+                  if [ -z "$LATEST" ]; then DIR=""; LATEST=$(newest ""); fi
                   if [ -z "$LATEST" ]; then
-                    echo "[drill] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}"; exit 1
+                    echo "[drill] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}/daily/ or the bucket root"; exit 1
                   fi
-                  echo "[drill] newest backup: $LATEST"
-                  mc cp "s3/${S3_BUCKET}/${LATEST}" /work/latest.dump
-                  echo "$LATEST" > /work/dump-name
+                  echo "[drill] newest backup: ${DIR}${LATEST}"
+                  mc cp "s3/${S3_BUCKET}/${DIR}${LATEST}" /work/latest.dump
+                  echo "${DIR}${LATEST}" > /work/dump-name
               env:
                 - name: S3_ENDPOINT
                   value: {{ required "backup.s3.endpoint is required" .Values.backup.s3.endpoint | quote }}

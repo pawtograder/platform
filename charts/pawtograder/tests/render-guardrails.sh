@@ -527,6 +527,134 @@ assert_renders "prometheus rules with ruleSelector label renders" \
 assert_renders "prometheus rules allowUnselectedRules renders" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.allowUnselectedRules=true
 
+echo "== backup retention tiers (chart 0.3.28) =="
+BACKUP_ON=(--set backup.enabled=true --set backup.s3.endpoint=https://s3.example.com
+  --set backup.image.tag=v1.0.0)
+# The removed key must be refused, not ignored: ignoring it is how a retention
+# change used to look applied while the bucket kept its old rule.
+assert_refused "backup.retentionDays is refused" \
+  "backup.retentionDays was removed in chart 0.3.28" \
+  "${BACKUP_ON[@]}" --set backup.retentionDays=30
+assert_refused "backup.retention.dailyDays=0 is refused" \
+  "backup.retention.dailyDays must be >= 1" \
+  "${BACKUP_ON[@]}" --set backup.retention.dailyDays=0
+assert_refused "negative backup.retention.monthlyDays is refused" \
+  "backup.retention.monthlyDays must be a whole number of days" \
+  "${BACKUP_ON[@]}" --set backup.retention.monthlyDays=-1
+# sprig's int turns these into 0, the documented "off" value — a typo must not
+# silently drop a tier.
+assert_refused "typo in backup.retention.monthlyDays is refused" \
+  "backup.retention.monthlyDays must be a whole number of days" \
+  "${BACKUP_ON[@]}" --set-string backup.retention.monthlyDays=9O
+assert_refused "word in backup.retention.legacyRootDays is refused" \
+  "backup.retention.legacyRootDays must be a whole number of days" \
+  "${BACKUP_ON[@]}" --set-string backup.retention.legacyRootDays=thirty
+assert_rendered_contains "backup uploads under daily/" templates/backup.yaml \
+  'upload "s3/${S3_BUCKET}/daily/$(basename "$FILE")"' "${BACKUP_ON[@]}"
+assert_rendered_contains "backup reconciles lifecycle by import" templates/backup.yaml \
+  'mc ilm rule import' "${BACKUP_ON[@]}"
+assert_rendered_contains "legacy root rule on by default" templates/backup.yaml \
+  'pawtograder-legacy-root' "${BACKUP_ON[@]}"
+assert_rendered_lacks "legacyRootDays=0 drops the root rule" templates/backup.yaml \
+  'pawtograder-legacy-root' "${BACKUP_ON[@]}" --set backup.retention.legacyRootDays=0
+# monthlyDays=0 (the default) must drop BOTH halves of the tier: an upload with
+# no rule would keep monthly dumps forever.
+assert_rendered_lacks "monthlyDays=0: no monthly rule" templates/backup.yaml \
+  'pawtograder-monthly' "${BACKUP_ON[@]}"
+assert_rendered_lacks "monthlyDays=0: no monthly upload" templates/backup.yaml \
+  '/monthly/$(basename' "${BACKUP_ON[@]}"
+assert_rendered_contains "monthlyDays>0: monthly rule" templates/backup.yaml \
+  'pawtograder-monthly' "${BACKUP_ON[@]}" --set backup.retention.monthlyDays=90
+assert_rendered_contains "monthlyDays>0: monthly upload" templates/backup.yaml \
+  '/monthly/$(basename' "${BACKUP_ON[@]}" --set backup.retention.monthlyDays=90
+assert_rendered_contains "backup-verify reads daily/ first" templates/backup-verify.yaml \
+  'LATEST=$(newest daily/)' "${BACKUP_ON[@]}"
+assert_rendered_contains "restore drill reads daily/ first" templates/backup-restore-drill.yaml \
+  'LATEST=$(newest daily/)' "${BACKUP_ON[@]}" --set backup.restoreDrill.enabled=true
+
+# The lifecycle planner embedded in backup.yaml decides which of the bucket's
+# rules survive the nightly import, so a mistake there deletes ops' rules or
+# lets an expiry rule override the tiers. Run the RENDERED planner against
+# canned `mc ilm rule export --json` documents.
+#
+# Needs python3 (the job itself runs the planner with the image's python3), but
+# no YAML library: the planner is cut out of the block scalar with awk, and the
+# BACKUP_LIFECYCLE value is a double-quoted YAML scalar that is also a JSON
+# string. Without python3 this FAILS under CI and is skipped locally.
+echo "== backup lifecycle planner =="
+PLANNER_DIR="$(mktemp -d)"
+if ! command -v python3 >/dev/null 2>&1; then
+  if [ -n "${CI:-}" ]; then
+    echo "FAIL [planner]: python3 not on PATH — the lifecycle planner cases cannot run"; FAILED=1
+  else
+    echo "skip [planner]: python3 not on PATH"
+  fi
+elif helm template t "$CHART" "${BASE[@]}" "${BACKUP_ON[@]}" --set backup.retention.dailyDays=7 --set backup.retention.monthlyDays=90 \
+     --set backup.retention.legacyRootDays=30 --show-only templates/backup.yaml >"$PLANNER_DIR/r.yaml" 2>"$ERRFILE" \
+   && awk '/<<'"'"'PY'"'"'$/ { on=1; next }
+           on && /^ *PY$/ { exit }
+           on { if (!ind) { match($0, /^ */); ind=RLENGTH } print substr($0, ind+1) }' \
+        "$PLANNER_DIR/r.yaml" >"$PLANNER_DIR/planner.py" \
+   && grep -A1 -- '- name: BACKUP_LIFECYCLE' "$PLANNER_DIR/r.yaml" | sed -n 's/^ *value: //p' \
+        | python3 -c 'import json, sys; print(json.loads(sys.stdin.read()))' >"$PLANNER_DIR/lifecycle.json" \
+   && [ -s "$PLANNER_DIR/planner.py" ] && [ -s "$PLANNER_DIR/lifecycle.json" ]
+then
+  BACKUP_LIFECYCLE="$(cat "$PLANNER_DIR/lifecycle.json")"
+  export BACKUP_LIFECYCLE
+  OWNED='{"Expiration":{"Days":7},"Filter":{"Prefix":"daily/"},"ID":"pawtograder-daily","Status":"Enabled"},{"Expiration":{"Days":90},"Filter":{"Prefix":"monthly/"},"ID":"pawtograder-monthly","Status":"Enabled"},{"Expiration":{"Days":30},"Filter":{"Prefix":"pawtograder-"},"ID":"pawtograder-legacy-root","Status":"Enabled"}'
+  NONCUR='{"ID":"ops-noncurrent","NoncurrentVersionExpiration":{"NoncurrentDays":1},"Status":"Enabled"}'
+  exported() { printf '{"status":"success","config":{"Rules":[%s]}}' "$1"; }
+  # assert_plan "<label>" <want-exit> "<export doc>" [<merged must contain>] [<merged must NOT contain>]
+  assert_plan() {
+    local label="$1" want="$2" doc="$3" has="${4:-}" lacks="${5:-}" rc=0
+    python3 "$PLANNER_DIR/planner.py" plan "$doc" >"$OUTFILE" 2>"$ERRFILE" || rc=$?
+    if [ "$rc" != "$want" ]; then
+      echo "FAIL [planner: $label]: exit $rc, want $want ($(tr '\n' ' ' <"$ERRFILE" | cut -c1-200))"; FAILED=1
+    elif [ -n "$has" ] && ! grep -qF "$has" "$OUTFILE"; then
+      echo "FAIL [planner: $label]: merged config is missing $has"; FAILED=1
+    elif [ -n "$lacks" ] && grep -qF "$lacks" "$OUTFILE"; then
+      echo "FAIL [planner: $label]: merged config still contains $lacks"; FAILED=1
+    else
+      echo "ok   [planner: $label]"
+    fi
+  }
+  assert_plan "in sync is a no-op" 0 "$(exported "$OWNED,$NONCUR")"
+  assert_plan "reordered keys, Prefix under And, empty defaults: still in sync" 0 \
+    "$(exported '{"Status":"Enabled","ID":"pawtograder-daily","Filter":{"And":{"Prefix":"daily/"}},"Expiration":{"Days":7,"ExpiredObjectDeleteMarker":false}},{"Expiration":{"Days":90},"Filter":{"Prefix":"monthly/"},"ID":"pawtograder-monthly","Status":"Enabled"},{"Expiration":{"Days":30},"Filter":{"Prefix":"pawtograder-"},"ID":"pawtograder-legacy-root","Status":"Enabled"}')"
+  assert_plan "no lifecycle config: import ours" 10 \
+    '{"status":"error","error":{"cause":{"error":{"Code":"NoSuchLifecycleConfiguration"}}}}' '"pawtograder-daily"'
+  assert_plan "0.3.27 bucket-wide days rule removed, ops noncurrent rule kept" 10 \
+    "$(exported '{"Expiration":{"Days":30},"ID":"old","Status":"Enabled"},'"$NONCUR")" '"ops-noncurrent"' '"ID": "old"'
+  assert_plan "bucket-wide DATE expiry removed" 10 \
+    "$(exported "$OWNED"',{"Expiration":{"Date":"2027-01-01T00:00:00Z"},"Filter":{"Prefix":""},"ID":"dated","Status":"Enabled"}')" \
+    '"pawtograder-monthly"' '"dated"'
+  assert_plan "expiry on a prefix covering monthly/ removed" 10 \
+    "$(exported "$OWNED"',{"Expiration":{"Days":3},"Filter":{"Prefix":"mon"},"ID":"short","Status":"Enabled"}')" '' '"short"'
+  assert_plan "tag-filtered expiry kept (dumps are never tagged)" 0 \
+    "$(exported "$OWNED"',{"Expiration":{"Days":3},"Filter":{"Tag":{"Key":"tmp","Value":"1"}},"ID":"tagged","Status":"Enabled"}')"
+  assert_plan "owned rule that gained a tag condition is drift" 10 \
+    "$(exported '{"Expiration":{"Days":7},"Filter":{"And":{"Prefix":"daily/","Tags":[{"Key":"k","Value":"v"}]}},"ID":"pawtograder-daily","Status":"Enabled"},{"Expiration":{"Days":90},"Filter":{"Prefix":"monthly/"},"ID":"pawtograder-monthly","Status":"Enabled"},{"Expiration":{"Days":30},"Filter":{"Prefix":"pawtograder-"},"ID":"pawtograder-legacy-root","Status":"Enabled"}')" \
+    '' '"Tags"'
+  assert_plan "owned rule with the wrong days is drift" 10 \
+    "$(exported "${OWNED/\"Days\":7/\"Days\":30}")" '"Days": 7'
+  assert_plan "AccessDenied export stops instead of importing" 1 \
+    '{"status":"error","error":{"cause":{"error":{"Code":"AccessDenied"}}}}'
+  assert_plan "non-JSON export stops instead of importing" 1 'mc: <ERROR> dial tcp: connection refused'
+  # check: the read-back must hold the WHOLE merged config, ops rules included.
+  MERGED_DOC="{\"Rules\":[$OWNED,$NONCUR]}"
+  if python3 "$PLANNER_DIR/planner.py" check "$MERGED_DOC" "$(exported "$NONCUR,$OWNED")"; then
+    echo "ok   [planner: check passes on a full read-back]"
+  else echo "FAIL [planner: check rejected a matching read-back]"; FAILED=1; fi
+  if python3 "$PLANNER_DIR/planner.py" check "$MERGED_DOC" "$(exported "$OWNED")"; then
+    echo "FAIL [planner: check passed although the server dropped the ops rule]"; FAILED=1
+  else echo "ok   [planner: check fails when the server drops an ops rule]"; fi
+else
+  echo "FAIL [planner]: could not render backup.yaml or extract the planner"
+  echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+  FAILED=1
+fi
+rm -rf "$PLANNER_DIR"
+
 # assert_exporter_metric "<block>" "<column>" [<label>...]
 # postgres_exporter names every custom metric `<block key>_<column name>`, so the
 # queries.yaml block key and the column name TOGETHER are the metric name that

@@ -109,12 +109,13 @@ start at 200Gi and grow rather than over-provisioning.
 | Pool          | Values key               | Ceiling                                                                          |
 | ------------- | ------------------------ | -------------------------------------------------------------------------------- |
 | App storage   | `storage.s3.bucket`      | full retention window (see formula above)                                        |
-| Nightly dumps | `backup.s3.bucket`       | ≈ compressed `pg_dump` × `backup.retentionDays` (14 default / 30 prod)           |
+| Nightly dumps | `backup.s3.bucket`       | ≈ compressed `pg_dump` × (`dailyDays` + `monthlyDays`/30) (`backup.retention`)   |
 | WAL-G / PITR  | `postgres.walg.s3Prefix` | ≈ `keepBackups` × base-backup + WAL over `intervalHours × keepBackups` (~8 days) |
 
-Keep the WAL-G prefix in its **own bucket** — the nightly-dump job installs a
-_bucket-wide_ ILM expiry rule, which would otherwise prune WAL-G objects and
-break PITR. See [`production-install.md`](./production-install.md) §3.
+Keep the WAL-G prefix in its **own bucket**. The nightly-dump job owns the
+dump bucket's expiry rules and removes any bucket-wide one it finds, so sharing
+the bucket would leave WAL-G either pruned early by a rule or not pruned at
+all. See [`production-install.md`](./production-install.md) §3.
 
 ## 3. Operationalizing "delete data older than N years"
 

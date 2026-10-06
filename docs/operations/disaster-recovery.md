@@ -36,23 +36,30 @@ The `backup` CronJob (`charts/pawtograder/templates/backup.yaml`, default
    `YYYYMMDDTHHMMSSZ`.
 2. Parses the archive TOC (`pg_restore --list`) **before** upload, so a
    truncated dump fails at backup time, not on restore day.
-3. Uploads to `s3://<backup.s3.bucket>/pawtograder-<TS>.dump` via `mc`, then
-   re-`stat`s the object and fails on any size mismatch.
-4. Ensures a bucket ILM expiry rule exists (`backup.retentionDays`, default 14).
+3. Uploads to `s3://<backup.s3.bucket>/daily/pawtograder-<TS>.dump` via `mc`,
+   then re-`stat`s the object and fails on any size mismatch. When
+   `backup.retention.monthlyDays` > 0, the first good run of each UTC month
+   also uploads the dump to `monthly/` (chart >= 0.3.28; older charts wrote
+   every dump to the bucket root).
+4. Reconciles the bucket's lifecycle rules with `backup.retention`: one expiry
+   rule per prefix (`daily/`, `monthly/`, and `pawtograder-` for dumps an older
+   chart left at the root). It removes any bucket-wide expiry rule and keeps
+   every other rule ops added. It reads the rules back and fails the Job on a
+   mismatch.
 
 Object naming is timestamped so lexical sort equals chronological sort; the
 newest object is always `... | sort | tail -1`.
 
 | Fact                           | Value / source                                                              |
 | ------------------------------ | --------------------------------------------------------------------------- |
-| Backup objects                 | `s3://<bucket>/pawtograder-*.dump` (custom format)                          |
+| Backup objects                 | `s3://<bucket>/{daily,monthly}/pawtograder-*.dump` (custom format)          |
 | Bucket / endpoint              | `backup.s3.bucket` / `backup.s3.endpoint` in the prod values                |
 | S3 credentials                 | Secret `pawtograder-s3`, keys `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
 | Postgres StatefulSet + Service | `<release>-postgres`; pod `<release>-postgres-0`                            |
 | DB name                        | `postgres` (`postgres.database`)                                            |
 | Superuser for restore          | `supabase_admin` (see below)                                                |
 | DB password                    | Secret `pawtograder-postgres`, key `POSTGRES_PASSWORD`                      |
-| Retention                      | `backup.retentionDays` days, enforced by an S3 ILM rule                     |
+| Retention                      | `backup.retention.*` days per prefix, enforced by S3 lifecycle rules        |
 
 > Use `supabase_admin`, not `postgres`, for restore. The chart demotes the
 > `postgres` role, and the schema owns objects created by the superuser
@@ -109,17 +116,20 @@ echo "$MC_SHA256  /usr/local/bin/mc" | sha256sum -c -
 chmod +x /usr/local/bin/mc
 
 mc alias set s3 "$S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
-LATEST=$(mc ls "s3/$S3_BUCKET/" | awk '{print $NF}' \
+LATEST=$(mc ls "s3/$S3_BUCKET/daily/" | awk '{print $NF}' \
   | grep '^pawtograder-.*\.dump$' | sort | tail -1)
-echo "restoring from: $LATEST"
-mc cp "s3/$S3_BUCKET/$LATEST" /tmp/latest.dump
+echo "restoring from: daily/$LATEST"
+mc cp "s3/$S3_BUCKET/daily/$LATEST" /tmp/latest.dump
 pg_restore --list /tmp/latest.dump >/dev/null   # sanity: TOC parses (preserves exit status)
 ```
 
 Set `S3_ENDPOINT`, `S3_BUCKET`, and the AWS keys from the `pawtograder-s3`
 secret and prod values before running. To restore an **older** object (e.g. the
 newest is the one that got corrupted), list all and pick by timestamp instead
-of `tail -1`.
+of `tail -1`. `daily/` holds the last `backup.retention.dailyDays` days. For
+anything older, list `monthly/`, which holds one dump per month for
+`backup.retention.monthlyDays`. Dumps from before chart 0.3.28 sit at the bucket
+root until `legacyRootDays` expires them.
 
 ### A. Restore into a scratch database (non-destructive)
 
