@@ -667,14 +667,19 @@ bucket looked applied and changed nothing. Any environment.
 */ -}}
 {{- if .Values.backup.enabled -}}
 {{- if hasKey .Values.backup "retentionDays" -}}
-{{- fail (printf "backup.retentionDays was removed in chart 0.3.28 (got %v). Retention is now tiered by prefix: set backup.retention.dailyDays for nightly dumps, backup.retention.monthlyDays for the monthly tier (0 = none), and backup.retention.legacyRootDays to your OLD retentionDays so dumps the previous chart wrote at the bucket root still expire. The backup job now replaces the bucket's whole lifecycle configuration with these rules." .Values.backup.retentionDays) -}}
+{{- fail (printf "backup.retentionDays was removed in chart 0.3.28 (got %v). Retention is now tiered by prefix: set backup.retention.dailyDays for nightly dumps, backup.retention.monthlyDays for the monthly tier (0 = none), and backup.retention.legacyRootDays to your OLD retentionDays so dumps the previous chart wrote at the bucket root still expire. The backup job now reconciles the bucket's lifecycle rules with these on every run." .Values.backup.retentionDays) -}}
 {{- end -}}
-{{- $ret := .Values.backup.retention -}}
-{{- if lt (int $ret.dailyDays) 1 -}}
-{{- fail (printf "backup.retention.dailyDays must be >= 1 (got %v) — 0 would leave daily/ with no expiry rule and the bucket would grow without bound." $ret.dailyDays) -}}
+{{- /* Whole numbers only, checked as text BEFORE any `int`: sprig's int turns
+       a typo like "9O" or "thirty" into 0, and 0 is the documented "off" — so
+       a typo would silently drop the monthly tier or the legacy root rule. */ -}}
+{{- range $k := list "dailyDays" "monthlyDays" "legacyRootDays" -}}
+{{- $v := index $.Values.backup.retention $k -}}
+{{- if not (regexMatch "^[0-9]+$" (toString $v)) -}}
+{{- fail (printf "backup.retention.%s must be a whole number of days (got %v). 0 turns the monthlyDays / legacyRootDays tier off." $k $v) -}}
 {{- end -}}
-{{- if or (lt (int $ret.monthlyDays) 0) (lt (int $ret.legacyRootDays) 0) -}}
-{{- fail (printf "backup.retention.monthlyDays and legacyRootDays must be >= 0, where 0 turns the tier off (got monthlyDays=%v legacyRootDays=%v)." $ret.monthlyDays $ret.legacyRootDays) -}}
+{{- end -}}
+{{- if lt (int .Values.backup.retention.dailyDays) 1 -}}
+{{- fail (printf "backup.retention.dailyDays must be >= 1 (got %v) — 0 would leave daily/ with no expiry rule and the bucket would grow without bound." .Values.backup.retention.dailyDays) -}}
 {{- end -}}
 {{- end -}}
 

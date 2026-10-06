@@ -115,16 +115,25 @@ spec:
                   LOCAL_SIZE=$(stat -c%s "$FILE")
                   # upload <remote>: copy the dump up, then require the object
                   # to exist remotely at exactly the local size (catches
-                  # truncated multipart uploads).
+                  # truncated multipart uploads). A mismatched object is
+                  # deleted before failing: left in place, a truncated
+                  # monthly/ copy would satisfy the "month already covered"
+                  # check on the retry and stand in for the whole month.
                   upload() {
                     mc cp "$FILE" "$1"
                     REMOTE_SIZE=$(mc stat --json "$1" | grep -o '"size":[0-9]*' | head -1 | cut -d: -f2)
                     if [ "$LOCAL_SIZE" != "$REMOTE_SIZE" ]; then
                       echo "[backup] FATAL: size mismatch after upload to $1 (local=$LOCAL_SIZE remote=${REMOTE_SIZE:-missing})"
+                      mc rm "$1" || echo "[backup] could not delete the mismatched object $1 — remove it by hand"
                       exit 1
                     fi
                     echo "[backup] uploaded + size-verified $1"
                   }
+                  # Set when a step after the daily upload fails. The run still
+                  # finishes (rm, lifecycle reconcile) and then exits non-zero,
+                  # so PawtograderBackupJobFailed fires without the verified
+                  # daily dump costing tonight's lifecycle pass.
+                  DEFERRED_FAILURE=""
                   # daily/ and monthly/ are hardcoded, not values: the
                   # lifecycle rules below, backup-verify and the restore drill
                   # all key off them.
@@ -133,12 +142,19 @@ spec:
                   # Monthly tier: the first good run of each UTC month keeps a
                   # second copy. Keyed on "monthly/ has nothing for this month
                   # yet" rather than "today is the 1st", so a failed run on
-                  # the 1st is covered by the next good one. A failed listing
-                  # reads as "nothing yet" and costs at most one extra copy.
-                  if mc ls "s3/${S3_BUCKET}/monthly/pawtograder-${TS:0:6}" | grep -q '\.dump$'; then
-                    echo "[backup] monthly/ already holds a ${TS:0:6} dump"
+                  # the 1st is covered by the next good one. A FAILED listing
+                  # is not "nothing yet": treating it so would upload a full
+                  # dump every night the listing stays broken, ~90 copies in
+                  # a 90-day tier instead of 3.
+                  if MONTH_LISTING=$(mc ls "s3/${S3_BUCKET}/monthly/pawtograder-${TS:0:6}"); then
+                    if grep -q '\.dump$' <<<"$MONTH_LISTING"; then
+                      echo "[backup] monthly/ already holds a ${TS:0:6} dump"
+                    else
+                      upload "s3/${S3_BUCKET}/monthly/$(basename "$FILE")"
+                    fi
                   else
-                    upload "s3/${S3_BUCKET}/monthly/$(basename "$FILE")"
+                    echo "[backup] FATAL: could not list monthly/ — skipping the monthly copy rather than risk one per night"
+                    DEFERRED_FAILURE="monthly listing failed"
                   fi
                   {{- end }}
                   # Drop the local copy now the remote is byte-verified, so a
@@ -151,26 +167,35 @@ spec:
                   # so changing retentionDays on a live bucket did nothing.
                   #
                   # The job owns rules whose ID starts with "pawtograder-".
-                  # It also removes any bucket-wide expiry rule (no prefix, no
-                  # tag) — the old job's, or one made by hand — because that
-                  # would expire monthly/ too. Every other rule is ops' and is
-                  # kept as exported: a noncurrent-version expiry on a
-                  # versioned bucket is the one that matters, and dropping it
-                  # would let old versions pile up forever.
+                  # It also removes any other EXPIRY rule (by days or by date)
+                  # that could match daily/ or monthly/ keys — a bucket-wide
+                  # rule like the old job's, or a prefix such as "d" — since it
+                  # would override the tiers. A rule filtered by tag is kept:
+                  # the job never tags dumps, so it cannot match them. Every
+                  # other rule is ops' and is kept as exported; a
+                  # noncurrent-version expiry on a versioned bucket is the one
+                  # that matters, and dropping it would let old versions pile
+                  # up forever.
                   #
-                  # Owned rules compare on ID, status, prefix and days rather
-                  # than raw JSON, so a server that reorders keys or moves
-                  # Prefix into an And block on export does not look like
-                  # drift. `lifecycle plan` exits 0 = in sync, 10 = prints the
-                  # merged config to import; `lifecycle check` exits 0 when
-                  # the bucket holds exactly the owned rules wanted. Any other
-                  # exit, including an export error other than "no lifecycle
-                  # configuration", stops the job: importing over a config we
-                  # could not read would delete ops' rules.
+                  # Rules compare in a canonical form: falsy fields dropped,
+                  # Prefix lifted out of Filter/And, keys sorted. So a server
+                  # that reorders keys, nests Prefix under And or adds empty
+                  # defaults does not look like drift, while an owned rule
+                  # that gained a tag, size condition or extra action does.
+                  #
+                  # lifecycle plan <export>: exit 0 = in sync; 10 = prints the
+                  # merged config to import. lifecycle check <merged>
+                  # <export>: exit 0 when the bucket holds exactly the merged
+                  # config, ops rules included. Any other exit, including an
+                  # export error other than "no lifecycle configuration",
+                  # stops: importing over a config we could not read would
+                  # delete ops' rules.
                   lifecycle() {
-                    python3 - "$1" "$BACKUP_LIFECYCLE" "$2" <<'PY'
-                  import json, sys
-                  mode, desired_doc, export_doc = sys.argv[1:4]
+                    python3 - "$@" <<'PY'
+                  import json, os, sys
+                  mode = sys.argv[1]
+                  want_doc = sys.argv[2] if mode == "check" else os.environ["BACKUP_LIFECYCLE"]
+                  export_doc = sys.argv[-1]
                   try:
                       exported = json.loads(export_doc)
                   except ValueError:
@@ -181,32 +206,48 @@ spec:
                       current = []
                   else:
                       sys.exit("[backup] FATAL: could not read the bucket's lifecycle rules: " + export_doc)
-                  def prefix(r):
-                      f = r.get("Filter") or {}
-                      return f.get("Prefix", (f.get("And") or {}).get("Prefix", r.get("Prefix", "")))
-                  def key(r):
-                      return (r.get("ID"), r.get("Status"), prefix(r), (r.get("Expiration") or {}).get("Days"))
+                  def strip(v):
+                      if isinstance(v, dict):
+                          v = {k: strip(x) for k, x in v.items()}
+                          return {k: x for k, x in v.items() if x not in (None, "", 0, False, {}, [])}
+                      if isinstance(v, list):
+                          return [strip(x) for x in v]
+                      return v
+                  def split(r):
+                      r = strip(r)
+                      f = dict(r.pop("Filter", None) or {})
+                      a = dict(f.pop("And", None) or {})
+                      p = next((c for c in (r.pop("Prefix", ""), f.pop("Prefix", ""), a.pop("Prefix", "")) if c), "")
+                      if a:
+                          f["And"] = a
+                      return r, p, f
+                  def canon(r):
+                      rest, p, f = split(r)
+                      return json.dumps([rest, p, f], sort_keys=True)
                   def owned(r):
                       return str(r.get("ID", "")).startswith("pawtograder-")
-                  def bucket_wide_expiry(r):
-                      f = r.get("Filter") or {}
-                      return (not owned(r) and prefix(r) == "" and not f.get("Tag") and not f.get("And")
-                              and bool((r.get("Expiration") or {}).get("Days")))
-                  desired = json.loads(desired_doc)["Rules"]
-                  in_sync = ({key(r) for r in desired} == {key(r) for r in current if owned(r)}
-                             and not any(bucket_wide_expiry(r) for r in current))
+                  def overrides_tiers(r):
+                      rest, p, f = split(r)
+                      exp = rest.get("Expiration") or {}
+                      tagged = f.get("Tag") or (f.get("And") or {}).get("Tags")
+                      return (not owned(r) and bool(exp.get("Days") or exp.get("Date")) and not tagged
+                              and any(k.startswith(p) for k in ("daily/pawtograder-", "monthly/pawtograder-")))
+                  def same(a, b):
+                      return sorted(map(canon, a)) == sorted(map(canon, b))
+                  want = json.loads(want_doc)["Rules"]
                   if mode == "check":
-                      sys.exit(0 if in_sync else 1)
-                  if in_sync:
+                      sys.exit(0 if same(current, want) else 1)
+                  kept = [r for r in current if not owned(r) and not overrides_tiers(r)]
+                  merged = kept + want
+                  if same(current, merged):
                       sys.exit(0)
                   for r in current:
-                      if bucket_wide_expiry(r):
-                          print("[backup] removing bucket-wide expiry rule %s (%sd): it would expire monthly/ too"
-                                % (r.get("ID"), r["Expiration"]["Days"]), file=sys.stderr)
-                  kept = [r for r in current if not owned(r) and not bucket_wide_expiry(r)]
+                      if overrides_tiers(r):
+                          print("[backup] removing expiry rule %s: it would expire daily/ or monthly/ dumps outside the tiers"
+                                % r.get("ID"), file=sys.stderr)
                   for r in kept:
                       print("[backup] keeping ops-owned lifecycle rule %s" % r.get("ID"), file=sys.stderr)
-                  print(json.dumps({"Rules": kept + desired}))
+                  print(json.dumps({"Rules": merged}))
                   sys.exit(10)
                   PY
                   }
@@ -217,17 +258,22 @@ spec:
                   elif [ "$RC" -eq 10 ]; then
                     echo "[backup] importing lifecycle configuration: $MERGED"
                     printf '%s' "$MERGED" | mc ilm rule import "s3/${S3_BUCKET}"
-                    # Read it back. A server that accepted the import but
-                    # dropped a filter would otherwise expire the wrong
-                    # objects in silence; failing here fires
+                    # Read it back and compare ALL of it. A server that
+                    # accepted the import but dropped a filter, or dropped an
+                    # ops rule such as the noncurrent-version expiry, would
+                    # otherwise fail in silence; failing here fires
                     # PawtograderBackupJobFailed instead.
                     APPLIED=$(export_rules)
-                    if ! lifecycle check "$APPLIED"; then
+                    if ! lifecycle check "$MERGED" "$APPLIED"; then
                       echo "[backup] FATAL: lifecycle read back differs from what was imported: $APPLIED"
                       exit 1
                     fi
                     echo "[backup] lifecycle configuration applied and read back"
                   else
+                    exit 1
+                  fi
+                  if [ -n "$DEFERRED_FAILURE" ]; then
+                    echo "[backup] FATAL: $DEFERRED_FAILURE (the daily dump itself landed and was verified)"
                     exit 1
                   fi
               volumeMounts:
