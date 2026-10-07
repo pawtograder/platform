@@ -3,7 +3,7 @@
 .gitignore
 .idea/
 .vscode/
-*.tgz
+/*.tgz
 *.swp
 *.tmp
 *.bak
@@ -19,5 +19,5 @@ README.md.tmp
 # ConfigMap only needs maintenance/index.html (a Files.Get target, kept).
 *.png
 images/
-/scripts/
+scripts/
 tests/

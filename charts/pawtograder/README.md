@@ -617,13 +617,15 @@ The chart can also run [Forgejo](https://forgejo.org) (git hosting and Actions) 
 
 | Value | What it adds |
 | --- | --- |
-| `forgejo.enabled` | Forgejo (subchart `charts/forgejo`, upstream `forgejo-helm/forgejo`) |
+| `forgejo.enabled` | Forgejo (subchart, upstream `forgejo-helm/forgejo`) |
 | `forgejo-db.enabled` | Forgejo's own Postgres (`groundhog2k/postgres`), Service `pawtograder-forgejo-db` |
 | `forgejoRunner.enabled` | A Forgejo Actions runner in host mode (`templates/forgejo-runner.yaml`) |
-| `coder.enabled` | Coder (subchart `charts/coder`, upstream `helm.coder.com/v2`), plus the post-install hook that creates its first owner and pushes `files/coder-templates/*` |
+| `coder.enabled` | Coder (subchart, upstream `helm.coder.com/v2`), plus the post-install hook that creates its first owner and pushes `files/coder-templates/*` |
 | `coder-db.enabled` | Coder's own Postgres, Service `pawtograder-coder-db` |
 
 The release must be named `pawtograder`: subchart values name `pawtograder-*` Secrets and ConfigMaps, and a render with another name fails.
+
+The subcharts aren't committed. `Chart.lock` pins them, and `scripts/build-deps.sh` fetches them into `charts/` (gitignored). CI runs it before every helm command; run it yourself before `helm template`, `lint` or `upgrade` against a checkout, which otherwise fail with "found in Chart.yaml, but missing in charts/ directory" even with every component off. The published OCI chart already contains them. To move a subchart to a new version, edit `Chart.yaml` and run `helm dependency update charts/pawtograder`.
 
 ### Databases
 

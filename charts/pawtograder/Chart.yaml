@@ -23,7 +23,7 @@ keywords:
   - autograder
 annotations:
   category: Application
-# Vendored unpacked under charts/: .helmignore drops *.tgz and CI runs no dependency build.
+# Fetched into charts/ (gitignored) from Chart.lock by scripts/build-deps.sh; run it before helm commands against a checkout.
 dependencies:
   - name: forgejo
     version: 17.1.7

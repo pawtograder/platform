@@ -65,6 +65,7 @@ prod render guard refuses those).
 ```bash
 # In the prod values overlay, set the web/edge/migrations image tags back to
 # the last-good release, then:
+charts/pawtograder/scripts/build-deps.sh   # fetch the subcharts Chart.lock pins
 helm upgrade <release> charts/pawtograder \
   -n "$NS" -f <your-prod-values>.yaml --wait --wait-for-jobs
 ```
