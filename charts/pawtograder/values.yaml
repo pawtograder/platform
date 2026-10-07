@@ -2628,9 +2628,6 @@ tests:
       requests: { cpu: "10m", memory: "16Mi" }
       limits:   { cpu: "100m", memory: "64Mi" }
 
-# -----------------------------------------------------------------------------
-# Forgejo and Coder (Cloud Workspaces)
-# -----------------------------------------------------------------------------
 forgejo:
   enabled: false
   database: own
@@ -2652,7 +2649,6 @@ forgejo:
   ingress:
     enabled: true
     className: nginx
-    # Set in the overlay; ROOT_URL and the edge functions' FORGEJO_URL come from the first host.
     hosts: []
   gitea:
     admin:
@@ -2755,7 +2751,6 @@ coder:
   enabled: false
   database: own
   coder:
-    # Set CODER_ACCESS_URL and CODER_WILDCARD_ACCESS_URL in the overlay's coder.coder.env.
     env: []
     envFrom:
       - configMapRef: { name: pawtograder-coder-env }
@@ -2768,7 +2763,6 @@ coder:
     ingress:
       enable: true
       className: nginx
-      # Set host and wildcardHost (and tls) in the overlay.
       host: ""
       wildcardHost: ""
     serviceAccount:
