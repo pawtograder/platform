@@ -97,3 +97,5 @@ ai-slop-report.md
 
 # a11y-judge v2: generated replay specs are artifacts until promoted (Wave-4 gate)
 tests/e2e/a11y-tasks/
+
+charts/pawtograder/charts/

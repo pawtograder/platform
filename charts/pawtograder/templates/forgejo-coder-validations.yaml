@@ -1,0 +1,62 @@
+{{- if or .Values.forgejo.enabled .Values.coder.enabled }}
+{{- if ne .Release.Name "pawtograder" }}
+{{- fail (printf "forgejo/coder: the release must be named pawtograder (got %q); their subchart values reference pawtograder-* Secrets and ConfigMaps." .Release.Name) }}
+{{- end }}
+{{- end }}
+
+{{- range $app := list "forgejo" "coder" }}
+{{- $v := index $.Values $app }}
+{{- $db := index $.Values (printf "%s-db" $app) }}
+{{- if $v.enabled }}
+{{- if not (has $v.database (list "own" "pawtograder")) }}
+{{- fail (printf "%s.database must be own or pawtograder, got %q" $app $v.database) }}
+{{- end }}
+{{- if and (eq $v.database "own") (not $db.enabled) }}
+{{- fail (printf "%s.database=own needs %s-db.enabled=true (or set %s.database=pawtograder to use this chart's Postgres)" $app $app $app) }}
+{{- end }}
+{{- if and (eq $v.database "pawtograder") (not $.Values.postgres.enabled) }}
+{{- fail (printf "%s.database=pawtograder needs postgres.enabled=true" $app) }}
+{{- end }}
+{{- end }}
+{{- if and $db.enabled (not (and $v.enabled (eq $v.database "own"))) }}
+{{- fail (printf "%s-db.enabled=true but nothing uses it: needs %s.enabled=true and %s.database=own" $app $app $app) }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.forgejo.enabled }}
+{{- if .Values.global.imagePullSecrets }}
+{{- fail "global.imagePullSecrets can't be combined with forgejo.enabled: the Forgejo subchart reads it as a list of names, this chart as a list of {name: ...}. Attach pull secrets to the ServiceAccount the pods use instead (serviceAccount.create=false runs them under the namespace's default one)." }}
+{{- end }}
+{{- if not .Values.forgejo.ingress.hosts }}
+{{- fail "forgejo.ingress.hosts must name Forgejo's host; ROOT_URL and the edge functions' FORGEJO_URL come from it" }}
+{{- end }}
+{{- $envNames := list }}
+{{- range .Values.forgejo.gitea.additionalConfigFromEnvs }}{{ $envNames = append $envNames .name }}{{ end }}
+{{- range $want := list "FORGEJO__DATABASE__HOST" "FORGEJO__DATABASE__PASSWD" }}
+{{- if not (has $want $envNames) }}
+{{- fail (printf "forgejo.gitea.additionalConfigFromEnvs is missing %s; an overlay that sets the list must keep the chart's database entries" $want) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.forgejoRunner.enabled }}
+{{- if not .Values.forgejo.enabled }}
+{{- fail "forgejoRunner.enabled needs forgejo.enabled" }}
+{{- end }}
+{{- if not (and .Values.forgejoRunner.image.repository .Values.forgejoRunner.image.tag) }}
+{{- fail "forgejoRunner.image.repository and .tag are required (build images/forgejo-runner)" }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.coder.enabled }}
+{{- if not .Values.coder.coder.ingress.host }}
+{{- fail "coder.coder.ingress.host must name Coder's host" }}
+{{- end }}
+{{- $refs := list }}
+{{- range .Values.coder.coder.envFrom }}{{ $refs = append $refs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
+{{- range $want := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
+{{- if not (has $want $refs) }}
+{{- fail (printf "coder.coder.envFrom is missing %s; an overlay that sets the list must keep the chart's entries" $want) }}
+{{- end }}
+{{- end }}
+{{- end }}

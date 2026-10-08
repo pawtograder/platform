@@ -2627,3 +2627,187 @@ tests:
     resources:
       requests: { cpu: "10m", memory: "16Mi" }
       limits:   { cpu: "100m", memory: "64Mi" }
+
+forgejo:
+  enabled: false
+  database: own
+  # Mirrored by .github/workflows/mirror-third-party.yml; a new tag goes in .github/mirror.yaml first.
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/forgejo/forgejo
+    tag: "15.0.9"
+  strategy:
+    type: Recreate # RWO repo volume
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  initContainers:
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+  persistence:
+    enabled: true
+    size: 20Gi
+  # The chart's test pod sets no resources, so limit-tracking quotas reject it.
+  test:
+    enabled: false
+  ingress:
+    enabled: true
+    className: nginx
+    hosts: []
+  gitea:
+    admin:
+      existingSecret: pawtograder-forgejo-admin
+      passwordMode: keepUpdated
+    # An overlay that sets this list must keep these two entries.
+    additionalConfigFromEnvs:
+      - name: FORGEJO__DATABASE__HOST
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-database, key: host }
+      - name: FORGEJO__DATABASE__PASSWD
+        valueFrom:
+          secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+    config:
+      server:
+        DISABLE_SSH: true # Ingress-only clusters serve git over HTTPS
+        START_SSH_SERVER: false
+        LFS_START_SERVER: true
+      database:
+        DB_TYPE: postgres
+        NAME: forgejo
+        USER: forgejo
+        SSL_MODE: disable
+      service:
+        DISABLE_REGISTRATION: true
+      actions:
+        ENABLED: true
+        DEFAULT_ACTIONS_URL: https://github.com # bare `uses:` resolve as on GitHub
+      session:
+        PROVIDER: db
+      cache:
+        ADAPTER: memory
+      queue:
+        TYPE: level
+      indexer:
+        ISSUE_INDEXER_TYPE: bleve
+        REPO_INDEXER_ENABLED: false
+  extraContainers:
+    - name: register-runner
+      image: ghcr.io/pawtograder/mirror/forgejo/forgejo:15.0.9-rootless
+      command:
+        - sh
+        - -c
+        - |
+          [ -n "$RUNNER_SECRET" ] || exec sleep 2147483647
+          # Runs on every Forgejo start; without --keep-labels it wipes the labels the runner declared.
+          until forgejo forgejo-cli actions register --name pawtograder-runner --secret "$RUNNER_SECRET" \
+            --keep-labels; do sleep 10; done
+          exec sleep 2147483647
+      env:
+        - { name: GITEA_APP_INI, value: /data/gitea/conf/app.ini }
+        - { name: GITEA_CUSTOM, value: /data/gitea }
+        - { name: GITEA_WORK_DIR, value: /data }
+        - { name: GITEA_TEMP, value: /tmp/gitea }
+        - name: RUNNER_SECRET
+          valueFrom:
+            secretKeyRef: { name: pawtograder-forgejo-runner, key: secret, optional: true }
+      securityContext:
+        allowPrivilegeEscalation: false
+      resources:
+        requests: { cpu: 10m, memory: 32Mi }
+        limits: { cpu: 200m, memory: 128Mi }
+      volumeMounts:
+        - { name: data, mountPath: /data }
+        - { name: temp, mountPath: /tmp }
+
+forgejo-db:
+  enabled: false
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/postgres
+    tag: "18.6"
+  settings:
+    existingSecret: pawtograder-forgejo-db-superuser
+    superuserPassword:
+      secretKey: POSTGRES_PASSWORD
+  storage:
+    requestedSize: 5Gi
+    keepPvc: true
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+forgejoRunner:
+  enabled: false
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  capacity: 2
+  labels:
+    - ubuntu-latest:host
+    - ubuntu-24.04:host
+    - ubuntu-22.04:host
+  workdirSizeLimit: 20Gi
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "2", memory: 4Gi }
+
+coder:
+  enabled: false
+  database: own
+  coder:
+    image:
+      repo: ghcr.io/pawtograder/mirror/coder/coder
+      tag: v2.37.3
+    env: []
+    envFrom:
+      - configMapRef: { name: pawtograder-coder-env }
+      - secretRef: { name: pawtograder-coder-db }
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+    service:
+      type: ClusterIP
+    ingress:
+      enable: true
+      className: nginx
+      host: ""
+      wildcardHost: ""
+    serviceAccount:
+      workspacePerms: true
+      enableDeployments: true
+
+coder-db:
+  enabled: false
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/postgres
+    tag: "18.6"
+  settings:
+    existingSecret: pawtograder-coder-db-superuser
+    superuserPassword:
+      secretKey: POSTGRES_PASSWORD
+  storage:
+    requestedSize: 5Gi
+    keepPvc: true
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+coderBootstrap:
+  enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+appDatabases:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }

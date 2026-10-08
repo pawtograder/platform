@@ -191,6 +191,7 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
      --from-literal=AWS_ACCESS_KEY_ID="$DRILL_S3_KEY" \
      --from-literal=AWS_SECRET_ACCESS_KEY="$DRILL_S3_SECRET"
 
+   charts/pawtograder/scripts/build-deps.sh   # fetch the subcharts Chart.lock pins
    helm install drill charts/pawtograder -n "$DRILL_NS" \
      -f charts/pawtograder/examples/values-preview.yaml \
      --set fullnameOverride=drill \

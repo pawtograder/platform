@@ -1,0 +1,15 @@
+dependencies:
+- name: forgejo
+  repository: oci://code.forgejo.org/forgejo-helm
+  version: 17.1.7
+- name: coder
+  repository: https://helm.coder.com/v2
+  version: 2.37.3
+- name: postgres
+  repository: https://groundhog2k.github.io/helm-charts/
+  version: 1.6.8
+- name: postgres
+  repository: https://groundhog2k.github.io/helm-charts/
+  version: 1.6.8
+digest: sha256:fbc46ca903e80ea8c8090ec81b7fbf445003327e7e7534cdb1aca7dd3bd4ecb8
+generated: "2026-10-07T11:22:50.15681-04:00"

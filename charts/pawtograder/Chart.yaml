@@ -7,7 +7,7 @@ description: |
   Studio, postgres-meta, supavisor) so the whole stack can be deployed to a
   Kubernetes cluster from a single Helm release.
 type: application
-version: 0.3.27
+version: 0.3.28
 appVersion: "0.0.1"
 kubeVersion: ">=1.27.0-0"
 home: https://pawtograder.net
@@ -23,3 +23,23 @@ keywords:
   - autograder
 annotations:
   category: Application
+# Fetched into charts/ (gitignored) from Chart.lock by scripts/build-deps.sh; run it before helm commands against a checkout.
+dependencies:
+  - name: forgejo
+    version: 17.1.7
+    repository: oci://code.forgejo.org/forgejo-helm
+    condition: forgejo.enabled
+  - name: coder
+    version: 2.37.3
+    repository: https://helm.coder.com/v2
+    condition: coder.enabled
+  - name: postgres
+    alias: forgejo-db
+    version: 1.6.8
+    repository: https://groundhog2k.github.io/helm-charts/
+    condition: forgejo-db.enabled
+  - name: postgres
+    alias: coder-db
+    version: 1.6.8
+    repository: https://groundhog2k.github.io/helm-charts/
+    condition: coder-db.enabled

@@ -174,6 +174,7 @@ fill every `← ...` blank: [`values-prod.yaml`](../../charts/pawtograder/exampl
 (pre-created Secrets + in-chart Redis + existing wildcard cert). Then:
 
 ```bash
+charts/pawtograder/scripts/build-deps.sh   # fetch the subcharts Chart.lock pins
 helm upgrade --install <release> ./charts/pawtograder \
   -n "$NS" --create-namespace \
   -f <your-prod-values>.yaml --wait --wait-for-jobs
