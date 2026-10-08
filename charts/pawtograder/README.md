@@ -625,7 +625,7 @@ The chart can also run [Forgejo](https://forgejo.org) (git hosting and Actions) 
 
 The release must be named `pawtograder`: subchart values name `pawtograder-*` Secrets and ConfigMaps, and a render with another name fails.
 
-The subcharts aren't committed. `Chart.lock` pins them, and `scripts/build-deps.sh` fetches them into `charts/` (gitignored). CI runs it before every helm command; run it yourself before `helm template`, `lint` or `upgrade` against a checkout, which otherwise fail with "found in Chart.yaml, but missing in charts/ directory" even with every component off. The published OCI chart already contains them. To move a subchart to a new version, edit `Chart.yaml` and run `helm dependency update charts/pawtograder`.
+The subcharts aren't committed. `Chart.lock` pins them, and `scripts/build-deps.sh` fetches them into `charts/` (gitignored). CI runs it before every helm command; run it yourself before `helm template`, `lint` or `upgrade` against a checkout, which otherwise fail with "found in Chart.yaml, but missing in charts/ directory" even with every component off. The published OCI chart already contains them. Their images (Forgejo, Coder, both Postgres servers, and the Coder workspace image in `files/coder-templates`) are pulled from `ghcr.io/pawtograder/mirror`, which `.github/workflows/mirror-third-party.yml` fills from `.github/mirror.yaml`. To change a tag, add it to `.github/mirror.yaml`, let the workflow run on `staging`, then update the value here. To move a subchart to a new version, edit `Chart.yaml` and run `helm dependency update charts/pawtograder`.
 
 ### Databases
 

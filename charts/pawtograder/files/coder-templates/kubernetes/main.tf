@@ -21,7 +21,7 @@ variable "namespace" {
 variable "image" {
   type        = string
   description = "Workspace container image."
-  default     = "codercom/enterprise-base:ubuntu"
+  default     = "ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005"
 }
 
 data "coder_parameter" "cpu" {
