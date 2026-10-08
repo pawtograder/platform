@@ -1,11 +1,6 @@
 name: Mirror third-party charts and images
 
-# Copies what .github/mirror.yaml lists into ghcr.io/pawtograder/mirror, so CI
-# and clusters pull from GHCR rather than upstream registries.
-#
-# New GHCR packages start private, and the cluster and CI pull anonymously: after
-# the first run that creates a package, an org admin sets it to public
-# (github.com/orgs/pawtograder/packages -> package -> Package settings).
+# New GHCR packages start private: an org admin must make each public after the run that creates it.
 
 on:
   push:

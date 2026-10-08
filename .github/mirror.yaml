@@ -1,9 +1,6 @@
-# Third-party charts and images copied into ghcr.io/pawtograder/mirror by
-# .github/workflows/mirror-third-party.yml. Pin exact versions: a copy that
-# already exists is never refreshed.
+# Pin exact versions: copies that already exist are never refreshed.
 
 charts:
-  # -> oci://ghcr.io/pawtograder/mirror/charts/<name>
   - name: forgejo
     repository: oci://code.forgejo.org/forgejo-helm
     version: 17.1.7
@@ -15,7 +12,6 @@ charts:
     version: 1.6.8
 
 images:
-  # -> ghcr.io/pawtograder/mirror/<path without the registry host>
   - code.forgejo.org/forgejo/forgejo:15.0.9-rootless
   - ghcr.io/coder/coder:v2.37.3
   - docker.io/postgres:18.6

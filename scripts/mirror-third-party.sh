@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-#
-# Copies the charts and images listed in .github/mirror.yaml into DEST, skipping
-# any that are already there. Run by .github/workflows/mirror-third-party.yml.
-#
-#   DEST=ghcr.io/pawtograder/mirror scripts/mirror-third-party.sh [list]
-#   DRY_RUN=1 ...    # print what would be copied, push nothing
-#
-# Requires: helm 3.8+, docker buildx, yq v4. Log in to DEST's registry first.
 
 set -euo pipefail
 
