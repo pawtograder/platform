@@ -334,6 +334,17 @@ const DISCORD_UNKNOWN_MEMBER = 10007;
 const STATUS_WRITE_ATTEMPTS = 3;
 
 /**
+ * How many requeues a rate-limited envelope must survive before the limit is reported to Sentry.
+ *
+ * Below this, the backoff is doing its job and the operation still completes, so a report says only
+ * "Discord applied backpressure once" — which was 3776 events and the project's largest issue. At or
+ * above it, the limit has outlived several backoffs and is worth a human knowing about. Must stay
+ * under the `>= 5` dead-letter threshold, or a sustained limit would dead-letter without ever being
+ * reported.
+ */
+const RATE_LIMIT_REPORT_AFTER_RETRIES = 3;
+
+/**
  * Store a freshly created Discord invite, and return the URL the student will actually be given.
  *
  * Retried in place and compensated on failure, because by this point the invite exists in Discord
@@ -3221,18 +3232,45 @@ export async function processEnvelope(
     const rt = detectRateLimit(error);
     console.log(`[processEnvelope] Rate limit detected: ${rt.isRateLimit}, retry_after: ${rt.retryAfter}`);
     scope.setTag("rate_limit", rt.isRateLimit ? "true" : "false");
-    // A rate limit that reaches here is backpressure, not a fault: the envelope is requeued below and
-    // the operation still happens. Filing it at `error` put a self-correcting 429 in the same bucket
-    // as a lost message and made the Discord worker look like it was failing when it was waiting.
-    // Still captured -- a sustained limit is worth seeing, and DiscordWrapper only propagates the ones
-    // too long to wait out -- but at a level that does not page.
-    if (rt.isRateLimit) scope.setLevel("warning");
-    const errorId = Sentry.captureException(error, scope);
-    console.log(`[processEnvelope] Recorded error with Sentry ID: ${errorId}`);
 
-    // Check retry count - if >= 5, send to DLQ instead of requeuing
+    // Needed before the capture decision below, so read it here rather than after.
     const currentRetryCount = envelope.retry_count ?? 0;
     console.log(`[processEnvelope] Current retry count: ${currentRetryCount}`);
+
+    // A rate limit that reaches here is backpressure, not a fault: the envelope is requeued below and
+    // the operation still happens. Filing it at `error` put a self-correcting 429 in the same bucket
+    // as a lost message and made the Discord worker look like it was failing when it was waiting, so
+    // it was dropped to `warning`.
+    //
+    // That was not enough. Reporting every 429 made this the single largest issue in the project —
+    // 3776 events, more than the next two combined — which is not "visible", it is the thing you
+    // scroll past to find real failures. The intent behind capturing was that a *sustained* limit is
+    // worth seeing, and a single 429 that the next requeue clears is not sustained by any reading.
+    //
+    // So capture on the same signal the code already uses to mean "this is not resolving itself":
+    // the envelope has come back at least RATE_LIMIT_REPORT_AFTER_RETRIES times and is still limited.
+    // A genuine sustained limit crosses that within minutes and is still reported, with retry_count
+    // in the payload saying how long it has been going. A one-off never is.
+    const sustainedRateLimit = rt.isRateLimit && currentRetryCount >= RATE_LIMIT_REPORT_AFTER_RETRIES;
+    if (rt.isRateLimit) {
+      scope.setLevel("warning");
+      scope.setContext("rate_limit_report", {
+        retry_count: currentRetryCount,
+        reported_after_retries: RATE_LIMIT_REPORT_AFTER_RETRIES,
+        sustained: sustainedRateLimit
+      });
+      // One issue for "Discord is rate limiting us", not one per endpoint/snowflake.
+      scope.setFingerprint(["discord-rate-limit-sustained"]);
+    }
+    if (!rt.isRateLimit || sustainedRateLimit) {
+      const errorId = Sentry.captureException(error, scope);
+      console.log(`[processEnvelope] Recorded error with Sentry ID: ${errorId}`);
+    } else {
+      console.log(
+        `[processEnvelope] Rate limited (retry ${currentRetryCount}/${RATE_LIMIT_REPORT_AFTER_RETRIES}), ` +
+          `not reporting to Sentry until sustained`
+      );
+    }
 
     if (currentRetryCount >= 5) {
       console.log(`[processEnvelope] Retry count >= 5, sending to DLQ`);

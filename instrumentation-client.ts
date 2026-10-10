@@ -116,14 +116,24 @@ Sentry.init({
       }
     }
 
-    // Filter errors thrown by injected browser extensions (reader-mode/page-scraper
-    // content scripts, etc.). Our own code is always served from `app:///_next/static/...`,
-    // whereas extension content scripts surface as `app:///assets/*.js`. These bubble up to
-    // the page's global onunhandledrejection handler and get attributed to us even though
-    // they originate from the user's extensions (e.g. invalid `querySelector` selectors).
-    if (
-      event.exception?.values?.some((e) => e.stacktrace?.frames?.some((f) => f.filename?.startsWith("app:///assets/")))
-    ) {
+    // Filter errors thrown by injected browser extensions (reader-mode/page-scraper content
+    // scripts, etc.). These bubble up to the page's global onunhandledrejection handler and get
+    // attributed to us even though they originate from the user's extensions (e.g. invalid
+    // `querySelector` selectors, or reading a property off undefined in a scraper).
+    //
+    // This used to name one known root, `app:///assets/`. That list only ever grows, and a root
+    // nobody has added yet is indistinguishable from one of our own crashes. Measured against the
+    // events actually in Bugsink, `app:///_next/` is the only root we ever serve (1229 events);
+    // every other one — /executors, /npm, /scripts, /Applications, /dist — is injected, and
+    // together they accounted for 589 events across 28 issues.
+    //
+    // So test by origin instead of by list. An event is dropped only when it has `app:///` frames
+    // and NOT ONE of them is ours: a stack that touches our own bundle anywhere is kept, even if an
+    // extension also appears on it, and an event with no `app:///` frames at all is untouched.
+    const appFrames = (event.exception?.values ?? []).flatMap(
+      (e) => e.stacktrace?.frames?.filter((f) => f.filename?.startsWith("app:///")) ?? []
+    );
+    if (appFrames.length > 0 && !appFrames.some((f) => f.filename?.startsWith("app:///_next/"))) {
       return null;
     }
 

@@ -16,7 +16,8 @@ import {
   validateOIDCTokenOrAllowE2E,
   END_TO_END_REPO_PREFIX,
   SecondaryRateLimitError,
-  PrimaryRateLimitError
+  PrimaryRateLimitError,
+  MissingInstallationError
 } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
@@ -33,6 +34,15 @@ import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
 
 const RESET_WINDOW_MS = 60_000;
+
+/**
+ * Orgs whose "GitHub App is not installed" condition this isolate has already reported.
+ *
+ * Deliberately per-isolate rather than persisted: the condition is real and unfixed, so it should
+ * keep surfacing as isolates recycle, just not once per submission. See the catch in the resolveRef
+ * block below.
+ */
+const reportedMissingInstallations = new Set<string>();
 
 function detectRateLimitType(error: unknown): {
   type: "secondary" | "primary" | "extreme" | null;
@@ -663,6 +673,36 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
             Sentry.captureException(e, errorScope);
           });
           console.warn(`GitHub rate limit (${rt.type}) hit during resolveRef for action SHA`);
+        } else if (e instanceof MissingInstallationError) {
+          // The App is not installed on the org that owns the action repository. Grading is not
+          // blocked — action_sha stays undefined and the flow below continues — and the outcome is
+          // identical on every submission until somebody installs it, so reporting per submission
+          // produced 2990 events for one org and told us nothing the first event had not.
+          //
+          // Report once per org per isolate instead. Edge isolates recycle, so this still re-raises
+          // periodically (it is a real, unfixed condition and should not vanish entirely) without
+          // scaling with submission volume.
+          if (!reportedMissingInstallations.has(e.org)) {
+            reportedMissingInstallations.add(e.org);
+            Sentry.withScope((errorScope) => {
+              errorScope.setFingerprint(["github-app-not-installed", e.org]);
+              errorScope.setTag("github_org", e.org);
+              errorScope.setTag("github_api_method", "resolveRef");
+              errorScope.setLevel("warning");
+              errorScope.setContext("missing_installation", {
+                org: e.org,
+                action_repository: requestBody.action_repository,
+                action_ref: requestBody.action_ref,
+                impact: "action_sha is not recorded on grader results for this org; grading still runs",
+                remedy: `Install the Pawtograder GitHub App on the "${e.org}" organization`
+              });
+              Sentry.captureException(e, errorScope);
+            });
+          }
+          console.warn(
+            `[autograder-submit-feedback] GitHub App is not installed on "${e.org}" — ` +
+              `cannot resolve ${requestBody.action_repository}@${requestBody.action_ref}, continuing without action_sha`
+          );
         } else {
           Sentry.captureException(e, scope);
         }
