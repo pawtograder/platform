@@ -25,6 +25,7 @@ import type * as MathJSType from "mathjs";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LuArrowLeftRight, LuCheck, LuCircleAlert, LuMaximize2, LuMinimize2, LuUser } from "react-icons/lu";
 import type { GradebookColumn } from "@/utils/supabase/DatabaseTypes";
+import { configureMonacoWorkers } from "@/lib/monacoWorkers";
 
 const ExpressionMonacoEditor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
   ssr: false,
@@ -552,14 +553,7 @@ function InlineLineAnnotatedEditor({
     // already a global symbol when the editor loads via AMD; we only re-add
     // it because our webpack-bundled build keeps it module-local.
     (window as unknown as { monaco?: Monaco }).monaco = monaco;
-    window.MonacoEnvironment = {
-      getWorker(_moduleId, label) {
-        if (label === "editorWorkerService") {
-          return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
-        }
-        throw new Error(`Unknown Monaco worker label: ${label}`);
-      }
-    };
+    configureMonacoWorkers();
     registerGradebookExpressionLanguage(monaco);
     providersDisposableRef.current?.dispose();
     providersDisposableRef.current = registerGradebookExpressionEditorFeatures(monaco, {
