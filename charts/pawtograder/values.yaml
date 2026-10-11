@@ -2181,7 +2181,31 @@ backup:
     endpoint: ""
     region: "us-east-1"
     bucket: "pawtograder-backups"
-  retentionDays: 14
+  # Tiered retention, enforced by S3 lifecycle rules filtered by prefix.
+  # Nightly dumps land under daily/. When monthlyDays > 0, the first good run
+  # of each UTC month also uploads its dump under monthly/. That is a second
+  # upload of the local file, not a server-side copy: a >5 GB object needs
+  # multipart copy, one more S3 feature the endpoint would have to get right.
+  #
+  # Every run reconciles the bucket's lifecycle rules with these. The job owns
+  # the rules whose ID starts with "pawtograder-" and removes any bucket-wide
+  # expiry rule (no prefix filter), since that would expire monthly/ as well.
+  # Every other rule is kept, e.g. ops' noncurrent-version expiry on a
+  # versioned bucket. On a versioned bucket, expiry only writes delete
+  # markers: without that noncurrent rule, no dump is ever actually freed.
+  #
+  # Expiry counts days and S3 rounds up to the next UTC midnight, so
+  # dailyDays: 7 keeps 7-8 dumps and monthlyDays: 90 keeps about 3.
+  retention:
+    dailyDays: 14
+    # 0 = no monthly tier (no monthly/ upload, no monthly/ rule).
+    monthlyDays: 0
+    # Expiry for dumps at the bucket ROOT (pawtograder-*.dump), where chart
+    # <= 0.3.27 wrote them. Replacing the old bucket-wide rule would otherwise
+    # leave those dumps with no expiry at all. Set it to the old
+    # backup.retentionDays; 0 drops the rule, which is safe once the root
+    # holds no dumps.
+    legacyRootDays: 14
   # Restore verification: a second CronJob that downloads the NEWEST backup
   # object and runs `pg_restore --list` over it — validating the archive's
   # TOC end-to-end (download integrity + dump structure) without needing a

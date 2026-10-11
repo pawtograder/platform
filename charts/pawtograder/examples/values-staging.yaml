@@ -430,7 +430,10 @@ backup:
     # need this; scripts/redeploy-staging.sh uses this file as-is and does.
     pullPolicy: Always
   schedule: "0 4 * * *"
-  retentionDays: 14
+  retention:
+    dailyDays: 14
+    monthlyDays: 0
+    legacyRootDays: 14   # old retentionDays; 0 once the bucket root is empty
   # Dump staging goes on ceph-rbd, NOT the local-path class postgres uses above.
   # The chart falls back to postgres.persistence.storageClass when this is
   # unset, and inheriting local-path here would stage the whole dump on the
