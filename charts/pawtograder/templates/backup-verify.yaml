@@ -73,12 +73,25 @@ spec:
                   # where chart <= 0.3.27 wrote them (drop the fallback once
                   # backup.retention.legacyRootDays has emptied the root).
                   # Timestamped names sort lexicographically == chronologically.
-                  # `|| true`: with pipefail, an empty listing fails grep, and
-                  # that must reach the FATAL below rather than exit silently.
-                  newest() { mc ls "s3/${S3_BUCKET}/$1" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true; }
+                  # The fallback is only for an EMPTY daily/: a FAILED listing
+                  # is fatal, or a denied or flaky daily/ would quietly check
+                  # an old root dump and pass. `|| true` covers only the grep,
+                  # which fails under pipefail when no name matches.
+                  newest() {
+                    local out
+                    out=$(mc ls "s3/${S3_BUCKET}/$1") || return 1
+                    printf '%s\n' "$out" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true
+                  }
                   DIR=daily/
-                  LATEST=$(newest daily/)
-                  if [ -z "$LATEST" ]; then DIR=""; LATEST=$(newest ""); fi
+                  if ! LATEST=$(newest daily/); then
+                    echo "[verify] FATAL: could not list s3/${S3_BUCKET}/daily/"; exit 1
+                  fi
+                  if [ -z "$LATEST" ]; then
+                    DIR=""
+                    if ! LATEST=$(newest ""); then
+                      echo "[verify] FATAL: could not list s3/${S3_BUCKET}/"; exit 1
+                    fi
+                  fi
                   if [ -z "$LATEST" ]; then
                     echo "[verify] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}/daily/ or the bucket root — backups are not landing"
                     exit 1

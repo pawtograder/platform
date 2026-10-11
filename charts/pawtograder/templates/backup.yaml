@@ -167,15 +167,21 @@ spec:
                   # so changing retentionDays on a live bucket did nothing.
                   #
                   # The job owns rules whose ID starts with "pawtograder-".
-                  # It also removes any other EXPIRY rule (by days or by date)
-                  # that could match daily/ or monthly/ keys — a bucket-wide
-                  # rule like the old job's, or a prefix such as "d" — since it
-                  # would override the tiers. A rule filtered by tag is kept:
-                  # the job never tags dumps, so it cannot match them. Every
-                  # other rule is ops' and is kept as exported; a
+                  # Any other ENABLED rule with a current-version Expiration
+                  # (by days or by date) whose prefix overlaps daily/ or
+                  # monthly/ — a bucket-wide rule like the old job's, a
+                  # broader prefix such as "d", or a narrower one such as
+                  # "monthly/pawtograder-2025" — would override the tiers, so
+                  # its Expiration is removed. The rest of that rule (e.g. a
+                  # NoncurrentVersionExpiration in the same rule) is kept
+                  # under its own ID, and the rule is dropped only when
+                  # nothing else is left. Kept as exported: disabled rules
+                  # (S3 ignores them, and ops disable rules to stage or debug
+                  # them), tag-filtered rules (the job never tags dumps, so
+                  # they cannot match), and every other ops rule. The
                   # noncurrent-version expiry on a versioned bucket is the one
-                  # that matters, and dropping it would let old versions pile
-                  # up forever.
+                  # that matters: dropping it would let old versions pile up
+                  # forever.
                   #
                   # Rules compare in a canonical form: falsy fields dropped,
                   # Prefix lifted out of Filter/And, keys sorted. So a server
@@ -230,23 +236,43 @@ spec:
                       rest, p, f = split(r)
                       exp = rest.get("Expiration") or {}
                       tagged = f.get("Tag") or (f.get("And") or {}).get("Tags")
-                      return (not owned(r) and bool(exp.get("Days") or exp.get("Date")) and not tagged
-                              and any(k.startswith(p) for k in ("daily/pawtograder-", "monthly/pawtograder-")))
+                      # Overlap either way: a prefix that contains a tier
+                      # ("", "d") or sits inside one ("daily/pawtograder-2026").
+                      overlaps = any(t.startswith(p) or p.startswith(t) for t in ("daily/", "monthly/"))
+                      return (not owned(r) and rest.get("Status") == "Enabled" and not tagged
+                              and bool(exp.get("Days") or exp.get("Date")) and overlaps)
+                  NOT_ACTIONS = ("ID", "Status", "Filter", "Prefix")
+                  def without_expiration(r):
+                      # The rule minus its current-version Expiration, or None
+                      # when that leaves no action at all.
+                      r = {k: v for k, v in r.items() if k != "Expiration"}
+                      return r if any(k not in NOT_ACTIONS for k in strip(r)) else None
                   def same(a, b):
                       return sorted(map(canon, a)) == sorted(map(canon, b))
                   want = json.loads(want_doc)["Rules"]
                   if mode == "check":
                       sys.exit(0 if same(current, want) else 1)
-                  kept = [r for r in current if not owned(r) and not overrides_tiers(r)]
+                  kept, notes = [], []
+                  for r in current:
+                      if owned(r):
+                          continue
+                      if not overrides_tiers(r):
+                          kept.append(r)
+                          notes.append("keeping ops-owned lifecycle rule %s" % r.get("ID"))
+                          continue
+                      rest = without_expiration(r)
+                      if rest is None:
+                          notes.append("removing expiry rule %s: it would expire daily/ or monthly/ dumps outside the tiers"
+                                       % r.get("ID"))
+                      else:
+                          kept.append(rest)
+                          notes.append("removing the Expiration from rule %s (it would expire daily/ or monthly/ dumps"
+                                       " outside the tiers) and keeping its other actions" % r.get("ID"))
                   merged = kept + want
                   if same(current, merged):
                       sys.exit(0)
-                  for r in current:
-                      if overrides_tiers(r):
-                          print("[backup] removing expiry rule %s: it would expire daily/ or monthly/ dumps outside the tiers"
-                                % r.get("ID"), file=sys.stderr)
-                  for r in kept:
-                      print("[backup] keeping ops-owned lifecycle rule %s" % r.get("ID"), file=sys.stderr)
+                  for n in notes:
+                      print("[backup] " + n, file=sys.stderr)
                   print(json.dumps({"Rules": merged}))
                   sys.exit(10)
                   PY

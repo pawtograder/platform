@@ -630,6 +630,20 @@ then
     '"pawtograder-monthly"' '"dated"'
   assert_plan "expiry on a prefix covering monthly/ removed" 10 \
     "$(exported "$OWNED"',{"Expiration":{"Days":3},"Filter":{"Prefix":"mon"},"ID":"short","Status":"Enabled"}')" '' '"short"'
+  assert_plan "expiry on a prefix INSIDE monthly/ removed" 10 \
+    "$(exported "$OWNED"',{"Expiration":{"Days":3},"Filter":{"Prefix":"monthly/pawtograder-2025"},"ID":"inner","Status":"Enabled"}')" '' '"inner"'
+  assert_plan "expiry on an unrelated prefix kept" 0 \
+    "$(exported "$OWNED"',{"Expiration":{"Days":3},"Filter":{"Prefix":"scratch/"},"ID":"other","Status":"Enabled"}')"
+  # S3 ignores a disabled rule, and ops disable rules to stage or debug them.
+  assert_plan "DISABLED overlapping expiry kept" 0 \
+    "$(exported "$OWNED"',{"Expiration":{"Days":3},"ID":"staged","Status":"Disabled"}')"
+  # One rule may carry both actions; only the current-version Expiration
+  # conflicts, so the noncurrent action must survive under the same ID.
+  assert_plan "bucket-wide Expiration + Noncurrent rule: Expiration dropped, noncurrent kept" 10 \
+    "$(exported '{"Expiration":{"Days":30},"NoncurrentVersionExpiration":{"NoncurrentDays":1},"ID":"combo","Status":"Enabled"}')" \
+    '{"NoncurrentVersionExpiration": {"NoncurrentDays": 1}, "ID": "combo", "Status": "Enabled"}' '"Days": 30}, "NoncurrentVersionExpiration"'
+  assert_plan "split rule is in sync on the next run" 0 \
+    "$(exported "$OWNED"',{"NoncurrentVersionExpiration":{"NoncurrentDays":1},"ID":"combo","Status":"Enabled"}')"
   assert_plan "tag-filtered expiry kept (dumps are never tagged)" 0 \
     "$(exported "$OWNED"',{"Expiration":{"Days":3},"Filter":{"Tag":{"Key":"tmp","Value":"1"}},"ID":"tagged","Status":"Enabled"}')"
   assert_plan "owned rule that gained a tag condition is drift" 10 \
