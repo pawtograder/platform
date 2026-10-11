@@ -29,8 +29,9 @@ import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions
  *                            GitHub invitations to a roster that is not enrolled yet. COUNTED AND
  *                            LOGGED, not reported to Sentry: it is a configuration state no release
  *                            can clear, so reporting it re-raised the same classes on every hourly
- *                            run forever. The count rides back on the response as
- *                            classes_alerted_unset_term_dates.
+ *                            run forever. Note the cost — the hourly caller `perform`s this function
+ *                            and discards the response, so the log line is the ONLY signal left.
+ *                            See the branch itself for what that means and what should replace it.
  *       still stuck          Term dates set, window open, and enrolled users remain unconfirmed
  *                            anyway —
  *                            a broken App installation, a login GitHub no longer recognizes, an org
@@ -143,9 +144,18 @@ function alertOnStuckClasses(alerts: MembershipAlert[], scope: Sentry.Scope) {
       // that was two classes at 193 events each between 09-11 and 10-10 — the third-largest
       // issue in the project, for a condition nobody can action from an error tracker.
       //
-      // The signal is not lost: the count is returned in the response body as
-      // classes_alerted_unset_term_dates, which is where a "how is configuration doing" number
-      // belongs, and the per-class detail is on stdout for anyone chasing a specific class.
+      // Be clear about what this costs. `classes_alerted_unset_term_dates` is still in the response
+      // body, but NOTHING reads it: the hourly caller is
+      // `perform public.call_edge_function_internal(...)` in
+      // 20260909140000_github_membership_reconciler.sql, and `perform` discards the result. So the
+      // only remaining signal is this log line, and a class whose term dates are never filled in
+      // leaves its students outside the org — and therefore without repo access — until somebody
+      // reads function logs or notices by hand.
+      //
+      // That is the deliberate trade: the alert as written could not be actioned OR silenced, so it
+      // was pure noise at ~48 events/day. A durable low-volume replacement (report on state change,
+      // or once per class per week via the Redis lease the async workers already use) is the right
+      // long-term answer and is not in this change.
       console.warn(
         `[github-membership-reconciler] GitHub org re-invites are disabled for class ${alert.class_id} ` +
           `(${alert.class_slug ?? "unknown"}, org ${alert.github_org ?? "unknown"}): ` +

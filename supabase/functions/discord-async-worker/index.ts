@@ -3252,18 +3252,25 @@ export async function processEnvelope(
     // A genuine sustained limit crosses that within minutes and is still reported, with retry_count
     // in the payload saying how long it has been going. A one-off never is.
     const sustainedRateLimit = rt.isRateLimit && currentRetryCount >= RATE_LIMIT_REPORT_AFTER_RETRIES;
-    if (rt.isRateLimit) {
-      scope.setLevel("warning");
-      scope.setContext("rate_limit_report", {
-        retry_count: currentRetryCount,
-        reported_after_retries: RATE_LIMIT_REPORT_AFTER_RETRIES,
-        sustained: sustainedRateLimit
-      });
-      // One issue for "Discord is rate limiting us", not one per endpoint/snowflake.
-      scope.setFingerprint(["discord-rate-limit-sustained"]);
-    }
     if (!rt.isRateLimit || sustainedRateLimit) {
-      const errorId = Sentry.captureException(error, scope);
+      // A CLONE for the rate-limit framing, never `scope` itself. `scope` is handed to
+      // sendToDeadLetterQueue / archiveMessage / deleteMessage further down, and each of those
+      // reports its own failures through it. Setting the rate-limit fingerprint on the shared scope
+      // would file "the DLQ write failed" — which means repeated delivery or lost cleanup — under
+      // the benign `discord-rate-limit-sustained` issue, hiding a storage fault inside a
+      // backpressure bucket.
+      const reportScope = rt.isRateLimit ? scope.clone() : scope;
+      if (rt.isRateLimit) {
+        reportScope.setLevel("warning");
+        reportScope.setContext("rate_limit_report", {
+          retry_count: currentRetryCount,
+          reported_after_retries: RATE_LIMIT_REPORT_AFTER_RETRIES,
+          sustained: sustainedRateLimit
+        });
+        // One issue for "Discord is rate limiting us", not one per endpoint/snowflake.
+        reportScope.setFingerprint(["discord-rate-limit-sustained"]);
+      }
+      const errorId = Sentry.captureException(error, reportScope);
       console.log(`[processEnvelope] Recorded error with Sentry ID: ${errorId}`);
     } else {
       console.log(

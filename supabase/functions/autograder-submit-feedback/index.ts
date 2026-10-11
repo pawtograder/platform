@@ -19,6 +19,7 @@ import {
   PrimaryRateLimitError,
   MissingInstallationError
 } from "../_shared/GitHubWrapper.ts";
+import { createRedis, type RedisClient } from "../_shared/Redis.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
@@ -36,13 +37,52 @@ type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"][
 const RESET_WINDOW_MS = 60_000;
 
 /**
- * Orgs whose "GitHub App is not installed" condition this isolate has already reported.
+ * How long one "the GitHub App is not installed on <org>" report suppresses the next for that org.
  *
- * Deliberately per-isolate rather than persisted: the condition is real and unfixed, so it should
- * keep surfacing as isolates recycle, just not once per submission. See the catch in the resolveRef
- * block below.
+ * A day. The condition is a configuration state, not an incident: it is identical on every
+ * submission until somebody installs the App, so one report per org per day says everything a
+ * hundred would, and the issue stays visible (and re-raises daily) until it is actually fixed.
  */
-const reportedMissingInstallations = new Set<string>();
+const MISSING_INSTALLATION_REPORT_TTL_MS = 24 * 60 * 60 * 1000;
+
+let missingInstallationRedis: RedisClient | null | undefined;
+
+/**
+ * Claim the right to report this org's missing installation, once per
+ * {@link MISSING_INSTALLATION_REPORT_TTL_MS}.
+ *
+ * Redis, NOT module-level state. prod runs the edge runtime with `policy: per_request`
+ * (values-prod.yaml), so every submission gets a fresh isolate and anything module-scoped is empty
+ * on arrival — a `Set` here would suppress nothing and the per-submission flood this exists to stop
+ * would continue unchanged. charts/pawtograder/values.yaml spells this out next to the policy knob:
+ * isolate-local state cannot be used for cross-request coordination, use a Redis lease. Same
+ * `set(..., { px, nx: true })` primitive workerRun.ts uses for its poll-loop lease.
+ *
+ * Returns false when Redis is unreachable or unconfigured, i.e. fail CLOSED: a missing installation
+ * is non-fatal and permanent, so dropping the report costs a log line we also emit, whereas failing
+ * open restores a 2990-event flood precisely when Redis — and therefore everything else — is
+ * already unhappy.
+ */
+async function claimMissingInstallationReport(org: string): Promise<boolean> {
+  if (missingInstallationRedis === undefined) {
+    missingInstallationRedis = createRedis();
+  }
+  const redis = missingInstallationRedis;
+  if (!redis) return false;
+
+  try {
+    const claimed = await redis.set(`pawtograder:missing-installation-reported:${org}`, "1", {
+      px: MISSING_INSTALLATION_REPORT_TTL_MS,
+      nx: true
+    });
+    return !!claimed;
+  } catch (e) {
+    // Never let the bookkeeping break grading: this runs inside the catch of a failure that is
+    // already non-fatal.
+    console.warn(`[autograder-submit-feedback] could not claim missing-installation report for ${org}:`, e);
+    return false;
+  }
+}
 
 function detectRateLimitType(error: unknown): {
   type: "secondary" | "primary" | "extreme" | null;
@@ -679,11 +719,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           // identical on every submission until somebody installs it, so reporting per submission
           // produced 2990 events for one org and told us nothing the first event had not.
           //
-          // Report once per org per isolate instead. Edge isolates recycle, so this still re-raises
-          // periodically (it is a real, unfixed condition and should not vanish entirely) without
-          // scaling with submission volume.
-          if (!reportedMissingInstallations.has(e.org)) {
-            reportedMissingInstallations.add(e.org);
+          // Report once per org per day instead, claimed through Redis. NOT module-level state:
+          // prod runs `policy: per_request`, so every submission is a fresh isolate and an
+          // in-process guard would suppress nothing at all. See claimMissingInstallationReport.
+          if (await claimMissingInstallationReport(e.org)) {
             Sentry.withScope((errorScope) => {
               errorScope.setFingerprint(["github-app-not-installed", e.org]);
               errorScope.setTag("github_org", e.org);
