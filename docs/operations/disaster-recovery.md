@@ -116,11 +116,19 @@ echo "$MC_SHA256  /usr/local/bin/mc" | sha256sum -c -
 chmod +x /usr/local/bin/mc
 
 mc alias set s3 "$S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
-LATEST=$(mc ls "s3/$S3_BUCKET/daily/" | awk '{print $NF}' \
-  | grep '^pawtograder-.*\.dump$' | sort | tail -1)
-echo "restoring from: daily/$LATEST"
-mc cp "s3/$S3_BUCKET/daily/$LATEST" /tmp/latest.dump
-pg_restore --list /tmp/latest.dump >/dev/null   # sanity: TOC parses (preserves exit status)
+# Newest dump under daily/. Right after the 0.3.28 upgrade daily/ can still be
+# empty, so fall back to the bucket root, where older charts wrote them.
+newest() { mc ls "s3/$S3_BUCKET/$1" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1; }
+DIR=daily/; LATEST=$(newest daily/)
+[ -n "$LATEST" ] || { DIR=""; LATEST=$(newest ""); }
+# No `exit` on failure: in this interactive pod it would end the session.
+if [ -z "$LATEST" ]; then
+  echo "no pawtograder-*.dump in daily/ or the bucket root — stop and check the backup CronJob"
+else
+  echo "restoring from: ${DIR}${LATEST}"
+  mc cp "s3/$S3_BUCKET/${DIR}${LATEST}" /tmp/latest.dump
+  pg_restore --list /tmp/latest.dump >/dev/null   # sanity: TOC parses (preserves exit status)
+fi
 ```
 
 Set `S3_ENDPOINT`, `S3_BUCKET`, and the AWS keys from the `pawtograder-s3`
@@ -128,7 +136,9 @@ secret and prod values before running. To restore an **older** object (e.g. the
 newest is the one that got corrupted), list all and pick by timestamp instead
 of `tail -1`. `daily/` holds the last `backup.retention.dailyDays` days. For
 anything older, list `monthly/`, which holds one dump per month for
-`backup.retention.monthlyDays`. Dumps from before chart 0.3.28 sit at the bucket
+`backup.retention.monthlyDays`. Use a monthly dump only if it has a matching
+`<name>.dump.verified` marker, which the job writes after the size check
+passes. A `.dump` without a marker is a failed upload. Dumps from before chart 0.3.28 sit at the bucket
 root until `legacyRootDays` expires them.
 
 ### A. Restore into a scratch database (non-destructive)

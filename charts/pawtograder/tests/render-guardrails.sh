@@ -567,6 +567,10 @@ assert_rendered_contains "monthlyDays>0: monthly rule" templates/backup.yaml \
   'pawtograder-monthly' "${BACKUP_ON[@]}" --set backup.retention.monthlyDays=90
 assert_rendered_contains "monthlyDays>0: monthly upload" templates/backup.yaml \
   '/monthly/$(basename' "${BACKUP_ON[@]}" --set backup.retention.monthlyDays=90
+# A bare .dump can be a truncated copy upload() failed to delete; only the
+# marker written after the size check may count the month as covered.
+assert_rendered_contains "monthly coverage keys off the .verified marker" templates/backup.yaml \
+  "grep -q '\.dump\.verified\$'" "${BACKUP_ON[@]}" --set backup.retention.monthlyDays=90
 assert_rendered_contains "backup-verify reads daily/ first" templates/backup-verify.yaml \
   'LATEST=$(newest daily/)' "${BACKUP_ON[@]}"
 assert_rendered_contains "restore drill reads daily/ first" templates/backup-restore-drill.yaml \

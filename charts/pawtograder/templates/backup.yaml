@@ -146,11 +146,19 @@ spec:
                   # is not "nothing yet": treating it so would upload a full
                   # dump every night the listing stays broken, ~90 copies in
                   # a 90-day tier instead of 3.
+                  #
+                  # "Covered" means a .dump.verified marker, written only after
+                  # the size check passed — not a bare .dump, which can be a
+                  # truncated copy that upload() failed to delete. The marker
+                  # holds the verified size and expires with the monthly/ rule.
                   if MONTH_LISTING=$(mc ls "s3/${S3_BUCKET}/monthly/pawtograder-${TS:0:6}"); then
-                    if grep -q '\.dump$' <<<"$MONTH_LISTING"; then
-                      echo "[backup] monthly/ already holds a ${TS:0:6} dump"
+                    if grep -q '\.dump\.verified$' <<<"$MONTH_LISTING"; then
+                      echo "[backup] monthly/ already holds a verified ${TS:0:6} dump"
                     else
-                      upload "s3/${S3_BUCKET}/monthly/$(basename "$FILE")"
+                      MONTHLY="s3/${S3_BUCKET}/monthly/$(basename "$FILE")"
+                      upload "$MONTHLY"
+                      printf '%s\n' "$LOCAL_SIZE" | mc pipe --quiet "${MONTHLY}.verified"
+                      echo "[backup] marked $MONTHLY verified"
                     fi
                   else
                     echo "[backup] FATAL: could not list monthly/ — skipping the monthly copy rather than risk one per night"
