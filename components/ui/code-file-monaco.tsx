@@ -39,6 +39,7 @@ import {
   type CodeFileHandle,
   type CodeFileProps
 } from "./code-file-shared";
+import { configureMonacoWorkers } from "@/lib/monacoWorkers";
 
 const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
   ssr: false,
@@ -1144,25 +1145,11 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
 
     // Handle editor before mount (worker setup)
     const handleEditorWillMount = useCallback(() => {
-      if (typeof window !== "undefined") {
-        window.MonacoEnvironment = {
-          getWorker(_moduleId, label) {
-            switch (label) {
-              case "editorWorkerService":
-                return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
-              case "yaml":
-                return new Worker(new URL("monaco-yaml/yaml.worker", import.meta.url));
-              default:
-                // Several Monaco editors share the single global `window.MonacoEnvironment`, and
-                // monaco-yaml's `configureMonacoYaml` registers the yaml service on the shared monaco
-                // singleton for the rest of the session. Throwing here on an unexpected label escapes
-                // as an unhandled promise rejection through Monaco's loader and takes down the grading
-                // UI, so fall back to the editor worker instead of crashing.
-                return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
-            }
-          }
-        };
-      }
+      // Shared with every other editor in the app. This viewer opens whatever a student submitted —
+      // .ts, .tsx, .css, .json are the bulk of it — and each of those is a worker-backed language
+      // service that needs its own worker. Mapping only yaml here is what produced the repeated
+      // `Cannot read properties of undefined (reading 'toUrl')` rejections on this page.
+      configureMonacoWorkers();
     }, []);
 
     const commentsForCurrentFile = useMemo(() => {
