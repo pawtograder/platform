@@ -26,17 +26,21 @@ import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions
  *
  *       missing term dates   The sweep skips these on purpose — with no start_date/end_date we
  *                            cannot tell whether the class is in session, and the wrong guess mails
- *                            GitHub invitations to a roster that is not enrolled yet. This alert is
- *                            what stops "skip" from meaning "fail silently"; it names the class and
- *                            says which dates to fill in.
+ *                            GitHub invitations to a roster that is not enrolled yet. COUNTED AND
+ *                            LOGGED, not reported to Sentry: it is a configuration state no release
+ *                            can clear, so reporting it re-raised the same classes on every hourly
+ *                            run forever. Note the cost — the hourly caller `perform`s this function
+ *                            and discards the response, so the log line is the ONLY signal left.
+ *                            See the branch itself for what that means and what should replace it.
  *       still stuck          Term dates set, window open, and enrolled users remain unconfirmed
  *                            anyway —
  *                            a broken App installation, a login GitHub no longer recognizes, an org
  *                            that requires SSO. Automation cannot fix these; a human has to look.
+ *                            This one IS reported.
  *
- *     One Sentry issue per class in both cases, never one per student: the failures that cause this
- *     strand a whole roster at once, and per-student events would bury the signal (the same lesson
- *     the Discord terminal-failure work learned from a 30,332-row flood).
+ *     Where we do report, it is one Sentry issue per class, never one per student: the failures that
+ *     cause this strand a whole roster at once, and per-student events would bury the signal (the
+ *     same lesson the Discord terminal-failure work learned from a 30,332-row flood).
  */
 
 if (Deno.env.get("SENTRY_DSN")) {
@@ -102,7 +106,12 @@ type MembershipAlert = {
   oldest_invitation: string | null;
 };
 
-/** Emit one Sentry issue per class for the two stuck shapes. Returns the counts, for the response. */
+/**
+ * Report classes whose enrolled users are still outside the org. Returns the counts, for the response.
+ *
+ * Only the in-window shape reaches Sentry. The unset-term-dates shape is counted and logged but not
+ * reported — see the branch below for why.
+ */
 function alertOnStuckClasses(alerts: MembershipAlert[], scope: Sentry.Scope) {
   let unsetTermDates = 0;
   let stuckInWindow = 0;
@@ -129,11 +138,28 @@ function alertOnStuckClasses(alerts: MembershipAlert[], scope: Sentry.Scope) {
     classScope.setLevel("warning");
 
     if (alert.missing_term_dates) {
-      // Actionable in one step, and the message says which step.
-      classScope.setFingerprint(["github-org-invite-window-unset", String(alert.class_id)]);
-      Sentry.captureMessage(
-        "GitHub org re-invites are disabled for this class: start_date/end_date are not set",
-        classScope
+      // Deliberately NOT reported to Sentry. "This class has no term dates" is a configuration
+      // state, not a defect: no code change can clear it, so the cron re-raised the same classes
+      // on every run and the issue could never be resolved by shipping anything. In production
+      // that was two classes at 193 events each between 09-11 and 10-10 — the third-largest
+      // issue in the project, for a condition nobody can action from an error tracker.
+      //
+      // Be clear about what this costs. `classes_alerted_unset_term_dates` is still in the response
+      // body, but NOTHING reads it: the hourly caller is
+      // `perform public.call_edge_function_internal(...)` in
+      // 20260909140000_github_membership_reconciler.sql, and `perform` discards the result. So the
+      // only remaining signal is this log line, and a class whose term dates are never filled in
+      // leaves its students outside the org — and therefore without repo access — until somebody
+      // reads function logs or notices by hand.
+      //
+      // That is the deliberate trade: the alert as written could not be actioned OR silenced, so it
+      // was pure noise at ~48 events/day. A durable low-volume replacement (report on state change,
+      // or once per class per week via the Redis lease the async workers already use) is the right
+      // long-term answer and is not in this change.
+      console.warn(
+        `[github-membership-reconciler] GitHub org re-invites are disabled for class ${alert.class_id} ` +
+          `(${alert.class_slug ?? "unknown"}, org ${alert.github_org ?? "unknown"}): ` +
+          `start_date/end_date are not set, ${alert.stuck_count} unconfirmed membership(s)`
       );
       unsetTermDates++;
       continue;
