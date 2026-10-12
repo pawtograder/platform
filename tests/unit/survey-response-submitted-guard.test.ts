@@ -22,7 +22,8 @@ import {
   isSurveyResponseReadOnly,
   NO_ROWS_ERROR_CODE,
   resolveResponseWriteFlags,
-  responseStateFromLoad
+  responseStateFromLoad,
+  shouldAutosaveResponse
 } from "@/lib/surveyResponseState";
 
 describe("responseStateFromLoad", () => {
@@ -89,6 +90,30 @@ describe("resolveResponseWriteFlags", () => {
       const flags = resolveResponseWriteFlags({ isSubmitted, loadedState: "submitted" });
       expect(flags.skip || flags.isSubmitted).toBe(true);
     }
+  });
+});
+
+describe("shouldAutosaveResponse (issue #977)", () => {
+  test("a draft autosaves on a survey that does not allow editing", () => {
+    // The bug: autosave was gated on allow_response_editing, which is off by default, so nothing
+    // was written until Complete and a refresh lost every answer.
+    expect(shouldAutosaveResponse({ loadedState: "draft", allowResponseEditing: false })).toBe(true);
+  });
+
+  test("a draft autosaves on a survey that allows editing", () => {
+    expect(shouldAutosaveResponse({ loadedState: "draft", allowResponseEditing: true })).toBe(true);
+  });
+
+  test("a submitted response autosaves its edits only when the survey allows editing", () => {
+    expect(shouldAutosaveResponse({ loadedState: "submitted", allowResponseEditing: true })).toBe(true);
+    // Read-only form, and RLS refuses the update: there is nothing to save.
+    expect(shouldAutosaveResponse({ loadedState: "submitted", allowResponseEditing: false })).toBe(false);
+  });
+
+  test("an unreadable row still reaches the write rules, which skip it", () => {
+    // shouldAutosaveResponse does not duplicate the unknown-state rule; resolveResponseWriteFlags owns it.
+    expect(shouldAutosaveResponse({ loadedState: "unknown", allowResponseEditing: false })).toBe(true);
+    expect(resolveResponseWriteFlags({ isSubmitted: false, loadedState: "unknown" }).skip).toBe(true);
   });
 });
 

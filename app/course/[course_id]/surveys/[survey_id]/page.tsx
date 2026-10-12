@@ -15,6 +15,7 @@ import {
   isSurveyResponseReadOnly,
   resolveResponseWriteFlags,
   responseStateFromLoad,
+  shouldAutosaveResponse,
   type LoadedResponseState
 } from "@/lib/surveyResponseState";
 
@@ -271,7 +272,8 @@ export default function SurveyTakingPage() {
   const handleValueChanged = useCallback(
     (surveyModel: Model, options?: ValueChangedEvent) => {
       void options;
-      if (!private_profile_id || !surveyId || !allowResponseEditing) return;
+      if (!private_profile_id || !surveyId) return;
+      if (!shouldAutosaveResponse({ loadedState: responseStateRef.current, allowResponseEditing })) return;
       // Only a submit in flight blocks autosave outright. An already-submitted response does
       // not: on an editable survey the student may still be changing answers, and
       // saveResponseToDb keeps that write in the submitted state rather than dropping it.
