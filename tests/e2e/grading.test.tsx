@@ -339,8 +339,18 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
     await visualScreenshot(page, "Instructor completes the grading review", { stabilizeRubric: "Grading Rubric" });
-    await page.getByRole("button", { name: "Complete", exact: true }).click();
-    await expect(page.getByText("Completed by")).toBeVisible();
+    // Completing opens the next submission when there is one ("Complete and go to next"), so this
+    // page's "Completed by" may never render here. The database is the proof.
+    await page.getByRole("button", { name: /^Complete( and go to next)?$/ }).click();
+    await expect(async () => {
+      const { data } = await supabase
+        .from("submission_reviews")
+        .select("completed_at")
+        .eq("submission_id", submission_id!)
+        .eq("rubric_id", assignment!.grading_rubric_id!)
+        .not("completed_at", "is", null);
+      expect(data?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
 
     // Release selected submission reviews (select all in filtered view, then release)
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
