@@ -229,24 +229,60 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
 }
 
 /**
- * After a grader completes a review, open the next submission on the same tab. Students (who
- * complete self-reviews with these same buttons) stay where they are.
+ * What happens after a review is saved as complete. Graders get both "Complete" (stay here) and
+ * "Complete and go to next": one grading a whole submission at a time, or wanting to look back over
+ * what they just finished, must not be pushed off the page. Students (who complete self-reviews with
+ * these same buttons) only ever stay.
  */
-function useAdvanceAfterCompletion() {
+function useAfterCompletion(completingSubmissionReviewId?: number) {
   const router = useRouter();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const { nextUrl, isReviewMode } = useSubmissionNavigation();
-  return useCallback(() => {
-    if (!isGraderOrInstructor) return;
-    if (nextUrl) {
-      router.push(nextUrl);
-    } else if (isReviewMode) {
-      toaster.success({
-        title: "All of your assigned reviews are complete",
-        description: "There are no more incomplete reviews assigned to you on this assignment."
-      });
-    }
-  }, [isGraderOrInstructor, isReviewMode, nextUrl, router]);
+  const { nextUrl, isReviewMode } = useSubmissionNavigation({ completingSubmissionReviewId });
+  const canGoToNext = isGraderOrInstructor && Boolean(nextUrl);
+  const afterCompletion = useCallback(
+    (goToNext: boolean) => {
+      if (!isGraderOrInstructor) return;
+      if (nextUrl) {
+        if (goToNext) router.push(nextUrl);
+      } else if (isReviewMode) {
+        toaster.success({
+          title: "All of your assigned reviews are complete",
+          description: "There are no more incomplete reviews assigned to you on this assignment."
+        });
+      }
+    },
+    [isGraderOrInstructor, isReviewMode, nextUrl, router]
+  );
+  return { canGoToNext, afterCompletion };
+}
+
+/** "Complete" and, when there is somewhere to go, "Complete and go to next" side by side. */
+function CompleteButtons({
+  canGoToNext,
+  isLoading,
+  onComplete
+}: {
+  canGoToNext: boolean;
+  isLoading: boolean;
+  onComplete: (goToNext: boolean) => void;
+}) {
+  return (
+    <HStack gap={2} w="100%" flexWrap="wrap">
+      <Button
+        variant={canGoToNext ? "outline" : "solid"}
+        colorPalette="green"
+        loading={isLoading}
+        onClick={() => onComplete(false)}
+      >
+        Complete
+      </Button>
+      {canGoToNext && (
+        <Button variant="solid" colorPalette="green" loading={isLoading} onClick={() => onComplete(true)}>
+          Complete and go to next
+        </Button>
+      )}
+    </HStack>
+  );
 }
 
 /**
@@ -259,13 +295,16 @@ function CompleteReviewAssignmentDialog({
   isReleased,
   isLoading,
   setIsLoading,
+  canGoToNext,
   onCompleted
 }: {
   reviewAssignment: {
     id: number;
   };
-  /** Runs after the review assignment is saved as complete (e.g. move on to the next submission). */
-  onCompleted?: () => void;
+  /** Offer "Complete and go to next" alongside "Complete". */
+  canGoToNext: boolean;
+  /** Runs after the review assignment is saved as complete, with the button the grader chose. */
+  onCompleted?: (goToNext: boolean) => void;
   missing_required_checks: {
     id: number;
     name: string;
@@ -337,11 +376,10 @@ function CompleteReviewAssignmentDialog({
             </Text>
           )}
           {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
-            <Button
-              variant="solid"
-              colorPalette="green"
-              loading={isLoading}
-              onClick={async () => {
+            <CompleteButtons
+              canGoToNext={canGoToNext}
+              isLoading={isLoading}
+              onComplete={async (goToNext) => {
                 try {
                   setIsLoading(true);
                   if (isReleased) {
@@ -360,7 +398,7 @@ function CompleteReviewAssignmentDialog({
                     title: "Review assignment marked as complete",
                     description: "Your review assignment has been marked as complete."
                   });
-                  onCompleted?.();
+                  onCompleted?.(goToNext);
                 } catch (error) {
                   console.error("Error marking review assignment as complete", error);
                   // Extract error message from Supabase error
@@ -376,9 +414,7 @@ function CompleteReviewAssignmentDialog({
                   setIsLoading(false);
                 }
               }}
-            >
-              Mark Review Assignment as Complete
-            </Button>
+            />
           )}
         </VStack>
       </Popover.Body>
@@ -398,7 +434,7 @@ export function CompleteReviewAssignmentButton() {
     useMissingRubricChecksForReviewAssignment(activeReviewAssignmentId);
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
-  const advanceAfterCompletion = useAdvanceAfterCompletion();
+  const { canGoToNext, afterCompletion } = useAfterCompletion();
 
   // gradeTargetsBlocked added for the same reason as CompleteReviewButton: the missing_* checks
   // below are always arrays and so never gated anything.
@@ -442,7 +478,8 @@ export function CompleteReviewAssignmentButton() {
           isReleased={Boolean(activeSubmissionReview?.released)}
           isLoading={isLoading}
           setIsLoading={setIsLoading}
-          onCompleted={advanceAfterCompletion}
+          canGoToNext={canGoToNext}
+          onCompleted={afterCompletion}
         />
       </Popover.Positioner>
     </Popover.Root>
@@ -467,46 +504,49 @@ export function CompleteReviewButton() {
   } = useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
-  const { nextUrl } = useSubmissionNavigation();
-  const advanceAfterCompletion = useAdvanceAfterCompletion();
+  const { canGoToNext, afterCompletion } = useAfterCompletion(activeSubmissionReview?.id);
 
-  const markComplete = useCallback(async () => {
-    if (!activeSubmissionReview) {
-      toaster.error({
-        title: "Error marking review as complete",
-        description: "No active submission review found."
-      });
-      return;
-    }
-    try {
-      setIsLoading(true);
-      if (activeSubmissionReview.released) {
-        toaster.warning({
-          title: "Grade already released",
-          description: "This grade is already released to students. Marking complete will update grading after release."
+  const markComplete = useCallback(
+    async (goToNext: boolean) => {
+      if (!activeSubmissionReview) {
+        toaster.error({
+          title: "Error marking review as complete",
+          description: "No active submission review found."
         });
+        return;
       }
-      await submissionController.submission_reviews.update(activeSubmissionReview.id, {
-        completed_at: new Date().toISOString(),
-        completed_by: private_profile_id
-      });
+      try {
+        setIsLoading(true);
+        if (activeSubmissionReview.released) {
+          toaster.warning({
+            title: "Grade already released",
+            description:
+              "This grade is already released to students. Marking complete will update grading after release."
+          });
+        }
+        await submissionController.submission_reviews.update(activeSubmissionReview.id, {
+          completed_at: new Date().toISOString(),
+          completed_by: private_profile_id
+        });
 
-      toaster.success({
-        title: "Review marked as complete",
-        description: "Your review has been marked as complete."
-      });
+        toaster.success({
+          title: "Review marked as complete",
+          description: "Your review has been marked as complete."
+        });
 
-      advanceAfterCompletion();
-    } catch (error) {
-      console.error("Error marking review as complete", error);
-      toaster.error({
-        title: "Error marking review as complete",
-        description: "An error occurred while marking the review as complete."
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [activeSubmissionReview, advanceAfterCompletion, private_profile_id, submissionController.submission_reviews]);
+        afterCompletion(goToNext);
+      } catch (error) {
+        console.error("Error marking review as complete", error);
+        toaster.error({
+          title: "Error marking review as complete",
+          description: "An error occurred while marking the review as complete."
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [activeSubmissionReview, afterCompletion, private_profile_id, submissionController.submission_reviews]
+  );
 
   // The old guard tested the truthiness of `missing_*`, which are always arrays from a useMemo, so
   // it never fired. The real not-ready case is group membership: until it loads we cannot tell an
@@ -606,13 +646,15 @@ export function CompleteReviewButton() {
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
                 <Text>
                   All required checks have been applied.
-                  {nextUrl ? " Completing opens the next submission on this tab." : ""}
+                  {canGoToNext ? " Complete and go to next opens your next review on this tab." : ""}
                 </Text>
               )}
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
-                <Button variant="solid" colorPalette="green" loading={isLoading} onClick={() => void markComplete()}>
-                  {nextUrl ? "Complete and go to next" : "Complete"}
-                </Button>
+                <CompleteButtons
+                  canGoToNext={canGoToNext}
+                  isLoading={isLoading}
+                  onComplete={(goToNext) => void markComplete(goToNext)}
+                />
               )}
             </VStack>
           </Popover.Body>
