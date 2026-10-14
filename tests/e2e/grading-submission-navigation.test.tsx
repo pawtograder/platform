@@ -209,6 +209,28 @@ test.describe("Grading several submissions in a row", () => {
     await expect(page).toHaveURL(new RegExp(`/submissions/${codeSubs[0]!.submission_id}/results`));
   });
 
+  test("Complete keeps the grader on the submission they just finished", async ({ page }) => {
+    await loginAsUser(page, gary, course);
+    await page.goto(subUrl(codeAssignment, codeSubs[2]!, `/files?review_assignment_id=${garyCodeReviews[2]}`));
+    await expect(panel(page)).toBeVisible();
+
+    await page.getByRole("button", { name: "Complete Review Assignment" }).first().click();
+    // Both choices are offered: stay, or move on.
+    await expect(page.getByRole("button", { name: "Complete and go to next" })).toBeVisible();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
+
+    await expect(async () => {
+      const { data } = await supabase
+        .from("review_assignments")
+        .select("completed_at")
+        .eq("id", garyCodeReviews[2]!)
+        .single();
+      expect(data?.completed_at).not.toBeNull();
+    }).toPass({ timeout: 15_000 });
+    await expect(panel(page)).toContainText("Complete");
+    await expect(page).toHaveURL(new RegExp(`/submissions/${codeSubs[2]!.submission_id}/files`));
+  });
+
   test("completing a review assignment opens the next one on the same tab", async ({ page }) => {
     await loginAsUser(page, gary, course);
     await page.goto(subUrl(codeAssignment, codeSubs[0]!, `/results?review_assignment_id=${garyCodeReviews[0]}`));
@@ -218,7 +240,7 @@ test.describe("Grading several submissions in a row", () => {
     await expect(page.getByRole("heading", { name: "Submission Review Actions" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Complete Review Assignment" }).first().click();
-    await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
+    await page.getByRole("button", { name: "Complete and go to next" }).click();
     await expect(page).toHaveURL(new RegExp(`/submissions/${codeSubs[1]!.submission_id}/results`));
 
     await expect(async () => {

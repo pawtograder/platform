@@ -259,7 +259,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
-    await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await visualScreenshot(page, "Self-Review Rubric completed", { stabilizeRubric: "Self-Review Rubric" });
     await assertStudentPageAccessible(page, "grading self-review completed");
@@ -339,9 +339,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
     await visualScreenshot(page, "Instructor completes the grading review", { stabilizeRubric: "Grading Rubric" });
-    // Completing opens the next submission when there is one ("Complete and go to next"), so this
-    // page's "Completed by" may never render here. The database is the proof.
-    await page.getByRole("button", { name: /^Complete( and go to next)?$/ }).click();
+    // "Complete" stays on this submission ("Complete and go to next" is the button that moves on).
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(async () => {
       const { data } = await supabase
         .from("submission_reviews")
@@ -696,6 +695,6 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review Assignment" }).first().click();
-    await page.getByRole("button", { name: "Mark Review Assignment as" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
   });
 });
