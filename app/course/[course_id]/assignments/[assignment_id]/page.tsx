@@ -31,6 +31,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
 import UploadSubmission from "@/components/submissions/upload-submission";
 import { CommitHistoryDialog } from "./commitHistory";
+import ForgejoWorkspace from "./forgejoWorkspace";
 import ManageGroupWidget from "./manageGroupWidget";
 import PrSubmissionPanel from "./prSubmissionPanel";
 import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
@@ -193,10 +194,15 @@ export default function AssignmentPage() {
     assignment.repo_mode === "none" ||
     assignment.repo_mode === "no_submission" ||
     isPrMode;
+  const isForgejo = assignment.git_provider === "forgejo";
   return (
     <Box p={4}>
-      <LinkAccount />
-      <ResendOrgInvitation />
+      {!isForgejo && (
+        <>
+          <LinkAccount />
+          <ResendOrgInvitation />
+        </>
+      )}
       <Grid
         templateColumns={assignment.show_leaderboard ? { base: "1fr", lg: "1fr 320px" } : { base: "1fr", lg: "1fr" }}
         gap={4}
@@ -231,6 +237,8 @@ export default function AssignmentPage() {
 
           {isPrMode ? (
             <></>
+          ) : isForgejo ? (
+            <ForgejoWorkspace classSlug={course?.slug} assignmentSlug={assignment.slug} />
           ) : assignment.repo_mode === "none" ? (
             <UploadSubmission assignmentId={Number(assignment_id)} onUploaded={() => refetchSubmissions()} />
           ) : assignment.repo_mode === "no_submission" ? (
@@ -259,7 +267,7 @@ export default function AssignmentPage() {
               assignment={assignment}
               repositories={repositories ?? []}
               showRepositories={
-                !isPrMode && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission"
+                !isPrMode && !isForgejo && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission"
               }
             />
           </Box>
