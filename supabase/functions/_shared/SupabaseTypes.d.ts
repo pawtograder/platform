@@ -1979,6 +1979,8 @@ export type Database = {
           end_date: string | null;
           events_ics_url: string | null;
           features: Json | null;
+          forgejo_org: string | null;
+          git_provider: string;
           github_org: string | null;
           gradebook_id: number | null;
           handout_template_repo: string | null;
@@ -2007,6 +2009,8 @@ export type Database = {
           end_date?: string | null;
           events_ics_url?: string | null;
           features?: Json | null;
+          forgejo_org?: string | null;
+          git_provider?: string;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -2035,6 +2039,8 @@ export type Database = {
           end_date?: string | null;
           events_ics_url?: string | null;
           features?: Json | null;
+          forgejo_org?: string | null;
+          git_provider?: string;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -3469,6 +3475,86 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "flashcard_decks";
             referencedColumns: ["id"];
+          }
+        ];
+      };
+      git_accounts: {
+        Row: {
+          created_at: string;
+          id: number;
+          instance_url: string;
+          login: string;
+          provider: string;
+          remote_user_id: number;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          id?: never;
+          instance_url: string;
+          login: string;
+          provider: string;
+          remote_user_id: number;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          id?: never;
+          instance_url?: string;
+          login?: string;
+          provider?: string;
+          remote_user_id?: number;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "git_accounts_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      git_setup_codes: {
+        Row: {
+          class_id: number;
+          code_hash: string;
+          created_at: string;
+          expires_at: string;
+          used_at: string | null;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          code_hash: string;
+          created_at?: string;
+          expires_at: string;
+          used_at?: string | null;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          code_hash?: string;
+          created_at?: string;
+          expires_at?: string;
+          used_at?: string | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "git_setup_codes_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "git_setup_codes_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
           }
         ];
       };
@@ -6772,6 +6858,7 @@ export type Database = {
           creation_attempts: number;
           creation_error: string | null;
           desired_handout_sha: string | null;
+          git_provider: string;
           id: number;
           is_github_ready: boolean;
           last_creation_attempt_at: string | null;
@@ -6793,6 +6880,7 @@ export type Database = {
           creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
+          git_provider?: string;
           id?: number;
           is_github_ready?: boolean;
           last_creation_attempt_at?: string | null;
@@ -6814,6 +6902,7 @@ export type Database = {
           creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
+          git_provider?: string;
           id?: number;
           is_github_ready?: boolean;
           last_creation_attempt_at?: string | null;

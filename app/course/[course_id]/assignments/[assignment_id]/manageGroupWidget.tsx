@@ -866,6 +866,20 @@ function GroupDetails({
 
 function RepositoryLabel({ repository }: { repository: Repository }) {
   const { role } = useClassProfiles();
+  if (repository.git_provider === "forgejo") {
+    // Forgejo repos are only marked ready once the student's access has been read back, so there is
+    // no "accepted the invitation yet?" state to guard against.
+    return (
+      <Link
+        href={`${process.env.NEXT_PUBLIC_FORGEJO_URL}/${repository.repository}`}
+        target="_blank"
+        data-visual-test="transparent"
+        data-visual-placeholder="repository"
+      >
+        {repository.repository} {repository.is_github_ready ? " (ready ✅)" : " (being created…)"}
+      </Link>
+    );
+  }
   if (!role.github_org_confirmed) {
     return (
       <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">

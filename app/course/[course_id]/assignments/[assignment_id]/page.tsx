@@ -32,6 +32,7 @@ import { useEffect, useMemo, useRef } from "react";
 import UploadSubmission from "@/components/submissions/upload-submission";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
+import WorkLocallyPanel from "@/components/forgejo/work-locally-panel";
 import PrSubmissionPanel from "./prSubmissionPanel";
 import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
 
@@ -263,6 +264,7 @@ export default function AssignmentPage() {
               }
             />
           </Box>
+          {!isPrMode && <WorkLocallyPanel repositories={repositories ?? []} />}
           <SelfReviewNotice
             review_settings={review_settings ?? ({} as SelfReviewSettings)}
             assignment={assignment}

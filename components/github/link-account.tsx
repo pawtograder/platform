@@ -67,7 +67,8 @@ export default function LinkAccount() {
   const searchParams = useSearchParams();
   const errorDescription = searchParams.get("error_description");
   const githubIdentity = identities?.find((identity) => identity.provider === "github");
-  if (!identities || githubIdentity) {
+  // A Forgejo class creates the student's git account itself, so there is nothing to link.
+  if (!identities || githubIdentity || course.git_provider === "forgejo") {
     return null;
   }
   return (

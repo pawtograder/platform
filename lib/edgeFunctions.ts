@@ -55,6 +55,23 @@ export async function autograderCreateAssignmentRepos(
 ) {
   return await invokeEdgeFunction<{ message: string }>(supabase, "assignment-create-all-repos", { body: params });
 }
+/**
+ * Forgejo POC: issue a single-use, ten-minute code for the copy-paste git setup command. The code
+ * goes into `curl … /git-setup/<code> | sh`; fetching that URL burns it and mints the token.
+ */
+export async function gitSetupCreateCode(params: { class_id: number }, supabase: SupabaseClient<Database>) {
+  return await invokeEdgeFunction<{ code: string; expires_at: string }>(supabase, "git-setup", { body: params });
+}
+/** Forgejo POC: create Forgejo accounts and team memberships, and optionally an assignment's repos. */
+export async function forgejoProvision(
+  params: { class_id: number; assignment_id?: number },
+  supabase: SupabaseClient<Database>
+) {
+  return await invokeEdgeFunction<{
+    accounts_created: number;
+    repos: { repository: string; login: string; permission: string; ready: boolean }[];
+  }>(supabase, "forgejo-provision", { body: params });
+}
 /** (Re)build the code-symbol index for a submission's source files (used by reindex tooling). */
 export async function indexSubmission(
   params: FunctionTypes.IndexSubmissionRequest,
