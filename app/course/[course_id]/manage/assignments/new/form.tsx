@@ -1151,6 +1151,20 @@ export default function AssignmentForm({
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"
+                    label="Repository host"
+                    helperText="Where student repositories for this assignment live. Forgejo assignments open in a Coder workspace with the repository already cloned, and students don't need a GitHub account."
+                  >
+                    <NativeSelectRoot {...register("git_provider")}>
+                      <NativeSelectField name="git_provider">
+                        <option value="github">GitHub</option>
+                        <option value="forgejo">Forgejo + Coder workspace</option>
+                      </NativeSelectField>
+                    </NativeSelectRoot>
+                  </Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
                     label="Points possible"
                     errorText={errors.total_points?.message?.toString()}
                     invalid={!!errors.total_points}
