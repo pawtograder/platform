@@ -1,12 +1,20 @@
 # Forgejo onboarding POC
 
-This is a proof of concept for running a class on Pawtograder's own Forgejo instead of GitHub. It is not production code. It exists to show the student flow and to check the parts we were unsure about.
+This is a proof of concept for hosting assignment repos on Pawtograder's own Forgejo instead of GitHub. It is not production code. It exists to show the student flow and to check the parts we were unsure about.
+
+## Forgejo is chosen per assignment
+
+`assignments.git_provider` (`github` by default) picks the host, so a class is never locked in. An instructor can try Forgejo on one assignment, keep GitHub for the others, and go back for the next one. The class only stores which Forgejo org to use (`classes.forgejo_org`, falling back to the class slug).
+
+- **The choice is fixed once repos exist.** A trigger rejects changing an assignment's `git_provider` after it has repositories, because those repos would be stranded on the old host.
+- **GitHub never touches Forgejo assignments.** All GitHub repo creation in SQL goes through `enqueue_github_create_repo`, and all permission sync through `enqueue_github_sync_repo_permissions`. Each is renamed to `*_unguarded` and fronted by a same-named guard that skips Forgejo assignments and repos. The edge functions that call GitHub `createRepo` directly (`assignment-create-all-repos`, `autograder-create-repos-for-student`, `github-user-sync`) and the stuck-repo alert in `github-repo-reconciler` filter on `git_provider = 'github'`. Checked locally: the guards return null for a Forgejo assignment or repo and still enqueue for GitHub ones.
+- **GitHub prompts depend on the assignment.** A Forgejo assignment's page never asks the student to link GitHub or accept an invite. Course-wide pages ask only while some assignment still gets GitHub repos, or while there are no repo assignments yet.
 
 ## The flow it demonstrates
 
-A GitHub class asks a student to create a GitHub account, link it, accept an org invitation, and set up a personal access token or SSH key. A Forgejo class asks for none of that:
+A GitHub assignment asks a student to create a GitHub account, link it, accept an org invitation, and set up a personal access token or SSH key. A Forgejo assignment asks for none of that:
 
-1. The instructor provisions the class (`forgejo-provision`). Pawtograder creates a Forgejo account for each enrolled person, adds them to the course org's `students` or `staff` team directly, and creates each student's private repo from the assignment template. A repo is marked ready only after Forgejo reports the student's `write` access back.
+1. The instructor provisions the assignment (`forgejo-provision`). Pawtograder creates a Forgejo account for each enrolled person who lacks one, adds them to the course org's `students` or `staff` team directly, and creates each student's private repo from the template. A repo is marked ready only after Forgejo reports the student's `write` access back.
 2. The student opens the assignment. There is no "link your GitHub account" banner and no invitation banner. The **Work on your own computer** panel links to the repo on Forgejo.
 3. The student clicks **Set up git on this computer** and pastes one command:
 
@@ -59,11 +67,11 @@ Not checked: Windows PowerShell 5.1 or Git Credential Manager on real Windows, a
 
 1. Add to `.env.local`: `FORGEJO_URL`, `NEXT_PUBLIC_FORGEJO_URL`, `FORGEJO_ADMIN_USERNAME`, `FORGEJO_ADMIN_PASSWORD` (the admin secret in the team namespace).
 2. `npx supabase start`, `npx supabase functions serve --env-file .env.local`, `npm run seed`, `npm run dev`.
-3. Make a class use Forgejo and point an individual assignment at a Forgejo template:
+3. Switch one individual assignment to Forgejo and point it at a Forgejo template (set `forgejo_org` only if the org isn't the class slug):
 
    ```sql
-   update classes set git_provider = 'forgejo', forgejo_org = '<org>' where id = <class>;
-   update assignments set template_repo = '<org>/<template>' where id = <assignment>;
+   update classes set forgejo_org = '<org>' where id = <class>;
+   update assignments set git_provider = 'forgejo', template_repo = '<org>/<template>' where id = <assignment>;
    ```
 
 4. As an instructor, `POST /functions/v1/forgejo-provision` with `{ "class_id": <class>, "assignment_id": <assignment> }`.

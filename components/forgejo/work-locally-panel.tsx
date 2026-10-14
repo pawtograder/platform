@@ -45,7 +45,7 @@ export default function WorkLocallyPanel({ repositories }: { repositories: Repos
   const secondsLeft = useSecondsLeft(code?.expires_at ?? null);
 
   const forgejoRepos = repositories.filter((r) => r.git_provider === "forgejo" && r.is_github_ready);
-  if (course.git_provider !== "forgejo" || forgejoRepos.length === 0) {
+  if (forgejoRepos.length === 0) {
     return null;
   }
   const forgejoUrl = process.env.NEXT_PUBLIC_FORGEJO_URL;

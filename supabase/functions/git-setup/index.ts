@@ -53,10 +53,6 @@ async function createCode(req: Request, scope: Sentry.Scope): Promise<GitSetupCr
   const { enrollment } = await assertUserIsInCourse(classId, authHeader);
   const admin = adminClient();
 
-  const { data: klass } = await admin.from("classes").select("git_provider").eq("id", classId).single();
-  if (klass?.git_provider !== "forgejo") {
-    throw new UserVisibleError("This class does not use Forgejo", 400);
-  }
   const { data: account } = await admin
     .from("git_accounts")
     .select("login")
@@ -66,7 +62,7 @@ async function createCode(req: Request, scope: Sentry.Scope): Promise<GitSetupCr
     .maybeSingle();
   if (!account) {
     throw new UserVisibleError(
-      "Your Forgejo account has not been created yet. It is created when your instructor sets up the course.",
+      "Your Forgejo account has not been created yet. It is created when your instructor releases an assignment that uses the course git server.",
       409
     );
   }

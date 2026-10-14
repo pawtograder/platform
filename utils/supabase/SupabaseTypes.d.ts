@@ -1087,6 +1087,7 @@ export type Database = {
           description: string | null;
           due_date: string;
           enable_repo_analytics: boolean;
+          git_provider: string;
           gradebook_column_id: number | null;
           grader_pseudonymous_mode: boolean;
           grading_rubric_id: number | null;
@@ -1138,6 +1139,7 @@ export type Database = {
           description?: string | null;
           due_date: string;
           enable_repo_analytics?: boolean;
+          git_provider?: string;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
@@ -1189,6 +1191,7 @@ export type Database = {
           description?: string | null;
           due_date?: string;
           enable_repo_analytics?: boolean;
+          git_provider?: string;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
@@ -1980,7 +1983,6 @@ export type Database = {
           events_ics_url: string | null;
           features: Json | null;
           forgejo_org: string | null;
-          git_provider: string;
           github_org: string | null;
           gradebook_id: number | null;
           handout_template_repo: string | null;
@@ -2010,7 +2012,6 @@ export type Database = {
           events_ics_url?: string | null;
           features?: Json | null;
           forgejo_org?: string | null;
-          git_provider?: string;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -2040,7 +2041,6 @@ export type Database = {
           events_ics_url?: string | null;
           features?: Json | null;
           forgejo_org?: string | null;
-          git_provider?: string;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -12992,6 +12992,27 @@ export type Database = {
         };
         Returns: number;
       };
+      enqueue_github_create_repo_unguarded: {
+        Args: {
+          p_assignment_group_id?: number;
+          p_assignment_id?: number;
+          p_branch_protection?: Json;
+          p_class_id: number;
+          p_course_slug: string;
+          p_creation_method?: string;
+          p_debug_id?: string;
+          p_github_usernames: string[];
+          p_is_template_repo?: boolean;
+          p_latest_template_sha?: string;
+          p_org: string;
+          p_profile_id?: string;
+          p_repo_name: string;
+          p_source_repo?: string;
+          p_student_team_permission?: string;
+          p_template_repo: string;
+        };
+        Returns: number;
+      };
       enqueue_github_org_reinvite: {
         Args: {
           p_class_id: number;
@@ -13004,6 +13025,17 @@ export type Database = {
         Returns: number;
       };
       enqueue_github_sync_repo_permissions: {
+        Args: {
+          p_class_id: number;
+          p_course_slug: string;
+          p_debug_id?: string;
+          p_github_usernames: string[];
+          p_org: string;
+          p_repo: string;
+        };
+        Returns: number;
+      };
+      enqueue_github_sync_repo_permissions_unguarded: {
         Args: {
           p_class_id: number;
           p_course_slug: string;

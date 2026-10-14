@@ -29,9 +29,9 @@ export type ForgejoProvisionResponse = {
 async function handleRequest(req: Request, scope: Sentry.Scope): Promise<ForgejoProvisionResponse> {
   const body = await readJsonObjectBody(req);
   const classId = Number(body.class_id);
-  const assignmentId = body.assignment_id === undefined ? null : Number(body.assignment_id);
-  if (!Number.isInteger(classId)) {
-    throw new UserVisibleError("class_id is required", 400);
+  const assignmentId = Number(body.assignment_id);
+  if (!Number.isInteger(classId) || !Number.isInteger(assignmentId)) {
+    throw new UserVisibleError("class_id and assignment_id are required", 400);
   }
   scope?.setTag("class_id", String(classId));
 
@@ -45,21 +45,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<Forgejo
     auth: REQUEST_SCOPED_AUTH_OPTIONS
   });
 
-  const { data: klass, error: classError } = await admin
-    .from("classes")
-    .select("id, name, git_provider, forgejo_org")
-    .eq("id", classId)
+  const { data: assignment } = await admin
+    .from("assignments")
+    .select("id, slug, template_repo, group_config, git_provider, classes(name, slug, forgejo_org)")
+    .eq("id", assignmentId)
+    .eq("class_id", classId)
     .single();
-  if (classError || !klass) {
-    throw new UserVisibleError("Class not found", 404);
+  if (!assignment?.template_repo || !assignment.slug) {
+    throw new UserVisibleError("Assignment not found, or it has no template repo", 404);
   }
-  if (klass.git_provider !== "forgejo" || !klass.forgejo_org) {
-    throw new UserVisibleError("This class does not use Forgejo", 400);
+  if (assignment.git_provider !== "forgejo") {
+    throw new UserVisibleError("This assignment does not use Forgejo", 400);
   }
-  const org = klass.forgejo_org;
+  if (assignment.group_config !== "individual") {
+    throw new UserVisibleError("The Forgejo POC only provisions individual assignments", 400);
+  }
+  const klass = assignment.classes;
+  const org = klass?.forgejo_org || klass?.slug;
+  if (!org) {
+    throw new UserVisibleError("The class needs a slug or forgejo_org before it can use Forgejo", 400);
+  }
   const instance = forgejoUrl();
 
-  await ensureOrg(org, klass.name ?? org);
+  await ensureOrg(org, klass?.name ?? org);
   const studentsTeam = await ensureTeam(org, "students", "read");
   const staffTeam = await ensureTeam(org, "staff", "write");
 
@@ -117,46 +125,32 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<Forgejo
   }
 
   const repos: ForgejoProvisionResponse["repos"] = [];
-  if (assignmentId !== null) {
-    const { data: assignment } = await admin
-      .from("assignments")
-      .select("id, slug, template_repo, group_config")
-      .eq("id", assignmentId)
-      .eq("class_id", classId)
-      .single();
-    if (!assignment?.template_repo || !assignment.slug) {
-      throw new UserVisibleError("Assignment not found, or it has no template repo", 404);
+  for (const role of roles ?? []) {
+    const login = loginByUser.get(role.user_id);
+    if (role.role !== "student" || !login || !role.private_profile_id) {
+      continue;
     }
-    if (assignment.group_config !== "individual") {
-      throw new UserVisibleError("The Forgejo POC only provisions individual assignments", 400);
+    const name = `${assignment.slug}-${login}`;
+    const repository = `${org}/${name}`;
+    await generateRepoFromTemplate(assignment.template_repo, org, name);
+    await addCollaborator(repository, login, "write");
+    const permission = await getPermission(repository, login);
+    const ready = permission === "write" || permission === "admin";
+    const { error } = await admin.from("repositories").upsert(
+      {
+        assignment_id: assignment.id,
+        class_id: classId,
+        profile_id: role.private_profile_id,
+        repository,
+        git_provider: "forgejo",
+        is_github_ready: ready
+      },
+      { onConflict: "repository" }
+    );
+    if (error) {
+      throw new Error(`Could not record ${repository}: ${error.message}`);
     }
-    for (const role of roles ?? []) {
-      const login = loginByUser.get(role.user_id);
-      if (role.role !== "student" || !login || !role.private_profile_id) {
-        continue;
-      }
-      const name = `${assignment.slug}-${login}`;
-      const repository = `${org}/${name}`;
-      await generateRepoFromTemplate(assignment.template_repo, org, name);
-      await addCollaborator(repository, login, "write");
-      const permission = await getPermission(repository, login);
-      const ready = permission === "write" || permission === "admin";
-      const { error } = await admin.from("repositories").upsert(
-        {
-          assignment_id: assignment.id,
-          class_id: classId,
-          profile_id: role.private_profile_id,
-          repository,
-          git_provider: "forgejo",
-          is_github_ready: ready
-        },
-        { onConflict: "repository" }
-      );
-      if (error) {
-        throw new Error(`Could not record ${repository}: ${error.message}`);
-      }
-      repos.push({ repository, login, permission, ready });
-    }
+    repos.push({ repository, login, permission, ready });
   }
 
   return { accounts_created: accountsCreated, repos };

@@ -1,6 +1,7 @@
 "use client";
 
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useNeedsGitHubAccount } from "@/hooks/useNeedsGitHubAccount";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, Heading, HStack, Icon, Text, VStack, PopoverTrigger } from "@chakra-ui/react";
 import { toaster } from "../ui/toaster";
@@ -64,13 +65,14 @@ function HelpDialog() {
   );
 }
 
-export default function ResendOrgInvitation() {
+export default function ResendOrgInvitation({ assignmentGitProvider }: { assignmentGitProvider?: string | null } = {}) {
   const { role } = useClassProfiles();
+  const needsGitHub = useNeedsGitHubAccount(assignmentGitProvider);
 
   const [isResending, setIsResending] = useState(false);
   const [inviteSent, setInviteSent] = useState(false);
 
-  if (role.github_org_confirmed || !role.users.github_username || role.classes.git_provider === "forgejo") {
+  if (role.github_org_confirmed || !role.users.github_username || !needsGitHub) {
     return null;
   }
   const lastInviteTime = role.invitation_date;

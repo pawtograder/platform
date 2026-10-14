@@ -6,6 +6,7 @@ import { createBrowserClient } from "@supabase/ssr";
 import { BsGithub, BsInfoCircle } from "react-icons/bs";
 import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot } from "../ui/popover";
 import { useIdentity } from "@/hooks/useIdentities";
+import { useNeedsGitHubAccount } from "@/hooks/useNeedsGitHubAccount";
 import { useSearchParams } from "next/navigation";
 import { Alert } from "../ui/alert";
 function HelpDialog() {
@@ -57,7 +58,7 @@ function HelpDialog() {
     </PopoverRoot>
   );
 }
-export default function LinkAccount() {
+export default function LinkAccount({ assignmentGitProvider }: { assignmentGitProvider?: string | null } = {}) {
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL || "",
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
@@ -65,9 +66,10 @@ export default function LinkAccount() {
   const course = useCourse();
   const { identities } = useIdentity();
   const searchParams = useSearchParams();
+  const needsGitHub = useNeedsGitHubAccount(assignmentGitProvider);
   const errorDescription = searchParams.get("error_description");
   const githubIdentity = identities?.find((identity) => identity.provider === "github");
-  if (!identities || githubIdentity || course.git_provider === "forgejo") {
+  if (!identities || githubIdentity || !needsGitHub) {
     return null;
   }
   return (

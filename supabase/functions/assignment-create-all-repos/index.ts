@@ -262,6 +262,10 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
     console.log(`Assignment has repo_mode=${assignment.repo_mode}; skipping per-student repo creation`);
     return emptySettledSummary();
   }
+  if (assignment.git_provider !== "github") {
+    console.log(`Assignment uses ${assignment.git_provider}; skipping GitHub repo creation`);
+    return emptySettledSummary();
+  }
 
   const branchProtection: BranchProtectionConfig = {
     blockForcePush: assignment.protect_block_force_push ?? true,

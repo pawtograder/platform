@@ -196,8 +196,8 @@ export default function AssignmentPage() {
     isPrMode;
   return (
     <Box p={4}>
-      <LinkAccount />
-      <ResendOrgInvitation />
+      <LinkAccount assignmentGitProvider={assignment.git_provider} />
+      <ResendOrgInvitation assignmentGitProvider={assignment.git_provider} />
       <Grid
         templateColumns={assignment.show_leaderboard ? { base: "1fr", lg: "1fr 320px" } : { base: "1fr", lg: "1fr" }}
         gap={4}
