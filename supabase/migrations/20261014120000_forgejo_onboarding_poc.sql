@@ -1,5 +1,3 @@
--- The provider is chosen per assignment, so a class can try Forgejo on one assignment and keep
--- GitHub for the rest, or move back, without a class-wide switch.
 ALTER TABLE public.assignments
   ADD COLUMN git_provider text NOT NULL DEFAULT 'github' CHECK (git_provider IN ('github', 'forgejo'));
 
@@ -33,9 +31,7 @@ CREATE TRIGGER assignments_lock_git_provider
   BEFORE UPDATE OF git_provider ON public.assignments
   FOR EACH ROW EXECUTE FUNCTION public.assignments_lock_git_provider();
 
--- Every GitHub repo-creation and permission-sync path in SQL funnels through these two enqueue
--- functions. Rename the originals and put a same-named guard in front, so a Forgejo assignment or
--- repo in a mixed class never reaches the GitHub worker, without copying either body.
+-- Renamed and fronted by a same-named guard, not copied: callers resolve these by name at runtime.
 ALTER FUNCTION public.enqueue_github_create_repo(
   bigint, text, text, text, text, text[], boolean, text, bigint, uuid, bigint, text, text, text, jsonb, text
 ) RENAME TO enqueue_github_create_repo_unguarded;
