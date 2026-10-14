@@ -1,19 +1,4 @@
-/**
- * Minimal Forgejo admin client for the Forgejo onboarding POC.
- *
- * Pawtograder owns the Forgejo instance, so it acts as the instance admin: it creates accounts,
- * orgs, teams and repos directly, with no invitation for anyone to accept.
- *
- * Auth is HTTP Basic with the admin's username and password. An admin *token* cannot create another
- * user's access token (`401 auth method not allowed`), but admin Basic auth can, through the normal
- * `/users/{username}/tokens` endpoints. That is what lets Pawtograder mint a student's git token
- * without the student ever having a Forgejo password. It also means
- * `[service] ENABLE_BASIC_AUTHENTICATION` must stay on; students' accounts have no usable password,
- * so in practice only the admin can use it.
- *
- * Env: FORGEJO_URL, FORGEJO_ADMIN_USERNAME, FORGEJO_ADMIN_PASSWORD, and optionally
- * FORGEJO_AUTH_SOURCE_ID (the Pawtograder OIDC login source, once SSO is configured).
- */
+// Admin Basic auth, not an admin token: a token cannot mint other users' tokens (401 auth method not allowed).
 import { UserVisibleError } from "./HandlerUtils.ts";
 
 export type ForgejoUser = { id: number; login: string; login_name: string; source_id: number; email: string };
@@ -59,10 +44,7 @@ async function forgejo<T>(
   return { status: res.status, data };
 }
 
-/**
- * Turn an email into a Forgejo username: the local part, lowercased, with anything Forgejo would
- * reject replaced by `-`. Forgejo allows up to 40 characters; we keep 30 to leave room for a suffix.
- */
+// Forgejo caps usernames at 40 chars; keep 30 to leave room for a collision suffix.
 export function usernameFromEmail(email: string): string {
   const local = email.split("@")[0].toLowerCase();
   const cleaned = local
@@ -84,13 +66,6 @@ export async function getUser(login: string): Promise<ForgejoUser | null> {
   return status === 404 ? null : data;
 }
 
-/**
- * Create the account for a Pawtograder user. The username is derived, never chosen by the student,
- * and a collision gets a numeric suffix. With an SSO login source configured, the account is bound
- * to it with the Pawtograder user ID as the login name, so the first SSO login lands on this
- * account instead of creating a new one. Without one (this POC), the account gets a random password
- * nobody knows, and git access goes only through minted tokens.
- */
 export async function createUserForPawtograderUser(params: {
   userId: string;
   email: string;
@@ -137,11 +112,6 @@ export async function ensureOrg(org: string, fullName: string): Promise<void> {
 
 type Team = { id: number; name: string };
 
-/**
- * Teams carry membership, not student repo access: each student repo gets its owner as a
- * collaborator instead, so a course-wide team never leaks onto another student's private repo.
- * The staff team does include every repo in the org.
- */
 export async function ensureTeam(org: string, name: "students" | "staff", permission: "read" | "write"): Promise<Team> {
   const { data } = await forgejo<{ data: Team[] }>(
     "GET",
@@ -165,10 +135,7 @@ export async function addTeamMember(teamId: number, login: string): Promise<void
   await forgejo("PUT", `/teams/${teamId}/members/${encodeURIComponent(login)}`);
 }
 
-/**
- * Copy a template into a private repo in the course org. A `409` means the repo already exists, so a
- * retry adopts it rather than failing or replacing student work.
- */
+// 409 means the repo already exists; adopt it rather than replace student work.
 export async function generateRepoFromTemplate(template: string, org: string, name: string): Promise<void> {
   const [templateOwner, templateRepo] = template.split("/");
   await forgejo(
@@ -183,7 +150,6 @@ export async function addCollaborator(repo: string, login: string, permission: "
   await forgejo("PUT", `/repos/${repo}/collaborators/${encodeURIComponent(login)}`, { permission });
 }
 
-/** Read access back from Forgejo rather than trusting that the grant above took effect. */
 export async function getPermission(repo: string, login: string): Promise<string> {
   const { data } = await forgejo<{ permission: string }>(
     "GET",
@@ -194,11 +160,7 @@ export async function getPermission(repo: string, login: string): Promise<string
 
 type AccessToken = { id: number; name: string; sha1: string };
 
-/**
- * Mint a fresh token for a user, replacing any earlier token of the same name. Forgejo token names
- * are unique per user, so "delete then create" is the rotation: generating a new setup command
- * always revokes the previous one.
- */
+// Forgejo token names are unique per user, so delete-then-create is the rotation.
 export async function rotateUserToken(login: string, tokenName: string, scopes: string[]): Promise<string> {
   const user = encodeURIComponent(login);
   const { data: tokens } = await forgejo<AccessToken[]>("GET", `/users/${user}/tokens`);

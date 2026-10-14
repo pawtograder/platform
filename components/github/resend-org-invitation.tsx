@@ -70,7 +70,6 @@ export default function ResendOrgInvitation() {
   const [isResending, setIsResending] = useState(false);
   const [inviteSent, setInviteSent] = useState(false);
 
-  // A Forgejo class adds people to its org directly; there is no invitation to accept.
   if (role.github_org_confirmed || !role.users.github_username || role.classes.git_provider === "forgejo") {
     return null;
   }

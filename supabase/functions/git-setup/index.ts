@@ -1,21 +1,3 @@
-/**
- * POC: one copy-paste command that sets up git on a student's own computer for a Forgejo class,
- * with nothing to install. It does not depend on workspaces.
- *
- * POST /git-setup            (signed in)  { class_id }  ->  { code, expires_at }
- *   Issues a single-use code that expires in ten minutes. The page turns it into
- *     curl -fsSL <functions>/git-setup/<code> | sh                 (macOS / Linux)
- *     irm <functions>/git-setup/<code>?shell=ps1 | iex             (Windows)
- *
- * GET  /git-setup/<code>[?shell=ps1]   (no auth: the code is the credential)
- *   Burns the code, rotates the student's `pawtograder-local` Forgejo token (push/pull only), and
- *   returns a script that stores it with git's own credential helper and clones the class repos.
- *   The token never appears on screen or in shell history; only the burned code does.
- *
- * GET  /git-setup/preview[?shell=ps1]
- *   The same script with the token left out, so a student can read what they are about to run
- *   without spending their code.
- */
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
@@ -103,12 +85,10 @@ async function createCode(req: Request, scope: Sentry.Scope): Promise<GitSetupCr
   return { code, expires_at: expiresAt };
 }
 
-/** POSIX single-quote a value, so nothing in it is interpreted by the shell. */
 function shQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-/** PowerShell single-quote a value. */
 function psQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
@@ -290,7 +270,6 @@ async function serveScript(req: Request, codeOrPreview: string, shell: Shell): P
       .eq("profile_id", role.private_profile_id)
       .eq("git_provider", "forgejo")
       .eq("is_github_ready", true),
-    // users.name is often empty; the course profile always has the name staff see.
     admin.from("profiles").select("name").eq("id", role.private_profile_id).single()
   ]);
 

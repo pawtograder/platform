@@ -38,11 +38,6 @@ function useSecondsLeft(expiresAt: string | null) {
   return Math.max(0, Math.round((new Date(expiresAt).getTime() - now) / 1000));
 }
 
-/**
- * Forgejo POC: lets a student work on their own computer, without a workspace. One button issues a
- * single-use setup command; pasting it into a terminal stores a push/pull-only token with git's own
- * credential helper and clones the repo. Nothing to install and no token to copy by hand.
- */
 export default function WorkLocallyPanel({ repositories }: { repositories: Repository[] }) {
   const course = useCourse();
   const [code, setCode] = useState<{ code: string; expires_at: string } | null>(null);

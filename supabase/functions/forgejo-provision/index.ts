@@ -1,20 +1,3 @@
-/**
- * POC: provision a Forgejo class. Creates a Forgejo account for every enrolled person who lacks
- * one, puts them on the course org's students or staff team, and (when assignment_id is given)
- * creates each student's private repo from the assignment's template.
- *
- * Nobody accepts an invitation: Pawtograder owns the Forgejo instance and adds people directly.
- * A repository row is marked ready only after Forgejo reports the student's access back, so the
- * assignment page never links to a repo the student cannot open yet.
- *
- * In production this belongs in the existing async worker, driven by enrollment and release
- * triggers. Here it is one synchronous call so the flow can be exercised end to end.
- *
- * Request:  { class_id: number, assignment_id?: number }
- * Response: { accounts_created: number, repos: { repository, login, permission, ready }[] }
- *
- * Authorization: instructor in the class.
- */
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";

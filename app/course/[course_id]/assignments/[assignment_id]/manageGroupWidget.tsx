@@ -867,8 +867,6 @@ function GroupDetails({
 function RepositoryLabel({ repository }: { repository: Repository }) {
   const { role } = useClassProfiles();
   if (repository.git_provider === "forgejo") {
-    // Forgejo repos are only marked ready once the student's access has been read back, so there is
-    // no "accepted the invitation yet?" state to guard against.
     return (
       <Link
         href={`${process.env.NEXT_PUBLIC_FORGEJO_URL}/${repository.repository}`}
