@@ -234,10 +234,10 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
  * what they just finished, must not be pushed off the page. Students (who complete self-reviews with
  * these same buttons) only ever stay.
  */
-function useAfterCompletion() {
+function useAfterCompletion(completingSubmissionReviewId?: number) {
   const router = useRouter();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const { nextUrl, isReviewMode } = useSubmissionNavigation();
+  const { nextUrl, isReviewMode } = useSubmissionNavigation({ completingSubmissionReviewId });
   const canGoToNext = isGraderOrInstructor && Boolean(nextUrl);
   const afterCompletion = useCallback(
     (goToNext: boolean) => {
@@ -504,7 +504,7 @@ export function CompleteReviewButton() {
   } = useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
-  const { canGoToNext, afterCompletion } = useAfterCompletion();
+  const { canGoToNext, afterCompletion } = useAfterCompletion(activeSubmissionReview?.id);
 
   const markComplete = useCallback(
     async (goToNext: boolean) => {

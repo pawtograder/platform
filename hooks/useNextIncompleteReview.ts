@@ -4,7 +4,7 @@ import {
   getSubmissionSubPage,
   submissionUrl
 } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
-import { pickNextIncompleteReview } from "@/lib/nextIncompleteReview";
+import { type IncompleteReview, pickNextIncompleteReview } from "@/lib/nextIncompleteReview";
 import { useActiveSubmissions, useAssignmentGroups, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { useAllProfilesForClass, useGradersAndInstructors } from "@/hooks/useCourseController";
 import { useParams, usePathname, useSearchParams } from "next/navigation";
@@ -16,7 +16,7 @@ export type ReviewSubmissionOption = {
   /** Prefer an incomplete review assignment for this submission. */
   reviewAssignmentId?: number;
   /** Every one of my incomplete review assignments on this submission, by id. */
-  incompleteReviewAssignmentIds: number[];
+  incompleteReviews: IncompleteReview[];
   hasIncompleteReview: boolean;
   allReviewsComplete: boolean;
   totalReviews: number;
@@ -41,10 +41,10 @@ export function useMyReviewSubmissionOptions(): ReviewSubmissionOption[] {
       return {
         submissionId,
         reviewAssignmentId: primary?.id,
-        incompleteReviewAssignmentIds: assignments
+        incompleteReviews: assignments
           .filter((ra) => !ra.completed_at)
-          .map((ra) => ra.id)
-          .sort((a, b) => a - b),
+          .map((ra) => ({ id: ra.id, submissionReviewId: ra.submission_review_id }))
+          .sort((a, b) => a.id - b.id),
         hasIncompleteReview: assignments.some((ra) => !ra.completed_at),
         allReviewsComplete: assignments.every((ra) => ra.completed_at),
         totalReviews: assignments.length,
@@ -141,7 +141,15 @@ export type SubmissionNavigation = {
  * through 20 submissions does not mean re-picking the tab 20 times. A target that lacks the tab
  * falls back on its own: the layout redirects a no-submission assignment to Grade, for instance.
  */
-export function useSubmissionNavigation(): SubmissionNavigation {
+export function useSubmissionNavigation({
+  completingSubmissionReviewId
+}: {
+  /**
+   * Set by the submission-review "Complete" popover: the review it completes, whose review
+   * assignments the completion trigger closes too, so "next" skips them.
+   */
+  completingSubmissionReviewId?: number;
+} = {}): SubmissionNavigation {
   const { course_id, assignment_id, submissions_id } = useParams();
   const pathname = usePathname();
   const activeReviewAssignmentParam = useSearchParams().get("review_assignment_id");
@@ -162,7 +170,10 @@ export function useSubmissionNavigation(): SubmissionNavigation {
 
     if (reviewOptions.length > 0) {
       const activeReviewAssignmentId = activeReviewAssignmentParam ? parseInt(activeReviewAssignmentParam) : undefined;
-      const next = pickNextIncompleteReview(reviewOptions, currentSubmissionId, activeReviewAssignmentId);
+      const next = pickNextIncompleteReview(reviewOptions, currentSubmissionId, {
+        activeReviewAssignmentId,
+        submissionReviewId: completingSubmissionReviewId
+      });
       // Previous walks back by id through all of my submissions, complete or not, without wrapping:
       // after "complete and move on" it returns to the one just finished.
       const previous = currentSubmissionId
@@ -190,7 +201,16 @@ export function useSubmissionNavigation(): SubmissionNavigation {
       previousUrl: previous ? urlFor(previous.value) : null,
       urlFor
     };
-  }, [course_id, assignment_id, submissions_id, subPage, activeReviewAssignmentParam, reviewOptions, groups]);
+  }, [
+    course_id,
+    assignment_id,
+    submissions_id,
+    subPage,
+    activeReviewAssignmentParam,
+    completingSubmissionReviewId,
+    reviewOptions,
+    groups
+  ]);
 }
 
 /**

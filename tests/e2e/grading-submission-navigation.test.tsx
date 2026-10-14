@@ -220,12 +220,13 @@ test.describe("Grading several submissions in a row", () => {
     await page.getByRole("button", { name: "Complete", exact: true }).click();
 
     await expect(async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("review_assignments")
         .select("completed_at")
         .eq("id", garyCodeReviews[2]!)
         .single();
-      expect(data?.completed_at).not.toBeNull();
+      expect(error).toBeNull();
+      expect(data?.completed_at).toEqual(expect.any(String));
     }).toPass({ timeout: 15_000 });
     await expect(panel(page)).toContainText("Complete");
     await expect(page).toHaveURL(new RegExp(`/submissions/${codeSubs[2]!.submission_id}/files`));
@@ -244,12 +245,13 @@ test.describe("Grading several submissions in a row", () => {
     await expect(page).toHaveURL(new RegExp(`/submissions/${codeSubs[1]!.submission_id}/results`));
 
     await expect(async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("review_assignments")
         .select("completed_at")
         .eq("id", garyCodeReviews[0]!)
         .single();
-      expect(data?.completed_at).not.toBeNull();
+      expect(error).toBeNull();
+      expect(data?.completed_at).toEqual(expect.any(String));
     }).toPass({ timeout: 15_000 });
 
     // Previous goes back to the one just finished, which now reads as complete.
