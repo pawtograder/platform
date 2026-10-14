@@ -10,9 +10,9 @@
 --   * check_can_add_to_help_request authorized staff against the caller-supplied class_id,
 --     so a grader in ANY class could add themselves to a private request in another class,
 --     after which can_access_help_request (realtime channel auth) let them subscribe to it;
---   * file references could be edited/deleted by any class member; feedback and read
---     receipts could be written under another student's profile; is_system_message could
---     be set by students to spoof system messages.
+--   * file references on private requests could be read, edited and deleted by any class
+--     member; feedback and read receipts could be written under another student's
+--     profile; is_system_message could be set by students to spoof system messages.
 -- The create_help_request_with_participants RPC already enforces all of this; these
 -- policies bring direct table writes up to the same bar. SECURITY DEFINER triggers and
 -- RPCs run as the table owner, so these policies do not apply to them. The BEFORE UPDATE
@@ -302,15 +302,20 @@ BEFORE UPDATE ON public.help_requests
 FOR EACH ROW EXECUTE FUNCTION public.enforce_help_request_update_columns();
 
 -- ---------------------------------------------------------------------------
--- help_request_file_references (SELECT unchanged: class-scoped, see follow-ups)
+-- help_request_file_references
 -- ---------------------------------------------------------------------------
 
 DROP POLICY IF EXISTS "Users can CRUD file references in their classes" ON public.help_request_file_references;
 
-CREATE POLICY "Users can view file references in their classes" ON public.help_request_file_references
+-- Visible exactly when the help request is. The subquery runs as the caller, so the
+-- help_requests SELECT policy decides (staff: all; students: public requests in their
+-- class, or private ones they created or joined). Previously any class member could
+-- read the code references on every private request.
+CREATE POLICY "Users can view file references on help requests they can see" ON public.help_request_file_references
 FOR SELECT TO authenticated
-USING (EXISTS (SELECT 1 FROM public.user_privileges up
-                WHERE up.user_id = auth.uid() AND up.class_id = help_request_file_references.class_id));
+USING (EXISTS (SELECT 1 FROM public.help_requests hr
+                WHERE hr.id = help_request_file_references.help_request_id
+                  AND hr.class_id = help_request_file_references.class_id));
 
 CREATE POLICY "Participants and staff can add file references" ON public.help_request_file_references
 FOR INSERT TO authenticated
