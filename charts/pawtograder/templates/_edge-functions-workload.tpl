@@ -30,7 +30,13 @@ So the sum is asserted at render time rather than documented and hoped for:
       <= resources.limits.memory
 
 The host term is measured, not guessed: a freshly started pod with an empty
-cache sits at ~87Mi.
+cache sits at ~87Mi. It also absorbs the pawtograder_edge_* metrics collector
+added in chart 0.3.18: its state is bounded at image-build time to one
+fixed-size numeric array plus a <=32-entry status map per allowlisted function,
+~85KB total for ~56 functions. That is inside the rounding error of the ~90Mi
+host term, so it is NOT a separate line in this sum -- recorded here so the next
+person reconciling these numbers finds it accounted for rather than discovering
+it.
 
 The cold-load term covers bundle buffers that residentBytes does NOT count: a
 bundle being read for a cache miss, and one the LRU evicted or refused while a
@@ -264,6 +270,65 @@ spec:
             # holds these bytes from before a cold read until create() returns.
             - name: EDGE_ESZIP_COLD_LOAD_MAX_BYTES
               value: {{ mul $ctx.Values.edgeFunctions.eszipColdLoadHeadroomMb 1048576 | quote }}
+            # Per-request pawtograder_edge_* metrics, collected by main.ts and
+            # appended to the metrics function's /metrics response. A RUNTIME
+            # switch, not a build-time constant, so it is flipped by a values
+            # change rather than an image rebuild. Default off: the deploy plan
+            # ships this dark to prod and enables it in a later, separate deploy
+            # so the cardinality delta has a single attributable cause.
+            - name: EDGE_METRICS
+              value: {{ ternary "1" "0" $ctx.Values.edgeFunctions.metrics.enabled | quote }}
+            # github-async-worker pgmq drain tuning, read by
+            # supabase/functions/_shared/asyncWorkerTuning.ts. Defaults (4 / 300)
+            # are the values that were hardcoded in the worker until 2026-09-07,
+            # when a 58-message create_repo burst took 88 minutes to drain and
+            # re-read 20 of those 58 against the 300s timeout. The two are
+            # COUPLED — visibilityTimeoutSeconds must cover a whole batch of
+            # drainConcurrency (x120s/message) — and validations.yaml enforces
+            # that whenever concurrency is raised. See values.yaml.
+            - name: GITHUB_ASYNC_WORKER_DRAIN_CONCURRENCY
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.drainConcurrency | quote }}
+            - name: GITHUB_ASYNC_WORKER_VISIBILITY_TIMEOUT_SECONDS
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.visibilityTimeoutSeconds | quote }}
+            # Per-org leaseholders. A SECOND scaling axis to the two above: those
+            # make one leaseholder's batch bigger inside a single 256MiB isolate,
+            # these run more leaseholders, one isolate each, one GitHub org each.
+            # globalCap 0 = off, which is the shipped default, so this renders the
+            # pre-2026-09-13 behaviour until an operator sets it. Rendered as
+            # explicit `env` (an `env` entry beats `envFrom`), so envFromSecrets
+            # cannot override them — same rule as the two knobs above.
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_GLOBAL_CAP
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotGlobalCap | quote }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_MAX_PER_ORG
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotMaxPerOrg | quote }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_LEASE_TTL_SECONDS
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotLeaseTtlSeconds | quote }}
+            # Continuous-refill KILL SWITCH, 1 = on (shipped). Only meaningful on
+            # the org-leased path. It exists so the drain SHAPE can be rolled
+            # back without a code deploy and without setting orgSlotGlobalCap: 0,
+            # which would also give up per-org leaseholders.
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_CONTINUOUS_REFILL
+              value: {{ $ctx.Values.edgeFunctions.githubAsyncWorker.orgSlotContinuousRefill | quote }}
+            # Wall-clock run budget for one org-leased drain: when a leaseholder
+            # stops claiming and lets the in-flight messages finish, so
+            # EDGE_WORKER_TIMEOUT_MS above cannot kill the isolate mid-message.
+            # Default and ceiling are the same number and both are DERIVED from
+            # worker.timeoutMs, so only DOWN is useful and the chart leaves the
+            # default to the worker: RENDERED ONLY WHEN SET, because a present-
+            # but-empty variable is read as a botched edit and fails safe to the
+            # 120s floor. validations.yaml refuses anything outside
+            # 120..ceiling(worker.timeoutMs) before it reaches this line.
+            {{- $runBudget := include "pawtograder.asyncWorker.runBudgetRaw" $ctx }}
+            {{- if ne $runBudget "" }}
+            - name: GITHUB_ASYNC_WORKER_ORG_SLOT_RUN_BUDGET_SECONDS
+              value: {{ $runBudget | quote }}
+            {{- end }}
+            # Latency histogram bounds in seconds. The top finite bucket must be
+            # >= worker.timeoutMs/1000 or every request that hits the worker
+            # timeout lands in +Inf and the upper quantiles become an
+            # extrapolation; render-guardrails.sh asserts that.
+            - name: EDGE_METRICS_BUCKETS
+              value: {{ join "," $ctx.Values.edgeFunctions.metrics.buckets | quote }}
             # JWT_SECRET here is NOT the deployment's HS256 shared secret. The
             # only consumer inside the edge runtime is _shared/MCPAuth.ts, which
             # mints short-lived per-user RLS JWTs for MCP and the CLI — with
@@ -349,6 +414,9 @@ spec:
             {{- if $ctx.Values.edgeFunctions.e2e.mockGitHub }}
             - name: E2E_MOCK_GITHUB
               value: "true"
+            {{- end }}
+            {{- with $ctx.Values.edgeFunctions.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           envFrom:
             - secretRef:

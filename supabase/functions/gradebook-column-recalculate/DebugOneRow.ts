@@ -28,6 +28,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 export async function debugOneRow(studentPrivateProfileId: string, columnSlugFilter?: string) {
   if (columnSlugFilter?.trim()) {
@@ -36,7 +37,8 @@ export async function debugOneRow(studentPrivateProfileId: string, columnSlugFil
   }
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const scope = new Sentry.Scope();
 

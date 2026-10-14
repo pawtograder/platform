@@ -21,6 +21,7 @@ import { createClient } from "@/utils/supabase/server";
 import { createAdminClient } from "@/utils/supabase/client";
 import { isInstructorOfClass } from "@/lib/lti/auth";
 import { manageDiscordPageUrl, redirectOrigin } from "@/lib/discordInstall";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ type DisconnectRow = {
   previous_guild_id: string | null;
 };
 
-export async function POST(request: NextRequest) {
+async function postHandler(request: NextRequest) {
   const scope = Sentry.getCurrentScope();
   scope.setTag("endpoint", "discord_disconnect");
 
@@ -152,3 +153,7 @@ export async function POST(request: NextRequest) {
     status: 303
   });
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const POST = withRouteMetrics("/api/discord/disconnect", postHandler);

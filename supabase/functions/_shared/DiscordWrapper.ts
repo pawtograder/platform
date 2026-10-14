@@ -29,6 +29,22 @@ import {
 /** Default timeout for Discord API fetch calls (15 seconds) */
 const DISCORD_FETCH_TIMEOUT_MS = 15_000;
 
+/**
+ * Longest `retry_after` this will wait out in place rather than propagating.
+ *
+ * Discord's per-route buckets are small and refill on a sub-second cadence, so brushing one costs a
+ * `retry_after` in the tens of milliseconds. Propagating those was a 200x amplification: the worker
+ * rounds the delay up to a whole second, applies a five-second floor, requeues the message and files
+ * an error-level Sentry event -- all to avoid a 26ms wait. Waiting is also the behaviour Discord's own
+ * documentation asks for.
+ *
+ * The bound is what keeps this from becoming a hidden stall. A genuine sustained limit -- the global
+ * 50/s ceiling, or a route parked for seconds -- still propagates, so the queue's backoff and the
+ * circuit breaker keep seeing it. One second is above every per-route reset observed in production
+ * and far below the visibility timeout the message is holding.
+ */
+const SHORT_RATE_LIMIT_WAIT_MS = 1_000;
+
 const globalLimiters = new Map<string, Bottleneck>();
 const channelLimiters = new Map<string, Bottleneck>();
 
@@ -135,69 +151,116 @@ async function discordRequest(
   const globalLimiter = getGlobalLimiter();
 
   return await globalLimiter.schedule(async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), DISCORD_FETCH_TIMEOUT_MS);
+    // Attempted at most twice, and only for a 429 short enough to wait out (see
+    // SHORT_RATE_LIMIT_WAIT_MS). The retry stays inside the limiter slot on purpose: releasing it to
+    // sleep would let the next queued call take the slot and hit the same exhausted bucket, which is
+    // the pile-up this is meant to stop.
+    for (let attempt = 0; ; attempt++) {
+      const result = await attemptDiscordRequest(url, method, endpoint, token, body, scope);
+      if (result.kind === "response") return result.response;
 
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method,
-        headers: {
-          Authorization: `Bot ${token}`,
-          "Content-Type": "application/json",
-          "User-Agent": "Pawtograder-Discord-Bot/1.0"
-        },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal
-      });
-    } catch (fetchError) {
-      clearTimeout(timer);
-      // Convert AbortError into a descriptive timeout error
-      if (fetchError instanceof DOMException && fetchError.name === "AbortError") {
-        const msg = `Discord API timeout after ${DISCORD_FETCH_TIMEOUT_MS}ms: ${method} ${endpoint}`;
-        console.error(`[discordRequest] ${msg}`);
-        scope?.setContext("discord_timeout", { endpoint, method, timeout_ms: DISCORD_FETCH_TIMEOUT_MS });
-        Sentry.addBreadcrumb({ message: msg, level: "error" });
-        throw new Error(msg);
+      // Rate limited. Wait it out once if it is brief, otherwise hand it to the caller's backoff.
+      if (attempt === 0 && result.retryAfterMs <= SHORT_RATE_LIMIT_WAIT_MS) {
+        console.log(
+          `[discordRequest] Rate limited on ${method} ${endpoint}, waiting ${result.retryAfterMs}ms and retrying once`
+        );
+        Sentry.addBreadcrumb({
+          message: `Discord rate limit waited out: ${endpoint}`,
+          level: "info",
+          data: { retry_after_ms: result.retryAfterMs, remaining: result.remaining }
+        });
+        await new Promise((resolve) => setTimeout(resolve, result.retryAfterMs));
+        continue;
       }
-      throw fetchError;
-    } finally {
-      clearTimeout(timer);
-    }
 
-    // Check rate limit headers
-    const remaining = response.headers.get("X-RateLimit-Remaining");
-    const resetAfter = response.headers.get("X-RateLimit-Reset-After");
-
-    if (response.status === 429) {
-      // Rate limited
-      const retryAfter = resetAfter ? parseFloat(resetAfter) * 1000 : 1000; // Convert to ms
       scope?.setContext("discord_rate_limit", {
         endpoint,
-        retry_after_ms: retryAfter,
-        remaining: remaining
+        retry_after_ms: result.retryAfterMs,
+        remaining: result.remaining,
+        waited_out: attempt > 0
       });
       Sentry.addBreadcrumb({
         message: `Discord rate limit hit: ${endpoint}`,
         level: "warning",
-        data: { retry_after_ms: retryAfter, remaining }
+        data: { retry_after_ms: result.retryAfterMs, remaining: result.remaining }
       });
-      throw new Error(`Discord rate limit: retry after ${retryAfter}ms`);
+      throw new Error(`Discord rate limit: retry after ${result.retryAfterMs}ms`);
     }
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "Unknown error");
-      scope?.setContext("discord_api_error", {
-        endpoint,
-        status: response.status,
-        status_text: response.statusText,
-        error: errorText
-      });
-      throw new Error(`Discord API error: ${response.status} ${response.statusText} - ${errorText}`);
-    }
-
-    return response;
   });
+}
+
+/** A 429 the caller has to decide about, rather than a response. */
+type RateLimited = { kind: "rate_limited"; retryAfterMs: number; remaining: string | null };
+
+/**
+ * One attempt at a Discord call. Separated from discordRequest so the 429 path can be retried without
+ * re-entering the limiter, and so the retry decision lives in one place instead of being duplicated.
+ */
+async function attemptDiscordRequest(
+  url: string,
+  method: string,
+  endpoint: string,
+  token: string,
+  body: unknown,
+  scope?: Sentry.Scope
+): Promise<{ kind: "response"; response: Response } | RateLimited> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DISCORD_FETCH_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bot ${token}`,
+        "Content-Type": "application/json",
+        "User-Agent": "Pawtograder-Discord-Bot/1.0"
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal
+    });
+  } catch (fetchError) {
+    clearTimeout(timer);
+    // Convert AbortError into a descriptive timeout error
+    if (fetchError instanceof DOMException && fetchError.name === "AbortError") {
+      const msg = `Discord API timeout after ${DISCORD_FETCH_TIMEOUT_MS}ms: ${method} ${endpoint}`;
+      console.error(`[discordRequest] ${msg}`);
+      scope?.setContext("discord_timeout", { endpoint, method, timeout_ms: DISCORD_FETCH_TIMEOUT_MS });
+      Sentry.addBreadcrumb({ message: msg, level: "error" });
+      throw new Error(msg);
+    }
+    throw fetchError;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  // Check rate limit headers
+  const remaining = response.headers.get("X-RateLimit-Remaining");
+  const resetAfter = response.headers.get("X-RateLimit-Reset-After");
+
+  if (response.status === 429) {
+    // Rate limited
+    const retryAfter = resetAfter ? parseFloat(resetAfter) * 1000 : 1000; // Convert to ms
+    // Drained before returning. The caller may sleep for the retry window and issue a second
+    // request, and an unread body holds its connection out of the pool for that whole wait --
+    // exactly when the pool is under pressure. Deno also warns about bodies that were never
+    // consumed.
+    await response.body?.cancel().catch(() => {});
+    return { kind: "rate_limited", retryAfterMs: retryAfter, remaining };
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "Unknown error");
+    scope?.setContext("discord_api_error", {
+      endpoint,
+      status: response.status,
+      status_text: response.statusText,
+      error: errorText
+    });
+    throw new Error(`Discord API error: ${response.status} ${response.statusText} - ${errorText}`);
+  }
+
+  return { kind: "response", response };
 }
 
 /**

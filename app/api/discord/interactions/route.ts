@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 import { createAdminClient } from "@/utils/supabase/client";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { verify } from "@noble/ed25519";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 /**
  * Discord Interactions endpoint for handling slash commands
@@ -24,7 +25,7 @@ import { verify } from "@noble/ed25519";
  * - 6: DEFERRED_UPDATE_MESSAGE
  * - 7: UPDATE_MESSAGE
  */
-export async function POST(request: NextRequest) {
+async function postHandler(request: NextRequest) {
   const scope = Sentry.getCurrentScope();
   scope.setTag("endpoint", "discord_interactions");
 
@@ -351,3 +352,7 @@ function hexToBytes(hex: string): Uint8Array {
   }
   return bytes;
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const POST = withRouteMetrics("/api/discord/interactions", postHandler);

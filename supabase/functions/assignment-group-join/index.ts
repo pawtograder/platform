@@ -12,6 +12,7 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 async function handleAssignmentGroupJoin(
   req: Request,
   scope: Sentry.Scope
@@ -21,7 +22,8 @@ async function handleAssignmentGroupJoin(
   scope?.setTag("assignment_group_id", assignment_group_id.toString());
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data: assignmentGroup } = await adminSupabase
     .from("assignment_groups")

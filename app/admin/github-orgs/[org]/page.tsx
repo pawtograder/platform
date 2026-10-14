@@ -45,6 +45,9 @@ export default function GitHubOrgDetailPage() {
   // for half-typed or not-yet-saved repos.
   const [savedHandout, setSavedHandout] = useState("");
   const [savedSolution, setSavedSolution] = useState("");
+  // Held as the raw text the admin typed, not as a parsed array, so a half-typed entry doesn't
+  // vanish from the box while they're still writing it. Parsed on save.
+  const [exemptUsers, setExemptUsers] = useState("");
   const [courses, setCourses] = useState<OrgCourse[]>([]);
 
   const load = useCallback(async () => {
@@ -64,6 +67,7 @@ export default function GitHubOrgDetailPage() {
       setSolution(loadedSolution);
       setSavedHandout(loadedHandout);
       setSavedSolution(loadedSolution);
+      setExemptUsers((thisOrg?.permission_sync_exempt_users ?? []).join(", "));
       setCourses((orgCourses ?? []) as OrgCourse[]);
     } catch (err) {
       toaster.error({ title: "Failed to load org", description: (err as Error).message });
@@ -83,7 +87,13 @@ export default function GitHubOrgDetailPage() {
       const { error } = await supabase.rpc("admin_upsert_github_org", {
         p_org_name: orgName,
         p_handout: handout.trim() === "" ? undefined : handout.trim(),
-        p_solution: solution.trim() === "" ? undefined : solution.trim()
+        p_solution: solution.trim() === "" ? undefined : solution.trim(),
+        // Always sent, including as an empty array: `undefined` means "leave as-is" to the RPC, so
+        // omitting it when the box is cleared would make clearing the list impossible.
+        p_permission_sync_exempt_users: exemptUsers
+          .split(/[\s,]+/)
+          .map((u) => u.trim())
+          .filter((u) => u !== "")
       });
       if (error) throw error;
       toaster.success({ title: "Org defaults saved" });
@@ -96,7 +106,7 @@ export default function GitHubOrgDetailPage() {
     } finally {
       setSaving(false);
     }
-  }, [orgName, handout, solution, load, revalidateServerCaches]);
+  }, [orgName, handout, solution, exemptUsers, load, revalidateServerCaches]);
 
   // A course in this org gives the edge function a valid auth/ownership context for editing the
   // org's template repos. (Writes are restricted to the course's own org.) Prefer a non-archived
@@ -140,6 +150,17 @@ export default function GitHubOrgDetailPage() {
             </Field>
             <Field label="Default solution (grader) template repository">
               <Input value={solution} onChange={(e) => setSolution(e.target.value)} fontFamily="mono" />
+            </Field>
+            <Field
+              label="Permission sync exemptions"
+              helperText="GitHub usernames, comma separated. Repository permission sync removes anyone who is not on the course roster or the staff team; these accounts are left alone. Use for access that is intentional but that the roster cannot explain — institutional IT, an integration account, or faculty carried on repos directly."
+            >
+              <Input
+                value={exemptUsers}
+                onChange={(e) => setExemptUsers(e.target.value)}
+                fontFamily="mono"
+                placeholder="octocat, some-ops-account"
+              />
             </Field>
             <Button colorPalette="green" alignSelf="flex-start" onClick={handleSave} loading={saving}>
               Save defaults

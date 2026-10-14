@@ -45,6 +45,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
 import { Octokit } from "https://esm.sh/octokit?dts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 interface Args {
   submissionId: number;
@@ -192,7 +193,8 @@ function parseArgs(): Args {
 async function getSubmissionData(submissionId: number): Promise<SubmissionData> {
   const supabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const { data, error } = await supabase

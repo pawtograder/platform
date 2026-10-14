@@ -11,7 +11,7 @@ import {
 import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
+import TableController, { fetchPostgrestAllPages, PossiblyTentativeResult } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   HydratedRubricPart,
@@ -532,32 +532,57 @@ function SubmissionControllerCreator({
   }
   const submissionController = ctx.submissionController;
 
-  // Single comprehensive query to load all data upfront
-  const { query } = useShow<SubmissionWithGraderResultsAndFiles>({
+  // Submission row plus grader results and artifacts. submission_files is loaded separately below:
+  // an embedded `submission_files(*)` is silently capped at PostgREST's max_rows (1000), which
+  // truncated the file tree (and the PR base→head diff) for large repositories.
+  const { query } = useShow<Omit<SubmissionWithGraderResultsAndFiles, "submission_files">>({
     resource: "submissions",
     id: submission_id,
     meta: {
       select: `
         *,
-        submission_files(*),
         grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*), grader_result_output(*)),
         submission_artifacts(*)
       `.trim()
     }
   });
 
+  const [submissionFiles, setSubmissionFiles] = useState<SubmissionWithGraderResultsAndFiles["submission_files"]>();
+  const [filesError, setFilesError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setSubmissionFiles(undefined);
+    setFilesError(null);
+    fetchPostgrestAllPages<SubmissionWithGraderResultsAndFiles["submission_files"][number]>(
+      createClient().from("submission_files").select("*").eq("submission_id", submission_id),
+      [{ column: "id" }],
+      { isCancelled: () => cancelled }
+    )
+      .then((rows) => {
+        if (!cancelled) setSubmissionFiles(rows);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        // Don't block the whole submission view on the files: surface the error and show none.
+        setFilesError(e instanceof Error ? e.message : String(e));
+        setSubmissionFiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [submission_id]);
+
   // Set up live subscriptions with proper event handling
   // We need these enabled to receive live events, but we'll ignore the initial data since we already loaded it
   const [liveSubscriptionsReady, setLiveSubscriptionsReady] = useState(false);
 
-  // Process the main query data once it's loaded
+  // Process the main query data once it and the files are loaded
   useEffect(() => {
-    if (query.data?.data && !query.isLoading) {
-      const data = query.data.data;
-      submissionController.submission = data;
+    if (query.data?.data && !query.isLoading && submissionFiles) {
+      submissionController.submission = { ...query.data.data, submission_files: submissionFiles };
       setLiveSubscriptionsReady(true);
     }
-  }, [query.data, query.isLoading, submissionController]);
+  }, [query.data, query.isLoading, submissionFiles, submissionController]);
 
   // Set ready when everything is loaded
   useEffect(() => {
@@ -566,7 +591,13 @@ function SubmissionControllerCreator({
     }
   }, [query.isLoading, liveSubscriptionsReady, setReady]);
 
-  if (query.isLoading) {
+  useEffect(() => {
+    if (filesError) {
+      toaster.error({ title: "Error loading submission files", description: filesError });
+    }
+  }, [filesError]);
+
+  if (query.isLoading || !submissionFiles) {
     return (
       <div className="fixed inset-0 w-full h-full flex justify-center items-center bg-white/80 z-[9999]">
         <Spinner />

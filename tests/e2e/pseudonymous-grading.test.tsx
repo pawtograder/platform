@@ -206,7 +206,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
-    await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await assertStudentPageAccessible(page, "pseudonymous self-review completed");
   });
@@ -275,8 +275,8 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
+    // "Complete" stays on this submission ("Complete and go to next" is the button that moves on).
     await page.getByRole("button", { name: "Complete", exact: true }).click();
-    await expect(page.getByText("Completed by")).toBeVisible();
 
     // "Completed by" appears from the optimistic TableController update (it marks the row
     // __db_pending and renders immediately, before the awaited PATCH to submission_reviews

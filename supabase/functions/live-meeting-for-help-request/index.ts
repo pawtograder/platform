@@ -7,6 +7,7 @@ import { assertUserIsInCourse, NotFoundError, wrapRequestHandler } from "../_sha
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { LiveMeetingForHelpRequestRequest } from "../_shared/FunctionTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { courseId, helpRequestId } = (await req.json()) as LiveMeetingForHelpRequestRequest;
@@ -16,7 +17,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { enrollment } = await assertUserIsInCourse(courseId, req.headers.get("Authorization")!);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data: helpRequest } = await adminSupabase.from("help_requests").select("*").eq("id", helpRequestId).single();
   if (!helpRequest) {

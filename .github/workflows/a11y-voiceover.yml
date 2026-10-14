@@ -7,7 +7,7 @@
 # self-hosted/macOS/voiceover — setup: docs/a11y-voiceover-mac-runbook.md). It
 # cannot host a dev stack; it drives Safari+VoiceOver against the remote
 # preview and pulls the preview's e2e env from OpenBao, where preview.yml's
-# secrets job published it (scripts/publish-preview-e2e-to-bao.sh).
+# publish-e2e-bundle job published it (scripts/publish-preview-e2e-to-bao.sh).
 name: a11y VoiceOver (real Safari)
 
 on:

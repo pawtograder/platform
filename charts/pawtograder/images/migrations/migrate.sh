@@ -53,6 +53,41 @@ echo "[migrate] source=${MIGRATIONS_DIR}"
 echo "[migrate] environment=${MIGRATIONS_ENVIRONMENT:-<unset>}"
 echo "[migrate] reset_on_drift=${RESET_ON_DRIFT}"
 
+shopt -s nullglob
+files=( "${MIGRATIONS_DIR}"/*.sql )
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "[migrate] no migration files found in ${MIGRATIONS_DIR}" >&2
+  exit 1
+fi
+
+# Lexicographic sort matches supabase's <timestamp>_<name>.sql convention.
+# mapfile -t handles filenames containing whitespace correctly; word-splitting
+# on IFS=$'\n' breaks on names with literal newlines (rare here, but cheap to
+# avoid).
+mapfile -t sorted < <(printf '%s\n' "${files[@]}" | sort)
+
+# Two files that share a version prefix are ONE migration to everything below: phase 3
+# skips the second because the first already recorded the version, and phase 1 then reads
+# that row's hash against the wrong file forever and calls it drift. The skip is silent and
+# the drift is not, so the collision surfaces as a refused deploy one release after the
+# migration it dropped. Fail here instead, while the names are still in front of someone.
+duplicate_versions="$(printf '%s\n' "${sorted[@]}" | while read -r f; do
+  base="$(basename "$f" .sql)"
+  echo "${base%%_*}"
+done | sort | uniq -d)"
+if [ -n "${duplicate_versions}" ]; then
+  echo "[migrate] ERROR: these migration versions are used by more than one file:" >&2
+  while read -r version; do
+    printf '    %s\n' "${version}" >&2
+    for collision in "${MIGRATIONS_DIR}"/"${version}"_*.sql; do
+      printf '      %s\n' "$(basename "${collision}")" >&2
+    done
+  done <<< "${duplicate_versions}"
+  echo "[migrate]        Rename all but one to a fresh timestamp. A version is applied once," >&2
+  echo "[migrate]        so leaving these in place silently drops every file but the first." >&2
+  exit 1
+fi
+
 # Bootstrap the schema_migrations table. file_hash is added as a nullable
 # column so a freshly-upgraded migrator can adopt rows that pre-date hash
 # tracking (NULL hash = "back-fill on next sight; don't treat as drift").
@@ -66,19 +101,6 @@ CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
 ALTER TABLE supabase_migrations.schema_migrations
   ADD COLUMN IF NOT EXISTS file_hash TEXT;
 SQL
-
-shopt -s nullglob
-files=( "${MIGRATIONS_DIR}"/*.sql )
-if [ "${#files[@]}" -eq 0 ]; then
-  echo "[migrate] no migration files found in ${MIGRATIONS_DIR}" >&2
-  exit 1
-fi
-
-# Lexicographic sort matches supabase's <timestamp>_<name>.sql convention.
-# mapfile -t handles filenames containing whitespace correctly; word-splitting
-# on IFS=$'\n' breaks on names with literal newlines (rare here, but cheap to
-# avoid).
-mapfile -t sorted < <(printf '%s\n' "${files[@]}" | sort)
 
 # Helper: SHA-256 of a file, returning the hex digest only (no filename).
 sha_of() {

@@ -38,6 +38,7 @@ import {
   randomInstallNonce
 } from "@/lib/discordInstallState";
 import { installCallbackUrl, redirectOrigin } from "@/lib/discordInstall";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,7 @@ export const dynamic = "force-dynamic";
 // Same reasoning as app/api/lti/login/route.ts.
 const NO_STORE = { "Cache-Control": "no-store" } as const;
 
-export async function GET(request: Request) {
+async function getHandler(request: Request) {
   const scope = Sentry.getCurrentScope();
   scope.setTag("endpoint", "discord_install");
 
@@ -157,3 +158,7 @@ export async function GET(request: Request) {
   });
   return response;
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const GET = withRouteMetrics("/api/discord/install", getHandler);

@@ -3,12 +3,13 @@ import { createClient } from "@/utils/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import * as Sentry from "@sentry/nextjs";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 /**
  * Revalidate Next.js cache tags for a course after client-side mutations
  * (e.g. Refine assignment update). Requires an authenticated staff session for the class.
  */
-export async function POST(request: NextRequest) {
+async function postHandler(request: NextRequest) {
   const scope = Sentry.getCurrentScope();
   scope.setTag("endpoint", "cache_revalidate_tags");
 
@@ -77,3 +78,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const POST = withRouteMetrics("/api/cache/revalidate-tags", postHandler);

@@ -23,6 +23,7 @@ import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { describeCause, isDuplicateKey } from "../_shared/ErrorDetail.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
@@ -81,6 +82,7 @@ async function authenticateUser(authHeader: string | null) {
   }
 
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
       headers: { Authorization: authHeader }
     }
@@ -291,7 +293,8 @@ async function handleDelete(authHeader: string | null, body: DeleteTokenRequest)
   // Add to revoked_token_ids for fast lookup
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const { error: revokeInsertError } = await adminSupabase

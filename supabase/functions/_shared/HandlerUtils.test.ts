@@ -8,12 +8,13 @@
  *
  * Run from supabase/functions:  deno test --no-check --allow-env _shared/HandlerUtils.test.ts
  */
-import { assertEquals, assertThrows } from "jsr:@std/assert@^1";
+import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@^1";
 import {
   assertAuthLookupSucceeded,
   assertRoleLookupSucceeded,
   IllegalArgumentError,
   NotFoundError,
+  readJsonObjectBody,
   SecurityError,
   UserVisibleError,
   wrapRequestHandler
@@ -140,4 +141,58 @@ Deno.test("wrapRequestHandler: typed errors keep their own statuses", async () =
 Deno.test("wrapRequestHandler: a successful handler is still 200", async () => {
   const res = await wrapRequestHandler(post(), () => Promise.resolve({ ok: true }));
   assertEquals(res.status, 200);
+});
+
+// --- Request bodies that are not objects (readJsonObjectBody) ---------------
+//
+// Every handler here does `const { a, b } = await req.json()`. A malformed body throws a
+// SyntaxError out of `req.json()`, and a body of JSON `null` or a bare scalar throws a TypeError on
+// the destructuring. Neither is a typed error, so the ladder above turns both into a 500 "Internal
+// Server Error" AND captures them to Sentry: a caller sending a bad body pages us and is told
+// nothing about what was wrong with their request.
+//
+// Driven through wrapRequestHandler with real Requests, because the status is the thing being
+// pinned down — a helper that throws the right class but still comes back as a 500 has fixed
+// nothing.
+
+function postBody(body: string): Request {
+  return new Request("https://example.test/fn", { method: "POST", body });
+}
+
+Deno.test("readJsonObjectBody: an object body passes through with its fields intact", async () => {
+  const body = await readJsonObjectBody(postBody(JSON.stringify({ assignment_id: 7, new_repo: "org/repo" })));
+  assertEquals(body.assignment_id, 7);
+  assertEquals(body.new_repo, "org/repo");
+});
+
+Deno.test("readJsonObjectBody: malformed JSON is a 400, not a 500", async () => {
+  const res = await wrapRequestHandler(postBody("{not json"), async (req) => await readJsonObjectBody(req));
+  assertEquals(res.status, 400);
+});
+
+Deno.test("readJsonObjectBody: an empty body is a 400", async () => {
+  // `req.json()` on zero bytes is the same SyntaxError as malformed input.
+  const res = await wrapRequestHandler(postBody(""), async (req) => await readJsonObjectBody(req));
+  assertEquals(res.status, 400);
+});
+
+Deno.test("readJsonObjectBody: a JSON null body is a 400, not a 500", async () => {
+  // Valid JSON, so it survives req.json() and only fails at the destructuring — which is why this
+  // one reached the caller as an unexplained 500 rather than as a parse error.
+  const res = await wrapRequestHandler(postBody("null"), async (req) => await readJsonObjectBody(req));
+  assertEquals(res.status, 400);
+});
+
+Deno.test("readJsonObjectBody: scalars and arrays are not objects to destructure", async () => {
+  // An array would destructure without throwing and hand every named field back as `undefined` —
+  // reported as a missing-field problem rather than as the wrong shape of body.
+  for (const body of ["42", '"a string"', "true", "[]", '[{"assignment_id":1}]']) {
+    const res = await wrapRequestHandler(postBody(body), async (req) => await readJsonObjectBody(req));
+    assertEquals(res.status, 400, body);
+  }
+});
+
+Deno.test("readJsonObjectBody: the thrown error is a 400 UserVisibleError", async () => {
+  const e = await assertRejects(() => readJsonObjectBody(postBody("null")), UserVisibleError);
+  assertEquals((e as UserVisibleError).status, 400);
 });

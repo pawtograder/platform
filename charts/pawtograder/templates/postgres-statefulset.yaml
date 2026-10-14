@@ -52,16 +52,27 @@ spec:
         # on a real postgresql.conf / pg_hba edit. (Explicit arg order, not a
         # pipe: sprig regexReplaceAll is regexReplaceAll(regex, input, repl).)
         #
-        # Also hash monitoring.yaml (empty unless monitoring.enabled): it renders
-        # the postgres_exporter custom-queries ConfigMap the exporter SIDECAR mounts
-        # and reads ONLY at startup. Without this, adding/altering a collector (e.g.
-        # the replication-lag query) on an in-place upgrade would update the mounted
-        # file but never restart the sidecar, so the new metric stays absent until a
-        # manual roll. The strip drops the version labels AND the ServiceMonitor
-        # `interval`/`scrapeTimeout` lines, so a scrape-cadence tweak (unrelated to
-        # the exporter's query set) does NOT needlessly roll the primary — only a
-        # real query change does.
-        checksum/config: {{ regexReplaceAll "(?m)^.*(helm\\.sh/chart|app\\.kubernetes\\.io/version|interval|scrapeTimeout):.*$" (printf "%s\n%s" (include (print $.Template.BasePath "/postgres-config.yaml") .) (include (print $.Template.BasePath "/monitoring.yaml") .)) "" | sha256sum }}
+        # Also hash postgres-exporter-queries.yaml (empty unless
+        # monitoring.enabled): it renders the postgres_exporter custom-queries
+        # ConfigMap the exporter SIDECAR mounts and reads ONLY at startup. Without
+        # this, adding/altering a collector (e.g. the replication-lag query) on an
+        # in-place upgrade would update the mounted file but never restart the
+        # sidecar, so the new metric stays absent until a manual roll.
+        #
+        # It hashes THAT file and not monitoring.yaml, and the difference is not
+        # cosmetic. monitoring.yaml also renders every ServiceMonitor in the chart,
+        # so hashing it meant any unrelated monitoring change rolled the PRIMARY
+        # DATABASE. Enabling web.metricsLeader — which only adds a Deployment, a
+        # Service and a ServiceMonitor, and touches nothing Postgres reads — moved
+        # this hash and took auth, storage and realtime through a ~60s crash-loop
+        # on Khoury prod (2026-09-04). The `interval`/`scrapeTimeout` entries in the
+        # strip below were an earlier, narrower attempt at the same problem: they
+        # only covered a scrape-cadence tweak, not a whole new object.
+        #
+        # Keep this list to files whose CONTENT the postgres pod actually consumes.
+        # If you need a new monitoring object, put it in monitoring.yaml and it will
+        # correctly not restart the database.
+        checksum/config: {{ regexReplaceAll "(?m)^.*(helm\\.sh/chart|app\\.kubernetes\\.io/version):.*$" (printf "%s\n%s" (include (print $.Template.BasePath "/postgres-config.yaml") .) (include (print $.Template.BasePath "/postgres-exporter-queries.yaml") .)) "" | sha256sum }}
     spec:
       serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}

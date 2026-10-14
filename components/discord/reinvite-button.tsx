@@ -96,8 +96,21 @@ export default function DiscordReinviteButton({
       // RETURNS TABLE, so PostgREST sends a one-row array.
       const queued = data?.[0]?.queued ?? 0;
       const rolesRepaired = data?.[0]?.roles_repaired ?? 0;
+      const channelsRepaired = data?.[0]?.channels_repaired ?? 0;
 
-      if (rolesRepaired > 0) {
+      if (channelsRepaired > 0 && rolesRepaired === 0) {
+        // Channels are reported on their own only when the roles were fine, because the two failure
+        // modes read differently to an instructor. Missing roles block the sync -- nothing can be
+        // queued until they exist. Missing #scheduling / #operations block nothing; they are where
+        // the course's own notifications go, so the honest message is "this is being fixed", not
+        // "retry in a minute". When both are missing the role message below covers the press, and
+        // this repair rides along with it.
+        toaster.create({
+          title: "Re-creating this course's Discord channels",
+          description: `${channelsRepaired} missing ${channelsRepaired === 1 ? "channel was" : "channels were"} never created. They should appear in the server shortly.`,
+          type: "warning"
+        });
+      } else if (rolesRepaired > 0) {
         // The class was missing the Discord roles the sync assigns, which is the state a class is
         // left in when its role creation failed. Nothing could have been queued for those students
         // until the roles exist, so this is reported as its own outcome rather than folded into a

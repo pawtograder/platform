@@ -1,6 +1,6 @@
 {
   "uid": "pawtograder-edge-functions",
-  "title": "Pawtograder \u00b7 Edge Functions",
+  "title": "Pawtograder · Edge Functions",
   "tags": [
     "pawtograder",
     "edge"
@@ -36,13 +36,15 @@
         "regex": ""
       },
       {
-        "name": "fn",
+        "name": "namespace",
+        "label": "Namespace",
         "type": "query",
         "datasource": {
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "query": "label_values(deno_http_requests_total, function)",
+        "query": "label_values(kube_pod_info, namespace)",
+        "regex": "pawtograder.*",
         "refresh": 1,
         "current": {
           "selected": false,
@@ -50,26 +52,27 @@
           "value": "$__all"
         },
         "includeAll": true,
-        "multi": true
+        "multi": false,
+        "sort": 1,
+        "description": "Scopes EVERY Prometheus query on this dashboard, not just the kube-state ones. The pawtograder_edge_* series carry a namespace label because the prometheus-operator ServiceMonitor scrape path (Grafana Alloy's prometheus.operator.servicemonitors in this cluster) sets it from __meta_kubernetes_namespace on every target, and none of the chart's ServiceMonitors override the relabeling. Without the matcher, one datasource holding staging, previews and production summed all of them into the headline traffic, error and latency panels while only the kube-state and Loki panels honoured the selector. $fn is derived from the namespace-scoped series so the function list follows the selection too."
       },
       {
-        "name": "namespace",
-        "label": "Namespace (logs)",
+        "name": "fn",
         "type": "query",
         "datasource": {
-          "type": "loki",
-          "uid": "${loki}"
+          "type": "prometheus",
+          "uid": "${datasource}"
         },
-        "query": "label_values(namespace)",
-        "regex": "/pawtograder-.*/",
+        "query": "label_values(pawtograder_edge_requests_total{namespace=~\"$namespace\"}, function)",
         "refresh": 1,
         "current": {
-          "selected": true,
-          "text": "pawtograder-staging",
-          "value": "pawtograder-staging"
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
         },
-        "includeAll": false,
-        "multi": false
+        "includeAll": true,
+        "multi": true,
+        "description": "Function label domain is closed at image-build time by the demuxer's boot-time allowlist (charts/pawtograder/images/edge-functions/main.ts); anything off that list reports as \"_unknown\"."
       }
     ]
   },
@@ -91,7 +94,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(deno_http_requests_total{function=~\"$fn\"}[1m]))"
+          "expr": "sum(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\"}[1m]))"
         }
       ],
       "fieldConfig": {
@@ -117,7 +120,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(deno_http_requests_total{function=~\"$fn\", status=~\"5..\"}[5m])) / clamp_min(sum(rate(deno_http_requests_total{function=~\"$fn\"}[5m])), 0.001)"
+          "expr": "sum(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\", status=~\"5..\"}[5m])) / clamp_min(sum(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m])), 0.001)"
         }
       ],
       "fieldConfig": {
@@ -160,19 +163,20 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by(le) (rate(deno_http_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
+          "expr": "histogram_quantile(0.95, sum by(le)(rate(pawtograder_edge_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])))"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "s"
         }
-      }
+      },
+      "description": "POD-WIDE, across all functions: pawtograder_edge_request_duration_seconds{namespace=~\"$namespace\"} has no function label, so the $fn selector is deliberately absent here — adding it would match nothing and the panel would go blank. Per-function latency is the panel below, as a mean. This measures TIME TO HEADERS, not full response time: the demuxer sees the response when headers are ready and a streaming body finishes later."
     },
     {
       "id": 4,
       "type": "stat",
-      "title": "Workers active",
+      "title": "User workers active",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -186,14 +190,15 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(edge_runtime_workers_active)"
+          "expr": "sum(pawtograder_edge_user_workers_active{namespace=~\"$namespace\"})"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "none"
         }
-      }
+      },
+      "description": "Live user-worker isolates across the fleet, from EdgeRuntime.getRuntimeMetrics() on each pod's main worker."
     },
     {
       "id": 10,
@@ -213,7 +218,7 @@
         {
           "refId": "A",
           "legendFormat": "{{function}}",
-          "expr": "sum by(function)(rate(deno_http_requests_total[1m]))"
+          "expr": "sum by(function)(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\"}[1m]))"
         }
       ],
       "fieldConfig": {
@@ -225,10 +230,10 @@
     {
       "id": 11,
       "type": "timeseries",
-      "title": "P50/P95/P99 latency by function",
+      "title": "Mean latency by function",
       "gridPos": {
         "h": 9,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 13
       },
@@ -238,31 +243,57 @@
       },
       "targets": [
         {
-          "refId": "p50",
-          "legendFormat": "p50 {{function}}",
-          "expr": "histogram_quantile(0.50, sum by(le, function)(rate(deno_http_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
-        },
-        {
-          "refId": "p95",
-          "legendFormat": "p95 {{function}}",
-          "expr": "histogram_quantile(0.95, sum by(le, function)(rate(deno_http_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
-        },
-        {
-          "refId": "p99",
-          "legendFormat": "p99 {{function}}",
-          "expr": "histogram_quantile(0.99, sum by(le, function)(rate(deno_http_request_duration_seconds_bucket{function=~\"$fn\"}[5m])))"
+          "refId": "mean",
+          "legendFormat": "mean {{function}}",
+          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m])) / clamp_min(sum by(function)(rate(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m])), 0.001)"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "s"
         }
+      },
+      "description": "rate(function_seconds_total) / rate(requests_total): seconds of demuxer time per request, which is TIME TO HEADERS rather than full response time (worker.fetch resolves when headers are ready). This used to share a panel with the time-spent series; they are not the same unit and the shared axis flattened this one into the floor — see 'Share of tier time by function' beside it. The per-function latency HISTOGRAM deliberately does not exist: adding `function` to it takes the edge tier from ~8.6k to ~37k series, all per-pod, doubling on every HPA excursion. If it is ever added, the quantiles are histogram_quantile(0.5|0.95|0.99, sum by(le, function)(rate(pawtograder_edge_request_duration_seconds_bucket[5m])))."
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Share of tier time by function",
+      "description": "Each function's share of all demuxer time, stacked to 100%. This is the 'where is the tier's time going' panel: a function can be fast per request and still dominate the tier by volume, and mean latency beside it cannot show that. The numerator, sum by(function)(rate(pawtograder_edge_function_seconds_total[5m])), is function-seconds per wall-clock second — i.e. mean CONCURRENT executions, a dimensionless number that can exceed 1 and is NOT a duration. It was previously plotted raw on the mean-latency axis, where Grafana rendered a value of 20 as '20 seconds' and squashed the real latency series flat. Divided by the fleet total it becomes a genuine share; the axis unit is set explicitly to percentunit rather than inferred. If you want the absolute figure (how many worker slots a function occupies on average), query the numerator on its own in Explore.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{function}}",
+          "expr": "sum by(function)(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m])) / clamp_min(scalar(sum(rate(pawtograder_edge_function_seconds_total{namespace=~\"$namespace\"}[5m]))), 0.001)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        }
       }
     },
     {
-      "id": 20,
-      "type": "table",
-      "title": "Top errors by function",
+      "id": 12,
+      "type": "timeseries",
+      "title": "Worker retirements & demuxer errors",
+      "description": "Two different scopes on purpose. The error series carries a `function` label and honours $fn. The retirement series does not: pawtograder_edge_user_workers_retired_total is a pod-wide counter from EdgeRuntime.getRuntimeMetrics() with no function dimension, so it stays fleet-wide however $fn is set — filtering it would silently return the same number under a different label. The three metrics that carry `function` are pawtograder_edge_requests_total, pawtograder_edge_function_seconds_total and pawtograder_edge_worker_errors_total; every panel that reads one of them applies $fn.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -275,17 +306,26 @@
       },
       "targets": [
         {
-          "refId": "A",
-          "format": "table",
-          "instant": true,
-          "expr": "topk(15, sum by(function, status)(increase(deno_http_requests_total{status=~\"4..|5..\"}[1h])))"
+          "refId": "errors",
+          "legendFormat": "errors {{kind}}",
+          "expr": "sum by(kind)(rate(pawtograder_edge_worker_errors_total{namespace=~\"$namespace\", function=~\"$fn\"}[5m]))"
+        },
+        {
+          "refId": "retired",
+          "legendFormat": "workers retired",
+          "expr": "sum(rate(pawtograder_edge_user_workers_retired_total{namespace=~\"$namespace\"}[5m]))"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
     },
     {
-      "id": 30,
-      "type": "timeseries",
-      "title": "Web app's calls to edge functions",
+      "id": 20,
+      "type": "table",
+      "title": "Top errors by function",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -299,21 +339,17 @@
       "targets": [
         {
           "refId": "A",
-          "legendFormat": "{{function}} ({{status}})",
-          "expr": "sum by(function, status)(rate(web_edge_function_invocation_total[1m]))"
+          "format": "table",
+          "instant": true,
+          "expr": "topk(15, sum by(function, status)(increase(pawtograder_edge_requests_total{namespace=~\"$namespace\", function=~\"$fn\", status=~\"4..|5..\"}[1h])))"
         }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops"
-        }
-      }
+      ]
     },
     {
       "id": 50,
       "type": "timeseries",
       "title": "Pod restarts (30m)",
-      "description": "A restart here kills PID 1, so every in-flight request on that pod dies at once and Kong returns 502 to the caller \u2014 including the grading runner. Spikes here line up with 502 spikes to the second.",
+      "description": "A restart here kills PID 1, so every in-flight request on that pod dies at once and Kong returns 502 to the caller — including the grading runner. Spikes here line up with 502 spikes to the second.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -327,7 +363,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\", container=\"functions\"}[30m])",
+          "expr": "increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\", container=\"functions\"}[30m])",
           "legendFormat": "{{pod}}"
         }
       ]
@@ -350,7 +386,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", container=\"functions\"} / on(namespace, pod, container) kube_pod_container_resource_limits{namespace=\"$namespace\", container=\"functions\", resource=\"memory\"})",
+          "expr": "max by (pod) (container_memory_working_set_bytes{namespace=~\"$namespace\", container=\"functions\"} / on(namespace, pod, container) kube_pod_container_resource_limits{namespace=~\"$namespace\", container=\"functions\", resource=\"memory\"})",
           "legendFormat": "{{pod}}"
         }
       ],
@@ -378,7 +414,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (pod) (kube_pod_container_status_last_terminated_reason{namespace=\"$namespace\", container=\"functions\", reason=\"OOMKilled\"})",
+          "expr": "max by (pod) (kube_pod_container_status_last_terminated_reason{namespace=~\"$namespace\", container=\"functions\", reason=\"OOMKilled\"})",
           "legendFormat": "{{pod}}"
         }
       ]
@@ -387,7 +423,7 @@
       "id": 53,
       "type": "timeseries",
       "title": "Working set memory vs pod age",
-      "description": "The diagnostic panel: if memory tracks pod AGE rather than request volume, the cause is long-lived isolates accumulating, not load \u2014 and scaling out on a memory target makes it worse, because every new pod starts the same climb.",
+      "description": "Decomposes the container working set. eszip cache is the demuxer's resident bundle LRU; main heap is the pod-lifetime main isolate. Working set minus those two is user-worker isolates plus the Deno host. container_memory_working_set_bytes alone cannot separate the three, which is why the 2026-08-19 cache leak looked like generic memory growth for days.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -401,13 +437,23 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", container=\"functions\"})",
+          "expr": "max by (pod) (container_memory_working_set_bytes{namespace=~\"$namespace\", container=\"functions\"})",
           "legendFormat": "mem {{pod}}"
         },
         {
           "refId": "B",
-          "expr": "max by (pod) (time() - kube_pod_start_time{namespace=\"$namespace\"})",
+          "expr": "max by (pod) (time() - kube_pod_start_time{namespace=~\"$namespace\"})",
           "legendFormat": "age {{pod}}"
+        },
+        {
+          "refId": "cache",
+          "legendFormat": "eszip cache {{pod}}",
+          "expr": "sum by(pod)(pawtograder_edge_eszip_cache_bytes{namespace=~\"$namespace\"})"
+        },
+        {
+          "refId": "heap",
+          "legendFormat": "main heap {{pod}}",
+          "expr": "sum by(pod)(pawtograder_edge_main_worker_heap_bytes{namespace=~\"$namespace\", stat=\"used\"})"
         }
       ],
       "fieldConfig": {
@@ -419,7 +465,7 @@
     {
       "id": 40,
       "type": "logs",
-      "title": "Logs \u2014 $namespace / $fn",
+      "title": "Logs — $namespace / $fn",
       "description": "Edge-function stdout from Loki, filtered to the selected function(s) via the [fn=<name>] tag stamped by the demuxer (main.ts) and wrapRequestHandler. Pick a single $fn to isolate one function.",
       "gridPos": {
         "h": 14,
@@ -440,7 +486,7 @@
           },
           "editorMode": "code",
           "queryType": "range",
-          "expr": "{namespace=\"$namespace\", component=\"functions\"} |~ \"\\[fn=(${fn:pipe})\\]\""
+          "expr": "{namespace=~\"$namespace\", component=\"functions\"} |~ \"\\[fn=(${fn:pipe})\\]\""
         }
       ],
       "options": {

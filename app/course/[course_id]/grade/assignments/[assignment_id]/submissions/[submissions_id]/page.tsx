@@ -17,6 +17,8 @@ export default function SubmissionsView() {
       return;
     }
 
+    // No-submission assignments never mount this route at all (the layout renders the grading UI
+    // directly and redirects to /grade on its own), so this only needs to handle every other mode.
     // Preserve existing query parameters when redirecting
     const queryString = searchParams.toString();
     const targetPage = hasGraderOutput ? "results" : "files";

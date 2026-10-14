@@ -55,8 +55,14 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
     .filter((e) => e.assignment_id === assignment.id)
     .map((e) => e.tokens_consumed)
     .reduce((a, b) => a + b, 0);
-  if (course.late_tokens_per_student === 0) {
-    return <Text>(No late submissions allowed)</Text>;
+  // Gifted tokens are recorded as negative `tokens_consumed`, so a student in a course with no
+  // allotment can still have a balance; only say the course gives none when that is all they have.
+  if (course.late_tokens_per_student === 0 && lateTokensUsedByStudent >= 0) {
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        (This course does not give late tokens. Contact your instructor if you need an extension.)
+      </Text>
+    );
   }
   if (hoursExtended && hoursExtended < 0) {
     return (
@@ -69,6 +75,13 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
     return (
       <Text fontSize="sm" color="fg.muted">
         (You have no remaining late tokens)
+      </Text>
+    );
+  }
+  if (assignment.max_late_tokens === 0) {
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        (Late tokens cannot be used on this assignment)
       </Text>
     );
   }

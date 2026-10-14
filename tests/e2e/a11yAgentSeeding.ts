@@ -20,6 +20,86 @@ import {
 } from "./TestingUtils";
 import type { TaskContext } from "../../tools/a11y-judge/agent/tasks";
 
+/**
+ * The released hand-grade on the seeded submission. Chosen to collide with
+ * nothing else in the seed: it is not the autograder's 5/10, not a heading
+ * level, and not a count that turns up in page chrome — so when it is heard,
+ * it came from the gradebook.
+ */
+const GRADEBOOK_SCORE = 45;
+/** `insertAssignment` hard-codes `total_points: 100`, which becomes the auto-created column's `max_score`. */
+const ASSIGNMENT_TOTAL_POINTS = 100;
+
+/**
+ * Put a released, student-visible score on the assignment's gradebook column.
+ *
+ * Two writes, because the production path between them is asynchronous and this
+ * seed has to be deterministic:
+ *
+ *  1. Release the submission review. This is the real upstream gate — the
+ *     `is_private = false` gradebook cell draws from `scores_by_round_public`,
+ *     which filters on `submission_reviews.released`.
+ *  2. Write the student-visible cell directly. In production a pg_cron job
+ *     drains a queue into the `gradebook-column-recalculate` Edge Function,
+ *     which can take a minute or more to land; polling for it would add a
+ *     worker dependency and a long timeout to every a11y seed. Writing it here
+ *     is safe precisely *because* step 1 happened: if the worker does run, it
+ *     recomputes the same score from the released review and converges.
+ *
+ * Note the `is_private = false` filter. Both rows exist per (column, student);
+ * the staff-facing `is_private = true` row is ungated and is not what the
+ * student gradebook reads (`hooks/useGradebook.tsx`, RLS policy
+ * "student views non-private only").
+ */
+async function releaseGradebookScore({
+  class_id,
+  assignment_slug,
+  grading_review_id,
+  student_profile_id,
+  grader_profile_id,
+  score
+}: {
+  class_id: number;
+  assignment_slug: string;
+  grading_review_id: number;
+  student_profile_id: string;
+  grader_profile_id: string;
+  score: number;
+}) {
+  const { error: reviewErr } = await supabase
+    .from("submission_reviews")
+    .update({
+      total_score: score,
+      released: true,
+      completed_by: grader_profile_id,
+      completed_at: new Date().toISOString()
+    })
+    .eq("id", grading_review_id);
+  if (reviewErr) throw new Error(`release review failed: ${reviewErr.message}`);
+
+  const { data: column, error: columnErr } = await supabase
+    .from("gradebook_columns")
+    .select("id")
+    .eq("class_id", class_id)
+    .eq("slug", `assignment-${assignment_slug}`)
+    .single();
+  if (columnErr || !column) {
+    throw new Error(`assignment gradebook column lookup failed: ${columnErr?.message ?? "missing row"}`);
+  }
+
+  const { data: updated, error: cellErr } = await supabase
+    .from("gradebook_column_students")
+    .update({ score, released: true, is_missing: false })
+    .eq("gradebook_column_id", column.id)
+    .eq("student_id", student_profile_id)
+    .eq("is_private", false)
+    .select("id");
+  if (cellErr) throw new Error(`gradebook cell seed failed: ${cellErr.message}`);
+  if (!updated || updated.length === 0) {
+    throw new Error(`gradebook cell seed matched no student-visible row for column ${column.id}`);
+  }
+}
+
 export const AGENT_SURVEY_JSON = {
   pages: [
     {
@@ -121,11 +201,12 @@ export async function seedAgentPages(): Promise<AgentSeed> {
 
   // insertPreBakedSubmission seeds grader_results score 5/10 with passing
   // tests "test 1" and "test 2" (TestingUtils) — the read-task ground truth.
+  const assignmentSlug = `e2e-a11y-agent-${course.id}`;
   const assignment = await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
     class_id: course.id,
     name: "Agent Assignment",
-    assignment_slug: `e2e-a11y-agent-${course.id}`
+    assignment_slug: assignmentSlug
   });
   const sub = await insertPreBakedSubmission({
     student_profile_id: student.private_profile_id,
@@ -142,6 +223,28 @@ export async function seedAgentPages(): Promise<AgentSeed> {
   seedValues.assignmentName = "Agent Assignment";
   seedValues.autograderScore = "5";
   seedValues.autograderMax = "10";
+
+  // A RELEASED hand-grade, so the gradebook has an actual score to announce.
+  // Without this the student-visible cell has score = null and the page renders
+  // the "Submitted" status for everyone — which is why the gradebook read-task
+  // could only ever needle the assignment name (issue #915).
+  await releaseGradebookScore({
+    class_id: course.id,
+    assignment_slug: assignmentSlug,
+    grading_review_id: sub.grading_review_id,
+    student_profile_id: student.private_profile_id,
+    grader_profile_id: instructor.private_profile_id,
+    score: GRADEBOOK_SCORE
+  });
+  seedValues.gradebookScore = String(GRADEBOOK_SCORE);
+  seedValues.gradebookMaxScore = String(ASSIGNMENT_TOTAL_POINTS);
+  // The needle the gradebook read-task keys on. It is the exact phrase the score
+  // cell exposes to a screen reader (<SpokenValue> in whatIf.tsx), and it is
+  // deliberately the whole phrase rather than a bare "45": normalizePhrase
+  // substitutes seed values as whole tokens, so a lone number still matches
+  // incidental digits elsewhere in the journey ("heading, level 5"). See the
+  // memo in docs/a11y-session-memo-2026-08.md.
+  seedValues.gradebookSpokenScore = `${GRADEBOOK_SCORE} of ${ASSIGNMENT_TOTAL_POINTS} points`;
   seedValues.codeFileName = A11Y_CODE_FILE_NAME;
   seedValues.codeMarkerText = A11Y_CODE_MARKER_TEXT;
 

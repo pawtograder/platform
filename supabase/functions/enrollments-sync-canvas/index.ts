@@ -8,6 +8,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { assertUserIsInstructor } from "../_shared/HandlerUtils.ts";
 import { createUserInClass } from "../_shared/EnrollmentUtils.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { course_id } = (await req.json()) as { course_id: number };
   if (!course_id) {
@@ -18,7 +19,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   await assertUserIsInstructor(course_id, req.headers.get("Authorization")!);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data: course } = await adminSupabase
     .from("classes")

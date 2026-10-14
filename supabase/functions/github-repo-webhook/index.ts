@@ -50,8 +50,11 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { createRedis, type RedisClient } from "../_shared/Redis.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
+import { ExpectedRetryError, expectedRetryReport } from "../_shared/ExpectedRetryError.ts";
+import { classifyUnreadyRepoPush } from "../_shared/unreadyRepoPush.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
@@ -145,6 +148,41 @@ if (Deno.env.get("SENTRY_DSN")) {
   });
 }
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
+
+/**
+ * Capture at the severity the error asked for.
+ *
+ * Most of what this webhook throws is a fault. Some of it is not: a few sites throw specifically to
+ * make EventBridge redeliver the event (GitHub's webhook reaches this function through an
+ * EventBridge rule, which is what retries a non-2xx), because a redelivery is what makes the
+ * outcome correct (see ExpectedRetryError). Those must not be reported at `error` level, and they
+ * must not share a
+ * Bugsink group with genuine failures from the same frame — otherwise routine provisioning buries
+ * the real thing. Concretely: one 58-student assignment release produced 412 error-level events
+ * from one such throw site over the 88 minutes the create_repo queue took to drain.
+ *
+ * Used at the generic catch sites rather than at the throw sites, because the throw sites do not
+ * capture — they throw, and these catches are what report. `expectedRetryReport` also looks inside an
+ * AggregateError, which is how `eventHandler.receive` may hand a listener's throw to the entry catch,
+ * so both catches agree on the level for the same underlying error.
+ *
+ * Anything without a report captures exactly as before, so no existing issue's grouping or severity
+ * moves.
+ */
+function captureWebhookException(err: unknown, scope: Sentry.Scope) {
+  const expected = expectedRetryReport(err);
+  if (!expected) {
+    Sentry.captureException(err, scope);
+    return;
+  }
+  // Cloned rather than mutated: the caller's scope carries the tags for this delivery and may be
+  // reused for further captures, which must not inherit the downgrade.
+  const expectedScope = typeof scope?.clone === "function" ? scope.clone() : new Sentry.Scope();
+  expectedScope.setLevel(expected.level);
+  expectedScope.setFingerprint(expected.fingerprint);
+  expectedScope.setTag("expected_retry", "true");
+  Sentry.captureException(err, expectedScope);
+}
 
 /**
  * Returns true if the given file path appears in the modified/added/removed lists
@@ -280,9 +318,10 @@ async function createPushDirectSubmission(
     /**
      * The assignment's automatic late-token policy, applied to a late push exactly as the
      * Actions path applies it. It belongs to the assignment, so a repo-only assignment honours
-     * it too.
+     * it too. `classLateTokensPerStudent` is the course-wide allotment every assignment draws from;
+     * it only shapes the rejection message, since the RPC reads the balance itself.
      */
-    lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean };
+    lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean; classLateTokensPerStudent: number };
     /**
      * The pusher is course staff pushing to a repository that is their own — the Instructor Test
      * Assignment case. The Actions path exempts staff-triggered submissions from the deadline,
@@ -418,12 +457,16 @@ async function createPushDirectSubmission(
   // (require_tokens_before_due_date, which is the default), or the student's own early
   // finalization may rule it out — and in each of those the balance is never read, so reporting
   // exhaustion states something we did not check and sends the student to the wrong remedy.
-  let lateTokenOutcome: "none_offered" | "not_automatic" | "finalized_early" | "exhausted" =
+  // A course with no allotment gets its own outcome: "no late tokens left" would suggest the
+  // student spent tokens they were never given.
+  let lateTokenOutcome: "none_offered" | "none_in_course" | "not_automatic" | "finalized_early" | "exhausted" =
     lateTokenPolicy.maxLateTokens <= 0
       ? "none_offered"
-      : lateTokenPolicy.requireTokensBeforeDueDate
-        ? "not_automatic"
-        : "exhausted";
+      : lateTokenPolicy.classLateTokensPerStudent <= 0
+        ? "none_in_course"
+        : lateTokenPolicy.requireTokensBeforeDueDate
+          ? "not_automatic"
+          : "exhausted";
   let stillLate = isLate;
   if (isLate && mayRecordSubmission) {
     if (await hasFinalizedEarly(adminSupabase, studentRepo, scope)) {
@@ -635,6 +678,7 @@ async function createPushDirectSubmission(
     console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; recording a rejection`);
     const lateTokenClause = {
       none_offered: "",
+      none_in_course: ", and this course does not give late tokens, so none could be applied",
       not_automatic:
         ", and late tokens for this assignment have to be applied before the deadline, so none covered this push",
       finalized_early:
@@ -1771,7 +1815,7 @@ async function handlePushToStudentRepo(
   const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
     .from("assignments")
     .select(
-      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date"
+      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date, classes(late_tokens_per_student)"
     )
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
@@ -1877,7 +1921,15 @@ async function handlePushToStudentRepo(
     // set up — the repository works and the student can push to it, and the reconciler will repair
     // the flag shortly. Acknowledging those pushes discarded them permanently, so none of the
     // student's work between the failure and the repair became a submission. Those are thrown, so
-    // GitHub redelivers until the flag is repaired.
+    // the delivery is redelivered until the flag is repaired.
+    //
+    // Redelivered by EVENTBRIDGE, not by GitHub. GitHub's webhook goes to an EventBridge rule that
+    // invokes this function (hence the EVENTBRIDGE_SECRET check at the entry point, and the
+    // `attempt=N` counter in the [DISPATCH] log line), so the retry policy that decides whether a
+    // student push survives a provisioning window is an EventBridge rule/target configuration in
+    // AWS — defined outside this repository and NOT verifiable from this code. Anyone reasoning
+    // about worst-case loss here has to go read that configuration; no attempt count or maximum
+    // event age is asserted anywhere in this file, because none has been confirmed.
     if (!studentRepo.is_github_ready) {
       const isProvisioningPush = !!studentRepo.synced_repo_sha && studentRepo.synced_repo_sha === payload.after;
       if (isProvisioningPush) {
@@ -1888,10 +1940,98 @@ async function handlePushToStudentRepo(
         );
         return;
       }
+      // Which of the two cases above this is, reported accordingly. BOTH still throw: the
+      // redelivery is the mechanism that makes provisioning converge, and removing it is how the
+      // student-work case starts losing submissions again. How many redeliveries there are, and for
+      // how long, is an EventBridge setting defined outside this repository — so the size of that
+      // budget cannot be read off this code, and nothing here should be tuned as if it could.
+      // What differs between the two cases is only the severity of the Sentry event, and that
+      // difference is the whole point of this branch.
+      //
+      // The expected case is not rare or incidental — it happens once for EVERY repository, on the
+      // first delivery, because the `repositories` row is inserted before createRepo runs and the
+      // readiness write lands after it returns. Measured in Khoury production on 2026-09-07: CS 4530
+      // released one assignment to 58 students, and the async create_repo queue drained the batch on
+      // GitHub between 04:09 and 05:37 UTC. Over those 88 minutes this line threw 412 times across
+      // all 58 repositories (~7 deliveries each, EventBridge backing off until the readiness write
+      // landed), and every one of them arrived in Bugsink at `error` level in the same group. The
+      // outcome was completely correct — 58/58 ready, no duplicates, empty DLQ, no lost work — which
+      // is exactly the problem: a genuine readiness-write failure occurring in that window was
+      // indistinguishable from the batch. Fall 2026's CS 2000 has ~585 students, i.e. several
+      // thousand such events on day one.
+      //
+      // What the split rests on, and what it deliberately does NOT rest on.
+      //
+      // The tempting discriminator is the shape of the push: case 1 is by construction the creation
+      // of the default branch, so it arrives with `created: true` and an all-zero `before`. That is
+      // insufficient, and an earlier version of this branch was wrong for exactly that reason. When
+      // GitHub created the repository and our readiness write then FAILED, the delivery being
+      // rejected is still that same branch-creation push — and a redelivery carries a byte-identical
+      // payload, so `created: true` never stops being true. Classifying on shape alone would report
+      // case 2 as expected forever, permanently hiding the one failure this branch exists to surface.
+      //
+      // So the shape is only a necessary condition, and the decision rests on independent evidence
+      // that creation is still running: `payload.repository.created_at`, GitHub's own per-repository
+      // creation timestamp, which must fall inside a finalize window (see
+      // PROVISIONING_IN_FLIGHT_WINDOW_MS). That is NOT the grace window on `repositories.created_at`
+      // rejected earlier, and the difference matters: our row is stamped when the whole release is
+      // enqueued, so its age grows with the size of the batch (~96 minutes for the last of 58, many
+      // hours for 585). GitHub creates the repository INSIDE our createRepo call, so its timestamp
+      // measures that one repository's own remaining finalize time — ~275s to the readiness write,
+      // ~8.7 minutes worst case traced — and does not grow with the batch at all.
+      //
+      // Every uncertainty resolves to the visible side: no timestamp, an unusable one, or a push onto
+      // existing history is `readiness_write_failed`. A mislabelled error event costs ten seconds of
+      // triage; a hidden readiness failure costs student submissions.
+      //
+      // One inference remains, and it is only about the volume, not the logic: that those 412
+      // deliveries carried `created: true` / an all-zero `before` follows from how a
+      // template-generated repository's first push must look, but the payloads retrievable from that
+      // incident are truncated, so it was never confirmed against them. The tags below are how to
+      // confirm it — after the next release, an all-`provisioning_in_flight` batch is the expected
+      // shape, and any `readiness_write_failed` in it deserves a look at `repo_not_ready_reason`.
+      //
+      // Do not "fix" this by deleting the throw or by loosening the sha comparison above: neither is
+      // broken. The sha comparison is the fast path for a provisioning push whose readiness write
+      // HAS landed; this branch is the same push arriving before it landed.
+      const unready = classifyUnreadyRepoPush({
+        created: payload.created,
+        before: payload.before,
+        repositoryCreatedAt: payload.repository?.created_at,
+        repositoryPushedAt: payload.repository?.pushed_at
+      });
       scope.setTag("push_direct_retry_reason", "repo_not_github_ready");
+      scope.setTag("repo_not_ready_kind", unready.kind);
+      scope.setTag("repo_not_ready_reason", unready.reason);
+      if (unready.repoAgeMs !== undefined) {
+        scope.setTag("repo_age_seconds", String(Math.round(unready.repoAgeMs / 1000)));
+      }
+      if (unready.kind === "provisioning_in_flight") {
+        console.log(
+          `Rejecting delivery for ${repoName}@${payload.after}: repository creation is still in flight (this is the ` +
+            `branch-creation push, GitHub created the repository ${Math.round((unready.repoAgeMs ?? 0) / 1000)}s ago, ` +
+            `and the readiness write has not landed yet). EventBridge will redeliver, and the retry will recognize ` +
+            `it as the starter-template push once synced_repo_sha is recorded.`
+        );
+        throw new ExpectedRetryError(
+          `${repoName} is not marked ready yet, ${payload.after} created the default branch and GitHub created the ` +
+            `repository within the provisioning window, so creation is still in flight; rejecting this delivery so ` +
+            `EventBridge retries it once provisioning is recorded`,
+          {
+            name: "RepoProvisioningInFlightError",
+            level: "info",
+            fingerprint: ["github-repo-webhook", "push-direct", "repo-provisioning-in-flight"]
+          }
+        );
+      }
+      // Reached when the push is not the branch creation, when GitHub created this repository too long
+      // ago for creation to still be running, or when its creation timestamp is unusable. All three
+      // mean the same thing operationally: readiness was never recorded for a repository that exists,
+      // so the student's pushes are being rejected and only the reconciler (or a human) will fix it.
       throw new Error(
-        `${repoName} is not marked ready yet, but ${payload.after} is not the starter-template commit either, so ` +
-          `this is student work; rejecting this delivery so GitHub retries it once provisioning is recorded`
+        `${repoName} is not marked ready yet, but ${payload.after} is not a push from provisioning either ` +
+          `(${unready.reason}), so this is student work on a repository whose readiness was never recorded; ` +
+          `rejecting this delivery so EventBridge retries it once provisioning is recorded`
       );
     }
     // Record the commit history BEFORE any of the reasons this delivery might not become a
@@ -2029,7 +2169,8 @@ async function handlePushToStudentRepo(
       permitEmptySubmissions: pushAssignment.permit_empty_submissions ?? false,
       lateTokenPolicy: {
         maxLateTokens: pushAssignment.max_late_tokens ?? 0,
-        requireTokensBeforeDueDate: pushAssignment.require_tokens_before_due_date ?? false
+        requireTokensBeforeDueDate: pushAssignment.require_tokens_before_due_date ?? false,
+        classLateTokensPerStudent: pushAssignment.classes?.late_tokens_per_student ?? 0
       },
       // Staff pushing to their OWN repository — the Instructor Test Assignment flow — keeps the
       // bypasses the Actions path gives them. Losing that meant a no-autograder test assignment
@@ -2120,7 +2261,8 @@ async function handlePushToStudentRepo(
           permitEmptySubmissions: pushAssignment?.permit_empty_submissions ?? false,
           lateTokenPolicy: {
             maxLateTokens: pushAssignment?.max_late_tokens ?? 0,
-            requireTokensBeforeDueDate: pushAssignment?.require_tokens_before_due_date ?? false
+            requireTokensBeforeDueDate: pushAssignment?.require_tokens_before_due_date ?? false,
+            classLateTokensPerStudent: pushAssignment?.classes?.late_tokens_per_student ?? 0
           },
           actorIsStaffOwner: fallbackStanding.isOwnerStaff,
           scope
@@ -2712,7 +2854,8 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       const repoName = payload.repository.full_name;
       const adminSupabase = createClient<Database>(
         Deno.env.get("SUPABASE_URL") || "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+        { auth: REQUEST_SCOPED_AUTH_OPTIONS }
       );
       console.log(`[PUSH] repo=${repoName}`);
       //Is it a student repo?
@@ -2782,7 +2925,7 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       }
     }
   } catch (err) {
-    Sentry.captureException(err, scope);
+    captureWebhookException(err, scope);
     throw err;
   }
 });
@@ -2797,7 +2940,8 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
         maybeCrash("check_run.before_db_lookup");
         const adminSupabase = createClient<Database>(
           Deno.env.get("SUPABASE_URL") || "",
-          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+          { auth: REQUEST_SCOPED_AUTH_OPTIONS }
         );
         const checkRun = await adminSupabase
           .from("repository_check_runs")
@@ -2929,7 +3073,9 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
   tagScopeWithGenericPayload(scope, "membership", payload);
 
   try {
-    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+      auth: REQUEST_SCOPED_AUTH_OPTIONS
+    });
 
     // Only process when a member is added to a team
     if (payload.action !== "added") {
@@ -3044,6 +3190,82 @@ eventHandler.on("membership", async ({ payload }: { payload: MembershipEvent }) 
 });
 
 // Handle organization invitation events
+/**
+ * A user left (or was removed from) a course's GitHub org.
+ *
+ * Until this handler existed, `github_org_confirmed` was a one-way latch: set true when the user
+ * joined the team, and never cleared. An enrollment whose org membership disappeared therefore
+ * looked confirmed forever, so nothing re-invited them, the team sync kept counting them as an
+ * intended member, and the student's only symptom was repo permissions that silently stopped
+ * working. Clearing both columns puts the row back into the state the ordinary invite machinery
+ * already knows how to repair: the enrollment triggers on the next role change, and the hourly
+ * membership reconciler otherwise.
+ *
+ * Only rows for classes IN THIS ORG are touched, and only live enrollments — a dropped student who
+ * is removed from the org must stay removed. This is also the shape the instructor unlink flow
+ * produces (github-user-sync removes the member, then clears the link); clearing there is harmless
+ * because every re-invite path requires a non-null github_username.
+ */
+async function handleOrgMemberRemoved(
+  adminSupabase: SupabaseClient<Database>,
+  organizationName: string,
+  removedUser: { login: string; id?: number | null },
+  scope: Sentry.Scope
+) {
+  // Resolve by GitHub ACCOUNT ID first, falling back to the login. A user who renames their GitHub
+  // account and then leaves arrives here under the new login while `users.github_username` may
+  // still hold the old one, so a login-only lookup finds nothing and the enrollment stays falsely
+  // confirmed forever — the exact latch this handler exists to release. The account id is the
+  // stable identity, and it is the same one `reresolveMissingGitHubLogin` recovers renames from.
+  let userData: { user_id: string } | null = null;
+  if (removedUser.id !== undefined && removedUser.id !== null) {
+    const { data, error } = await adminSupabase
+      .from("users")
+      .select("user_id")
+      .eq("github_user_id", String(removedUser.id))
+      .maybeSingle();
+    // Throw rather than capture-and-return. Every early return here looks to the dispatcher exactly
+    // like "handled", so it marks the delivery complete and GitHub never redelivers — and nothing
+    // else in the system clears this latch, so a transient database error would leave the departed
+    // member confirmed until some unrelated role mutation. The organization handler's own catch
+    // captures with the org/user tags already on the scope.
+    if (error) throw error;
+    userData = data;
+  }
+  if (!userData) {
+    const { data, error } = await adminSupabase
+      .from("users")
+      .select("user_id")
+      // Case-insensitive: GitHub logins are, and `users.github_username` stores whatever casing was
+      // current when the account was linked.
+      .ilike("github_username", removedUser.login)
+      .maybeSingle();
+    if (error) throw error;
+    userData = data;
+  }
+  if (!userData) {
+    // Not one of ours (an org owner, a bot, someone added out of band). Not an error.
+    return;
+  }
+
+  // One RPC for the whole repair: it clears the confirmation for the user's live enrollments in
+  // this org's classes and, for the classes actually in session, enqueues a forced re-invite. The
+  // enqueue matters — clearing alone would leave the student waiting for the sweep, which only
+  // reconsiders an enrollment whose invitation is a staleness period old, so someone removed days
+  // after accepting would have no repository access for the rest of that period. The window check
+  // and the org's case-insensitive match live in SQL alongside the predicate they share.
+  const { data: enqueued, error: repairError } = await adminSupabase.rpc("clear_org_membership_and_repair", {
+    p_user_id: userData.user_id,
+    p_org: organizationName
+  });
+  if (repairError) throw repairError;
+  scope?.setTag("org_membership_repairs_enqueued", String(enqueued ?? 0));
+  scope?.setTag("org_membership_cleared", "true");
+  console.log(
+    `[github-repo-webhook] ${removedUser.login} left ${organizationName}; cleared github_org_confirmed for their live enrollments, enqueued ${enqueued ?? 0} repair(s)`
+  );
+}
+
 eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent }) => {
   // Extract organization name early for e2e-ignore guard
   const organizationName = payload.organization?.login;
@@ -3064,7 +3286,24 @@ eventHandler.on("organization", async ({ payload }: { payload: OrganizationEvent
   }
 
   try {
-    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+      auth: REQUEST_SCOPED_AUTH_OPTIONS
+    });
+
+    // A departure is the mirror of an invitation: it must un-confirm the enrollment, or the row
+    // claims a membership that no longer exists and no repair path will ever look at it again.
+    if (payload.action === "member_removed") {
+      const removedUser = "membership" in payload ? payload.membership?.user : undefined;
+      if (removedUser?.login && organizationName) {
+        await handleOrgMemberRemoved(
+          adminSupabase,
+          organizationName,
+          { login: removedUser.login, id: removedUser.id },
+          scope
+        );
+      }
+      return;
+    }
 
     // Only process member invitation events
     if (payload.action !== "member_invited") {
@@ -3291,7 +3530,8 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   try {
@@ -3424,7 +3664,8 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   try {
@@ -3563,7 +3804,8 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Which assignments treat this repo as their upstream/class repo? (Could be
@@ -3867,7 +4109,8 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
 
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
     );
 
     try {
@@ -3876,7 +4119,7 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
       // Find the repository in our database
       const { data: repo, error: repoError } = await adminSupabase
         .from("repositories")
-        .select("id, synced_handout_sha, desired_handout_sha")
+        .select("id, synced_handout_sha, desired_handout_sha, sync_data, sync_blocked_at")
         .eq("repository", repoFullName)
         .maybeSingle();
 
@@ -3896,8 +4139,53 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
       const shortSha = branchName.replace("sync-to-", "");
 
       // Use the full SHA from desired_handout_sha if it matches the short SHA prefix,
-      // otherwise fall back to the short SHA (handles edge cases)
-      const syncedSha = repo.desired_handout_sha?.startsWith(shortSha) ? repo.desired_handout_sha : shortSha;
+      // otherwise fall back to the short SHA (handles edge cases). synced_handout_sha is tried
+      // too: when a LATER revision has already raised desired_handout_sha, it is the row's
+      // other recorded sha that this branch can still name in full.
+      const syncedSha = repo.desired_handout_sha?.startsWith(shortSha)
+        ? repo.desired_handout_sha
+        : repo.synced_handout_sha?.startsWith(shortSha)
+          ? repo.synced_handout_sha
+          : shortSha;
+
+      // WHICH REVISION THIS PULL REQUEST IS FOR, and why the answer decides what survives.
+      //
+      // A sync that could not be delivered records `blocked_by_student_changes` along with the
+      // revision it was blocked at and the paths that blocked it, and it carries forward the
+      // pull request an EARLIER revision opened, because that PR is still open and still the
+      // thing the student has to merge. When they merge it, this handler runs -- for the older
+      // revision. Replacing sync_data wholesale then deleted a live revision's status and its
+      // unresolved paths, while sync_blocked_at stayed set: the row read "Sync Finalizing",
+      // the instructor lost the only record of what was actually blocking, and the durable
+      // marker sat there with nothing to explain it.
+      //
+      // The branch name carries the revision as its 7-character prefix, which is what makes
+      // the two cases distinguishable at all.
+      const priorSyncData = (repo.sync_data ?? {}) as {
+        status?: string;
+        blocked_handout_sha?: string;
+        unresolved_paths?: string[];
+        last_sync_error?: string;
+        terminal_reason?: string;
+        branch_name?: string;
+      };
+      // The durable COLUMN, not a display status, is what says a person is still needed. Two
+      // outcomes set it and both carry an earlier revision's pull request: the blocked one
+      // ("every changed file is the student's own work") and a terminal failure
+      // (sync_branch_not_ours, sync_branch_moved, sync_tree_too_large). Recognizing only the
+      // first meant merging that older PR cleared the marker and overwrote a terminal
+      // failure's state -- and because desired_handout_sha already equalled the newer
+      // revision, non-forced queueing then skipped the repository as up to date while it sat
+      // on the older one.
+      const wasBlocked = repo.sync_blocked_at !== null;
+      const blockedRevision = wasBlocked ? priorSyncData.blocked_handout_sha : undefined;
+      // Only a blocker on a DIFFERENT revision survives. When the merged PR is the blocked
+      // revision's own, merging it is what resolved it. A blocker whose revision was not
+      // recorded is preserved: an unreadable marker is not a cleared one, and the failure
+      // direction has to be a repository that stays visibly stuck rather than one that
+      // reports itself finished.
+      const stillBlockedOnNewerRevision = wasBlocked && !blockedRevision?.startsWith(shortSha);
+      scope.setTag("sync_pr_merge_preserves_block", String(stillBlockedOnNewerRevision));
 
       // For "Rebase and merge" PRs, merge_commit_sha is null, so fall back to head SHA
       const effectiveMergeSha = payload.pull_request.merge_commit_sha || payload.pull_request.head.sha;
@@ -3912,7 +4200,33 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
         .update({
           synced_handout_sha: syncedSha,
           synced_repo_sha: effectiveMergeSha,
+          // The marker is cleared by a merge of the revision it was set for, and only that.
+          // A newer revision is still undelivered and still needs a person, so its retry
+          // record has to outlive an older pull request being merged.
+          ...(stillBlockedOnNewerRevision ? {} : { sync_blocked_at: null, sync_block_reason: null }),
           sync_data: {
+            // The newer revision's blocker, kept ahead of this PR's bookkeeping so a merge of
+            // an older pull request cannot report the repository as finished. Its own status
+            // is carried rather than assumed, because the two shapes are not interchangeable:
+            // one names the files the student has to apply, the other names the error class a
+            // person has to act on.
+            ...(stillBlockedOnNewerRevision
+              ? {
+                  status: priorSyncData.status,
+                  blocked_handout_sha: blockedRevision,
+                  unresolved_paths: priorSyncData.unresolved_paths,
+                  last_sync_error: priorSyncData.last_sync_error,
+                  terminal_reason: priorSyncData.terminal_reason
+                }
+              : // Nothing newer is blocked, so this merge IS the outcome -- but a sync can
+                // write some files and still leave others to the student, and those paths are
+                // recorded alongside the open pull request. They are the only record that
+                // those handout changes never arrived, and they do not stop being absent
+                // because the PR carrying the rest was merged. Carried when this merge is the
+                // pull request they were recorded with.
+                priorSyncData.branch_name === branchName && priorSyncData.unresolved_paths?.length
+                ? { unresolved_paths: priorSyncData.unresolved_paths }
+                : {}),
             pr_number: payload.pull_request.number,
             pr_url: payload.pull_request.html_url,
             pr_state: "merged",
@@ -4090,7 +4404,7 @@ serveWithSentryFlush(async (req) => {
     } catch (err) {
       console.log(`Error processing webhook for ${eventName} id ${id}`);
       console.error(err);
-      Sentry.captureException(err, scope);
+      captureWebhookException(err, scope);
 
       // Log error in Redis
       if (redis) {
@@ -4127,7 +4441,7 @@ serveWithSentryFlush(async (req) => {
   } catch (err) {
     console.log(`Error processing webhook for ${eventName} id ${id}`);
     console.error(err);
-    Sentry.captureException(err, scope);
+    captureWebhookException(err, scope);
     return Response.json(
       {
         message: "Error processing webhook"

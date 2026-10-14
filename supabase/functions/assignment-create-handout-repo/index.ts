@@ -16,6 +16,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { describeHandoutSeedResult, seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -28,7 +29,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // `*` rather than an explicit column list: the long list this used to carry

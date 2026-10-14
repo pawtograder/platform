@@ -4,6 +4,7 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AssignmentGroupCopyGroupsFromAssignmentRequest } from "../_shared/FunctionTypes.d.ts";
 import { IllegalArgumentError, assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function copyGroupsFromAssignment(req: Request, scope: Sentry.Scope): Promise<void> {
   const { source_assignment_id, class_id, target_assignment_id } =
@@ -26,7 +27,8 @@ async function copyGroupsFromAssignment(req: Request, scope: Sentry.Scope): Prom
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Process each source group
