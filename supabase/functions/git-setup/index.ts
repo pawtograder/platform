@@ -118,33 +118,33 @@ if ! command -v git >/dev/null 2>&1; then
   exit 1
 fi
 
-# Use the helper git already has (Keychain on macOS, Git Credential Manager on Windows). Only when
-# there is none, fall back to git's built-in store, and only for this host.
-if [ -z "$(git config --get-urlmatch credential.helper "https://$HOST" 2>/dev/null)" ]; then
-  case "$(uname -s)" in
-    Darwin) git config --global "credential.https://$HOST.helper" osxkeychain ;;
-    *) git config --global "credential.https://$HOST.helper" store ;;
-  esac
-fi
+# Everything below is scoped to $HOST, so github.com logins and settings are left alone.
+# Use the helper git already has (Keychain on macOS, Git Credential Manager on Windows). With none,
+# or only the in-memory cache (which forgets after 15 minutes), add a persistent one for this host.
+case "$(git config --get-urlmatch credential.helper "https://$HOST" 2>/dev/null)" in
+  "" | cache*)
+    case "$(uname -s)" in
+      Darwin) git config --global "credential.https://$HOST.helper" osxkeychain ;;
+      *) git config --global "credential.https://$HOST.helper" store ;;
+    esac ;;
+esac
 git config --global "credential.https://$HOST.username" "$LOGIN"
 
 # Replace any token saved by an earlier setup, then save this one.
 printf 'protocol=https\\nhost=%s\\nusername=%s\\n\\n' "$HOST" "$LOGIN" | git credential reject
 printf 'protocol=https\\nhost=%s\\nusername=%s\\npassword=%s\\n\\n' "$HOST" "$LOGIN" "$TOKEN" | git credential approve
-${
-  input.gitName && input.gitEmail
-    ? `
-# Commits need a name and email. Set them only if this computer has none yet.
-git config --global user.name >/dev/null 2>&1 || git config --global user.name ${shQuote(input.gitName)}
-git config --global user.email >/dev/null 2>&1 || git config --global user.email ${shQuote(input.gitEmail)}
-`
-    : ""
-}
 ${input.cloneUrls
   .map(
     (url) => `url=${shQuote(url)}
 dir=$(basename "$url" .git)
-if [ -d "$dir" ]; then echo "$dir already exists here, skipping clone."; else git clone "$url"; fi`
+if [ -d "$dir" ]; then echo "$dir already exists here, skipping clone."; else git clone "$url"; fi${
+      input.gitName && input.gitEmail
+        ? `
+# Commits need a name and email. Only when git has none at all, set them in this repo alone.
+git -C "$dir" config user.name >/dev/null 2>&1 || git -C "$dir" config user.name ${shQuote(input.gitName)}
+git -C "$dir" config user.email >/dev/null 2>&1 || git -C "$dir" config user.email ${shQuote(input.gitEmail)}`
+        : ""
+    }`
   )
   .join("\n")}
 
@@ -168,27 +168,27 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   return
 }
 
+# Everything below is scoped to this host, so github.com logins and settings are left alone.
 $helper = git config --get-urlmatch credential.helper "https://$HostName" 2>$null
-if (-not $helper) { git config --global "credential.https://$HostName.helper" manager }
+if (-not $helper -or $helper -like 'cache*') { git config --global "credential.https://$HostName.helper" manager }
 git config --global "credential.https://$HostName.username" $Login
 
 # Replace any token saved by an earlier setup, then save this one. git reads CRLF fine, so the
 # line ending PowerShell adds when piping to a native command does no harm.
 "protocol=https\`nhost=$HostName\`nusername=$Login\`n" | git credential reject
 "protocol=https\`nhost=$HostName\`nusername=$Login\`npassword=$Token\`n" | git credential approve
-${
-  input.gitName && input.gitEmail
-    ? `
-if (-not (git config --global user.name)) { git config --global user.name ${psQuote(input.gitName)} }
-if (-not (git config --global user.email)) { git config --global user.email ${psQuote(input.gitEmail)} }
-`
-    : ""
-}
 ${input.cloneUrls
   .map(
     (url) => `$url = ${psQuote(url)}
 $dir = [System.IO.Path]::GetFileNameWithoutExtension($url)
-if (Test-Path $dir) { Write-Host "$dir already exists here, skipping clone." } else { git clone $url }`
+if (Test-Path $dir) { Write-Host "$dir already exists here, skipping clone." } else { git clone $url }${
+      input.gitName && input.gitEmail
+        ? `
+# Only when git has no name/email at all, set them in this repo alone.
+if (-not (git -C $dir config user.name)) { git -C $dir config user.name ${psQuote(input.gitName)} }
+if (-not (git -C $dir config user.email)) { git -C $dir config user.email ${psQuote(input.gitEmail)} }`
+        : ""
+    }`
   )
   .join("\n")}
 

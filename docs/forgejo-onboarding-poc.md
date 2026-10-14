@@ -15,7 +15,9 @@ A GitHub class asks a student to create a GitHub account, link it, accept an org
    irm "<functions>/git-setup/<code>?shell=ps1" | iex             # Windows
    ```
 
-   The script stores a push/pull-only token in the credential helper git already has (Keychain on macOS, Git Credential Manager on Windows, git's `store` on Linux, scoped to the Forgejo host), sets `user.name`/`user.email` if they are unset, and clones the repo. Nothing gets installed.
+   The script stores a push/pull-only token in the credential helper git already has (Keychain on macOS, Git Credential Manager on Windows, git's `store` on Linux, scoped to the Forgejo host) and clones the repo. If git has no name or email at all, it sets them in that repo only. Nothing gets installed.
+
+   It leaves GitHub alone. The only global change is a `[credential "https://<forgejo-host>"]` block, which holds the username, plus `helper = store` when there was no helper or only the 15-minute `cache` one. Saved `github.com` logins and the global `user.name`/`user.email` are never touched. This was checked in clean containers for three cases: a student already set up for GitHub, a brand-new git install, and a `cache`-only helper.
 
 Workspaces are not required. A Coder workspace can run the same setup URL in its startup script, so laptops and workspaces share one auth path.
 
