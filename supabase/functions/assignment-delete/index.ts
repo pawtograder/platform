@@ -12,6 +12,7 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
 import {
   buildAssignmentDeleteArchiveDebugId,
   collectGitHubRepoTargets,
+  parseDeletedGitHubRepositories,
   selectGitHubCleanupStrategy
 } from "./repositoryCleanup.ts";
 import type { GitHubCleanupStrategy, GitHubRepoTarget } from "./repositoryCleanup.ts";
@@ -121,7 +122,18 @@ async function assertRepositoriesHaveOnlyTemplateCommits(repositories: Repositor
   }
 }
 
-async function deleteGitHubRepository(target: GitHubRepoTarget): Promise<"deleted" | "skipped"> {
+/**
+ * Runs AFTER the database delete has committed, so it must not throw: the assignment is
+ * already gone and an error here would tell the instructor the delete failed when it did
+ * not. A repository we fail to delete is handed to the archive queue instead of being left
+ * on GitHub with nothing in the database pointing at it.
+ */
+async function deleteGitHubRepository(
+  classId: number,
+  assignmentId: number,
+  target: GitHubRepoTarget,
+  index: number
+): Promise<"deleted" | "skipped" | "queued"> {
   try {
     console.log(`Deleting ${target.kind} repository ${target.fullName} from GitHub...`);
     const octokit = await getOctoKit(target.org);
@@ -142,44 +154,47 @@ async function deleteGitHubRepository(target: GitHubRepoTarget): Promise<"delete
       return "skipped";
     }
 
-    if (target.kind === "student") {
-      console.warn(`Failed to delete repository ${target.fullName} from GitHub:`, deleteError);
+    console.warn(
+      `Failed to delete ${target.kind} repository ${target.fullName} from GitHub; queueing it for archival:`,
+      deleteError
+    );
+    try {
+      await enqueueGithubArchiveRepo(
+        classId,
+        target.org,
+        target.repo,
+        buildAssignmentDeleteArchiveDebugId(assignmentId, target, index)
+      );
+      return "queued";
+    } catch (enqueueError) {
+      console.error(`Failed to queue ${target.fullName} for archival; it is orphaned on GitHub:`, enqueueError);
+      Sentry.captureException(enqueueError);
       return "skipped";
     }
-
-    console.warn(`Failed to delete ${target.kind} repository ${target.fullName} from GitHub:`, deleteError);
-    throw new UserVisibleError(
-      `Failed to delete ${target.kind} repository ${target.fullName} from GitHub: ${
-        deleteError instanceof Error ? deleteError.message : "Unknown error"
-      }`
-    );
   }
 }
 
-async function deleteGitHubRepositoriesSynchronously(targets: GitHubRepoTarget[]) {
+async function deleteGitHubRepositoriesSynchronously(
+  classId: number,
+  assignmentId: number,
+  targets: GitHubRepoTarget[]
+) {
   let deleted = 0;
+  let queued = 0;
   let skipped = 0;
 
-  for (const target of targets) {
-    const result = await deleteGitHubRepository(target);
+  for (const [index, target] of targets.entries()) {
+    const result = await deleteGitHubRepository(classId, assignmentId, target, index);
     if (result === "deleted") {
       deleted++;
+    } else if (result === "queued") {
+      queued++;
     } else {
       skipped++;
     }
   }
 
-  return { deleted, skipped };
-}
-
-async function enqueueGitHubRepositoryArchives(classId: number, assignmentId: number, targets: GitHubRepoTarget[]) {
-  for (const [index, target] of targets.entries()) {
-    const debugId = buildAssignmentDeleteArchiveDebugId(assignmentId, target, index);
-    console.log(`Queueing ${target.fullName} for async archival with debug_id=${debugId}`);
-    await enqueueGithubArchiveRepo(classId, target.org, target.repo, debugId);
-  }
-
-  return targets.length;
+  return { deleted, queued, skipped };
 }
 
 async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<AssignmentDeleteResponse> {
@@ -261,43 +276,32 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
   console.log("All safety checks passed. Proceeding with deletion...");
 
   // ========================
-  // PHASE 2: CLEAN UP GITHUB FIRST
+  // PHASE 2: DELETE ALL DATA FROM DATABASE USING RPC FUNCTION
   // ========================
+  //
+  // The database goes first, and for the asynchronous strategy the RPC queues the archive
+  // jobs inside its own transaction. Queueing them here beforehand meant a delete that
+  // failed (2026-10-15: statement timeout on 238 repositories) still archived, renamed and
+  // stripped collaborators from every repository of an assignment that stayed live.
 
   const cleanupStrategy = selectGitHubCleanupStrategy(githubTargets.length);
   scope?.setTag("github_cleanup_strategy", cleanupStrategy);
-  scope?.setTag("github_repositories_total", githubTargets.length.toString());
 
-  console.log(`Phase 2: Cleaning up ${githubTargets.length} GitHub repositories via ${cleanupStrategy}...`);
+  console.log(`Phase 2: Deleting all related data from database (GitHub cleanup via ${cleanupStrategy})...`);
 
-  let githubRepositoriesDeleted = 0;
-  let githubRepositoriesQueuedForArchive = 0;
-  let githubRepositoriesSkipped = skippedInvalidStudentRepos;
-
-  if (cleanupStrategy === "archive_asynchronously") {
-    githubRepositoriesQueuedForArchive = await enqueueGitHubRepositoryArchives(class_id, assignment_id, githubTargets);
-  } else {
-    const synchronousCleanup = await deleteGitHubRepositoriesSynchronously(githubTargets);
-    githubRepositoriesDeleted = synchronousCleanup.deleted;
-    githubRepositoriesSkipped += synchronousCleanup.skipped;
-  }
-
-  // ========================
-  // PHASE 3: DELETE ALL DATA FROM DATABASE USING RPC FUNCTION
-  // ========================
-
-  console.log("Phase 3: Deleting all related data from database using RPC function...");
-
-  // Call the RPC function to delete all assignment data
   const { data: deleteResultRaw, error: deleteError } = await adminSupabase.rpc("delete_assignment_with_all_data", {
     p_assignment_id: assignment_id,
-    p_class_id: class_id
+    p_class_id: class_id,
+    p_enqueue_github_archives: cleanupStrategy === "archive_asynchronously"
   });
   const deleteResult = deleteResultRaw as {
     success: boolean;
     message: string;
     assignment_id: number;
     class_id: number;
+    github_repositories?: unknown;
+    github_archives_queued?: number;
+    handout_syncs_cancelled?: number;
   };
 
   if (deleteError) {
@@ -310,19 +314,48 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
     throw new UserVisibleError(`Failed to delete assignment: ${deleteResult?.message || "Unknown error"}`);
   }
 
-  console.log(`Successfully deleted assignment ${assignment_id}: "${assignment.title}"`);
+  console.log(
+    `Successfully deleted assignment ${assignment_id}: "${assignment.title}" ` +
+      `(${deleteResult.handout_syncs_cancelled ?? 0} queued handout syncs cancelled)`
+  );
+
+  // ========================
+  // PHASE 3: CLEAN UP GITHUB
+  // ========================
+  //
+  // The RPC reports the repositories it actually deleted, which can include one created
+  // after the Phase 1 read. Those are the targets, not the Phase 1 list.
+
+  const deletedTargets = parseDeletedGitHubRepositories(deleteResult.github_repositories);
+  scope?.setTag("github_repositories_total", deletedTargets.length.toString());
+
+  let githubRepositoriesDeleted = 0;
+  let githubRepositoriesQueuedForArchive = 0;
+  let githubRepositoriesSkipped = skippedInvalidStudentRepos;
+
+  if (cleanupStrategy === "archive_asynchronously") {
+    githubRepositoriesQueuedForArchive = deleteResult.github_archives_queued ?? 0;
+    console.log(`Phase 3: ${githubRepositoriesQueuedForArchive} GitHub repositories queued for archival by the RPC`);
+  } else {
+    console.log(`Phase 3: Deleting ${deletedTargets.length} GitHub repositories...`);
+    const synchronousCleanup = await deleteGitHubRepositoriesSynchronously(class_id, assignment_id, deletedTargets);
+    githubRepositoriesDeleted = synchronousCleanup.deleted;
+    githubRepositoriesQueuedForArchive = synchronousCleanup.queued;
+    githubRepositoriesSkipped += synchronousCleanup.skipped;
+  }
 
   const baseMessage =
     deleteResult.message ||
     `Assignment "${assignment.title}" has been successfully deleted along with all related data.`;
+  const queuedMessage = `${githubRepositoriesQueuedForArchive} GitHub ${
+    githubRepositoriesQueuedForArchive === 1 ? "repository was" : "repositories were"
+  } queued for background archival and locking.`;
   const githubMessage =
     cleanupStrategy === "archive_asynchronously"
-      ? `${githubRepositoriesQueuedForArchive} GitHub ${
-          githubRepositoriesQueuedForArchive === 1 ? "repository was" : "repositories were"
-        } queued for background archival and locking.`
+      ? queuedMessage
       : `${githubRepositoriesDeleted} GitHub ${
           githubRepositoriesDeleted === 1 ? "repository was" : "repositories were"
-        } deleted immediately.`;
+        } deleted immediately.${githubRepositoriesQueuedForArchive > 0 ? ` ${queuedMessage}` : ""}`;
   const skippedMessage =
     githubRepositoriesSkipped > 0
       ? ` ${githubRepositoriesSkipped} GitHub ${
@@ -333,7 +366,7 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
   return {
     message: `${baseMessage} ${githubMessage}${skippedMessage}`,
     github_cleanup_strategy: cleanupStrategy,
-    github_repositories_total: githubTargets.length,
+    github_repositories_total: deletedTargets.length,
     github_repositories_deleted: githubRepositoriesDeleted,
     github_repositories_queued_for_archive: githubRepositoriesQueuedForArchive,
     github_repositories_skipped: githubRepositoriesSkipped

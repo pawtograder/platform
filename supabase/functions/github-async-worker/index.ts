@@ -1859,13 +1859,30 @@ export async function processEnvelope(
           // Check to see if the repo is already up to date. Use full-SHA equality
           // (NOT a 6-char prefix — short prefixes can collide and have caused
           // truncated-SHA false-positives in the past, see FixStuckSyncs `[truncated SHA]`).
-          const { data: currentRepo } = await adminSupabase
+          const { data: currentRepo, error: currentRepoError } = await adminSupabase
             .from("repositories")
             .select(
               "synced_handout_sha, synced_repo_sha, desired_handout_sha, sync_data, assignments(latest_template_sha)"
             )
             .eq("id", repository_id)
             .maybeSingle();
+          if (currentRepoError) {
+            throw currentRepoError;
+          }
+          // No row means the repository was deleted with its assignment after this job was
+          // queued. Read as "no baseline", it used to fall through to a full sync: on
+          // 2026-10-15, 238 of these would have written sync branches into repositories that
+          // assignment-delete was archiving. There is nothing left to sync for.
+          if (!currentRepo) {
+            Sentry.addBreadcrumb({
+              message: `Repository ${repository_id} (${repository_full_name}) no longer exists; dropping handout sync`,
+              level: "warning"
+            });
+            console.log(
+              `Dropping sync_repo_to_handout for deleted repository ${repository_id} (${repository_full_name})`
+            );
+            return true;
+          }
           // The handout revision this repo is actually on, read in the SAME row as
           // synced_repo_sha just above. The envelope's from_sha was recorded when the job
           // was queued, and a second handout revision queued while the first sync was in
