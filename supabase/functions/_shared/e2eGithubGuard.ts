@@ -34,7 +34,12 @@ export interface E2eFixtureIdentifiers {
  *   - repoName   `test-e2e*` / `e2e-test*` (create_repo)
  */
 export function isE2eFixtureTarget({ org, courseSlug, repoName }: E2eFixtureIdentifiers): boolean {
-  if (org !== E2E_FIXTURE_ORG) return false;
+  // Case-insensitive: GitHub org logins are, and `classes.github_org` stores whatever
+  // capitalization was typed (admin_create_class and admin_update_class both keep it verbatim). An
+  // exact comparison here fails OPEN — a class recorded as `Pawtograder-Playground` stops looking
+  // like a fixture, and every guard built on this predicate then lets real GitHub mutations through
+  // for an e2e-ignore-*/e2e-test* target. That is the one outcome this module exists to prevent.
+  if (org?.toLowerCase() !== E2E_FIXTURE_ORG) return false;
   return (
     (courseSlug?.startsWith("e2e-ignore-") ?? false) ||
     (repoName?.startsWith("e2e-ignore-") ?? false) ||

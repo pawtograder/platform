@@ -53,11 +53,21 @@ export default async function GitHubOrgsPage() {
                 <Text fontFamily="mono" fontSize="sm">
                   {org.default_handout_template_repo}
                 </Text>
+                {/* The value above is what is in force; this says where it came from. Without it a
+                    configured org that pins nothing is indistinguishable from one that pins exactly
+                    the deployment default, which are different things the moment that default
+                    changes. */}
+                <Badge colorPalette={org.override_handout_template_repo ? "purple" : "gray"} size="sm">
+                  {org.override_handout_template_repo ? "Override" : "Inherited"}
+                </Badge>
               </Table.Cell>
               <Table.Cell>
                 <Text fontFamily="mono" fontSize="sm">
                   {org.default_solution_template_repo}
                 </Text>
+                <Badge colorPalette={org.override_solution_template_repo ? "purple" : "gray"} size="sm">
+                  {org.override_solution_template_repo ? "Override" : "Inherited"}
+                </Badge>
               </Table.Cell>
               <Table.Cell>
                 {org.is_configured ? (
