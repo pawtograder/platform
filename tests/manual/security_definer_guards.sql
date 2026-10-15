@@ -152,8 +152,14 @@ select pg_temp.expect('admin of other class: act on class 1 regrade with own pro
   $q$select public.update_regrade_request_status((select id from fx_rr), 'closed', '00000000-0000-0000-0000-00000000b001', closed_points => 0)$q$, true);
 
 -- 4h get_student_summary ----------------------------------------------------------------------------
-select pg_temp.expect('student: own summary denied', (select stu1 from fx),
-  $q$select public.get_student_summary(1, (select stu1_priv from fx))$q$, true);
+select pg_temp.expect('student: own summary allowed', (select stu1 from fx),
+  $q$select public.get_student_summary(1, (select stu1_priv from fx))$q$, false);
+select pg_temp.expect_bool('student: own summary omits private grades', (select stu1 from fx),
+  $q$select jsonb_array_length(public.get_student_summary(1, (select stu1_priv from fx))->'grades_private') = 0$q$, true);
+select pg_temp.expect('student: another student''s summary denied', (select stu1 from fx),
+  $q$select public.get_student_summary(1, (select stu2_priv from fx))$q$, true);
+select pg_temp.expect_bool('instructor: summary includes private grades', (select instr from fx),
+  $q$select jsonb_array_length(public.get_student_summary(1, (select stu1_priv from fx))->'grades_private') > 0$q$, true);
 select pg_temp.expect('instructor: student summary allowed', (select instr from fx),
   $q$select public.get_student_summary(1, (select stu1_priv from fx))$q$, false);
 

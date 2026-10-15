@@ -1709,12 +1709,14 @@ begin
         raise exception 'Regrade request not found';
     end if;
 
-    -- The acting profile must be an active member of the request's class.
+    -- The acting profile must belong to an active member of the request's class. Graders in
+    -- pseudonymous mode act with their public profile, so accept either.
     if not exists (
         select 1
         from public.user_roles ur
         where ur.class_id = current_request.class_id
-          and ur.private_profile_id = update_regrade_request_status.profile_id
+          and (ur.private_profile_id = update_regrade_request_status.profile_id
+               or ur.public_profile_id = update_regrade_request_status.profile_id)
           and ur.disabled = false
     ) then
         raise exception 'Profile is not enrolled in this class';
@@ -2037,9 +2039,10 @@ begin
 end;
 $function$;
 
--- 4h. get_student_summary admitted the student themself, but its grades_private section returns
---     is_private gradebook rows (unreleased and instructor-only scores) that RLS hides from
---     students. Its only caller is the staff student page, so make it staff-only.
+-- 4h. get_student_summary is student-callable for the student's own profile (its assignment
+--     scores are already gated on release for non-staff), but its grades_private section returned
+--     is_private gradebook rows -- unreleased and instructor-only scores that RLS hides from
+--     students. Return those to staff only.
 CREATE OR REPLACE FUNCTION public.get_student_summary(p_class_id bigint, p_student_profile_id uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -2058,7 +2061,10 @@ begin
     from public.user_privileges ur
     where ur.class_id = p_class_id
       and ur.user_id = auth.uid()
-      and ur.role in ('instructor','grader')
+      and (
+        ur.role in ('instructor','grader')
+        or ur.private_profile_id = p_student_profile_id
+      )
   ) then
     raise exception 'Access denied'
       using errcode = 'insufficient_privilege';
@@ -2196,6 +2202,7 @@ begin
      where gcs.class_id = p_class_id
        and gcs.student_id = p_student_profile_id
        and gcs.is_private = true
+       and v_is_staff
   )
   select jsonb_build_object(
     'help_requests', coalesce(jsonb_agg(to_jsonb(help_requests) order by help_requests.created_at desc), '[]'::jsonb),
