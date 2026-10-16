@@ -40,6 +40,7 @@ type AssignmentDeleteResponse = {
 };
 
 const REPOSITORY_MODIFICATION_CHECK_CONCURRENCY = 5;
+const REPOSITORY_PAGE_SIZE = 1000;
 
 function isGitHubNotFoundError(error: unknown) {
   const maybeStatus = (error as { status?: number })?.status;
@@ -220,12 +221,26 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
 
   console.log("Phase 1: Performing all safety checks...");
 
-  // Get all repositories for this assignment
-  const { data: repositories } = await adminSupabase
-    .from("repositories")
-    .select("id, repository, assignment_group_id, profile_id, synced_handout_sha")
-    .eq("assignment_id", assignment_id);
-  const assignmentRepositories = (repositories ?? []) as RepositoryRow[];
+  // Get all repositories for this assignment. Paged, because PostgREST caps a response at
+  // db-max-rows (1000 in production): an unpaged read would silently safety-check only the
+  // first page and hand the RPC an incomplete snapshot. A failed read must stop the delete,
+  // not stand in for "no repositories".
+  const assignmentRepositories: RepositoryRow[] = [];
+  for (let offset = 0; ; offset += REPOSITORY_PAGE_SIZE) {
+    const { data: page, error: pageError } = await adminSupabase
+      .from("repositories")
+      .select("id, repository, assignment_group_id, profile_id, synced_handout_sha")
+      .eq("assignment_id", assignment_id)
+      .order("id", { ascending: true })
+      .range(offset, offset + REPOSITORY_PAGE_SIZE - 1);
+    if (pageError) {
+      throw new UserVisibleError(`Failed to read the assignment's repositories: ${pageError.message}`);
+    }
+    assignmentRepositories.push(...((page ?? []) as RepositoryRow[]));
+    if (!page || page.length < REPOSITORY_PAGE_SIZE) {
+      break;
+    }
+  }
 
   await assertNoReleasedSubmissionReviews(adminSupabase, assignment_id);
   await assertRepositoriesHaveOnlyTemplateCommits(assignmentRepositories, assignment.template_repo);
@@ -270,7 +285,10 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
   const { data: deleteResultRaw, error: deleteError } = await adminSupabase.rpc("delete_assignment_with_all_data", {
     p_assignment_id: assignment_id,
     p_class_id: class_id,
-    p_enqueue_github_archives: true
+    p_enqueue_github_archives: true,
+    // What Phase 1 checked for student work. If a repository was created since, the RPC
+    // refuses rather than archive (or hand back for deletion) a repository nobody checked.
+    p_expected_repository_ids: assignmentRepositories.map((repo) => repo.id)
   });
   const deleteResult = deleteResultRaw as {
     success: boolean;
@@ -284,9 +302,10 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
 
   if (deleteError) {
     console.error("Failed to delete assignment data:", deleteError);
-    // 55006 object_in_use: a handout sync for one of the repositories is running. Nothing
-    // was deleted or queued, and retrying once it finishes succeeds.
-    if (deleteError.code === "55006") {
+    // 55006 object_in_use: a handout sync for one of the repositories is running.
+    // 40001 serialization_failure: a repository was created after the Phase 1 checks.
+    // Either way nothing was deleted or queued, and a retry succeeds (and re-checks).
+    if (deleteError.code === "55006" || deleteError.code === "40001") {
       throw new UserVisibleError(deleteError.message, 409);
     }
     throw new UserVisibleError(`Failed to delete assignment data: ${deleteError.message}`);

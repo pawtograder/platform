@@ -41,6 +41,18 @@ describe("assignment-delete repository cleanup helpers", () => {
       expect(parseGitHubRepoFullName("/repo")).toBeNull();
       expect(parseGitHubRepoFullName("owner/repo/extra")).toBeNull();
     });
+
+    it("trims ASCII spaces around the name and each part, like the SQL side", () => {
+      expect(parseGitHubRepoFullName("  Org / spaced-repo ")?.fullName).toBe("Org/spaced-repo");
+    });
+
+    it("rejects other whitespace and characters GitHub names cannot contain, instead of normalising them", () => {
+      expect(parseGitHubRepoFullName("Org /\trepo")).toBeNull();
+      expect(parseGitHubRepoFullName("Org/repo\n")).toBeNull();
+      expect(parseGitHubRepoFullName("\u00a0Org/repo")).toBeNull();
+      expect(parseGitHubRepoFullName("Org/my repo")).toBeNull();
+      expect(parseGitHubRepoFullName("Org/repo;rm")).toBeNull();
+    });
   });
 
   describe("collectGitHubRepoTargets", () => {

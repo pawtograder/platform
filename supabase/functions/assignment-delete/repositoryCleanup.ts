@@ -35,12 +35,26 @@ export type CollectedGitHubRepoTargets = {
   invalidTargets: InvalidGitHubRepoTarget[];
 };
 
+/**
+ * GitHub owner and repository names use only these characters. Requiring them (rather than
+ * "anything non-empty") is what lets delete_assignment_with_all_data parse names identically
+ * in SQL: both sides trim ASCII spaces only and reject everything else unusual, so a value
+ * holding a tab or a non-breaking space is invalid in both places instead of normalised by
+ * JavaScript's trim() here and kept verbatim (or dropped) there.
+ */
+const GITHUB_NAME_PART = /^[A-Za-z0-9._-]+$/;
+
+/** Strips leading/trailing ASCII spaces, matching SQL btrim(value, ' '). */
+function trimSpaces(value: string) {
+  return value.replace(/^ +| +$/g, "");
+}
+
 export function parseGitHubRepoFullName(value: string | null | undefined): {
   fullName: string;
   org: string;
   repo: string;
 } | null {
-  const trimmed = value?.trim();
+  const trimmed = value == null ? "" : trimSpaces(value);
   if (!trimmed) {
     return null;
   }
@@ -50,8 +64,8 @@ export function parseGitHubRepoFullName(value: string | null | undefined): {
     return null;
   }
 
-  const [org, repo] = parts.map((part) => part.trim());
-  if (!org || !repo) {
+  const [org, repo] = parts.map(trimSpaces);
+  if (!GITHUB_NAME_PART.test(org) || !GITHUB_NAME_PART.test(repo)) {
     return null;
   }
 

@@ -73,7 +73,10 @@ CREATE INDEX IF NOT EXISTS idx_grader_result_output_assignment_group_id
 --
 -- The targets are the repository rows this call actually deletes (DELETE ... RETURNING), plus
 -- the template and grader repos, so a repository created between the edge function's safety
--- checks and this call is cleaned up too.
+-- checks and this call is cleaned up too -- but only if it passed those checks:
+-- p_expected_repository_ids is the set the caller validated, and once the rows are locked the
+-- function refuses (40001, retry) if the set differs, so it never archives or hands back for
+-- deletion a repository nobody has checked for student work.
 --
 -- It also cancels queued sync_repo_to_handout jobs for those repositories, after locking the
 -- repository rows so no sync can be queued concurrently. A sync a worker has already claimed
@@ -95,7 +98,8 @@ DROP FUNCTION IF EXISTS public.delete_assignment_with_all_data(bigint, bigint);
 CREATE FUNCTION public.delete_assignment_with_all_data(
     p_assignment_id bigint,
     p_class_id bigint,
-    p_enqueue_github_archives boolean DEFAULT false
+    p_enqueue_github_archives boolean DEFAULT false,
+    p_expected_repository_ids bigint[] DEFAULT NULL
 )
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -158,6 +162,19 @@ BEGIN
          ORDER BY id
          FOR UPDATE
       ) locked;
+
+    -- The repositories the caller ran its safety checks on (that each holds only template
+    -- commits). A row created since then, e.g. by a repository-creation job that committed in
+    -- between, has not been checked, and this call would archive it or, on the synchronous
+    -- path, the edge function would DELETE it from GitHub, student work included. Now that the
+    -- rows are locked the set cannot change, so compare it and let the caller re-check.
+    IF p_expected_repository_ids IS NOT NULL
+       AND COALESCE(v_repository_ids, ARRAY[]::bigint[])
+           IS DISTINCT FROM COALESCE(ARRAY(SELECT DISTINCT u FROM unnest(p_expected_repository_ids) u ORDER BY u), ARRAY[]::bigint[])
+    THEN
+        RAISE EXCEPTION 'Cannot delete assignment: its repositories changed while the delete was being checked. Try again.'
+            USING ERRCODE = 'serialization_failure';
+    END IF;
 
     -- Handout syncs already queued for those repositories, on either queue the worker drains.
     -- An unclaimed one would write a sync branch into a repository that is about to be
@@ -443,26 +460,27 @@ BEGIN
         -- supabase/functions/assignment-delete/repositoryCleanup.ts. Malformed student names are
         -- skipped; the edge function rejects a malformed template/solution before calling.
         FOR v_target IN
-            -- Parsed exactly like parseGitHubRepoFullName: trim, split on '/', require exactly
-            -- two parts, trim each, both non-empty. "Org / repo" is therefore Org/repo here too;
-            -- a stricter rule would let the edge function's validation pass a target that this
-            -- loop then silently drops, leaving the repository on GitHub with no row behind it.
+            -- Parsed exactly like parseGitHubRepoFullName: trim ASCII spaces, split on '/', require
+            -- exactly two parts, trim each, and require GitHub's name characters in both. "Org /
+            -- repo" is Org/repo on both sides; a tab, newline or non-breaking space is invalid on
+            -- both sides. Any difference would let the edge function validate a target that this
+            -- loop drops or queues malformed.
             WITH raw AS (
                 SELECT 'student'::text AS kind, name AS value, ord AS ord
                   FROM unnest(COALESCE(v_repository_names, ARRAY[]::text[])) WITH ORDINALITY AS u(name, ord)
                 UNION ALL SELECT 'template', v_template_repo, 1000000001
                 UNION ALL SELECT 'solution', v_grader_repo, 1000000002
             ), parts AS (
-                SELECT kind, ord, string_to_array(btrim(value), '/') AS p
-                  FROM raw WHERE btrim(value) <> ''
+                SELECT kind, ord, string_to_array(btrim(value, ' '), '/') AS p
+                  FROM raw WHERE btrim(value, ' ') <> ''
             ), parsed AS (
-                SELECT kind, ord, btrim(p[1]) AS org, btrim(p[2]) AS repo
+                SELECT kind, ord, btrim(p[1], ' ') AS org, btrim(p[2], ' ') AS repo
                   FROM parts WHERE cardinality(p) = 2
             ), valid AS (
                 SELECT kind, ord, org, repo, org || '/' || repo AS full_name,
                        row_number() OVER (PARTITION BY lower(org || '/' || repo) ORDER BY ord) AS dup
                   FROM parsed
-                 WHERE org <> '' AND repo <> ''
+                 WHERE org ~ '^[A-Za-z0-9._-]+$' AND repo ~ '^[A-Za-z0-9._-]+$'
             )
             SELECT kind, full_name, org, repo
               FROM valid WHERE dup = 1 ORDER BY ord
@@ -511,11 +529,11 @@ $function$;
 -- as postgres silently leaves supabase_admin's grants in place). This migration also runs as
 -- supabase_admin (migrations-job.yaml), so these revokes take effect.
 
-REVOKE ALL ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint, boolean) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint, boolean) TO service_role, postgres;
+REVOKE ALL ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint, boolean, bigint[]) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint, boolean, bigint[]) TO service_role, postgres;
 
 REVOKE ALL ON FUNCTION public.enqueue_github_archive_repo(bigint, text, text, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.enqueue_github_archive_repo(bigint, text, text, text) TO service_role, postgres;
 
-COMMENT ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint, boolean) IS
+COMMENT ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint, boolean, bigint[]) IS
   'Deletes an assignment and all its associated data in one transaction. With p_enqueue_github_archives, also queues archive_repo_and_lock for every deleted repository plus the template and grader repos, so GitHub cleanup commits or rolls back with the delete. Locks the repositories and cancels their queued sync_repo_to_handout jobs, refusing (55006) while one is claimed by a worker. Returns the GitHub targets it removed. false = legacy caller that queued its own archives. service_role/postgres only.';

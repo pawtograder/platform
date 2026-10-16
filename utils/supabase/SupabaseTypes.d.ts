@@ -12796,6 +12796,7 @@ export type Database = {
           p_assignment_id: number;
           p_class_id: number;
           p_enqueue_github_archives?: boolean;
+          p_expected_repository_ids?: number[];
         };
         Returns: Json;
       };
