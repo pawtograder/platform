@@ -1,0 +1,66 @@
+# Pre-create the Secrets listed in README "Forgejo and Coder".
+
+forgejo:
+  enabled: true
+  database: own
+  ingress:
+    hosts:
+      - host: git.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: example-wildcard-tls
+        hosts: [git.example.com]
+  gitea:
+    additionalConfigFromEnvs:
+      - name: FORGEJO__DATABASE__HOST
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-database, key: host }
+      - name: FORGEJO__DATABASE__PASSWD
+        valueFrom:
+          secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+      - name: FORGEJO__STORAGE__MINIO_ACCESS_KEY_ID
+        valueFrom:
+          secretKeyRef: { name: pawtograder-s3, key: AWS_ACCESS_KEY_ID }
+      - name: FORGEJO__STORAGE__MINIO_SECRET_ACCESS_KEY
+        valueFrom:
+          secretKeyRef: { name: pawtograder-s3, key: AWS_SECRET_ACCESS_KEY }
+    config:
+      storage:
+        STORAGE_TYPE: minio
+        MINIO_ENDPOINT: s3.example.com
+        MINIO_USE_SSL: true
+        MINIO_BUCKET: pawtograder
+        MINIO_BUCKET_LOOKUP: path
+        MINIO_LOCATION: us-east-1
+        MINIO_BASE_PATH: forgejo/
+
+forgejo-db:
+  enabled: true
+
+forgejoRunner:
+  enabled: true
+  image:
+    repository: registry.example.com/pawtograder/forgejo-runner
+    tag: 13.2.0-jdk21
+
+coder:
+  enabled: true
+  database: own
+  coder:
+    env:
+      - name: CODER_ACCESS_URL
+        value: https://coder.example.com
+      - name: CODER_WILDCARD_ACCESS_URL
+        value: "*.example.com"
+    ingress:
+      host: coder.example.com
+      wildcardHost: "*.example.com"
+      tls:
+        enable: true
+        secretName: example-wildcard-tls
+        wildcardSecretName: example-wildcard-tls
+
+coder-db:
+  enabled: true

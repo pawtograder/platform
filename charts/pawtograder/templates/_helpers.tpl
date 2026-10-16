@@ -284,6 +284,35 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") -}}
 {{- end -}}
 
+{{/* Forgejo's public URL: the subchart builds ROOT_URL from the same host. */}}
+{{- define "pawtograder.forgejo.url" -}}
+{{- printf "https://%s" (tpl (index .Values.forgejo.ingress.hosts 0).host .) -}}
+{{- end -}}
+
+{{- define "pawtograder.forgejo.http" -}}
+{{- printf "%s-forgejo-http" .Release.Name -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.host" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+{{- include "pawtograder.postgres.host" .ctx -}}
+{{- else -}}
+{{- printf "%s-%s-db" .ctx.Release.Name .app -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.superuser" -}}
+{{- ternary "supabase_admin" "postgres" (eq (index .ctx.Values .app).database "pawtograder") -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.superuserSecret" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+{{- .ctx.Values.secrets.names.postgres -}}
+{{- else -}}
+{{- printf "%s-%s-db-superuser" .ctx.Release.Name .app -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Maintenance posture (maintenance.active): the replica count a WRITER tier
 renders. 0 while the posture is on, the caller's own count otherwise.

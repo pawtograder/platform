@@ -432,6 +432,8 @@ jobs:
       - uses: azure/setup-helm@v4
         with:
           version: v3.20.2
+      - name: Fetch chart dependencies
+        run: charts/pawtograder/scripts/build-deps.sh
       - name: Run chart guard-rail render tests
         run: charts/pawtograder/tests/render-guardrails.sh
 
@@ -491,6 +493,8 @@ jobs:
       - uses: azure/setup-helm@v4
         with:
           version: v3.20.2
+      - name: Fetch chart dependencies
+        run: charts/pawtograder/scripts/build-deps.sh
       - name: Postgres restart needs a minor version bump
         run: charts/pawtograder/tests/postgres-restart-gate.sh origin/main
 

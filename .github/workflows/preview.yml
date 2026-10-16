@@ -1201,6 +1201,9 @@ jobs:
           echo "$!" > "$RUNNER_TEMP/hook-logs/.watcher.pid"
           echo "following batch job pods in $NS (pid $(cat "$RUNNER_TEMP/hook-logs/.watcher.pid"))"
 
+      - name: Fetch chart dependencies
+        run: charts/pawtograder/scripts/build-deps.sh
+
       - name: helm upgrade --install
         env:
           RELEASE: ${{ needs.meta.outputs.release }}

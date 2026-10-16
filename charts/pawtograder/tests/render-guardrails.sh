@@ -312,6 +312,13 @@ assert_web_render_unchanged() {
     rm -rf "$tmp"
     return
   fi
+  # git archive leaves out the gitignored subcharts; fetch the base's own pins.
+  if ! "$CHART/scripts/build-deps.sh" "$base_chart"; then
+    echo "FAIL [$label]: could not fetch the chart's dependencies at $WEB_RENDER_BASE_REF"
+    FAILED=1
+    rm -rf "$tmp"
+    return
+  fi
 
   # Values files this chart is actually consumed with. Anything under examples/
   # is in scope; the real production overlay lives in the prod-charts repo and is

@@ -1,0 +1,93 @@
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
+{{- $files := .Files.Glob "files/coder-templates/**" }}
+{{- $tag := .Values.coder.coder.image.tag | default .Subcharts.coder.Chart.AppVersion }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "coder-templates") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder-templates") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  {{- range $path, $_ := $files }}
+  {{ trimPrefix "files/coder-templates/" $path | replace "/" "__" }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "coder-bootstrap") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder-bootstrap") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder-bootstrap") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.coder.coder.image.repo }}:v{{ trimPrefix "v" $tag }}"
+          command:
+            - sh
+            - -ec
+            - |
+              url="http://coder.{{ .Release.Namespace }}.svc.cluster.local"
+              until curl -fsS -o /dev/null "$url/healthz"; do sleep 5; done
+              post() { curl -fsS -X POST -H 'Content-Type: application/json' --data-binary @- "$url$1"; }
+              # Bodies go over stdin to keep the password out of the process list.
+              if curl -fsS -o /dev/null "$url/api/v2/users/first"; then
+                echo "first user exists"
+              else
+                printf '{"email":"%s","username":"%s","password":"%s","trial":false}' \
+                  "$ADMIN_EMAIL" "$ADMIN_USERNAME" "$ADMIN_PASSWORD" | post /api/v2/users/first >/dev/null
+                echo "created first owner $ADMIN_USERNAME"
+              fi
+              CODER_SESSION_TOKEN="$(printf '{"email":"%s","password":"%s"}' "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
+                | post /api/v2/users/login | sed -n 's/.*"session_token":"\([^"]*\)".*/\1/p')"
+              export CODER_URL="$url" CODER_SESSION_TOKEN CODER_CONFIG_DIR=/tmp/coder
+              for dir in /templates/*/; do
+                name="$(basename "$dir")"
+                /opt/coder templates push "$name" --directory "$dir" --yes \
+                  --variable namespace={{ .Release.Namespace }} --message "chart {{ .Chart.Version }}"
+              done
+          env:
+            - name: ADMIN_EMAIL
+              valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-admin, key: email } }
+            - name: ADMIN_USERNAME
+              valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-admin, key: username } }
+            - name: ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-admin, key: password } }
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            {{- toYaml .Values.coderBootstrap.resources | nindent 12 }}
+          volumeMounts:
+            - { name: templates, mountPath: /templates, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: templates
+          configMap:
+            name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "coder-templates") }}
+            items:
+              {{- range $path, $_ := $files }}
+              {{- $rel := trimPrefix "files/coder-templates/" $path }}
+              - { key: {{ replace "/" "__" $rel }}, path: {{ $rel }} }
+              {{- end }}
+        - name: tmp
+          emptyDir: {}
+{{- end }}
