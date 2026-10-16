@@ -330,7 +330,8 @@ export default function EditAssignment() {
         // 200 with `{ message: "Repository not found" }`, and `invokeEdgeFunction` only throws on a
         // transport error or an `error` key. So check the returned message too.
         let webhookError: string | null = null;
-        if (values.template_repo) {
+        // A Forgejo handout isn't on GitHub, so there is no GitHub webhook or workflow to point at it.
+        if (values.template_repo && values.git_provider !== "forgejo") {
           // Both GitHub-touching calls sit in ONE rollback scope. The row is already
           // saved by this point, so anything that throws here would otherwise leave
           // has_autograder at its new value with the handout untouched — and the

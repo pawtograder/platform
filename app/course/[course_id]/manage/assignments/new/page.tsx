@@ -47,7 +47,9 @@ export default function NewAssignmentPage() {
         const repoMode = getValues("repo_mode") || "template_only_staff";
         const isNoRepo = repoMode === "none" || repoMode === "no_submission";
         const isPr = getValues("submission_mode") === "pr";
-        const willCreateRepos = !isNoRepo;
+        const isForgejo = getValues("git_provider") === "forgejo";
+        // Forgejo handouts already exist on Forgejo; the handout and solution creators only speak GitHub.
+        const willCreateRepos = !isNoRepo && !isForgejo;
 
         // Validate the fork/source autograder agreement BEFORE inserting anything.
         // assignment-create-handout-repo rejects this mismatch, but by then the
@@ -193,6 +195,7 @@ export default function NewAssignmentPage() {
               permit_empty_submissions: false,
               total_points: getValues("total_points"),
               template_repo: isNoRepo ? null : getValues("template_repo"),
+              git_provider: isForgejo ? "forgejo" : "github",
               submission_files: getValues("submission_files"),
               // has_autograder must reflect reality (it gates the webhook's autograder run and the
               // results-page empty state). No-repo modes ('none'/'no_submission') can never have one
@@ -257,7 +260,7 @@ export default function NewAssignmentPage() {
               description: error?.message ?? "The assignment was not created. Please try again."
             });
           } else {
-            if (!isNoRepo) {
+            if (willCreateRepos) {
               await assignmentCreateHandoutRepo(
                 { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
                 supabase

@@ -55,6 +55,18 @@ export async function autograderCreateAssignmentRepos(
 ) {
   return await invokeEdgeFunction<{ message: string }>(supabase, "assignment-create-all-repos", { body: params });
 }
+export async function gitSetupCreateCode(params: { class_id: number }, supabase: SupabaseClient<Database>) {
+  return await invokeEdgeFunction<{ code: string; expires_at: string }>(supabase, "git-setup", { body: params });
+}
+export async function forgejoProvision(
+  params: { class_id: number; assignment_id?: number },
+  supabase: SupabaseClient<Database>
+) {
+  return await invokeEdgeFunction<{
+    accounts_created: number;
+    repos: { repository: string; login: string; permission: string; ready: boolean }[];
+  }>(supabase, "forgejo-provision", { body: params });
+}
 /** (Re)build the code-symbol index for a submission's source files (used by reindex tooling). */
 export async function indexSubmission(
   params: FunctionTypes.IndexSubmissionRequest,

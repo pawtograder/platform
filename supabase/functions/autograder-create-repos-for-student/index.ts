@@ -416,6 +416,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       classes!.map((c) => c!.class_id)
     )
     .eq("classes.user_roles.user_id", userId)
+    .eq("git_provider", "github")
     .not("template_repo", "is", "null")
     .not("template_repo", "eq", "")
     .limit(1000);

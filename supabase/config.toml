@@ -816,3 +816,15 @@ entrypoint = "./functions/cli/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/index-submission/index.ts"
+[functions.forgejo-provision]
+enabled = true
+verify_jwt = false
+import_map = "./functions/forgejo-provision/deno.json"
+entrypoint = "./functions/forgejo-provision/index.ts"
+
+# The script endpoint is fetched by curl/irm with no session; the one-time code is the credential.
+[functions.git-setup]
+enabled = true
+verify_jwt = false
+import_map = "./functions/git-setup/deno.json"
+entrypoint = "./functions/git-setup/index.ts"
