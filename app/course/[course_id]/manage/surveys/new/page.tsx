@@ -104,6 +104,19 @@ export default function NewSurveyPage() {
   const hasLoadedDraft = useRef(false);
   const hasLoadedTemplate = useRef(false);
 
+  // Prefill the linked assignment when arriving from "create assignment" with type=survey.
+  // That flow creates the assignment first and redirects here; `assignment_id` otherwise
+  // defaults to null and the survey would be saved unlinked.
+  const hasLoadedAssignmentId = useRef(false);
+  useEffect(() => {
+    const assignmentIdParam = searchParams.get("assignment_id");
+    if (!assignmentIdParam || hasLoadedAssignmentId.current) return;
+    const assignmentId = Number(assignmentIdParam);
+    if (!Number.isFinite(assignmentId)) return;
+    hasLoadedAssignmentId.current = true;
+    setValue("assignment_id", assignmentId, { shouldDirty: true });
+  }, [searchParams, setValue]);
+
   // Load template if template_id query parameter is present
   useEffect(() => {
     const templateId = searchParams.get("template_id");
