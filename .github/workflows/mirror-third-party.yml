@@ -1,0 +1,51 @@
+name: Mirror third-party charts and images
+
+# New GHCR packages start private: an org admin must make each public after the run that creates it.
+
+on:
+  push:
+    branches: [staging]
+    paths:
+      - .github/mirror.yaml
+      - .github/workflows/mirror-third-party.yml
+      - scripts/mirror-third-party.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: mirror-third-party
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to GHCR (helm)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
+
+      - name: Mirror
+        env:
+          DEST: ${{ env.REGISTRY }}/${{ github.repository_owner }}/mirror
+        run: scripts/mirror-third-party.sh
