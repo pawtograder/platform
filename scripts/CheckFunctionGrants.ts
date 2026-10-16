@@ -7,9 +7,10 @@
  * it forgets, nothing fails until a user hits the code path and gets SQLSTATE 42501.
  *
  * Errors (exit 1), from the catalog of a migrated database:
- *   - a function used by an RLS policy, a security_invoker view, a column default or a CHECK
- *     constraint that a role reaching that object (anon/authenticated) cannot execute. These fail
- *     every read or write of the table or view, not only one RPC.
+ *   - a function used by an RLS policy, a view, a column default or a CHECK constraint that a
+ *     role reaching that object (anon/authenticated) cannot execute. These fail every read or
+ *     write of the table or view, not only one RPC. Views count whether or not they are
+ *     security_invoker: the selecting user needs EXECUTE on a view's functions either way.
  *   - a function in pgmq_public that service_role cannot execute (an ALTER EXTENSION UPDATE
  *     creates new ones with no grants).
  *
@@ -49,12 +50,12 @@ with uses as (
    and (r.oid = any (p.polroles) or 0 = any (p.polroles))
   where d.refclassid = 'pg_proc'::regclass
   union all
-  -- security_invoker views run their functions as whoever selects from them.
+  -- Views: whoever selects from a view needs EXECUTE on the functions it calls, with or
+  -- without security_invoker (that option only changes whose table privileges apply).
   select d.refobjid, format('view %s', rw.ev_class::regclass), r.rolname
   from pg_depend d
   join pg_rewrite rw on d.classid = 'pg_rewrite'::regclass and rw.oid = d.objid
   join pg_class c on c.oid = rw.ev_class and c.relkind = 'v'
-   and coalesce(c.reloptions::text[] && array['security_invoker=true', 'security_invoker=on'], false)
   join pg_roles r on r.rolname in ('anon', 'authenticated') and has_table_privilege(r.oid, c.oid, 'SELECT')
   where d.refclassid = 'pg_proc'::regclass
   union all

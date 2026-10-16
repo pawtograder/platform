@@ -537,8 +537,8 @@ jobs:
         run: npx jest --runInBand --testPathPatterns "tests/unit/issue"
 
       # Functions created by migrations get no EXECUTE for anon/authenticated by default (see
-      # 20261015120000_lock_down_security_definer_functions.sql). Fails when an RLS policy,
-      # security_invoker view, column default or CHECK constraint uses a function the roles reaching
+      # 20261015120000_lock_down_security_definer_functions.sql). Fails when an RLS policy, view,
+      # column default or CHECK constraint uses a function the roles reaching
       # it cannot execute, or service_role loses a pgmq_public function; warns (annotation only)
       # on .rpc() calls from user clients to functions authenticated cannot execute.
       - name: Check function grants
