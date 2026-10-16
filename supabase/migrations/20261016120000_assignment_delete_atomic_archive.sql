@@ -1,5 +1,11 @@
 -- Make assignment deletion fast, atomic with its GitHub cleanup, and not callable by API roles.
 --
+-- ORDERING: runs after 20261015120000_lock_down_security_definer_functions.sql (#1087), which
+-- revokes the grants on delete_assignment_with_all_data(bigint, bigint) -- the signature this
+-- migration drops -- and sets the default privileges this one relies on. migrate.sh rejects two
+-- files with the same version, and sorted the other way round that REVOKE would fail on a
+-- function that no longer exists.
+--
 -- Incident 2026-10-15 (CS 3650 fa26, assignment 1259, 238 repositories): assignment-delete
 -- queued 239 archive_repo_and_lock jobs, THEN called delete_assignment_with_all_data, which
 -- hit authenticator's 8s statement_timeout and rolled back. The archive jobs only need
