@@ -70,6 +70,8 @@ CREATE INDEX IF NOT EXISTS idx_grader_result_output_assignment_group_id
 --
 -- It also cancels queued sync_repo_to_handout jobs for the deleted repositories. Those jobs
 -- name a repository row that no longer exists, and the handout they sync is being archived.
+-- If one is already claimed by a worker it cannot be cancelled, so the delete refuses with a
+-- retryable error rather than archive a repository a sync is still writing to.
 --
 -- The result now carries `github_repositories` ({kind, full_name}, validated owner/repo, in
 -- the order the edge function's debug ids assume) so the synchronous-delete path can delete
@@ -104,6 +106,8 @@ DECLARE
     v_target record;
     v_index integer := 0;
     v_archives_queued integer := 0;
+    v_sync_msg_ids bigint[];
+    v_syncs_in_flight integer := 0;
     v_syncs_cancelled integer := 0;
 BEGIN
     -- Only service_role and postgres may call this (see the REVOKE below); authorization of
@@ -131,6 +135,40 @@ BEGIN
 
     -- Read before the autograder row is deleted below.
     SELECT grader_repo INTO v_grader_repo FROM public.autograder WHERE id = p_assignment_id;
+
+    -- Handout syncs for this assignment's repositories. A queued one would write a sync branch
+    -- into a repository that is about to be archived, so it is cancelled. A CLAIMED one (read
+    -- by a worker: read_ct > 0 and still invisible) cannot be stopped from here -- deleting its
+    -- queue row does not stop the worker holding the envelope, which may already be past its
+    -- row check and mutating GitHub -- so the delete waits for it instead of racing it.
+    --
+    -- FOR UPDATE is what makes the check hold for the rest of this transaction: pgmq.read
+    -- claims with FOR UPDATE SKIP LOCKED, so no worker can claim these rows between the check
+    -- and the delete. (read_ct = 0 with a future vt is a delayed requeue, not a claim.)
+    SELECT array_agg(id) INTO v_repository_ids
+      FROM public.repositories WHERE assignment_id = p_assignment_id;
+
+    IF v_repository_ids IS NOT NULL THEN
+        SELECT array_agg(q.msg_id),
+               count(*) FILTER (WHERE q.read_ct > 0 AND q.vt > clock_timestamp())
+          INTO v_sync_msg_ids, v_syncs_in_flight
+          FROM (
+            SELECT msg_id, read_ct, vt FROM pgmq.q_async_calls
+             WHERE message->>'method' = 'sync_repo_to_handout'
+               AND message->'args'->>'repository_id' = ANY (v_repository_ids::text[])
+             FOR UPDATE
+          ) q;
+
+        IF v_syncs_in_flight > 0 THEN
+            RAISE EXCEPTION 'Cannot delete assignment: % handout sync(s) for its repositories are running right now. Try again in a few minutes.',
+                v_syncs_in_flight
+                USING ERRCODE = 'object_in_use';
+        END IF;
+
+        IF v_sync_msg_ids IS NOT NULL THEN
+            SELECT count(*) INTO v_syncs_cancelled FROM pgmq.delete('async_calls', v_sync_msg_ids);
+        END IF;
+    END IF;
 
     -- Get assignment group IDs for this assignment
     SELECT array_agg(id) INTO v_assignment_group_ids
@@ -285,20 +323,6 @@ BEGIN
           INTO v_repository_ids, v_repository_names
           FROM deleted;
 
-        -- Cancel queued handout syncs for the deleted repositories. They would otherwise try to
-        -- write a sync branch into repositories that are being archived.
-        IF v_repository_ids IS NOT NULL THEN
-            SELECT count(*) INTO v_syncs_cancelled
-              FROM pgmq.delete(
-                'async_calls',
-                ARRAY(
-                    SELECT q.msg_id FROM pgmq.q_async_calls q
-                     WHERE q.message->>'method' = 'sync_repo_to_handout'
-                       AND q.message->'args'->>'repository_id' = ANY (v_repository_ids::text[])
-                )
-              );
-        END IF;
-
         -- Delete assignment group members
         DELETE FROM public.assignment_groups_members WHERE assignment_id = p_assignment_id;
 
@@ -381,20 +405,28 @@ BEGIN
         -- supabase/functions/assignment-delete/repositoryCleanup.ts. Malformed student names are
         -- skipped; the edge function rejects a malformed template/solution before calling.
         FOR v_target IN
+            -- Parsed exactly like parseGitHubRepoFullName: trim, split on '/', require exactly
+            -- two parts, trim each, both non-empty. "Org / repo" is therefore Org/repo here too;
+            -- a stricter rule would let the edge function's validation pass a target that this
+            -- loop then silently drops, leaving the repository on GitHub with no row behind it.
             WITH raw AS (
-                SELECT 'student'::text AS kind, btrim(name) AS full_name, ord AS ord
+                SELECT 'student'::text AS kind, name AS value, ord AS ord
                   FROM unnest(COALESCE(v_repository_names, ARRAY[]::text[])) WITH ORDINALITY AS u(name, ord)
-                UNION ALL SELECT 'template', btrim(v_template_repo), 1000000001
-                UNION ALL SELECT 'solution', btrim(v_grader_repo), 1000000002
+                UNION ALL SELECT 'template', v_template_repo, 1000000001
+                UNION ALL SELECT 'solution', v_grader_repo, 1000000002
+            ), parts AS (
+                SELECT kind, ord, string_to_array(btrim(value), '/') AS p
+                  FROM raw WHERE btrim(value) <> ''
+            ), parsed AS (
+                SELECT kind, ord, btrim(p[1]) AS org, btrim(p[2]) AS repo
+                  FROM parts WHERE cardinality(p) = 2
             ), valid AS (
-                SELECT kind, full_name, ord,
-                       row_number() OVER (PARTITION BY lower(full_name) ORDER BY ord) AS dup
-                  FROM raw
-                 WHERE full_name ~ '^[^/[:space:]]+/[^/[:space:]]+$'
+                SELECT kind, ord, org, repo, org || '/' || repo AS full_name,
+                       row_number() OVER (PARTITION BY lower(org || '/' || repo) ORDER BY ord) AS dup
+                  FROM parsed
+                 WHERE org <> '' AND repo <> ''
             )
-            SELECT kind, full_name,
-                   split_part(full_name, '/', 1) AS org,
-                   split_part(full_name, '/', 2) AS repo
+            SELECT kind, full_name, org, repo
               FROM valid WHERE dup = 1 ORDER BY ord
         LOOP
             v_github_repositories := v_github_repositories

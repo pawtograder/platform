@@ -306,6 +306,11 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
 
   if (deleteError) {
     console.error("Failed to delete assignment data:", deleteError);
+    // 55006 object_in_use: a handout sync for one of the repositories is running. Nothing
+    // was deleted or queued, and retrying once it finishes succeeds.
+    if (deleteError.code === "55006") {
+      throw new UserVisibleError(deleteError.message, 409);
+    }
     throw new UserVisibleError(`Failed to delete assignment data: ${deleteError.message}`);
   }
 
