@@ -202,6 +202,21 @@ BEGIN
         --     still in the queue count: one whose message has left it (archived when the
         --     handler ended, dead-lettered, or replaced by a requeue under a new msg_id) is
         --     stale, so a crashed worker cannot pin an assignment for good.
+        --   * a message some worker has read (read_ct > 0) while a drain lease for its org is
+        --     live. The marker is one value per repository, so two overlapping handlers for the
+        --     same repository (H2 and H3: queue_repository_syncs serializes nothing per
+        --     repository) share it, and the newer one can overwrite and then clear it while the
+        --     older one, past its timeout, is still running. What does last for every handler is
+        --     the org slot it runs under: a leaseholder renews async_worker_slots while it works
+        --     and releases it only after every in-flight message finishes. The org is the one
+        --     the slot allocator charges a sync to (claim_org_slot_and_read,
+        --     20260914120000_async_lease_pin_org.sql): the owner in args.repository_full_name,
+        --     lowercased, on the same queue. No new handler can pick these messages up while
+        --     this transaction holds them, so a live slot means one that already has may still
+        --     be running. It is coarse (any work for the org keeps the slot live), so it is
+        --     applied only to messages that have been read at least once.
+        --     With org slots disabled (orgSlotGlobalCap 0, the chart default) there is no lease
+        --     to consult and this arm never fires; production runs with them enabled.
         -- The window before the marker is written needs no check: the worker plants it with a
         -- guarded UPDATE of these repository rows, which this transaction holds locked; after
         -- the commit that UPDATE matches nothing and the worker drops the job without touching
@@ -217,14 +232,26 @@ BEGIN
                AND sync_data->>'status' = 'in_progress'
         ), main_q AS (
             SELECT q.msg_id,
-                   (q.read_ct > 0 AND q.vt > clock_timestamp()) OR q.msg_id IN (SELECT msg_id FROM markers) AS running
+                   (q.read_ct > 0 AND q.vt > clock_timestamp())
+                   OR q.msg_id IN (SELECT msg_id FROM markers)
+                   OR (q.read_ct > 0 AND EXISTS (
+                         SELECT 1 FROM public.async_worker_slots sl
+                          WHERE sl.queue_name = 'async_calls'
+                            AND sl.org = lower(split_part(q.message->'args'->>'repository_full_name', '/', 1))
+                            AND sl.expires_at > clock_timestamp())) AS running
               FROM pgmq.q_async_calls q
              WHERE q.message->>'method' = 'sync_repo_to_handout'
                AND q.message->'args'->>'repository_id' = ANY (v_repository_ids::text[])
                FOR UPDATE OF q
         ), low_q AS (
             SELECT q.msg_id,
-                   (q.read_ct > 0 AND q.vt > clock_timestamp()) OR q.msg_id IN (SELECT msg_id FROM markers) AS running
+                   (q.read_ct > 0 AND q.vt > clock_timestamp())
+                   OR q.msg_id IN (SELECT msg_id FROM markers)
+                   OR (q.read_ct > 0 AND EXISTS (
+                         SELECT 1 FROM public.async_worker_slots sl
+                          WHERE sl.queue_name = 'async_calls_low_priority'
+                            AND sl.org = lower(split_part(q.message->'args'->>'repository_full_name', '/', 1))
+                            AND sl.expires_at > clock_timestamp())) AS running
               FROM pgmq.q_async_calls_low_priority q
              WHERE q.message->>'method' = 'sync_repo_to_handout'
                AND q.message->'args'->>'repository_id' = ANY (v_repository_ids::text[])
