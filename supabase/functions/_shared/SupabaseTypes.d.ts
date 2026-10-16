@@ -4726,10 +4726,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_feedback_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_feedback_student_profile_id_fkey";
@@ -4819,10 +4819,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_file_references_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_file_references_submission_file_id_fkey";
@@ -4899,10 +4899,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_message_read_receipts_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_message_read_receipts_message_id_fkey";
@@ -4988,10 +4988,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_messages_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_messages_reply_to_message_id_fkey";
@@ -5135,10 +5135,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_students_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_students_profile_id_fkey";
@@ -5248,10 +5248,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_watchers_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_watchers_user_id_fkey";
@@ -12307,6 +12307,14 @@ export type Database = {
         Args: { class__id: number };
         Returns: boolean;
       };
+      authorizeforhelprequestparticipant: {
+        Args: { p_help_request_id: number };
+        Returns: boolean;
+      };
+      authorizeforhelprequeststaff: {
+        Args: { p_class_id: number };
+        Returns: boolean;
+      };
       authorizeforinstructorofstudent: {
         Args: { _user_id: string };
         Returns: boolean;
@@ -12319,6 +12327,10 @@ export type Database = {
         | { Args: { poll__id: number }; Returns: boolean }
         | { Args: { class__id: number; poll__id: number }; Returns: boolean };
       authorizeforprofile: { Args: { profile_id: string }; Returns: boolean };
+      authorizeforprofile_in_class: {
+        Args: { p_class_id: number; p_profile_id: string };
+        Returns: boolean;
+      };
       bulk_assign_reviews: {
         Args: {
           p_assignment_id: number;
@@ -12404,6 +12416,14 @@ export type Database = {
         Args: { path: string };
         Returns: boolean;
       };
+      can_add_profile_to_help_request: {
+        Args: { p_help_request_id: number; p_profile_id: string };
+        Returns: boolean;
+      };
+      can_follow_up_help_request: {
+        Args: { p_class_id: number; p_followup_to: number };
+        Returns: boolean;
+      };
       can_respond_to_survey: {
         Args: { p_profile_id: string; p_survey_id: string };
         Returns: boolean;
@@ -12411,14 +12431,6 @@ export type Database = {
       channel_has_subscribers: { Args: { p_channel: string }; Returns: boolean };
       check_assignment_deadlines_passed: { Args: never; Returns: undefined };
       check_assignment_release_dates: { Args: never; Returns: undefined };
-      check_can_add_to_help_request: {
-        Args: {
-          p_class_id: number;
-          p_help_request_id: number;
-          p_user_id: string;
-        };
-        Returns: boolean;
-      };
       check_can_remove_from_help_request: {
         Args: {
           p_class_id: number;
