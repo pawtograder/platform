@@ -11830,9 +11830,21 @@ export type Database = {
       };
     };
     Functions: {
+      _calculate_effective_due_date: {
+        Args: { assignment_id_param: number; student_profile_id_param: string };
+        Returns: string;
+      };
       _cli_resolve_submission_file_id: {
         Args: { p_file_name: string; p_submission_id: number };
         Returns: number;
+      };
+      _due_date_lookup_allowed: {
+        Args: {
+          p_assignment_group_id: number;
+          p_assignment_id: number;
+          p_profile_id: string;
+        };
+        Returns: boolean;
       };
       _eval_rubric_report_filter: {
         Args: {

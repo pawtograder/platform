@@ -20,30 +20,47 @@
 --   4. Fixes guards that could be bypassed:
 --        - authorize_for_admin(p_user_id) trusted a caller-supplied id, so every admin_* RPC
 --          that passed its own p_*_by argument could be satisfied with any admin's uuid.
---        - instructors could create platform admins (user_roles.role = 'admin' in their own
---          class counts as admin everywhere) via create_user_role_for_existing_user,
---          bulk_csv_import_enrollment, create_invitation, or the user_roles RLS policies.
+--        - instructors could create, retarget or remove platform admins (user_roles.role =
+--          'admin' in their own class counts as admin everywhere) via
+--          create_user_role_for_existing_user, bulk_csv_import_enrollment, create_invitation,
+--          or the user_roles and invitations RLS policies.
 --        - update_gradebook_column_student_with_recalc had no check at all.
 --        - release_instructor_only_gradebook_column allowed graders.
 --        - soft_delete_survey deleted every class's surveys sharing a logical survey_id.
---        - update_rubric_full did not check the rubric's assignment is in the class.
+--        - update_rubric_full did not check the rubric's assignment or referenced checks are in
+--          the class.
 --        - update_regrade_request_status let any user open/escalate any class's requests.
 --        - get_student_summary returned unreleased private grades to the student.
---        - check_can_add_to_help_request did not check the help request's class.
+--        - send_signup_welcome_message, calculate_effective_due_date,
+--          calculate_final_due_date and user_is_in_help_request answered for any user.
 
 -- ---------------------------------------------------------------------------------------------
 -- 1. Default privileges for functions created by migrations from here on.
 -- ---------------------------------------------------------------------------------------------
 -- The built-in EXECUTE-to-PUBLIC default can only be revoked globally (per-schema default
 -- privileges can add to the global defaults but not remove from them), so this applies to every
--- function postgres creates, in any schema. anon/authenticated are granted per schema by
+-- function the role creates, in any schema. anon/authenticated are granted per schema by
 -- Supabase, so those are revoked per schema.
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres
-  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  REVOKE EXECUTE ON FUNCTIONS FROM anon, authenticated;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  GRANT EXECUTE ON FUNCTIONS TO service_role;
+--
+-- Default privileges belong to the creating role. The Supabase CLI (local, CI, hosted) runs
+-- migrations as postgres; the chart's migrations Job (charts/pawtograder/images/migrations)
+-- runs them as supabase_admin, which has the same anon/authenticated defaults in public. Change
+-- both where the running role may: postgres is not a member of supabase_admin, so a CLI run
+-- skips it, and the superuser supabase_admin covers both.
+DO $default_privileges$
+DECLARE
+  v_role text;
+BEGIN
+  FOREACH v_role IN ARRAY ARRAY['postgres', 'supabase_admin'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role)
+       AND pg_has_role(current_user, v_role, 'MEMBER') THEN
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC', v_role);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM anon, authenticated', v_role);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role', v_role);
+    END IF;
+  END LOOP;
+END
+$default_privileges$;
 
 -- ---------------------------------------------------------------------------------------------
 -- 2. Internal functions: no user-client caller. Each line notes what calls it today.
@@ -357,6 +374,21 @@ GRANT EXECUTE ON FUNCTION public.vacuum_health_check() TO service_role;
 -- SECURITY INVOKER wrapper around enqueue_discord_role_sync; only update_discord_profile() calls it
 REVOKE ALL ON FUNCTION public.check_discord_role_sync_after_link(p_user_id uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.check_discord_role_sync_after_link(p_user_id uuid) TO service_role;
+-- no caller; the body requires service_role (20250830163212 revoked it from authenticated)
+REVOKE ALL ON FUNCTION public.get_assignment_llm_metrics() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_assignment_llm_metrics() TO service_role;
+-- no caller; the body requires service_role (20250830163212 revoked it from authenticated)
+REVOKE ALL ON FUNCTION public.get_llm_tags_breakdown() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_llm_tags_breakdown() TO service_role;
+-- service-role client in tests/e2e only; the body requires service_role
+REVOKE ALL ON FUNCTION public.merge_class_feature_as_service_role(p_class_id bigint, p_name text, p_enabled boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.merge_class_feature_as_service_role(p_class_id bigint, p_name text, p_enabled boolean) TO service_role;
+-- no caller; answered for any _person_id
+REVOKE ALL ON FUNCTION public.is_instructor_for_student(_person_id uuid, _student_id uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.is_instructor_for_student(_person_id uuid, _student_id uuid) TO service_role;
+-- only trigger_signup_welcome_message() (SECURITY DEFINER below) calls it
+REVOKE ALL ON FUNCTION public.send_signup_welcome_message(p_user_id uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.send_signup_welcome_message(p_user_id uuid) TO service_role;
 
 -- ---------------------------------------------------------------------------------------------
 -- 3. User-facing functions: guarded by an in-body check; remove anon.
@@ -447,8 +479,6 @@ REVOKE ALL ON FUNCTION public.can_access_submission_storage_path(path text) FROM
 GRANT EXECUTE ON FUNCTION public.can_access_submission_storage_path(path text) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.channel_has_subscribers(p_channel text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.channel_has_subscribers(p_channel text) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION public.check_can_add_to_help_request(p_help_request_id bigint, p_user_id uuid, p_class_id bigint) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.check_can_add_to_help_request(p_help_request_id bigint, p_user_id uuid, p_class_id bigint) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.check_can_remove_from_help_request(p_help_request_id bigint, p_profile_id_to_remove uuid, p_user_id uuid, p_class_id bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.check_can_remove_from_help_request(p_help_request_id bigint, p_profile_id_to_remove uuid, p_user_id uuid, p_class_id bigint) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.check_gradebook_realtime_authorization(topic_text text) FROM PUBLIC, anon;
@@ -497,8 +527,6 @@ REVOKE ALL ON FUNCTION public.finalize_submission_early(this_assignment_id bigin
 GRANT EXECUTE ON FUNCTION public.finalize_submission_early(this_assignment_id bigint, this_profile_id uuid) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.fix_assignment_repo_permissions(p_class_id bigint, p_assignment_id bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fix_assignment_repo_permissions(p_class_id bigint, p_assignment_id bigint) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION public.get_assignment_llm_metrics() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.get_assignment_llm_metrics() TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.get_assignments_for_student_dashboard(p_class_id bigint, p_student_profile_id uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_assignments_for_student_dashboard(p_class_id bigint, p_student_profile_id uuid) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.get_common_test_errors_for_assignment(p_assignment_id bigint, p_test_name text, p_test_part text, p_min_occurrences integer, p_limit integer) FROM PUBLIC, anon;
@@ -517,8 +545,6 @@ REVOKE ALL ON FUNCTION public.get_grading_progress_for_assignment(p_class_id big
 GRANT EXECUTE ON FUNCTION public.get_grading_progress_for_assignment(p_class_id bigint, p_assignment_id bigint) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.get_instructor_dashboard_overview_metrics(p_class_id bigint, p_now timestamp with time zone) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_instructor_dashboard_overview_metrics(p_class_id bigint, p_now timestamp with time zone) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION public.get_llm_tags_breakdown() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.get_llm_tags_breakdown() TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.get_rubric_check_application_stats(p_assignment_id bigint, p_filter jsonb, p_review_round text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_rubric_check_application_stats(p_assignment_id bigint, p_filter jsonb, p_review_round text) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.get_rubric_report_cohort_members(p_assignment_id bigint, p_filter jsonb, p_review_round text) FROM PUBLIC, anon;
@@ -559,14 +585,10 @@ REVOKE ALL ON FUNCTION public.is_instructor_for_class(_person_id uuid, _class_id
 GRANT EXECUTE ON FUNCTION public.is_instructor_for_class(_person_id uuid, _class_id integer) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.is_instructor_for_class(_person_id uuid, classid bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.is_instructor_for_class(_person_id uuid, classid bigint) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION public.is_instructor_for_student(_person_id uuid, _student_id uuid) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.is_instructor_for_student(_person_id uuid, _student_id uuid) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.mark_discussion_thread_duplicate(p_duplicate_root_id bigint, p_original_root_id bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.mark_discussion_thread_duplicate(p_duplicate_root_id bigint, p_original_root_id bigint) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.merge_class_feature(p_class_id bigint, p_name text, p_enabled boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.merge_class_feature(p_class_id bigint, p_name text, p_enabled boolean) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION public.merge_class_feature_as_service_role(p_class_id bigint, p_name text, p_enabled boolean) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.merge_class_feature_as_service_role(p_class_id bigint, p_name text, p_enabled boolean) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.only_calendar_or_discord_ids_changed(new_row classes) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.only_calendar_or_discord_ids_changed(new_row classes) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.preview_error_pin_matches(p_assignment_id bigint, p_rules jsonb, p_rule_logic text, p_class_id bigint) FROM PUBLIC, anon;
@@ -591,8 +613,6 @@ REVOKE ALL ON FUNCTION public.retry_repository_creation(p_repository_id bigint) 
 GRANT EXECUTE ON FUNCTION public.retry_repository_creation(p_repository_id bigint) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.save_error_pin(p_error_pin jsonb, p_rules jsonb) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.save_error_pin(p_error_pin jsonb, p_rules jsonb) TO authenticated, service_role;
-REVOKE ALL ON FUNCTION public.send_signup_welcome_message(p_user_id uuid) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.send_signup_welcome_message(p_user_id uuid) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.set_class_template_overrides(p_class_id bigint, p_handout text, p_solution text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.set_class_template_overrides(p_class_id bigint, p_handout text, p_solution text) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.set_discussion_thread_topic(p_thread_id bigint, p_topic_id bigint) FROM PUBLIC, anon;
@@ -625,6 +645,12 @@ REVOKE ALL ON FUNCTION public.update_rubric_full(p_rubric jsonb) FROM PUBLIC, an
 GRANT EXECUTE ON FUNCTION public.update_rubric_full(p_rubric jsonb) TO authenticated, service_role;
 REVOKE ALL ON FUNCTION public.user_is_in_help_request(p_help_request_id bigint, p_user_id uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.user_is_in_help_request(p_help_request_id bigint, p_user_id uuid) TO authenticated, service_role;
+
+-- These security_invoker views call calculate_*_due_date, which no longer has anon EXECUTE, so an
+-- anon read would fail on the function instead of returning no rows. Nothing reads them
+-- signed out; take anon's table grants away so the view is denied up front instead.
+REVOKE ALL ON public.assignments_with_effective_due_dates FROM anon;
+REVOKE ALL ON public.submissions_with_grades_for_assignment_and_regression_test FROM anon;
 
 -- ---------------------------------------------------------------------------------------------
 -- 4. Guard fixes.
@@ -664,58 +690,86 @@ BEGIN
 END;
 $function$;
 
--- 4b. Only platform admins (or service_role / migrations) can create, transfer, or re-enable an
---     admin role, or invite someone as admin. An admin row in any class is global admin
---     (authorize_for_admin, authorize_for_submission), and instructors can otherwise write
---     user_roles and invitations rows in their own class with any role.
+-- 4b. Only platform admins (or service_role / migrations) can change who holds an admin role.
+--     An enabled admin row in any class is global admin (authorize_for_admin,
+--     authorize_for_submission), and instructors can otherwise insert, update and delete
+--     user_roles and invitations rows in their own class with any role. So an end user who is
+--     not an admin may not:
+--       - create an admin row, transfer one to another user, or re-enable a disabled one;
+--       - demote, disable, transfer or delete an enabled admin row (admin_create_class puts the
+--         creating admin's row in every class, and removing it could revoke their admin);
+--       - create an admin invitation, or retarget (sis_user_id, class_id) or reactivate (status
+--         back to 'pending') one. Invitations are accepted later as service_role (user sign-in
+--         sets users.sis_user_id; handle_user_sis_id_update copies i.role), where this trigger
+--         cannot tell who set the invitation up, so the check has to happen here.
+--     Service-role callers are trusted. Edge functions that write user_roles from request input
+--     (enrollments-add) validate the role themselves.
 CREATE OR REPLACE FUNCTION public.guard_admin_role_grant()
  RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
+DECLARE
+  v_changes_admin boolean;
 BEGIN
-  IF NEW.role IS DISTINCT FROM 'admin'::public.app_role THEN
-    RETURN NEW;
-  END IF;
-
-  IF TG_OP = 'UPDATE' AND OLD.role = 'admin'::public.app_role THEN
-    IF TG_TABLE_NAME = 'invitations' THEN
-      RETURN NEW;
-    END IF;
-    -- Same person, not being re-enabled: an ordinary edit of an existing admin row.
-    IF OLD.user_id IS NOT DISTINCT FROM NEW.user_id
-       AND (NEW.disabled OR NOT OLD.disabled) THEN
-      RETURN NEW;
-    END IF;
+  IF TG_TABLE_NAME = 'invitations' THEN
+    v_changes_admin := CASE TG_OP
+      WHEN 'INSERT' THEN NEW.role = 'admin'::public.app_role
+      ELSE NEW.role = 'admin'::public.app_role AND (
+             OLD.role IS DISTINCT FROM 'admin'::public.app_role
+          OR OLD.sis_user_id IS DISTINCT FROM NEW.sis_user_id
+          OR OLD.class_id IS DISTINCT FROM NEW.class_id
+          OR (NEW.status = 'pending' AND OLD.status IS DISTINCT FROM 'pending'))
+    END;
+  ELSE
+    v_changes_admin := CASE TG_OP
+      WHEN 'INSERT' THEN NEW.role = 'admin'::public.app_role
+      WHEN 'DELETE' THEN OLD.role = 'admin'::public.app_role AND NOT OLD.disabled
+      ELSE
+        -- Granting: becomes admin, moves to another user, or is re-enabled.
+        (NEW.role = 'admin'::public.app_role AND (
+             OLD.role IS DISTINCT FROM 'admin'::public.app_role
+          OR OLD.user_id IS DISTINCT FROM NEW.user_id
+          OR (OLD.disabled AND NOT NEW.disabled)))
+        -- Revoking: an enabled admin row stops being one for the same user.
+        OR (OLD.role = 'admin'::public.app_role AND NOT OLD.disabled AND (
+             NEW.role IS DISTINCT FROM 'admin'::public.app_role
+          OR NEW.disabled
+          OR OLD.user_id IS DISTINCT FROM NEW.user_id))
+    END;
   END IF;
 
   -- Only end-user API requests are restricted; migrations, seeds, cron and service-role
   -- callers carry no anon/authenticated role.
-  IF coalesce(auth.role(), '') NOT IN ('anon', 'authenticated') THEN
-    RETURN NEW;
+  IF NOT v_changes_admin
+     OR coalesce(auth.role(), '') NOT IN ('anon', 'authenticated')
+     OR public.authorize_for_admin() THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
   END IF;
 
-  IF public.authorize_for_admin() THEN
-    RETURN NEW;
-  END IF;
-
-  RAISE EXCEPTION 'Only platform admins can grant the admin role'
+  RAISE EXCEPTION 'Only platform admins can grant or remove the admin role'
     USING ERRCODE = 'insufficient_privilege';
 END;
 $function$;
 
 REVOKE ALL ON FUNCTION public.guard_admin_role_grant() FROM PUBLIC, anon, authenticated;
 
-DROP TRIGGER IF EXISTS guard_admin_role_grant ON public.user_roles;
-CREATE TRIGGER guard_admin_role_grant
-  BEFORE INSERT OR UPDATE OF role, user_id, disabled ON public.user_roles
+-- CREATE OR REPLACE rather than DROP + CREATE: DROP TRIGGER takes an ACCESS EXCLUSIVE lock, which
+-- blocks every read of user_roles (most RLS checks) until commit. This takes SHARE ROW EXCLUSIVE,
+-- which only blocks writes.
+CREATE OR REPLACE TRIGGER guard_admin_role_grant
+  BEFORE INSERT OR DELETE OR UPDATE OF role, user_id, disabled ON public.user_roles
   FOR EACH ROW EXECUTE FUNCTION public.guard_admin_role_grant();
 
-DROP TRIGGER IF EXISTS guard_admin_role_grant ON public.invitations;
-CREATE TRIGGER guard_admin_role_grant
-  BEFORE INSERT OR UPDATE OF role ON public.invitations
-  FOR EACH ROW EXECUTE FUNCTION public.guard_admin_role_grant();
+-- No column list: an UPDATE OF trigger fires only for columns named in the statement's SET
+-- list, and every column that matters here (role, sis_user_id, class_id, status) has to be
+-- covered. The function only acts on rows whose new role is admin, so the WHEN clause keeps it
+-- from being called for every other invitation write (SIS sync updates them in bulk).
+CREATE OR REPLACE TRIGGER guard_admin_role_grant
+  BEFORE INSERT OR UPDATE ON public.invitations
+  FOR EACH ROW WHEN (NEW.role = 'admin'::public.app_role)
+  EXECUTE FUNCTION public.guard_admin_role_grant();
 
 -- 4c. update_gradebook_column_student_with_recalc had no caller check. Match the
 --     gradebook_column_students UPDATE policy (instructors and graders of the row's class).
@@ -871,6 +925,8 @@ $function$;
 -- 4f. update_rubric_full checked the caller instructs p_rubric.class_id but never that the
 --     rubric's assignment is in that class, so a rubric (and, for code-walk rubrics, gradebook
 --     columns and submission reviews via triggers) could be created against another class.
+--     It also accepted any referenced_rubric_check_id, linking this class's rubric to checks
+--     in other classes.
 CREATE OR REPLACE FUNCTION public.update_rubric_full(p_rubric jsonb)
  RETURNS text
  LANGUAGE plpgsql
@@ -914,6 +970,7 @@ DECLARE
   v_refs_removed int := 0;
   v_reviews_recomputed int := 0;
   v_foreign_ids_remapped int := 0;
+  v_ref_ids bigint[];
 
   -- Input map key -> real DB id, after insert/update phases.
   v_part_id_map jsonb := '{}'::jsonb;
@@ -988,6 +1045,25 @@ BEGIN
   END IF;
   IF v_new_name IS NULL OR length(trim(v_new_name)) = 0 THEN
     RAISE EXCEPTION 'Rubric name is required';
+  END IF;
+  -- rubric_check_references rows are inserted without RLS, so a reference may only name a
+  -- rubric check in this class. The ids are collected first and matched with id = ANY(...): a
+  -- join against the nested jsonb_array_elements is estimated at 100^4 rows and planned as a
+  -- sequential scan of rubric_checks.
+  SELECT array_agg(DISTINCT (ref->>'referenced_rubric_check_id')::bigint)
+  INTO v_ref_ids
+  FROM jsonb_array_elements(COALESCE(p_rubric->'parts', '[]'::jsonb)) part,
+       jsonb_array_elements(COALESCE(part->'criteria', '[]'::jsonb)) crit,
+       jsonb_array_elements(COALESCE(crit->'checks', '[]'::jsonb)) chk,
+       jsonb_array_elements(COALESCE(chk->'references', '[]'::jsonb)) ref
+  WHERE ref->>'referenced_rubric_check_id' IS NOT NULL;
+
+  IF v_ref_ids IS NOT NULL AND cardinality(v_ref_ids) <> (
+    SELECT count(*) FROM public.rubric_checks rc
+    WHERE rc.id = ANY (v_ref_ids) AND rc.class_id = v_class_id
+  ) THEN
+    RAISE EXCEPTION 'Referenced rubric check does not belong to class %', v_class_id
+      USING ERRCODE = 'insufficient_privilege';
   END IF;
 
   ----------------------------------------------------------------
@@ -2231,78 +2307,256 @@ begin
 end;
 $function$;
 
--- 4i. check_can_add_to_help_request (the help_request_students INSERT policy) took the class from
---     the inserted row but never checked the help request is in that class, so staff of one class
---     could join another class's private requests, and anyone could join non-private ones.
-CREATE OR REPLACE FUNCTION public.check_can_add_to_help_request(p_help_request_id bigint, p_user_id uuid, p_class_id bigint)
- RETURNS boolean
+-- 4i. trigger_signup_welcome_message was SECURITY INVOKER, so the instructor or student whose
+--     insert created the role needed EXECUTE on send_signup_welcome_message, which inserts a
+--     notification for any p_user_id. Running the trigger as definer lets section 2 revoke the
+--     function from authenticated. The first-role check also now sees the user's roles in every
+--     class, not only the ones visible to the inserting user under RLS.
+CREATE OR REPLACE FUNCTION public.trigger_signup_welcome_message()
+ RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
- SET search_path TO 'public'
+ SET search_path TO ''
+AS $function$
+BEGIN
+    -- Check if this is the user's first role
+    IF NOT EXISTS (
+        SELECT 1 FROM public.user_roles 
+        WHERE user_id = NEW.user_id 
+        AND id != NEW.id
+    ) THEN
+        -- Send welcome message asynchronously (don't block if it fails)
+        PERFORM public.send_signup_welcome_message(NEW.user_id);
+    END IF;
+    
+    RETURN NEW;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.trigger_signup_welcome_message() FROM PUBLIC, anon, authenticated;
+
+-- 4j. calculate_effective_due_date and calculate_final_due_date answered for any assignment and
+--     profile, exposing another student's lab-based due date and summed extension hours across
+--     classes. They stay granted to authenticated because the security_invoker views
+--     assignments_with_effective_due_dates and submissions_with_grades_for_assignment_and_regression_test
+--     call them per row; those rows are already limited by RLS to the caller's own profile (and
+--     group) for students, and to the class for staff, which is exactly what the check allows.
+--     SECURITY DEFINER callers (finalize_submission_early, submission_set_active,
+--     get_student_summary, get_assignments_for_student_dashboard) pass the same arguments, and
+--     cron/service-role callers are not checked.
+--     The views call these once per row, so the check is one query over the caller's own
+--     user_privileges rows, in a SQL function with no SET clause (a separate SECURITY DEFINER
+--     plpgsql check with SET search_path made the per-row call about 5x slower for staff). It
+--     runs with the calling SECURITY DEFINER function's privileges.
+CREATE OR REPLACE FUNCTION public._due_date_lookup_allowed(
+  p_assignment_id bigint, p_profile_id uuid, p_assignment_group_id bigint)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT coalesce(auth.role(), '') NOT IN ('anon', 'authenticated')
+    OR EXISTS (
+      SELECT 1
+      FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND (
+          -- Staff of the assignment's class.
+          (up.role IN ('instructor', 'grader')
+           AND up.class_id = (SELECT a.class_id FROM public.assignments a WHERE a.id = p_assignment_id))
+          -- No group: the profile is the caller's own (or absent, which reads nothing).
+          OR (p_assignment_group_id IS NULL
+              AND (p_profile_id IS NULL OR up.private_profile_id = p_profile_id))
+          -- A group's exceptions are summed in: the caller is in the group, and the profile (if
+          -- any) is the caller's or another member's.
+          OR (p_assignment_group_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM public.assignment_groups_members m
+                WHERE m.assignment_group_id = p_assignment_group_id
+                  AND m.profile_id = up.private_profile_id)
+              AND (p_profile_id IS NULL
+                   OR up.private_profile_id = p_profile_id
+                   OR EXISTS (
+                     SELECT 1 FROM public.assignment_groups_members m
+                     WHERE m.assignment_group_id = p_assignment_group_id
+                       AND m.profile_id = p_profile_id)))
+        )
+    );
+$function$;
+
+REVOKE ALL ON FUNCTION public._due_date_lookup_allowed(bigint, uuid, bigint) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._due_date_lookup_allowed(bigint, uuid, bigint) TO service_role;
+
+-- The unchecked computation, so calculate_final_due_date does not run the check twice.
+CREATE OR REPLACE FUNCTION public._calculate_effective_due_date(assignment_id_param bigint, student_profile_id_param uuid)
+ RETURNS timestamp with time zone
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
 AS $function$
 DECLARE
-  v_is_staff boolean;
-  v_is_private boolean;
-  v_is_creator boolean;
-  v_is_member boolean;
-  v_private_profile_id uuid;
-  v_public_profile_id uuid;
+    assignment_record RECORD;
+    student_lab_section_id bigint;
+    most_recent_lab_meeting_date date;
+    lab_section_record RECORD;
+    course_record RECORD;
+    lab_based_due_date timestamp with time zone;
+    lab_meeting_timestamp timestamp with time zone;
+    lab_end_time time;
 BEGIN
-  -- The help request must belong to the class the membership row claims.
-  IF NOT EXISTS (
-    SELECT 1 FROM help_requests WHERE id = p_help_request_id AND class_id = p_class_id
-  ) THEN
-    RETURN false;
-  END IF;
+    -- Get assignment details
+    SELECT * INTO assignment_record
+    FROM public.assignments
+    WHERE id = assignment_id_param;
 
-  -- Get user's role and profile IDs
-  SELECT 
-    role IN ('instructor', 'grader', 'admin'),
-    private_profile_id,
-    public_profile_id
-  INTO v_is_staff, v_private_profile_id, v_public_profile_id
-  FROM user_privileges
-  WHERE user_id = p_user_id AND class_id = p_class_id
-  LIMIT 1;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Assignment with id % not found', assignment_id_param;
+    END IF;
 
-  -- Staff can add to any help request
-  IF v_is_staff THEN
-    RETURN true;
-  END IF;
+    -- If assignment doesn't use lab-based scheduling, return original due date
+    IF assignment_record.minutes_due_after_lab IS NULL THEN
+        RETURN assignment_record.due_date;
+    END IF;
 
-  -- Not enrolled in this class.
-  IF v_private_profile_id IS NULL THEN
-    RETURN false;
-  END IF;
+    -- Get student's lab section for this class
+    SELECT lab_section_id INTO student_lab_section_id
+    FROM public.user_roles
+    WHERE private_profile_id = student_profile_id_param
+    AND class_id = assignment_record.class_id
+    AND lab_section_id IS NOT NULL;
 
-  -- For students, check help request privacy (bypass RLS with SECURITY DEFINER)
-  SELECT is_private INTO v_is_private
-  FROM help_requests
-  WHERE id = p_help_request_id;
+    -- If student is not in a lab section, fall back to original due date
+    IF student_lab_section_id IS NULL THEN
+        RETURN assignment_record.due_date;
+    END IF;
 
-  -- Anyone can add to non-private help requests
-  IF NOT v_is_private THEN
-    RETURN true;
-  END IF;
+    -- Get lab section details (for end_time)
+    SELECT * INTO lab_section_record
+    FROM public.lab_sections
+    WHERE id = student_lab_section_id;
 
-  -- For private help requests, check if user is creator
-  SELECT EXISTS (
-    SELECT 1 FROM help_requests
-    WHERE id = p_help_request_id
-      AND (created_by = v_private_profile_id OR created_by = v_public_profile_id)
-  ) INTO v_is_creator;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Lab section with id % not found', student_lab_section_id;
+    END IF;
 
-  IF v_is_creator THEN
-    RETURN true;
-  END IF;
+    -- Get course details (for time_zone)
+    SELECT * INTO course_record
+    FROM public.classes
+    WHERE id = assignment_record.class_id;
 
-  -- Check if user is already a member of the private help request
-  SELECT EXISTS (
-    SELECT 1 FROM help_request_students
-    WHERE help_request_id = p_help_request_id
-      AND (profile_id = v_private_profile_id OR profile_id = v_public_profile_id)
-  ) INTO v_is_member;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Class with id % not found', assignment_record.class_id;
+    END IF;
 
-  RETURN v_is_member;
+    -- end_time is nullable, and concatenating a NULL into the meeting timestamp below would
+    -- NULL the whole comparison, match no meeting, and silently skip the lab offset. A section
+    -- with no recorded end time is treated as ending at the end of its meeting day, which is
+    -- what the assignment form's Lab Section Due Date Preview already shows.
+    lab_end_time := COALESCE(lab_section_record.end_time, TIME '23:59:59');
+
+    -- Find the most recent lab section meeting before the assignment's original due date
+    -- Convert meeting date + lab section end time to timestamp in course timezone
+    SELECT meeting_date INTO most_recent_lab_meeting_date
+    FROM public.lab_section_meetings lsm
+    WHERE lsm.lab_section_id = student_lab_section_id
+    AND (
+        (lsm.meeting_date::text || ' ' || lab_end_time::text)::timestamp AT TIME ZONE course_record.time_zone
+    ) <= assignment_record.due_date
+    AND NOT lsm.cancelled
+    ORDER BY lsm.meeting_date DESC
+    LIMIT 1;
+
+    -- If no lab meeting found before due date, fall back to original due date
+    IF most_recent_lab_meeting_date IS NULL THEN
+        RETURN assignment_record.due_date;
+    END IF;
+
+    -- Combine meeting date with lab section end time and apply course time zone
+    lab_meeting_timestamp := (
+        most_recent_lab_meeting_date::text || ' ' || lab_end_time::text
+    )::timestamp AT TIME ZONE course_record.time_zone;
+
+    -- Calculate lab-based due date
+    lab_based_due_date := lab_meeting_timestamp
+                         + (assignment_record.minutes_due_after_lab * INTERVAL '1 minute');
+
+    -- Return the lab-based due date
+    RETURN lab_based_due_date;
 END;
+$function$;
+
+REVOKE ALL ON FUNCTION public._calculate_effective_due_date(bigint, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._calculate_effective_due_date(bigint, uuid) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.calculate_effective_due_date(assignment_id_param bigint, student_profile_id_param uuid)
+ RETURNS timestamp with time zone
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+AS $function$
+BEGIN
+    IF NOT public._due_date_lookup_allowed(assignment_id_param, student_profile_id_param, NULL) THEN
+        RAISE EXCEPTION 'Access denied: not your due date' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN public._calculate_effective_due_date(assignment_id_param, student_profile_id_param);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.calculate_final_due_date(assignment_id_param bigint, student_profile_id_param uuid, assignment_group_id_param bigint DEFAULT NULL::bigint)
+ RETURNS timestamp with time zone
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+AS $function$
+DECLARE
+    effective_due_date timestamp with time zone;
+    total_extension_hours integer := 0;
+    total_extension_minutes integer := 0;
+BEGIN
+    IF NOT public._due_date_lookup_allowed(assignment_id_param, student_profile_id_param, assignment_group_id_param) THEN
+        RAISE EXCEPTION 'Access denied: not your due date' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+
+    -- Get the effective due date (lab-based or regular)
+    effective_due_date := public._calculate_effective_due_date(assignment_id_param, student_profile_id_param);
+    
+    -- Calculate total extensions for this student/group
+    SELECT 
+        COALESCE(SUM(hours), 0),
+        COALESCE(SUM(minutes), 0)
+    INTO 
+        total_extension_hours,
+        total_extension_minutes
+    FROM public.assignment_due_date_exceptions
+    WHERE assignment_id = assignment_id_param
+    AND (
+        student_id = student_profile_id_param 
+        OR (assignment_group_id_param IS NOT NULL AND assignment_group_id = assignment_group_id_param)
+    );
+    
+    -- Apply extensions to the effective due date
+    RETURN effective_due_date 
+           + (total_extension_hours * INTERVAL '1 hour')
+           + (total_extension_minutes * INTERVAL '1 minute');
+END;
+$function$;
+
+-- 4k. user_is_in_help_request(id, p_user_id) answered for any p_user_id. Every policy and
+--     function that calls it uses the auth.uid() default, so end users may only ask about
+--     themselves. The body is 20261014120000_help_request_write_rls_hardening's (profiles in the
+--     request's own class only); only the first condition is new.
+CREATE OR REPLACE FUNCTION public.user_is_in_help_request(p_help_request_id bigint, p_user_id uuid DEFAULT auth.uid())
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  SELECT (p_user_id = auth.uid() OR coalesce(auth.role(), '') NOT IN ('anon', 'authenticated'))
+     AND EXISTS (
+    SELECT 1
+      FROM public.help_requests hr
+      JOIN public.user_privileges up
+        ON up.user_id = p_user_id AND up.class_id = hr.class_id
+     WHERE hr.id = p_help_request_id
+       AND (hr.created_by = up.private_profile_id
+            OR EXISTS (SELECT 1 FROM public.help_request_students hrs
+                        WHERE hrs.help_request_id = hr.id
+                          AND hrs.profile_id IN (up.private_profile_id, up.public_profile_id)))
+  );
 $function$;
