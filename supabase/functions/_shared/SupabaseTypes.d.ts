@@ -12804,7 +12804,12 @@ export type Database = {
       custom_access_token_hook: { Args: { event: Json }; Returns: Json };
       deactivate_expired_polls: { Args: never; Returns: undefined };
       delete_assignment_with_all_data: {
-        Args: { p_assignment_id: number; p_class_id: number };
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_enqueue_github_archives?: boolean;
+          p_expected_repository_ids?: number[];
+        };
         Returns: Json;
       };
       delete_queued_messages_for_class: {
