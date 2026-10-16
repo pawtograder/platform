@@ -178,7 +178,7 @@ BEGIN
 
     -- Handout syncs already queued for those repositories, on either queue the worker drains.
     -- An unclaimed one would write a sync branch into a repository that is about to be
-    -- archived, so it is cancelled. A CLAIMED one (read_ct > 0, still invisible) cannot be
+    -- archived, so it is cancelled. A RUNNING one (defined below) cannot be
     -- stopped from here: deleting its queue row does not stop the worker holding the envelope,
     -- which may be past its row check and mutating GitHub. So the delete refuses and the
     -- caller retries once it finishes. FOR UPDATE keeps the answer true for the rest of this
@@ -189,25 +189,50 @@ BEGIN
     -- caller passing p_enqueue_github_archives = false is an assignment-delete from before this
     -- migration, which has ALREADY committed its archive jobs: refusing it would leave those
     -- jobs archiving an assignment that stays live, the very failure this migration fixes. It
-    -- gets the old behaviour (delete, cancel only what is unclaimed) during the rollout.
+    -- gets the old behaviour (delete, cancel only what is not running) during the rollout.
     IF v_repository_ids IS NOT NULL THEN
+        -- What counts as RUNNING, not merely queued:
+        --   * a claimed message: read_ct > 0 and still invisible; or
+        --   * a message whose handler has planted its marker on the repository row. A handler
+        --     that outlives its visibility timeout (a batch of 4 has been measured at ~420s
+        --     against the chart's 300s default) has a message that LOOKS unclaimed again while
+        --     its worker is still mutating GitHub. Before any GitHub write the handler sets
+        --     sync_data = {status: in_progress, msg_id, ...} and overwrites it when it ends,
+        --     so the marker lasts exactly as long as the handler. Only markers whose message is
+        --     still in the queue count: one whose message has left it (archived when the
+        --     handler ended, dead-lettered, or replaced by a requeue under a new msg_id) is
+        --     stale, so a crashed worker cannot pin an assignment for good.
+        -- The window before the marker is written needs no check: the worker plants it with a
+        -- guarded UPDATE of these repository rows, which this transaction holds locked; after
+        -- the commit that UPDATE matches nothing and the worker drops the job without touching
+        -- GitHub (retireStaleSync: "the repository row is gone").
+        --
         -- One locked scan per queue (FOR UPDATE is not allowed under UNION, but is in a CTE).
-        WITH main_q AS (
-            SELECT msg_id, (read_ct > 0 AND vt > clock_timestamp()) AS claimed
-              FROM pgmq.q_async_calls
-             WHERE message->>'method' = 'sync_repo_to_handout'
-               AND message->'args'->>'repository_id' = ANY (v_repository_ids::text[])
-               FOR UPDATE
+        WITH markers AS (
+            -- CASE, not a WHERE conjunct: SQL does not promise to test the pattern before
+            -- the cast, and a malformed marker must be ignored rather than fail the delete.
+            SELECT CASE WHEN sync_data->>'msg_id' ~ '^[0-9]{1,18}$' THEN (sync_data->>'msg_id')::bigint END AS msg_id
+              FROM public.repositories
+             WHERE id = ANY (v_repository_ids)
+               AND sync_data->>'status' = 'in_progress'
+        ), main_q AS (
+            SELECT q.msg_id,
+                   (q.read_ct > 0 AND q.vt > clock_timestamp()) OR q.msg_id IN (SELECT msg_id FROM markers) AS running
+              FROM pgmq.q_async_calls q
+             WHERE q.message->>'method' = 'sync_repo_to_handout'
+               AND q.message->'args'->>'repository_id' = ANY (v_repository_ids::text[])
+               FOR UPDATE OF q
         ), low_q AS (
-            SELECT msg_id, (read_ct > 0 AND vt > clock_timestamp()) AS claimed
-              FROM pgmq.q_async_calls_low_priority
-             WHERE message->>'method' = 'sync_repo_to_handout'
-               AND message->'args'->>'repository_id' = ANY (v_repository_ids::text[])
-               FOR UPDATE
+            SELECT q.msg_id,
+                   (q.read_ct > 0 AND q.vt > clock_timestamp()) OR q.msg_id IN (SELECT msg_id FROM markers) AS running
+              FROM pgmq.q_async_calls_low_priority q
+             WHERE q.message->>'method' = 'sync_repo_to_handout'
+               AND q.message->'args'->>'repository_id' = ANY (v_repository_ids::text[])
+               FOR UPDATE OF q
         )
-        SELECT (SELECT array_agg(msg_id) FROM main_q WHERE NOT claimed),
-               (SELECT array_agg(msg_id) FROM low_q WHERE NOT claimed),
-               (SELECT count(*) FROM main_q WHERE claimed) + (SELECT count(*) FROM low_q WHERE claimed)
+        SELECT (SELECT array_agg(msg_id) FROM main_q WHERE NOT running),
+               (SELECT array_agg(msg_id) FROM low_q WHERE NOT running),
+               (SELECT count(*) FROM main_q WHERE running) + (SELECT count(*) FROM low_q WHERE running)
           INTO v_sync_msg_ids, v_low_priority_sync_msg_ids, v_syncs_in_flight;
 
         IF v_syncs_in_flight > 0 AND p_enqueue_github_archives THEN
@@ -536,4 +561,4 @@ REVOKE ALL ON FUNCTION public.enqueue_github_archive_repo(bigint, text, text, te
 GRANT EXECUTE ON FUNCTION public.enqueue_github_archive_repo(bigint, text, text, text) TO service_role, postgres;
 
 COMMENT ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint, boolean, bigint[]) IS
-  'Deletes an assignment and all its associated data in one transaction. With p_enqueue_github_archives, also queues archive_repo_and_lock for every deleted repository plus the template and grader repos, so GitHub cleanup commits or rolls back with the delete. Locks the repositories and cancels their queued sync_repo_to_handout jobs, refusing (55006) while one is claimed by a worker. Returns the GitHub targets it removed. false = legacy caller that queued its own archives. service_role/postgres only.';
+  'Deletes an assignment and all its associated data in one transaction. With p_enqueue_github_archives, also queues archive_repo_and_lock for every deleted repository plus the template and grader repos, so GitHub cleanup commits or rolls back with the delete. Locks the repositories and cancels their queued sync_repo_to_handout jobs, refusing (55006) while one is running (claimed, or an in_progress marker whose message is still queued). Returns the GitHub targets it removed. false = legacy caller that queued its own archives. service_role/postgres only.';
