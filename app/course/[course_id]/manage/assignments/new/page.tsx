@@ -193,6 +193,7 @@ export default function NewAssignmentPage() {
               permit_empty_submissions: false,
               total_points: getValues("total_points"),
               template_repo: isNoRepo ? null : getValues("template_repo"),
+              git_provider: getValues("git_provider") || "github",
               submission_files: getValues("submission_files"),
               // has_autograder must reflect reality (it gates the webhook's autograder run and the
               // results-page empty state). No-repo modes ('none'/'no_submission') can never have one
