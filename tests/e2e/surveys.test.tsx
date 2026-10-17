@@ -643,6 +643,47 @@ test.describe("Surveys Page", () => {
       .toBe("First response");
   });
 
+  // Issue #977: autosave used to run only when the survey allowed response editing, which is off
+  // by default, so on most surveys a refresh before Complete lost every answer.
+  for (const allowResponseEditing of [false, true]) {
+    test(`student's in-progress answers survive a reload (editing ${allowResponseEditing ? "on" : "off"})`, async ({
+      page
+    }) => {
+      const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+        title: "Reload Survey",
+        status: "published",
+        allow_response_editing: allowResponseEditing,
+        json: {
+          pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }]
+        }
+      });
+
+      await loginAsUser(page, studentA, course);
+      await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+      await page.getByRole("textbox", { name: "Question 1" }).fill("Answer before reload");
+
+      // The debounced autosave must land as a draft, not as a submission.
+      await expect
+        .poll(
+          async () => {
+            const { data, error } = await supabase
+              .from("survey_responses")
+              .select("response, is_submitted")
+              .eq("survey_id", survey.id)
+              .eq("profile_id", studentA.private_profile_id)
+              .maybeSingle();
+            if (error) throw new Error(error.message);
+            return data ? { q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted } : null;
+          },
+          { timeout: 10_000 }
+        )
+        .toEqual({ q1: "Answer before reload", is_submitted: false });
+
+      await page.reload();
+      await expect(page.getByRole("textbox", { name: "Question 1" })).toHaveValue("Answer before reload");
+    });
+  }
+
   test("survey questions read before their answer options (WCAG 1.3.2)", async ({ page }) => {
     // SurveyJS renders its own DOM (axe-excluded), so probe the emitted markup directly:
     // the question title must be a real h2 that PRECEDES the choice inputs in DOM order,
