@@ -1,15 +1,15 @@
 dependencies:
 - name: forgejo
-  repository: oci://code.forgejo.org/forgejo-helm
+  repository: oci://ghcr.io/pawtograder/mirror/charts
   version: 17.1.7
 - name: coder
-  repository: https://helm.coder.com/v2
+  repository: oci://ghcr.io/pawtograder/mirror/charts
   version: 2.37.3
 - name: postgres
-  repository: https://groundhog2k.github.io/helm-charts/
+  repository: oci://ghcr.io/pawtograder/mirror/charts
   version: 1.6.8
 - name: postgres
-  repository: https://groundhog2k.github.io/helm-charts/
+  repository: oci://ghcr.io/pawtograder/mirror/charts
   version: 1.6.8
-digest: sha256:fbc46ca903e80ea8c8090ec81b7fbf445003327e7e7534cdb1aca7dd3bd4ecb8
-generated: "2026-10-07T11:22:50.15681-04:00"
+digest: sha256:8a547c0314bfa598c7c9869e63e705455325d66de1c352c4edb30ad3703b0821
+generated: "2026-10-19T11:09:18.596233-04:00"

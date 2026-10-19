@@ -2630,7 +2630,7 @@ tests:
 
 forgejo:
   enabled: false
-  database: own
+  database: pawtograder # or own, with forgejo-db.enabled
   # Mirrored by .github/workflows/mirror-third-party.yml; a new tag goes in .github/mirror.yaml first.
   image:
     registry: ghcr.io
@@ -2758,7 +2758,7 @@ forgejoRunner:
 
 coder:
   enabled: false
-  database: own
+  database: pawtograder # or own, with coder-db.enabled
   coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder

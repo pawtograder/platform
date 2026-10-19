@@ -2,7 +2,7 @@
 
 forgejo:
   enabled: true
-  database: own
+  database: pawtograder
   ingress:
     hosts:
       - host: git.example.com
@@ -36,9 +36,6 @@ forgejo:
         MINIO_LOCATION: us-east-1
         MINIO_BASE_PATH: forgejo/
 
-forgejo-db:
-  enabled: true
-
 forgejoRunner:
   enabled: true
   image:
@@ -47,7 +44,7 @@ forgejoRunner:
 
 coder:
   enabled: true
-  database: own
+  database: pawtograder
   coder:
     env:
       - name: CODER_ACCESS_URL
@@ -61,6 +58,3 @@ coder:
         enable: true
         secretName: example-wildcard-tls
         wildcardSecretName: example-wildcard-tls
-
-coder-db:
-  enabled: true

@@ -618,20 +618,20 @@ The chart can also run [Forgejo](https://forgejo.org) (git hosting and Actions) 
 | Value | What it adds |
 | --- | --- |
 | `forgejo.enabled` | Forgejo (subchart, upstream `forgejo-helm/forgejo`) |
-| `forgejo-db.enabled` | Forgejo's own Postgres (`groundhog2k/postgres`), Service `pawtograder-forgejo-db` |
+| `forgejo-db.enabled` | A separate Postgres for Forgejo (`groundhog2k/postgres`), Service `pawtograder-forgejo-db`; only with `forgejo.database=own` |
 | `forgejoRunner.enabled` | A Forgejo Actions runner in host mode (`templates/forgejo-runner.yaml`) |
 | `coder.enabled` | Coder (subchart, upstream `helm.coder.com/v2`), plus the post-install hook that creates its first owner and pushes `files/coder-templates/*` |
-| `coder-db.enabled` | Coder's own Postgres, Service `pawtograder-coder-db` |
+| `coder-db.enabled` | A separate Postgres for Coder, Service `pawtograder-coder-db`; only with `coder.database=own` |
 
 The release must be named `pawtograder`: subchart values name `pawtograder-*` Secrets and ConfigMaps, and a render with another name fails.
 
-The subcharts aren't committed. `Chart.lock` pins them, and `scripts/build-deps.sh` fetches them into `charts/` (gitignored). CI runs it before every helm command; run it yourself before `helm template`, `lint` or `upgrade` against a checkout, which otherwise fail with "found in Chart.yaml, but missing in charts/ directory" even with every component off. The published OCI chart already contains them. Their images (Forgejo, Coder, both Postgres servers, and the Coder workspace image in `files/coder-templates`) are pulled from `ghcr.io/pawtograder/mirror`, which `.github/workflows/mirror-third-party.yml` fills from `.github/mirror.yaml`. To change a tag, add it to `.github/mirror.yaml`, let the workflow run on `staging`, then update the value here. To move a subchart to a new version, edit `Chart.yaml` and run `helm dependency update charts/pawtograder`.
+The subcharts aren't committed. `Chart.lock` pins them, and `scripts/build-deps.sh` fetches them into `charts/` (gitignored). CI runs it before every helm command; run it yourself before `helm template`, `lint` or `upgrade` against a checkout, which otherwise fail with "found in Chart.yaml, but missing in charts/ directory" even with every component off. The published OCI chart already contains them. Their images (Forgejo, Coder, both Postgres servers, and the Coder workspace image in `files/coder-templates`) are pulled from `ghcr.io/pawtograder/mirror`, which `.github/workflows/mirror-third-party.yml` fills from `.github/mirror.yaml`. To change a tag, add it to `.github/mirror.yaml`, let the workflow run on `staging`, then update the value here. The subcharts come from the same mirror (`oci://ghcr.io/pawtograder/mirror/charts`). To move one to a new version, add it to `.github/mirror.yaml` first, then edit `Chart.yaml` and run `helm dependency update charts/pawtograder`.
 
 ### Databases
 
-Each app has a `database` value. `own` (the default) uses its `*-db` Postgres, so enable that alongside it. `pawtograder` uses this chart's Postgres instead, with the `*-db` release left off. Either way the app gets its own role and database, created by the `pawtograder-app-databases-<revision>` Job on every install and upgrade. Switching an existing app between the two connects it to an empty database; move the data first.
+Each app has a `database` value. `pawtograder` (the default) uses this chart's Postgres, with the `*-db` release left off. `own` runs a separate Postgres for the app, so enable its `*-db` alongside it. Either way the app gets its own role and database, created by the `pawtograder-app-databases-<revision>` Job on every install and upgrade. Switching an existing app between the two connects it to an empty database; move the data first.
 
-Prefer `own` in production. Sharing this chart's Postgres puts Git and Coder downtime on every Postgres restart, and their connections count against `postgres.config.max_connections`.
+Sharing this chart's Postgres puts Git and Coder downtime on every Postgres restart, and their connections count against `postgres.config.max_connections`. Move to `own` if either becomes a problem.
 
 ### Secrets
 
@@ -641,11 +641,11 @@ Pre-create these alongside the ones under "Required Secrets" (or sync them with 
 | --- | --- | --- |
 | `pawtograder-forgejo-admin` | `username`, `password` | Forgejo's admin account (`admin` is reserved) |
 | `pawtograder-forgejo-db` | `PGPASSWORD` | Forgejo's database role |
-| `pawtograder-forgejo-db-superuser` | `POSTGRES_PASSWORD` | `forgejo-db` |
+| `pawtograder-forgejo-db-superuser` | `POSTGRES_PASSWORD` | `forgejo-db` (`forgejo.database=own` only) |
 | `pawtograder-forgejo-runner` | `secret` (40 hex characters) | `forgejoRunner`; the same secret registers the runner on both sides |
 | `pawtograder-coder-admin` | `email`, `username`, `password` | Coder's first owner |
 | `pawtograder-coder-db` | `PGPASSWORD` | Coder's database role |
-| `pawtograder-coder-db-superuser` | `POSTGRES_PASSWORD` | `coder-db` |
+| `pawtograder-coder-db-superuser` | `POSTGRES_PASSWORD` | `coder-db` (`coder.database=own` only) |
 
 Keep database passwords alphanumeric; Coder's connection settings don't escape them.
 
