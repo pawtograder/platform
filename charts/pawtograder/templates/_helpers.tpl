@@ -284,7 +284,6 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") -}}
 {{- end -}}
 
-{{/* Forgejo's public URL: the subchart builds ROOT_URL from the same host. */}}
 {{- define "pawtograder.forgejo.url" -}}
 {{- printf "https://%s" (tpl (index .Values.forgejo.ingress.hosts 0).host .) -}}
 {{- end -}}

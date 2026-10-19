@@ -29,7 +29,6 @@ data:
   # No password in the URL: Coder's Postgres driver reads PGPASSWORD (Secret <release>-coder-db).
   CODER_PG_CONNECTION_URL: postgres://coder@{{ include "pawtograder.appDatabase.host" (dict "ctx" . "app" "coder") }}:5432/coder?sslmode=disable
   CODER_TELEMETRY_ENABLE: "false"
-  # Coder's built-in GitHub OAuth app is on by default with no configuration.
   CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE: "false"
   CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS: "false"
 ---
