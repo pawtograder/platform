@@ -89,7 +89,7 @@ INSTANCE_LABEL="app.kubernetes.io/instance=${RELEASE}"
 STABLE_WRITERS=(functions web rest auth storage realtime)
 
 # Write-capable CronJobs to suspend for the window (component suffixes).
-SUSPEND_CRONJOBS=(audit-partitions backup-restore-drill backup-pitr-drill backup-verify)
+SUSPEND_CRONJOBS=(audit-partitions backup-restore-drill backup-pitr-drill backup-verify walg-retention)
 
 # pgmq queue tables reported as informational backlog (durable; not a gate).
 DRAIN_QUEUES=(q_async_calls q_async_calls_low_priority q_gradebook_row_recalculate q_discord_async_calls)

@@ -110,7 +110,7 @@ start at 200Gi and grow rather than over-provisioning.
 | ------------- | ------------------------ | -------------------------------------------------------------------------------- |
 | App storage   | `storage.s3.bucket`      | full retention window (see formula above)                                        |
 | Nightly dumps | `backup.s3.bucket`       | ≈ compressed `pg_dump` × `backup.retentionDays` (14 default / 30 prod)           |
-| WAL-G / PITR  | `postgres.walg.s3Prefix` | ≈ `keepBackups` × base-backup + WAL over `intervalHours × keepBackups` (~8 days) |
+| WAL-G / PITR  | `postgres.walg.s3Prefix` | ≈ `retention.keepBackups` × base-backup + WAL over `intervalHours × keepBackups` |
 
 Keep the WAL-G prefix in its **own bucket** — the nightly-dump job installs a
 _bucket-wide_ ILM expiry rule, which would otherwise prune WAL-G objects and
