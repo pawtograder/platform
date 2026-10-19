@@ -527,6 +527,30 @@ assert_renders "prometheus rules with ruleSelector label renders" \
 assert_renders "prometheus rules allowUnselectedRules renders" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.allowUnselectedRules=true
 
+echo "== walg retention CronJob =="
+WALG_ON=(--set postgres.walg.enabled=true --set postgres.walg.s3Prefix=s3://b/walg)
+assert_rendered_contains "walg-retention inherits baseBackup.keepBackups" \
+  templates/walg-retention.yaml "KEEP=8" "${WALG_ON[@]}"
+assert_rendered_contains "walg-retention keepBackups overrides" \
+  templates/walg-retention.yaml "KEEP=4" "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=4
+# 0 is the dangerous value (`retain FULL 0` deletes every backup), and the one
+# sprig's `default` would have quietly swapped for baseBackup.keepBackups.
+assert_refused "walg-retention keepBackups=0 is refused" "must be an integer >= 1" \
+  "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=0
+assert_refused "walg-retention keepBackups non-integer is refused" "must be an integer >= 1" \
+  "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=abc
+# The point of the CronJob: changing retention must not touch the primary's pod
+# template, or the StatefulSet restarts Postgres.
+sts_a="$(helm template t "$CHART" "${BASE[@]}" "${WALG_ON[@]}" --show-only templates/postgres-statefulset.yaml 2>/dev/null)"
+sts_b="$(helm template t "$CHART" "${BASE[@]}" "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=3 \
+  --set postgres.walg.retention.schedule="5 * * * *" --show-only templates/postgres-statefulset.yaml 2>/dev/null)"
+if [ -n "$sts_a" ] && [ "$sts_a" = "$sts_b" ]; then
+  echo "ok   [walg-retention changes leave the postgres StatefulSet byte-identical]"
+else
+  echo "FAIL [walg-retention changes leave the postgres StatefulSet byte-identical]: it differs or did not render"
+  FAILED=1
+fi
+
 echo "== backup retention tiers (chart 0.3.28) =="
 BACKUP_ON=(--set backup.enabled=true --set backup.s3.endpoint=https://s3.example.com
   --set backup.image.tag=v1.0.0)
