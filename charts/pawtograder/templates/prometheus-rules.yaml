@@ -176,9 +176,9 @@ spec:
         {{- if and .Values.postgres.walg.baseBackup.enabled .Values.postgres.walg.retention.enabled }}
         {{- $retCj := include "pawtograder.componentName" (dict "ctx" . "component" "walg-retention") }}
         # The walg-retention CronJob has not succeeded for 26h (it runs hourly).
-        # Nothing breaks right away: the sidecar still prunes to
-        # baseBackup.keepBackups. But the WAL-G bucket climbs back toward that
-        # count, which is the growth this job exists to cap. The second arm
+        # Nothing breaks right away, but it is the only thing that prunes WAL-G,
+        # so every day it stays down adds a full base backup and a day of WAL to
+        # the bucket. The second arm
         # covers a CronJob that has never succeeded, once it is old enough to
         # have had the chance. Warning: cost, not recoverability.
         - alert: PawtograderWALRetentionStale

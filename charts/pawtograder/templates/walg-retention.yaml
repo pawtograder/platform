@@ -4,13 +4,11 @@ schedule, in its own pod. Deleting the oldest full backups also deletes every
 WAL segment older than the oldest backup that remains, so this one call caps
 the WAL-G prefix at about keepBackups × (base backup + a day of WAL).
 
-Why a CronJob rather than the base-backup sidecar alone: the sidecar has its
-keep count baked into its command, so changing retention there edits the
-primary's pod template and the StatefulSet restarts Postgres. Pruning needs
-only the object store, not PGDATA, so it lives here, where changing the count
-restarts nothing. The sidecar still prunes to baseBackup.keepBackups after each
-push; when postgres.walg.retention.keepBackups is lower, this job does the
-pruning and the sidecar's own prune finds nothing to delete.
+Why not in the base-backup sidecar, which used to prune after each push: the
+count was baked into its command, so changing retention edited the primary's
+pod template and the StatefulSet restarted Postgres. Pruning needs only the
+object store, not PGDATA, so since 0.4.0 it lives only here, where changing the
+count restarts nothing.
 
 Safe alongside a running backup-push: a backup still uploading has no sentinel
 yet, so `delete retain` does not count it, and its WAL is newer than anything

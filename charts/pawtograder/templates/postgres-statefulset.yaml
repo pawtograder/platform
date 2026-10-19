@@ -291,10 +291,11 @@ spec:
         # Base-backup sidecar. wal-g backup-push reads the data directory
         # directly, so it must run co-located with PGDATA (shares the `data`
         # volume, same pod). A plain interval loop — postgres has no cron for
-        # this — takes a full backup every intervalHours, then prunes so only
-        # keepBackups remain (wal-g delete also drops WAL older than the oldest
-        # retained base backup). Uses the postgres socket in /var/run/postgresql
-        # to read control data; connects as the local supabase_admin.
+        # this — takes a full backup every intervalHours. It does not prune:
+        # the walg-retention CronJob does, from its own pod, so the retained
+        # count can change without editing this pod template (which restarts
+        # Postgres). Uses the postgres socket in /var/run/postgresql to read
+        # control data; connects as the local supabase_admin.
         - name: base-backup
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
@@ -305,7 +306,6 @@ spec:
               set -uo pipefail
               export PGDATA=/var/lib/postgresql/data/pgdata
               INTERVAL=$(( {{ .Values.postgres.walg.baseBackup.intervalHours | default 24 }} * 3600 ))
-              KEEP={{ .Values.postgres.walg.baseBackup.keepBackups | default 8 }}
               # Exit promptly on SIGTERM. Every long op runs as a backgrounded
               # child that we `wait` on, and the trap kills it and exits. Without
               # this, bash defers the signal until the foreground `sleep ${INTERVAL}`
@@ -318,18 +318,11 @@ spec:
               # Clear CHILD once the child reaps, so a SIGTERM landing between
               # `run` calls can't kill an exited/reused PID.
               run() { "$@" & CHILD=$!; wait "$CHILD"; local rc=$?; CHILD=""; return $rc; }
-              echo "[base-backup] first run in {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}s, then every ${INTERVAL}s (keep ${KEEP})"
+              echo "[base-backup] first run in {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}s, then every ${INTERVAL}s"
               run sleep {{ .Values.postgres.walg.baseBackup.initialDelaySeconds | default 120 }}
               while true; do
                 echo "[base-backup] $(date -u +%FT%TZ) wal-g backup-push"
-                if run wal-g backup-push "$PGDATA"; then
-                  # Retention: keep the newest ${KEEP} full backups; --confirm
-                  # actually deletes (dry-run without it). Non-fatal if it fails
-                  # — a failed prune must not stop future backups.
-                  run wal-g delete retain FULL "${KEEP}" --confirm || echo "[base-backup] WARN: retention prune failed"
-                else
-                  echo "[base-backup] ERROR: backup-push failed; will retry next cycle"
-                fi
+                run wal-g backup-push "$PGDATA" || echo "[base-backup] ERROR: backup-push failed; will retry next cycle"
                 run sleep "${INTERVAL}"
               done
           env:

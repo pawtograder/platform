@@ -131,6 +131,7 @@ postgres:
     forcePathStyle: true
     baseBackup:
       intervalHours: 24
+    retention:
       keepBackups: 8    # ~8 days of PITR window
 
   # Streaming standby: warm failover + read scaling. Promotion is MANUAL.

@@ -138,6 +138,13 @@ cannot detect.
 {{- fail "monitoring.enabled=true with postgres.enabled=false ships NO database metrics collector. pawtograder_vacuum_alert, pawtograder_db_buffer_cache*, pawtograder_db_dead_tuples, pawtograder_db_connections_*, pawtograder_table_sizes_*, pawtograder_replication_*, pawtograder_wal_archiving_* and pg_stat_statements_top all come from the postgres_exporter sidecar inside the chart-managed Postgres StatefulSet, which this mode does not deploy; the metrics edge function no longer collects them either. The PawtograderPostgresExporterQueryFailing/Down alerts are skipped under the same condition, so the absence would be silent. Point your own postgres_exporter at the external database (the queries.yaml ConfigMap still renders, so you can mount it and keep the same metric names), add a ServiceMonitor for it, then set monitoring.externalPostgresExporter=true to confirm. Set monitoring.enabled=false if you do not want DB metrics." -}}
 {{- end -}}
 
+{{- /* Removed in 0.4.0, refused rather than ignored: ignored, an overlay that
+     still sets it looks like it controls retention while the CronJob keeps its
+     own count. */ -}}
+{{- if hasKey (.Values.postgres.walg.baseBackup | default dict) "keepBackups" -}}
+{{- fail "postgres.walg.baseBackup.keepBackups was removed in chart 0.4.0 — the base-backup sidecar no longer prunes. Move the value to postgres.walg.retention.keepBackups (the walg-retention CronJob, which changes without restarting Postgres)." -}}
+{{- end -}}
+
 {{- if and .Values.postgres.replica.enabled (not .Values.postgres.walg.enabled) -}}
 {{- fail "postgres.replica.enabled=true requires postgres.walg.enabled=true — the standby uses `wal-g wal-fetch` as its archive fallback when it falls behind the primary's retained pg_wal, and shares the WAL-G config. Enable postgres.walg first." -}}
 {{- end -}}
@@ -332,6 +339,9 @@ accident, because maintenance.active defaults to false.
 {{- end -}}
 {{- if and .Values.postgres.walg.enabled (not .Values.postgres.walg.baseBackup.enabled) -}}
 {{- fail (printf "postgres.walg.enabled=true with postgres.walg.baseBackup.enabled=false ships WAL to S3 forever (archive_command) but never takes a base backup or prunes WAL — S3 grows unbounded and PITR silently cannot restore (wal-g backup-fetch finds no base backup). Not allowed when global.environment=%s. Enable baseBackup, or disable walg." $env) -}}
+{{- end -}}
+{{- if and .Values.postgres.walg.enabled .Values.postgres.walg.baseBackup.enabled (not .Values.postgres.walg.retention.enabled) -}}
+{{- fail (printf "postgres.walg.retention.enabled=false with base backups on means nothing prunes WAL-G: the base-backup sidecar stopped pruning in 0.4.0, so every daily full backup and all WAL are kept forever. Not allowed when global.environment=%s. Enable postgres.walg.retention." $env) -}}
 {{- end -}}
 {{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRules.enabled (not .Values.monitoring.prometheusRules.labels) (not .Values.monitoring.prometheusRules.allowUnselectedRules) -}}
 {{- fail (printf "monitoring.prometheusRules.enabled=true with an empty monitoring.prometheusRules.labels ships a PrometheusRule the cluster Prometheus never loads — kube-prometheus-stack's ruleSelector matches `release: <name>`, so with no matching label every backup/ESO/cert alert is inert. Not allowed when global.environment=%s. Set monitoring.prometheusRules.labels to your cluster's ruleSelector (e.g. { release: kube-prometheus-stack }), or set monitoring.prometheusRules.allowUnselectedRules=true to confirm your Prometheus selects all rules." $env) -}}

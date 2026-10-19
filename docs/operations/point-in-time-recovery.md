@@ -27,7 +27,7 @@ sourced from the `pawtograder-s3` secret and `postgres.walg.*` values:
 | -------------- | ------------------------------------------------------------------------ | ------------------------------------------------- |
 | WAL archiving  | `archive_command = wal-g wal-push %p` (+ `archive_timeout`)              | primary postgres, via generated `postgresql.conf` |
 | Base backups   | `wal-g backup-push` on an interval                                       | `base-backup` sidecar in the primary pod          |
-| Retention      | `wal-g delete retain FULL <n>` hourly, plus after each base backup       | `walg-retention` CronJob (and the sidecar)        |
+| Retention      | `wal-g delete retain FULL <n>`, hourly                                   | `walg-retention` CronJob                          |
 | Restore (PITR) | `wal-g backup-fetch` + WAL replay to a target                            | manual, this runbook                              |
 | Standby stream | `pg_basebackup -R` bootstrap → WAL streaming, `wal-g wal-fetch` fallback | `postgres-replica` StatefulSet                    |
 
@@ -59,6 +59,7 @@ postgres:
     forcePathStyle: true
     baseBackup:
       intervalHours: 24
+    retention:
       keepBackups: 8 # retention ≈ intervalHours × keepBackups
   replica:
     enabled: true # requires walg.enabled (render guard enforces)
@@ -427,16 +428,13 @@ asserts row count, cleans up — no orphan scratch DB or volume.
   older than the oldest retained base backup is pruned with it, so a PITR target
   must fall inside that window. Each retained backup is a full copy, so the
   bucket is roughly `keepBackups × database size` plus the WAL between them.
-- **Change the retained count with `postgres.walg.retention.keepBackups`, not
-  `baseBackup.keepBackups`.** The latter is baked into the `base-backup`
-  sidecar's command; changing it edits the primary's pod template and the
-  StatefulSet restarts Postgres. The `walg-retention` CronJob does the same
-  prune from its own pod, so its count changes without a restart. Keep it at or
-  below `baseBackup.keepBackups`; above that, the sidecar's prune still deletes
-  down to its own count. Unset, it inherits `baseBackup.keepBackups`. A one-off
-  prune by hand (from the `base-backup` container) is `wal-g delete retain FULL
-  <n>` to preview and `... --confirm` to delete; follow it with `wal-g
-  wal-verify integrity`.
+- **Only the `walg-retention` CronJob prunes.** It runs hourly from its own pod,
+  so changing `postgres.walg.retention.keepBackups` restarts nothing. Before
+  0.4.0 the `base-backup` sidecar also pruned, with the count baked into the
+  primary's pod template, so changing it restarted Postgres;
+  `baseBackup.keepBackups` is now refused. A one-off prune by hand (from the
+  `base-backup` container) is `wal-g delete retain FULL <n>` to preview and
+  `... --confirm` to delete; follow it with `wal-g wal-verify integrity`.
 - **No physical replication slot for the standby.** The chart creates none, so
   the primary never retains WAL on the standby's behalf. A standby that lags past
   the WAL still in the primary's `pg_wal` falls back to `wal-g wal-fetch` from the

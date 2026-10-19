@@ -453,13 +453,12 @@ postgres:
     # (disk-fill risk), so archiving must keep up. archive_timeout forces a
     # segment switch so idle periods still bound RPO.
     archiveTimeout: "60s"
-    # Base backups: the sidecar loop cadence and how many full backups to keep.
-    # WAL older than the oldest retained base backup is pruned with it. Sizing:
-    # retention window ≈ baseBackupIntervalHours × keepBackups.
+    # Base backups: the sidecar loop cadence. How many to keep is
+    # retention.keepBackups below (baseBackup.keepBackups was removed in 0.4.0
+    # and is refused). Retention window ≈ intervalHours × retention.keepBackups.
     baseBackup:
       enabled: true
       intervalHours: 24
-      keepBackups: 8
       # Wait this long after the sidecar starts before the FIRST base backup,
       # so postgres + archiving are healthy first.
       initialDelaySeconds: 120
@@ -467,18 +466,17 @@ postgres:
         requests: { cpu: "50m",  memory: "128Mi" }
         limits:   { cpu: "1",    memory: "512Mi" }
     # Retention CronJob (templates/walg-retention.yaml): `wal-g delete retain
-    # FULL <keepBackups>` in its own pod. Change the retained count HERE, not in
-    # baseBackup.keepBackups: that one is baked into the primary's sidecar, so
-    # editing it restarts Postgres; this one restarts nothing. Set it at or
-    # below baseBackup.keepBackups — above it, the sidecar's prune wins.
+    # FULL <keepBackups>` in its own pod, the only thing that prunes WAL-G. It
+    # lives outside the primary's pod so changing the count restarts nothing.
+    # WAL older than the oldest retained base backup is deleted with it.
     retention:
       enabled: true
       # Hourly: the prune is a listing plus deletes, and running it every hour
       # keeps it close behind each base backup however far the sidecar's
       # interval loop has drifted from its start time.
       schedule: "17 * * * *"
-      # Empty = baseBackup.keepBackups. Must be >= 1.
-      keepBackups: ""
+      # Full base backups to keep. Must be an integer >= 1.
+      keepBackups: 8
       startingDeadlineSeconds: 1800
       activeDeadlineSeconds: 1800
       resources:

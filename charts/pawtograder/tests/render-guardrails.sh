@@ -529,16 +529,32 @@ assert_renders "prometheus rules allowUnselectedRules renders" \
 
 echo "== walg retention CronJob =="
 WALG_ON=(--set postgres.walg.enabled=true --set postgres.walg.s3Prefix=s3://b/walg)
-assert_rendered_contains "walg-retention inherits baseBackup.keepBackups" \
+assert_rendered_contains "walg-retention keeps 8 by default" \
   templates/walg-retention.yaml "KEEP=8" "${WALG_ON[@]}"
 assert_rendered_contains "walg-retention keepBackups overrides" \
   templates/walg-retention.yaml "KEEP=4" "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=4
 # 0 is the dangerous value (`retain FULL 0` deletes every backup), and the one
-# sprig's `default` would have quietly swapped for baseBackup.keepBackups.
+# sprig's `default` would have quietly swapped for the default.
 assert_refused "walg-retention keepBackups=0 is refused" "must be an integer >= 1" \
   "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=0
 assert_refused "walg-retention keepBackups non-integer is refused" "must be an integer >= 1" \
   "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=abc
+# 0.4.0 moved the count out of the sidecar. The old key must be refused, not
+# ignored, or an overlay that still sets it looks like it controls retention.
+assert_refused "baseBackup.keepBackups is refused" "removed in chart 0.4.0" \
+  "${WALG_ON[@]}" --set postgres.walg.baseBackup.keepBackups=4
+# The CronJob is now the only prune; without it the bucket grows forever.
+assert_refused "walg retention disabled in production" "nothing prunes WAL-G" \
+  "${WALG_ON[@]}" --set postgres.walg.retention.enabled=false
+assert_renders "walg retention disabled allowed on dev" \
+  --set global.environment=dev "${WALG_ON[@]}" --set postgres.walg.retention.enabled=false
+if helm template t "$CHART" "${BASE[@]}" "${WALG_ON[@]}" --show-only templates/postgres-statefulset.yaml 2>/dev/null \
+    | grep -q "wal-g delete"; then
+  echo "FAIL [base-backup sidecar no longer prunes]: postgres-statefulset still renders wal-g delete"
+  FAILED=1
+else
+  echo "ok   [base-backup sidecar no longer prunes]"
+fi
 # The point of the CronJob: changing retention must not touch the primary's pod
 # template, or the StatefulSet restarts Postgres.
 sts_a="$(helm template t "$CHART" "${BASE[@]}" "${WALG_ON[@]}" --show-only templates/postgres-statefulset.yaml 2>/dev/null)"
