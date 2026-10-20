@@ -1,7 +1,11 @@
 /**
  * @jest-environment node
  */
-import { describeBulkReleaseResult, describeReleaseAllResult } from "@/lib/bulkReleaseMessage";
+import {
+  describeBulkReleaseResult,
+  describeCodeWalkReleaseResult,
+  describeReleaseAllResult
+} from "@/lib/bulkReleaseMessage";
 
 describe("describeBulkReleaseResult", () => {
   it("reports the RPC count, not the selection size", () => {
@@ -107,5 +111,39 @@ describe("describeReleaseAllResult", () => {
   it("uses the singular for a single submission", () => {
     const msg = describeReleaseAllResult({ affected: 1, action: "released" });
     expect(msg.description).toContain("1 submission in this assignment");
+  });
+});
+
+describe("describeCodeWalkReleaseResult", () => {
+  it("reports the RPC count and says incomplete code walks were skipped", () => {
+    const msg = describeCodeWalkReleaseResult({ affected: 280, action: "released" });
+    expect(msg.status).toBe("success");
+    expect(msg.description).toContain("Released 280 code walks in this assignment");
+    expect(msg.description).toContain("Code walks that are not complete were not released");
+    expect(msg.description).toContain("Grading, self-review and meta-grading reviews were not changed");
+  });
+
+  it("does not mention skipped incomplete code walks on unrelease, which touches all of them", () => {
+    const msg = describeCodeWalkReleaseResult({ affected: 3, action: "unreleased" });
+    expect(msg.status).toBe("success");
+    expect(msg.description).toContain("Unreleased 3 code walks in this assignment");
+    expect(msg.description).not.toContain("not complete");
+  });
+
+  it("uses the singular for one code walk", () => {
+    const msg = describeCodeWalkReleaseResult({ affected: 1, action: "released" });
+    expect(msg.description).toContain("Released 1 code walk in this assignment");
+  });
+
+  it("warns on a no-op release or unrelease", () => {
+    const release = describeCodeWalkReleaseResult({ affected: 0, action: "released" });
+    expect(release.status).toBe("warning");
+    expect(release.title).toBe("Nothing to release");
+    expect(release.description).toContain("already released");
+
+    const unrelease = describeCodeWalkReleaseResult({ affected: 0, action: "unreleased" });
+    expect(unrelease.status).toBe("warning");
+    expect(unrelease.title).toBe("Nothing to unrelease");
+    expect(unrelease.description).toContain("has a released code walk");
   });
 });
