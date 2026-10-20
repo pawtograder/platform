@@ -445,6 +445,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         if (!assignment.template_repo?.includes("/")) {
           return;
         }
+        // This assignment comes from the membership embed, not the filtered assignments query.
+        if (assignment.git_provider !== "github") {
+          return;
+        }
         // Skip if assignment_id is specified and this assignment doesn't match
         if (assignmentId !== undefined && assignment.id !== assignmentId) {
           return;
@@ -859,6 +863,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
     // Sync permissions for existing individual repos
     const individualRepoSyncPromises = existingIndividualRepos
+      .filter((repo) => repo.git_provider === "github")
       .filter((repo) => repo.repository && repo.repository.includes("/"))
       .filter((repo) => assignmentId === undefined || repo.assignment_id === assignmentId)
       .map(async (repo) => {
@@ -883,6 +888,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
     // Sync permissions for existing group repos
     const groupRepoSyncPromises = existingGroupRepos
+      .filter((repo) => repo.git_provider === "github")
       .filter((repo) => repo.repository && repo.repository.includes("/"))
       .filter((repo) => assignmentId === undefined || repo.assignment_id === assignmentId)
       .map(async (repo) => {

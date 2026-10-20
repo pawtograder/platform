@@ -1,11 +1,13 @@
 -- CW-10 foundation. Provider selection is opt-in and fixed after provisioning.
 -- The UI picker and GitHub banner gating follow in a separate PR.
 ALTER TABLE public.assignments
-  ADD COLUMN git_provider text NOT NULL DEFAULT 'github'
-  CHECK (git_provider IN ('github', 'forgejo'));
+  ADD COLUMN git_provider text NOT NULL DEFAULT 'github';
+ALTER TABLE public.assignments ADD CONSTRAINT assignments_git_provider_check
+  CHECK (git_provider IN ('github', 'forgejo')) NOT VALID;
 ALTER TABLE public.repositories
-  ADD COLUMN git_provider text NOT NULL DEFAULT 'github'
-  CHECK (git_provider IN ('github', 'forgejo'));
+  ADD COLUMN git_provider text NOT NULL DEFAULT 'github';
+ALTER TABLE public.repositories ADD CONSTRAINT repositories_git_provider_check
+  CHECK (git_provider IN ('github', 'forgejo')) NOT VALID;
 ALTER TABLE public.classes ADD COLUMN forgejo_org text;
 
 COMMENT ON COLUMN public.assignments.git_provider IS
@@ -248,8 +250,10 @@ declare
   log_id bigint;
   message_id bigint;
 begin
+  -- GitHubWrapper treats a supplied owner/name as authoritative, regardless of p_org.
   if exists (select 1 from public.repositories
-              where class_id = p_class_id and repository = p_org || '/' || p_repo
+              where class_id = p_class_id
+                and repository = case when strpos(p_repo, '/') > 0 then p_repo else p_org || '/' || p_repo end
                 and git_provider <> 'github') then
     return null;
   end if;
@@ -292,8 +296,10 @@ declare
   log_id bigint;
   message_id bigint;
 begin
+  -- Match the same owner/name that archiveRepoAndLock will use.
   if exists (select 1 from public.repositories
-              where class_id = p_class_id and repository = p_org || '/' || p_repo
+              where class_id = p_class_id
+                and repository = case when strpos(p_repo, '/') > 0 then p_repo else p_org || '/' || p_repo end
                 and git_provider <> 'github') then
     return null;
   end if;

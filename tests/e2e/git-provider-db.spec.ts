@@ -133,8 +133,13 @@ test("disabling the flag blocks new Forgejo selections without rewriting existin
   expect(next.error?.code).toBe("23514");
 });
 
-for (const provider of ["github", "forgejo"] as const) {
-  test(`${provider} create, permission-sync, and archive queues respect the provider`, async () => {
+for (const [provider, qualified] of [
+  ["github", false],
+  ["forgejo", false],
+  ["github", true],
+  ["forgejo", true]
+] as const) {
+  test(`${provider} queues respect the provider with ${qualified ? "owner/name" : "short"} names`, async () => {
     const { course, assignment } = await fixture(provider);
     const repoName = `e2e-ignore-${crypto.randomUUID()}`;
     const debugId = `cw10-${crypto.randomUUID()}`;
@@ -167,13 +172,18 @@ for (const provider of ["github", "forgejo"] as const) {
       });
       expect(inserted.error).toBeNull();
     }
-    const sync = await supabase.rpc("enqueue_github_sync_repo_permissions", {
+    // Group-leave passes a full name with the class's different GitHub org.
+    const target = {
       ...common,
-      p_repo: repoName,
+      p_org: qualified ? "different-class-org" : common.p_org,
+      p_repo: qualified ? `${common.p_org}/${repoName}` : repoName
+    };
+    const sync = await supabase.rpc("enqueue_github_sync_repo_permissions", {
+      ...target,
       p_course_slug: course.slug!,
       p_github_usernames: []
     });
-    const archive = await supabase.rpc("enqueue_github_archive_repo", { ...common, p_repo: repoName });
+    const archive = await supabase.rpc("enqueue_github_archive_repo", target);
     for (const result of [sync, archive]) {
       expect(result.error).toBeNull();
       if (provider === "github") expect(result.data).toBeGreaterThan(0);
@@ -297,17 +307,12 @@ test("GitHub creation explains why it cannot provision a Forgejo assignment", as
     .update({ release_date: new Date(Date.now() - 60_000).toISOString() })
     .eq("id", assignment.id);
   expect(released.error).toBeNull();
-  const response = await fetch(`${process.env.SUPABASE_URL}/functions/v1/assignment-create-all-repos`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${await getAuthTokenForUser(instructor)}`,
-      apikey: (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ courseId: course.id, assignmentId: assignment.id })
+  const { error } = await supabase.functions.invoke("assignment-create-all-repos", {
+    headers: { Authorization: `Bearer ${await getAuthTokenForUser(instructor)}` },
+    body: { courseId: course.id, assignmentId: assignment.id }
   });
-  expect(response.status).toBe(400);
-  expect(await response.text()).toContain("This assignment uses Forgejo");
+  expect(error?.context.status).toBe(400);
+  expect(await error.context.text()).toContain("This assignment uses Forgejo");
   const repositories = await supabase.from("repositories").select("id").eq("assignment_id", assignment.id);
   expect(repositories.error).toBeNull();
   expect(repositories.data).toHaveLength(0);

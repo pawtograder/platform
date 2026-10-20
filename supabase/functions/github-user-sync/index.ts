@@ -260,10 +260,10 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
   // exist for this assignment?", which decides whether to CREATE one — a different question, and
   // one where dropping archived rows would conclude "missing" and manufacture a fresh repo for a
   // retired assignment. Existence is unconditional; only syncing is filtered.
-  const isForLiveAssignment = (repo: { assignments?: { archived_at: string | null } | null }) =>
-    !repo.assignments?.archived_at;
-  const individualReposToSync = existingIndividualRepos.filter(isForLiveAssignment);
-  const groupReposToSync = existingGroupRepos.filter(isForLiveAssignment);
+  const isLiveGitHubRepo = (repo: { git_provider: string; assignments?: { archived_at: string | null } | null }) =>
+    repo.git_provider === "github" && !repo.assignments?.archived_at;
+  const individualReposToSync = existingIndividualRepos.filter(isLiveGitHubRepo);
+  const groupReposToSync = existingGroupRepos.filter(isLiveGitHubRepo);
 
   const existingRepos = [...existingIndividualRepos, ...existingGroupRepos];
   //Find all assignments that the student is enrolled in that have been released
@@ -322,7 +322,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
         // its own embed rather than from `allAssignments` — so the `archived_at` filter on that
         // query does not reach here. Without this guard, "Fix GitHub" would still manufacture a
         // fresh group repo for an assignment the instructor has retired.
-        if (assignment.archived_at) {
+        if (assignment.archived_at || assignment.git_provider !== "github") {
           return;
         }
         const repoName = `${c.classes!.slug}-${assignment.slug}-group-${sanitizeRepoNameComponent(group.name)}`;
