@@ -16,6 +16,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
+import * as Sentry from "@sentry/nextjs";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useRubric } from "@/hooks/useAssignment";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
@@ -137,13 +138,24 @@ export default function GradingStatusPanel({
   // action when the assignment has a code-walk rubric.
   const codeWalkRubric = useRubric("code-walk");
 
+  // The RPC has already committed by the time the dashboard refetches. A refetch that throws (for
+  // example TableController's "Refetch all called too frequently" when two actions run within 3s)
+  // must not skip the result toast and leave the confirm popover open as if nothing happened.
+  const refreshAfterChange = async () => {
+    try {
+      await onChanged?.();
+    } catch (e) {
+      Sentry.captureException(e);
+    }
+  };
+
   const runReleaseAll = async (rpc: ReleaseAllRpc, action: BulkReleaseAction) => {
     const { data, error } = await supabase.rpc(rpc, { assignment_id: assignmentId });
     if (error) {
       toaster.error({ title: "Error", description: error.message });
       return;
     }
-    await onChanged?.();
+    await refreshAfterChange();
     // The RPC touches each submission's grading review only, and returns how many it actually
     // changed — not how many submissions the assignment has. Share the per-submission bulk path's
     // wording so both toasts count the same thing and both say which rounds were left alone.
@@ -158,7 +170,7 @@ export default function GradingStatusPanel({
       toaster.error({ title: "Error", description: error.message });
       return;
     }
-    await onChanged?.();
+    await refreshAfterChange();
     const affected = typeof data === "number" ? data : 0;
     const message = describeCodeWalkReleaseResult({ affected, action });
     toaster[message.status]({ title: message.title, description: message.description });
