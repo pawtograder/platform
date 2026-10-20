@@ -206,13 +206,16 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
   // Check if assignment exists and belongs to the specified class
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("id, title, template_repo, autograder(grader_repo)")
+    .select("id, title, template_repo, git_provider, autograder(grader_repo)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
 
   if (!assignment) {
     throw new IllegalArgumentError("Assignment not found or does not belong to this class");
+  }
+  if (assignment.git_provider !== "github") {
+    throw new UserVisibleError("Deleting Forgejo assignments is not supported yet.", 400);
   }
 
   // ========================

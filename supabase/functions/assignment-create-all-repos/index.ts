@@ -263,6 +263,10 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
     return emptySettledSummary();
   }
 
+  if (assignment.git_provider !== "github") {
+    return emptySettledSummary();
+  }
+
   const branchProtection: BranchProtectionConfig = {
     blockForcePush: assignment.protect_block_force_push ?? true,
     requirePullRequest: assignment.protect_require_pull_request ?? false,

@@ -1090,6 +1090,7 @@ export type Database = {
           gradebook_column_id: number | null;
           grader_pseudonymous_mode: boolean;
           grading_rubric_id: number | null;
+          git_provider: string;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline: string | null;
           handout_url: string | null;
@@ -1141,6 +1142,7 @@ export type Database = {
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
+          git_provider?: string;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
           handout_url?: string | null;
@@ -1192,6 +1194,7 @@ export type Database = {
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
+          git_provider?: string;
           group_config?: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
           handout_url?: string | null;
@@ -1979,6 +1982,7 @@ export type Database = {
           end_date: string | null;
           events_ics_url: string | null;
           features: Json | null;
+          forgejo_org: string | null;
           github_org: string | null;
           gradebook_id: number | null;
           handout_template_repo: string | null;
@@ -2007,6 +2011,7 @@ export type Database = {
           end_date?: string | null;
           events_ics_url?: string | null;
           features?: Json | null;
+          forgejo_org?: string | null;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -2035,6 +2040,7 @@ export type Database = {
           end_date?: string | null;
           events_ics_url?: string | null;
           features?: Json | null;
+          forgejo_org?: string | null;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -6772,6 +6778,7 @@ export type Database = {
           creation_attempts: number;
           creation_error: string | null;
           desired_handout_sha: string | null;
+          git_provider: string;
           id: number;
           is_github_ready: boolean;
           last_creation_attempt_at: string | null;
@@ -6793,6 +6800,7 @@ export type Database = {
           creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
+          git_provider?: string;
           id?: number;
           is_github_ready?: boolean;
           last_creation_attempt_at?: string | null;
@@ -6814,6 +6822,7 @@ export type Database = {
           creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
+          git_provider?: string;
           id?: number;
           is_github_ready?: boolean;
           last_creation_attempt_at?: string | null;
