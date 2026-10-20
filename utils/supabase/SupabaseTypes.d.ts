@@ -1087,10 +1087,10 @@ export type Database = {
           description: string | null;
           due_date: string;
           enable_repo_analytics: boolean;
+          git_provider: string;
           gradebook_column_id: number | null;
           grader_pseudonymous_mode: boolean;
           grading_rubric_id: number | null;
-          git_provider: string;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline: string | null;
           handout_url: string | null;
@@ -1139,10 +1139,10 @@ export type Database = {
           description?: string | null;
           due_date: string;
           enable_repo_analytics?: boolean;
+          git_provider?: string;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
-          git_provider?: string;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
           handout_url?: string | null;
@@ -1191,10 +1191,10 @@ export type Database = {
           description?: string | null;
           due_date?: string;
           enable_repo_analytics?: boolean;
+          git_provider?: string;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
-          git_provider?: string;
           group_config?: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
           handout_url?: string | null;

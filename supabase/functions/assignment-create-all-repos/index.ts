@@ -264,7 +264,10 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   }
 
   if (assignment.git_provider !== "github") {
-    return emptySettledSummary();
+    throw new UserVisibleError(
+      "This assignment uses Forgejo. This action only creates GitHub repositories. No repositories were created.",
+      400
+    );
   }
 
   const branchProtection: BranchProtectionConfig = {

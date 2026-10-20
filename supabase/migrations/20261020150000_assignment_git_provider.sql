@@ -13,7 +13,7 @@ COMMENT ON COLUMN public.assignments.git_provider IS
 COMMENT ON COLUMN public.repositories.git_provider IS
   'Repository host, required to match the assignment provider.';
 COMMENT ON COLUMN public.classes.forgejo_org IS
-  'Forgejo organization for this class. Provisioning may fall back to the class slug when null.';
+  'Forgejo organization for this class.';
 
 CREATE OR REPLACE FUNCTION public.assignments_validate_git_provider() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
@@ -24,7 +24,7 @@ BEGIN
     -- delete_assignment_with_all_data deletes repository rows before enqueueing GitHub cleanup.
     -- Once those rows are gone, an enqueue guard cannot recover their provider.
     IF OLD.git_provider = 'forgejo' THEN
-      RAISE EXCEPTION 'Deleting Forgejo assignments is not supported yet'
+      RAISE EXCEPTION 'Deleting Forgejo assignments or their course is not supported yet. If no repositories exist, switch the assignment to GitHub before deleting. Otherwise, wait for provider-aware cleanup.'
         USING ERRCODE = 'feature_not_supported';
     END IF;
     RETURN OLD;
@@ -68,9 +68,9 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
   v_provider text;
 BEGIN
-  -- Serialize repo insertion with provider changes so a concurrent switch cannot strand a repo.
+  -- Block provider changes without blocking concurrent repo inserts or submission FK checks.
   SELECT git_provider INTO v_provider FROM public.assignments
-    WHERE id = NEW.assignment_id FOR UPDATE;
+    WHERE id = NEW.assignment_id FOR SHARE;
   IF FOUND AND NEW.git_provider IS DISTINCT FROM v_provider THEN
     RAISE EXCEPTION 'Repository host must match its assignment'
       USING ERRCODE = 'check_violation';
@@ -87,7 +87,7 @@ REVOKE ALL ON FUNCTION public.repositories_validate_git_provider() FROM PUBLIC, 
 
 -- Keep the existing function identities and grants. The GitHub bodies below are unchanged
 -- except for provider guards. No separately callable, unguarded RPCs are introduced.
-
+-- Each Source migration retains the original implementation rationale and history.
 
 -- Source: 20260816120000_bound_repo_creation_retries.sql
 create or replace function public.enqueue_github_create_repo(
@@ -122,7 +122,7 @@ declare
   v_args jsonb;
 begin
   -- Take the same parent lock as repository insertion before checking the chosen host.
-  perform 1 from public.assignments where id = p_assignment_id for update;
+  perform 1 from public.assignments where id = p_assignment_id for share;
   if exists (select 1 from public.assignments where id = p_assignment_id and git_provider <> 'github')
      or exists (select 1 from public.repositories
                 where class_id = p_class_id and repository = p_org || '/' || p_repo_name
@@ -363,6 +363,8 @@ begin
   end if;
 
   v_creation_method := case when r.repo_mode = 'template_only_staff' then 'template' else 'fork' end;
+  -- Keep everything after the first slash. Legacy stored repo names may contain more slashes.
+  -- See section 5 of 20260816120000_bound_repo_creation_retries.sql.
   v_repo_name := substring(r.repository from position('/' in r.repository) + 1);
 
   if r.assignment_group_id is not null then

@@ -215,7 +215,10 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
     throw new IllegalArgumentError("Assignment not found or does not belong to this class");
   }
   if (assignment.git_provider !== "github") {
-    throw new UserVisibleError("Deleting Forgejo assignments is not supported yet.", 400);
+    throw new UserVisibleError(
+      "Deleting Forgejo assignments or their course is not supported yet. If no repositories exist, switch the assignment to GitHub before deleting. Otherwise, wait for provider-aware cleanup.",
+      400
+    );
   }
 
   // ========================
