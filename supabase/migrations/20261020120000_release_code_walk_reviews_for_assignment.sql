@@ -20,9 +20,10 @@
 -- trigger (submissionreviewreleasecascade) sees every changed row in one transition table and
 -- cascades `released` to the review's submission_comments, submission_file_comments and
 -- submission_artifact_comments. The trigger only sets `submissions.released` for the grading
--- review, so releasing a code walk does not mark the submission itself released. Like the
--- per-submission button, releasing any review also sets grader_result_tests.is_released for that
--- submission; that behavior belongs to the trigger and is unchanged here.
+-- review, so releasing a code walk does not mark the submission itself released. Before
+-- 20261020120100 the trigger also released the submission's hidden grader_result_tests for any
+-- review; that migration limits the test cascade to the grading review, so releasing code walks
+-- no longer exposes hidden autograder tests.
 --
 -- Authorization matches release_all_grading_reviews_for_assignment: SECURITY INVOKER, so the
 -- UPDATE policy on submission_reviews ("Instructors full; graders limited on released complete
