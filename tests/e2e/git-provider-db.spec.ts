@@ -81,14 +81,26 @@ for (const [name, features] of disabledFlags) {
     expect(result.error?.message).toContain("cloud-workspaces");
   });
 }
-test("the host can change before provisioning, but not after a repository exists", async () => {
-  const f = await fixture("github");
-  for (const provider of ["forgejo", "github"]) await ok(switchHost(f.assignment.id, provider));
-  await ok(repository(f));
-  const result = await switchHost(f.assignment.id, "forgejo");
-  expect(result.error?.code).toBe("23514");
-  expect(result.error?.message).toContain("after repositories exist");
-});
+for (const kind of ["student", "handout", "grader"]) {
+  test(`${kind} repositories lock the provider after provisioning`, async () => {
+    const f = await fixture("github");
+    for (const provider of ["forgejo", "github"]) await ok(switchHost(f.assignment.id, provider));
+    if (kind === "student") await ok(repository(f));
+    else {
+      const table = kind === "handout" ? "assignments" : "autograder";
+      const column = kind === "handout" ? "template_repo" : "grader_repo";
+      await ok(
+        supabase
+          .from(table)
+          .update({ [column]: "e2e-ignore/staff" })
+          .eq("id", f.assignment.id)
+      );
+    }
+    const result = await switchHost(f.assignment.id, "forgejo");
+    expect(result.error?.code).toBe("23514");
+    expect(result.error?.message).toContain("after repositories exist");
+  });
+}
 test("a repository must match its assignment on insert and update", async () => {
   const f = await fixture("forgejo");
   expect((await repository(f)).error?.code).toBe("23514");
@@ -240,15 +252,16 @@ test("course deletion explains the restriction and preserves the course", async 
 for (const endpoint of [
   "assignment-create-all-repos",
   "assignment-create-handout-repo",
-  "assignment-create-solution-repo"
+  "assignment-create-solution-repo",
+  "assignment-sync-autograder-workflow"
 ]) {
-  test(`${endpoint} cannot provision a Forgejo assignment`, async () => {
+  test(`${endpoint} rejects a Forgejo assignment`, async () => {
     const { course, assignment } = await fixture("forgejo");
     const instructor = await createUserInClass({ class_id: course.id, role: "instructor" });
     await ok(
       supabase
         .from("assignments")
-        .update({ release_date: new Date(Date.now() - 60_000).toISOString() })
+        .update({ release_date: new Date(Date.now() - 60_000).toISOString(), template_repo: "e2e-ignore/staff" })
         .eq("id", assignment.id)
     );
     const { error } = await supabase.functions.invoke(endpoint, {

@@ -52,7 +52,9 @@ BEGIN
         USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.git_provider IS DISTINCT FROM OLD.git_provider
-       AND EXISTS (SELECT 1 FROM public.repositories WHERE assignment_id = OLD.id) THEN
+       AND (OLD.template_repo IS NOT NULL OR NEW.template_repo IS NOT NULL
+            OR EXISTS (SELECT 1 FROM public.autograder WHERE id = OLD.id AND grader_repo IS NOT NULL)
+            OR EXISTS (SELECT 1 FROM public.repositories WHERE assignment_id = OLD.id)) THEN
       RAISE EXCEPTION 'Cannot change repository host after repositories exist'
         USING ERRCODE = 'check_violation';
     END IF;
@@ -126,8 +128,7 @@ create or replace function public.enqueue_github_create_repo(
   p_source_repo text default null,                     -- owner/repo to fork when method='fork'
   p_branch_protection jsonb default null,              -- {blockForcePush, requirePullRequest, requiredReviewers}
   p_student_team_permission text default null          -- 'pull' (mode 2 handout) | null
-) returns bigint
-language plpgsql security definer set search_path = public as $$
+) returns bigint language plpgsql security definer set search_path = public as $$
 declare
   log_id bigint;
   message_id bigint;
@@ -162,22 +163,11 @@ begin
     limit 1;
     if repo_id is null then
       insert into public.repositories(
-        profile_id,
-        assignment_group_id,
-        assignment_id,
-        repository,
-        class_id,
-        synced_handout_sha,
-        is_github_ready
-      )
-      values (
-        p_profile_id,
-        p_assignment_group_id,
-        p_assignment_id,
-        full_repo_name,
-        p_class_id,
-        p_latest_template_sha,
-        false
+        profile_id, assignment_group_id, assignment_id, repository,
+        class_id, synced_handout_sha, is_github_ready
+      ) values (
+        p_profile_id, p_assignment_group_id, p_assignment_id, full_repo_name,
+        p_class_id, p_latest_template_sha, false
       )
       on conflict do nothing
       returning id into repo_id;
@@ -205,12 +195,9 @@ begin
      where id = repo_id;
   end if;
   v_args := jsonb_build_object(
-    'org', p_org,
-    'repoName', v_repo_name,
-    'templateRepo', p_template_repo,
-    'isTemplateRepo', p_is_template_repo,
-    'courseSlug', p_course_slug,
-    'githubUsernames', p_github_usernames
+    'org', p_org, 'repoName', v_repo_name,
+    'templateRepo', p_template_repo, 'isTemplateRepo', p_is_template_repo,
+    'courseSlug', p_course_slug, 'githubUsernames', p_github_usernames
   );
   if p_creation_method is not null and p_creation_method <> 'template' then
     v_args := v_args || jsonb_build_object('creationMethod', p_creation_method);
@@ -224,17 +211,11 @@ begin
   if p_student_team_permission is not null then
     v_args := v_args || jsonb_build_object('studentTeamPermission', p_student_team_permission);
   end if;
-  select pgmq_public.send(
-    'async_calls',
-    jsonb_build_object(
-      'method', 'create_repo',
-      'class_id', p_class_id,
-      'debug_id', p_debug_id,
-      'log_id', log_id,
-      'repo_id', repo_id,
-      'args', v_args
-    )
-  ) into message_id;
+  select pgmq_public.send('async_calls', jsonb_build_object(
+      'method', 'create_repo', 'class_id', p_class_id,
+      'debug_id', p_debug_id, 'log_id', log_id,
+      'repo_id', repo_id, 'args', v_args
+  )) into message_id;
   return message_id;
 end;
 $$;
@@ -244,8 +225,7 @@ create or replace function public.enqueue_github_sync_repo_permissions(
   p_class_id bigint, p_org text, p_repo text,
   p_course_slug text, p_github_usernames text[],
   p_debug_id text default null
-) returns bigint
-language plpgsql security definer set search_path = public as $$
+) returns bigint language plpgsql security definer set search_path = public as $$
 declare
   log_id bigint;
   message_id bigint;
@@ -260,31 +240,22 @@ begin
   insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
   values ('sync_repo_permissions', 0, p_class_id, p_debug_id)
   returning id into log_id;
-  select pgmq_public.send(
-    'async_calls',
-    jsonb_build_object(
-      'method', 'sync_repo_permissions',
-      'class_id', p_class_id,
-      'debug_id', p_debug_id,
-      'log_id', log_id,
+  select pgmq_public.send('async_calls', jsonb_build_object(
+      'method', 'sync_repo_permissions', 'class_id', p_class_id,
+      'debug_id', p_debug_id, 'log_id', log_id,
       'args', jsonb_build_object(
-        'org', p_org,
-        'repo', p_repo,
-        'courseSlug', p_course_slug,
-        'githubUsernames', p_github_usernames
+        'org', p_org, 'repo', p_repo,
+        'courseSlug', p_course_slug, 'githubUsernames', p_github_usernames
       )
-    )
-  ) into message_id;
+  )) into message_id;
   return message_id;
 end;
 $$;
 
 -- Source: 20250904234806_async-github-worker.sql
 create or replace function public.enqueue_github_archive_repo(
-  p_class_id bigint, p_org text, p_repo text,
-  p_debug_id text default null
-) returns bigint
-language plpgsql security definer set search_path = public as $$
+  p_class_id bigint, p_org text, p_repo text, p_debug_id text default null
+) returns bigint language plpgsql security definer set search_path = public as $$
 declare
   log_id bigint;
   message_id bigint;
@@ -299,27 +270,18 @@ begin
   insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
   values ('archive_repo_and_lock', 0, p_class_id, p_debug_id)
   returning id into log_id;
-  select pgmq_public.send(
-    'async_calls',
-    jsonb_build_object(
-      'method', 'archive_repo_and_lock',
-      'class_id', p_class_id,
-      'debug_id', p_debug_id,
-      'log_id', log_id,
-      'args', jsonb_build_object(
-        'org', p_org,
-        'repo', p_repo
-      )
-    )
-  ) into message_id;
+  select pgmq_public.send('async_calls', jsonb_build_object(
+      'method', 'archive_repo_and_lock', 'class_id', p_class_id,
+      'debug_id', p_debug_id, 'log_id', log_id,
+      'args', jsonb_build_object('org', p_org, 'repo', p_repo)
+  )) into message_id;
   return message_id;
 end;
 $$;
 
 -- Source: 20260816120000_bound_repo_creation_retries.sql
 create or replace function public.enqueue_create_repo_for_repository(p_repository_id bigint)
-returns bigint
-language plpgsql security definer set search_path = public as $$
+returns bigint language plpgsql security definer set search_path = public as $$
 declare
   r record;
   v_creation_method text;
@@ -357,15 +319,13 @@ begin
   -- See section 5 of 20260816120000_bound_repo_creation_retries.sql.
   v_repo_name := substring(r.repository from position('/' in r.repository) + 1);
   if r.assignment_group_id is not null then
-    select array_remove(array_agg(u.github_username), null)
-      into v_usernames
+    select array_remove(array_agg(u.github_username), null) into v_usernames
       from public.assignment_groups_members agm
       join public.user_roles ur on ur.private_profile_id = agm.profile_id and ur.disabled = false
       join public.users u on u.user_id = ur.user_id
      where agm.assignment_group_id = r.assignment_group_id;
     if r.repo_mode = 'fork_from_prior_assignment' then
-      select pr.repository
-        into v_source_repo
+      select pr.repository into v_source_repo
         from public.repositories pr
         join public.assignment_groups ag on ag.id = pr.assignment_group_id
         join public.assignment_groups cur on cur.id = r.assignment_group_id
@@ -376,8 +336,7 @@ begin
       v_source_repo := r.template_repo;
     end if;
   else
-    select array[u.github_username]
-      into v_usernames
+    select array[u.github_username] into v_usernames
       from public.user_roles ur
       join public.users u on u.user_id = ur.user_id
      where ur.private_profile_id = r.profile_id
@@ -385,8 +344,7 @@ begin
        and u.github_username is not null
      limit 1;
     if r.repo_mode = 'fork_from_prior_assignment' then
-      select pr.repository
-        into v_source_repo
+      select pr.repository into v_source_repo
         from public.repositories pr
        where pr.assignment_id = r.source_assignment_id
          and pr.profile_id = r.profile_id
@@ -410,21 +368,12 @@ begin
     return null;
   end if;
   select public.enqueue_github_create_repo(
-    r.class_id,
-    r.github_org,
-    v_repo_name,
-    coalesce(r.template_repo, v_source_repo),
-    r.course_slug,
-    v_usernames,
+    r.class_id, r.github_org, v_repo_name,
+    coalesce(r.template_repo, v_source_repo), r.course_slug, v_usernames,
     false, -- p_is_template_repo
     'reconcile-repo-' || p_repository_id || '-' || extract(epoch from now())::bigint, -- p_debug_id
-    r.assignment_id,
-    r.profile_id,
-    r.assignment_group_id,
-    r.latest_template_sha,
-    v_creation_method,
-    v_source_repo,
-    r.branch_protection,
+    r.assignment_id, r.profile_id, r.assignment_group_id,
+    r.latest_template_sha, v_creation_method, v_source_repo, r.branch_protection,
     null -- p_student_team_permission
   ) into v_msg_id;
   update public.repositories
@@ -438,8 +387,7 @@ $$;
 
 -- Source: 20260910010000_park_dead_lettered_repo_creations.sql
 create or replace function public.reconcile_stuck_repo_creations(p_stale_minutes integer default 15)
-returns integer
-language plpgsql security definer set search_path = public as $$
+returns integer language plpgsql security definer set search_path = public as $$
 declare
   r record;
   v_count integer := 0;
@@ -480,8 +428,7 @@ begin
               and d.dead_lettered_at >= rp.last_creation_attempt_at
          );
   for r in
-    select rp.id
-      from public.repositories rp
+    select rp.id from public.repositories rp
       join public.assignments a on a.id = rp.assignment_id
       join public.classes c on c.id = rp.class_id
      where rp.is_github_ready = false

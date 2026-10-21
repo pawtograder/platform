@@ -138,3 +138,38 @@ test.each(["repositories", "autograder", "assignments"])("push routing respects 
     expect(dispatch).toHaveBeenCalledTimes(provider === "github" ? 1 : 0);
   }
 });
+
+test("commit history never authorizes a same-named repository on another provider", async () => {
+  const file = "supabase/functions/repository-list-commits/index.ts";
+  const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest);
+  const fn = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "handleRequest")!;
+  for (const provider of ["github", "forgejo"]) {
+    let row: unknown = { git_provider: provider, profile_id: "student", assignment_group_id: null };
+    const query = {
+      select: () => query,
+      eq: (column: string, value: string) => {
+        if (column === "git_provider" && provider !== value) row = null;
+        return query;
+      },
+      maybeSingle: async () => ({ data: row, error: null })
+    };
+    const listCommits = jest.fn(async () => ({ commits: [{ sha: "private-github-history" }], has_more: false }));
+    const invoke = runInNewContext(`${ts.transpile(fn.getText(source))}\nhandleRequest`, {
+      listCommits,
+      SecurityError: Error,
+      assertUserIsInCourse: async () => ({
+        supabase: { from: () => query },
+        enrollment: { role: "student", private_profile_id: "student" }
+      }),
+      console: { log() {} }
+    });
+    const response = invoke({
+      headers: new Map(),
+      json: async () => ({ course_id: 1, repo_name: "same/name", page: 1 })
+    });
+    if (provider === "github")
+      await expect(response).resolves.toMatchObject({ commits: [{ sha: "private-github-history" }] });
+    else await expect(response).rejects.toThrow("not authorized");
+    expect(listCommits).toHaveBeenCalledTimes(provider === "github" ? 1 : 0);
+  }
+});
