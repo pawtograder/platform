@@ -82,3 +82,59 @@ test.each(["github-user-sync", "autograder-create-repos-for-student"])(
     }
   }
 );
+
+test.each(["repositories", "autograder", "assignments"])("push routing respects %s providers", async (table) => {
+  const text = readFileSync("supabase/functions/github-repo-webhook/index.ts", "utf8");
+  const source = ts.createSourceFile("webhook.ts", text, ts.ScriptTarget.Latest);
+  const handler = source.statements.find((node) => node.getText(source).startsWith('eventHandler.on("push",'))!;
+  for (const provider of ["github", "forgejo"]) {
+    const dispatch = jest.fn();
+    const row = { id: 1, git_provider: provider, assignments: { git_provider: provider } };
+    const client = {
+      from: (name: string) => {
+        let rows = name === table ? [row] : [];
+        let single = false;
+        const query = {
+          select: () => query,
+          eq: (column: string, value: string) => {
+            if (column === "git_provider") rows = rows.filter((r) => r.git_provider === value);
+            if (column === "assignments.git_provider") rows = rows.filter((r) => r.assignments.git_provider === value);
+            return query;
+          },
+          maybeSingle: () => {
+            single = true;
+            return query;
+          },
+          then: (resolve: (result: unknown) => void) =>
+            resolve({ data: single ? (rows[0] ?? null) : rows, error: null })
+        };
+        return query;
+      }
+    };
+    let invoke: (event: unknown) => Promise<void> = async () => {};
+    runInNewContext(ts.transpile(handler.getText(source), { target: ts.ScriptTarget.ES2022 }), {
+      eventHandler: {
+        on: (_: string, fn: typeof invoke) => {
+          invoke = fn;
+        }
+      },
+      createClient: () => client,
+      REQUEST_SCOPED_AUTH_OPTIONS: {},
+      Deno: { env: { get: () => "test" } },
+      Sentry: {
+        Scope: class {
+          setTag() {}
+        }
+      },
+      console: { log() {} },
+      tagScopeWithGenericPayload() {},
+      maybeCrash() {},
+      captureWebhookException() {},
+      handlePushToStudentRepo: dispatch,
+      handlePushToGraderSolution: dispatch,
+      handlePushToTemplateRepo: dispatch
+    });
+    await invoke({ name: "push", payload: { repository: { full_name: "same/name" }, ref: "refs/heads/main" } });
+    expect(dispatch).toHaveBeenCalledTimes(provider === "github" ? 1 : 0);
+  }
+});

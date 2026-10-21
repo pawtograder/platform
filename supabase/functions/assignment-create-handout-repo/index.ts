@@ -47,6 +47,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!assignment) {
     throw new UserVisibleError("Assignment not found", 400);
   }
+  if (assignment.git_provider !== "github") {
+    throw new UserVisibleError("This assignment uses Forgejo. GitHub repository setup is unavailable.", 400);
+  }
   if (!assignment.classes.slug) {
     throw new UserVisibleError("Class does not have a slug", 400);
   }

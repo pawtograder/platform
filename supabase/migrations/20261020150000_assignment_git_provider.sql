@@ -21,6 +21,7 @@ CREATE OR REPLACE FUNCTION public.assignments_validate_git_provider() RETURNS tr
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
   v_enabled boolean;
+  v_source_provider text;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     -- delete_assignment_with_all_data deletes repository rows before enqueueing GitHub cleanup.
@@ -31,9 +32,24 @@ BEGIN
     END IF;
     RETURN OLD;
   END IF;
+  IF NEW.source_assignment_id IS NOT NULL THEN
+    SELECT git_provider INTO v_source_provider FROM public.assignments
+      WHERE id = NEW.source_assignment_id FOR SHARE;
+    IF NEW.git_provider IS DISTINCT FROM v_source_provider THEN
+      RAISE EXCEPTION 'Fork source and target must use the same repository host'
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
   IF TG_OP = 'UPDATE' THEN
     IF NEW.git_provider = OLD.git_provider AND NEW.class_id = OLD.class_id THEN
       RETURN NEW;
+    END IF;
+    IF NEW.git_provider IS DISTINCT FROM OLD.git_provider AND EXISTS (
+      SELECT 1 FROM public.assignments
+      WHERE source_assignment_id = OLD.id AND git_provider <> NEW.git_provider
+    ) THEN
+      RAISE EXCEPTION 'Fork source and target must use the same repository host'
+        USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.git_provider IS DISTINCT FROM OLD.git_provider
        AND EXISTS (SELECT 1 FROM public.repositories WHERE assignment_id = OLD.id) THEN
@@ -59,7 +75,7 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER assignments_validate_git_provider
-  BEFORE INSERT OR UPDATE OF git_provider, class_id ON public.assignments
+  BEFORE INSERT OR UPDATE OF git_provider, class_id, source_assignment_id ON public.assignments
   FOR EACH ROW EXECUTE FUNCTION public.assignments_validate_git_provider();
 CREATE TRIGGER assignments_guard_forgejo_delete
   BEFORE DELETE ON public.assignments
@@ -70,6 +86,13 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
   v_provider text;
 BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.git_provider = 'forgejo' THEN
+      RAISE EXCEPTION 'Deleting Forgejo repositories is not supported until provider-aware cleanup exists'
+        USING ERRCODE = 'feature_not_supported';
+    END IF;
+    RETURN OLD;
+  END IF;
   -- Block provider changes without blocking concurrent repo inserts or submission FK checks.
   SELECT git_provider INTO v_provider FROM public.assignments
     WHERE id = NEW.assignment_id FOR SHARE;
@@ -81,7 +104,7 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER repositories_validate_git_provider
-  BEFORE INSERT OR UPDATE OF git_provider, assignment_id ON public.repositories
+  BEFORE INSERT OR UPDATE OF git_provider, assignment_id OR DELETE ON public.repositories
   FOR EACH ROW EXECUTE FUNCTION public.repositories_validate_git_provider();
 
 REVOKE ALL ON FUNCTION public.assignments_validate_git_provider() FROM PUBLIC, anon, authenticated;
@@ -93,27 +116,18 @@ REVOKE ALL ON FUNCTION public.repositories_validate_git_provider() FROM PUBLIC, 
 
 -- Source: 20260816120000_bound_repo_creation_retries.sql
 create or replace function public.enqueue_github_create_repo(
-  p_class_id bigint,
-  p_org text,
-  p_repo_name text,
-  p_template_repo text,
-  p_course_slug text,
-  p_github_usernames text[],
-  p_is_template_repo boolean default false,
-  p_debug_id text default null,
+  p_class_id bigint, p_org text, p_repo_name text,
+  p_template_repo text, p_course_slug text, p_github_usernames text[],
+  p_is_template_repo boolean default false, p_debug_id text default null,
   p_assignment_id bigint default null,
-  p_profile_id uuid default null,
-  p_assignment_group_id bigint default null,
+  p_profile_id uuid default null, p_assignment_group_id bigint default null,
   p_latest_template_sha text default null,
   p_creation_method text default 'template',           -- 'template' | 'fork'
   p_source_repo text default null,                     -- owner/repo to fork when method='fork'
   p_branch_protection jsonb default null,              -- {blockForcePush, requirePullRequest, requiredReviewers}
   p_student_team_permission text default null          -- 'pull' (mode 2 handout) | null
 ) returns bigint
-language plpgsql
-security definer
-set search_path = public
-as $$
+language plpgsql security definer set search_path = public as $$
 declare
   log_id bigint;
   message_id bigint;
@@ -133,11 +147,9 @@ begin
   end if;
   v_repo_name := p_repo_name;
   full_repo_name := p_org || '/' || v_repo_name;
-
   insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
   values ('create_repo', 0, p_class_id, p_debug_id)
   returning id into log_id;
-
   if p_assignment_id is not null then
     select id, repository into repo_id, v_existing_name
     from public.repositories
@@ -148,7 +160,6 @@ begin
       )
     order by (repository = p_org || '/' || p_repo_name) desc, id
     limit 1;
-
     if repo_id is null then
       insert into public.repositories(
         profile_id,
@@ -170,7 +181,6 @@ begin
       )
       on conflict do nothing
       returning id into repo_id;
-
       if repo_id is null then
         select id, repository into repo_id, v_existing_name
         from public.repositories
@@ -189,13 +199,11 @@ begin
       v_repo_name := substring(v_existing_name from position('/' in v_existing_name) + 1);
     end if;
   end if;
-
   if repo_id is not null then
     update public.repositories
        set last_creation_attempt_at = now()
      where id = repo_id;
   end if;
-
   v_args := jsonb_build_object(
     'org', p_org,
     'repoName', v_repo_name,
@@ -216,7 +224,6 @@ begin
   if p_student_team_permission is not null then
     v_args := v_args || jsonb_build_object('studentTeamPermission', p_student_team_permission);
   end if;
-
   select pgmq_public.send(
     'async_calls',
     jsonb_build_object(
@@ -228,24 +235,17 @@ begin
       'args', v_args
     )
   ) into message_id;
-
   return message_id;
 end;
 $$;
 
 -- Source: 20250904234806_async-github-worker.sql
 create or replace function public.enqueue_github_sync_repo_permissions(
-  p_class_id bigint,
-  p_org text,
-  p_repo text,
-  p_course_slug text,
-  p_github_usernames text[],
+  p_class_id bigint, p_org text, p_repo text,
+  p_course_slug text, p_github_usernames text[],
   p_debug_id text default null
 ) returns bigint
-language plpgsql
-security definer
-set search_path = public
-as $$
+language plpgsql security definer set search_path = public as $$
 declare
   log_id bigint;
   message_id bigint;
@@ -260,7 +260,6 @@ begin
   insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
   values ('sync_repo_permissions', 0, p_class_id, p_debug_id)
   returning id into log_id;
-
   select pgmq_public.send(
     'async_calls',
     jsonb_build_object(
@@ -276,22 +275,16 @@ begin
       )
     )
   ) into message_id;
-
   return message_id;
 end;
 $$;
 
 -- Source: 20250904234806_async-github-worker.sql
 create or replace function public.enqueue_github_archive_repo(
-  p_class_id bigint,
-  p_org text,
-  p_repo text,
+  p_class_id bigint, p_org text, p_repo text,
   p_debug_id text default null
 ) returns bigint
-language plpgsql
-security definer
-set search_path = public
-as $$
+language plpgsql security definer set search_path = public as $$
 declare
   log_id bigint;
   message_id bigint;
@@ -306,7 +299,6 @@ begin
   insert into public.api_gateway_calls(method, status_code, class_id, debug_id)
   values ('archive_repo_and_lock', 0, p_class_id, p_debug_id)
   returning id into log_id;
-
   select pgmq_public.send(
     'async_calls',
     jsonb_build_object(
@@ -320,7 +312,6 @@ begin
       )
     )
   ) into message_id;
-
   return message_id;
 end;
 $$;
@@ -328,10 +319,7 @@ $$;
 -- Source: 20260816120000_bound_repo_creation_retries.sql
 create or replace function public.enqueue_create_repo_for_repository(p_repository_id bigint)
 returns bigint
-language plpgsql
-security definer
-set search_path = public
-as $$
+language plpgsql security definer set search_path = public as $$
 declare
   r record;
   v_creation_method text;
@@ -354,25 +342,20 @@ begin
     join public.assignments a on a.id = rp.assignment_id
     join public.classes c on c.id = rp.class_id
    where rp.id = p_repository_id;
-
   if not found then
     raise exception 'Repository % not found', p_repository_id;
   end if;
-
   if r.git_provider <> 'github' then
     return null;
   end if;
-
   if r.repo_mode in ('none', 'no_submission') then
     raise notice 'Repository % assignment repo_mode=%; nothing to enqueue', p_repository_id, r.repo_mode;
     return null;
   end if;
-
   v_creation_method := case when r.repo_mode = 'template_only_staff' then 'template' else 'fork' end;
   -- Keep everything after the first slash. Legacy stored repo names may contain more slashes.
   -- See section 5 of 20260816120000_bound_repo_creation_retries.sql.
   v_repo_name := substring(r.repository from position('/' in r.repository) + 1);
-
   if r.assignment_group_id is not null then
     select array_remove(array_agg(u.github_username), null)
       into v_usernames
@@ -380,7 +363,6 @@ begin
       join public.user_roles ur on ur.private_profile_id = agm.profile_id and ur.disabled = false
       join public.users u on u.user_id = ur.user_id
      where agm.assignment_group_id = r.assignment_group_id;
-
     if r.repo_mode = 'fork_from_prior_assignment' then
       select pr.repository
         into v_source_repo
@@ -402,7 +384,6 @@ begin
        and ur.disabled = false
        and u.github_username is not null
      limit 1;
-
     if r.repo_mode = 'fork_from_prior_assignment' then
       select pr.repository
         into v_source_repo
@@ -414,11 +395,9 @@ begin
       v_source_repo := r.template_repo;
     end if;
   end if;
-
   if v_usernames is null then
     v_usernames := array[]::text[];
   end if;
-
   if r.repo_mode = 'fork_from_prior_assignment' and v_source_repo is null then
     update public.repositories
        set creation_error = format(
@@ -430,7 +409,6 @@ begin
     raise warning 'No source repository resolved for repository % (fork_from_prior_assignment); parked for instructor retry', p_repository_id;
     return null;
   end if;
-
   select public.enqueue_github_create_repo(
     r.class_id,
     r.github_org,
@@ -449,13 +427,11 @@ begin
     r.branch_protection,
     null -- p_student_team_permission
   ) into v_msg_id;
-
   update public.repositories
      set updated_at = now(),
          creation_attempts = creation_attempts + 1,
          last_creation_attempt_at = now()
    where id = p_repository_id;
-
   return v_msg_id;
 end;
 $$;
@@ -463,10 +439,7 @@ $$;
 -- Source: 20260910010000_park_dead_lettered_repo_creations.sql
 create or replace function public.reconcile_stuck_repo_creations(p_stale_minutes integer default 15)
 returns integer
-language plpgsql
-security definer
-set search_path = public
-as $$
+language plpgsql security definer set search_path = public as $$
 declare
   r record;
   v_count integer := 0;
@@ -475,7 +448,6 @@ declare
   v_inflight_repo_ids text[];
 begin
   v_inflight_repo_ids := public.repo_ids_with_queued_create();
-
   update public.repositories rp
      set creation_error = format(
            'Repository creation did not succeed after %s automatic attempts. Check the assignment template repository and GitHub org configuration, then use Retry.',
@@ -491,7 +463,6 @@ begin
            mins => p_stale_minutes * (2 ^ least(rp.creation_attempts, v_max_backoff_doublings))::int
          )
      and a.repo_mode not in ('none', 'no_submission');
-
   update public.repositories rp
      set creation_error = 'Repository creation failed and the job was dead-lettered, so automatic retries have stopped. Check the assignment template repository and GitHub org configuration (a private template needs org permission to be forked), then use Retry.'
     from public.assignments a
@@ -508,7 +479,6 @@ begin
             where d.repo_id = rp.id::text
               and d.dead_lettered_at >= rp.last_creation_attempt_at
          );
-
   for r in
     select rp.id
       from public.repositories rp

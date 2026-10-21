@@ -66,8 +66,7 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
         .eq("assignment_group_id", old_assignment_group_id);
       const oldGroupRepo = currentGroup.assignment_groups!.repositories[0];
       if (oldGroupRepo) {
-        const parts = oldGroupRepo.repository.split("/");
-        const repoName = parts.length > 1 ? parts[1] : parts[0];
+        const repoName = oldGroupRepo.repository;
         if (repoName) {
           await enqueueGithubArchiveRepo(class_id, currentGroup.classes!.github_org!, repoName);
         }
