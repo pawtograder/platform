@@ -472,3 +472,45 @@ monitoring:
   prometheusRules:
     labels:
       release: kps
+
+# ----- Forgejo and Coder (seed secrets first: scripts/setup-openbao-forgejo-coder.sh)
+forgejoCoderSecrets:
+  externalSecret:
+    enabled: true
+    forgejoPath: apps/pawtograder/forgejo-staging
+    coderPath: apps/pawtograder/coder-staging
+
+forgejo:
+  enabled: true
+  ingress:
+    hosts:
+      - host: git.staging.pawtograder.net
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: staging-wildcard-tls
+        hosts: [git.staging.pawtograder.net]
+
+forgejoRunner:
+  enabled: true
+  image:
+    repository: ghcr.io/pawtograder/forgejo-runner
+    tag: staging-latest
+
+coder:
+  enabled: true
+  coder:
+    env:
+      - name: CODER_ACCESS_URL
+        value: https://coder.staging.pawtograder.net
+      - name: CODER_WILDCARD_ACCESS_URL
+        value: "*-coder.staging.pawtograder.net" # suffix form stays one label deep for the wildcard cert
+    ingress:
+      host: coder.staging.pawtograder.net
+      # Ingress hosts allow only a whole-label wildcard; exact hosts still win.
+      wildcardHost: "*.staging.pawtograder.net"
+      tls:
+        enable: true
+        secretName: staging-wildcard-tls
+        wildcardSecretName: staging-wildcard-tls

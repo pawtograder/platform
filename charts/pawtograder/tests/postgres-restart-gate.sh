@@ -64,6 +64,11 @@ if ! git -C "$REPO" archive "$BASE_REF" "$CHART_REL" | tar -x -C "$TMP/base"; th
   exit 2
 fi
 BASE_CHART="$TMP/base/$CHART_REL"
+# git archive leaves out the gitignored subcharts; fetch the base's own pins.
+if ! "$(dirname "${BASH_SOURCE[0]}")/../scripts/build-deps.sh" "$BASE_CHART"; then
+  echo "postgres-restart-gate: could not fetch the chart's dependencies at $BASE_REF" >&2
+  exit 2
+fi
 
 chart_version() { awk '/^version:/ {gsub(/["'\'']/, "", $2); print $2; exit}' "$1/Chart.yaml"; }
 BASE_VER="$(chart_version "$BASE_CHART")"
