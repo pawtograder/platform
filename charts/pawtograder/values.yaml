@@ -2754,9 +2754,7 @@ coder:
     envFrom:
       - configMapRef: { name: pawtograder-coder-env }
       - secretRef: { name: pawtograder-coder-db }
-    # Until the first user exists, anyone reaching coderd can create it and become owner, so this creates it
-    # from pawtograder-coder-admin on a coderd bound to 127.0.0.1 before the real one serves. Overlays that
-    # set this list must keep it (image = coder.coder.image), or set [] along with coderBootstrap.enabled=false.
+    # Whoever reaches a coderd with no users becomes owner; this creates ours on 127.0.0.1 before coderd serves.
     initContainers:
       - name: first-owner
         image: ghcr.io/pawtograder/mirror/coder/coder:v2.37.3
