@@ -23,7 +23,7 @@ spawn() {
     | .spec.volumes |= map(if .name == "token" then .secret.secretName = $n else . end)
     | .spec.containers[0].env += [{name: "RUNNER_UUID", value: $u}, {name: "JOB_HANDLE", value: $h}]
     ' /etc/dispatcher/job-pod.json | kube -X POST "$KAPI/pods" --data-binary @-) \
-    || { fj -o /dev/null -X DELETE "$FAPI/admin/actions/runners/$rid"; return 1; }
+    || { kube -o /dev/null -X DELETE "$KAPI/pods/$name" 2>/dev/null; fj -o /dev/null -X DELETE "$FAPI/admin/actions/runners/$rid"; return 1; }
   uid=$(jq -r .metadata.uid <<<"$pod")
   jq -n --arg n "$name" --arg u "$uid" --arg t "$token" --arg s "$PREFIX" '{
       apiVersion: "v1", kind: "Secret",

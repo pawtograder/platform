@@ -34,7 +34,22 @@
 {{- end }}
 {{- end }}
 {{- end }}
-{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
+{{- with .Values.global.imageRegistry }}
+{{- $reg := . }}
+{{- $refs := dict }}
+{{- if $.Values.forgejo.enabled }}{{ $_ := set $refs "forgejo.image.registry" (printf "%s/" $.Values.forgejo.image.registry) }}{{ end }}
+{{- if (index $.Values "forgejo-db").enabled }}{{ $_ := set $refs "forgejo-db.image.registry" (printf "%s/" (index $.Values "forgejo-db").image.registry) }}{{ end }}
+{{- if (index $.Values "coder-db").enabled }}{{ $_ := set $refs "coder-db.image.registry" (printf "%s/" (index $.Values "coder-db").image.registry) }}{{ end }}
+{{- if $.Values.coder.enabled }}{{ $_ := set $refs "coder.coder.image.repo" $.Values.coder.coder.image.repo }}{{ end }}
+{{- if and $.Values.coder.enabled $.Values.coderBootstrap.enabled }}{{ $_ := set $refs "coderBootstrap.workspaces.image" $.Values.coderBootstrap.workspaces.image }}{{ end }}
+{{- if $.Values.forgejoRunner.enabled }}{{ $_ := set $refs "forgejoRunner.image.repository" $.Values.forgejoRunner.image.repository }}{{ end }}
+{{- range $key, $ref := $refs }}
+{{- if not (hasPrefix (printf "%s/" $reg) $ref) }}
+{{- fail (printf "global.imageRegistry=%s doesn't reach subcharts or full image references; point %s at it (got %q)" $reg $key $ref) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if .Values.coder.enabled }}
 {{- $img := .Values.coder.coder.image }}
 {{- $want := printf "%s:%s" $img.repo ($img.tag | default (printf "v%v" .Subcharts.coder.Chart.AppVersion)) }}
 {{- $init := dict }}
@@ -54,6 +69,11 @@
 {{- $wsAffinity := include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml }}
 {{- if omit $wsAffinity "nodeAffinity" }}
 {{- fail "Coder workspaces take only nodeAffinity from coderBootstrap.workspaces.affinity / global.affinity; podAffinity and podAntiAffinity aren't passed to the template, so set coderBootstrap.workspaces.affinity (it overrides global's) to a nodeAffinity-only value" }}
+{{- end }}
+{{- $wildcardEnv := false }}
+{{- range .Values.coder.coder.env }}{{ if and (eq .name "CODER_WILDCARD_ACCESS_URL") .value }}{{ $wildcardEnv = true }}{{ end }}{{ end }}
+{{- if not (and .Values.coder.coder.ingress.wildcardHost $wildcardEnv) }}
+{{- fail "the pushed workspace template serves VS Code on a subdomain: set coder.coder.ingress.wildcardHost and CODER_WILDCARD_ACCESS_URL in coder.coder.env" }}
 {{- end }}
 {{- end }}
 

@@ -2842,6 +2842,7 @@ coderBootstrap:
   enabled: true
   workspaceNamespace: ""
   workspaces:
+    image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
     storageClass: ""
     ephemeralStorageLimit: 4Gi
     networkPolicy:
