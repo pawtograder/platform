@@ -2791,7 +2791,6 @@ coder-db:
 coderBootstrap:
   enabled: true
   workspaceNamespace: ""
-  # nodeSelector / tolerations for workspace pods, merged with global's like any component.
   workspaces: {}
   resources:
     requests: { cpu: 50m, memory: 64Mi }
