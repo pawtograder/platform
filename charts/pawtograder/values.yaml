@@ -2773,8 +2773,12 @@ coder:
               kill -0 "$pid" 2>/dev/null || { cat /tmp/first-owner.log >&2; exit 1; }
               sleep 2
             done
-            if curl -fsS -o /dev/null "$url/api/v2/users/first"; then
+            # Coder answers 200 once a user exists and 404 before; anything else is an error, not "no user".
+            status=$(curl -sS -o /dev/null -w '%{http_code}' "$url/api/v2/users/first")
+            if [ "$status" = 200 ]; then
               echo "first user exists"
+            elif [ "$status" != 404 ]; then
+              echo "GET /api/v2/users/first returned $status" >&2; exit 1
             else
               esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
               printf '{"email":"%s","username":"%s","password":"%s","trial":false}' \
@@ -2843,6 +2847,7 @@ coderBootstrap:
   workspaceNamespace: ""
   workspaces:
     image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
+    imagePullSecrets: [] # Secret names in the workspace namespace
     storageClass: ""
     ephemeralStorageLimit: 4Gi
     networkPolicy:

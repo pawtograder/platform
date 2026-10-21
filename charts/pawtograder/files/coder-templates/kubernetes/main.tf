@@ -36,6 +36,12 @@ variable "node_affinity" {
   default     = "{}"
 }
 
+variable "image_pull_secrets" {
+  type        = string
+  description = "JSON list of Secret names for pulling the workspace image."
+  default     = "[]"
+}
+
 variable "home_storage_class" {
   type        = string
   description = "StorageClass for workspace home volumes; empty uses the cluster default."
@@ -118,10 +124,13 @@ resource "coder_agent" "main" {
   arch           = "amd64"
   startup_script = <<-EOT
     set -e
-    if [ ! -x "$HOME/.local/bin/code-server" ]; then
-      curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix="$HOME/.local"
+    # An image with code-server baked in (needed without internet egress) skips the download.
+    CS="$(command -v code-server || true)"
+    if [ -z "$CS" ]; then
+      CS="$HOME/.local/bin/code-server"
+      [ -x "$CS" ] || curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix="$HOME/.local"
     fi
-    "$HOME/.local/bin/code-server" --auth none --port 13337 >/tmp/code-server.log 2>&1 &
+    "$CS" --auth none --port 13337 >/tmp/code-server.log 2>&1 &
   EOT
 
   metadata {
@@ -198,6 +207,13 @@ resource "kubernetes_pod_v1" "main" {
     automount_service_account_token = false
     restart_policy                  = "Always"
     node_selector                   = jsondecode(var.node_selector)
+
+    dynamic "image_pull_secrets" {
+      for_each = jsondecode(var.image_pull_secrets)
+      content {
+        name = image_pull_secrets.value
+      }
+    }
 
     dynamic "affinity" {
       for_each = var.node_affinity == "{}" ? [] : [jsondecode(var.node_affinity)]

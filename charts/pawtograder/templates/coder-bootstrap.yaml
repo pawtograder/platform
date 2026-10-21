@@ -64,8 +64,8 @@ spec:
               done
               esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
               E="$(esc "$ADMIN_EMAIL")" P="$(esc "$ADMIN_PASSWORD")"
-              curl -fsS -o /dev/null "$url/api/v2/users/first" \
-                || { echo "Coder has no first user; the first-owner init container in coder.coder.initContainers should have made it" >&2; exit 1; }
+              status=$(curl -sS -o /dev/null -w '%{http_code}' "$url/api/v2/users/first")
+              [ "$status" = 200 ] || { echo "GET /api/v2/users/first returned $status, not 200: the first-owner init container should have created the owner" >&2; exit 1; }
               login() { printf '{"email":"%s","password":"%s"}' "$E" "$P" \
                 | post /api/v2/users/login | sed -n 's/.*"session_token":"\([^"]*\)".*/\1/p'; }
               CODER_SESSION_TOKEN="$(login || true)"
@@ -84,6 +84,7 @@ spec:
                   --variable node_selector={{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml | toJson | squote }} \
                   --variable tolerations={{ include "pawtograder.tolerations" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYamlArray | toJson | squote }} \
                   --variable image={{ .Values.coderBootstrap.workspaces.image | squote }} \
+                  --variable image_pull_secrets={{ .Values.coderBootstrap.workspaces.imagePullSecrets | default list | toJson | squote }} \
                   --variable home_storage_class={{ .Values.coderBootstrap.workspaces.storageClass | default "" | squote }} \
                   --variable ephemeral_storage_limit={{ .Values.coderBootstrap.workspaces.ephemeralStorageLimit | default "4Gi" }} \
                   --variable node_affinity={{ (include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml).nodeAffinity | default dict | toJson | squote }} \
