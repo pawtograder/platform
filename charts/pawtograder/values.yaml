@@ -2760,7 +2760,8 @@ coder:
     service:
       type: ClusterIP
     ingress:
-      enable: true
+      # Off: templates/coder-ingress.yaml publishes the same Ingress once coder-bootstrap has created the owner.
+      enable: false
       className: nginx
       host: ""
       wildcardHost: ""
@@ -2790,8 +2791,14 @@ coder-db:
 
 coderBootstrap:
   enabled: true
+  publishIngress: true
   workspaceNamespace: ""
-  workspaces: {}
+  workspaces:
+    ephemeralStorageLimit: 4Gi
+    # Egress allowed for workspace pods with networkPolicy.enabled: DNS, the ingress controller, and the internet minus these.
+    networkPolicy:
+      privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      extraEgress: []
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: 500m, memory: 256Mi }

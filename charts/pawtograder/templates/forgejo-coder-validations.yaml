@@ -34,6 +34,9 @@
 {{- end }}
 {{- end }}
 {{- end }}
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled .Values.coderBootstrap.publishIngress .Values.coder.coder.ingress.enable }}
+{{- fail "coder.coder.ingress.enable must stay false: coderBootstrap.publishIngress publishes Coder's Ingress only after the first owner exists, and the subchart's would expose /api/v2/users/first before that" }}
+{{- end }}
 {{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
 {{- $wsAffinity := include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml }}
 {{- if omit $wsAffinity "nodeAffinity" }}

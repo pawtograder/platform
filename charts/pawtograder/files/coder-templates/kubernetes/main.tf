@@ -36,6 +36,12 @@ variable "node_affinity" {
   default     = "{}"
 }
 
+variable "ephemeral_storage_limit" {
+  type        = string
+  description = "Cap on what a workspace writes outside its home volume (/tmp, the image layer)."
+  default     = "4Gi"
+}
+
 variable "image" {
   type        = string
   description = "Workspace container image."
@@ -273,12 +279,14 @@ resource "kubernetes_pod_v1" "main" {
 
       resources {
         requests = {
-          cpu    = "250m"
-          memory = "512Mi"
+          cpu                 = "250m"
+          memory              = "512Mi"
+          "ephemeral-storage" = "256Mi"
         }
         limits = {
-          cpu    = data.coder_parameter.cpu.value
-          memory = "${data.coder_parameter.memory.value}Gi"
+          cpu                 = data.coder_parameter.cpu.value
+          memory              = "${data.coder_parameter.memory.value}Gi"
+          "ephemeral-storage" = var.ephemeral_storage_limit
         }
       }
 

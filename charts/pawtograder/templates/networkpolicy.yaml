@@ -190,6 +190,7 @@ spec:
 {{- if .Values.coder.enabled }}
 ---
 # No ingress: Coder then relays workspace traffic over the agent's outbound DERP connection instead of direct P2P.
+# Egress mirrors the Actions job policy: workspaces run student code.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -201,7 +202,26 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: coder-workspace
-  policyTypes: ["Ingress"]
+  policyTypes: ["Ingress", "Egress"]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Agents dial CODER_ACCESS_URL; on most CNIs a ClusterIP/LoadBalancer hop is matched after DNAT, at the controller pod.
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingressControllerNamespaceSelector | nindent 12 }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: {{ toJson .Values.coderBootstrap.workspaces.networkPolicy.privateCidrs }}
+    {{- with .Values.coderBootstrap.workspaces.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}
 {{- if $onPostgres }}
 ---

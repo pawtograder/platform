@@ -88,6 +88,7 @@ spec:
                   --variable namespace={{ .Values.coderBootstrap.workspaceNamespace | default .Release.Namespace }} \
                   --variable node_selector={{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml | toJson | squote }} \
                   --variable tolerations={{ include "pawtograder.tolerations" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYamlArray | toJson | squote }} \
+                  --variable ephemeral_storage_limit={{ .Values.coderBootstrap.workspaces.ephemeralStorageLimit | default "4Gi" }} \
                   --variable node_affinity={{ (include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml).nodeAffinity | default dict | toJson | squote }} \
                   --message "chart {{ .Chart.Version }}"
               done
