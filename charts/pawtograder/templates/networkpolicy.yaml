@@ -189,6 +189,28 @@ spec:
 {{- end }}
 {{- if .Values.coder.enabled }}
 ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" . }}-apps-allow-workspaces-to-coder
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: coder
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.coderBootstrap.workspaceNamespace | default .Release.Namespace }} }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: coder-workspace }
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
 # No ingress: Coder then relays workspace traffic over the agent's outbound DERP connection instead of direct P2P.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -214,6 +236,16 @@ spec:
     - to:
         - namespaceSelector:
             {{- toYaml .Values.networkPolicy.ingressControllerNamespaceSelector | nindent 12 }}
+    # The subchart's default access URL is coderd's in-cluster Service.
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} }
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: coder
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - { protocol: TCP, port: 8080 }
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

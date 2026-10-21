@@ -2754,14 +2754,64 @@ coder:
     envFrom:
       - configMapRef: { name: pawtograder-coder-env }
       - secretRef: { name: pawtograder-coder-db }
+    # Until the first user exists, anyone reaching coderd can create it and become owner, so this creates it
+    # from pawtograder-coder-admin on a coderd bound to 127.0.0.1 before the real one serves. Overlays that
+    # set this list must keep it (image = coder.coder.image), or set [] along with coderBootstrap.enabled=false.
+    initContainers:
+      - name: first-owner
+        image: ghcr.io/pawtograder/mirror/coder/coder:v2.37.3
+        command:
+          - sh
+          - -ec
+          - |
+            for v in "$ADMIN_EMAIL" "$ADMIN_USERNAME" "$ADMIN_PASSWORD"; do
+              case "$v" in *[[:cntrl:]]*) echo "pawtograder-coder-admin has a control character (trailing newline?)" >&2; exit 1 ;; esac
+            done
+            /opt/coder server >/tmp/first-owner.log 2>&1 &
+            pid=$!
+            url=http://127.0.0.1:3000
+            until curl -fsS -o /dev/null "$url/healthz"; do
+              kill -0 "$pid" 2>/dev/null || { cat /tmp/first-owner.log >&2; exit 1; }
+              sleep 2
+            done
+            if curl -fsS -o /dev/null "$url/api/v2/users/first"; then
+              echo "first user exists"
+            else
+              esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+              printf '{"email":"%s","username":"%s","password":"%s","trial":false}' \
+                "$(esc "$ADMIN_EMAIL")" "$(esc "$ADMIN_USERNAME")" "$(esc "$ADMIN_PASSWORD")" \
+                | curl -fsS -o /dev/null -X POST -H 'Content-Type: application/json' --data-binary @- "$url/api/v2/users/first"
+              echo "created first owner $ADMIN_USERNAME"
+            fi
+            kill "$pid"
+            wait "$pid" 2>/dev/null || true
+        env:
+          - { name: CODER_HTTP_ADDRESS, value: "127.0.0.1:3000" }
+          - { name: CODER_ACCESS_URL, value: "http://127.0.0.1:3000" }
+          - { name: CODER_PROVISIONER_DAEMONS, value: "0" }
+          - { name: CODER_CACHE_DIRECTORY, value: /tmp/coder-cache }
+          - name: ADMIN_EMAIL
+            valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: email } }
+          - name: ADMIN_USERNAME
+            valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: username } }
+          - name: ADMIN_PASSWORD
+            valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: password } }
+        envFrom:
+          - configMapRef: { name: pawtograder-coder-env }
+          - secretRef: { name: pawtograder-coder-db }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: [ALL] }
+        resources:
+          requests: { cpu: 250m, memory: 512Mi }
+          limits: { cpu: "1", memory: 1Gi }
     resources:
       requests: { cpu: 250m, memory: 512Mi }
       limits: { cpu: "1", memory: 1Gi }
     service:
       type: ClusterIP
     ingress:
-      # Off: templates/coder-ingress.yaml publishes the same Ingress once coder-bootstrap has created the owner.
-      enable: false
+      enable: true
       className: nginx
       host: ""
       wildcardHost: ""
@@ -2791,7 +2841,6 @@ coder-db:
 
 coderBootstrap:
   enabled: true
-  publishIngress: true
   workspaceNamespace: ""
   workspaces:
     ephemeralStorageLimit: 4Gi

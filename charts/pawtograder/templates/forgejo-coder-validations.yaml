@@ -34,8 +34,17 @@
 {{- end }}
 {{- end }}
 {{- end }}
-{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled .Values.coderBootstrap.publishIngress .Values.coder.coder.ingress.enable }}
-{{- fail "coder.coder.ingress.enable must stay false: coderBootstrap.publishIngress publishes Coder's Ingress only after the first owner exists, and the subchart's would expose /api/v2/users/first before that" }}
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
+{{- $img := .Values.coder.coder.image }}
+{{- $want := printf "%s:%s" $img.repo ($img.tag | default (printf "v%v" .Subcharts.coder.Chart.AppVersion)) }}
+{{- $init := dict }}
+{{- range .Values.coder.coder.initContainers }}{{ if eq .name "first-owner" }}{{ $init = . }}{{ end }}{{ end }}
+{{- if not $init }}
+{{- fail "coder.coder.initContainers must keep the chart's first-owner entry: without it, whoever reaches Coder first can create its owner" }}
+{{- end }}
+{{- if ne $init.image $want }}
+{{- fail (printf "coder.coder.initContainers first-owner image must match coder.coder.image (%s, got %s)" $want $init.image) }}
+{{- end }}
 {{- end }}
 {{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
 {{- $wsAffinity := include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml }}

@@ -14,6 +14,12 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder") | nindent 4 }}
 data:
+  {{- range .Values.coder.coder.env }}
+  {{- if eq .name "CODER_PG_CONNECTION_URL" }}
+  # For the first-owner init container; coderd itself takes it from coder.coder.env.
+  CODER_PG_CONNECTION_URL: {{ .value | quote }}
+  {{- end }}
+  {{- end }}
   CODER_TELEMETRY_ENABLE: "false"
   CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE: "false"
   CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS: "false"

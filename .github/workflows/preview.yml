@@ -1202,7 +1202,8 @@ jobs:
           echo "following batch job pods in $NS (pid $(cat "$RUNNER_TEMP/hook-logs/.watcher.pid"))"
 
       - name: Fetch chart dependencies
-        run: charts/pawtograder/scripts/build-deps.sh
+        # Not the PR's build-deps.sh: this job holds live cluster credentials. OCI dependencies need no repo add.
+        run: helm dependency build charts/pawtograder --skip-refresh
 
       - name: helm upgrade --install
         env:
