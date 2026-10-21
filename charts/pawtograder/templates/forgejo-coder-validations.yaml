@@ -34,7 +34,7 @@
 {{- end }}
 {{- end }}
 {{- end }}
-{{- if .Values.coder.enabled }}
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
 {{- $wsAffinity := include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml }}
 {{- if omit $wsAffinity "nodeAffinity" }}
 {{- fail "Coder workspaces take only nodeAffinity from coderBootstrap.workspaces.affinity / global.affinity; podAffinity and podAntiAffinity aren't passed to the template, so set coderBootstrap.workspaces.affinity (it overrides global's) to a nodeAffinity-only value" }}
@@ -89,16 +89,21 @@
 {{- if not (or (eq $pgURL $pgWant) (hasPrefix (printf "%s?" $pgWant) $pgURL)) }}
 {{- fail (printf "coder.coder.env must set CODER_PG_CONNECTION_URL to %s?sslmode=disable for coder.database=%s (got %q); an overlay that sets the list must keep it" $pgWant .Values.coder.database $pgURL) }}
 {{- end }}
-{{- with .Values.coderBootstrap.workspaceNamespace }}
-{{- if ne . $.Release.Namespace }}
-{{- $sa := $.Values.coder.coder.serviceAccount }}
+{{- if .Values.coderBootstrap.enabled }}
+{{- $wsNS := .Values.coderBootstrap.workspaceNamespace | default .Release.Namespace }}
+{{- $sa := .Values.coder.coder.serviceAccount }}
 {{- $granted := list }}
 {{- range $sa.workspaceNamespaces }}{{ if and (kindIs "map" .) .workspacePerms }}{{ $granted = append $granted .name }}{{ end }}{{ end }}
-{{- if not (has . $granted) }}
-{{- fail (printf "coderBootstrap.workspaceNamespace=%s needs {name: %s, workspacePerms: true} in coder.coder.serviceAccount.workspaceNamespaces, or coderd can't create workspaces there" . .) }}
+{{- if eq $wsNS .Release.Namespace }}
+{{- if not (or $sa.workspacePerms (has $wsNS $granted)) }}
+{{- fail (printf "workspaces go in %s (coderBootstrap.workspaceNamespace is empty), but coder.coder.serviceAccount.workspacePerms=false leaves coderd no Role there; set coderBootstrap.workspaceNamespace or keep workspacePerms" $wsNS) }}
+{{- end }}
+{{- else }}
+{{- if not (has $wsNS $granted) }}
+{{- fail (printf "coderBootstrap.workspaceNamespace=%s needs {name: %s, workspacePerms: true} in coder.coder.serviceAccount.workspaceNamespaces, or coderd can't create workspaces there" $wsNS $wsNS) }}
 {{- end }}
 {{- if $sa.workspacePerms }}
-{{- fail (printf "coderBootstrap.workspaceNamespace=%s moves workspaces out of %s; set coder.coder.serviceAccount.workspacePerms=false so coderd loses its Role over Pawtograder's pods there" . $.Release.Namespace) }}
+{{- fail (printf "coderBootstrap.workspaceNamespace=%s moves workspaces out of %s; set coder.coder.serviceAccount.workspacePerms=false so coderd loses its Role over Pawtograder's pods there" $wsNS .Release.Namespace) }}
 {{- end }}
 {{- end }}
 {{- end }}
