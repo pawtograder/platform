@@ -470,12 +470,7 @@ monitoring:
     labels:
       release: kps
 
-# ----- Forgejo and Coder ----------------------------------------------------
-# Both on this release's Postgres (the chart default). Hosts sit under the
-# existing *.staging.pawtograder.net DNS and staging-wildcard-tls cert; Coder's
-# app URLs use the suffix form (8080--main--ws--user-coder.staging...) so they
-# stay one label deep, which a wildcard cert requires. Secrets come from
-# OpenBao: scripts/setup-openbao-forgejo-coder.sh --env staging --coder-email ...
+# ----- Forgejo and Coder (seed secrets first: scripts/setup-openbao-forgejo-coder.sh)
 forgejoCoderSecrets:
   externalSecret:
     enabled: true
@@ -498,7 +493,7 @@ forgejoRunner:
   enabled: true
   image:
     repository: ghcr.io/pawtograder/forgejo-runner
-    tag: staging-latest # deploy-staging pins staging-<sha>
+    tag: staging-latest
 
 coder:
   enabled: true
@@ -507,10 +502,10 @@ coder:
       - name: CODER_ACCESS_URL
         value: https://coder.staging.pawtograder.net
       - name: CODER_WILDCARD_ACCESS_URL
-        value: "*-coder.staging.pawtograder.net"
+        value: "*-coder.staging.pawtograder.net" # suffix form stays one label deep for the wildcard cert
     ingress:
       host: coder.staging.pawtograder.net
-      # Ingress hosts only allow a whole-label wildcard; exact hosts (stable, api, channels) still win.
+      # Ingress hosts allow only a whole-label wildcard; exact hosts still win.
       wildcardHost: "*.staging.pawtograder.net"
       tls:
         enable: true

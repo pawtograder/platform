@@ -1,21 +1,4 @@
 #!/usr/bin/env bash
-# One-time bootstrap of the Forgejo and Coder credentials in OpenBao, read by
-# the chart's forgejoCoderSecrets ExternalSecrets.
-#
-# Writes (default mount=kv):
-#   <prefix>/forgejo-<env>   admin_username, admin_password, db_password, runner_secret
-#   <prefix>/coder-<env>     admin_email, admin_username, admin_password, db_password
-#
-# Passwords are alphanumeric: Coder's connection settings don't escape them.
-# runner_secret is 40 hex characters, as `forgejo-cli actions register` requires.
-#
-# Usage:
-#   ./scripts/setup-openbao-forgejo-coder.sh --env staging --coder-email ops@example.edu
-#   ./scripts/setup-openbao-forgejo-coder.sh --env staging --coder-email ... --rotate
-#
-# Requires `bao` (or `vault`) on PATH; BAO_ADDR/BAO_TOKEN (or VAULT_*)
-# exported; `jq` and `openssl`.
-
 set -euo pipefail
 
 usage() {
@@ -72,6 +55,7 @@ $CLI status >/dev/null 2>&1 || {
   exit 1
 }
 
+# Alphanumeric: Coder's connection settings don't escape passwords.
 pw() { openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | cut -c1-32; }
 
 for app in forgejo coder; do
@@ -81,6 +65,7 @@ for app in forgejo coder; do
   fi
 done
 
+# runner_secret is 40 hex chars, as `forgejo-cli actions register` requires.
 jq -n --arg a "$(pw)" --arg d "$(pw)" --arg r "$(openssl rand -hex 20)" \
   '{admin_username: "forgejo-admin", admin_password: $a, db_password: $d, runner_secret: $r}' \
   | $CLI kv put -mount="$BAO_MOUNT" "$PREFIX/forgejo-$ENV_NAME" - >/dev/null
