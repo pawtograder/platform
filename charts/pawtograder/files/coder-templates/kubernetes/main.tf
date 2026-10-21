@@ -187,9 +187,9 @@ resource "kubernetes_persistent_volume_claim_v1" "home" {
     labels    = local.labels
   }
   wait_until_bound = false
-  # Both force replacement, which deletes the home: older PVCs keep their name, and a new class applies to new ones.
+  # Each forces replacement, which deletes the home; changing these applies to new workspaces only.
   lifecycle {
-    ignore_changes = [metadata[0].name, spec[0].storage_class_name]
+    ignore_changes = [metadata[0].name, metadata[0].namespace, spec[0].storage_class_name]
   }
   spec {
     access_modes       = ["ReadWriteOnce"]

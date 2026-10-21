@@ -87,8 +87,11 @@
 {{- if and (index .Values "coder-db").enabled .Values.global.imagePullSecrets (not (index .Values "coder-db").imagePullSecrets) }}
 {{- fail "global.imagePullSecrets doesn't reach the coder-db subchart's pod; set coder-db.imagePullSecrets too" }}
 {{- end }}
-{{- if and .Values.forgejo.enabled (or .Values.forgejo.nameOverride .Values.forgejo.fullnameOverride) }}
-{{- fail "forgejo.nameOverride / fullnameOverride aren't supported: this chart refers to Forgejo's Services as pawtograder-forgejo-*" }}
+{{- range $key := list "forgejo" "forgejo-db" "coder-db" }}
+{{- $v := index $.Values $key }}
+{{- if and $v.enabled (or $v.nameOverride $v.fullnameOverride $v.namespaceOverride) }}
+{{- fail (printf "%s.nameOverride / fullnameOverride / namespaceOverride aren't supported: this chart addresses its Services as pawtograder-%s* in the release namespace" $key $key) }}
+{{- end }}
 {{- end }}
 {{- if and .Values.coder.enabled .Values.global.imagePullSecrets (not .Values.coder.coder.image.pullSecrets) }}
 {{- fail "global.imagePullSecrets doesn't reach the Coder subchart's pod; set coder.coder.image.pullSecrets too" }}
@@ -114,10 +117,14 @@
 {{- if omit $wsAffinity "nodeAffinity" }}
 {{- fail "Coder workspaces take only nodeAffinity from coderBootstrap.workspaces.affinity / global.affinity; podAffinity and podAntiAffinity aren't passed to the template, so set coderBootstrap.workspaces.affinity (it overrides global's) to a nodeAffinity-only value" }}
 {{- end }}
-{{- $wildcardEnv := false }}
-{{- range .Values.coder.coder.env }}{{ if and (eq .name "CODER_WILDCARD_ACCESS_URL") .value }}{{ $wildcardEnv = true }}{{ end }}{{ end }}
-{{- if not (and .Values.coder.coder.ingress.wildcardHost $wildcardEnv) }}
+{{- $wildcardEnv := "" }}
+{{- range .Values.coder.coder.env }}{{ if eq .name "CODER_WILDCARD_ACCESS_URL" }}{{ $wildcardEnv = .value | default "" | trimPrefix "https://" | trimPrefix "http://" | trimSuffix "/" }}{{ end }}{{ end }}
+{{- $wildcardHost := .Values.coder.coder.ingress.wildcardHost | default "" }}
+{{- if not (and $wildcardHost $wildcardEnv) }}
 {{- fail "the pushed workspace template serves VS Code on a subdomain: set coder.coder.ingress.wildcardHost and CODER_WILDCARD_ACCESS_URL in coder.coder.env" }}
+{{- end }}
+{{- if ne $wildcardEnv $wildcardHost }}
+{{- fail (printf "CODER_WILDCARD_ACCESS_URL (%s) must name the same host as coder.coder.ingress.wildcardHost (%s), or app URLs have no route" $wildcardEnv $wildcardHost) }}
 {{- end }}
 {{- end }}
 
