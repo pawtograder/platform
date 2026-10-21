@@ -16,8 +16,9 @@ spawn() {
   reg=$(jq -n --arg n "$PREFIX-job-$id" '{name: $n, ephemeral: true}' | fj -X POST "$FAPI/admin/actions/runners" --data-binary @-) || return 1
   uuid=$(jq -r .uuid <<<"$reg"); rid=$(jq -r .id <<<"$reg"); token=$(jq -r .token <<<"$reg")
   name="$PREFIX-job-$id-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
-  pod=$(jq --arg n "$name" --arg h "$handle" --arg u "$uuid" --arg r "$rid" --arg j "$id" '
+  pod=$(jq --arg n "$name" --arg h "$handle" --arg u "$uuid" --arg r "$rid" --arg j "$id" --argjson o "$OWNER" '
       .metadata.name = $n
+    | .metadata.ownerReferences = $o
     | .metadata.annotations += {"pawtograder.net/job-handle": $h, "pawtograder.net/runner-id": $r, "pawtograder.net/job-id": $j}
     | .spec.volumes |= map(if .name == "token" then .secret.secretName = $n else . end)
     | .spec.containers[0].env += [{name: "RUNNER_UUID", value: $u}, {name: "JOB_HANDLE", value: $h}]
@@ -35,6 +36,8 @@ spawn() {
 
 while true; do
   sleep "$POLL_INTERVAL"
+  # Job pods are owned by the chart's ConfigMap, so disabling the runner or uninstalling garbage-collects them.
+  OWNER=$(kube "$KAPI/configmaps/$PREFIX" | jq -c --arg n "$PREFIX" '[{apiVersion: "v1", kind: "ConfigMap", name: $n, uid: .metadata.uid}]') || continue
   pods=$(kube "$KAPI/pods?labelSelector=$SELECTOR") || continue
   for p in $(jq -r '.items[] | select(.status.phase == "Succeeded" or .status.phase == "Failed") | .metadata.name' <<<"$pods"); do
     kube -o /dev/null -X DELETE "$KAPI/pods/$p" && echo "reaped $p"

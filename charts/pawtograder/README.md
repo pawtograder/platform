@@ -623,7 +623,7 @@ The chart can also run [Forgejo](https://forgejo.org) (git hosting and Actions) 
 | `coder.enabled` | Coder (subchart, upstream `helm.coder.com/v2`), plus the post-install hook that creates its first owner and pushes `files/coder-templates/*` |
 | `coder-db.enabled` | A separate Postgres for Coder, Service `pawtograder-coder-db`; only with `coder.database=own` |
 
-`global.nodeSelector`, `tolerations` and `affinity` apply to the chart's own new pods (the `app-databases` Job, the Coder bootstrap hook, the Actions dispatcher and job pods, and Coder workspaces through `coderBootstrap.workspaces`), but not to the subcharts. With them set, give each enabled subchart its own (`forgejo.nodeSelector`, `coder.coder.nodeSelector`, `forgejo-db.nodeSelector`, `coder-db.nodeSelector`, or the matching `tolerations`); the render fails otherwise.
+`global.nodeSelector`, `tolerations` and `affinity` apply to the chart's own new pods (the `app-databases` Job, the Coder bootstrap hook, the Actions dispatcher and job pods, and Coder workspaces through `coderBootstrap.workspaces`), but not to the subcharts. For each of the three that's set globally, give every enabled subchart the same key (`forgejo.<key>`, `coder.coder.<key>`, `forgejo-db.<key>`, `coder-db.<key>`); the render fails otherwise. Workspaces take only `nodeAffinity`; a `podAffinity` or `podAntiAffinity` that would reach them fails the render, and `coderBootstrap.workspaces.affinity` overrides the global one.
 
 The release must be named `pawtograder`: subchart values name `pawtograder-*` Secrets and ConfigMaps, and a render with another name fails.
 
@@ -664,7 +664,7 @@ Git is HTTPS only, since SSH is disabled for ingress-only clusters. An overlay t
 
 Every Actions job runs in a pod of its own, so it works where Docker-in-Docker isn't allowed. The runner labels (`ubuntu-latest`, `ubuntu-24.04` and `ubuntu-22.04`, all `:host`) mean the job runs directly in that pod, with the toolchain baked into `images/forgejo-runner`: JDK 21, Maven, Python 3, Node 22 and git. Build it for `linux/amd64`, push it, and set `forgejoRunner.image` (and `forgejoRunner.imagePullSecrets` if the registry needs auth; `global.imagePullSecrets` can't be used with Forgejo on). Each job pod's `ephemeral-storage` limit caps everything it writes, including outside the `/data` work directory.
 
-A dispatcher Deployment polls Forgejo for waiting jobs. For each one it registers an ephemeral runner through the admin API, then starts a pod that runs `forgejo-runner one-job` for that job alone, with that runner's token mounted from a Secret the pod owns. Forgejo deletes an ephemeral runner after its one job, and the dispatcher deletes finished pods (their Secret goes with them). Nothing carries over between jobs: no shared work directory, no cache, no long-lived runner credential. Job pods get no service account token or service-link environment variables, run as uid 1000 with all capabilities dropped, and are killed after `forgejoRunner.podDeadlineSeconds`. At most `forgejoRunner.capacity` run at once.
+A dispatcher Deployment polls Forgejo for waiting jobs. For each one it registers an ephemeral runner through the admin API, then starts a pod that runs `forgejo-runner one-job` for that job alone, with that runner's token mounted from a Secret the pod owns. Forgejo deletes an ephemeral runner after its one job, and the dispatcher deletes finished pods (their Secret goes with them). Job pods are owned by the runner's ConfigMap, so turning `forgejoRunner` off or uninstalling deletes running jobs too, rather than leaving them running outside the runner NetworkPolicy. Nothing carries over between jobs: no shared work directory, no cache, no long-lived runner credential. Job pods get no service account token or service-link environment variables, run as uid 1000 with all capabilities dropped, and are killed after `forgejoRunner.podDeadlineSeconds`. At most `forgejoRunner.capacity` run at once.
 
 This is the flow Forgejo 15 added ephemeral runners and `one-job --handle` for (upstream's `examples/on-demand` in the runner repo is the same loop for a single host); upstream ships no Kubernetes operator, and its Kubernetes example needs privileged Docker-in-Docker.
 
@@ -678,7 +678,7 @@ Workspace pods (`files/coder-templates/kubernetes`) run under runc as uid 1000, 
 
 ### NetworkPolicy
 
-With `networkPolicy.enabled`, the chart adds the same rules for Forgejo, Coder and their `*-db` Postgres, whose subchart pods the chart's own policies don't select: ingress only from this release's pods and, for Forgejo and Coder, the ingress controller. Job pods may reach Forgejo on port 3000 and nothing else in the release, and Forgejo or Coder may reach this chart's Postgres when they use it.
+With `networkPolicy.enabled`, the chart adds the same rules for Forgejo, Coder and their `*-db` Postgres, whose subchart pods the chart's own policies don't select: ingress only from this release's pods and, for Forgejo and Coder, the ingress controller. Job pods may reach Forgejo's HTTP port and nothing else in the release, and Forgejo or Coder may reach this chart's Postgres when they use it. Coder workspace pods, in whichever namespace they run, take no ingress; Coder then relays their traffic over each agent's outbound connection.
 
 ## Realtime sizing
 

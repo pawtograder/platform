@@ -30,6 +30,12 @@ variable "tolerations" {
   default     = "[]"
 }
 
+variable "node_affinity" {
+  type        = string
+  description = "JSON Kubernetes nodeAffinity for workspace pods."
+  default     = "{}"
+}
+
 variable "image" {
   type        = string
   description = "Workspace container image."
@@ -174,6 +180,64 @@ resource "kubernetes_pod_v1" "main" {
     automount_service_account_token = false
     restart_policy                  = "Always"
     node_selector                   = jsondecode(var.node_selector)
+
+    dynamic "affinity" {
+      for_each = var.node_affinity == "{}" ? [] : [jsondecode(var.node_affinity)]
+      content {
+        node_affinity {
+          dynamic "required_during_scheduling_ignored_during_execution" {
+            for_each = can(affinity.value.requiredDuringSchedulingIgnoredDuringExecution) ? [affinity.value.requiredDuringSchedulingIgnoredDuringExecution] : []
+            content {
+              dynamic "node_selector_term" {
+                for_each = required_during_scheduling_ignored_during_execution.value.nodeSelectorTerms
+                content {
+                  dynamic "match_expressions" {
+                    for_each = lookup(node_selector_term.value, "matchExpressions", [])
+                    content {
+                      key      = match_expressions.value.key
+                      operator = match_expressions.value.operator
+                      values   = lookup(match_expressions.value, "values", null)
+                    }
+                  }
+                  dynamic "match_fields" {
+                    for_each = lookup(node_selector_term.value, "matchFields", [])
+                    content {
+                      key      = match_fields.value.key
+                      operator = match_fields.value.operator
+                      values   = lookup(match_fields.value, "values", null)
+                    }
+                  }
+                }
+              }
+            }
+          }
+          dynamic "preferred_during_scheduling_ignored_during_execution" {
+            for_each = lookup(affinity.value, "preferredDuringSchedulingIgnoredDuringExecution", [])
+            content {
+              weight = preferred_during_scheduling_ignored_during_execution.value.weight
+              preference {
+                dynamic "match_expressions" {
+                  for_each = lookup(preferred_during_scheduling_ignored_during_execution.value.preference, "matchExpressions", [])
+                  content {
+                    key      = match_expressions.value.key
+                    operator = match_expressions.value.operator
+                    values   = lookup(match_expressions.value, "values", null)
+                  }
+                }
+                dynamic "match_fields" {
+                  for_each = lookup(preferred_during_scheduling_ignored_during_execution.value.preference, "matchFields", [])
+                  content {
+                    key      = match_fields.value.key
+                    operator = match_fields.value.operator
+                    values   = lookup(match_fields.value, "values", null)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
 
     dynamic "toleration" {
       for_each = jsondecode(var.tolerations)
