@@ -220,6 +220,9 @@ metadata:
   namespace: {{ .Values.coderBootstrap.workspaceNamespace | default .Release.Namespace }}
   labels:
     {{- include "pawtograder.labels" . | nindent 4 }}
+  annotations:
+    # Terraform-made workspace pods can't be owned by a release object, so they outlive Coder; keep them confined.
+    helm.sh/resource-policy: keep
 spec:
   podSelector:
     matchLabels:

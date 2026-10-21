@@ -3,10 +3,12 @@
 terraform {
   required_providers {
     coder = {
-      source = "coder/coder"
+      source  = "coder/coder"
+      version = "2.19.0"
     }
     kubernetes = {
-      source = "hashicorp/kubernetes"
+      source  = "hashicorp/kubernetes"
+      version = "3.4.0"
     }
   }
 }
@@ -34,6 +36,12 @@ variable "node_affinity" {
   type        = string
   description = "JSON Kubernetes nodeAffinity for workspace pods."
   default     = "{}"
+}
+
+variable "image_pull_policy" {
+  type        = string
+  description = "Pull policy for the workspace image."
+  default     = "IfNotPresent"
 }
 
 variable "image_pull_secrets" {
@@ -293,7 +301,7 @@ resource "kubernetes_pod_v1" "main" {
     container {
       name              = "dev"
       image             = var.image
-      image_pull_policy = "IfNotPresent"
+      image_pull_policy = var.image_pull_policy
       command           = ["sh", "-c", coder_agent.main.init_script]
 
       env {

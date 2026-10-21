@@ -2847,6 +2847,7 @@ coderBootstrap:
   workspaceNamespace: ""
   workspaces:
     image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
+    imagePullPolicy: IfNotPresent
     imagePullSecrets: [] # Secret names in the workspace namespace
     storageClass: ""
     ephemeralStorageLimit: 4Gi
