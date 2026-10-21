@@ -1,27 +1,116 @@
 {{- if and .Values.forgejo.enabled .Values.forgejoRunner.enabled }}
 {{- $r := .Values.forgejoRunner }}
-{{- $config := dict "log" (dict "level" "info") "runner" (dict "file" "/data/.runner" "capacity" $r.capacity "timeout" "1h" "shutdown_timeout" "5m" "labels" $r.labels) "cache" (dict "enabled" true "dir" "/data/cache") "host" (dict "workdir_parent" "/data/work") }}
+{{- $name := include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
+{{- $url := printf "http://%s:3000" (include "pawtograder.forgejo.http" .) }}
+{{- $labelNames := list }}
+{{- range $r.labels }}{{ $labelNames = append $labelNames (splitList ":" . | first) }}{{ end }}
+{{- $config := dict "log" (dict "level" "info") "runner" (dict "timeout" $r.jobTimeout) "cache" (dict "enabled" false) "host" (dict "workdir_parent" "/data/work") }}
+{{- $args := list "one-job" "--config" "/etc/forgejo-runner/config.yaml" "--url" $url "--uuid" "$(RUNNER_UUID)" "--handle" "$(JOB_HANDLE)" "--token-url" "file:/run/forgejo-runner/token" }}
+{{- range $r.labels }}{{ $args = concat $args (list "--label" .) }}{{ end }}
+{{- $jobPod := dict
+  "apiVersion" "v1"
+  "kind" "Pod"
+  "metadata" (dict
+    "labels" (dict "pawtograder.net/forgejo-job" $name "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "forgejo-job")
+    "annotations" (dict))
+  "spec" (dict
+    "restartPolicy" "Never"
+    "activeDeadlineSeconds" $r.podDeadlineSeconds
+    "serviceAccountName" (printf "%s-job" $name)
+    "automountServiceAccountToken" false
+    "enableServiceLinks" false
+    "imagePullSecrets" (.Values.global.imagePullSecrets | default list)
+    "securityContext" (dict "runAsNonRoot" true "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000 "seccompProfile" (dict "type" "RuntimeDefault"))
+    "containers" (list (dict
+      "name" "job"
+      "image" (printf "%s:%s" $r.image.repository $r.image.tag)
+      "imagePullPolicy" $r.image.pullPolicy
+      "workingDir" "/data"
+      "command" (list "forgejo-runner")
+      "args" $args
+      "env" (list)
+      "securityContext" (dict "allowPrivilegeEscalation" false "capabilities" (dict "drop" (list "ALL")))
+      "resources" $r.resources
+      "volumeMounts" (list
+        (dict "name" "data" "mountPath" "/data")
+        (dict "name" "config" "mountPath" "/etc/forgejo-runner" "readOnly" true)
+        (dict "name" "token" "mountPath" "/run/forgejo-runner" "readOnly" true))))
+    "volumes" (list
+      (dict "name" "data" "emptyDir" (dict "sizeLimit" $r.workdirSizeLimit))
+      (dict "name" "config" "configMap" (dict "name" $name))
+      (dict "name" "token" "secret" (dict "secretName" "" "defaultMode" 256)))) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
+  name: {{ $name }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
 data:
   config.yaml: |
     {{- toYaml $config | nindent 4 }}
+  job-pod.json: {{ toJson $jobPod | quote }}
+  dispatcher.sh: |
+    {{- .Files.Get "files/forgejo-dispatcher.sh" | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}-job
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
+  name: {{ $name }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
 spec:
   replicas: 1
-  # One registration identity: never two pods at once.
+  # Two dispatchers would each start a pod for the same waiting job.
   strategy:
     type: Recreate
   selector:
@@ -32,45 +121,81 @@ spec:
       labels:
         {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 8 }}
       annotations:
-        checksum/config: {{ toYaml $config | sha256sum }}
-        # Runner declares labels only at startup; a new Forgejo DB left it label-less.
-        checksum/forgejo-database: {{ include "pawtograder.appDatabase.host" (dict "ctx" . "app" "forgejo") | sha256sum }}
+        checksum/config: {{ printf "%s%s%s" (toYaml $config) (toJson $jobPod) (.Files.Get "files/forgejo-dispatcher.sh") | sha256sum }}
     spec:
-      automountServiceAccountToken: false
+      serviceAccountName: {{ $name }}
+      enableServiceLinks: false
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
       securityContext:
+        runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
-        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
       containers:
-        - name: runner
+        - name: dispatcher
           image: "{{ $r.image.repository }}:{{ $r.image.tag }}"
           imagePullPolicy: {{ $r.image.pullPolicy }}
-          workingDir: /data
-          args:
-            - sh
-            - -c
-            # Retries until Forgejo's register-runner sidecar has registered the secret.
-            - |
-              forgejo-runner create-runner-file --instance "http://{{ include "pawtograder.forgejo.http" . }}:3000" \
-                --name pawtograder-runner --secret "$RUNNER_SECRET"
-              until forgejo-runner daemon --config /etc/forgejo-runner/config.yaml; do sleep 15; done
+          command: [bash, /etc/dispatcher/dispatcher.sh]
           env:
-            - name: RUNNER_SECRET
-              valueFrom:
-                secretKeyRef: { name: {{ .Release.Name }}-forgejo-runner, key: secret }
+            - { name: FORGEJO_URL, value: {{ $url | quote }} }
+            - { name: PREFIX, value: {{ $name | quote }} }
+            - { name: LABELS, value: {{ join "," $labelNames | quote }} }
+            - { name: CAPACITY, value: {{ $r.capacity | quote }} }
+            - { name: POLL_INTERVAL, value: {{ $r.pollInterval | quote }} }
+            - name: FORGEJO_USER
+              valueFrom: { secretKeyRef: { name: {{ .Values.forgejo.gitea.admin.existingSecret }}, key: username } }
+            - name: FORGEJO_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.forgejo.gitea.admin.existingSecret }}, key: password } }
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           resources:
-            {{- toYaml $r.resources | nindent 12 }}
+            {{- toYaml $r.dispatcher.resources | nindent 12 }}
           volumeMounts:
-            - { name: data, mountPath: /data }
-            - { name: config, mountPath: /etc/forgejo-runner, readOnly: true }
+            - { name: dispatcher, mountPath: /etc/dispatcher, readOnly: true }
       volumes:
-        - name: config
+        - name: dispatcher
           configMap:
-            name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
-        - name: data
-          emptyDir:
-            sizeLimit: {{ $r.workdirSizeLimit }}
+            name: {{ $name }}
+            items:
+              - { key: dispatcher.sh, path: dispatcher.sh }
+              - { key: job-pod.json, path: job-pod.json }
+{{- if $r.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-jobs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      pawtograder.net/forgejo-job: {{ $name }}
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: forgejo
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - { protocol: TCP, port: 3000 }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: {{ toJson $r.networkPolicy.privateCidrs }}
+    {{- with $r.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
 {{- end }}

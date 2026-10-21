@@ -642,7 +642,6 @@ Pre-create these alongside the ones under "Required Secrets" (or sync them with 
 | `pawtograder-forgejo-admin` | `username`, `password` | Forgejo's admin account (`admin` is reserved) |
 | `pawtograder-forgejo-db` | `PGPASSWORD` | Forgejo's database role |
 | `pawtograder-forgejo-db-superuser` | `POSTGRES_PASSWORD` | `forgejo-db` (`forgejo.database=own` only) |
-| `pawtograder-forgejo-runner` | `secret` (40 hex characters) | `forgejoRunner`; the same secret registers the runner on both sides |
 | `pawtograder-coder-admin` | `email`, `username`, `password` | Coder's first owner |
 | `pawtograder-coder-db` | `PGPASSWORD` | Coder's database role |
 | `pawtograder-coder-db-superuser` | `POSTGRES_PASSWORD` | `coder-db` (`coder.database=own` only) |
@@ -657,7 +656,11 @@ Git is HTTPS only, since SSH is disabled for ingress-only clusters. An overlay t
 
 ### Actions runner
 
-The runner executes jobs inside its own container (labels `ubuntu-latest`, `ubuntu-24.04` and `ubuntu-22.04`, all `:host`), so it works where Docker-in-Docker isn't allowed. Jobs get the toolchain baked into `images/forgejo-runner`: JDK 21, Maven, Python 3, Node 22 and git. Build it for `linux/amd64`, push it, and set `forgejoRunner.image`. A `register-runner` sidecar in the Forgejo pod registers the shared secret with Forgejo, and the runner retries until that has happened. The runner pod gets no service account token.
+Every Actions job runs in a pod of its own, so it works where Docker-in-Docker isn't allowed. The runner labels (`ubuntu-latest`, `ubuntu-24.04` and `ubuntu-22.04`, all `:host`) mean the job runs directly in that pod, with the toolchain baked into `images/forgejo-runner`: JDK 21, Maven, Python 3, Node 22 and git. Build it for `linux/amd64`, push it, and set `forgejoRunner.image`.
+
+A dispatcher Deployment polls Forgejo for waiting jobs. For each one it registers an ephemeral runner through the admin API, then starts a pod that runs `forgejo-runner one-job` for that job alone, with that runner's token mounted from a Secret the pod owns. Forgejo deletes an ephemeral runner after its one job, and the dispatcher deletes finished pods (their Secret goes with them). Nothing carries over between jobs: no shared work directory, no cache, no long-lived runner credential. Job pods get no service account token or service-link environment variables, run as uid 1000 with all capabilities dropped, and are killed after `forgejoRunner.podDeadlineSeconds`. At most `forgejoRunner.capacity` run at once.
+
+The dispatcher holds the Forgejo admin credentials and a Role that can create pods and Secrets in the namespace; job pods never see either. `forgejoRunner.networkPolicy` limits job pods to DNS, Forgejo and the public internet (`privateCidrs` excluded; add exceptions under `extraEgress`), but only on a CNI that enforces NetworkPolicy. Without one, jobs can reach every Service in the namespace, so run untrusted workflows only where it is enforced or in a namespace of their own.
 
 ### Coder
 
