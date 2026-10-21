@@ -44,7 +44,7 @@
 {{- fail "forgejoRunner.enabled needs forgejo.enabled" }}
 {{- end }}
 {{- if not (and .Values.forgejoRunner.image.repository .Values.forgejoRunner.image.tag) }}
-{{- fail "forgejoRunner.image.repository and .tag are required (build images/forgejo-runner)" }}
+{{- fail "forgejoRunner.image.repository and .tag are required (ghcr.io/pawtograder/forgejo-runner, built by release-images.yml)" }}
 {{- end }}
 {{- end }}
 

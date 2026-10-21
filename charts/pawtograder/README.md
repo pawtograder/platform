@@ -648,6 +648,10 @@ Pre-create these alongside the ones under "Required Secrets" (or sync them with 
 
 Keep database passwords alphanumeric; Coder's connection settings don't escape them.
 
+With External Secrets Operator, set `forgejoCoderSecrets.externalSecret.enabled` and point `forgejoPath` / `coderPath` at one OpenBao path per app; the chart then renders ExternalSecrets for the Secrets above (the `*-superuser` ones excepted, which only `database: own` uses). `scripts/setup-openbao-forgejo-coder.sh --env <env> --coder-email <email>` writes both paths with generated passwords. `examples/values-staging.yaml` runs this way.
+
+The runner image is built from `images/forgejo-runner` by `.github/workflows/release-images.yml` as `ghcr.io/pawtograder/forgejo-runner:<tag>`, with the same tags as the other images.
+
 ### Forgejo
 
 Forgejo's public URL comes from the first `forgejo.ingress.hosts` entry: the subchart builds `ROOT_URL` from it, and the edge functions get the same URL as `FORGEJO_URL`. That is what makes `validateOIDCToken` trust Forgejo Actions job tokens, whose issuer is `<FORGEJO_URL>/api/actions`; a job asks for one with `enable-openid-connect: true`. Bare `uses:` names (`actions/checkout@v4`, `pawtograder/assignment-action@v3`) resolve against GitHub, as they do there. Self-registration is off; accounts are provisioned.

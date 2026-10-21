@@ -2785,6 +2785,17 @@ coder-db:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: 250m, memory: 256Mi }
 
+# Off: pre-create the Forgejo/Coder Secrets by hand. On: ESO syncs them from one OpenBao path per app
+# (scripts/setup-openbao-forgejo-coder.sh writes both).
+forgejoCoderSecrets:
+  externalSecret:
+    enabled: false
+    forgejoPath: "" # keys admin_username, admin_password, db_password, runner_secret
+    coderPath: "" # keys admin_email, admin_username, admin_password, db_password
+    storeName: openbao
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+
 coderBootstrap:
   enabled: true
   resources:
