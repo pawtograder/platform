@@ -648,7 +648,7 @@ Pre-create these alongside the ones under "Required Secrets" (or sync them with 
 | `pawtograder-coder-db` | `PGPASSWORD` | Coder's database role |
 | `pawtograder-coder-db-superuser` | `POSTGRES_PASSWORD` | `coder-db` (`coder.database=own` only) |
 
-Keep database passwords alphanumeric; Coder's connection settings don't escape them.
+Keep database passwords alphanumeric; Coder's connection settings don't escape them. To rotate `pawtograder-forgejo-db` or `pawtograder-coder-db`: change the Secret, run `helm upgrade` (the `app-databases` Job sets the role's new password), then `kubectl rollout restart deployment/pawtograder-forgejo deployment/coder`. The apps read the password only at startup, and neither subchart restarts on a Secret change. Don't let Reloader restart them on the Secret alone: it would do so before the role's password changes.
 
 ### Forgejo
 
@@ -658,7 +658,7 @@ Git is HTTPS only, since SSH is disabled for ingress-only clusters. An overlay t
 
 ### Actions runner
 
-Every Actions job runs in a pod of its own, so it works where Docker-in-Docker isn't allowed. The runner labels (`ubuntu-latest`, `ubuntu-24.04` and `ubuntu-22.04`, all `:host`) mean the job runs directly in that pod, with the toolchain baked into `images/forgejo-runner`: JDK 21, Maven, Python 3, Node 22 and git. Build it for `linux/amd64`, push it, and set `forgejoRunner.image`.
+Every Actions job runs in a pod of its own, so it works where Docker-in-Docker isn't allowed. The runner labels (`ubuntu-latest`, `ubuntu-24.04` and `ubuntu-22.04`, all `:host`) mean the job runs directly in that pod, with the toolchain baked into `images/forgejo-runner`: JDK 21, Maven, Python 3, Node 22 and git. Build it for `linux/amd64`, push it, and set `forgejoRunner.image` (and `forgejoRunner.imagePullSecrets` if the registry needs auth; `global.imagePullSecrets` can't be used with Forgejo on). Each job pod's `ephemeral-storage` limit caps everything it writes, including outside the `/data` work directory.
 
 A dispatcher Deployment polls Forgejo for waiting jobs. For each one it registers an ephemeral runner through the admin API, then starts a pod that runs `forgejo-runner one-job` for that job alone, with that runner's token mounted from a Secret the pod owns. Forgejo deletes an ephemeral runner after its one job, and the dispatcher deletes finished pods (their Secret goes with them). Nothing carries over between jobs: no shared work directory, no cache, no long-lived runner credential. Job pods get no service account token or service-link environment variables, run as uid 1000 with all capabilities dropped, and are killed after `forgejoRunner.podDeadlineSeconds`. At most `forgejoRunner.capacity` run at once.
 
@@ -668,9 +668,9 @@ The dispatcher holds a Forgejo admin credential and a Role that can create pods 
 
 ### Coder
 
-Coder serves on `coder.coder.ingress.host`, with workspace apps on one-label subdomains of `wildcardHost`. Set `CODER_ACCESS_URL` and `CODER_WILDCARD_ACCESS_URL` in `coder.coder.env`, keeping its `CODER_PG_CONNECTION_URL` entry. Password login is the only sign-in method: signups close after the first owner, and Coder's built-in GitHub login is turned off.
+Coder serves on `coder.coder.ingress.host`, with workspace apps on one-label subdomains of `wildcardHost`. Set `CODER_ACCESS_URL` and `CODER_WILDCARD_ACCESS_URL` in `coder.coder.env`, keeping its `CODER_PG_CONNECTION_URL` entry. Password login is the only sign-in method: signups close after the first owner, and Coder's built-in GitHub login is turned off. `pawtograder-coder-admin` is the owner's password of record: when the bootstrap hook can't log in with it, it resets the owner's password to it (`coder reset-password`, straight against Coder's database), so change it there, not in Coder.
 
-Workspace pods (`files/coder-templates/kubernetes`) run under runc as uid 1000, without privileges or a service account token, and declare requests and limits. They are created in the release's namespace, and the Role the Coder subchart creates lets coderd manage pods, PVCs and Deployments there, Pawtograder's included. Where that matters, put workspaces in a namespace of their own: set `coderBootstrap.workspaceNamespace`, which the pushed templates use, and list the same namespace under `coder.coder.serviceAccount.workspaceNamespaces` so coderd gets a Role there (the render fails without it).
+Workspace pods (`files/coder-templates/kubernetes`) run under runc as uid 1000, without privileges or a service account token, and declare requests and limits. They are created in the release's namespace, and the Role the Coder subchart creates lets coderd manage pods, PVCs and Deployments there, Pawtograder's included. Where that matters, put workspaces in a namespace of their own: set `coderBootstrap.workspaceNamespace`, which the pushed templates use, and list the same namespace under `coder.coder.serviceAccount.workspaceNamespaces` as `{name: ...}` (the pinned Coder chart fails to render a bare string there) so coderd gets a Role there (the render fails without it).
 
 ### NetworkPolicy
 

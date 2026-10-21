@@ -74,7 +74,7 @@
 {{- with .Values.coderBootstrap.workspaceNamespace }}
 {{- if ne . $.Release.Namespace }}
 {{- $granted := list }}
-{{- range $.Values.coder.coder.serviceAccount.workspaceNamespaces }}{{ $granted = append $granted .name }}{{ end }}
+{{- range $.Values.coder.coder.serviceAccount.workspaceNamespaces }}{{ $granted = append $granted (ternary . (dig "name" "" .) (kindIs "string" .)) }}{{ end }}
 {{- if not (has . $granted) }}
 {{- fail (printf "coderBootstrap.workspaceNamespace=%s needs a matching entry in coder.coder.serviceAccount.workspaceNamespaces, or coderd can't create workspaces there" .) }}
 {{- end }}

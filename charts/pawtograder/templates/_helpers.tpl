@@ -306,6 +306,15 @@ Internal service hostnames.
 {{- end -}}
 {{- end -}}
 
+{{- define "pawtograder.forgejo.servicePort" -}}
+{{- dig "service" "http" "port" 3000 .Values.forgejo -}}
+{{- end -}}
+
+{{/* The subchart defaults HTTP_PORT to the Service port; NetworkPolicy matches the pod's. */}}
+{{- define "pawtograder.forgejo.containerPort" -}}
+{{- dig "gitea" "config" "server" "HTTP_PORT" (include "pawtograder.forgejo.servicePort" . | int) .Values.forgejo -}}
+{{- end -}}
+
 {{- define "pawtograder.forgejo.http" -}}
 {{- printf "%s-forgejo-http" .Release.Name -}}
 {{- end -}}

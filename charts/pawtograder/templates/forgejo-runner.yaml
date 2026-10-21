@@ -1,7 +1,7 @@
 {{- if and .Values.forgejo.enabled .Values.forgejoRunner.enabled }}
 {{- $r := .Values.forgejoRunner }}
 {{- $name := include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
-{{- $url := printf "http://%s:3000" (include "pawtograder.forgejo.http" .) }}
+{{- $url := printf "http://%s:%v" (include "pawtograder.forgejo.http" .) (include "pawtograder.forgejo.servicePort" .) }}
 {{- $labelNames := list }}
 {{- range $r.labels }}{{ $labelNames = append $labelNames (splitList ":" . | first) }}{{ end }}
 {{- $config := dict "log" (dict "level" "info") "runner" (dict "timeout" $r.jobTimeout) "cache" (dict "enabled" false) "host" (dict "workdir_parent" "/data/work") }}
@@ -19,7 +19,7 @@
     "serviceAccountName" (printf "%s-job" $name)
     "automountServiceAccountToken" false
     "enableServiceLinks" false
-    "imagePullSecrets" (.Values.global.imagePullSecrets | default list)
+    "imagePullSecrets" ($r.imagePullSecrets | default list)
     "securityContext" (dict "runAsNonRoot" true "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000 "seccompProfile" (dict "type" "RuntimeDefault"))
     "containers" (list (dict
       "name" "job"
@@ -125,7 +125,10 @@ spec:
     spec:
       serviceAccountName: {{ $name }}
       enableServiceLinks: false
-      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- with $r.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -194,7 +197,7 @@ spec:
               app.kubernetes.io/name: forgejo
               app.kubernetes.io/instance: {{ .Release.Name }}
       ports:
-        - { protocol: TCP, port: 3000 }
+        - { protocol: TCP, port: {{ include "pawtograder.forgejo.containerPort" . }} }
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

@@ -62,8 +62,16 @@ spec:
                   "$E" "$U" "$P" | post /api/v2/users/first >/dev/null
                 echo "created first owner $ADMIN_USERNAME"
               fi
-              CODER_SESSION_TOKEN="$(printf '{"email":"%s","password":"%s"}' "$E" "$P" \
-                | post /api/v2/users/login | sed -n 's/.*"session_token":"\([^"]*\)".*/\1/p')"
+              login() { printf '{"email":"%s","password":"%s"}' "$E" "$P" \
+                | post /api/v2/users/login | sed -n 's/.*"session_token":"\([^"]*\)".*/\1/p'; }
+              CODER_SESSION_TOKEN="$(login || true)"
+              if [ -z "$CODER_SESSION_TOKEN" ]; then
+                # The Secret is the source of truth; an owner password changed anywhere else would fail every upgrade.
+                echo "login as $ADMIN_EMAIL failed; resetting $ADMIN_USERNAME's password from {{ .Release.Name }}-coder-admin"
+                printf '%s\n%s\n' "$ADMIN_PASSWORD" "$ADMIN_PASSWORD" \
+                  | /opt/coder reset-password --postgres-url "$CODER_PG_CONNECTION_URL" "$ADMIN_USERNAME" >/dev/null
+                CODER_SESSION_TOKEN="$(login || true)"
+              fi
               [ -n "$CODER_SESSION_TOKEN" ] || { echo "login as $ADMIN_EMAIL failed; check {{ .Release.Name }}-coder-admin" >&2; exit 1; }
               export CODER_URL="$url" CODER_SESSION_TOKEN CODER_CONFIG_DIR=/tmp/coder
               for dir in /templates/*/; do
@@ -78,6 +86,14 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-admin, key: username } }
             - name: ADMIN_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-admin, key: password } }
+            {{- range .Values.coder.coder.env }}
+            {{- if eq .name "CODER_PG_CONNECTION_URL" }}
+            - name: CODER_PG_CONNECTION_URL
+              value: {{ .value | quote }}
+            {{- end }}
+            {{- end }}
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-db, key: PGPASSWORD } }
           securityContext:
             allowPrivilegeEscalation: false
           resources:

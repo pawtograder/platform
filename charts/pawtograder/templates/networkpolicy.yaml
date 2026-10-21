@@ -185,7 +185,7 @@ spec:
             matchLabels:
               pawtograder.net/forgejo-job: {{ include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
       ports:
-        - { protocol: TCP, port: 3000 }
+        - { protocol: TCP, port: {{ include "pawtograder.forgejo.containerPort" . }} }
 {{- end }}
 {{- if $onPostgres }}
 ---

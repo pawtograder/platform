@@ -2717,6 +2717,8 @@ forgejoRunner:
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
+  # [{name: ...}] for the dispatcher and job pods; global.imagePullSecrets can't be set with Forgejo on.
+  imagePullSecrets: []
   capacity: 2
   labels:
     - ubuntu-latest:host
@@ -2726,9 +2728,10 @@ forgejoRunner:
   podDeadlineSeconds: 4200
   pollInterval: 5
   workdirSizeLimit: 20Gi
+  # The ephemeral-storage limit also covers writes outside /data (/tmp, the image layer), which workdirSizeLimit doesn't.
   resources:
-    requests: { cpu: "1", memory: 2Gi }
-    limits: { cpu: "2", memory: 4Gi }
+    requests: { cpu: "1", memory: 2Gi, ephemeral-storage: 1Gi }
+    limits: { cpu: "2", memory: 4Gi, ephemeral-storage: 24Gi }
   dispatcher:
     # Secret with a write:admin `token`; empty falls back to the admin password, which breaks under 2FA.
     tokenSecret: ""
