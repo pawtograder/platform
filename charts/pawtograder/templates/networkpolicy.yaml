@@ -142,7 +142,7 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/name
                 operator: In
-                values: ["pawtograder", "forgejo", "coder"]
+                values: [{{ include "pawtograder.name" . | quote }}, "forgejo", "coder"]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

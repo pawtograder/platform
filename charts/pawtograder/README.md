@@ -639,6 +639,8 @@ The app's own settings name the server, so that changing it rolls the app's pods
 
 **Backups don't cover Forgejo or Coder yet.** `backup.enabled` dumps only Pawtograder's database (`postgres.database`). In `database: pawtograder` mode, `postgres.walg` base backups and WAL archiving cover the `forgejo` and `coder` databases, because they're physical backups of the whole server. The `*-db` servers in `own` mode have no backup. Neither does Forgejo's repository volume, which a database dump wouldn't restore anyway. Back up the volumes, or use `forgejo dump`, until the chart does this itself.
 
+With `global.environment: production`, the render requires a named, replicated StorageClass for each volume these components add, as it already does for `postgres.persistence.storageClass`: `forgejo.persistence.storageClass`, `forgejo-db.storage.className`, `coder-db.storage.className` and `coderBootstrap.workspaces.storageClass`.
+
 Sharing this chart's Postgres puts Git and Coder downtime on every Postgres restart, and their connections count against `postgres.config.max_connections`. Move to `own` if either becomes a problem.
 
 ### Secrets
