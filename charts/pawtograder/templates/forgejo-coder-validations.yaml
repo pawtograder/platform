@@ -73,10 +73,14 @@
 {{- end }}
 {{- with .Values.coderBootstrap.workspaceNamespace }}
 {{- if ne . $.Release.Namespace }}
+{{- $sa := $.Values.coder.coder.serviceAccount }}
 {{- $granted := list }}
-{{- range $.Values.coder.coder.serviceAccount.workspaceNamespaces }}{{ $granted = append $granted (ternary . (dig "name" "" .) (kindIs "string" .)) }}{{ end }}
+{{- range $sa.workspaceNamespaces }}{{ if and (kindIs "map" .) .workspacePerms }}{{ $granted = append $granted .name }}{{ end }}{{ end }}
 {{- if not (has . $granted) }}
-{{- fail (printf "coderBootstrap.workspaceNamespace=%s needs a matching entry in coder.coder.serviceAccount.workspaceNamespaces, or coderd can't create workspaces there" .) }}
+{{- fail (printf "coderBootstrap.workspaceNamespace=%s needs {name: %s, workspacePerms: true} in coder.coder.serviceAccount.workspaceNamespaces, or coderd can't create workspaces there" . .) }}
+{{- end }}
+{{- if $sa.workspacePerms }}
+{{- fail (printf "coderBootstrap.workspaceNamespace=%s moves workspaces out of %s; set coder.coder.serviceAccount.workspacePerms=false so coderd loses its Role over Pawtograder's pods there" . $.Release.Namespace) }}
 {{- end }}
 {{- end }}
 {{- end }}

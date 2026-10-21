@@ -75,7 +75,7 @@ locals {
   name = "coder-${lower(data.coder_workspace_owner.me.name)}-${lower(data.coder_workspace.me.name)}"
   labels = {
     "app.kubernetes.io/name"     = "coder-workspace"
-    "app.kubernetes.io/instance" = local.name
+    "app.kubernetes.io/instance" = data.coder_workspace.me.id # local.name can pass the 63-char label limit
     "app.kubernetes.io/part-of"  = "pawtograder-stack"
     "com.coder.workspace.id"     = data.coder_workspace.me.id
     "com.coder.user.id"          = data.coder_workspace_owner.me.id
