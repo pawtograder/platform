@@ -45,6 +45,10 @@
 {{- if ne $init.image $want }}
 {{- fail (printf "coder.coder.initContainers first-owner image must match coder.coder.image (%s, got %s)" $want $init.image) }}
 {{- end }}
+{{- $policy := $img.pullPolicy | default "IfNotPresent" }}
+{{- if ne ($init.imagePullPolicy | default "IfNotPresent") $policy }}
+{{- fail (printf "coder.coder.initContainers first-owner imagePullPolicy must match coder.coder.image.pullPolicy (%s)" $policy) }}
+{{- end }}
 {{- end }}
 {{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
 {{- $wsAffinity := include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml }}

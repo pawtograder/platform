@@ -2758,6 +2758,7 @@ coder:
     initContainers:
       - name: first-owner
         image: ghcr.io/pawtograder/mirror/coder/coder:v2.37.3
+        imagePullPolicy: IfNotPresent
         command:
           - sh
           - -ec
@@ -2841,6 +2842,7 @@ coderBootstrap:
   enabled: true
   workspaceNamespace: ""
   workspaces:
+    storageClass: ""
     ephemeralStorageLimit: 4Gi
     networkPolicy:
       privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]

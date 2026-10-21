@@ -210,6 +210,7 @@ spec:
             matchLabels: { app.kubernetes.io/name: coder-workspace }
       ports:
         - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 } # coder.coder.tls
 ---
 # No ingress: Coder then relays workspace traffic over the agent's outbound DERP connection instead of direct P2P.
 apiVersion: networking.k8s.io/v1
@@ -246,6 +247,7 @@ spec:
               app.kubernetes.io/instance: {{ .Release.Name }}
       ports:
         - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
