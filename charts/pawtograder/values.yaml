@@ -2659,7 +2659,6 @@ forgejo:
     admin:
       existingSecret: pawtograder-forgejo-admin
       passwordMode: keepUpdated
-    # An overlay that sets this list must keep this entry.
     additionalConfigFromEnvs:
       - name: FORGEJO__DATABASE__PASSWD
         valueFrom:
@@ -2671,7 +2670,7 @@ forgejo:
         LFS_START_SERVER: true
       database:
         DB_TYPE: postgres
-        # Must match forgejo.database's server; set here so a change rolls Forgejo via the config checksum.
+        # Set here, not via env, so a change rolls Forgejo via the config checksum.
         HOST: pawtograder-postgres:5432
         NAME: forgejo
         USER: forgejo
@@ -2717,7 +2716,6 @@ forgejoRunner:
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
-  # [{name: ...}] for the dispatcher and job pods; global.imagePullSecrets can't be set with Forgejo on.
   imagePullSecrets: []
   capacity: 2
   labels:
@@ -2728,7 +2726,6 @@ forgejoRunner:
   podDeadlineSeconds: 4200
   pollInterval: 5
   workdirSizeLimit: 20Gi
-  # The ephemeral-storage limit also covers writes outside /data (/tmp, the image layer), which workdirSizeLimit doesn't.
   resources:
     requests: { cpu: "1", memory: 2Gi, ephemeral-storage: 1Gi }
     limits: { cpu: "2", memory: 4Gi, ephemeral-storage: 24Gi }
@@ -2751,7 +2748,6 @@ coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder
       tag: v2.37.3
-    # Overlays must keep CODER_PG_CONNECTION_URL at coder.database's server; the password comes from PGPASSWORD.
     env:
       - name: CODER_PG_CONNECTION_URL
         value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
@@ -2794,7 +2790,6 @@ coder-db:
 
 coderBootstrap:
   enabled: true
-  # Any namespace but the release's must be in coder.coder.serviceAccount.workspaceNamespaces.
   workspaceNamespace: ""
   resources:
     requests: { cpu: 50m, memory: 64Mi }

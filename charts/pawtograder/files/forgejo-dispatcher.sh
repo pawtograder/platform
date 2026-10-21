@@ -8,7 +8,6 @@ FAPI="$FORGEJO_URL/api/v1"
 SELECTOR="pawtograder.net/forgejo-job=$PREFIX"
 
 kube() { curl -sS --fail-with-body --cacert "$SA/ca.crt" -H "Authorization: Bearer $(cat "$SA/token")" -H 'Content-Type: application/json' "$@"; }
-# Basic auth stops working once the admin enrolls 2FA.
 if [ -n "${FORGEJO_TOKEN:-}" ]; then FJ_AUTH=(-H "Authorization: token $FORGEJO_TOKEN"); else FJ_AUTH=(-u "$FORGEJO_USER:$FORGEJO_PASSWORD"); fi
 fj() { curl -sS --fail-with-body "${FJ_AUTH[@]}" -H 'Content-Type: application/json' "$@"; }
 
