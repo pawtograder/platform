@@ -151,6 +151,21 @@ Usage: {{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.p
 {{- end -}}
 {{- end -}}
 
+{{- define "pawtograder.placement" -}}
+{{- with (include "pawtograder.nodeSelector" .) }}
+nodeSelector:
+{{- . | nindent 2 }}
+{{- end }}
+{{- with (include "pawtograder.tolerations" .) }}
+tolerations:
+{{- . | nindent 2 }}
+{{- end }}
+{{- with (include "pawtograder.affinity" .) }}
+affinity:
+{{- . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
 {{/*
 Public URLs.
 */}}

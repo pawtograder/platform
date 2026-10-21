@@ -39,6 +39,7 @@
       (dict "name" "data" "emptyDir" (dict "sizeLimit" $r.workdirSizeLimit))
       (dict "name" "config" "configMap" (dict "name" $name))
       (dict "name" "token" "secret" (dict "secretName" "" "defaultMode" 256)))) }}
+{{- $_ := merge $jobPod.spec (include "pawtograder.placement" (dict "ctx" . "component" $r) | fromYaml) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -128,6 +129,9 @@ spec:
       {{- with $r.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.placement" (dict "ctx" . "component" $r.dispatcher) | trim) }}
+      {{- . | nindent 6 }}
       {{- end }}
       securityContext:
         runAsNonRoot: true

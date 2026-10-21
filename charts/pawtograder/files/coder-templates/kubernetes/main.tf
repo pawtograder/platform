@@ -18,6 +18,18 @@ variable "namespace" {
   description = "Namespace workspaces are created in (coderd's own)."
 }
 
+variable "node_selector" {
+  type        = string
+  description = "JSON object of node labels for workspace pods."
+  default     = "{}"
+}
+
+variable "tolerations" {
+  type        = string
+  description = "JSON list of Kubernetes tolerations for workspace pods."
+  default     = "[]"
+}
+
 variable "image" {
   type        = string
   description = "Workspace container image."
@@ -161,6 +173,18 @@ resource "kubernetes_pod_v1" "main" {
   spec {
     automount_service_account_token = false
     restart_policy                  = "Always"
+    node_selector                   = jsondecode(var.node_selector)
+
+    dynamic "toleration" {
+      for_each = jsondecode(var.tolerations)
+      content {
+        key                = lookup(toleration.value, "key", null)
+        operator           = lookup(toleration.value, "operator", null)
+        value              = lookup(toleration.value, "value", null)
+        effect             = lookup(toleration.value, "effect", null)
+        toleration_seconds = lookup(toleration.value, "tolerationSeconds", null)
+      }
+    }
 
     security_context {
       run_as_user  = 1000

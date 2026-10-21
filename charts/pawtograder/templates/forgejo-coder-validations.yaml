@@ -23,6 +23,16 @@
 {{- end }}
 {{- end }}
 
+{{- if or .Values.global.nodeSelector .Values.global.tolerations }}
+{{- $subcharts := dict "forgejo" .Values.forgejo "forgejo-db" (index .Values "forgejo-db") "coder.coder" .Values.coder.coder "coder-db" (index .Values "coder-db") }}
+{{- $on := dict "forgejo" .Values.forgejo.enabled "forgejo-db" (index .Values "forgejo-db").enabled "coder.coder" .Values.coder.enabled "coder-db" (index .Values "coder-db").enabled }}
+{{- range $key, $v := $subcharts }}
+{{- if and (get $on $key) (not (or $v.nodeSelector $v.tolerations $v.affinity)) }}
+{{- fail (printf "global.nodeSelector/tolerations don't reach subcharts; set %s.nodeSelector / %s.tolerations too" $key $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- if .Values.forgejo.enabled }}
 {{- if .Values.global.imagePullSecrets }}
 {{- fail "global.imagePullSecrets can't be combined with forgejo.enabled: the Forgejo subchart reads it as a list of names, this chart as a list of {name: ...}. Attach pull secrets to the ServiceAccount the pods use instead (serviceAccount.create=false runs them under the namespace's default one)." }}
