@@ -2724,6 +2724,7 @@ forgejoRunner:
     - ubuntu-22.04:host
   jobTimeout: 1h
   podDeadlineSeconds: 4200
+  pendingTimeoutSeconds: 900 # job pods still Pending (unschedulable, image pull stuck) after this are deleted
   pollInterval: 5
   workdirSizeLimit: 20Gi
   resources:

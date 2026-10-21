@@ -153,6 +153,7 @@ spec:
             - { name: LABELS, value: {{ join "," $labelNames | quote }} }
             - { name: CAPACITY, value: {{ $r.capacity | quote }} }
             - { name: POLL_INTERVAL, value: {{ $r.pollInterval | quote }} }
+            - { name: PENDING_TIMEOUT, value: {{ $r.pendingTimeoutSeconds | default 900 | quote }} }
             {{- with $r.dispatcher.tokenSecret }}
             - name: FORGEJO_TOKEN
               valueFrom: { secretKeyRef: { name: {{ . }}, key: token } }

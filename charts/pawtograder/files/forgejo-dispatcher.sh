@@ -42,6 +42,10 @@ while true; do
   for p in $(jq -r '.items[] | select(.status.phase == "Succeeded" or .status.phase == "Failed") | .metadata.name' <<<"$pods"); do
     kube -o /dev/null -X DELETE "$KAPI/pods/$p" && echo "reaped $p"
   done
+  # activeDeadlineSeconds counts from startTime, which a pod that never schedules doesn't get.
+  for p in $(jq -r --argjson t "$PENDING_TIMEOUT" '.items[] | select(.status.phase == "Pending" and ((.metadata.creationTimestamp | fromdateiso8601) < (now - $t))) | .metadata.name' <<<"$pods"); do
+    kube -o /dev/null -X DELETE "$KAPI/pods/$p" && echo "reaped $p: still Pending after ${PENDING_TIMEOUT}s"
+  done
   active=$(jq '[.items[] | select(.status.phase != "Succeeded" and .status.phase != "Failed")] | length' <<<"$pods")
   claimed=$(jq -c '[.items[] | select(.status.phase != "Succeeded" and .status.phase != "Failed") | .metadata.annotations["pawtograder.net/job-handle"]]' <<<"$pods")
 

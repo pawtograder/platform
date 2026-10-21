@@ -61,6 +61,9 @@
 {{- end }}
 {{- end }}
 {{- end }}
+{{- if and .Values.coder.enabled .Values.global.imagePullSecrets (not .Values.coder.coder.image.pullSecrets) }}
+{{- fail "global.imagePullSecrets doesn't reach the Coder subchart's pod; set coder.coder.image.pullSecrets too" }}
+{{- end }}
 {{- if .Values.coder.enabled }}
 {{- $img := .Values.coder.coder.image }}
 {{- $want := printf "%s:%s" $img.repo ($img.tag | default (printf "v%v" .Subcharts.coder.Chart.AppVersion)) }}
