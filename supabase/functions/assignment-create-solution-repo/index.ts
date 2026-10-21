@@ -48,12 +48,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!solutionRepoOrg) {
     throw new UserVisibleError("Class does not have a GitHub organization");
   }
-  await adminSupabase
-    .from("autograder")
-    .update({
-      grader_repo: `${solutionRepoOrg}/${solutionRepoName}`
-    })
-    .eq("id", assignment_id);
+  const { error: reservationError } = await adminSupabase.rpc("reserve_github_staff_repo", {
+    p_assignment_id: assignment_id,
+    p_class_id: class_id,
+    p_repository: `${solutionRepoOrg}/${solutionRepoName}`,
+    p_is_grader: true
+  });
+  if (reservationError) throw new UserVisibleError(reservationError.message, 400);
   const { solution: solutionTemplateRepo } = await resolveTemplateRepos(adminSupabase, class_id);
   scope.setTag("solution_template_repo", solutionTemplateRepo);
 

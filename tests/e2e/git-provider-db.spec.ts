@@ -84,18 +84,18 @@ for (const [name, features] of disabledFlags) {
 for (const kind of ["student", "handout", "grader"]) {
   test(`${kind} repositories lock the provider after provisioning`, async () => {
     const f = await fixture("github");
-    for (const provider of ["forgejo", "github"]) await ok(switchHost(f.assignment.id, provider));
+    const reserve = () =>
+      supabase.rpc("reserve_github_staff_repo", {
+        p_assignment_id: f.assignment.id,
+        p_class_id: f.course.id,
+        p_repository: "e2e-ignore/staff",
+        p_is_grader: kind === "grader"
+      });
+    await ok(switchHost(f.assignment.id, "forgejo"));
+    if (kind !== "student") expect((await reserve()).error?.code).toBe("23514");
+    await ok(switchHost(f.assignment.id, "github"));
     if (kind === "student") await ok(repository(f));
-    else {
-      const table = kind === "handout" ? "assignments" : "autograder";
-      const column = kind === "handout" ? "template_repo" : "grader_repo";
-      await ok(
-        supabase
-          .from(table)
-          .update({ [column]: "e2e-ignore/staff" })
-          .eq("id", f.assignment.id)
-      );
-    }
+    else await ok(reserve());
     const result = await switchHost(f.assignment.id, "forgejo");
     expect(result.error?.code).toBe("23514");
     expect(result.error?.message).toContain("after repositories exist");
@@ -253,7 +253,8 @@ for (const endpoint of [
   "assignment-create-all-repos",
   "assignment-create-handout-repo",
   "assignment-create-solution-repo",
-  "assignment-sync-autograder-workflow"
+  "assignment-sync-autograder-workflow",
+  "github-repo-configure-webhook"
 ]) {
   test(`${endpoint} rejects a Forgejo assignment`, async () => {
     const { course, assignment } = await fixture("forgejo");
@@ -266,7 +267,14 @@ for (const endpoint of [
     );
     const { error } = await supabase.functions.invoke(endpoint, {
       headers: { Authorization: `Bearer ${await getAuthTokenForUser(instructor)}` },
-      body: { courseId: course.id, assignmentId: assignment.id, class_id: course.id, assignment_id: assignment.id }
+      body: {
+        courseId: course.id,
+        assignmentId: assignment.id,
+        class_id: course.id,
+        assignment_id: assignment.id,
+        new_repo: "e2e-ignore/staff",
+        watch_type: "grader_solution"
+      }
     });
     expect(error?.context.status).toBe(400);
     expect(await error.context.text()).toContain("This assignment uses Forgejo");

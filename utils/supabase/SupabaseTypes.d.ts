@@ -14037,6 +14037,15 @@ export type Database = {
           roles_repaired: number;
         }[];
       };
+      reserve_github_staff_repo: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_is_grader: boolean;
+          p_repository: string;
+        };
+        Returns: undefined;
+      };
       reset_all_flashcard_progress: {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
         Returns: undefined;

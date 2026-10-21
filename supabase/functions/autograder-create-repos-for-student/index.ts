@@ -253,10 +253,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .select(
       // "*"
       // "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*,assignments(*), assignment_groups(*,repositories(*)), user_roles(users(github_username)))))",
-      "class_id, github_org_confirmed, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
+      "class_id, github_org_confirmed, classes!inner(slug, github_org, assignments!inner(id)), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
     )
     .eq("disabled", false)
-    .eq("user_id", userId); //.eq("role", "student");
+    .eq("user_id", userId)
+    .eq("classes.assignments.git_provider", "github")
+    .is("classes.assignments.archived_at", null);
 
   // If class_id is provided, filter to only that class
   if (classId) {

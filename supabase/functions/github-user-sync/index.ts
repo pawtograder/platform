@@ -91,10 +91,14 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
   );
   const { data: staffRoles, error: staffError } = await adminSupabase
     .from("user_roles")
-    .select("class_id, role, github_org_confirmed, classes(slug, github_org, start_date, end_date, archived)")
+    .select(
+      "class_id, role, github_org_confirmed, classes!inner(slug, github_org, start_date, end_date, archived, assignments!inner(id))"
+    )
     .eq("disabled", false)
     .in("role", ["instructor", "grader", "admin"])
-    .eq("user_id", userID);
+    .eq("user_id", userID)
+    .eq("classes.assignments.git_provider", "github")
+    .is("classes.assignments.archived_at", null);
   if (staffError) {
     Sentry.captureException(staffError, scope);
     return {
@@ -179,11 +183,13 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
       //
       // The class's term dates and archived flag come along for isOrgInviteWindowKnownClosed below,
       // which decides whether this reconcile may still mail an org invitation.
-      "class_id, github_org_confirmed, classes(slug, github_org, time_zone, start_date, end_date, archived), profiles!private_profile_id(id, name, sortable_name, repositories(*, assignments(archived_at)), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*, assignments(archived_at)), assignment_groups_members(*, user_roles(users(github_username))))))"
+      "class_id, github_org_confirmed, classes!inner(slug, github_org, time_zone, start_date, end_date, archived, assignments!inner(id)), profiles!private_profile_id(id, name, sortable_name, repositories(*, assignments(archived_at)), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*, assignments(archived_at)), assignment_groups_members(*, user_roles(users(github_username))))))"
     )
     .eq("disabled", false)
     .eq("role", "student")
-    .eq("user_id", userID);
+    .eq("user_id", userID)
+    .eq("classes.assignments.git_provider", "github")
+    .is("classes.assignments.archived_at", null);
   if (classesError) {
     Sentry.captureException(classesError, scope);
     throw new UserVisibleError("Error fetching classes");
