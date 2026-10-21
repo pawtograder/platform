@@ -162,7 +162,11 @@ spec:
             {{- toYaml $r.dispatcher.resources | nindent 12 }}
           volumeMounts:
             - { name: dispatcher, mountPath: /etc/dispatcher, readOnly: true }
+            # Bash spills here-strings past the pipe buffer (the pod list can) to a temp file.
+            - { name: tmp, mountPath: /tmp }
       volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
         - name: dispatcher
           configMap:
             name: {{ $name }}
