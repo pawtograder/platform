@@ -45,6 +45,21 @@
 {{- fail (printf "%s is empty: like postgres.persistence.storageClass, production must name a replicated storage class, not the cluster default (which may be node-local)" $key) }}
 {{- end }}
 {{- end }}
+{{- $tags := dict }}
+{{- if .Values.forgejo.enabled }}{{ $_ := set $tags "forgejo.image.tag" (toString .Values.forgejo.image.tag) }}{{ end }}
+{{- if (index .Values "forgejo-db").enabled }}{{ $_ := set $tags "forgejo-db.image.tag" (toString (index .Values "forgejo-db").image.tag) }}{{ end }}
+{{- if (index .Values "coder-db").enabled }}{{ $_ := set $tags "coder-db.image.tag" (toString (index .Values "coder-db").image.tag) }}{{ end }}
+{{- if .Values.coder.enabled }}{{ $_ := set $tags "coder.coder.image.tag" (toString .Values.coder.coder.image.tag) }}{{ end }}
+{{- if .Values.forgejoRunner.enabled }}{{ $_ := set $tags "forgejoRunner.image.tag" (toString .Values.forgejoRunner.image.tag) }}{{ end }}
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
+{{- $ws := .Values.coderBootstrap.workspaces.image }}
+{{- $_ := set $tags "coderBootstrap.workspaces.image's tag" (ternary (last (splitList ":" $ws)) "" (contains ":" (last (splitList "/" $ws)))) }}
+{{- end }}
+{{- range $key, $tag := $tags }}
+{{- if or (not $tag) (eq $tag "latest") (hasSuffix "-latest" $tag) }}
+{{- fail (printf "%s=%q: production deploys must pin an immutable tag, as for web/edgeFunctions/migrations/backup" $key $tag) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- with .Values.global.imageRegistry }}
 {{- $reg := . }}
