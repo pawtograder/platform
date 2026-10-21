@@ -14,13 +14,7 @@ NetworkPolicies (networkPolicy.enabled):
                         the edge-facing pods (web, kong, studio).
   4. allow-monitoring — Prometheus' namespace may scrape any release pod
                         (rendered only when monitoring.enabled).
-  5. apps-*           — the same rules for Forgejo, Coder and their *-db
-                        Postgres (rendered only when forgejo/coder are on).
-                        Their subchart pods are labelled app.kubernetes.io/name
-                        forgejo, coder, forgejo-db or coder-db, so 1-3 don't
-                        select them, and 2 doesn't let them reach this
-                        chart's Postgres. Forgejo Actions job pods carry no
-                        app.kubernetes.io/name and may reach Forgejo only.
+  5. apps-*           — the same rules for Forgejo, Coder and their *-db Postgres.
 
 Egress is deliberately unrestricted: web + edge functions call GitHub,
 Discord, SMTP, LLM APIs, S3, …; tightening egress is an overlay concern.

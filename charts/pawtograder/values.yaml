@@ -2666,14 +2666,12 @@ forgejo:
           secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
     config:
       server:
-        DISABLE_SSH: true # Ingress-only clusters serve git over HTTPS
+        DISABLE_SSH: true
         START_SSH_SERVER: false
         LFS_START_SERVER: true
       database:
         DB_TYPE: postgres
-        # host:port of forgejo.database's server; the render fails if it doesn't match
-        # (own: pawtograder-forgejo-db:5432). Kept here, not in a ConfigMap, so a
-        # change rolls Forgejo through the subchart's config checksum.
+        # Must match forgejo.database's server; set here so a change rolls Forgejo via the config checksum.
         HOST: pawtograder-postgres:5432
         NAME: forgejo
         USER: forgejo
@@ -2719,7 +2717,7 @@ forgejoRunner:
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
-  capacity: 2 # job pods at once
+  capacity: 2
   labels:
     - ubuntu-latest:host
     - ubuntu-24.04:host
@@ -2732,8 +2730,7 @@ forgejoRunner:
     requests: { cpu: "1", memory: 2Gi }
     limits: { cpu: "2", memory: 4Gi }
   dispatcher:
-    # Secret with key `token`: a Forgejo access token with scope write:admin. Empty falls
-    # back to the admin's password, which fails once that account enrolls 2FA.
+    # Secret with a write:admin `token`; empty falls back to the admin password, which breaks under 2FA.
     tokenSecret: ""
     resources:
       requests: { cpu: 10m, memory: 32Mi }
@@ -2751,9 +2748,7 @@ coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder
       tag: v2.37.3
-    # An overlay that sets this list must keep CODER_PG_CONNECTION_URL, pointing at
-    # coder.database's server (own: pawtograder-coder-db:5432); the render fails otherwise.
-    # No password in the URL: Coder's Postgres driver reads PGPASSWORD (Secret pawtograder-coder-db).
+    # Overlays must keep CODER_PG_CONNECTION_URL at coder.database's server; the password comes from PGPASSWORD.
     env:
       - name: CODER_PG_CONNECTION_URL
         value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
@@ -2796,8 +2791,7 @@ coder-db:
 
 coderBootstrap:
   enabled: true
-  # Namespace the pushed templates put workspaces in; empty means the release's.
-  # Any other namespace must be listed in coder.coder.serviceAccount.workspaceNamespaces.
+  # Any namespace but the release's must be in coder.coder.serviceAccount.workspaceNamespaces.
   workspaceNamespace: ""
   resources:
     requests: { cpu: 50m, memory: 64Mi }

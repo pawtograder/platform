@@ -50,7 +50,6 @@ spec:
               until curl -fsS -o /dev/null "$url/healthz"; do sleep 5; done
               post() { curl -fsS -X POST -H 'Content-Type: application/json' --data-binary @- "$url$1"; }
               # Bodies go over stdin to keep the password out of the process list.
-              # sed can't escape control characters; the usual one is a trailing newline from --from-file.
               for v in "$ADMIN_EMAIL" "$ADMIN_USERNAME" "$ADMIN_PASSWORD"; do
                 case "$v" in *[[:cntrl:]]*) echo "{{ .Release.Name }}-coder-admin has a control character (trailing newline?)" >&2; exit 1 ;; esac
               done

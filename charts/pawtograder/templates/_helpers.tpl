@@ -284,13 +284,7 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") -}}
 {{- end -}}
 
-{{/*
-Forgejo's ROOT_URL, without the trailing slash, derived the way the Forgejo
-subchart derives it (gitea.inline_configuration.defaults.server and
-gitea.public_protocol): an explicit ROOT_URL wins, otherwise https when the
-ingress has TLS or the HTTPRoute terminates it, else server.PROTOCOL. Actions
-tokens carry ROOT_URL as their issuer, so FORGEJO_URL must match it.
-*/}}
+{{/* Must equal the subchart's ROOT_URL: Actions tokens carry it as their issuer. */}}
 {{- define "pawtograder.forgejo.url" -}}
 {{- $f := .Values.forgejo -}}
 {{- $server := $f.gitea.config.server | default dict -}}

@@ -23,7 +23,7 @@ keywords:
   - autograder
 annotations:
   category: Application
-# Fetched into charts/ (gitignored) from Chart.lock by scripts/build-deps.sh; run it before helm commands against a checkout.
+# Gitignored; run scripts/build-deps.sh before helm commands against a checkout.
 dependencies:
   - name: forgejo
     version: 17.1.7

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# One fresh pod per Forgejo Actions job: an ephemeral runner registered for that job alone.
 set -uo pipefail
 
 SA=/var/run/secrets/kubernetes.io/serviceaccount
@@ -9,7 +8,7 @@ FAPI="$FORGEJO_URL/api/v1"
 SELECTOR="pawtograder.net/forgejo-job=$PREFIX"
 
 kube() { curl -sS --fail-with-body --cacert "$SA/ca.crt" -H "Authorization: Bearer $(cat "$SA/token")" -H 'Content-Type: application/json' "$@"; }
-# A write:admin token is what Forgejo recommends; basic auth stops working once the admin enrolls 2FA.
+# Basic auth stops working once the admin enrolls 2FA.
 if [ -n "${FORGEJO_TOKEN:-}" ]; then FJ_AUTH=(-H "Authorization: token $FORGEJO_TOKEN"); else FJ_AUTH=(-u "$FORGEJO_USER:$FORGEJO_PASSWORD"); fi
 fj() { curl -sS --fail-with-body "${FJ_AUTH[@]}" -H 'Content-Type: application/json' "$@"; }
 
