@@ -7,10 +7,28 @@ import { TZDate } from "@date-fns/tz";
 const runtime = { REQUEST_SCOPED_AUTH_OPTIONS: {}, Deno: { env: { get: () => "test" } } };
 
 function handler(file: string, name = "handleRequest", context: object) {
-  const path = `supabase/functions/${file}/index.ts`;
+  const path = `supabase/functions/${file.endsWith(".ts") ? file : `${file}/index.ts`}`;
   const source = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest);
   const fn = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)!;
   return runInNewContext(`${ts.transpile(fn.getText(source), { target: ts.ScriptTarget.ES2022 })}\n${name}`, context);
+}
+// Fluent database mock with value-sensitive provider predicates.
+function query(data: unknown, overrides: object = {}) {
+  const chain: Record<string, unknown> = {
+    then: (done: (result: unknown) => void) => done({ data, error: null }),
+    eq: (column: string, value: unknown) => {
+      if (column.endsWith("git_provider") && Array.isArray(data)) {
+        data = data.filter((row) => column.split(".").reduce((v, key) => v?.[key], row) === value);
+      }
+      return chain;
+    }
+  };
+  chain.single = chain.maybeSingle = async () => ({
+    data: Array.isArray(data) ? (data[0] ?? null) : data,
+    error: null
+  });
+  for (const method of ["select", "in", "is", "not", "lte", "limit", "update"]) chain[method] = () => chain;
+  return Object.assign(chain, overrides);
 }
 // Execute actual function bodies with database/GitHub mocks, no copied filtering logic.
 test.each(["github-user-sync", "autograder-create-repos-for-student"])("%s scopes fan-outs", async (file) => {
@@ -33,7 +51,12 @@ test.each(["github-user-sync", "autograder-create-repos-for-student"])("%s scope
     const classes = [
       {
         class_id: 1,
-        classes: { slug: "course", github_org: "org", time_zone: "UTC" },
+        classes: {
+          slug: "course",
+          github_org: "org",
+          time_zone: "UTC",
+          assignments: { git_provider: mode === "forgejo-only" ? "forgejo" : "github" }
+        },
         profiles: {
           repositories: [repo("github", "individual"), repo("forgejo", "individual")],
           assignment_groups_members: memberships
@@ -46,19 +69,7 @@ test.each(["github-user-sync", "autograder-create-repos-for-student"])("%s scope
     const client = {
       from: (table: string) => {
         const data = table === "user_roles" ? classes : table === "users" ? { github_username: "student" } : [];
-        const result = { data: table === "repositories" ? [repo("github", "group")] : data, error: null };
-        const query: Record<string, unknown> = {
-          then: (resolve: (value: unknown) => void) => resolve(result),
-          insert
-        };
-        for (const method of ["select", "eq", "in", "is", "not", "lte", "limit", "update", "single"]) {
-          query[method] = () => query;
-        }
-        query.eq = (column: string) => {
-          if (column === "classes.assignments.git_provider" && mode === "forgejo-only") result.data = [];
-          return query;
-        };
-        return query;
+        return query(table === "repositories" ? [repo("github", "group")] : data, { insert });
       }
     };
     const reinviteToOrgTeam = jest.fn(async () => true);
@@ -96,26 +107,7 @@ test.each(["repositories", "autograder", "assignments"])("push routing respects 
   for (const provider of ["github", "forgejo"]) {
     const dispatch = jest.fn();
     const row = { id: 1, git_provider: provider, assignments: { git_provider: provider } };
-    const client = {
-      from: (name: string) => {
-        let rows = name === table ? [row] : [];
-        let single = false;
-        const query = {
-          select: () => query,
-          eq: (column: string, value: string) => {
-            if (column === "git_provider") rows = rows.filter((r) => r.git_provider === value);
-            if (column === "assignments.git_provider") rows = rows.filter((r) => r.assignments.git_provider === value);
-            return query;
-          },
-          maybeSingle: () => {
-            single = true;
-            return query;
-          },
-          then: (done: (result: unknown) => void) => done({ data: single ? (rows[0] ?? null) : rows, error: null })
-        };
-        return query;
-      }
-    };
+    const client = { from: (name: string) => query(name === table ? [row] : []) };
     let invoke: (event: unknown) => Promise<void> = async () => {};
     runInNewContext(ts.transpile(handler.getText(source), { target: ts.ScriptTarget.ES2022 }), {
       eventHandler: {
@@ -145,21 +137,13 @@ test.each(["repositories", "autograder", "assignments"])("push routing respects 
 
 test("commit history never authorizes a same-named repository on another provider", async () => {
   for (const provider of ["github", "forgejo"]) {
-    let row: unknown = { git_provider: provider, profile_id: "student", assignment_group_id: null };
-    const query = {
-      select: () => query,
-      eq: (column: string, value: string) => {
-        if (column === "git_provider" && provider !== value) row = null;
-        return query;
-      },
-      maybeSingle: async () => ({ data: row, error: null })
-    };
+    const rows = [{ git_provider: provider, profile_id: "student", assignment_group_id: null }];
     const listCommits = jest.fn(async () => ({ commits: [{ sha: "private-github-history" }], has_more: false }));
     const invoke = handler("repository-list-commits", "handleRequest", {
       listCommits,
       SecurityError: Error,
       assertUserIsInCourse: async () => ({
-        supabase: { from: () => query },
+        supabase: { from: () => query(rows) },
         enrollment: { role: "student", private_profile_id: "student" }
       }),
       console: { log() {} }
@@ -176,27 +160,16 @@ test("commit history never authorizes a same-named repository on another provide
 });
 
 test.each(["github", "forgejo"])("%s group moves reach writes only for GitHub", async (provider) => {
-  let rows = [{ id: 1, assignments: { git_provider: provider } }];
+  const rows = [{ id: 1, assignments: { git_provider: provider } }];
   const write = jest.fn(() => {
     throw new Error("membership write reached");
   });
-  const query = {
-    select: () => query,
-    in: () => query,
-    eq: (column: string, value: string) => {
-      if (column === "assignments.git_provider") rows = rows.filter((r) => r.assignments.git_provider === value);
-      return query;
-    },
-    single: async () => ({ data: { id: 1 }, error: null }),
-    delete: write,
-    insert: write,
-    then: (resolve: (value: unknown) => void) => resolve({ data: rows, error: null })
-  };
+  const client = { from: () => query(rows, { delete: write, insert: write }) };
   const invoke = handler("assignment-group-instructor-move-student", "handleAssignmentGroupInstructorMoveStudent", {
-    createClient: () => ({ from: () => query }),
+    createClient: () => client,
     ...runtime,
     IllegalArgumentError: Error,
-    assertUserIsInstructor: async () => ({ supabase: { from: () => query }, enrollment: {} })
+    assertUserIsInstructor: async () => ({ supabase: client, enrollment: {} })
   });
   const response = invoke({
     headers: new Map(),
@@ -204,4 +177,9 @@ test.each(["github", "forgejo"])("%s group moves reach writes only for GitHub", 
   });
   await expect(response).rejects.toThrow(provider === "forgejo" ? "Forgejo" : "membership write reached");
   expect(write).toHaveBeenCalledTimes(provider === "forgejo" ? 0 : 1);
+});
+
+test("Forgejo assignment copies reject before database writes", async () => {
+  const copy = handler("cli/commands/assignments.ts", "copySingleAssignment", { CLICommandError: Error });
+  await expect(copy({}, { git_provider: "forgejo" }, {}, {}, {})).rejects.toThrow("Forgejo");
 });
