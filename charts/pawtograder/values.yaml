@@ -2770,11 +2770,10 @@ coder:
             pid=$!
             url=http://127.0.0.1:3000
             c() { curl --connect-timeout 5 --max-time 30 "$@"; }
-            tries=0
+            deadline=$(( $(date +%s) + 600 ))
             until c -fsS -o /dev/null "$url/healthz"; do
               kill -0 "$pid" 2>/dev/null || { cat /tmp/first-owner.log >&2; exit 1; }
-              tries=$((tries + 1))
-              [ "$tries" -lt 300 ] || { echo "coderd not healthy after 10m" >&2; tail -50 /tmp/first-owner.log >&2; exit 1; }
+              [ "$(date +%s)" -lt "$deadline" ] || { echo "coderd not healthy after 10m" >&2; tail -50 /tmp/first-owner.log >&2; exit 1; }
               sleep 2
             done
             # Coder answers 200 once a user exists and 404 before; anything else is an error, not "no user".
