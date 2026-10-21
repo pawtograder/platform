@@ -190,7 +190,6 @@ spec:
 {{- if .Values.coder.enabled }}
 ---
 # No ingress: Coder then relays workspace traffic over the agent's outbound DERP connection instead of direct P2P.
-# Egress mirrors the Actions job policy: workspaces run student code.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
