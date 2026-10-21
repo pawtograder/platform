@@ -33,6 +33,8 @@ spec:
         {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 8 }}
       annotations:
         checksum/config: {{ toYaml $config | sha256sum }}
+        # A runner declares its labels only at startup; a new Forgejo database would otherwise keep it label-less.
+        checksum/forgejo-database: {{ include "pawtograder.appDatabase.host" (dict "ctx" . "app" "forgejo") | sha256sum }}
     spec:
       automountServiceAccountToken: false
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
