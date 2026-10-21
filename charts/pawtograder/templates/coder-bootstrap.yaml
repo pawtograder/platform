@@ -50,15 +50,18 @@ spec:
               until curl -fsS -o /dev/null "$url/healthz"; do sleep 5; done
               post() { curl -fsS -X POST -H 'Content-Type: application/json' --data-binary @- "$url$1"; }
               # Bodies go over stdin to keep the password out of the process list.
+              esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+              E="$(esc "$ADMIN_EMAIL")" U="$(esc "$ADMIN_USERNAME")" P="$(esc "$ADMIN_PASSWORD")"
               if curl -fsS -o /dev/null "$url/api/v2/users/first"; then
                 echo "first user exists"
               else
                 printf '{"email":"%s","username":"%s","password":"%s","trial":false}' \
-                  "$ADMIN_EMAIL" "$ADMIN_USERNAME" "$ADMIN_PASSWORD" | post /api/v2/users/first >/dev/null
+                  "$E" "$U" "$P" | post /api/v2/users/first >/dev/null
                 echo "created first owner $ADMIN_USERNAME"
               fi
-              CODER_SESSION_TOKEN="$(printf '{"email":"%s","password":"%s"}' "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
+              CODER_SESSION_TOKEN="$(printf '{"email":"%s","password":"%s"}' "$E" "$P" \
                 | post /api/v2/users/login | sed -n 's/.*"session_token":"\([^"]*\)".*/\1/p')"
+              [ -n "$CODER_SESSION_TOKEN" ] || { echo "login as $ADMIN_EMAIL failed; check {{ .Release.Name }}-coder-admin" >&2; exit 1; }
               export CODER_URL="$url" CODER_SESSION_TOKEN CODER_CONFIG_DIR=/tmp/coder
               for dir in /templates/*/; do
                 name="$(basename "$dir")"
