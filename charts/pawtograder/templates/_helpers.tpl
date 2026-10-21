@@ -362,7 +362,15 @@ Internal service hostnames.
 {{- if eq (index .ctx.Values .app).database "pawtograder" -}}
 {{- .ctx.Values.secrets.names.postgres -}}
 {{- else -}}
-{{- printf "%s-%s-db-superuser" .ctx.Release.Name .app -}}
+{{- dig "settings" "existingSecret" (printf "%s-%s-db-superuser" .ctx.Release.Name .app) (index .ctx.Values (printf "%s-db" .app)) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.superuserSecretKey" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+POSTGRES_PASSWORD
+{{- else -}}
+{{- dig "settings" "superuserPassword" "secretKey" "POSTGRES_PASSWORD" (index .ctx.Values (printf "%s-db" .app)) -}}
 {{- end -}}
 {{- end -}}
 

@@ -66,7 +66,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ include "pawtograder.appDatabase.superuserSecret" (dict "ctx" $ "app" $app) }}
-                  key: POSTGRES_PASSWORD
+                  key: {{ include "pawtograder.appDatabase.superuserSecretKey" (dict "ctx" $ "app" $app) }}
             - name: APP_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ $.Release.Name }}-{{ $app }}-db, key: PGPASSWORD }
