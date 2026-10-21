@@ -58,8 +58,17 @@ spec:
               value: {{ include "pawtograder.appDatabase.host" (dict "ctx" $ "app" $app) }}
             - name: PGPORT
               value: {{ include "pawtograder.appDatabase.port" (dict "ctx" $ "app" $app) | quote }}
+            {{- $su := dict }}
+            {{- if eq (index $.Values $app).database "own" }}{{ $su = dig "settings" "superuser" dict (index $.Values (printf "%s-db" $app)) | default dict }}{{ end }}
             - name: PGUSER
-              value: {{ include "pawtograder.appDatabase.superuser" (dict "ctx" $ "app" $app) }}
+              {{- if $su.secretKey }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pawtograder.appDatabase.superuserSecret" (dict "ctx" $ "app" $app) }}
+                  key: {{ $su.secretKey }}
+              {{- else }}
+              value: {{ $su.value | default (include "pawtograder.appDatabase.superuser" (dict "ctx" $ "app" $app)) }}
+              {{- end }}
             - name: PGDATABASE
               value: postgres
             - name: PGPASSWORD

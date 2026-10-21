@@ -203,7 +203,7 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   policyTypes: ["Ingress"]
   {{- $wsNamespaces := list (.Values.coderBootstrap.workspaceNamespace | default .Release.Namespace) }}
-  {{- range .Values.coder.coder.serviceAccount.workspaceNamespaces }}{{ if kindIs "map" . }}{{ $wsNamespaces = append $wsNamespaces .name }}{{ end }}{{ end }}
+  {{- range .Values.coder.coder.serviceAccount.workspaceNamespaces }}{{ if kindIs "map" . }}{{ $wsNamespaces = append $wsNamespaces .name }}{{ else }}{{ $wsNamespaces = append $wsNamespaces . }}{{ end }}{{ end }}
   ingress:
     - from:
         - namespaceSelector:

@@ -2638,6 +2638,17 @@ forgejo:
     tag: "15.0.9"
   strategy:
     type: Recreate # RWO repo volume
+  podSecurityContext:
+    fsGroup: 1000
+    seccompProfile: { type: RuntimeDefault }
+  # The subchart's documented rootless set, without SYS_CHROOT (SSH is off); applies to its init containers too.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities: { drop: [ALL] }
+    privileged: false
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "1", memory: 2Gi } # 1Gi OOMKilled finishing a job's log upload

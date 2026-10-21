@@ -141,6 +141,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        fsGroup: 1000 # makes the forgejo-auth Secret files group-readable
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: dispatcher
@@ -154,15 +155,6 @@ spec:
             - { name: CAPACITY, value: {{ $r.capacity | quote }} }
             - { name: POLL_INTERVAL, value: {{ $r.pollInterval | quote }} }
             - { name: PENDING_TIMEOUT, value: {{ $r.pendingTimeoutSeconds | default 900 | quote }} }
-            {{- with $r.dispatcher.tokenSecret }}
-            - name: FORGEJO_TOKEN
-              valueFrom: { secretKeyRef: { name: {{ . }}, key: token } }
-            {{- else }}
-            - name: FORGEJO_USER
-              valueFrom: { secretKeyRef: { name: {{ .Values.forgejo.gitea.admin.existingSecret }}, key: username } }
-            - name: FORGEJO_PASSWORD
-              valueFrom: { secretKeyRef: { name: {{ .Values.forgejo.gitea.admin.existingSecret }}, key: password } }
-            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -173,9 +165,21 @@ spec:
             - { name: dispatcher, mountPath: /etc/dispatcher, readOnly: true }
             # Bash spills here-strings past the pipe buffer (the pod list can) to a temp file.
             - { name: tmp, mountPath: /tmp }
+            # A mounted Secret follows rotations; env from secretKeyRef would keep the old credential.
+            - { name: forgejo-auth, mountPath: /run/forgejo-auth, readOnly: true }
       volumes:
         - name: tmp
           emptyDir: { sizeLimit: 64Mi }
+        - name: forgejo-auth
+          secret:
+            defaultMode: 0400
+            {{- with $r.dispatcher.tokenSecret }}
+            secretName: {{ . }}
+            items: [{ key: token, path: token }]
+            {{- else }}
+            secretName: {{ .Values.forgejo.gitea.admin.existingSecret }}
+            items: [{ key: username, path: username }, { key: password, path: password }]
+            {{- end }}
         - name: dispatcher
           configMap:
             name: {{ $name }}

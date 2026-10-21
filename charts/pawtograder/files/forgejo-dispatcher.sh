@@ -8,8 +8,13 @@ FAPI="$FORGEJO_URL/api/v1"
 SELECTOR="pawtograder.net/forgejo-job=$PREFIX"
 
 kube() { curl -sS --fail-with-body --connect-timeout 10 --max-time 60 --cacert "$SA/ca.crt" -H "Authorization: Bearer $(cat "$SA/token")" -H 'Content-Type: application/json' "$@"; }
-if [ -n "${FORGEJO_TOKEN:-}" ]; then FJ_AUTH=(-H "Authorization: token $FORGEJO_TOKEN"); else FJ_AUTH=(-u "$FORGEJO_USER:$FORGEJO_PASSWORD"); fi
-fj() { curl -sS --fail-with-body --connect-timeout 10 --max-time 60 "${FJ_AUTH[@]}" -H 'Content-Type: application/json' "$@"; }
+AUTH=/run/forgejo-auth
+fj() {
+  local auth
+  if [ -f "$AUTH/token" ]; then auth=(-H "Authorization: token $(cat "$AUTH/token")")
+  else auth=(-u "$(cat "$AUTH/username"):$(cat "$AUTH/password")"); fi
+  curl -sS --fail-with-body --connect-timeout 10 --max-time 60 "${auth[@]}" -H 'Content-Type: application/json' "$@"
+}
 
 spawn() {
   local id=$1 handle=$2 reg uuid rid token name pod uid
