@@ -65,9 +65,8 @@ for app in forgejo coder; do
   fi
 done
 
-# runner_secret is 40 hex chars, as `forgejo-cli actions register` requires.
-jq -n --arg a "$(pw)" --arg d "$(pw)" --arg r "$(openssl rand -hex 20)" \
-  '{admin_username: "forgejo-admin", admin_password: $a, db_password: $d, runner_secret: $r}' \
+jq -n --arg a "$(pw)" --arg d "$(pw)" \
+  '{admin_username: "forgejo-admin", admin_password: $a, db_password: $d}' \
   | $CLI kv put -mount="$BAO_MOUNT" "$PREFIX/forgejo-$ENV_NAME" - >/dev/null
 jq -n --arg e "$CODER_EMAIL" --arg a "$(pw)" --arg d "$(pw)" \
   '{admin_email: $e, admin_username: "coder-admin", admin_password: $a, db_password: $d}' \
