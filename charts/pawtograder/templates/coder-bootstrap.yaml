@@ -40,6 +40,7 @@ spec:
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.coderBootstrap) | nindent 6 }}
       {{- with $pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -107,8 +108,7 @@ spec:
             {{- end }}
             - name: PGPASSWORD
               valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-db, key: PGPASSWORD } }
-          securityContext:
-            allowPrivilegeEscalation: false
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.coderBootstrap) | nindent 10 }}
           resources:
             {{- toYaml .Values.coderBootstrap.resources | nindent 12 }}
           volumeMounts:

@@ -43,6 +43,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       automountServiceAccountToken: false
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.appDatabases) | nindent 6 }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
       {{- with (include "pawtograder.placement" (dict "ctx" . "component" .Values.appDatabases) | trim) }}
       {{- . | nindent 6 }}
@@ -51,8 +52,7 @@ spec:
         {{- range $app := $apps }}
         - name: {{ $app }}
           image: {{ include "pawtograder.image" (dict "ctx" $ "image" $.Values.postgres.image) }}
-          securityContext:
-            allowPrivilegeEscalation: false
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ "component" $.Values.appDatabases) | nindent 10 }}
           env:
             - name: PGHOST
               value: {{ include "pawtograder.appDatabase.host" (dict "ctx" $ "app" $app) }}
