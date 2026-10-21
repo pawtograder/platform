@@ -619,7 +619,7 @@ The chart can also run [Forgejo](https://forgejo.org) (git hosting and Actions) 
 | --- | --- |
 | `forgejo.enabled` | Forgejo (subchart, upstream `forgejo-helm/forgejo`) |
 | `forgejo-db.enabled` | A separate Postgres for Forgejo (`groundhog2k/postgres`), Service `pawtograder-forgejo-db`; only with `forgejo.database=own` |
-| `forgejoRunner.enabled` | A Forgejo Actions runner in host mode (`templates/forgejo-runner.yaml`) |
+| `forgejoRunner.enabled` | Forgejo Actions jobs, one pod per job (`templates/forgejo-runner.yaml`) |
 | `coder.enabled` | Coder (subchart, upstream `helm.coder.com/v2`), plus the post-install hook that creates its first owner and pushes `files/coder-templates/*` |
 | `coder-db.enabled` | A separate Postgres for Coder, Service `pawtograder-coder-db`; only with `coder.database=own` |
 
@@ -629,7 +629,9 @@ The subcharts aren't committed. `Chart.lock` pins them, and `scripts/build-deps.
 
 ### Databases
 
-Each app has a `database` value. `pawtograder` (the default) uses this chart's Postgres, with the `*-db` release left off. `own` runs a separate Postgres for the app, so enable its `*-db` alongside it. Either way the app gets its own role and database, created by the `pawtograder-app-databases-<revision>` Job on every install and upgrade. Switching an existing app between the two connects it to an empty database; move the data first.
+Each app has a `database` value. `pawtograder` (the default) uses this chart's Postgres, with the `*-db` release left off. `own` runs a separate Postgres for the app, so enable its `*-db` alongside it. Either way the app gets its own role and database, created by the `pawtograder-app-databases-<revision>` Job on every install and upgrade.
+
+The app's own settings name the server, so that changing it rolls the app's pods: `forgejo.gitea.config.database.HOST` and the `CODER_PG_CONNECTION_URL` entry in `coder.coder.env`. The defaults point at `pawtograder-postgres:5432`. With `database: own` they become `pawtograder-forgejo-db:5432` and `postgres://coder@pawtograder-coder-db:5432/coder?sslmode=disable`, and with a non-default `service.port` they take that port. The render fails, naming the expected value, when one doesn't match its `database` mode. Switching an existing app between the two connects it to an empty database; move the data first.
 
 Sharing this chart's Postgres puts Git and Coder downtime on every Postgres restart, and their connections count against `postgres.config.max_connections`. Move to `own` if either becomes a problem.
 
@@ -650,9 +652,9 @@ Keep database passwords alphanumeric; Coder's connection settings don't escape t
 
 ### Forgejo
 
-Forgejo's public URL comes from the first `forgejo.ingress.hosts` entry: the subchart builds `ROOT_URL` from it, and the edge functions get the same URL as `FORGEJO_URL`. That is what makes `validateOIDCToken` trust Forgejo Actions job tokens, whose issuer is `<FORGEJO_URL>/api/actions`; a job asks for one with `enable-openid-connect: true`. Bare `uses:` names (`actions/checkout@v4`, `pawtograder/assignment-action@v3`) resolve against GitHub, as they do there. Self-registration is off; accounts are provisioned.
+Forgejo's public URL comes from the first `forgejo.ingress.hosts` entry: the subchart builds `ROOT_URL` from it (https when the ingress has `tls`, otherwise `gitea.config.server.PROTOCOL`, unless `gitea.config.server.ROOT_URL` is set), and the edge functions get the same URL, derived the same way, as `FORGEJO_URL`. Forgejo Actions job tokens carry `<ROOT_URL>api/actions` as their issuer; a job asks for one with `enable-openid-connect: true`. The edge functions in this release don't read `FORGEJO_URL` yet, so they still only accept GitHub's tokens: grading from Forgejo Actions needs the follow-up that teaches `validateOIDCToken` this issuer. Bare `uses:` names (`actions/checkout@v4`, `pawtograder/assignment-action@v3`) resolve against GitHub, as they do there. Self-registration is off; accounts are provisioned.
 
-Git is HTTPS only, since SSH is disabled for ingress-only clusters. An overlay that extends `forgejo.gitea.additionalConfigFromEnvs`, for instance with S3 credentials as in the example, has to keep the chart's two `FORGEJO__DATABASE__*` entries; the render fails otherwise.
+Git is HTTPS only, since SSH is disabled for ingress-only clusters. An overlay that extends `forgejo.gitea.additionalConfigFromEnvs`, for instance with S3 credentials as in the example, has to keep the chart's `FORGEJO__DATABASE__PASSWD` entry, and mustn't set `FORGEJO__DATABASE__HOST`, which would override `gitea.config.database.HOST`; the render fails otherwise.
 
 ### Actions runner
 
@@ -660,13 +662,19 @@ Every Actions job runs in a pod of its own, so it works where Docker-in-Docker i
 
 A dispatcher Deployment polls Forgejo for waiting jobs. For each one it registers an ephemeral runner through the admin API, then starts a pod that runs `forgejo-runner one-job` for that job alone, with that runner's token mounted from a Secret the pod owns. Forgejo deletes an ephemeral runner after its one job, and the dispatcher deletes finished pods (their Secret goes with them). Nothing carries over between jobs: no shared work directory, no cache, no long-lived runner credential. Job pods get no service account token or service-link environment variables, run as uid 1000 with all capabilities dropped, and are killed after `forgejoRunner.podDeadlineSeconds`. At most `forgejoRunner.capacity` run at once.
 
-The dispatcher holds the Forgejo admin credentials and a Role that can create pods and Secrets in the namespace; job pods never see either. `forgejoRunner.networkPolicy` limits job pods to DNS, Forgejo and the public internet (`privateCidrs` excluded; add exceptions under `extraEgress`), but only on a CNI that enforces NetworkPolicy. Without one, jobs can reach every Service in the namespace, so run untrusted workflows only where it is enforced or in a namespace of their own.
+This is the flow Forgejo 15 added ephemeral runners and `one-job --handle` for (upstream's `examples/on-demand` in the runner repo is the same loop for a single host); upstream ships no Kubernetes operator, and its Kubernetes example needs privileged Docker-in-Docker.
+
+The dispatcher holds a Forgejo admin credential and a Role that can create pods and Secrets in the namespace; job pods never see either. Give it an access token with scope `write:admin` in a Secret (key `token`) named by `forgejoRunner.dispatcher.tokenSecret`. Without one it falls back to the `pawtograder-forgejo-admin` password, which Forgejo refuses once that account enrolls two-factor authentication. `forgejoRunner.networkPolicy` limits job pods to DNS, Forgejo and the public internet (`privateCidrs` excluded; add exceptions under `extraEgress`), but only on a CNI that enforces NetworkPolicy. Without one, jobs can reach every Service in the namespace, so run untrusted workflows only where it is enforced or in a namespace of their own.
 
 ### Coder
 
-Coder serves on `coder.coder.ingress.host`, with workspace apps on one-label subdomains of `wildcardHost`. Set `CODER_ACCESS_URL` and `CODER_WILDCARD_ACCESS_URL` in `coder.coder.env`. Password login is the only sign-in method: signups close after the first owner, and Coder's built-in GitHub login is turned off.
+Coder serves on `coder.coder.ingress.host`, with workspace apps on one-label subdomains of `wildcardHost`. Set `CODER_ACCESS_URL` and `CODER_WILDCARD_ACCESS_URL` in `coder.coder.env`, keeping its `CODER_PG_CONNECTION_URL` entry. Password login is the only sign-in method: signups close after the first owner, and Coder's built-in GitHub login is turned off.
 
-Workspace pods (`files/coder-templates/kubernetes`) run under runc as uid 1000, without privileges or a service account token, and declare requests and limits. They are created in the release's namespace, and the Role the Coder subchart creates lets coderd manage pods, PVCs and Deployments there, Pawtograder's included. Where that matters, set `coder.coder.serviceAccount.workspaceNamespaces` to put workspaces in a namespace of their own.
+Workspace pods (`files/coder-templates/kubernetes`) run under runc as uid 1000, without privileges or a service account token, and declare requests and limits. They are created in the release's namespace, and the Role the Coder subchart creates lets coderd manage pods, PVCs and Deployments there, Pawtograder's included. Where that matters, put workspaces in a namespace of their own: set `coderBootstrap.workspaceNamespace`, which the pushed templates use, and list the same namespace under `coder.coder.serviceAccount.workspaceNamespaces` so coderd gets a Role there (the render fails without it).
+
+### NetworkPolicy
+
+With `networkPolicy.enabled`, the chart adds the same rules for Forgejo, Coder and their `*-db` Postgres, whose subchart pods the chart's own policies don't select: ingress only from this release's pods and, for Forgejo and Coder, the ingress controller. Job pods may reach Forgejo on port 3000 and nothing else in the release, and Forgejo or Coder may reach this chart's Postgres when they use it.
 
 ## Realtime sizing
 

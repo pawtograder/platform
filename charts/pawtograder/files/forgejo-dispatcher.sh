@@ -9,7 +9,9 @@ FAPI="$FORGEJO_URL/api/v1"
 SELECTOR="pawtograder.net/forgejo-job=$PREFIX"
 
 kube() { curl -sS --fail-with-body --cacert "$SA/ca.crt" -H "Authorization: Bearer $(cat "$SA/token")" -H 'Content-Type: application/json' "$@"; }
-fj() { curl -sS --fail-with-body -u "$FORGEJO_USER:$FORGEJO_PASSWORD" -H 'Content-Type: application/json' "$@"; }
+# A write:admin token is what Forgejo recommends; basic auth stops working once the admin enrolls 2FA.
+if [ -n "${FORGEJO_TOKEN:-}" ]; then FJ_AUTH=(-H "Authorization: token $FORGEJO_TOKEN"); else FJ_AUTH=(-u "$FORGEJO_USER:$FORGEJO_PASSWORD"); fi
+fj() { curl -sS --fail-with-body "${FJ_AUTH[@]}" -H 'Content-Type: application/json' "$@"; }
 
 spawn() {
   local id=$1 handle=$2 reg uuid rid token name pod uid
@@ -43,7 +45,8 @@ while true; do
   claimed=$(jq -c '[.items[] | select(.status.phase != "Succeeded" and .status.phase != "Failed") | .metadata.annotations["pawtograder.net/job-handle"]]' <<<"$pods")
 
   jobs=$(fj "$FAPI/admin/actions/runners/jobs?labels=$LABELS") || continue
-  for row in $(jq -r --argjson c "$claimed" '.[] | select(.status == "waiting") | select(.handle as $h | $c | index($h) | not) | "\(.id),\(.handle)"' <<<"$jobs"); do
+  # The list is null, not [], when nothing matches.
+  for row in $(jq -r --argjson c "$claimed" '(. // [])[] | select(.status == "waiting") | select(.handle as $h | $c | index($h) | not) | "\(.id),\(.handle)"' <<<"$jobs"); do
     [ "$active" -lt "$CAPACITY" ] || break
     spawn "${row%%,*}" "${row#*,}" && active=$((active + 1))
   done
@@ -51,7 +54,10 @@ while true; do
   # Forgejo deletes an ephemeral runner once it has run its job; these never got that far.
   pods=$(kube "$KAPI/pods?labelSelector=$SELECTOR") || continue
   live=$(jq -c '[.items[] | select(.status.phase != "Succeeded" and .status.phase != "Failed") | .metadata.annotations["pawtograder.net/runner-id"]]' <<<"$pods")
-  runners=$(fj "$FAPI/admin/actions/runners?limit=50") || continue
+  runners='[]' page=1
+  while batch=$(fj "$FAPI/admin/actions/runners?limit=50&page=$page") && [ "$(jq '(. // []) | length' <<<"$batch")" -gt 0 ]; do
+    runners=$(jq -c --argjson b "$batch" '. + $b' <<<"$runners"); page=$((page + 1))
+  done
   for rid in $(jq -r --arg p "$PREFIX-job-" --argjson l "$live" '.[] | select(.ephemeral and (.name | startswith($p))) | (.id | tostring) | select(. as $i | $l | index($i) | not)' <<<"$runners"); do
     fj -o /dev/null -X DELETE "$FAPI/admin/actions/runners/$rid" && echo "removed unused runner $rid"
   done

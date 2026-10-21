@@ -14,6 +14,13 @@ NetworkPolicies (networkPolicy.enabled):
                         the edge-facing pods (web, kong, studio).
   4. allow-monitoring — Prometheus' namespace may scrape any release pod
                         (rendered only when monitoring.enabled).
+  5. apps-*           — the same rules for Forgejo, Coder and their *-db
+                        Postgres (rendered only when forgejo/coder are on).
+                        Their subchart pods are labelled app.kubernetes.io/name
+                        forgejo, coder, forgejo-db or coder-db, so 1-3 don't
+                        select them, and 2 doesn't let them reach this
+                        chart's Postgres. Forgejo Actions job pods carry no
+                        app.kubernetes.io/name and may reach Forgejo only.
 
 Egress is deliberately unrestricted: web + edge functions call GitHub,
 Discord, SMTP, LLM APIs, S3, …; tightening egress is an overlay concern.
@@ -106,5 +113,109 @@ spec:
     - from:
         - namespaceSelector:
             {{- toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
+{{- end }}
+{{- $apps := list }}
+{{- $onPostgres := list }}
+{{- range $app := list "forgejo" "coder" }}
+{{- if (index $.Values $app).enabled }}
+{{- $apps = append $apps $app }}
+{{- if eq (index $.Values $app).database "pawtograder" }}{{ $onPostgres = append $onPostgres $app }}{{ end }}
+{{- end }}
+{{- end }}
+{{- if $apps }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" . }}-apps-allow-same-release
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: ["forgejo", "coder", "forgejo-db", "coder-db"]
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: ["pawtograder", "forgejo", "coder"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" . }}-apps-allow-ingress-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: ["forgejo", "coder"]
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingressControllerNamespaceSelector | nindent 12 }}
+{{- if and .Values.forgejo.enabled .Values.forgejoRunner.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" . }}-apps-allow-forgejo-jobs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/name: forgejo
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              pawtograder.net/forgejo-job: {{ include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
+      ports:
+        - { protocol: TCP, port: 3000 }
+{{- end }}
+{{- if $onPostgres }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" . }}-apps-allow-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: {{ toJson $onPostgres }}
+{{- end }}
 {{- end }}
 {{- end }}

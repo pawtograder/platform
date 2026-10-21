@@ -14,9 +14,6 @@ forgejo:
         hosts: [git.example.com]
   gitea:
     additionalConfigFromEnvs:
-      - name: FORGEJO__DATABASE__HOST
-        valueFrom:
-          configMapKeyRef: { name: pawtograder-forgejo-database, key: host }
       - name: FORGEJO__DATABASE__PASSWD
         valueFrom:
           secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
@@ -47,6 +44,8 @@ coder:
   database: pawtograder
   coder:
     env:
+      - name: CODER_PG_CONNECTION_URL
+        value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
       - name: CODER_ACCESS_URL
         value: https://coder.example.com
       - name: CODER_WILDCARD_ACCESS_URL

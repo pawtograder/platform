@@ -27,15 +27,21 @@
 {{- if .Values.global.imagePullSecrets }}
 {{- fail "global.imagePullSecrets can't be combined with forgejo.enabled: the Forgejo subchart reads it as a list of names, this chart as a list of {name: ...}. Attach pull secrets to the ServiceAccount the pods use instead (serviceAccount.create=false runs them under the namespace's default one)." }}
 {{- end }}
-{{- if not .Values.forgejo.ingress.hosts }}
+{{- $route := .Values.forgejo.httpRoute | default dict }}
+{{- if not (or .Values.forgejo.ingress.hosts (and $route.enabled $route.hostnames) .Values.forgejo.gitea.config.server.ROOT_URL .Values.forgejo.gitea.config.server.DOMAIN) }}
 {{- fail "forgejo.ingress.hosts must name Forgejo's host; ROOT_URL and the edge functions' FORGEJO_URL come from it" }}
 {{- end }}
 {{- $envNames := list }}
 {{- range .Values.forgejo.gitea.additionalConfigFromEnvs }}{{ $envNames = append $envNames .name }}{{ end }}
-{{- range $want := list "FORGEJO__DATABASE__HOST" "FORGEJO__DATABASE__PASSWD" }}
-{{- if not (has $want $envNames) }}
-{{- fail (printf "forgejo.gitea.additionalConfigFromEnvs is missing %s; an overlay that sets the list must keep the chart's database entries" $want) }}
+{{- if not (has "FORGEJO__DATABASE__PASSWD" $envNames) }}
+{{- fail "forgejo.gitea.additionalConfigFromEnvs is missing FORGEJO__DATABASE__PASSWD; an overlay that sets the list must keep the chart's entry" }}
 {{- end }}
+{{- if has "FORGEJO__DATABASE__HOST" $envNames }}
+{{- fail "forgejo.gitea.additionalConfigFromEnvs sets FORGEJO__DATABASE__HOST, which overrides forgejo.gitea.config.database.HOST; drop it (the pawtograder-forgejo-database ConfigMap it used to read is gone)" }}
+{{- end }}
+{{- $want := include "pawtograder.appDatabase.endpoint" (dict "ctx" . "app" "forgejo") }}
+{{- if ne (toString .Values.forgejo.gitea.config.database.HOST) $want }}
+{{- fail (printf "forgejo.gitea.config.database.HOST must be %q for forgejo.database=%s (got %q)" $want .Values.forgejo.database (toString .Values.forgejo.gitea.config.database.HOST)) }}
 {{- end }}
 {{- end }}
 
@@ -57,6 +63,21 @@
 {{- range $want := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
 {{- if not (has $want $refs) }}
 {{- fail (printf "coder.coder.envFrom is missing %s; an overlay that sets the list must keep the chart's entries" $want) }}
+{{- end }}
+{{- end }}
+{{- $pgURL := "" }}
+{{- range .Values.coder.coder.env }}{{ if eq .name "CODER_PG_CONNECTION_URL" }}{{ $pgURL = .value | default "" }}{{ end }}{{ end }}
+{{- $pgWant := printf "postgres://coder@%s/coder" (include "pawtograder.appDatabase.endpoint" (dict "ctx" . "app" "coder")) }}
+{{- if not (or (eq $pgURL $pgWant) (hasPrefix (printf "%s?" $pgWant) $pgURL)) }}
+{{- fail (printf "coder.coder.env must set CODER_PG_CONNECTION_URL to %s?sslmode=disable for coder.database=%s (got %q); an overlay that sets the list must keep it" $pgWant .Values.coder.database $pgURL) }}
+{{- end }}
+{{- with .Values.coderBootstrap.workspaceNamespace }}
+{{- if ne . $.Release.Namespace }}
+{{- $granted := list }}
+{{- range $.Values.coder.coder.serviceAccount.workspaceNamespaces }}{{ $granted = append $granted .name }}{{ end }}
+{{- if not (has . $granted) }}
+{{- fail (printf "coderBootstrap.workspaceNamespace=%s needs a matching entry in coder.coder.serviceAccount.workspaceNamespaces, or coderd can't create workspaces there" .) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

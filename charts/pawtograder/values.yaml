@@ -2659,11 +2659,8 @@ forgejo:
     admin:
       existingSecret: pawtograder-forgejo-admin
       passwordMode: keepUpdated
-    # An overlay that sets this list must keep these two entries.
+    # An overlay that sets this list must keep this entry.
     additionalConfigFromEnvs:
-      - name: FORGEJO__DATABASE__HOST
-        valueFrom:
-          configMapKeyRef: { name: pawtograder-forgejo-database, key: host }
       - name: FORGEJO__DATABASE__PASSWD
         valueFrom:
           secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
@@ -2674,6 +2671,10 @@ forgejo:
         LFS_START_SERVER: true
       database:
         DB_TYPE: postgres
+        # host:port of forgejo.database's server; the render fails if it doesn't match
+        # (own: pawtograder-forgejo-db:5432). Kept here, not in a ConfigMap, so a
+        # change rolls Forgejo through the subchart's config checksum.
+        HOST: pawtograder-postgres:5432
         NAME: forgejo
         USER: forgejo
         SSL_MODE: disable
@@ -2731,6 +2732,9 @@ forgejoRunner:
     requests: { cpu: "1", memory: 2Gi }
     limits: { cpu: "2", memory: 4Gi }
   dispatcher:
+    # Secret with key `token`: a Forgejo access token with scope write:admin. Empty falls
+    # back to the admin's password, which fails once that account enrolls 2FA.
+    tokenSecret: ""
     resources:
       requests: { cpu: 10m, memory: 32Mi }
       limits: { cpu: 200m, memory: 128Mi }
@@ -2747,7 +2751,12 @@ coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder
       tag: v2.37.3
-    env: []
+    # An overlay that sets this list must keep CODER_PG_CONNECTION_URL, pointing at
+    # coder.database's server (own: pawtograder-coder-db:5432); the render fails otherwise.
+    # No password in the URL: Coder's Postgres driver reads PGPASSWORD (Secret pawtograder-coder-db).
+    env:
+      - name: CODER_PG_CONNECTION_URL
+        value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
     envFrom:
       - configMapRef: { name: pawtograder-coder-env }
       - secretRef: { name: pawtograder-coder-db }
@@ -2787,6 +2796,9 @@ coder-db:
 
 coderBootstrap:
   enabled: true
+  # Namespace the pushed templates put workspaces in; empty means the release's.
+  # Any other namespace must be listed in coder.coder.serviceAccount.workspaceNamespaces.
+  workspaceNamespace: ""
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: 500m, memory: 256Mi }

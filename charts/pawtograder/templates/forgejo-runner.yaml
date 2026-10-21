@@ -5,7 +5,7 @@
 {{- $labelNames := list }}
 {{- range $r.labels }}{{ $labelNames = append $labelNames (splitList ":" . | first) }}{{ end }}
 {{- $config := dict "log" (dict "level" "info") "runner" (dict "timeout" $r.jobTimeout) "cache" (dict "enabled" false) "host" (dict "workdir_parent" "/data/work") }}
-{{- $args := list "one-job" "--config" "/etc/forgejo-runner/config.yaml" "--url" $url "--uuid" "$(RUNNER_UUID)" "--handle" "$(JOB_HANDLE)" "--token-url" "file:/run/forgejo-runner/token" }}
+{{- $args := list "one-job" "--config" "/etc/forgejo-runner/config.yaml" "--url" $url "--uuid" "$(RUNNER_UUID)" "--handle" "$(JOB_HANDLE)" "--token-url" "file:///run/forgejo-runner/token" }}
 {{- range $r.labels }}{{ $args = concat $args (list "--label" .) }}{{ end }}
 {{- $jobPod := dict
   "apiVersion" "v1"
@@ -142,10 +142,15 @@ spec:
             - { name: LABELS, value: {{ join "," $labelNames | quote }} }
             - { name: CAPACITY, value: {{ $r.capacity | quote }} }
             - { name: POLL_INTERVAL, value: {{ $r.pollInterval | quote }} }
+            {{- with $r.dispatcher.tokenSecret }}
+            - name: FORGEJO_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: token } }
+            {{- else }}
             - name: FORGEJO_USER
               valueFrom: { secretKeyRef: { name: {{ .Values.forgejo.gitea.admin.existingSecret }}, key: username } }
             - name: FORGEJO_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ .Values.forgejo.gitea.admin.existingSecret }}, key: password } }
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

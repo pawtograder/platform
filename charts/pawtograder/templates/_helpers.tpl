@@ -284,8 +284,32 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") -}}
 {{- end -}}
 
+{{/*
+Forgejo's ROOT_URL, without the trailing slash, derived the way the Forgejo
+subchart derives it (gitea.inline_configuration.defaults.server and
+gitea.public_protocol): an explicit ROOT_URL wins, otherwise https when the
+ingress has TLS or the HTTPRoute terminates it, else server.PROTOCOL. Actions
+tokens carry ROOT_URL as their issuer, so FORGEJO_URL must match it.
+*/}}
 {{- define "pawtograder.forgejo.url" -}}
-{{- printf "https://%s" (tpl (index .Values.forgejo.ingress.hosts 0).host .) -}}
+{{- $f := .Values.forgejo -}}
+{{- $server := $f.gitea.config.server | default dict -}}
+{{- $route := $f.httpRoute | default dict -}}
+{{- if $server.ROOT_URL -}}
+{{- trimSuffix "/" (tpl $server.ROOT_URL .) -}}
+{{- else -}}
+{{- $https := or (and $f.ingress.enabled (gt (len ($f.ingress.tls | default list)) 0)) (and $route.enabled $route.terminate) -}}
+{{- $proto := ternary "https" ($server.PROTOCOL | default "http") $https -}}
+{{- $domain := $server.DOMAIN -}}
+{{- if not $domain -}}
+{{- if and $route.enabled $route.hostnames -}}
+{{- $domain = index $route.hostnames 0 -}}
+{{- else -}}
+{{- $domain = (index $f.ingress.hosts 0).host -}}
+{{- end -}}
+{{- end -}}
+{{- printf "%s://%s" $proto (tpl $domain .) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "pawtograder.forgejo.http" -}}
@@ -298,6 +322,18 @@ Internal service hostnames.
 {{- else -}}
 {{- printf "%s-%s-db" .ctx.Release.Name .app -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.port" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+{{- .ctx.Values.postgres.service.port -}}
+{{- else -}}
+{{- dig "service" "port" 5432 (index .ctx.Values (printf "%s-db" .app)) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.endpoint" -}}
+{{- printf "%s:%v" (include "pawtograder.appDatabase.host" .) (include "pawtograder.appDatabase.port" .) -}}
 {{- end -}}
 
 {{- define "pawtograder.appDatabase.superuser" -}}

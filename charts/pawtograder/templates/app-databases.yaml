@@ -5,18 +5,6 @@
 {{- end }}
 {{- end }}
 {{- if $apps }}
-{{- if .Values.forgejo.enabled }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ .Release.Name }}-forgejo-database
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo") | nindent 4 }}
-data:
-  host: {{ include "pawtograder.appDatabase.host" (dict "ctx" . "app" "forgejo") }}:5432
----
-{{- end }}
 {{- if .Values.coder.enabled }}
 apiVersion: v1
 kind: ConfigMap
@@ -26,8 +14,6 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder") | nindent 4 }}
 data:
-  # No password in the URL: Coder's Postgres driver reads PGPASSWORD (Secret <release>-coder-db).
-  CODER_PG_CONNECTION_URL: postgres://coder@{{ include "pawtograder.appDatabase.host" (dict "ctx" . "app" "coder") }}:5432/coder?sslmode=disable
   CODER_TELEMETRY_ENABLE: "false"
   CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE: "false"
   CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS: "false"
@@ -61,6 +47,8 @@ spec:
           env:
             - name: PGHOST
               value: {{ include "pawtograder.appDatabase.host" (dict "ctx" $ "app" $app) }}
+            - name: PGPORT
+              value: {{ include "pawtograder.appDatabase.port" (dict "ctx" $ "app" $app) | quote }}
             - name: PGUSER
               value: {{ include "pawtograder.appDatabase.superuser" (dict "ctx" $ "app" $app) }}
             - name: PGDATABASE
