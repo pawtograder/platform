@@ -2826,6 +2826,9 @@ coder:
     resources:
       requests: { cpu: 250m, memory: 512Mi }
       limits: { cpu: "1", memory: 1Gi }
+    # Merged into the subchart's defaults (non-root uid 1000, RuntimeDefault seccomp, no privilege escalation).
+    securityContext:
+      capabilities: { drop: [ALL] }
     service:
       type: ClusterIP
     ingress:

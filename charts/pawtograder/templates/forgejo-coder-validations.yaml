@@ -87,6 +87,15 @@
 {{- if and (index .Values "coder-db").enabled .Values.global.imagePullSecrets (not (index .Values "coder-db").imagePullSecrets) }}
 {{- fail "global.imagePullSecrets doesn't reach the coder-db subchart's pod; set coder-db.imagePullSecrets too" }}
 {{- end }}
+{{- range $key := list "forgejo-db" "coder-db" }}
+{{- $v := index $.Values $key }}
+{{- if and $v.enabled (not (dig "settings" "existingSecret" "" $v)) }}
+{{- fail (printf "%s.settings.existingSecret must name the superuser Secret: without it the subchart generates one called pawtograder-%s, which is the app role's Secret" $key $key) }}
+{{- end }}
+{{- end }}
+{{- if and .Values.coder.enabled (or .Values.coder.nameOverride .Values.coder.fullnameOverride) }}
+{{- fail "coder.nameOverride / fullnameOverride aren't supported: this chart's NetworkPolicies and bootstrap address coderd as coder" }}
+{{- end }}
 {{- range $key := list "forgejo" "forgejo-db" "coder-db" }}
 {{- $v := index $.Values $key }}
 {{- if and $v.enabled (or $v.nameOverride $v.fullnameOverride $v.namespaceOverride) }}
