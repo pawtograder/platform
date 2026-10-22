@@ -1,0 +1,95 @@
+# promtool unit tests for the assignment staff-repository setup alerts.
+#
+# These rules live in the leader-only part of pawtograder.workflowmetrics (their
+# series come from the metrics leader's refresh, lib/metrics.ts), so the runner
+# renders them separately with web.workflowMetricsLeader=true.
+#
+# What each scenario pins:
+#   1. AtRisk pages on one open assignment with a missing repo, and names the class
+#      and kind. This is the 2026-10-19 CS 3100 hw-cyb4 shape: a solution repo that
+#      never got created on a released, autograded assignment.
+#   2. AtRisk stays quiet when the gauge is 0 -- the leader resets the family each
+#      refresh, so a recovered class must not keep paging.
+#   3. Failed fires on a failed job and stays quiet on queued ones.
+#   4. Stuck fires past an hour of pending, and not at half an hour.
+#
+# Run: charts/pawtograder/tests/promrules-unit.sh
+rule_files:
+  - rendered-rules-leader.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: an open assignment missing its solution repo pages, naming the class
+    interval: 1m
+    input_series:
+      - series: 'web_assignment_repo_setup_at_risk{namespace="pawtograder", class_id="653", kind="solution"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PawtograderAssignmentSetupAtRisk
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PawtograderAssignmentSetupAtRisk
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: pawtograder
+              class_id: "653"
+              kind: solution
+            exp_annotations:
+              summary: "Assignment repo setup incomplete for an open assignment (class 653, solution)"
+              description: >-
+                Class 653 in pawtograder has an assignment that is open or opens within 24h whose solution repository is not ready. A missing handout means students get no repositories; a missing solution means every submission fails grading. Find it with: select * from assignment_repo_setup where class_id = 653 and state <> 'ready'. last_error says why; the instructor can use Retry on the assignment page, or call retry_assignment_repo_setup.
+
+  - name: a recovered class stops paging
+    interval: 1m
+    input_series:
+      - series: 'web_assignment_repo_setup_at_risk{namespace="pawtograder", class_id="653", kind="handout"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PawtograderAssignmentSetupAtRisk
+        exp_alerts: []
+
+  - name: a failed setup job warns, queued ones do not
+    interval: 1m
+    input_series:
+      - series: 'web_assignment_repo_setup_jobs{namespace="pawtograder", kind="solution", state="failed"}'
+        values: "1x30"
+      - series: 'web_assignment_repo_setup_jobs{namespace="pawtograder", kind="handout", state="queued"}'
+        values: "4x30"
+      - series: 'web_assignment_repo_setup_jobs{namespace="pawtograder", kind="handout", state="failed"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PawtograderAssignmentSetupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: pawtograder
+              kind: solution
+            exp_annotations:
+              summary: "Assignment solution repo setup failed"
+              description: >-
+                1 assignment solution repository setup job(s) in pawtograder stopped retrying. Rows: select * from assignment_repo_setup where state = 'failed' and last_attempt_at is not null. The worker's Sentry event for the job (tag async_method=setup_solution_repo) has the stack.
+
+  - name: a setup pending over an hour warns, half an hour does not
+    interval: 1m
+    input_series:
+      - series: 'web_assignment_repo_setup_oldest_pending_seconds{namespace="pawtograder", kind="handout"}'
+        values: "4000x30"
+      - series: 'web_assignment_repo_setup_oldest_pending_seconds{namespace="pawtograder", kind="solution"}'
+        values: "1800x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PawtograderAssignmentSetupStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: pawtograder
+              kind: handout
+            exp_annotations:
+              summary: "Assignment handout repo setup pending for over an hour"
+              description: >-
+                The oldest pending assignment handout repository setup in pawtograder has waited 1h 6m 40s. Check the async_calls queue depth, open github_circuit_breakers for the org, and the github-async-worker logs.

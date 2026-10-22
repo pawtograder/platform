@@ -1168,6 +1168,69 @@ spec:
               monitoring.serviceMonitors.metricsLeader is not disabled){{- end }}, and that
               METRICS_SCRAPE_TOKEN is present in the {{ .Values.secrets.names.jwt }}
               Secret (/api/metrics returns 503 without it).
+        # Assignment staff-repository setup (handout + solution repos), produced by the
+        # same leader refresh from public.assignment_repo_setup via
+        # metrics_assignment_repo_setup(). Rendered only with a leader, because
+        # nothing else exports these series.
+        #
+        # Background: on 2026-10-19 a CS 3100 assignment was released to 291 students
+        # with no solution repo, because the browser that was creating it gave up
+        # half-way. Every push failed grading, and the only signal was an instructor
+        # email three days later. These three rules are the operator side of the fix;
+        # the instructor sees the same state, with a Retry button, on the assignment
+        # page.
+        #
+        # AtRisk is the one that matters: an assignment that is open (or opens within
+        # 24h) and not yet due, whose handout, or autograded solution, repo is not
+        # ready. Students are, or are about to be, unable to get a repo or be graded.
+        # It counts rows whether or not the new path ever attempted them, so it also
+        # covers assignments that pre-date server-side setup.
+        - alert: PawtograderAssignmentSetupAtRisk
+          expr: |
+            max by (namespace, class_id, kind) (web_assignment_repo_setup_at_risk{namespace="{{ $ns }}"}) > 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Assignment repo setup incomplete for an open assignment (class {{`{{ $labels.class_id }}`}}, {{`{{ $labels.kind }}`}})"
+            description: >-
+              Class {{`{{ $labels.class_id }}`}} in {{ $ns }} has an assignment that is open or opens
+              within 24h whose {{`{{ $labels.kind }}`}} repository is not ready. A missing handout means
+              students get no repositories; a missing solution means every submission fails
+              grading. Find it with: select * from assignment_repo_setup where class_id =
+              {{`{{ $labels.class_id }}`}} and state <> 'ready'. last_error says why; the instructor
+              can use Retry on the assignment page, or call retry_assignment_repo_setup.
+        # Failed: automatic retries have stopped (dead-lettered, or the attempt ceiling)
+        # on a row the server-side path attempted. Excludes the backfilled rows for
+        # historical assignments, which never had an attempt.
+        - alert: PawtograderAssignmentSetupFailed
+          expr: |
+            sum by (namespace, kind) (web_assignment_repo_setup_jobs{namespace="{{ $ns }}", state="failed"}) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Assignment {{`{{ $labels.kind }}`}} repo setup failed"
+            description: >-
+              {{`{{ $value }}`}} assignment {{`{{ $labels.kind }}`}} repository setup job(s) in
+              {{ $ns }} stopped retrying. Rows: select * from assignment_repo_setup where
+              state = 'failed' and last_attempt_at is not null. The worker's Sentry event for
+              the job (tag async_method=setup_{{`{{ $labels.kind }}`}}_repo) has the stack.
+        # Stuck: a job has been queued or running for over an hour. A healthy setup job
+        # finishes in a few minutes; an hour means the worker is not draining, the org's
+        # circuit is open, or GitHub rate-limited the org into a long backoff.
+        - alert: PawtograderAssignmentSetupStuck
+          expr: |
+            max by (namespace, kind) (web_assignment_repo_setup_oldest_pending_seconds{namespace="{{ $ns }}"}) > 3600
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Assignment {{`{{ $labels.kind }}`}} repo setup pending for over an hour"
+            description: >-
+              The oldest pending assignment {{`{{ $labels.kind }}`}} repository setup in {{ $ns }} has
+              waited {{`{{ $value | humanizeDuration }}`}}. Check the async_calls queue depth, open
+              github_circuit_breakers for the org, and the github-async-worker logs.
 {{- end }}
     - name: pawtograder.edgefunctions
       rules:

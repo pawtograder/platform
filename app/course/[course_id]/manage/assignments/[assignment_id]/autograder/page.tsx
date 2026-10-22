@@ -12,17 +12,20 @@ import {
   Button,
   Fieldset,
   Heading,
+  HStack,
   Input,
   Link,
   NativeSelectField,
   NativeSelectRoot,
-  RadioGroup
+  RadioGroup,
+  Text
 } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Controller, FieldValues } from "react-hook-form";
+import { RepoSetupStateBadge, useAssignmentRepoSetup } from "../RepoSetupStatus";
 
 export default function AutograderPage() {
   const { assignment_id, course_id } = useParams();
@@ -450,7 +453,11 @@ export default function AutograderPage() {
           </Fieldset.Content>
           <Fieldset.Content>
             <Field label="Solution Repository">
-              <Link href={`https://github.com/${currentGraderRepo}`}>{currentGraderRepo}</Link>
+              {currentGraderRepo ? (
+                <Link href={`https://github.com/${currentGraderRepo}`}>{currentGraderRepo}</Link>
+              ) : (
+                <SolutionRepoSetupState />
+              )}
             </Field>
           </Fieldset.Content>
         </Fieldset.Root>
@@ -483,5 +490,21 @@ export default function AutograderPage() {
         </Fieldset.Root>
       )}
     </div>
+  );
+}
+
+/** Shown in place of the link while no solution repository is recorded: why, and what is happening. */
+function SolutionRepoSetupState() {
+  const { rows } = useAssignmentRepoSetup();
+  const row = rows.solution;
+  return (
+    <HStack>
+      <RepoSetupStateBadge row={row} />
+      <Text fontSize="sm" color="fg.muted">
+        {row?.state === "failed"
+          ? "Creation failed. See Repository setup on the assignment overview to retry."
+          : "Not created yet. It is set up in the background after the assignment is created."}
+      </Text>
+    </HStack>
   );
 }
