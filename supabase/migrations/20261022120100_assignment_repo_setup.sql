@@ -34,15 +34,17 @@
 -- ---------------------------------------------------------------------------------------------
 -- 0. Opt-out at insert
 -- ---------------------------------------------------------------------------------------------
--- `assignments copy --skip-repos` (supabase/functions/cli/commands/assignments.ts) promises to make
--- no GitHub calls. An unconditional insert trigger would break that promise, so the caller says
--- so on the row it inserts. The rows are still recorded (as skipped, with a note) so an instructor
+-- Some callers must not have the insert queue repository setup: `assignments copy --skip-repos`
+-- (supabase/functions/cli/commands/assignments.ts) promises no GitHub calls, and callers that
+-- create the repositories themselves, synchronously, would race the queued job (the CLI copy,
+-- which copies content straight in; the seeding scripts). Such a caller says so on the row it
+-- inserts. The rows are still recorded (as skipped, with a note) so an instructor
 -- can see why there are no repositories and use Retry, which clears the flag.
 alter table public.assignments
   add column if not exists skip_repo_setup boolean not null default false;
 
 comment on column public.assignments.skip_repo_setup is
-  'Set by a caller that inserts an assignment and must not have its handout/solution repositories created automatically (CLI copy with --skip-repos). Respected by the insert trigger and the reconciler''s safety net; cleared by retry_assignment_repo_setup.';
+  'Set by a caller that inserts an assignment and must not have its handout/solution repository setup queued automatically: the CLI copy (which creates them itself, or not at all with --skip-repos) and the seeding scripts. Respected by the insert and mode-change triggers and the reconciler''s safety net; cleared by retry_assignment_repo_setup.';
 
 -- ---------------------------------------------------------------------------------------------
 -- 1. Status table
@@ -457,7 +459,7 @@ begin
   if new.skip_repo_setup then
     insert into public.assignment_repo_setup (assignment_id, class_id, kind, state, last_error)
     select new.id, new.class_id, k.kind, 'skipped',
-           'Repository setup was skipped when this assignment was created (for example, copied with --skip-repos). Use Retry to create the repository.'
+           'Automatic repository setup was turned off when this assignment was created (it was copied with --skip-repos, or the tool that created it sets up repositories itself). Use Retry to create the repository.'
       from unnest(enum_range(null::public.assignment_repo_kind)) as k(kind)
     on conflict (assignment_id, kind) do nothing;
     return new;

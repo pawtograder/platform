@@ -122,22 +122,64 @@ async function loadAssignment(opts: AssignmentRepoSetupOptions) {
   return data;
 }
 
+/** The assignment fields a setup job's plan depends on. */
+type RepoConfigSnapshot = {
+  repo_mode: string | null;
+  source_assignment_id: number | null;
+  has_autograder: boolean | null;
+  slug: string | null;
+  submission_mode: string | null;
+};
+
+function snapshotOf(row: Record<string, unknown>): RepoConfigSnapshot {
+  return {
+    repo_mode: (row.repo_mode as string | null) ?? null,
+    source_assignment_id: (row.source_assignment_id as number | null) ?? null,
+    has_autograder: (row.has_autograder as boolean | null) ?? null,
+    slug: (row.slug as string | null) ?? null,
+    submission_mode: (row.submission_mode as string | null) ?? null
+  };
+}
+
 /**
- * Whether the assignment still wants repositories, read fresh. An instructor can switch it to
- * `none`/`no_submission` while a job is running; the mode-change trigger marks the setup rows
- * skipped but cannot stop a job already in flight. So each job asks again right before the
- * irreversible step (creating the repository) and right before writing pointers back, and stops
- * if the answer changed. The window that remains is the few milliseconds between the check and
- * the write.
+ * A job planned its work from the assignment as it was when the job started. If the instructor
+ * changed the repository configuration since, the plan is stale. Thrown as a plain (retryable)
+ * error: the worker's retry re-reads the assignment and plans again; createRepo adopts whatever
+ * this attempt already created.
  */
-async function stillWantsRepositories(opts: AssignmentRepoSetupOptions): Promise<boolean> {
+export class AssignmentRepoConfigChangedError extends Error {
+  constructor() {
+    super(
+      "The assignment's repository settings changed while its repository was being set up; retrying with the new settings"
+    );
+    this.name = "AssignmentRepoConfigChangedError";
+  }
+}
+
+/**
+ * Re-read the assignment right before an irreversible step (creating the repository) and right
+ * before writing pointers back. An instructor can change the repository settings while a job
+ * runs; the mode-change trigger marks rows skipped when repositories are turned off, but cannot
+ * stop a job already in flight.
+ *  - `disabled`: repositories were turned off. Stop, write nothing.
+ *  - `changed`: still on, but the plan is stale (different mode, fork source, autograder flag,
+ *    slug or submission mode). Throws AssignmentRepoConfigChangedError so the job is retried.
+ * The window that remains is the milliseconds between this read and the write after it.
+ */
+async function recheckRepoConfig(
+  opts: AssignmentRepoSetupOptions,
+  planned: RepoConfigSnapshot
+): Promise<"unchanged" | "disabled"> {
   const { data, error } = await opts.adminSupabase
     .from("assignments")
-    .select("repo_mode")
+    .select("*")
     .eq("id", opts.assignmentId)
     .maybeSingle();
   if (error) throw error;
-  return !!data && data.repo_mode !== "none" && data.repo_mode !== "no_submission";
+  if (!data || data.repo_mode === "none" || data.repo_mode === "no_submission") return "disabled";
+  const now = snapshotOf(data as unknown as Record<string, unknown>);
+  if (JSON.stringify(now) !== JSON.stringify(planned)) throw new AssignmentRepoConfigChangedError();
+  return "unchanged";
 }
 
 const NO_LONGER_WANTED: Omit<AssignmentRepoSetupResult, "repo_full_name"> = {
@@ -166,6 +208,7 @@ export async function setupHandoutRepo(opts: AssignmentRepoSetupOptions): Promis
 
   const assignment = await loadAssignment(opts);
   if (!assignment) return notFound(assignmentId);
+  const planned = snapshotOf(assignment as unknown as Record<string, unknown>);
   if (!assignment.classes.slug) {
     throw new AssignmentSetupConfigError("This course has no slug, so its repositories cannot be named.");
   }
@@ -233,6 +276,7 @@ export async function setupHandoutRepo(opts: AssignmentRepoSetupOptions): Promis
   }
 
   if (action.kind === "inherit_from_source") {
+    if ((await recheckRepoConfig(opts, planned)) === "disabled") return { ...NO_LONGER_WANTED, repo_full_name: null };
     // For fork_from_prior_assignment we don't create a new handout repo; the student repos fork
     // from each student's prior-assignment repo. We still copy the source assignment's
     // template_repo + latest_template_sha onto this assignment so the handout-history UI and
@@ -259,6 +303,9 @@ export async function setupHandoutRepo(opts: AssignmentRepoSetupOptions): Promis
     if (sourceAssignment!.template_repo && assignment.has_autograder !== false) {
       await github.updateAutograderWorkflowHash(sourceAssignment!.template_repo);
     }
+    // The solution job may have finished first and skipped seeding for want of a handout
+    // revision; now that one is recorded, seed (a no-op if the solution config is not there yet).
+    await seedHashes(opts, sourceAssignment!.template_repo, sourceAssignment!.latest_template_sha ?? undefined);
     return {
       state: "ready",
       repo_full_name: sourceAssignment!.template_repo,
@@ -315,8 +362,8 @@ export async function setupHandoutRepo(opts: AssignmentRepoSetupOptions): Promis
     requiredReviewers: 0
   };
 
-  if (!(await stillWantsRepositories(opts))) return { ...NO_LONGER_WANTED, repo_full_name: null };
-  await scheduleCreate(handoutRepoOrg!, () =>
+  if ((await recheckRepoConfig(opts, planned)) === "disabled") return { ...NO_LONGER_WANTED, repo_full_name: null };
+  const createdHeadSha = await scheduleCreate(handoutRepoOrg!, () =>
     github.createRepo(
       handoutRepoOrg!,
       handoutRepoName,
@@ -382,6 +429,10 @@ export async function setupHandoutRepo(opts: AssignmentRepoSetupOptions): Promis
       scope.setTag("resolve_handout_head_failed", "true");
       Sentry.captureException(headErr, scope);
     }
+    // createRepo already returned the head it left the repository at. Fall back to it rather than
+    // record no revision: without one, hash seeding skips and new student repositories have no
+    // target handout revision, on a row that would show ready with no Retry.
+    handoutHeadSha = handoutHeadSha || createdHeadSha || undefined;
   }
 
   // Only persist the template_repo pointer after GitHub creation + permission sync succeed, so a
@@ -396,7 +447,8 @@ export async function setupHandoutRepo(opts: AssignmentRepoSetupOptions): Promis
   //
   // On an assignment whose release date has passed, this write is also what creates the student
   // repositories: check_assignment_for_repo_creation fires on template_repo going NULL -> value.
-  if (!(await stillWantsRepositories(opts))) return { ...NO_LONGER_WANTED, repo_full_name: handoutFullName };
+  if ((await recheckRepoConfig(opts, planned)) === "disabled")
+    return { ...NO_LONGER_WANTED, repo_full_name: handoutFullName };
   const { error: pointerError } = await adminSupabase
     .from("assignments")
     .update({
@@ -445,6 +497,7 @@ export async function setupSolutionRepo(opts: AssignmentRepoSetupOptions): Promi
 
   const assignment = await loadAssignment(opts);
   if (!assignment) return notFound(assignmentId);
+  const planned = snapshotOf(assignment as unknown as Record<string, unknown>);
   if (assignment.repo_mode === "none" || assignment.repo_mode === "no_submission") {
     return {
       state: "skipped",
@@ -492,7 +545,7 @@ export async function setupSolutionRepo(opts: AssignmentRepoSetupOptions): Promi
   const { solution: solutionTemplateRepo } = await resolveTemplateRepos(adminSupabase, assignment.class_id);
   scope.setTag("solution_template_repo", solutionTemplateRepo);
 
-  if (!(await stillWantsRepositories(opts))) return { ...NO_LONGER_WANTED, repo_full_name: null };
+  if ((await recheckRepoConfig(opts, planned)) === "disabled") return { ...NO_LONGER_WANTED, repo_full_name: null };
   const headSha = await scheduleCreate(solutionRepoOrg, () =>
     github.createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope)
   );
@@ -501,7 +554,17 @@ export async function setupSolutionRepo(opts: AssignmentRepoSetupOptions): Promi
   // Read the config at the commit we are about to record, so the two cannot describe different
   // trees if someone pushes in between.
   const graderConfig = await github.getFileFromRepo(solutionFullName, "pawtograder.yml", scope, headSha || undefined);
-  const config = (await parse(graderConfig.content)) as Json;
+  let config: Json;
+  try {
+    config = (await parse(graderConfig.content)) as Json;
+  } catch (yamlError) {
+    // The content is fixed at this commit, so a syntax error will not go away on retry.
+    throw new AssignmentSetupConfigError(
+      `pawtograder.yml in ${solutionFullName} is not valid YAML: ${
+        yamlError instanceof Error ? yamlError.message : String(yamlError)
+      }. Fix the file in the solution repository (or the course's solution template), then use Retry.`
+    );
+  }
   // An empty file, or one that is YAML `null`, parses without throwing. Recording that would mark
   // the repository ready while autograder.config stays NULL -- the very state every submission
   // fails on. The file's content is fixed at this commit, so retrying cannot change the answer.
@@ -512,7 +575,8 @@ export async function setupSolutionRepo(opts: AssignmentRepoSetupOptions): Promi
     );
   }
 
-  if (!(await stillWantsRepositories(opts))) return { ...NO_LONGER_WANTED, repo_full_name: solutionFullName };
+  if ((await recheckRepoConfig(opts, planned)) === "disabled")
+    return { ...NO_LONGER_WANTED, repo_full_name: solutionFullName };
   const { error: pointerError } = await adminSupabase
     .from("autograder")
     .update({

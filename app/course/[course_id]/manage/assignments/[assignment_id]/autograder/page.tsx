@@ -372,15 +372,18 @@ export default function AutograderPage() {
 
   // The solution repo is created in the background after the assignment is inserted, so this page
   // can open before it exists and the form loads grader_repo = null. When the setup job records
-  // it (the setup provider re-reads the pointer on every setup-row broadcast), adopt it, so the
-  // page shows the repo and its configuration without a reload. Only ever fills an empty value:
-  // never overwrites one the instructor typed.
+  // it (the setup provider re-reads the pointer on every setup-row broadcast), refetch the row
+  // rather than only patching the field: the save handler's rollback snapshot is built from the
+  // query data, and a stale snapshot would write the null grader_repo and config back on a failed
+  // workflow sync, undoing the setup. The field is also filled at once so the page updates without
+  // waiting on the refetch; only an empty value is ever filled, never one the instructor typed.
   const { checks: repoSetupChecks } = useAssignmentRepoSetup();
+  const recordedGraderRepo = repoSetupChecks?.grader_repo;
   useEffect(() => {
-    if (!currentGraderRepo && repoSetupChecks?.grader_repo) {
-      setValue("grader_repo", repoSetupChecks.grader_repo, { shouldDirty: false });
-    }
-  }, [currentGraderRepo, repoSetupChecks?.grader_repo, setValue]);
+    if (currentGraderRepo || !recordedGraderRepo) return;
+    setValue("grader_repo", recordedGraderRepo, { shouldDirty: false });
+    void query?.refetch();
+  }, [currentGraderRepo, recordedGraderRepo, setValue, query]);
 
   if (query?.isLoading || formLoading) {
     return <div>Loading...</div>;

@@ -20,9 +20,13 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
 // GitHubWrapper, which this module imports, builds a GitHub App at import time and needs a
 // non-empty private key. Nothing under test authenticates. Set it before the dynamic import.
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { setupHandoutRepo, setupSolutionRepo, runAssignmentRepoSetup, AssignmentSetupConfigError } = await import(
-  "./assignmentRepoSetup.ts"
-);
+const {
+  setupHandoutRepo,
+  setupSolutionRepo,
+  runAssignmentRepoSetup,
+  AssignmentSetupConfigError,
+  AssignmentRepoConfigChangedError
+} = await import("./assignmentRepoSetup.ts");
 const { NonRetryableGitHubError } = await import("./GitHubWrapper.ts");
 
 type Row = Record<string, unknown>;
@@ -496,4 +500,48 @@ Deno.test("both: repositories turned off mid-job stop the job before any pointer
       "no pointer written onto an assignment that no longer uses repositories"
     );
   }
+});
+
+Deno.test("both: a switch to a different repository mode mid-job is retried with the new plan", async () => {
+  for (const job of [setupHandoutRepo, setupSolutionRepo]) {
+    const row = assignmentRow();
+    const db = fakeSupabase({ assignment: row });
+    const gh = fakeGithub(db.log, {
+      createRepo: () => {
+        row.repo_mode = "template_with_student_forks";
+        return "head-sha-1";
+      }
+    });
+    await assertRejects(
+      () => job({ adminSupabase: db.client, assignmentId: 7, scope: scope(), github: gh.github }),
+      AssignmentRepoConfigChangedError
+    );
+    assertEquals(
+      db.writes.filter((w) => w.table === "assignments" || w.table === "autograder"),
+      [],
+      "the stale plan writes nothing"
+    );
+  }
+});
+
+Deno.test("solution: malformed YAML is a configuration error, not a retry", async () => {
+  const db = fakeSupabase({ assignment: assignmentRow() });
+  const gh = fakeGithub(db.log, { getFileFromRepo: () => ({ content: "grader: [unterminated\n" }) });
+  await assertRejects(
+    () => setupSolutionRepo({ adminSupabase: db.client, assignmentId: 7, scope: scope(), github: gh.github }),
+    AssignmentSetupConfigError,
+    "not valid YAML"
+  );
+});
+
+Deno.test("handout: a failed head lookup falls back to the sha createRepo returned", async () => {
+  const db = fakeSupabase({ assignment: assignmentRow() });
+  const gh = fakeGithub(db.log, {
+    getDefaultBranchHeadSha: () => {
+      throw new Error("transient");
+    }
+  });
+  await setupHandoutRepo({ adminSupabase: db.client, assignmentId: 7, scope: scope(), github: gh.github });
+  const pointer = db.writes.find((w) => w.table === "assignments")!;
+  assertEquals(pointer.values.latest_template_sha, "head-sha-1");
 });

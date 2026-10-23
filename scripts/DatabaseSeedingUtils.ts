@@ -3067,6 +3067,10 @@ export class DatabaseSeeder {
                 : addDays(new Date(), -1)
               ).toISOString(),
               class_id: class_id,
+              // The seeder creates (or skips) repositories itself -- the demo orchestrator calls the
+              // assignment-create-*-repo functions synchronously -- so opt out of the server-side
+              // setup the insert would otherwise queue, which would race those calls.
+              skip_repo_setup: true,
               slug,
               group_config: groupConfig,
               allow_not_graded_submissions: false,
