@@ -14000,6 +14000,10 @@ export type Database = {
         Args: { assignment_id: number };
         Returns: number;
       };
+      release_code_walk_reviews_for_assignment: {
+        Args: { p_assignment_id: number };
+        Returns: number;
+      };
       release_grading_reviews_for_submissions: {
         Args: { p_assignment_id: number; p_submission_ids: number[] };
         Returns: number;
@@ -14220,6 +14224,10 @@ export type Database = {
       };
       unrelease_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
+        Returns: number;
+      };
+      unrelease_code_walk_reviews_for_assignment: {
+        Args: { p_assignment_id: number };
         Returns: number;
       };
       unrelease_grading_reviews_for_submissions: {
