@@ -16,6 +16,7 @@ import AssignmentDashboard from "./assignmentDashboard";
 import { AssignmentExportControls } from "./assignmentsTable";
 import CreateSubmissionForStudentDialog from "./createSubmissionForStudentDialog";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
+import { AssignmentRepoSetupPanel, RepoSetupStateBadge, useAssignmentRepoSetup } from "./RepoSetupStatus";
 
 const VALID_TABS = ["dashboard", "assigned-grading"] as const;
 
@@ -68,7 +69,8 @@ export default function AssignmentHome() {
   const assignment = controller.assignment;
   const myReviewAssignments = useMyReviewAssignments();
   const hasReviewAssignments = myReviewAssignments.length > 0;
-  const { course, classRealTimeController } = useCourseController();
+  const { classRealTimeController } = useCourseController();
+  const repoSetup = useAssignmentRepoSetup();
   const { assignment_id } = useParams();
   const isInstructor = useIsInstructor();
   const supabase = useMemo(() => createClient(), []);
@@ -150,24 +152,32 @@ export default function AssignmentHome() {
                     <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
                       {assignment.template_repo}
                     </Link>
-                  ) : (
+                  ) : assignment.repo_mode === "none" || assignment.repo_mode === "no_submission" ? (
                     <Text fontStyle="italic" color="fg.muted">
                       No handout repository
                     </Text>
+                  ) : (
+                    <RepoSetupStateBadge row={repoSetup.rows.handout} />
                   )}
                 </DataList.ItemValue>
               </DataList.Item>
-              <DataList.Item>
-                <DataList.ItemLabel>Grader repo</DataList.ItemLabel>
-                <DataList.ItemValue>
-                  <Link
-                    href={`https://github.com/${course.github_org}/${course.slug}-solution-${assignment.slug}`}
-                    target="_blank"
-                  >
-                    {course.github_org}/{course.slug}-solution-{assignment.slug}
-                  </Link>
-                </DataList.ItemValue>
-              </DataList.Item>
+              {assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission" && (
+                <DataList.Item>
+                  <DataList.ItemLabel>Grader repo</DataList.ItemLabel>
+                  <DataList.ItemValue>
+                    {/* The recorded pointer, not a name built from the naming convention: the
+                        convention names a repository whether or not it was ever created, which is
+                        how a missing solution repo used to show up only as a GitHub 404. */}
+                    {repoSetup.checks?.grader_repo ? (
+                      <Link href={`https://github.com/${repoSetup.checks.grader_repo}`} target="_blank">
+                        {repoSetup.checks.grader_repo}
+                      </Link>
+                    ) : (
+                      <RepoSetupStateBadge row={repoSetup.rows.solution} />
+                    )}
+                  </DataList.ItemValue>
+                </DataList.Item>
+              )}
             </DataList.Root>
           </VStack>
           <HStack>
@@ -190,6 +200,7 @@ export default function AssignmentHome() {
           </HStack>
         </HStack>
       </Box>
+      <AssignmentRepoSetupPanel />
       <Suspense fallback={null}>
         <AssignmentHomeTabs hasReviewAssignments={hasReviewAssignments} tableController={tableController} />
       </Suspense>

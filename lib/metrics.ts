@@ -27,6 +27,13 @@ type MetricsBundle = {
   workflowQueueSeconds: Gauge<string>; // labels: class_id, quantile
   workflowRunSeconds: Gauge<string>; // labels: class_id, quantile
   workflowErrorsRecent: Gauge<string>; // labels: class_id, category, window
+
+  // Assignment staff-repository setup (handout + solution), from
+  // public.assignment_repo_setup via metrics_assignment_repo_setup(). Refreshed in
+  // the same pass as the workflow gauges. See that RPC for which rows count.
+  assignmentRepoSetupJobs: Gauge<string>; // labels: kind, state
+  assignmentRepoSetupOldestPendingSeconds: Gauge<string>; // labels: kind
+  assignmentRepoSetupAtRisk: Gauge<string>; // labels: class_id, kind
   workflowRefreshDuration: Histogram<string>; // observed when refresh runs
   workflowRefreshErrors: Counter<string>;
   // Unix seconds of the last fully successful refresh, INCLUDING one where
@@ -203,6 +210,32 @@ async function buildBundle(): Promise<MetricsBundle> {
     registers: [registry]
   });
 
+  // Not-ready staff-repository setup rows. `state` is a closed enum
+  // (queued / in_progress / failed) and `kind` is handout / solution, so the
+  // first two families are at most 6 and 2 series. The at-risk family carries
+  // class_id so the alert can name the course; it only has samples while some
+  // assignment is open with a repository missing.
+  const assignmentRepoSetupJobs = new promClient.Gauge({
+    name: "web_assignment_repo_setup_jobs",
+    help: "Assignment staff-repository setup rows that are not ready, by kind (handout/solution) and state (queued/in_progress/failed). Counts only rows the server-side setup path has attempted.",
+    labelNames: ["kind", "state"],
+    registers: [registry]
+  });
+
+  const assignmentRepoSetupOldestPendingSeconds = new promClient.Gauge({
+    name: "web_assignment_repo_setup_oldest_pending_seconds",
+    help: "Age of the oldest queued or in-progress assignment staff-repository setup attempt, by kind. 0 when none is pending.",
+    labelNames: ["kind"],
+    registers: [registry]
+  });
+
+  const assignmentRepoSetupAtRisk = new promClient.Gauge({
+    name: "web_assignment_repo_setup_at_risk",
+    help: "Assignments that are open (or open within 24h) and not yet due whose handout, or autograded solution, repository is not ready. By class and kind.",
+    labelNames: ["class_id", "kind"],
+    registers: [registry]
+  });
+
   // Leader-only, and the conditional is load-bearing — see the field comment on
   // MetricsBundle. The env var is the SAME one app/api/metrics/route.ts gates
   // refreshWorkflowMetrics() on, so a process that would never refresh also
@@ -241,6 +274,9 @@ async function buildBundle(): Promise<MetricsBundle> {
     workflowQueueSeconds,
     workflowRunSeconds,
     workflowErrorsRecent,
+    assignmentRepoSetupJobs,
+    assignmentRepoSetupOldestPendingSeconds,
+    assignmentRepoSetupAtRisk,
     workflowRefreshDuration,
     workflowRefreshErrors,
     workflowRefreshLastSuccess,
@@ -523,6 +559,66 @@ function noteWorkflowRefreshFailure(
   console.error(`[metrics] workflow-metrics refresh step "${step}" failed: ${detail}`);
 }
 
+// One row of metrics_assignment_repo_setup(): per class, kind and not-ready state.
+export type AssignmentRepoSetupMetricRow = {
+  class_id: number | string;
+  kind: string;
+  state: string;
+  count: number | string;
+  at_risk: number | string;
+  oldest_seconds: number | string;
+};
+
+// The CLOSED label domains for the setup gauges. Anything else the RPC returns
+// is dropped rather than minted as a new series, for the same reason as
+// WORKFLOW_ERROR_CATEGORIES.
+export const ASSIGNMENT_REPO_SETUP_KINDS = ["handout", "solution"] as const;
+export const ASSIGNMENT_REPO_SETUP_PENDING_STATES = ["queued", "in_progress", "failed"] as const;
+
+// Aggregate the per-class rows into the three gauge families. Every kind/state
+// pair is set explicitly, zero included, so "nothing failing" is a sample of 0
+// rather than an absent series an alert cannot tell from a broken producer.
+export function aggregateAssignmentRepoSetupRows(rows: AssignmentRepoSetupMetricRow[]) {
+  const kinds = new Set<string>(ASSIGNMENT_REPO_SETUP_KINDS);
+  const states = new Set<string>(ASSIGNMENT_REPO_SETUP_PENDING_STATES);
+  const jobs = new Map<string, number>();
+  const oldest = new Map<string, number>();
+  const atRisk = new Map<string, number>();
+  for (const kind of ASSIGNMENT_REPO_SETUP_KINDS) {
+    oldest.set(kind, 0);
+    for (const state of ASSIGNMENT_REPO_SETUP_PENDING_STATES) jobs.set(`${kind}|${state}`, 0);
+  }
+  for (const row of rows) {
+    if (!kinds.has(row.kind) || !states.has(row.state)) continue;
+    const key = `${row.kind}|${row.state}`;
+    jobs.set(key, (jobs.get(key) ?? 0) + Number(row.count));
+    oldest.set(row.kind, Math.max(oldest.get(row.kind) ?? 0, Number(row.oldest_seconds) || 0));
+    const risk = Number(row.at_risk);
+    if (risk > 0) {
+      const riskKey = `${String(row.class_id)}|${row.kind}`;
+      atRisk.set(riskKey, (atRisk.get(riskKey) ?? 0) + risk);
+    }
+  }
+  return { jobs, oldest, atRisk };
+}
+
+function applyAssignmentRepoSetupRows(m: MetricsBundle, rows: AssignmentRepoSetupMetricRow[]): void {
+  const { jobs, oldest, atRisk } = aggregateAssignmentRepoSetupRows(rows);
+  m.assignmentRepoSetupJobs.reset();
+  for (const [key, value] of jobs) {
+    const [kind, state] = key.split("|");
+    m.assignmentRepoSetupJobs.set({ kind, state }, value);
+  }
+  m.assignmentRepoSetupOldestPendingSeconds.reset();
+  for (const [kind, value] of oldest) m.assignmentRepoSetupOldestPendingSeconds.set({ kind }, value);
+  // Reset so a class that recovered stops exporting a stale at-risk sample.
+  m.assignmentRepoSetupAtRisk.reset();
+  for (const [key, value] of atRisk) {
+    const [class_id, kind] = key.split("|");
+    m.assignmentRepoSetupAtRisk.set({ class_id, kind }, value);
+  }
+}
+
 async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
   // Throttle. The gauges are .set()-persisted in the registry between scrapes,
   // so returning here still exports the last-good values — a scrape served from
@@ -557,7 +653,7 @@ async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
     // Run all four aggregate queries concurrently. Each returns its own
     // count → label dimension; the gauges are reset before each scrape
     // so stale class_ids don't linger when no rows match.
-    const [runs1h, runs24h, queue, run, errors1h] = await Promise.allSettled([
+    const [runs1h, runs24h, queue, run, errors1h, repoSetup] = await Promise.allSettled([
       // Conclusions over the last hour.
       client.rpc("metrics_workflow_runs_by_conclusion", { window_hours: 1 }),
       // Conclusions over the last day (wider trend signal).
@@ -567,7 +663,9 @@ async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
       // Run duration percentiles over the last hour.
       client.rpc("metrics_workflow_run_percentiles", { window_hours: 1 }),
       // Errors over the last hour.
-      client.rpc("metrics_workflow_errors_by_category", { window_hours: 1 })
+      client.rpc("metrics_workflow_errors_by_category", { window_hours: 1 }),
+      // Assignment staff-repository setup that is not ready.
+      client.rpc("metrics_assignment_repo_setup")
     ]);
 
     // Reset each family only after we know its fetch succeeded — otherwise
@@ -651,6 +749,13 @@ async function runWorkflowRefresh(m: MetricsBundle): Promise<void> {
       }
     } else {
       noteWorkflowRefreshFailure(m, "errors_1h", errors1h);
+      allOk = false;
+    }
+
+    if (repoSetup.status === "fulfilled" && !repoSetup.value.error) {
+      applyAssignmentRepoSetupRows(m, (repoSetup.value.data ?? []) as AssignmentRepoSetupMetricRow[]);
+    } else {
+      noteWorkflowRefreshFailure(m, "assignment_repo_setup", repoSetup);
       allOk = false;
     }
   } catch (err) {
