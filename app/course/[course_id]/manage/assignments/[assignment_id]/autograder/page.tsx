@@ -370,6 +370,18 @@ export default function AutograderPage() {
     typeof currentGraderRepo === "string" ? currentGraderRepo.split("/") : [];
   const graderRepoIsValid = !!graderOrg && !!graderRepoName && graderRepoExtra.length === 0;
 
+  // The solution repo is created in the background after the assignment is inserted, so this page
+  // can open before it exists and the form loads grader_repo = null. When the setup job records
+  // it (the setup provider re-reads the pointer on every setup-row broadcast), adopt it, so the
+  // page shows the repo and its configuration without a reload. Only ever fills an empty value:
+  // never overwrites one the instructor typed.
+  const { checks: repoSetupChecks } = useAssignmentRepoSetup();
+  useEffect(() => {
+    if (!currentGraderRepo && repoSetupChecks?.grader_repo) {
+      setValue("grader_repo", repoSetupChecks.grader_repo, { shouldDirty: false });
+    }
+  }, [currentGraderRepo, repoSetupChecks?.grader_repo, setValue]);
+
   if (query?.isLoading || formLoading) {
     return <div>Loading...</div>;
   }
@@ -495,8 +507,15 @@ export default function AutograderPage() {
 
 /** Shown in place of the link while no solution repository is recorded: why, and what is happening. */
 function SolutionRepoSetupState() {
-  const { rows } = useAssignmentRepoSetup();
+  const { rows, checks } = useAssignmentRepoSetup();
   const row = rows.solution;
+  if (checks && (checks.repo_mode === "none" || checks.repo_mode === "no_submission")) {
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        Not applicable: this assignment does not use GitHub repositories.
+      </Text>
+    );
+  }
   return (
     <HStack>
       <RepoSetupStateBadge row={row} />

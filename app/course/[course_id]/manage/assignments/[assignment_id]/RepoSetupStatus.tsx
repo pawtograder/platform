@@ -71,7 +71,10 @@ export function AssignmentRepoSetupProvider({
       client,
       table: "assignment_repo_setup",
       classRealTimeController,
-      realtimeFilter: { assignment_id: assignmentId }
+      realtimeFilter: { assignment_id: assignmentId },
+      // A transition broadcast while the staff channel was disconnected would otherwise be lost
+      // until reload; the table is two rows per assignment, so refetching on reconnect is cheap.
+      enableAutoRefetch: true
     });
     setController(tc);
     return () => tc.close();
@@ -131,7 +134,9 @@ export function RepoSetupStateBadge({ row }: { row: SetupRow | undefined }) {
     case "ready":
       return <Badge colorPalette="green">Ready</Badge>;
     case "skipped":
-      return <Badge colorPalette="gray">Not needed</Badge>;
+      // Skipped with a note means a caller opted out at creation (CLI copy --skip-repos); without
+      // one, the assignment needs no repository of this kind.
+      return <Badge colorPalette="gray">{row.last_error ? "Skipped" : "Not needed"}</Badge>;
     case "in_progress":
       return <Badge colorPalette="blue">Creating…</Badge>;
     case "queued":
@@ -262,7 +267,9 @@ function SetupRowView({ assignmentId, kind, canRetry }: { assignmentId: number; 
           <Text fontWeight="semibold">{KIND_LABEL[kind]}</Text>
           <RepoSetupStateBadge row={row} />
         </HStack>
-        {canRetry && row?.state === "failed" && <RetrySetupButton assignmentId={assignmentId} kind={kind} />}
+        {canRetry && (row?.state === "failed" || (row?.state === "skipped" && !row.repo_full_name)) && (
+          <RetrySetupButton assignmentId={assignmentId} kind={kind} />
+        )}
       </HStack>
       {row?.repo_full_name && (row.state === "ready" || row.state === "skipped") && (
         <Link href={`https://github.com/${row.repo_full_name}`} target="_blank" fontSize="sm">
@@ -287,7 +294,12 @@ function SetupRowView({ assignmentId, kind, canRetry }: { assignmentId: number; 
           )}
         </Text>
       )}
-      {row?.last_error && row.state !== "ready" && (
+      {row?.last_error && row.state === "skipped" && (
+        <Text fontSize="sm" color="fg.muted">
+          {row.last_error}
+        </Text>
+      )}
+      {row?.last_error && row.state !== "ready" && row.state !== "skipped" && (
         <Text fontSize="sm" color={row.state === "failed" ? "red.fg" : "orange.fg"} whiteSpace="pre-wrap">
           {row.state === "failed" ? "" : "Last attempt failed: "}
           {row.last_error}

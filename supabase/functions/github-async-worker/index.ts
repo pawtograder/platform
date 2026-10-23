@@ -43,6 +43,7 @@ import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions
 import { notReadyRequeuePatch, planRepoNotReadyWait } from "../_shared/repoNotReadyPlan.ts";
 import {
   type AssignmentRepoKind,
+  claimAssignmentRepoSetup,
   recordAssignmentRepoSetupEvent,
   setupHandoutRepo,
   setupSolutionRepo
@@ -1582,17 +1583,32 @@ export async function processEnvelope(
         // is recorded on the row there, and a dead-lettered job marks it failed in
         // sendToDeadLetterQueue.
         const target = assignmentRepoSetupTarget(envelope)!;
-        const { org } = envelope.args as SetupAssignmentRepoArgs;
         scope.setTag("assignment_id", String(target.assignmentId));
         scope.setTag("setup_kind", target.kind);
-        await recordAssignmentRepoSetupEvent(adminSupabase, { ...target, event: "started" }, scope);
+        // Serialize with the synchronous edge-function wrappers, which a caller may invoke for the
+        // same assignment right after inserting it (the CLI's assignment copy does). A held claim
+        // is not a failure: requeue shortly without spending the retry budget. The holder id is
+        // stable across redeliveries of this message, so a redelivery after an isolate died
+        // mid-job reclaims its own row instead of waiting out the TTL.
+        const claimed = await claimAssignmentRepoSetup(adminSupabase, {
+          ...target,
+          holder: `worker:${queueName}:${meta.msg_id}`
+        });
+        if (!claimed) {
+          scope.setTag("setup_claim_held", "true");
+          if (await requeueWithDelay(adminSupabase, envelope, 60, scope, queueName, { incrementRetryCount: false })) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
+          return false;
+        }
         const setupOptions = {
           adminSupabase,
           assignmentId: target.assignmentId,
           scope,
           // The same per-org limiter as create_repo, around createRepo only. See the comment in
           // the create_repo case for why nothing else may go inside it.
-          scheduleCreate: <T>(fn: () => Promise<T>) => getCreateContentLimiter(org).schedule(fn)
+          scheduleCreate: <T>(createOrg: string, fn: () => Promise<T>) =>
+            getCreateContentLimiter(createOrg).schedule(fn)
         };
         const result =
           target.kind === "handout" ? await setupHandoutRepo(setupOptions) : await setupSolutionRepo(setupOptions);

@@ -4,7 +4,11 @@ import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AssignmentCreateSolutionRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { AssignmentSetupConfigError, runAssignmentRepoSetup } from "../_shared/assignmentRepoSetup.ts";
+import {
+  AssignmentSetupBusyError,
+  AssignmentSetupConfigError,
+  runAssignmentRepoSetup
+} from "../_shared/assignmentRepoSetup.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 /**
@@ -44,6 +48,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return result.response;
   } catch (e) {
     if (e instanceof AssignmentSetupConfigError) throw new UserVisibleError(e.message, 400);
+    if (e instanceof AssignmentSetupBusyError) throw new UserVisibleError(e.message, 409);
     throw e;
   }
 }

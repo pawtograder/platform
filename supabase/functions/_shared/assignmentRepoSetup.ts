@@ -75,11 +75,13 @@ export type AssignmentRepoSetupOptions = {
   scope: Sentry.Scope;
   /**
    * Wraps the createRepo call. github-async-worker passes its per-org Redis limiter here, the same
-   * one create_repo uses, so staff-repo creation shares the org's creation budget. Only createRepo
+   * one create_repo uses, so staff-repo creation shares the org's creation budget. It is handed the
+   * org the repository is actually created in, read from the course when the job runs, so the
+   * limiter can never charge a stale org from the queued message. Only createRepo
    * is wrapped: nothing inside it re-enters the limiter, which is what keeps the pattern free of
    * the Bottleneck deadlock described at the worker's create_repo case.
    */
-  scheduleCreate?: <T>(fn: () => Promise<T>) => Promise<T>;
+  scheduleCreate?: <T>(org: string, fn: () => Promise<T>) => Promise<T>;
   /** Handout only: create from this repository instead of the course's configured template. */
   templateRepoOverride?: string;
   /** The GitHub calls, replaceable in unit tests. Defaults to GitHubWrapper's. */
@@ -105,7 +107,7 @@ const REAL_GITHUB: SetupGitHubCalls = {
   updateAutograderWorkflowHash
 };
 
-const runDirectly = <T>(fn: () => Promise<T>) => fn();
+const runDirectly = <T>(_org: string, fn: () => Promise<T>) => fn();
 
 async function loadAssignment(opts: AssignmentRepoSetupOptions) {
   let query = opts.adminSupabase
@@ -289,7 +291,7 @@ export async function setupHandoutRepo(opts: AssignmentRepoSetupOptions): Promis
     requiredReviewers: 0
   };
 
-  await scheduleCreate(() =>
+  await scheduleCreate(handoutRepoOrg!, () =>
     github.createRepo(
       handoutRepoOrg!,
       handoutRepoName,
@@ -464,7 +466,7 @@ export async function setupSolutionRepo(opts: AssignmentRepoSetupOptions): Promi
   const { solution: solutionTemplateRepo } = await resolveTemplateRepos(adminSupabase, assignment.class_id);
   scope.setTag("solution_template_repo", solutionTemplateRepo);
 
-  const headSha = await scheduleCreate(() =>
+  const headSha = await scheduleCreate(solutionRepoOrg, () =>
     github.createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope)
   );
   await github.syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, [], scope);
@@ -590,15 +592,98 @@ export async function recordAssignmentRepoSetupEvent(
   }
 }
 
-/** Run one setup job and record its outcome. Used by the edge-function wrappers. */
+/**
+ * Another runner holds the claim on this repository's setup and did not finish within the wait.
+ * The work is not lost: that runner (normally the worker's job) completes it.
+ */
+export class AssignmentSetupBusyError extends Error {
+  constructor(kind: AssignmentRepoKind) {
+    super(
+      `Setup of this assignment's ${kind} repository is already running in the background and did not finish ` +
+        `within ${CLAIM_WAIT_MS / 1000}s. It will complete on its own; check the assignment page, then retry this step.`
+    );
+    this.name = "AssignmentSetupBusyError";
+  }
+}
+
+/**
+ * How long a synchronous caller waits for a claim held by someone else. Bounded by the edge
+ * isolate's lifetime (worker.timeoutMs, ~400s, retired at half), with room left for the caller's
+ * own setup once it gets the claim.
+ */
+const CLAIM_WAIT_MS = 120_000;
+const CLAIM_POLL_MS = 5_000;
+
+/**
+ * Take the right to run setup for one repository (public.claim_assignment_repo_setup). False when
+ * another runner holds a live claim. Unlike the event reports this throws on a database error:
+ * running without the claim is exactly the overlap it exists to prevent.
+ */
+export async function claimAssignmentRepoSetup(
+  adminSupabase: SupabaseClient<Database>,
+  params: { assignmentId: number; kind: AssignmentRepoKind; holder: string }
+): Promise<boolean> {
+  const { data, error } = await adminSupabase.rpc("claim_assignment_repo_setup", {
+    p_assignment_id: params.assignmentId,
+    p_kind: params.kind,
+    p_holder: params.holder
+  });
+  if (error) throw error;
+  return data === true;
+}
+
+/** A result for a repository someone else just finished setting up, in the wrappers' response shape. */
+async function resultFromFinishedRow(
+  adminSupabase: SupabaseClient<Database>,
+  assignmentId: number,
+  kind: AssignmentRepoKind
+): Promise<AssignmentRepoSetupResult | null> {
+  const { data: row } = await adminSupabase
+    .from("assignment_repo_setup")
+    .select("state, repo_full_name")
+    .eq("assignment_id", assignmentId)
+    .eq("kind", kind)
+    .maybeSingle();
+  if (!row || (row.state !== "ready" && row.state !== "skipped")) return null;
+  const [org, repo] = (row.repo_full_name ?? "/").split("/");
+  return {
+    state: row.state,
+    repo_full_name: row.repo_full_name,
+    response: { repo_name: repo || null, org_name: org || null, completed_by_other_runner: true }
+  };
+}
+
+/**
+ * Run one setup job synchronously and record its outcome. Used by the edge-function wrappers.
+ *
+ * Inserting an assignment already queued this work for the worker, so a caller that inserts and
+ * then calls a wrapper (the CLI's assignment copy, the seeding scripts) races that job. The claim
+ * serializes them: if the worker holds it, this waits for the worker to finish and returns its
+ * result rather than running createRepo alongside it.
+ */
 export async function runAssignmentRepoSetup(
   kind: AssignmentRepoKind,
   opts: AssignmentRepoSetupOptions
 ): Promise<AssignmentRepoSetupResult> {
   const { adminSupabase, assignmentId, scope } = opts;
-  await recordAssignmentRepoSetupEvent(adminSupabase, { assignmentId, kind, event: "started" }, scope);
+  // The edge functions authorize the caller for the class_id in the request, not for the
+  // assignment. Confirm the assignment is in that class BEFORE claiming or reporting anything:
+  // the claim and the reports resolve the class from the assignment itself, so an assignment from
+  // another course would otherwise have its row marked in_progress and then skipped, wiping a
+  // failed row's error and its Retry button.
+  if (!(await loadAssignment(opts))) return notFound(assignmentId);
+  const holder = `edge:${crypto.randomUUID()}`;
+  const deadline = Date.now() + CLAIM_WAIT_MS;
+  while (!(await claimAssignmentRepoSetup(adminSupabase, { assignmentId, kind, holder }))) {
+    if (Date.now() >= deadline) throw new AssignmentSetupBusyError(kind);
+    await new Promise((resolve) => setTimeout(resolve, CLAIM_POLL_MS));
+    const finished = await resultFromFinishedRow(adminSupabase, assignmentId, kind);
+    if (finished) return finished;
+  }
   try {
     const result = kind === "handout" ? await setupHandoutRepo(opts) : await setupSolutionRepo(opts);
+    // Deleted between the ownership check and the job: there is no row left to report on.
+    if (result.skip_reason === "assignment_not_found") return result;
     await recordAssignmentRepoSetupEvent(
       adminSupabase,
       {
@@ -612,7 +697,7 @@ export async function runAssignmentRepoSetup(
     return result;
   } catch (e) {
     // Nothing retries a direct call, so the row goes straight to failed and the instructor gets
-    // the Retry button, which queues the same work on the worker.
+    // the Retry button, which queues the same work on the worker. Both reports release the claim.
     await recordAssignmentRepoSetupEvent(
       adminSupabase,
       { assignmentId, kind, event: "attempt_failed", error: e },

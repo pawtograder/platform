@@ -1045,6 +1045,8 @@ export type Database = {
         Row: {
           assignment_id: number;
           attempts: number;
+          claimed_by: string | null;
+          claimed_until: string | null;
           class_id: number;
           completed_at: string | null;
           created_at: string;
@@ -1063,6 +1065,8 @@ export type Database = {
         Insert: {
           assignment_id: number;
           attempts?: number;
+          claimed_by?: string | null;
+          claimed_until?: string | null;
           class_id: number;
           completed_at?: string | null;
           created_at?: string;
@@ -1081,6 +1085,8 @@ export type Database = {
         Update: {
           assignment_id?: number;
           attempts?: number;
+          claimed_by?: string | null;
+          claimed_until?: string | null;
           class_id?: number;
           completed_at?: string | null;
           created_at?: string;
@@ -1209,6 +1215,7 @@ export type Database = {
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
           show_leaderboard: boolean;
+          skip_repo_setup: boolean;
           slug: string | null;
           source_assignment_id: number | null;
           student_repo_prefix: string | null;
@@ -1260,6 +1267,7 @@ export type Database = {
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
           show_leaderboard?: boolean;
+          skip_repo_setup?: boolean;
           slug?: string | null;
           source_assignment_id?: number | null;
           student_repo_prefix?: string | null;
@@ -1311,6 +1319,7 @@ export type Database = {
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;
           show_leaderboard?: boolean;
+          skip_repo_setup?: boolean;
           slug?: string | null;
           source_assignment_id?: number | null;
           student_repo_prefix?: string | null;
@@ -12597,6 +12606,15 @@ export type Database = {
       };
       check_unified_realtime_authorization: {
         Args: { topic_text: string };
+        Returns: boolean;
+      };
+      claim_assignment_repo_setup: {
+        Args: {
+          p_assignment_id: number;
+          p_holder: string;
+          p_kind: Database["public"]["Enums"]["assignment_repo_kind"];
+          p_ttl_seconds?: number;
+        };
         Returns: boolean;
       };
       claim_discord_guild: {

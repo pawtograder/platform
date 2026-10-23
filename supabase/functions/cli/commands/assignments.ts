@@ -638,7 +638,10 @@ async function copySingleAssignment(
       self_review_rubric_id: null,
       meta_grading_rubric_id: null,
       template_repo: null,
-      student_repo_prefix: null
+      student_repo_prefix: null,
+      // Inserting an assignment queues its handout and solution repo creation server-side. With
+      // --skip-repos the copy promises no GitHub calls, so opt this row out of that.
+      skip_repo_setup: options.skipRepos
     };
 
     const { data: newAssignmentInitial, error: assignmentError } = await supabase

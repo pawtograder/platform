@@ -32,6 +32,19 @@
 -- student repositories, so a late handout catches up on its own.
 
 -- ---------------------------------------------------------------------------------------------
+-- 0. Opt-out at insert
+-- ---------------------------------------------------------------------------------------------
+-- `assignments copy --skip-repos` (supabase/functions/cli/commands/assignments.ts) promises to make
+-- no GitHub calls. An unconditional insert trigger would break that promise, so the caller says
+-- so on the row it inserts. The rows are still recorded (as skipped, with a note) so an instructor
+-- can see why there are no repositories and use Retry, which clears the flag.
+alter table public.assignments
+  add column if not exists skip_repo_setup boolean not null default false;
+
+comment on column public.assignments.skip_repo_setup is
+  'Set by a caller that inserts an assignment and must not have its handout/solution repositories created automatically (CLI copy with --skip-repos). Respected by the insert trigger and the reconciler''s safety net; cleared by retry_assignment_repo_setup.';
+
+-- ---------------------------------------------------------------------------------------------
 -- 1. Status table
 -- ---------------------------------------------------------------------------------------------
 create type public.assignment_repo_kind as enum ('handout', 'solution');
@@ -66,6 +79,13 @@ create table public.assignment_repo_setup (
   repo_full_name text,
   -- api_gateway_calls row of the most recent job, for an operator following one job through.
   log_id bigint,
+  -- Who is running setup for this row right now, and until when the claim holds. Serializes the
+  -- worker's job with the synchronous edge-function wrappers (the CLI's assignment copy calls them
+  -- right after inserting, while the insert trigger has already queued the same work): two
+  -- createRepo calls for one name can each see the other's half-generated repository as empty and
+  -- delete it. See claim_assignment_repo_setup.
+  claimed_by text,
+  claimed_until timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint assignment_repo_setup_assignment_kind_key unique (assignment_id, kind)
@@ -274,13 +294,70 @@ grant execute on function public.enqueue_assignment_repo_setup(bigint, public.as
   to service_role;
 
 -- ---------------------------------------------------------------------------------------------
+-- 3a. Claim
+-- ---------------------------------------------------------------------------------------------
+-- Take the right to run setup for one row. True when the row was free, its claim had lapsed, or
+-- the caller already holds it (a redelivered worker message reuses its holder id). Marks the row
+-- in_progress. Released by every terminal report in record_assignment_repo_setup_event. The TTL
+-- is the backstop for a holder that died without reporting; it is longer than any one setup
+-- takes, so it never expires under a live holder in practice.
+create or replace function public.claim_assignment_repo_setup(
+  p_assignment_id bigint,
+  p_kind public.assignment_repo_kind,
+  p_holder text,
+  p_ttl_seconds integer default 1800
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_class_id bigint;
+  v_claimed boolean;
+begin
+  select class_id into v_class_id from public.assignments where id = p_assignment_id;
+  if not found then
+    -- Deleted while queued. Let the caller run: it finds no assignment and reports a skip.
+    return true;
+  end if;
+
+  insert into public.assignment_repo_setup (assignment_id, class_id, kind)
+  values (p_assignment_id, v_class_id, p_kind)
+  on conflict (assignment_id, kind) do nothing;
+
+  update public.assignment_repo_setup
+     set state = 'in_progress',
+         started_at = now(),
+         claimed_by = p_holder,
+         claimed_until = now() + make_interval(secs => p_ttl_seconds)
+   where assignment_id = p_assignment_id
+     and kind = p_kind
+     and (claimed_until is null or claimed_until < now() or claimed_by = p_holder)
+  returning true into v_claimed;
+
+  return coalesce(v_claimed, false);
+end;
+$$;
+
+comment on function public.claim_assignment_repo_setup(bigint, public.assignment_repo_kind, text, integer) is
+  'Claim the right to run staff-repository setup for one (assignment, kind), so the worker job and a synchronous edge-function call never run createRepo for the same repository at once. Service role only.';
+
+revoke all on function public.claim_assignment_repo_setup(bigint, public.assignment_repo_kind, text, integer)
+  from public, anon, authenticated;
+grant execute on function public.claim_assignment_repo_setup(bigint, public.assignment_repo_kind, text, integer)
+  to service_role;
+
+-- ---------------------------------------------------------------------------------------------
 -- 3b. Job reports
 -- ---------------------------------------------------------------------------------------------
 -- The one writer of job outcomes, used by github-async-worker and the edge-function wrappers
 -- (supabase/functions/_shared/assignmentRepoSetup.ts). An upsert, so a direct edge-function call
 -- for an assignment with no row yet still leaves a record. Events:
---   started         a worker or wrapper began running the job
+--   started         a worker or wrapper began running the job (claim_assignment_repo_setup does
+--                   this and also takes the claim; kept for callers that only report)
 --   succeeded       repository exists and is recorded on the assignment
+-- Every event after `started` releases the claim.
 --   skipped         nothing to create (no repositories for this mode, or an E2E fixture)
 --   attempt_failed  one execution failed; the job will be retried, so the row stays queued
 --   gave_up         no more automatic retries (dead-lettered, or a direct call that failed)
@@ -318,7 +395,9 @@ begin
            repo_full_name = coalesce(p_repo_full_name, repo_full_name),
            completed_at = now(),
            last_error = null,
-           last_error_at = null
+           last_error_at = null,
+           claimed_by = null,
+           claimed_until = null
      where assignment_id = p_assignment_id and kind = p_kind;
   elsif p_event = 'skipped' then
     update public.assignment_repo_setup
@@ -326,21 +405,27 @@ begin
            repo_full_name = coalesce(p_repo_full_name, repo_full_name),
            completed_at = now(),
            last_error = null,
-           last_error_at = null
+           last_error_at = null,
+           claimed_by = null,
+           claimed_until = null
      where assignment_id = p_assignment_id and kind = p_kind;
   elsif p_event = 'attempt_failed' then
     update public.assignment_repo_setup
        set state = 'queued',
            failures = failures + 1,
            last_error = coalesce(p_error, last_error),
-           last_error_at = now()
+           last_error_at = now(),
+           claimed_by = null,
+           claimed_until = null
      where assignment_id = p_assignment_id and kind = p_kind;
   elsif p_event = 'gave_up' then
     update public.assignment_repo_setup
        set state = 'failed',
            last_error = coalesce(p_error, last_error,
              'Repository setup failed and automatic retries have stopped. Use Retry once the cause is fixed.'),
-           last_error_at = now()
+           last_error_at = now(),
+           claimed_by = null,
+           claimed_until = null
      where assignment_id = p_assignment_id and kind = p_kind;
   else
     raise exception 'Unknown assignment repo setup event: %', p_event;
@@ -366,10 +451,19 @@ security definer
 set search_path = public
 as $$
 begin
-  if new.repo_mode::text not in ('none', 'no_submission') then
-    perform public.enqueue_assignment_repo_setup(new.id, 'handout');
-    perform public.enqueue_assignment_repo_setup(new.id, 'solution');
+  if new.repo_mode::text in ('none', 'no_submission') then
+    return new;
   end if;
+  if new.skip_repo_setup then
+    insert into public.assignment_repo_setup (assignment_id, class_id, kind, state, last_error)
+    select new.id, new.class_id, k.kind, 'skipped',
+           'Repository setup was skipped when this assignment was created (for example, copied with --skip-repos). Use Retry to create the repository.'
+      from unnest(enum_range(null::public.assignment_repo_kind)) as k(kind)
+    on conflict (assignment_id, kind) do nothing;
+    return new;
+  end if;
+  perform public.enqueue_assignment_repo_setup(new.id, 'handout');
+  perform public.enqueue_assignment_repo_setup(new.id, 'solution');
   return new;
 end;
 $$;
@@ -394,7 +488,7 @@ declare
   v_new_needs boolean := new.repo_mode::text not in ('none', 'no_submission');
   v_kind public.assignment_repo_kind;
 begin
-  if v_new_needs and not v_old_needs then
+  if v_new_needs and not v_old_needs and not new.skip_repo_setup then
     foreach v_kind in array enum_range(null::public.assignment_repo_kind) loop
       -- A repository that already exists from before the switch stays as it is. Anything else
       -- starts a fresh automatic budget: attempts spent under the old mode say nothing about this
@@ -458,6 +552,9 @@ begin
     raise exception 'Setup of this repository is already queued or running. Wait for it to finish before retrying.';
   end if;
 
+  -- A retry is an explicit request for the repository, so it overrides an insert-time opt-out.
+  update public.assignments set skip_repo_setup = false where id = p_assignment_id and skip_repo_setup;
+
   v_msg_id := public.enqueue_assignment_repo_setup(p_assignment_id, p_kind);
 
   if v_msg_id is not null then
@@ -511,6 +608,7 @@ begin
          last_error_at = coalesce(s.last_error_at, now())
    where s.state in ('queued', 'in_progress')
      and (s.assignment_id || ':' || s.kind) <> all (v_in_flight)
+     and (s.claimed_until is null or s.claimed_until < now())  -- a live holder is not lost
      and exists (
            select 1 from public.assignment_repo_setup_jobs_dead_lettered() d
             where d.assignment_id = s.assignment_id
@@ -530,6 +628,7 @@ begin
    where s.state in ('queued', 'in_progress')
      and s.attempts >= v_max_attempts
      and (s.assignment_id || ':' || s.kind) <> all (v_in_flight)
+     and (s.claimed_until is null or s.claimed_until < now())  -- a live holder is not lost
      and coalesce(s.last_attempt_at, s.created_at) < now() - make_interval(
            mins => p_stale_minutes * (2 ^ least(s.attempts, v_max_backoff_doublings))::int);
 
@@ -541,6 +640,7 @@ begin
      where s.state in ('queued', 'in_progress')
        and s.attempts < v_max_attempts
        and (s.assignment_id || ':' || s.kind) <> all (v_in_flight)
+     and (s.claimed_until is null or s.claimed_until < now())  -- a live holder is not lost
        and coalesce(s.last_attempt_at, s.created_at) < now() - make_interval(
              mins => p_stale_minutes * (2 ^ least(greatest(s.attempts - 1, 0), v_max_backoff_doublings))::int)
   loop
@@ -558,6 +658,7 @@ begin
      where a.created_at > now() - interval '7 days'
        and a.created_at < now() - make_interval(mins => p_stale_minutes)
        and a.repo_mode::text not in ('none', 'no_submission')
+       and not a.skip_repo_setup
        and not exists (
              select 1 from public.assignment_repo_setup s
               where s.assignment_id = a.id and s.kind = k.kind)
@@ -693,8 +794,10 @@ grant execute on function public.metrics_assignment_repo_setup() to service_role
 -- ---------------------------------------------------------------------------------------------
 -- 9. Backfill
 -- ---------------------------------------------------------------------------------------------
--- One row per existing assignment that needs repositories. Ready when the pointer is recorded,
--- failed otherwise -- with no job queued, so this migration creates nothing on GitHub. Those
+-- One row per existing assignment that needs repositories. Ready when the pointer is recorded --
+-- for the solution, the pointer AND the parsed config, because the old solution setup wrote the
+-- pointer before creating the repository and a failure after that left a pointer to nothing.
+-- Failed otherwise -- with no job queued, so this migration creates nothing on GitHub. Those
 -- failed rows are what put a Retry button in front of an instructor with a broken assignment.
 -- "Ready" means the pointer exists; whether the repository behind it is complete is what the
 -- readiness checklist shows.
@@ -721,13 +824,16 @@ insert into public.assignment_repo_setup (
 select a.id,
        a.class_id,
        'solution',
-       case when ag.grader_repo is not null then 'ready' else 'failed' end::public.assignment_repo_setup_state,
+       case when ag.grader_repo is not null and ag.config is not null then 'ready' else 'failed' end::public.assignment_repo_setup_state,
        ag.grader_repo,
-       case when ag.grader_repo is not null then a.created_at end,
-       case when ag.grader_repo is null then
-         'No solution repository is recorded for this assignment. It was created before repository setup moved to the server; use Retry to create it.'
+       case when ag.grader_repo is not null and ag.config is not null then a.created_at end,
+       case
+         when ag.grader_repo is null then
+           'No solution repository is recorded for this assignment. It was created before repository setup moved to the server; use Retry to create it.'
+         when ag.config is null then
+           format('A solution repository (%s) is recorded but its pawtograder.yml was never read, so the old setup may have stopped part-way: it recorded the repository before creating it. If the repository exists, pushing to it records the config; otherwise use Retry.', ag.grader_repo)
        end,
-       case when ag.grader_repo is null then now() end
+       case when ag.grader_repo is null or ag.config is null then now() end
   from public.assignments a
   left join public.autograder ag on ag.id = a.id
  where a.repo_mode::text not in ('none', 'no_submission')
