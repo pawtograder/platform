@@ -476,7 +476,8 @@ create trigger enqueue_assignment_repo_setup_on_insert
 
 -- Switching an assignment between "no repositories" and a repository mode after creation. The
 -- edit page allows it, and nothing used to create the repositories when it happened. Leaving a
--- repository mode marks rows that never finished as skipped, so they stop showing as failed.
+-- repository mode marks every row skipped, so nothing shows as failed and a later switch back
+-- starts clean.
 create or replace function public.enqueue_assignment_repo_setup_on_repo_mode_change()
 returns trigger
 language plpgsql
@@ -504,10 +505,14 @@ begin
       end if;
     end loop;
   elsif v_old_needs and not v_new_needs then
+    -- Every row, ready ones included: the edit flow clears template_repo when repositories are
+    -- turned off, so a row left `ready` would later stop a switch back from re-creating the
+    -- pointer (the branch above skips ready rows), leaving no pointer, no job and no Retry.
+    -- A job already running notices the mode change itself (assignmentRepoSetup.ts re-reads it
+    -- before creating anything and before writing pointers).
     update public.assignment_repo_setup
-       set state = 'skipped', completed_at = now()
-     where assignment_id = new.id
-       and state <> 'ready';
+       set state = 'skipped', completed_at = now(), last_error = null, last_error_at = null
+     where assignment_id = new.id;
   end if;
   return new;
 end;
@@ -520,6 +525,82 @@ create trigger enqueue_assignment_repo_setup_on_repo_mode_change
   for each row
   when (old.repo_mode is distinct from new.repo_mode)
   execute function public.enqueue_assignment_repo_setup_on_repo_mode_change();
+
+-- ---------------------------------------------------------------------------------------------
+-- 4b. Pointers recorded by other paths
+-- ---------------------------------------------------------------------------------------------
+-- The setup row says what the jobs did, but the pointers can also be repaired outside them: an
+-- instructor pushing to a recorded solution repository makes the push webhook write
+-- autograder.config, and the Autograder page lets an instructor set grader_repo by hand. When the
+-- pointers an assignment needs are present and no runner holds the row, the row is ready -- so a
+-- repair clears the alert, the failed metric and the Retry button. A row whose claim is live is
+-- left to its runner, which reports for itself; the jobs write these same pointers mid-run.
+create or replace function public.mark_assignment_repo_setup_ready_from_pointer(
+  p_assignment_id bigint,
+  p_kind public.assignment_repo_kind,
+  p_repo_full_name text
+)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.assignment_repo_setup
+     set state = 'ready',
+         repo_full_name = p_repo_full_name,
+         completed_at = coalesce(completed_at, now()),
+         last_error = null,
+         last_error_at = null
+   where assignment_id = p_assignment_id
+     and kind = p_kind
+     and state in ('queued', 'failed')
+     and (claimed_until is null or claimed_until < now());
+$$;
+
+revoke all on function public.mark_assignment_repo_setup_ready_from_pointer(bigint, public.assignment_repo_kind, text)
+  from public, anon, authenticated;
+
+create or replace function public.sync_assignment_repo_setup_from_autograder()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.grader_repo is not null and new.config is not null then
+    perform public.mark_assignment_repo_setup_ready_from_pointer(new.id, 'solution', new.grader_repo);
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.sync_assignment_repo_setup_from_autograder() from public, anon, authenticated;
+
+create trigger sync_assignment_repo_setup_from_autograder
+  after update of grader_repo, config on public.autograder
+  for each row
+  when (new.grader_repo is not null and new.config is not null)
+  execute function public.sync_assignment_repo_setup_from_autograder();
+
+create or replace function public.sync_assignment_repo_setup_from_assignment()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.mark_assignment_repo_setup_ready_from_pointer(new.id, 'handout', new.template_repo);
+  return new;
+end;
+$$;
+
+revoke all on function public.sync_assignment_repo_setup_from_assignment() from public, anon, authenticated;
+
+create trigger sync_assignment_repo_setup_from_assignment
+  after update of template_repo on public.assignments
+  for each row
+  when (new.template_repo is not null and new.template_repo is distinct from old.template_repo)
+  execute function public.sync_assignment_repo_setup_from_assignment();
 
 -- ---------------------------------------------------------------------------------------------
 -- 5. Instructor retry
@@ -774,7 +855,7 @@ as $$
          count(*) filter (where s.last_attempt_at is not null)::bigint,
          count(*) filter (
            where coalesce(a.release_date, a.created_at) <= now() + interval '24 hours'
-             and a.due_date > now()
+             and (a.due_date is null or a.due_date > now())  -- an undated assignment never stops mattering
              and (s.kind = 'handout' or coalesce(a.has_autograder, true))
          )::bigint,
          coalesce(max(extract(epoch from now() - s.last_attempt_at))

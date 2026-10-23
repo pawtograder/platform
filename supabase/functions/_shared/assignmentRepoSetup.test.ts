@@ -475,3 +475,25 @@ Deno.test("solution: an empty or null pawtograder.yml is a configuration error, 
     );
   }
 });
+
+Deno.test("both: repositories turned off mid-job stop the job before any pointer is written back", async () => {
+  for (const job of [setupHandoutRepo, setupSolutionRepo]) {
+    const row = assignmentRow();
+    const db = fakeSupabase({ assignment: row });
+    // The instructor switches to "none" while createRepo is running.
+    const gh = fakeGithub(db.log, {
+      createRepo: () => {
+        row.repo_mode = "none";
+        return "head-sha-1";
+      }
+    });
+    const result = await job({ adminSupabase: db.client, assignmentId: 7, scope: scope(), github: gh.github });
+    assertEquals(result.state, "skipped");
+    assertEquals(result.skip_reason, "no_repositories");
+    assertEquals(
+      db.writes.filter((w) => w.table === "assignments" || w.table === "autograder"),
+      [],
+      "no pointer written onto an assignment that no longer uses repositories"
+    );
+  }
+});

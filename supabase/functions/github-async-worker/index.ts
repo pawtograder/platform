@@ -45,6 +45,7 @@ import {
   type AssignmentRepoKind,
   claimAssignmentRepoSetup,
   recordAssignmentRepoSetupEvent,
+  releaseAssignmentRepoSetupClaim,
   setupHandoutRepo,
   setupSolutionRepo
 } from "../_shared/assignmentRepoSetup.ts";
@@ -713,11 +714,22 @@ async function sendToDeadLetterQueue(
   // parks it from the DLQ too, but only on its next tick.
   const setupTarget = assignmentRepoSetupTarget(envelope);
   if (setupTarget) {
-    await recordAssignmentRepoSetupEvent(
+    const reported = await recordAssignmentRepoSetupEvent(
       adminSupabase,
       { ...setupTarget, event: "gave_up", error: errorMessage },
       scope
     );
+    if (!reported && envelope.log_id) {
+      // The job is already in the DLQ, so holding the message back would only rerun a job that
+      // has finished failing. Release the claim instead (the report was also what released it):
+      // with no live claim and the job in the DLQ, reconcile_assignment_repo_setup marks the row
+      // failed on its next tick.
+      await releaseAssignmentRepoSetupClaim(
+        adminSupabase,
+        { ...setupTarget, holder: `worker:${envelope.log_id}` },
+        scope
+      );
+    }
   }
 
   return true;

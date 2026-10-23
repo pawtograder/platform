@@ -122,6 +122,30 @@ async function loadAssignment(opts: AssignmentRepoSetupOptions) {
   return data;
 }
 
+/**
+ * Whether the assignment still wants repositories, read fresh. An instructor can switch it to
+ * `none`/`no_submission` while a job is running; the mode-change trigger marks the setup rows
+ * skipped but cannot stop a job already in flight. So each job asks again right before the
+ * irreversible step (creating the repository) and right before writing pointers back, and stops
+ * if the answer changed. The window that remains is the few milliseconds between the check and
+ * the write.
+ */
+async function stillWantsRepositories(opts: AssignmentRepoSetupOptions): Promise<boolean> {
+  const { data, error } = await opts.adminSupabase
+    .from("assignments")
+    .select("repo_mode")
+    .eq("id", opts.assignmentId)
+    .maybeSingle();
+  if (error) throw error;
+  return !!data && data.repo_mode !== "none" && data.repo_mode !== "no_submission";
+}
+
+const NO_LONGER_WANTED: Omit<AssignmentRepoSetupResult, "repo_full_name"> = {
+  state: "skipped",
+  skip_reason: "no_repositories",
+  response: { repo_name: null, org_name: null, skipped: true, repositories_disabled_during_setup: true }
+};
+
 function notFound(assignmentId: number): AssignmentRepoSetupResult {
   return {
     state: "skipped",
@@ -291,6 +315,7 @@ export async function setupHandoutRepo(opts: AssignmentRepoSetupOptions): Promis
     requiredReviewers: 0
   };
 
+  if (!(await stillWantsRepositories(opts))) return { ...NO_LONGER_WANTED, repo_full_name: null };
   await scheduleCreate(handoutRepoOrg!, () =>
     github.createRepo(
       handoutRepoOrg!,
@@ -371,6 +396,7 @@ export async function setupHandoutRepo(opts: AssignmentRepoSetupOptions): Promis
   //
   // On an assignment whose release date has passed, this write is also what creates the student
   // repositories: check_assignment_for_repo_creation fires on template_repo going NULL -> value.
+  if (!(await stillWantsRepositories(opts))) return { ...NO_LONGER_WANTED, repo_full_name: handoutFullName };
   const { error: pointerError } = await adminSupabase
     .from("assignments")
     .update({
@@ -466,6 +492,7 @@ export async function setupSolutionRepo(opts: AssignmentRepoSetupOptions): Promi
   const { solution: solutionTemplateRepo } = await resolveTemplateRepos(adminSupabase, assignment.class_id);
   scope.setTag("solution_template_repo", solutionTemplateRepo);
 
+  if (!(await stillWantsRepositories(opts))) return { ...NO_LONGER_WANTED, repo_full_name: null };
   const headSha = await scheduleCreate(solutionRepoOrg, () =>
     github.createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope)
   );
@@ -485,6 +512,7 @@ export async function setupSolutionRepo(opts: AssignmentRepoSetupOptions): Promi
     );
   }
 
+  if (!(await stillWantsRepositories(opts))) return { ...NO_LONGER_WANTED, repo_full_name: solutionFullName };
   const { error: pointerError } = await adminSupabase
     .from("autograder")
     .update({
