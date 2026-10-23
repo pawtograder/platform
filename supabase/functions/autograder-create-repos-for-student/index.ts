@@ -253,10 +253,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .select(
       // "*"
       // "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*,assignments(*), assignment_groups(*,repositories(*)), user_roles(users(github_username)))))",
-      "class_id, github_org_confirmed, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
+      "class_id, github_org_confirmed, classes!inner(slug, github_org, assignments!inner(id)), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
     )
     .eq("disabled", false)
-    .eq("user_id", userId); //.eq("role", "student");
+    .eq("user_id", userId)
+    .eq("classes.assignments.git_provider", "github")
+    .is("classes.assignments.archived_at", null);
 
   // If class_id is provided, filter to only that class
   if (classId) {
@@ -416,6 +418,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       classes!.map((c) => c!.class_id)
     )
     .eq("classes.user_roles.user_id", userId)
+    .eq("git_provider", "github")
     .not("template_repo", "is", "null")
     .not("template_repo", "eq", "")
     .limit(1000);
@@ -442,6 +445,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const group = groupMembership.assignment_groups;
         const assignment = groupMembership.assignments;
         if (!assignment.template_repo?.includes("/")) {
+          return;
+        }
+        // This assignment comes from the membership embed, not the filtered assignments query.
+        if (assignment.git_provider !== "github") {
           return;
         }
         // Skip if assignment_id is specified and this assignment doesn't match
@@ -858,6 +865,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
     // Sync permissions for existing individual repos
     const individualRepoSyncPromises = existingIndividualRepos
+      .filter((repo) => repo.git_provider === "github")
       .filter((repo) => repo.repository && repo.repository.includes("/"))
       .filter((repo) => assignmentId === undefined || repo.assignment_id === assignmentId)
       .map(async (repo) => {
@@ -882,6 +890,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
     // Sync permissions for existing group repos
     const groupRepoSyncPromises = existingGroupRepos
+      .filter((repo) => repo.git_provider === "github")
       .filter((repo) => repo.repository && repo.repository.includes("/"))
       .filter((repo) => assignmentId === undefined || repo.assignment_id === assignmentId)
       .map(async (repo) => {
