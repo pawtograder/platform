@@ -475,6 +475,15 @@ export async function setupSolutionRepo(opts: AssignmentRepoSetupOptions): Promi
   // trees if someone pushes in between.
   const graderConfig = await github.getFileFromRepo(solutionFullName, "pawtograder.yml", scope, headSha || undefined);
   const config = (await parse(graderConfig.content)) as Json;
+  // An empty file, or one that is YAML `null`, parses without throwing. Recording that would mark
+  // the repository ready while autograder.config stays NULL -- the very state every submission
+  // fails on. The file's content is fixed at this commit, so retrying cannot change the answer.
+  if (config === null || config === undefined || typeof config !== "object" || Array.isArray(config)) {
+    throw new AssignmentSetupConfigError(
+      `pawtograder.yml in ${solutionFullName} is empty or is not a YAML mapping, so the autograder has no ` +
+        `configuration. Fix the file in the solution repository (or the course's solution template), then use Retry.`
+    );
+  }
 
   const { error: pointerError } = await adminSupabase
     .from("autograder")
@@ -550,7 +559,10 @@ export type AssignmentRepoSetupEvent = "started" | "succeeded" | "skipped" | "at
 /**
  * Record a transition on public.assignment_repo_setup. Never throws: the state row is how the
  * instructor sees the job, but failing the job because the report about it failed would turn a
- * reporting blip into a real outage. Failures go to Sentry instead.
+ * reporting blip into a real outage. Failures go to Sentry instead, and the return value says
+ * whether the report landed: a terminal report is also what releases the setup claim, so a caller
+ * that finished the work has to act on a terminal report that did not (see the worker, and
+ * releaseAssignmentRepoSetupClaim).
  */
 export async function recordAssignmentRepoSetupEvent(
   adminSupabase: SupabaseClient<Database>,
@@ -562,7 +574,7 @@ export async function recordAssignmentRepoSetupEvent(
     error?: unknown;
   },
   scope?: Sentry.Scope
-): Promise<void> {
+): Promise<boolean> {
   const errorText =
     params.error === undefined
       ? null
@@ -576,6 +588,7 @@ export async function recordAssignmentRepoSetupEvent(
       p_error: errorText ?? undefined
     });
     if (error) throw error;
+    return true;
   } catch (e) {
     console.error(`Failed to record assignment repo setup event ${params.event}:`, e);
     if (scope) {
@@ -589,6 +602,29 @@ export async function recordAssignmentRepoSetupEvent(
     } else {
       Sentry.captureException(e);
     }
+    return false;
+  }
+}
+
+/**
+ * Last-resort release of a claim whose terminal report could not be recorded, so the row does
+ * not block other runners for the claim's whole TTL. Matches on the holder, so it can only ever
+ * release this runner's own claim. Best-effort, like the report it stands in for.
+ */
+export async function releaseAssignmentRepoSetupClaim(
+  adminSupabase: SupabaseClient<Database>,
+  params: { assignmentId: number; kind: AssignmentRepoKind; holder: string },
+  scope?: Sentry.Scope
+): Promise<void> {
+  const { error } = await adminSupabase
+    .from("assignment_repo_setup")
+    .update({ claimed_by: null, claimed_until: null })
+    .eq("assignment_id", params.assignmentId)
+    .eq("kind", params.kind)
+    .eq("claimed_by", params.holder);
+  if (error) {
+    if (scope) Sentry.captureException(error, scope);
+    else Sentry.captureException(error);
   }
 }
 
@@ -684,7 +720,7 @@ export async function runAssignmentRepoSetup(
     const result = kind === "handout" ? await setupHandoutRepo(opts) : await setupSolutionRepo(opts);
     // Deleted between the ownership check and the job: there is no row left to report on.
     if (result.skip_reason === "assignment_not_found") return result;
-    await recordAssignmentRepoSetupEvent(
+    const reported = await recordAssignmentRepoSetupEvent(
       adminSupabase,
       {
         assignmentId,
@@ -694,6 +730,7 @@ export async function runAssignmentRepoSetup(
       },
       scope
     );
+    if (!reported) await releaseAssignmentRepoSetupClaim(adminSupabase, { assignmentId, kind, holder }, scope);
     return result;
   } catch (e) {
     // Nothing retries a direct call, so the row goes straight to failed and the instructor gets
@@ -703,7 +740,12 @@ export async function runAssignmentRepoSetup(
       { assignmentId, kind, event: "attempt_failed", error: e },
       scope
     );
-    await recordAssignmentRepoSetupEvent(adminSupabase, { assignmentId, kind, event: "gave_up" }, scope);
+    const reported = await recordAssignmentRepoSetupEvent(
+      adminSupabase,
+      { assignmentId, kind, event: "gave_up" },
+      scope
+    );
+    if (!reported) await releaseAssignmentRepoSetupClaim(adminSupabase, { assignmentId, kind, holder }, scope);
     throw e;
   }
 }

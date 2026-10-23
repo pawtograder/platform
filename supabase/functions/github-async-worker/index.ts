@@ -1585,14 +1585,39 @@ export async function processEnvelope(
         const target = assignmentRepoSetupTarget(envelope)!;
         scope.setTag("assignment_id", String(target.assignmentId));
         scope.setTag("setup_kind", target.kind);
+        // args.org drives the circuit check and the per-org lease above, but the setup helpers
+        // create the repository in the course's org as it is NOW. If the course's org changed
+        // while this message waited, re-route it rather than charge one org's budget and circuit
+        // for work in another: requeue immediately with the current org, which is not a failure.
+        const queuedOrg = (envelope.args as SetupAssignmentRepoArgs).org;
+        const { data: orgRow, error: orgError } = await adminSupabase
+          .from("assignments")
+          .select("classes(github_org)")
+          .eq("id", target.assignmentId)
+          .maybeSingle();
+        if (orgError) throw orgError;
+        const currentOrg = orgRow?.classes?.github_org;
+        if (currentOrg && currentOrg.toLowerCase() !== queuedOrg?.toLowerCase()) {
+          scope.setContext("setup_org_changed", { queued_org: queuedOrg, current_org: currentOrg });
+          if (
+            await requeueWithDelay(adminSupabase, envelope, 0, scope, queueName, {
+              incrementRetryCount: false,
+              patch: { args: { ...(envelope.args as SetupAssignmentRepoArgs), org: currentOrg } }
+            })
+          ) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
+          return false;
+        }
         // Serialize with the synchronous edge-function wrappers, which a caller may invoke for the
         // same assignment right after inserting it (the CLI's assignment copy does). A held claim
-        // is not a failure: requeue shortly without spending the retry budget. The holder id is
-        // stable across redeliveries of this message, so a redelivery after an isolate died
-        // mid-job reclaims its own row instead of waiting out the TTL.
+        // is not a failure: requeue shortly without spending the retry budget. The holder is the
+        // job's log_id, which every requeue of this job carries, so a later attempt (or a
+        // redelivery after an isolate died mid-job) reclaims its own row instead of waiting out
+        // the TTL behind itself.
         const claimed = await claimAssignmentRepoSetup(adminSupabase, {
           ...target,
-          holder: `worker:${queueName}:${meta.msg_id}`
+          holder: `worker:${envelope.log_id ?? `${queueName}:${meta.msg_id}`}`
         });
         if (!claimed) {
           scope.setTag("setup_claim_held", "true");
@@ -1612,7 +1637,7 @@ export async function processEnvelope(
         };
         const result =
           target.kind === "handout" ? await setupHandoutRepo(setupOptions) : await setupSolutionRepo(setupOptions);
-        await recordAssignmentRepoSetupEvent(
+        const reported = await recordAssignmentRepoSetupEvent(
           adminSupabase,
           {
             ...target,
@@ -1621,6 +1646,13 @@ export async function processEnvelope(
           },
           scope
         );
+        if (!reported) {
+          // The work is done, but the row still says in_progress and still holds the claim: the
+          // instructor would see a stuck setup and an alert for 30 minutes. Fail the job instead,
+          // so the handler retries it. The retry reclaims under the same holder (log_id), finds
+          // the repository already there, and reports again.
+          throw new Error("Repository setup succeeded but its result could not be recorded; retrying to record it");
+        }
         recordMetric(
           adminSupabase,
           {

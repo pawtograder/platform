@@ -460,3 +460,18 @@ Deno.test("wrapper: when the worker holds the claim, it waits and returns the wo
   assertEquals(result.response.repo_name, "fa26-solution-hw1");
   assertEquals(gh.calls, [], "never ran createRepo alongside the worker");
 });
+
+Deno.test("solution: an empty or null pawtograder.yml is a configuration error, not a ready repo", async () => {
+  for (const content of ["", "null\n", "- just\n- a list\n"]) {
+    const db = fakeSupabase({ assignment: assignmentRow() });
+    const gh = fakeGithub(db.log, { getFileFromRepo: () => ({ content }) });
+    const err = await assertRejects(() =>
+      setupSolutionRepo({ adminSupabase: db.client, assignmentId: 7, scope: scope(), github: gh.github })
+    );
+    assert(err instanceof AssignmentSetupConfigError, `content ${JSON.stringify(content)}`);
+    assertEquals(
+      db.writes.filter((w) => w.table === "autograder"),
+      []
+    );
+  }
+});
