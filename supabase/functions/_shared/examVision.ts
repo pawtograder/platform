@@ -162,9 +162,11 @@ class GoogleVisionOcr {
         }
       ]
     };
-    const res = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${this.apiKey}`, {
+    // The key goes in x-goog-api-key, not ?key=: a URL ends up in fetch error messages, proxy
+    // logs and Sentry breadcrumbs, and the CI lane uploads the edge-function log as an artifact.
+    const res = await fetch("https://vision.googleapis.com/v1/images:annotate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
       body: JSON.stringify(body),
       // Bound the call so a stalled connection can't hang the worker indefinitely (it has no
       // other timeout); a timeout surfaces as a transient error and the message requeues.
@@ -239,10 +241,11 @@ class GeminiVision {
   }
   private async generate(parts: unknown[]): Promise<string> {
     await this.limiter.wait();
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+    // Key in a header rather than the query string; see GoogleVisionOcr.ocrImage.
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
         generationConfig: { responseMimeType: "application/json", temperature: 0 }
