@@ -7,10 +7,10 @@ import { UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/Databas
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { useParams } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import useAuthState from "./useAuthState";
-import { clearViewAsCookie, getViewAsCookie, setViewAsCookie } from "@/lib/viewAs";
+import { clearViewAsCookie, getViewAsCookie, isSelfViewAsScope, setViewAsCookie } from "@/lib/viewAs";
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
@@ -29,14 +29,26 @@ type ClassProfileContextType = {
   isViewingAsStudent: boolean;
   /** Convenience alias for `isViewingAsStudent` — gate write surfaces on this. */
   isReadOnly: boolean;
+  /**
+   * True when staff are previewing their *own* test-assignment work as a student rather than
+   * viewing an enrolled student. Client state, and only ever true inside the assignment the preview
+   * was opened from (see `isSelfViewAsScope`). The surfaces that need a real student enrollment stay
+   * empty for it, so UI offering a course-wide student view should branch on this.
+   */
+  isViewingAsSelf: boolean;
   /** The viewer's actual role in the course, unaffected by view-as. */
   realRole: Database["public"]["Enums"]["app_role"];
   /** The viewer's actual private profile id, unaffected by view-as. */
   realPrivateProfileId: string;
   /** Display name of the student being viewed, when viewing as. */
   viewAsProfileName?: string;
-  /** Staff-only: enter read-only view as the given private profile id. */
-  enterViewAs: (studentPrivateProfileId: string, redirectTo?: string) => void;
+  /** Staff-only: enter read-only view as the given enrolled student's private profile id. */
+  enterViewAs: (studentPrivateProfileId: string, options?: { redirectTo?: string }) => void;
+  /**
+   * Staff-only: preview your own work on one assignment as a student sees it. Client state, dropped
+   * as soon as you navigate outside that assignment — see `isSelfViewAsScope`.
+   */
+  enterSelfPreview: (assignmentId: number, redirectTo?: string) => void;
   /** Exit read-only student view and return to the instructor view. */
   exitViewAs: () => void;
 };
@@ -121,6 +133,8 @@ type UserRoleWithClassAndUser = GetResult<
  */
 export function ClassProfileProvider({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
+  const pathname = usePathname();
+  const router = useRouter();
   const { user } = useAuthState();
   const userId = user?.id;
   const [roles, setRoles] = useState<UserRoleWithClassAndUser[]>([]);
@@ -138,6 +152,18 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     typeof course_id === "string" ? getViewAsCookie(course_id) : null
   );
   const [viewAsRole, setViewAsRole] = useState<UserRoleWithClassAndUser | null>(null);
+  // The Test Assignment self-preview. Client state, not a cookie: RLS still evaluates as staff, so
+  // the same rows are fetched either way and only the rendering differs. Keeping it here means it is
+  // per-tab by construction, needs no cleanup, and cannot be left behind anywhere.
+  //
+  // `entered` distinguishes "requested, still navigating to the assignment" from "active". It is
+  // requested from the Test Assignment page, which is itself outside the preview's scope, so without
+  // this the scope guard below would cancel it before the navigation landed.
+  const [selfPreview, setSelfPreview] = useState<{
+    assignmentId: number;
+    requestedFrom: string;
+    entered: boolean;
+  } | null>(null);
   // True while the (instructor, viewAsProfileId) → student role lookup is in flight.
   // We must not publish the real instructor identity during that window, or read-only
   // gates would briefly re-enable instructor write UI. Initialized to true when a
@@ -250,6 +276,25 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     setViewAsProfileId(getViewAsCookie(course_id as string));
   }, [course_id]);
 
+  // The self-preview covers one assignment. The provider spans every `/course/**` route, so drop it
+  // as soon as the viewer navigates outside that assignment — otherwise the toggle would follow them
+  // onto pages it cannot represent (see isSelfViewAsScope). Nothing to clean up: it is only state.
+  useEffect(() => {
+    if (!selfPreview) return;
+    const inScope = !!course_id && isSelfViewAsScope(pathname ?? "", course_id as string, selfPreview.assignmentId);
+    if (inScope) {
+      if (!selfPreview.entered) {
+        setSelfPreview({ ...selfPreview, entered: true });
+      }
+      return;
+    }
+    // Out of scope: end an active preview, and abandon a requested one if the viewer went somewhere
+    // other than the assignment (so a navigation that never happened cannot arm itself later).
+    if (selfPreview.entered || pathname !== selfPreview.requestedFrom) {
+      setSelfPreview(null);
+    }
+  }, [pathname, course_id, selfPreview]);
+
   // When staff have an active view-as target, resolve the effective student role + profiles.
   // Until the lookup resolves we MUST keep the provider in a loading state — see
   // isResolvingViewAs below — otherwise consumers briefly see the real staff role.
@@ -260,8 +305,10 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       setIsResolvingViewAs(false);
       return;
     }
+    // The self-preview is handled as client state above, so a cookie naming the viewer's own
+    // profile is meaningless here and must not resolve to anything.
     if (viewAsProfileId === realMyRole.private_profile_id) {
-      setViewAsRole({ ...realMyRole, role: "student" } as UserRoleWithClassAndUser);
+      setViewAsRole(null);
       setIsResolvingViewAs(false);
       return;
     }
@@ -294,8 +341,9 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   }, [realMyRole, viewAsProfileId, course_id]);
 
   const enterViewAs = useCallback(
-    (studentPrivateProfileId: string, redirectTo?: string) => {
+    (studentPrivateProfileId: string, options?: { redirectTo?: string }) => {
       if (!course_id) return;
+      const redirectTo = options?.redirectTo;
       setViewAsCookie(course_id as string, studentPrivateProfileId);
       // Do a full document navigation rather than a soft client transition. The server
       // recomputes the effective identity from the cookie and every course/realtime
@@ -320,13 +368,33 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     [course_id]
   );
 
+  /**
+   * Staff-only: preview your own work on one assignment as a student would see it. No cookie and no
+   * document navigation — the preview is presentation, and this provider spans the Test Assignment
+   * page and the submission pages alike, so a soft navigation carries the state across.
+   */
+  const enterSelfPreview = useCallback(
+    (assignmentId: number, redirectTo?: string) => {
+      setSelfPreview({ assignmentId, requestedFrom: pathname ?? "", entered: false });
+      if (redirectTo) {
+        router.push(redirectTo);
+      }
+    },
+    [router, pathname]
+  );
+
   const exitViewAs = useCallback(() => {
     if (!course_id) return;
+    // The self-preview is only state, so dropping it needs no reload and no cookie work.
+    if (selfPreview) {
+      setSelfPreview(null);
+      return;
+    }
     clearViewAsCookie(course_id as string);
-    // Full reload for the same reason as enterViewAs: rebuild all controllers under the
-    // restored staff identity instead of racing a soft teardown/rebuild.
+    // Full reload for the same reason as enterViewAs: viewing an enrolled student really does change
+    // whose data the controllers hold, so rebuild them rather than racing a soft teardown/rebuild.
     window.location.assign(`${window.location.pathname}${window.location.search}${window.location.hash}`);
-  }, [course_id]);
+  }, [course_id, selfPreview]);
 
   if (isLoading || isResolvingViewAs) {
     return <Skeleton height="100px" width="100%" />;
@@ -393,8 +461,13 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     );
   }
 
-  const isViewingAsStudent = (myRole.role === "instructor" || myRole.role === "grader") && !!viewAsRole;
-  const effectiveRole = isViewingAsStudent ? viewAsRole : myRole;
+  const isStaff = myRole.role === "instructor" || myRole.role === "grader";
+  const isViewingAsSelf = isStaff && selfPreview?.entered === true;
+  // The self-preview borrows the viewer's own role row and only relabels it, so every existing gate
+  // (useIsGraderOrInstructor, the masking hooks) responds without knowing this feature exists.
+  const selfPreviewRole = isViewingAsSelf ? ({ ...myRole, role: "student" } as UserRoleWithClassAndUser) : null;
+  const isViewingAsStudent = isStaff && (!!viewAsRole || isViewingAsSelf);
+  const effectiveRole = selfPreviewRole ?? (isViewingAsStudent && viewAsRole ? viewAsRole : myRole);
 
   return (
     <ClassProfileContext.Provider
@@ -408,10 +481,12 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         public_profile: effectiveRole.publicProfile,
         isViewingAsStudent,
         isReadOnly: isViewingAsStudent,
+        isViewingAsSelf,
         realRole: myRole.role,
         realPrivateProfileId: myRole.private_profile_id,
-        viewAsProfileName: isViewingAsStudent ? (viewAsRole.privateProfile?.name ?? undefined) : undefined,
+        viewAsProfileName: isViewingAsSelf ? undefined : (viewAsRole?.privateProfile?.name ?? undefined),
         enterViewAs,
+        enterSelfPreview,
         exitViewAs
       }}
     >

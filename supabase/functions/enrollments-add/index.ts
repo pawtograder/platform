@@ -5,12 +5,18 @@ import { createUserInClass } from "../_shared/EnrollmentUtils.ts";
 import type { AddEnrollmentRequest } from "../_shared/FunctionTypes.d.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { email, name, role, courseId, notify } = (await req.json()) as AddEnrollmentRequest;
   if (!courseId) {
     throw new UserVisibleError("Course ID is required", 400);
+  }
+  // This writes user_roles through the service-role client, which guard_admin_role_grant trusts,
+  // so the role has to be checked here. An admin row in any class is platform-wide admin.
+  if (!["student", "grader", "instructor"].includes(role)) {
+    throw new UserVisibleError("Valid role is required (student, grader, or instructor)", 400);
   }
   scope?.setTag("function", "enrollments-add");
   scope?.setTag("email", email);
@@ -24,7 +30,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   );
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { data: existingUser } = await adminSupabase
     .rpc("get_user_id_by_email", {

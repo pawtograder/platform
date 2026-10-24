@@ -4,6 +4,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useForm } from "@refinedev/react-hook-form";
+import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
 import SurveyForm from "../../new/form";
@@ -46,6 +47,8 @@ const getParam = (value: string | string[] | undefined, name: string): string =>
 export default function EditSurveyPage() {
   const { course_id, survey_id } = useParams();
   const router = useRouter();
+  // The surveys list this page returns to is server-rendered; see useRevalidateServerCaches.
+  const revalidateServerCaches = useRevalidateServerCaches(Number(course_id));
   const trackEvent = useTrackEvent();
   const { private_profile_id, role } = useClassProfiles();
   const [isLoading, setIsLoading] = useState(true);
@@ -292,7 +295,7 @@ export default function EditSurveyPage() {
             });
 
             // Redirect to manage surveys page
-            router.push(`/course/${course_id}/manage/surveys`);
+            await revalidateServerCaches({ tables: ["surveys"], navigateTo: `/course/${course_id}/manage/surveys` });
           }
           // If shouldRedirect is false, we don't show any toast (used for preview auto-save)
         } catch (error) {
@@ -301,7 +304,7 @@ export default function EditSurveyPage() {
       }
       await updateDraft();
     },
-    [course_id, trackEvent, router, rawSurveyId, convertDueDateToISO]
+    [course_id, trackEvent, rawSurveyId, convertDueDateToISO, revalidateServerCaches]
   );
 
   const onSubmit = useCallback(
@@ -425,7 +428,7 @@ export default function EditSurveyPage() {
                 description: "There was an issue with the requested update. Your survey was saved as a draft.",
                 type: "warning"
               });
-              router.push(`/course/${course_id}/manage/surveys`);
+              await revalidateServerCaches({ tables: ["surveys"], navigateTo: `/course/${course_id}/manage/surveys` });
             } catch (fallbackError) {
               throw new Error(`Failed to update survey: ${error?.message || fallbackError || "Unknown error"}`);
             }
@@ -491,7 +494,7 @@ export default function EditSurveyPage() {
           }
 
           // Redirect to manage surveys page
-          router.push(`/course/${course_id}/manage/surveys`);
+          await revalidateServerCaches({ tables: ["surveys"], navigateTo: `/course/${course_id}/manage/surveys` });
         } catch (error) {
           // Dismiss loading toast and show error
           toaster.dismiss(loadingToast);
@@ -503,7 +506,7 @@ export default function EditSurveyPage() {
       }
       await update();
     },
-    [course_id, router, trackEvent, rawSurveyId, convertDueDateToISO]
+    [course_id, trackEvent, rawSurveyId, convertDueDateToISO, revalidateServerCaches]
   );
 
   if (isLoading) {

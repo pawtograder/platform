@@ -11,8 +11,8 @@ import {
 } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Box, Button, Flex, Heading, HStack, Icon, Link, Stack, Text, VStack } from "@chakra-ui/react";
-import { redirect, useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "@/components/ui/markdown";
 import { useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
 import { format, parseISO, isAfter, isSameDay, isWithinInterval } from "date-fns";
@@ -57,24 +57,33 @@ export default function OfficeHoursPage() {
   // Get current user profile IDs (needed for My Requests view)
   const { private_profile_id, public_profile_id } = useClassProfiles();
 
-  // Filter data based on requirements
-  const helpQueueAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
+  // Filter data based on requirements. These are memoized because they feed
+  // effect dependency lists below — rebuilding the arrays on every render would
+  // re-run the navigation effect on every render.
+  const helpQueueAssignments = useMemo(
+    () => allHelpQueueAssignments.filter((assignment) => assignment.is_active),
+    [allHelpQueueAssignments]
+  );
 
-  const helpQueues = allHelpQueues
-    .filter((queue) => queue.available)
-    .sort((a, b) => {
-      // Primary sort: by ordinal
-      if (a.ordinal !== b.ordinal) {
-        return a.ordinal - b.ordinal;
-      }
-      // Secondary sort: queues with active staff first
-      const aHasActive = helpQueueAssignments.some((assignment) => assignment.help_queue_id === a.id);
-      const bHasActive = helpQueueAssignments.some((assignment) => assignment.help_queue_id === b.id);
-      if (aHasActive !== bHasActive) {
-        return aHasActive ? -1 : 1;
-      }
-      return 0;
-    });
+  const helpQueues = useMemo(
+    () =>
+      allHelpQueues
+        .filter((queue) => queue.available)
+        .sort((a, b) => {
+          // Primary sort: by ordinal
+          if (a.ordinal !== b.ordinal) {
+            return a.ordinal - b.ordinal;
+          }
+          // Secondary sort: queues with active staff first
+          const aHasActive = helpQueueAssignments.some((assignment) => assignment.help_queue_id === a.id);
+          const bHasActive = helpQueueAssignments.some((assignment) => assignment.help_queue_id === b.id);
+          if (aHasActive !== bHasActive) {
+            return aHasActive ? -1 : 1;
+          }
+          return 0;
+        }),
+    [allHelpQueues, helpQueueAssignments]
+  );
 
   const activeHelpRequests = allHelpRequests.filter(
     (request) => request.status === "open" || request.status === "in_progress"
@@ -182,15 +191,42 @@ export default function OfficeHoursPage() {
     return upcoming;
   }, [selectedQueueId, selectedQueue, officeHoursEvents, now]);
 
-  // Auto-select first queue if none selected
+  // A class with a single queue has nothing to browse, so we send the student
+  // straight to it. Scoped to the browse view: "My Requests" is reached through
+  // this same route (?view=my-requests) and must not be bounced away.
+  const soleQueueId = view === "browse" && availableQueues.length === 1 ? availableQueues[0].id : null;
+  const soleQueueRedirectedTo = useRef<number | null>(null);
+
+  // Navigation belongs in an effect, never in the render phase. Calling
+  // `redirect()` while rendering throws NEXT_REDIRECT out of a client
+  // component, and the App Router root (`Router` in next/dist/client/
+  // components/app-router.tsx) can itself suspend mid-render via `use()` in
+  // useActionQueue. A render-phase throw interleaved with that suspend/replay
+  // leaves the root's hook list inconsistent between render attempts and React
+  // aborts the tree with error #310 ("Rendered more hooks than during the
+  // previous render"). That error originates above every app error boundary,
+  // so app/global-error.tsx never renders — the user gets Next's built-in
+  // "Application error: a client-side exception has occurred" page instead.
+  // See #881 (finding 4), found by the real-VoiceOver lane.
   useEffect(() => {
+    if (isLoading || connectionError) return;
+
+    if (soleQueueId !== null) {
+      if (soleQueueRedirectedTo.current !== soleQueueId) {
+        soleQueueRedirectedTo.current = soleQueueId;
+        router.replace(`/course/${course_id}/office-hours/${soleQueueId}`);
+      }
+      return;
+    }
+
+    // Auto-select first queue if none selected
     if (view === "browse" && !selectedQueueId && helpQueues.length > 0) {
       const next = new URLSearchParams(searchParams.toString());
       next.set("view", "browse");
       next.set("queue", helpQueues[0].id.toString());
       router.replace(`/course/${course_id}/office-hours?${next.toString()}`, { scroll: false });
     }
-  }, [view, selectedQueueId, helpQueues, searchParams, router, course_id]);
+  }, [view, selectedQueueId, helpQueues, searchParams, router, course_id, soleQueueId, isLoading, connectionError]);
 
   if (isLoading) {
     return (
@@ -208,8 +244,19 @@ export default function OfficeHoursPage() {
     );
   }
 
-  if (availableQueues.length === 1) {
-    redirect(`/course/${course_id}/office-hours/${availableQueues[0].id}`);
+  // The effect above is navigating to the only queue; render a stable status
+  // message rather than flashing a one-item browse list on the way out.
+  if (soleQueueId !== null) {
+    return (
+      <VStack textAlign="center" py={8} gap={2}>
+        <Text>Opening the help queue…</Text>
+        {/* Manual fallback. The redirect is latched to fire once per queue id
+            (soleQueueRedirectedTo) so re-renders cannot spam router.replace,
+            which means a navigation that never lands would otherwise leave this
+            placeholder as a dead end with no way out but a reload. */}
+        <Link href={`/course/${course_id}/office-hours/${soleQueueId}`}>Go to the help queue</Link>
+      </VStack>
+    );
   }
 
   if (view === "browse") {

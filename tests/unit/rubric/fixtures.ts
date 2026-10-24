@@ -22,6 +22,19 @@ export function loadFixtureAsYaml(name: string): YmlRubricType {
   };
 }
 
+/**
+ * The same fixture, un-narrowed.
+ *
+ * `loadFixtureAsYaml` deliberately whitelists four keys so the web round-trip tests
+ * exercise the parse/serialize pair on exactly the YAML schema. The CLI mapping tests
+ * need the whole object — including `hide_unless_assigned` and the per-part grading
+ * flags, which are precisely the fields whose loss the CLI tests exist to catch — so
+ * they get their own loader rather than widening that one.
+ */
+export function loadFixtureRaw(name: string): Record<string, unknown> {
+  return JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, `${name}.json`), "utf-8")) as Record<string, unknown>;
+}
+
 export const FIXTURE_NAMES = [
   "multi_option_check",
   "deduction_only",

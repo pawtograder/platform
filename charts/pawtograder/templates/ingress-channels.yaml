@@ -68,9 +68,18 @@ spec:
             pathType: Prefix
             backend:
               service:
+                {{- /* maintenance.active: the page, exactly as maintenance.sh
+                   `down` repoints this channel host's "/" path (the web-<channel>
+                   Deployment behind it is fenced to 0). See ingress.yaml. */}}
+                {{- if $.Values.maintenance.active }}
+                name: {{ include "pawtograder.maintenance.host" $ }}
+                port:
+                  number: {{ $.Values.maintenance.service.port }}
+                {{- else }}
                 name: {{ include "pawtograder.componentName" (dict "ctx" $ "component" $component) }}
                 port:
                   number: {{ $.Values.web.service.port }}
+                {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

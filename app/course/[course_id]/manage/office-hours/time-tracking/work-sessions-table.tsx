@@ -83,11 +83,11 @@ export default function WorkSessionsTable({ sessions, courseId }: WorkSessionsTa
           return values.some((val) => requestId.includes(val));
         },
         cell: ({ row }) => (
-          <Link href={`/course/${courseId}/manage/office-hours/request/${row.original.help_request_id}`}>
-            <Button variant="ghost" size="sm">
+          <Button asChild variant="ghost" size="sm">
+            <Link href={`/course/${courseId}/manage/office-hours/request/${row.original.help_request_id}`}>
               Request #{row.original.help_request_id}
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         )
       },
       {

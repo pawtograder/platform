@@ -13,6 +13,7 @@ import { ltiAdminClient } from "@/lib/lti/db";
 import { createState, randomNonce } from "@/lib/lti/state";
 import { toolBaseUrl } from "@/lib/lti/url";
 import { ltiClientIdMatches } from "@/lib/lti/util";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 export const dynamic = "force-dynamic";
 
@@ -98,11 +99,16 @@ async function handle(request: Request) {
   return res;
 }
 
-export async function GET(request: Request) {
+async function getHandler(request: Request) {
   return handle(request);
 }
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
   return handle(request);
 }
 
 export { STATE_COOKIE };
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const GET = withRouteMetrics("/api/lti/login", getHandler);
+export const POST = withRouteMetrics("/api/lti/login", postHandler);

@@ -39,6 +39,7 @@ import {
   type CodeFileHandle,
   type CodeFileProps
 } from "./code-file-shared";
+import { configureMonacoWorkers } from "@/lib/monacoWorkers";
 
 const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
   ssr: false,
@@ -51,6 +52,21 @@ export { isRubricCheckDataWithOptions };
 // Monotonic counter used to give every editor mount a unique model-URI authority (see instanceIdRef).
 // Module-scoped so it is shared across all panes in the (single, client-only) bundle.
 let paneInstanceSeq = 0;
+
+/**
+ * Whether to force Monaco's screen-reader-optimized rendering instead of letting
+ * it decide with `accessibilitySupport: "auto"`.
+ *
+ * Only our a11y harness sets this (it injects a virtual screen reader that
+ * Monaco's own detection cannot see). Real assistive tech is detected by "auto",
+ * and forcing SR mode for everyone would change rendering and mirror
+ * `accessibilityPageSize` lines into a hidden textarea for every student and
+ * grader — a test accommodation, not product behavior.
+ */
+function forceScreenReaderMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return (window as { __a11yForceScreenReader?: boolean }).__a11yForceScreenReader === true;
+}
 
 // Map file extensions to Monaco language IDs
 function getMonacoLanguage(fileName: string): string {
@@ -1129,25 +1145,11 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
 
     // Handle editor before mount (worker setup)
     const handleEditorWillMount = useCallback(() => {
-      if (typeof window !== "undefined") {
-        window.MonacoEnvironment = {
-          getWorker(_moduleId, label) {
-            switch (label) {
-              case "editorWorkerService":
-                return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
-              case "yaml":
-                return new Worker(new URL("monaco-yaml/yaml.worker", import.meta.url));
-              default:
-                // Several Monaco editors share the single global `window.MonacoEnvironment`, and
-                // monaco-yaml's `configureMonacoYaml` registers the yaml service on the shared monaco
-                // singleton for the rest of the session. Throwing here on an unexpected label escapes
-                // as an unhandled promise rejection through Monaco's loader and takes down the grading
-                // UI, so fall back to the editor worker instead of crashing.
-                return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
-            }
-          }
-        };
-      }
+      // Shared with every other editor in the app. This viewer opens whatever a student submitted —
+      // .ts, .tsx, .css, .json are the bulk of it — and each of those is a worker-backed language
+      // service that needs its own worker. Mapping only yaml here is what produced the repeated
+      // `Cannot read properties of undefined (reading 'toUrl')` rejections on this page.
+      configureMonacoWorkers();
     }, []);
 
     const commentsForCurrentFile = useMemo(() => {
@@ -1326,6 +1328,15 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
             onMount={handleEditorDidMount}
             options={{
               readOnly: true,
+              // Screen-reader support: name the editor after the file, read in
+              // large chunks, and let Tab move focus out — a read-only viewer
+              // must not be a keyboard trap (WCAG 2.1.2).
+              ariaLabel: currentFile ? `Code viewer: ${currentFile.name}` : "Code viewer",
+              accessibilitySupport: forceScreenReaderMode() ? "on" : "auto",
+              // Only takes effect once Monaco is in screen-reader mode, so this
+              // costs nothing for everyone else.
+              accessibilityPageSize: 100,
+              tabFocusMode: true,
               lineNumbers: "on",
               glyphMargin: true,
               minimap: { enabled: true },

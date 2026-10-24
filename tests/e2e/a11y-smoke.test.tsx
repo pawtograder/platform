@@ -1,6 +1,16 @@
+import { addDays } from "date-fns";
 import { expect, test } from "../global-setup";
-import { createClass, createUsersInClass, loginAsUser } from "./TestingUtils";
+import {
+  createClass,
+  createRegradeRequest,
+  createUsersInClass,
+  insertAssignment,
+  insertHelpRequest,
+  insertPreBakedSubmission,
+  loginAsUser
+} from "./TestingUtils";
 import { assertPageHasLandmarks, assertSkipLinksWork, assertStudentPageAccessible } from "./axeStudentA11y";
+import { A11Y_CODE_FILES, A11Y_CODE_FILE_NAME } from "./a11yAgentSeeding";
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];
@@ -98,5 +108,146 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
     await expect(page.getByRole("heading", { name: /assignments/i }).first()).toBeVisible();
     await expect(page).toHaveTitle(/Assignments.*Pawtograder/);
     await assertPageHasLandmarks(page, "assignments list");
+  });
+
+  test("status messages: connection status region and theme announcement", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}`);
+    await expect(page.locator("#main-content")).toBeVisible();
+
+    // The connection indicator is a keyboard-focusable control whose accessible
+    // name carries the CURRENT status (4.1.2/1.4.13)…
+    const connectionControl = page.getByRole("img", { name: /realtime connection status/i });
+    await expect(connectionControl.first()).toBeVisible();
+    expect(await connectionControl.first().getAttribute("tabindex")).toBe("0");
+
+    // …plus a SEPARATE polite region carrying the debounced copy (4.1.3). The two
+    // are distinct on purpose: the debounce keeps transient join cycles from
+    // being announced, and gating the control's name on it would leave the
+    // control with no status value for the first 3s and while channels flap.
+    const connectionRegion = page.getByRole("status").filter({ hasText: /realtime connection status/i });
+    await expect(connectionRegion.first()).toBeVisible();
+
+    // Theme toggle announces the change via a polite live region / toast (4.1.3).
+    await page.getByRole("button", { name: "Toggle color mode" }).first().click();
+    // Both the global live announcer AND the toast may carry the message; either satisfies 4.1.3.
+    await expect(
+      page
+        .locator('[role="status"], [role="alert"]')
+        .filter({ hasText: /switched to .* mode|following your system/i })
+        .first()
+    ).toBeVisible();
+  });
+
+  test("global search input shows a visible focus indicator (WCAG 2.4.7)", async ({ page, browserName }) => {
+    // :focus-visible matching after synthetic keyboard events is only reliable
+    // on chromium; a top-of-test skip keeps webkit reporting honest (the other
+    // status-message checks above run on every engine).
+    test.skip(browserName === "webkit", "webkit focus-visible heuristics differ under synthetic input");
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}`);
+    await expect(page.locator("#main-content")).toBeVisible();
+
+    await page.locator("#main-content").focus();
+    await page.keyboard.press("/");
+    const searchInput = page.getByRole("combobox", { name: /search pawtograder/i });
+    await expect(searchInput).toBeFocused();
+    const focusRing = await searchInput.evaluate((el) => {
+      const cs = window.getComputedStyle(el);
+      return { matchesFocusVisible: el.matches(":focus-visible"), outline: cs.outlineStyle, shadow: cs.boxShadow };
+    });
+    expect(focusRing.matchesFocusVisible, "search input matches :focus-visible after keyboard focus").toBe(true);
+    expect(
+      focusRing.outline !== "none" || focusRing.shadow !== "none",
+      `focused search input has a visible indicator (outline=${focusRing.outline}, shadow=${focusRing.shadow})`
+    ).toBe(true);
+  });
+});
+
+test.describe("a11y smoke — seeded student pages (assignments, files/Monaco, regrade, office hours)", () => {
+  let course: Course;
+  let student: User;
+  let submissionFilesUrl: string;
+
+  test.beforeAll(async () => {
+    course = await createClass();
+    const users = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "A11y Seeded Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "A11y Seeded Instructor", useMagicLink: true }
+    ]);
+    const [seededStudent, instructor] = users;
+    student = seededStudent;
+
+    const assignment = await insertAssignment({
+      due_date: addDays(new Date(), 1).toUTCString(),
+      class_id: course.id,
+      name: "A11y Smoke Assignment",
+      assignment_slug: `e2e-a11y-smoke-${course.id}`
+    });
+    const sub = await insertPreBakedSubmission({
+      student_profile_id: student.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: course.id,
+      files: A11Y_CODE_FILES
+    });
+    submissionFilesUrl = `/course/${course.id}/assignments/${assignment.id}/submissions/${sub.submission_id}/files`;
+    await createRegradeRequest(
+      sub.submission_id,
+      assignment.id,
+      student.private_profile_id,
+      instructor.private_profile_id,
+      assignment.rubricChecks[0]!.id,
+      course.id,
+      "opened"
+    );
+    await insertHelpRequest({
+      class_id: course.id,
+      student_profile_id: student.private_profile_id,
+      request: "Seeded question: my tests pass locally but fail on the autograder.",
+      active_staff_profile_id: instructor.private_profile_id
+    });
+  });
+
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([student]);
+  });
+
+  test("assignments list with seeded content passes axe", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/assignments`);
+    await expect(page.getByText("A11y Smoke Assignment").first()).toBeVisible();
+    await assertPageHasLandmarks(page, "assignments list (seeded)");
+    await assertStudentPageAccessible(page, "assignments list (seeded)");
+  });
+
+  test("submission files page (Monaco in scope) passes axe", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(submissionFilesUrl);
+    await expect(page.getByText(A11Y_CODE_FILE_NAME).first()).toBeVisible({ timeout: 30_000 });
+    // Monaco is deliberately NOT excluded from this scan — the read-only code
+    // viewer is configured for accessibility (components/ui/code-file-monaco.tsx).
+    await page
+      .locator(".monaco-editor")
+      .first()
+      .waitFor({ state: "visible", timeout: 60_000 })
+      .catch(() => {});
+    await assertPageHasLandmarks(page, "submission files");
+    await assertStudentPageAccessible(page, "submission files");
+  });
+
+  test("regrade requests page passes axe", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/regrade-requests`);
+    await expect(page.locator("#main-content, main").first()).toBeVisible();
+    await assertPageHasLandmarks(page, "regrade requests");
+    await assertStudentPageAccessible(page, "regrade requests");
+  });
+
+  test("office hours queue page passes axe", async ({ page }) => {
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/office-hours`);
+    await expect(page.locator("#main-content, main").first()).toBeVisible();
+    await assertPageHasLandmarks(page, "office hours");
+    await assertStudentPageAccessible(page, "office hours");
   });
 });

@@ -206,7 +206,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
-    await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await assertStudentPageAccessible(page, "pseudonymous self-review completed");
   });
@@ -225,7 +225,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     // race the in-flight replace and leave the URL on /files while the previous tab stays mounted,
     // so the file source never renders (flaky under CI load).
     await page.waitForURL(/\/submissions\/\d+\/(?:results|files|grade)(?:[/?#]|$)/);
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await page.waitForURL(/\/submissions\/\d+\/files(?:[/?#]|$)/);
 
     // Scroll grading rubric to top of its container
@@ -275,8 +275,8 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
+    // "Complete" stays on this submission ("Complete and go to next" is the button that moves on).
     await page.getByRole("button", { name: "Complete", exact: true }).click();
-    await expect(page.getByText("Completed by")).toBeVisible();
 
     // "Completed by" appears from the optimistic TableController update (it marks the row
     // __db_pending and renders immediately, before the awaited PATCH to submission_reviews
@@ -355,7 +355,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     const doMathLine = page.getByText("public int doMath(int a, int");
     await expect(doMathLine).toBeVisible();
     // toBeVisible() only requires a non-empty bounding box, not that the element is in

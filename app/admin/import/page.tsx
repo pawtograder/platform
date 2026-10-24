@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toaster } from "@/components/ui/toaster";
+import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import {
   VStack,
@@ -77,6 +78,7 @@ export default function CourseImportPage() {
   const [existingClass, setExistingClass] = useState<ExistingClass | null>(null);
   const [existingSections, setExistingSections] = useState<ExistingSection[]>([]);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
+  const revalidateServerCaches = useRevalidateServerCaches();
   const [existingClassesForTerm, setExistingClassesForTerm] = useState<
     Array<{ id: number; name: string | null; course_title: string | null }>
   >([]);
@@ -729,6 +731,11 @@ export default function CourseImportPage() {
       // Set the summary for display
       setImportSummary(summary);
 
+      // /admin/classes and /admin render their lists on the server. Without this the class this
+      // import just created is missing there for `staleTimes.dynamic` (30s), which is exactly
+      // how a bulk operator ends up importing the same course twice (#937).
+      void revalidateServerCaches();
+
       toaster.create({
         title: selectedExistingClassId ? "Class Synced Successfully" : "Class Created Successfully",
         description: `${selectedExistingClassId ? "Synced" : "Created"} class with ${summary.sectionsCreated} sections and ${summary.invitationsSent} invitations sent`,
@@ -764,7 +771,8 @@ export default function CourseImportPage() {
     selectedGithubOrg,
     supabase,
     processBatchedInvitations,
-    semester
+    semester,
+    revalidateServerCaches
   ]);
 
   const toggleSection = (crn: number) => {

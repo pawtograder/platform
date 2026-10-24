@@ -33,6 +33,12 @@ metadata:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup-restore-drill") | nindent 4 }}
 spec:
   schedule: {{ $rd.schedule | quote }}
+  {{- /* maintenance.active: suspended, the state maintenance.sh `down` leaves
+     this write-capable CronJob in (SUSPEND_CRONJOBS). Off, nothing is rendered
+     and the API default (false) applies, as before. */}}
+  {{- if .Values.maintenance.active }}
+  suspend: true
+  {{- end }}
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: {{ $rd.startingDeadlineSeconds | default 1800 }}
   successfulJobsHistoryLimit: 3
@@ -65,6 +71,7 @@ spec:
             # needs root (apt), but the postgres container must not run as root.
             - name: fetch-dump
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.backup.image) }}
+              imagePullPolicy: {{ .Values.backup.image.pullPolicy }}
               securityContext:
                 runAsUser: 0
               command:
@@ -72,18 +79,40 @@ spec:
                 - -c
                 - |
                   set -euo pipefail
-                  apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-                  curl -fsSL "{{ .Values.backup.mc.url }}" -o /usr/local/bin/mc
-                  echo "{{ .Values.backup.mc.sha256 }}  /usr/local/bin/mc" | sha256sum -c -
-                  chmod +x /usr/local/bin/mc
-                  mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
-                  LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true)
-                  if [ -z "$LATEST" ]; then
-                    echo "[drill] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}"; exit 1
+                  # Baked-in mc, with the same runtime fallback as
+                  # backup.yaml — see the rationale there.
+                  if ! command -v mc >/dev/null 2>&1; then
+                    echo "[drill] mc not in image — installing at runtime (see backup.image)"
+                    apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+                    curl -fsSL "{{ .Values.backup.mc.url }}" -o /usr/local/bin/mc
+                    echo "{{ .Values.backup.mc.sha256 }}  /usr/local/bin/mc" | sha256sum -c -
+                    chmod +x /usr/local/bin/mc
                   fi
-                  echo "[drill] newest backup: $LATEST"
-                  mc cp "s3/${S3_BUCKET}/${LATEST}" /work/latest.dump
-                  echo "$LATEST" > /work/dump-name
+                  mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
+                  # Newest dump under daily/, falling back to the bucket root
+                  # (chart <= 0.3.27) only when daily/ is EMPTY, never when
+                  # its listing fails. Same selection as backup-verify.
+                  newest() {
+                    local out
+                    out=$(mc ls "s3/${S3_BUCKET}/$1") || return 1
+                    printf '%s\n' "$out" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true
+                  }
+                  DIR=daily/
+                  if ! LATEST=$(newest daily/); then
+                    echo "[drill] FATAL: could not list s3/${S3_BUCKET}/daily/"; exit 1
+                  fi
+                  if [ -z "$LATEST" ]; then
+                    DIR=""
+                    if ! LATEST=$(newest ""); then
+                      echo "[drill] FATAL: could not list s3/${S3_BUCKET}/"; exit 1
+                    fi
+                  fi
+                  if [ -z "$LATEST" ]; then
+                    echo "[drill] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}/daily/ or the bucket root"; exit 1
+                  fi
+                  echo "[drill] newest backup: ${DIR}${LATEST}"
+                  mc cp "s3/${S3_BUCKET}/${DIR}${LATEST}" /work/latest.dump
+                  echo "${DIR}${LATEST}" > /work/dump-name
               env:
                 - name: S3_ENDPOINT
                   value: {{ required "backup.s3.endpoint is required" .Values.backup.s3.endpoint | quote }}

@@ -6,7 +6,7 @@ import { OfficeHoursDiscussionBrowser } from "@/components/help-queue/office-hou
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import Markdown from "@/components/ui/markdown";
@@ -548,7 +548,11 @@ export default function HelpRequestForm({
                 p_student_profile_ids: currentSelectedStudents,
                 p_template_id: (values.template_id as number | null | undefined) ?? undefined,
                 p_referenced_submission_id: referencedSubmissionId ?? undefined,
-                p_file_references: fileReferencesPayload as never
+                p_file_references: fileReferencesPayload as never,
+                // The "Follow-Up to Previous Request" field. This used to be collected by
+                // the form and then dropped on the floor: the RPC had no such parameter
+                // and never wrote the column, so every follow-up chain came out null.
+                p_followup_to: (values.followup_to as number | null | undefined) ?? undefined
               }
             );
             if (rpcError) {
@@ -661,7 +665,6 @@ export default function HelpRequestForm({
 
   return (
     <form onSubmit={onSubmit} aria-label="New Help Request Form">
-      <Toaster />
       <Stack spaceY={4}>
         <Box>
           <Heading>Request Live Help</Heading>

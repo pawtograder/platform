@@ -5,7 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import PersonName from "@/components/ui/person-name";
-import { Toaster, toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip as WrappedTooltip } from "@/components/ui/tooltip";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
@@ -3570,7 +3570,6 @@ export default function GradebookTable() {
           animation: gradebook-pulse 2s ease-in-out infinite;
         }
       `}</style>
-      <Toaster />
       <StudentDetailDialog />
       <GradebookPopoverProvider>
         <DndContext

@@ -66,7 +66,7 @@ test.describe("Monaco rubric context menu", () => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await expect(page.locator(".monaco-editor").first()).toBeVisible();
 
     // Right-click a code line to open Monaco's native context menu, then read its items immediately.

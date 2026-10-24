@@ -1,6 +1,6 @@
 "use client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Button, Flex, Heading, HStack, IconButton, Link, VStack } from "@chakra-ui/react";
+import { Box, Button, Flex, Heading, HStack, IconButton, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
 import NextLink from "next/link";
 import { useParams, usePathname } from "next/navigation";
@@ -73,11 +73,14 @@ export default function FlashcardDeckLayoutClient({ children }: { children: Reac
       </Box>
       <Box borderColor="border.muted" borderWidth="2px" borderRadius="md" p={4} flexGrow={1} minWidth="0">
         <HStack justifyContent="flex-start" gap={0}>
-          <Link href={`/course/${course_id}/manage/course/flashcard-decks`}>
-            <IconButton variant="ghost" size="sm" aria-label="Go back to flashcard decks">
+          <IconButton asChild variant="ghost" size="sm">
+            <NextLink
+              href={`/course/${course_id}/manage/course/flashcard-decks`}
+              aria-label="Go back to flashcard decks"
+            >
               <FaArrowLeft />
-            </IconButton>
-          </Link>
+            </NextLink>
+          </IconButton>
           <Heading size="lg">Flashcard Deck: {deck ? deck.data?.name : "Loading..."}</Heading>
         </HStack>
         <Box>{children}</Box>

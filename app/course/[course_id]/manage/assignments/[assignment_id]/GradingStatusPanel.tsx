@@ -2,6 +2,11 @@
 
 import { computeGradingCounts, type GradingStatusRow } from "@/lib/assignmentDashboardStats";
 import {
+  describeCodeWalkReleaseResult,
+  describeReleaseAllResult,
+  type BulkReleaseAction
+} from "@/lib/bulkReleaseMessage";
+import {
   DialogActionTrigger,
   DialogBody,
   DialogContent,
@@ -11,7 +16,9 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
+import * as Sentry from "@sentry/nextjs";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useRubric } from "@/hooks/useAssignment";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, CardBody, CardRoot, HStack, Popover, Text, VStack } from "@chakra-ui/react";
@@ -20,6 +27,7 @@ import { useParams, useRouter } from "next/navigation";
 import FinalizeGradingButton from "./FinalizeGradingButton";
 
 type ReleaseAllRpc = "release_all_grading_reviews_for_assignment" | "unrelease_all_grading_reviews_for_assignment";
+type CodeWalkReleaseRpc = "release_code_walk_reviews_for_assignment" | "unrelease_code_walk_reviews_for_assignment";
 
 /**
  * A button that opens a confirmation popover before running a destructive /
@@ -99,7 +107,8 @@ function ConfirmButton({
 
 /**
  * Dashboard panel summarizing grading progress for an assignment and hosting the
- * assignment-level grading actions: Finalize grading, Release all, Unrelease all.
+ * assignment-level grading actions: Finalize grading, Release all, Unrelease all, and, when the
+ * assignment has a code-walk rubric, Release code walks / Unrelease code walks.
  * Per-submission release/unrelease remains contextual in the submissions table.
  */
 export default function GradingStatusPanel({
@@ -124,19 +133,47 @@ export default function GradingStatusPanel({
   const isInstructor = useIsInstructor();
   const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
   const [isContinuingReleaseAll, setIsContinuingReleaseAll] = useState(false);
+  // Release all only touches the grading review, so code walks need their own bulk action. Read the
+  // rubric from the assignment controller (already loaded for this page) and only offer the
+  // action when the assignment has a code-walk rubric.
+  const codeWalkRubric = useRubric("code-walk");
 
-  const runReleaseAll = async (rpc: ReleaseAllRpc, successVerb: string) => {
+  // The RPC has already committed by the time the dashboard refetches. A refetch that throws (for
+  // example TableController's "Refetch all called too frequently" when two actions run within 3s)
+  // must not skip the result toast and leave the confirm popover open as if nothing happened.
+  const refreshAfterChange = async () => {
+    try {
+      await onChanged?.();
+    } catch (e) {
+      Sentry.captureException(e);
+    }
+  };
+
+  const runReleaseAll = async (rpc: ReleaseAllRpc, action: BulkReleaseAction) => {
     const { data, error } = await supabase.rpc(rpc, { assignment_id: assignmentId });
     if (error) {
       toaster.error({ title: "Error", description: error.message });
       return;
     }
-    await onChanged?.();
-    const count = typeof data === "number" ? data : 0;
-    toaster.success({
-      title: "Success",
-      description: `${count} submission review(s) ${successVerb}`
-    });
+    await refreshAfterChange();
+    // The RPC touches each submission's grading review only, and returns how many it actually
+    // changed — not how many submissions the assignment has. Share the per-submission bulk path's
+    // wording so both toasts count the same thing and both say which rounds were left alone.
+    const affected = typeof data === "number" ? data : 0;
+    const message = describeReleaseAllResult({ affected, action });
+    toaster[message.status]({ title: message.title, description: message.description });
+  };
+
+  const runCodeWalkRelease = async (rpc: CodeWalkReleaseRpc, action: BulkReleaseAction) => {
+    const { data, error } = await supabase.rpc(rpc, { p_assignment_id: assignmentId });
+    if (error) {
+      toaster.error({ title: "Error", description: error.message });
+      return;
+    }
+    await refreshAfterChange();
+    const affected = typeof data === "number" ? data : 0;
+    const message = describeCodeWalkReleaseResult({ affected, action });
+    toaster[message.status]({ title: message.title, description: message.description });
   };
 
   const incompleteCount = counts.total - counts.graded;
@@ -195,7 +232,7 @@ export default function GradingStatusPanel({
                   label="Release all"
                   colorPalette="green"
                   confirmTitle="Release all grading reviews"
-                  confirmBody="This will release the grading reviews for every submission in this assignment, making grades visible to all students. Continue?"
+                  confirmBody="This will release the grading review for every submission in this assignment, making grades visible to all students. Self-review and meta-grading rounds are not affected. Continue?"
                   tooltip="Make grades visible to students for every submission in this assignment."
                   onConfirm={confirmReleaseAll}
                 />
@@ -203,10 +240,30 @@ export default function GradingStatusPanel({
                   label="Unrelease all"
                   colorPalette="red"
                   confirmTitle="Unrelease all grading reviews"
-                  confirmBody="This will hide grades from all students for every submission in this assignment. Continue?"
+                  confirmBody="This will hide grades from all students for every submission in this assignment. Self-review and meta-grading rounds are not affected. Continue?"
                   tooltip="Hide grades from students again for every submission (reverses Release all)."
                   onConfirm={() => runReleaseAll("unrelease_all_grading_reviews_for_assignment", "unreleased")}
                 />
+                {codeWalkRubric && (
+                  <>
+                    <ConfirmButton
+                      label="Release code walks"
+                      colorPalette="green"
+                      confirmTitle="Release code walks"
+                      confirmBody="This will release every completed code walk in this assignment, making code walk grades visible to students. Code walks that are not complete stay unreleased. Grading, self-review and meta-grading reviews are not affected. Continue?"
+                      tooltip="Make completed code walk grades visible to students for every submission in this assignment."
+                      onConfirm={() => runCodeWalkRelease("release_code_walk_reviews_for_assignment", "released")}
+                    />
+                    <ConfirmButton
+                      label="Unrelease code walks"
+                      colorPalette="red"
+                      confirmTitle="Unrelease code walks"
+                      confirmBody="This will hide code walk grades from all students for every submission in this assignment. Grading, self-review and meta-grading reviews are not affected. Continue?"
+                      tooltip="Hide code walk grades from students again for every submission (reverses Release code walks)."
+                      onConfirm={() => runCodeWalkRelease("unrelease_code_walk_reviews_for_assignment", "unreleased")}
+                    />
+                  </>
+                )}
               </>
             )}
           </HStack>

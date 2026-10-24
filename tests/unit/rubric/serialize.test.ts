@@ -4,7 +4,7 @@ import { HydratedRubric, YmlRubricType } from "@/utils/supabase/DatabaseTypes";
 import { FIXTURE_NAMES, loadFixtureAsYaml } from "./fixtures";
 
 function roundTripYaml(yaml: YmlRubricType): YmlRubricType {
-  const hydrated = YamlRubricToHydratedRubric(yaml, {
+  const { rubric: hydrated } = YamlRubricToHydratedRubric(yaml, {
     assignment_id: 0,
     is_private: false,
     review_round: "grading-review"

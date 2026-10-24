@@ -28,8 +28,9 @@ import {
 } from "@chakra-ui/react";
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
-import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
-import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
+import { Tooltip } from "@/components/ui/tooltip";
+import { useClassProfiles, useIsGraderOrInstructor, useIsStudent } from "@/hooks/useClassProfiles";
+import { useAssignmentGroupWithMembersLoadState } from "@/hooks/useCourseController";
 import {
   useAllCommentsForReview,
   useSubmission,
@@ -46,14 +47,18 @@ import {
   useSetActiveSubmissionReviewId,
   useSetIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
-import { useNextIncompleteReviewUrl } from "@/hooks/useNextIncompleteReview";
-import { computeRubricGradingCompletion, gradeTargetsForSubmission } from "@/lib/rubricGradingCompletion";
+import { useSubmissionNavigation } from "@/hooks/useNextIncompleteReview";
+import {
+  computeRubricGradingCompletion,
+  gradeTargetsForSubmission,
+  perStudentEvaluationBlocked
+} from "@/lib/rubricGradingCompletion";
 import { useCallback, useMemo, useState } from "react";
 import { FaRegCheckCircle } from "react-icons/fa";
 import { useRouter } from "next/navigation";
 import PersonName from "./person-name";
 import SelfReviewDueDateInformation from "./self-review-due-date-information";
-import { Toaster, toaster } from "./toaster";
+import { toaster } from "./toaster";
 
 function ActiveReviewPicker() {
   const activeSubmissionReviewId = useActiveSubmissionReviewId();
@@ -103,17 +108,36 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
   const allChecksRaw = useRubricChecksByRubric(reviewAssignment?.rubric_id);
   const allChecksForRubric = useMemo(() => allChecksRaw ?? [], [allChecksRaw]);
 
-  const assignedRubricPartIds = reviewAssignmentRubricParts.map((part) => part.rubric_part_id);
+  // Memoized for the same reason as groupMemberProfileIds below: a bare `.map()` is a fresh array
+  // every render, so the rubricPartIdsInScope memo it feeds never memoized, and neither did the main
+  // memo that depends on it — which recomputed computeRubricGradingCompletion on every keystroke and
+  // every realtime tick in the review UI.
+  const assignedRubricPartIds = useMemo(
+    () => reviewAssignmentRubricParts.map((part) => part.rubric_part_id),
+    [reviewAssignmentRubricParts]
+  );
 
   const rubricPartIdsInScope = useMemo(() => {
     const partIds = assignedRubricPartIds.length > 0 ? assignedRubricPartIds : rubricPartsList.map((p) => p.id);
     return partIds;
   }, [assignedRubricPartIds, rubricPartsList]);
 
-  const groupRow = useAssignmentGroupWithMembers({
+  // SCOPED parts, not the whole rubric. Blocking on a per-student part the grader was never assigned
+  // makes a correctly-scoped review assignment unfinishable: computeRubricGradingCompletion below
+  // already narrows to rubricPartIdsInScope, so the block check has to agree with it.
+  const rubricPartsInScope = useMemo(
+    () => rubricPartsList.filter((p) => rubricPartIdsInScope.includes(p.id)),
+    [rubricPartsList, rubricPartIdsInScope]
+  );
+
+  const { group: groupRow, loaded: groupLoaded } = useAssignmentGroupWithMembersLoadState({
     assignment_group_id: submission.assignment_group_id ?? undefined
   });
-  const groupMemberProfileIds = (groupRow?.assignment_groups_members ?? []).map((m) => m.profile_id);
+  // Memoized: this was a fresh array every render, so the useMemo below never memoized.
+  const groupMemberProfileIds = useMemo(
+    () => (groupRow?.assignment_groups_members ?? []).map((m) => m.profile_id),
+    [groupRow]
+  );
 
   const gradeTargets = useMemo(
     () =>
@@ -128,35 +152,67 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
   const rubricPartStudentAssignments =
     (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
 
+  const gradeTargetsBlocked = perStudentEvaluationBlocked({
+    rubricParts: rubricPartsInScope,
+    gradeTargets,
+    gradeTargetsLoaded: groupLoaded,
+    rubricPartStudentAssignments
+  });
+
   return useMemo(() => {
-    if (!reviewAssignment || !activeSubmissionReview || !allChecksForRubric.length) {
+    // See the matching note in useMissingRubricChecksForActiveReview: a rubric with no checks is a
+    // steady state (the assignment-creation trigger inserts empty grading and self-review rubrics),
+    // so it must not be reported as "cannot evaluate" — callers turn that into a button that is
+    // disabled forever.
+    if (!reviewAssignment || !activeSubmissionReview) {
       return {
         missing_required_checks: [],
         missing_optional_checks: [],
         missing_required_criteria: [],
-        missing_optional_criteria: []
+        missing_optional_criteria: [],
+        gradeTargetsBlocked: true,
+        gradeTargetsLoaded: groupLoaded
       };
     }
 
-    const hasPerStudentParts = rubricPartsList?.some((p) => p.is_individual_grading || p.is_assign_to_student);
-    if (hasPerStudentParts && gradeTargets.length === 0) {
+    if (!allChecksForRubric.length) {
       return {
         missing_required_checks: [],
         missing_optional_checks: [],
         missing_required_criteria: [],
-        missing_optional_criteria: []
+        missing_optional_criteria: [],
+        gradeTargetsBlocked: false,
+        gradeTargetsLoaded: groupLoaded
       };
     }
 
-    return computeRubricGradingCompletion({
-      rubricChecks: allChecksForRubric,
-      allCriteria: allCriteriaForRubric,
-      rubricParts: rubricPartsList,
-      comments,
-      rubricPartStudentAssignments,
-      gradeTargets,
-      rubricPartIdsInScope
-    });
+    // Empty lists here mean "cannot evaluate", NOT "nothing missing" — this early return used to
+    // hand the dialog four empty arrays, which rendered an enabled "Mark Review Assignment as
+    // Complete" on a review whose per-student checks had never been examined.
+    if (gradeTargetsBlocked) {
+      return {
+        missing_required_checks: [],
+        missing_optional_checks: [],
+        missing_required_criteria: [],
+        missing_optional_criteria: [],
+        gradeTargetsBlocked: true,
+        gradeTargetsLoaded: groupLoaded
+      };
+    }
+
+    return {
+      ...computeRubricGradingCompletion({
+        rubricChecks: allChecksForRubric,
+        allCriteria: allCriteriaForRubric,
+        rubricParts: rubricPartsList,
+        comments,
+        rubricPartStudentAssignments,
+        gradeTargets,
+        rubricPartIdsInScope
+      }),
+      gradeTargetsBlocked: false,
+      gradeTargetsLoaded: groupLoaded
+    };
   }, [
     reviewAssignment,
     activeSubmissionReview,
@@ -166,8 +222,67 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
     comments,
     rubricPartStudentAssignments,
     gradeTargets,
-    rubricPartIdsInScope
+    rubricPartIdsInScope,
+    gradeTargetsBlocked,
+    groupLoaded
   ]);
+}
+
+/**
+ * What happens after a review is saved as complete. Graders get both "Complete" (stay here) and
+ * "Complete and go to next": one grading a whole submission at a time, or wanting to look back over
+ * what they just finished, must not be pushed off the page. Students (who complete self-reviews with
+ * these same buttons) only ever stay.
+ */
+function useAfterCompletion(completingSubmissionReviewId?: number) {
+  const router = useRouter();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const { nextUrl, isReviewMode } = useSubmissionNavigation({ completingSubmissionReviewId });
+  const canGoToNext = isGraderOrInstructor && Boolean(nextUrl);
+  const afterCompletion = useCallback(
+    (goToNext: boolean) => {
+      if (!isGraderOrInstructor) return;
+      if (nextUrl) {
+        if (goToNext) router.push(nextUrl);
+      } else if (isReviewMode) {
+        toaster.success({
+          title: "All of your assigned reviews are complete",
+          description: "There are no more incomplete reviews assigned to you on this assignment."
+        });
+      }
+    },
+    [isGraderOrInstructor, isReviewMode, nextUrl, router]
+  );
+  return { canGoToNext, afterCompletion };
+}
+
+/** "Complete" and, when there is somewhere to go, "Complete and go to next" side by side. */
+function CompleteButtons({
+  canGoToNext,
+  isLoading,
+  onComplete
+}: {
+  canGoToNext: boolean;
+  isLoading: boolean;
+  onComplete: (goToNext: boolean) => void;
+}) {
+  return (
+    <HStack gap={2} w="100%" flexWrap="wrap">
+      <Button
+        variant={canGoToNext ? "outline" : "solid"}
+        colorPalette="green"
+        loading={isLoading}
+        onClick={() => onComplete(false)}
+      >
+        Complete
+      </Button>
+      {canGoToNext && (
+        <Button variant="solid" colorPalette="green" loading={isLoading} onClick={() => onComplete(true)}>
+          Complete and go to next
+        </Button>
+      )}
+    </HStack>
+  );
 }
 
 /**
@@ -179,11 +294,17 @@ function CompleteReviewAssignmentDialog({
   missing_required_criteria,
   isReleased,
   isLoading,
-  setIsLoading
+  setIsLoading,
+  canGoToNext,
+  onCompleted
 }: {
   reviewAssignment: {
     id: number;
   };
+  /** Offer "Complete and go to next" alongside "Complete". */
+  canGoToNext: boolean;
+  /** Runs after the review assignment is saved as complete, with the button the grader chose. */
+  onCompleted?: (goToNext: boolean) => void;
   missing_required_checks: {
     id: number;
     name: string;
@@ -255,11 +376,10 @@ function CompleteReviewAssignmentDialog({
             </Text>
           )}
           {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
-            <Button
-              variant="solid"
-              colorPalette="green"
-              loading={isLoading}
-              onClick={async () => {
+            <CompleteButtons
+              canGoToNext={canGoToNext}
+              isLoading={isLoading}
+              onComplete={async (goToNext) => {
                 try {
                   setIsLoading(true);
                   if (isReleased) {
@@ -278,6 +398,7 @@ function CompleteReviewAssignmentDialog({
                     title: "Review assignment marked as complete",
                     description: "Your review assignment has been marked as complete."
                   });
+                  onCompleted?.(goToNext);
                 } catch (error) {
                   console.error("Error marking review assignment as complete", error);
                   // Extract error message from Supabase error
@@ -293,9 +414,7 @@ function CompleteReviewAssignmentDialog({
                   setIsLoading(false);
                 }
               }}
-            >
-              Mark Review Assignment as Complete
-            </Button>
+            />
           )}
         </VStack>
       </Popover.Body>
@@ -310,24 +429,37 @@ function CompleteReviewAssignmentDialog({
 export function CompleteReviewAssignmentButton() {
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const reviewAssignment = useReviewAssignment(activeReviewAssignmentId);
-  const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
+  // The optional lists are not consumed here — the dialog below renders only the required ones.
+  const { missing_required_checks, missing_required_criteria, gradeTargetsBlocked, gradeTargetsLoaded } =
     useMissingRubricChecksForReviewAssignment(activeReviewAssignmentId);
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
+  const { canGoToNext, afterCompletion } = useAfterCompletion();
 
-  if (
-    !reviewAssignment ||
-    !missing_required_checks ||
-    !missing_optional_checks ||
-    !missing_required_criteria ||
-    !missing_optional_criteria ||
-    reviewAssignment.completed_at
-  ) {
+  // gradeTargetsBlocked added for the same reason as CompleteReviewButton: the missing_* checks
+  // below are always arrays and so never gated anything.
+  // Spin only while there is genuinely something to wait for -- see the matching note in
+  // CompleteReviewButton.
+  if (!reviewAssignment || reviewAssignment.completed_at || (gradeTargetsBlocked && !gradeTargetsLoaded)) {
     // Render a loading state or disabled button if already completed
     return (
       <Button variant="surface" loading={!reviewAssignment?.completed_at}>
         {reviewAssignment?.completed_at ? "Review Assignment Completed" : "Complete Review Assignment"}
       </Button>
+    );
+  }
+
+  // Settled AND blocked is a different state from still-loading, and it used to render the same
+  // spinner — one that never resolved, with nothing telling the grader why. The only way to reach
+  // it is an empty assignment group, so say that, in the words the completion trigger uses when it
+  // refuses the same review server-side.
+  if (gradeTargetsBlocked) {
+    return (
+      <Tooltip content="This submission has no students to grade (its assignment group is empty), so per-student checks cannot be verified. Add the group's member(s) back to the assignment group, or turn off per-student grading for the rubric part.">
+        <Button variant="surface" disabled>
+          Complete Review Assignment
+        </Button>
+      </Tooltip>
     );
   }
 
@@ -346,6 +478,8 @@ export function CompleteReviewAssignmentButton() {
           isReleased={Boolean(activeSubmissionReview?.released)}
           isLoading={isLoading}
           setIsLoading={setIsLoading}
+          canGoToNext={canGoToNext}
+          onCompleted={afterCompletion}
         />
       </Popover.Positioner>
     </Popover.Root>
@@ -360,15 +494,20 @@ export function CompleteReviewAssignmentButton() {
 export function CompleteReviewButton() {
   const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
-  const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
-    useMissingRubricChecksForActiveReview();
+  const {
+    missing_required_checks,
+    missing_optional_checks,
+    missing_required_criteria,
+    missing_optional_criteria,
+    gradeTargetsBlocked,
+    gradeTargetsLoaded
+  } = useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
-  const router = useRouter();
-  const nextIncompleteUrl = useNextIncompleteReviewUrl();
+  const { canGoToNext, afterCompletion } = useAfterCompletion(activeSubmissionReview?.id);
 
   const markComplete = useCallback(
-    async (advanceAfter: boolean) => {
+    async (goToNext: boolean) => {
       if (!activeSubmissionReview) {
         toaster.error({
           title: "Error marking review as complete",
@@ -395,9 +534,7 @@ export function CompleteReviewButton() {
           description: "Your review has been marked as complete."
         });
 
-        if (advanceAfter && nextIncompleteUrl) {
-          router.push(nextIncompleteUrl);
-        }
+        afterCompletion(goToNext);
       } catch (error) {
         console.error("Error marking review as complete", error);
         toaster.error({
@@ -408,21 +545,34 @@ export function CompleteReviewButton() {
         setIsLoading(false);
       }
     },
-    [activeSubmissionReview, nextIncompleteUrl, private_profile_id, router, submissionController.submission_reviews]
+    [activeSubmissionReview, afterCompletion, private_profile_id, submissionController.submission_reviews]
   );
 
-  if (
-    !activeSubmissionReview ||
-    !missing_required_checks ||
-    !missing_optional_checks ||
-    !missing_required_criteria ||
-    !missing_optional_criteria
-  ) {
-    // Render a loading state or disabled button
+  // The old guard tested the truthiness of `missing_*`, which are always arrays from a useMemo, so
+  // it never fired. The real not-ready case is group membership: until it loads we cannot tell an
+  // ungraded per-student check from a graded one, and the fallback counts one member's comment as
+  // covering the whole group — an all-clear on a review nobody has finished.
+  // Spin only while there is genuinely something to wait for. `gradeTargetsBlocked` is false
+  // outright for a rubric with no per-student parts, so gating the spinner on `gradeTargetsLoaded`
+  // alone would stall the common case behind a group fetch whose result it does not use.
+  if (!activeSubmissionReview || (gradeTargetsBlocked && !gradeTargetsLoaded)) {
     return (
-      <Button variant="surface" loading>
+      <Button variant="surface" loading disabled>
         Complete Review
       </Button>
+    );
+  }
+
+  // Loaded, and still blocked. Same split as CompleteReviewAssignmentButton: this used to render
+  // the spinner above, which never resolved because there was nothing left to wait for. The
+  // wording matches what the completion trigger raises when it refuses the same review.
+  if (gradeTargetsBlocked) {
+    return (
+      <Tooltip content="This submission has no students to grade (its assignment group is empty), so per-student checks cannot be verified. Add the group's member(s) back to the assignment group, or turn off per-student grading for the rubric part.">
+        <Button variant="surface" disabled>
+          Complete Review
+        </Button>
+      </Tooltip>
     );
   }
 
@@ -435,7 +585,6 @@ export function CompleteReviewButton() {
       </Popover.Trigger>
       <Popover.Positioner>
         <Popover.Content>
-          <Toaster />
           <Popover.Arrow>
             <Popover.ArrowTip />
           </Popover.Arrow>
@@ -496,31 +645,16 @@ export function CompleteReviewButton() {
               )}
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
                 <Text>
-                  All checks have been applied. Use Complete + Next to save and open the next pending review when one is
-                  available.
+                  All required checks have been applied.
+                  {canGoToNext ? " Complete and go to next opens your next review on this tab." : ""}
                 </Text>
               )}
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
-                <HStack gap={2} w="100%" flexWrap="wrap">
-                  <Button
-                    variant="solid"
-                    colorPalette="green"
-                    loading={isLoading}
-                    onClick={() => void markComplete(false)}
-                  >
-                    Complete
-                  </Button>
-                  {nextIncompleteUrl && (
-                    <Button
-                      variant="solid"
-                      colorPalette="green"
-                      loading={isLoading}
-                      onClick={() => void markComplete(true)}
-                    >
-                      Complete + Next
-                    </Button>
-                  )}
-                </HStack>
+                <CompleteButtons
+                  canGoToNext={canGoToNext}
+                  isLoading={isLoading}
+                  onComplete={(goToNext) => void markComplete(goToNext)}
+                />
               )}
             </VStack>
           </Popover.Body>

@@ -1,0 +1,51 @@
+# TEMPORARY smoke test for the VoiceOver runner. Delete with the branch.
+#
+# Purpose: confirm the Mac is healthy after a macOS screen-capture consent dialog
+# trapped VoiceOver mid-run in baseline run 30574324736 — the cursor sat on the
+# dialog's "Open System Settings" button for ~950 consecutive next presses. The
+# doctor alone would not surface that, because the prompt fires once a task starts
+# driving the browser, so this runs one real task in enforce mode too.
+#
+# Push-triggered because workflow_dispatch is only exposed for workflows on the
+# default branch, and this lane has not merged yet.
+name: a11y VoiceOver smoke (pr-862 preview)
+on:
+  push:
+    branches: [a11y/vo-smoke]
+permissions:
+  contents: read
+concurrency:
+  group: a11y-voiceover-mac
+  cancel-in-progress: false
+jobs:
+  smoke:
+    runs-on: [self-hosted, macOS, voiceover]
+    timeout-minutes: 45
+    env:
+      BASE_URL: https://pr-862.preview.pawtograder.net
+      SUPABASE_URL: https://pr-862-api.preview.pawtograder.net
+      BAO_ADDR: https://bao.work.ripley.cloud
+      PREVIEW_ID: "862"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Preflight (VoiceOver / Safari / OpenBao permissions)
+        run: npm run a11y:vo:doctor
+      - name: One task in enforce mode
+        env:
+          A11Y_VO_RUN_ID: vo-smoke-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          eval "$(./scripts/export-preview-e2e-from-bao.sh "$PREVIEW_ID" --shell)"
+          npm run a11y:vo -- --filter assignments-list
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: a11y-vo-smoke-${{ github.run_id }}
+          path: a11y-vo-artifacts/
+          retention-days: 7
+          if-no-files-found: warn

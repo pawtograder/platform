@@ -63,7 +63,7 @@ test.describe("Enrollments Page", () => {
   test.describe.configure({ mode: "serial" });
   test.beforeEach(async ({ page }) => {
     await loginAsUser(page, instructor1!, course);
-    await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
+    await page.getByRole("button", { name: "Course Settings menu" }).click();
     await expect(page.getByRole("menuitem", { name: "Enrollments" })).toBeVisible();
     await page.getByRole("menuitem", { name: "Enrollments" }).click();
   });

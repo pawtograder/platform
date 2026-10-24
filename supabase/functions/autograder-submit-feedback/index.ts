@@ -16,19 +16,73 @@ import {
   validateOIDCTokenOrAllowE2E,
   END_TO_END_REPO_PREFIX,
   SecondaryRateLimitError,
-  PrimaryRateLimitError
+  PrimaryRateLimitError,
+  MissingInstallationError
 } from "../_shared/GitHubWrapper.ts";
+import { createRedis, type RedisClient } from "../_shared/Redis.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
 import {
   fetchDefaultGradeTargetStudentProfileId,
   fetchRubricCheckIdsRequiringTargetStudentProfileId
 } from "../_shared/rubricCommentTargetStudentProfileId.ts";
-import * as Sentry from "npm:@sentry/deno";
+import { hasGradeableContent, resolveGraderResultConflictVerdict } from "../_shared/graderResultVerdict.ts";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { graderResultErrorsIndicateFailure } from "../_shared/graderResultStatus.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
 
 const RESET_WINDOW_MS = 60_000;
+
+/**
+ * How long one "the GitHub App is not installed on <org>" report suppresses the next for that org.
+ *
+ * A day. The condition is a configuration state, not an incident: it is identical on every
+ * submission until somebody installs the App, so one report per org per day says everything a
+ * hundred would, and the issue stays visible (and re-raises daily) until it is actually fixed.
+ */
+const MISSING_INSTALLATION_REPORT_TTL_MS = 24 * 60 * 60 * 1000;
+
+let missingInstallationRedis: RedisClient | null | undefined;
+
+/**
+ * Claim the right to report this org's missing installation, once per
+ * {@link MISSING_INSTALLATION_REPORT_TTL_MS}.
+ *
+ * Redis, NOT module-level state. prod runs the edge runtime with `policy: per_request`
+ * (values-prod.yaml), so every submission gets a fresh isolate and anything module-scoped is empty
+ * on arrival — a `Set` here would suppress nothing and the per-submission flood this exists to stop
+ * would continue unchanged. charts/pawtograder/values.yaml spells this out next to the policy knob:
+ * isolate-local state cannot be used for cross-request coordination, use a Redis lease. Same
+ * `set(..., { px, nx: true })` primitive workerRun.ts uses for its poll-loop lease.
+ *
+ * Returns false when Redis is unreachable or unconfigured, i.e. fail CLOSED: a missing installation
+ * is non-fatal and permanent, so dropping the report costs a log line we also emit, whereas failing
+ * open restores a 2990-event flood precisely when Redis — and therefore everything else — is
+ * already unhappy.
+ */
+async function claimMissingInstallationReport(org: string): Promise<boolean> {
+  if (missingInstallationRedis === undefined) {
+    missingInstallationRedis = createRedis();
+  }
+  const redis = missingInstallationRedis;
+  if (!redis) return false;
+
+  try {
+    const claimed = await redis.set(`pawtograder:missing-installation-reported:${org}`, "1", {
+      px: MISSING_INSTALLATION_REPORT_TTL_MS,
+      nx: true
+    });
+    return !!claimed;
+  } catch (e) {
+    // Never let the bookkeeping break grading: this runs inside the catch of a failure that is
+    // already non-fatal.
+    console.warn(`[autograder-submit-feedback] could not claim missing-installation report for ${org}:`, e);
+    return false;
+  }
+}
 
 function detectRateLimitType(error: unknown): {
   type: "secondary" | "primary" | "extreme" | null;
@@ -426,13 +480,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   // Find the corresponding submission
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   const { repository, sha, run_id, run_attempt } = decoded;
   scope?.setTag("repository", repository);
   scope?.setTag("sha", sha);
   scope?.setTag("run_id", run_id);
   scope?.setTag("run_attempt", run_attempt);
+  // One click from any event this request reports to the run that caused it.
+  attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
   scope?.setTag("autograder_regression_test_id", autograder_regression_test_id?.toString() || "(null)");
   let class_id: number | null = null;
   let assignment_id: number | null = null;
@@ -452,22 +509,67 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     }
     if (!repository_id) {
       //TODO: if you want to record errors for regression test runs, you need to pass in the repository_id somehow
+      // workflow_run_error.repository_id is NOT NULL, so this early return is correct — but it used
+      // to be silent, which meant an error we believed we had recorded simply did not exist. Report
+      // the drop rather than throwing: this runs from the outer catch, and throwing here would
+      // replace the real error with a reporting error.
+      scope?.setTag("workflow_run_error_dropped", "no_repository_id");
+      console.warn(`Dropping workflow_run_error "${name}": no repository_id (regression run?)`);
+      Sentry.withScope((s) => {
+        s.setFingerprint(["workflow-run-error-dropped-no-repository-id"]);
+        Sentry.captureMessage("workflow_run_error dropped: repository_id is null", s);
+      });
       return;
     }
-    const { error: workflowRunErrorError } = await adminSupabase.from("workflow_run_error").insert({
-      run_number: Number.parseInt(run_id),
-      run_attempt: Number.parseInt(run_attempt),
-      class_id: class_id,
-      autograder_regression_test_id: autograder_regression_test_id ?? null,
-      submission_id: submission_id ?? null,
-      repository_id: repository_id ?? null,
-      name,
-      data,
-      is_private
-    });
+    // Upsert, ignoring duplicates, rather than a bare insert. `workflow_run_error` carries
+    // UNIQUE (repository_id, run_number, run_attempt, name), and this runs on paths that a client
+    // legitimately retries -- a network retry of the same feedback request re-records the same
+    // error for the same run attempt. As a plain insert that raised 23505, and the throw below
+    // then replaced the real outcome with the recording failure: the preserved-result path
+    // returned 500 before completing the check run, so the retry could never converge and the
+    // check spun for the rest of the run's life. Recording the same error twice conveys nothing,
+    // so collapsing the duplicate is the correct semantics, not just the convenient one.
+    const { error: workflowRunErrorError } = await adminSupabase.from("workflow_run_error").upsert(
+      {
+        run_number: Number.parseInt(run_id),
+        run_attempt: Number.parseInt(run_attempt),
+        class_id: class_id,
+        autograder_regression_test_id: autograder_regression_test_id ?? null,
+        submission_id: submission_id ?? null,
+        repository_id: repository_id ?? null,
+        name,
+        data,
+        is_private
+      },
+      { onConflict: "repository_id,run_number,run_attempt,name", ignoreDuplicates: true }
+    );
     if (workflowRunErrorError) {
       console.error(workflowRunErrorError);
       throw new Error(`Internal error: Failed to insert workflow run error: ${workflowRunErrorError.message}`);
+    }
+  }
+  // Shared by the normal return and the preserve-existing-result guard below. If the guard
+  // returned without this, repository_check_runs.completed_at would stay null forever and the
+  // GitHub check would spin for the rest of the run's life.
+  async function completeCheckRunIfNeeded() {
+    if (!submission_id || isRegressionRerun || isE2ERun || !checkRun) {
+      return;
+    }
+    const newStatus: CheckRunStatus = {
+      ...(checkRun.status as CheckRunStatus),
+      completed_at: new Date().toISOString()
+    };
+    const { error: checkRunError } = await adminSupabase
+      .from("repository_check_runs")
+      .update({ status: newStatus })
+      .eq("id", checkRun.id);
+    // Reported, not discarded: a dropped update leaves completed_at null and the GitHub check
+    // spinning for the rest of the run's life, which is precisely the state this helper exists to
+    // avoid. Not fatal -- the feedback itself is already written -- so report and carry on.
+    if (checkRunError) {
+      scope?.setTag("check_run_completion_failed", "true");
+      console.error(`Failed to mark check run ${checkRun.id} complete`, checkRunError);
+      Sentry.captureException(checkRunError, scope);
     }
   }
   let repository_id: number | null = null;
@@ -611,6 +713,35 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
             Sentry.captureException(e, errorScope);
           });
           console.warn(`GitHub rate limit (${rt.type}) hit during resolveRef for action SHA`);
+        } else if (e instanceof MissingInstallationError) {
+          // The App is not installed on the org that owns the action repository. Grading is not
+          // blocked — action_sha stays undefined and the flow below continues — and the outcome is
+          // identical on every submission until somebody installs it, so reporting per submission
+          // produced 2990 events for one org and told us nothing the first event had not.
+          //
+          // Report once per org per day instead, claimed through Redis. NOT module-level state:
+          // prod runs `policy: per_request`, so every submission is a fresh isolate and an
+          // in-process guard would suppress nothing at all. See claimMissingInstallationReport.
+          if (await claimMissingInstallationReport(e.org)) {
+            Sentry.withScope((errorScope) => {
+              errorScope.setFingerprint(["github-app-not-installed", e.org]);
+              errorScope.setTag("github_org", e.org);
+              errorScope.setTag("github_api_method", "resolveRef");
+              errorScope.setLevel("warning");
+              errorScope.setContext("missing_installation", {
+                org: e.org,
+                action_repository: requestBody.action_repository,
+                action_ref: requestBody.action_ref,
+                impact: "action_sha is not recorded on grader results for this org; grading still runs",
+                remedy: `Install the Pawtograder GitHub App on the "${e.org}" organization`
+              });
+              Sentry.captureException(e, errorScope);
+            });
+          }
+          console.warn(
+            `[autograder-submit-feedback] GitHub App is not installed on "${e.org}" — ` +
+              `cannot resolve ${requestBody.action_repository}@${requestBody.action_ref}, continuing without action_sha`
+          );
         } else {
           Sentry.captureException(e, scope);
         }
@@ -658,7 +789,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       if (isConflictError(insertResponse) && submission_id != null) {
         const { data: existingResult, error: existingResultError } = await adminSupabase
           .from("grader_results")
-          .select("id, created_at")
+          // `errors` too: the preserve branch below must not overwrite a real failure already
+          // recorded on this result with its own warning payload.
+          .select("id, created_at, errors")
           .eq("submission_id", submission_id)
           .single();
         if (existingResultError || !existingResult) {
@@ -675,8 +808,103 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           throw new UserVisibleError("Internal error: Existing grader result timestamp missing");
         }
 
-        if (!allowStaleOverwrite && Date.now() - existingCreatedAt > RESET_WINDOW_MS) {
+        const conflictVerdict = resolveGraderResultConflictVerdict({
+          retCode: requestBody.ret_code,
+          gradeable: hasGradeableContent(requestBody.feedback),
+          allowStaleOverwrite,
+          existingAgeMs: Date.now() - existingCreatedAt,
+          resetWindowMs: RESET_WINDOW_MS
+        });
+
+        if (conflictVerdict === "reject_stale") {
           throw new SecurityError("Request to rewrite submission feedback is too old");
+        }
+
+        if (conflictVerdict === "preserve") {
+          // A failed run that produced nothing gradeable. Overwriting here would call
+          // resetExistingGraderResult, which deletes every test, test output, result output and
+          // workflow_run_error row for this submission before writing the empty payload — the real
+          // grade would be destroyed, not shadowed. Keep the result and record the failure beside it.
+          scope?.setTag("empty_grader_result_guard", "preserved");
+          scope?.setTag("grader_ret_code", String(requestBody.ret_code));
+          console.warn(
+            `Preserving existing grader result ${existingResult.id} for submission ${submission_id}: ` +
+              `incoming run exited ${requestBody.ret_code} with no gradeable content`
+          );
+
+          // grader_results.errors is the reliable channel here — unlike workflow_run_error it needs
+          // no repository_id, so it also works for the regression-rerun shape.
+          const preservedErrors: GraderResultErrors = {
+            // Marks this as a warning, not a failure. Every view that reads `grader_results.errors`
+            // treated any non-null value as authoritative failure state and rendered "Error" in
+            // place of the score — so without this marker the guard preserved the score and then
+            // hid it, which is the opposite of the point. `graderResultIndicatesFailure` in
+            // lib/graderResultStatus.ts is the reader; unmarked payloads stay failures.
+            is_warning: true,
+            user_visible_message:
+              `A grading run for this submission exited with code ${requestBody.ret_code} and produced no ` +
+              `test results. Your previous results for this submission were kept. Ask your instructor to ` +
+              `check the autograder if this keeps happening.`
+          };
+          // Never downgrade an existing failure to this warning. If the result being preserved
+          // already carries a real error -- a prior attempt that inserted the row and then failed
+          // partway, say -- overwriting it with `is_warning: true` would make
+          // graderResultIndicatesFailure report success and put that result's partial score back
+          // in front of students as though it were final. The warning is only safe to write over
+          // an absent or already-warning payload; otherwise the older, stronger verdict wins and
+          // the discarded run is recorded through the workflow_run_error and Sentry paths below,
+          // which run either way.
+          const existingErrorsAreFailure = graderResultErrorsIndicateFailure(existingResult.errors);
+          if (existingErrorsAreFailure) {
+            scope?.setTag("empty_grader_result_guard_kept_existing_error", "true");
+            console.warn(
+              `Not overwriting the existing failure on grader result ${existingResult.id}; ` +
+                `recording the discarded empty run alongside it instead`
+            );
+          } else {
+            // Checked, and throwing. This message is the ONLY thing that tells the student their
+            // run was discarded rather than lost; dropping the write silently is the exact
+            // fail-open shape this guard exists to close, and every other DB write in this handler
+            // throws on error.
+            const { error: preservedErrorsError } = await adminSupabase
+              .from("grader_results")
+              .update({ errors: preservedErrors })
+              .eq("id", existingResult.id);
+            if (preservedErrorsError) {
+              throw new UserVisibleError(
+                `Internal error: failed to record that an empty grading run was discarded: ${preservedErrorsError.message}`
+              );
+            }
+          }
+
+          await recordWorkflowRunError({
+            name: "Autograder run produced no results; previous feedback preserved",
+            data: {
+              type: "empty_grader_result_discarded",
+              ret_code: requestBody.ret_code ?? null,
+              grader_sha: requestBody.grader_sha ?? null,
+              existing_grader_result_id: existingResult.id
+            },
+            is_private: false
+          });
+
+          Sentry.withScope((s) => {
+            s.setFingerprint(["empty-grader-result-discarded"]);
+            Sentry.captureMessage("Discarded an empty failed grader result to preserve existing feedback", s);
+          });
+
+          await completeCheckRunIfNeeded();
+
+          return {
+            is_ok: true,
+            message: `Grading run produced no results; existing feedback for submission ${submission_id} was preserved`,
+            details_url: `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/assignments/${assignment_id}/submissions/${submission_id}`,
+            // Nothing to upload: an empty payload declares no artifacts, so the runner's upload
+            // loop is a clean no-op.
+            artifacts: [],
+            supabase_url: publicSupabaseUrl(),
+            supabase_anon_key: Deno.env.get("SUPABASE_ANON_KEY") || ""
+          };
         }
 
         const { error: updateExistingError } = await adminSupabase
@@ -881,21 +1109,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       throw new UserVisibleError(`Internal error: Failed to insert feedback: ${(e as Error).message}`);
     }
 
-    // Update the repository_check_runs status to completed (DB state only)
-    if (submission_id && !isRegressionRerun && !isE2ERun) {
-      if (checkRun) {
-        const newStatus: CheckRunStatus = {
-          ...(checkRun.status as CheckRunStatus),
-          completed_at: new Date().toISOString()
-        };
-        await adminSupabase
-          .from("repository_check_runs")
-          .update({
-            status: newStatus
-          })
-          .eq("id", checkRun.id);
-      }
-    }
+    await completeCheckRunIfNeeded();
     if (submission_id) {
       return {
         is_ok: true,

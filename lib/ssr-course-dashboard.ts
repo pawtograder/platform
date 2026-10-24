@@ -5,7 +5,9 @@ import "server-only";
  * Callers must pass the request-scoped cookie Supabase client.
  */
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { classifySupabase, timeRpc } from "@/lib/metrics";
 
 export type ManageAssignmentsOverviewRow = Database["public"]["Views"]["assignment_overview"]["Row"];
 
@@ -62,7 +64,15 @@ export async function fetchInstructorDashboardBundle(
     { data: workflowStatsDay, error: workflowStatsDayError },
     { data: recentErrors, error: recentErrorsError }
   ] = await Promise.all([
-    supabase.rpc("get_instructor_dashboard_overview_metrics", { p_class_id: courseId }),
+    // web_supabase_rpc_*: the two aggregate RPCs on this page are the slowest
+    // server-side DB calls in the app. The plain .from() reads beside them are
+    // not timed — they are indexed single-table selects and would only dilute
+    // the histogram. `rpc` labels come from the closed RPC_LABELS union.
+    timeRpc(
+      "ssr_dashboard_overview_metrics",
+      async () => await supabase.rpc("get_instructor_dashboard_overview_metrics", { p_class_id: courseId }),
+      classifySupabase
+    ),
     supabase
       .from("help_requests")
       .select("*")
@@ -76,8 +86,16 @@ export async function fetchInstructorDashboardBundle(
       .eq("class_id", courseId)
       .is("deleted_at", null)
       .in("status", ["published", "closed"]),
-    supabase.rpc("get_workflow_statistics", { p_class_id: courseId, p_duration_hours: 1 }),
-    supabase.rpc("get_workflow_statistics", { p_class_id: courseId, p_duration_hours: 24 }),
+    timeRpc(
+      "ssr_workflow_statistics",
+      async () => await supabase.rpc("get_workflow_statistics", { p_class_id: courseId, p_duration_hours: 1 }),
+      classifySupabase
+    ),
+    timeRpc(
+      "ssr_workflow_statistics",
+      async () => await supabase.rpc("get_workflow_statistics", { p_class_id: courseId, p_duration_hours: 24 }),
+      classifySupabase
+    ),
     supabase
       .from("workflow_run_error")
       .select(
@@ -121,6 +139,18 @@ export type StudentDashboardBundle = {
     time_zone: string | null;
     office_hours_ics_url: string | null;
     events_ics_url: string | null;
+    /**
+     * Read here so the dashboard can decide server-side whether to mount the pending-invite panel.
+     * That component polls every 30 seconds, so mounting it for a course with no Discord server
+     * costs two useless requests per minute per open dashboard.
+     */
+    discord_server_id: string | null;
+    /**
+     * `classes.features` — read server-side so feature-gated dashboard content renders without a
+     * flash. Declared in its narrowed shape so consumers can hand it straight to
+     * `courseFeatureEnabled` instead of each re-asserting the row type.
+     */
+    features: CourseWithFeatures["features"] | null;
   } | null;
   courseError: string | null;
   assignments: unknown;
@@ -180,7 +210,7 @@ export async function fetchStudentDashboardBundle(
   ] = await Promise.all([
     supabase
       .from("classes")
-      .select("time_zone, office_hours_ics_url, events_ics_url, name")
+      .select("time_zone, office_hours_ics_url, events_ics_url, name, features, discord_server_id")
       .eq("id", courseId)
       .single(),
     supabase
@@ -191,6 +221,9 @@ export async function fetchStudentDashboardBundle(
       .eq("class_id", courseId)
       .eq("submissions.is_active", true)
       .eq("student_profile_id", privateProfileId)
+      // The view's `due_date` is the final per-student deadline (lab offsets + due-date
+      // exceptions), so a student holding an extension keeps the assignment in this list until
+      // their extended deadline passes. Filtering the pre-extension date used to hide it.
       .gte("due_date", new Date().toISOString())
       .order("due_date", { ascending: true })
       .limit(5),
@@ -246,7 +279,9 @@ export async function fetchStudentDashboardBundle(
     : { data: null, error: null };
 
   return {
-    course: course ?? null,
+    // `classes.features` is typed `Json`; narrow it once here so dashboard consumers do not each
+    // repeat the assertion. `courseFeatureEffectiveEnabled` re-checks `Array.isArray` at runtime.
+    course: course ? { ...course, features: course.features as CourseWithFeatures["features"] | null } : null,
     courseError: courseError?.message ?? null,
     assignments: assignments ?? null,
     assignmentsError: assignmentsError?.message ?? null,

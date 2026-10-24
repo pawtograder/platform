@@ -41,7 +41,7 @@ import {
   FiStar,
   FiUsers
 } from "react-icons/fi";
-import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
+import { MdOutlineMail, MdOutlineSchool, MdOutlineScience } from "react-icons/md";
 import { TbCards } from "react-icons/tb";
 import UserMenu from "./UserMenu";
 import { NavigationProgressBar } from "@/components/ui/navigation-progress";
@@ -160,6 +160,12 @@ const LinkItems = (courseID: number) => [
         target: `/course/${courseID}/manage/course/github`
       },
       {
+        name: "Class Sections",
+        instructors_or_graders_only: true,
+        icon: MdOutlineSchool,
+        target: `/course/${courseID}/manage/course/class-sections`
+      },
+      {
         name: "Lab Sections",
         instructors_or_graders_only: true,
         icon: MdOutlineScience,
@@ -265,7 +271,15 @@ export default function DynamicCourseNav() {
 
   const isInstructor = useIsInstructor();
   const isInstructorOrGrader = useIsGraderOrInstructor();
-  /** Matches `display={{ base, md }}` splits below — only one layout gets landmark ids / exposes nav to SRs. */
+  /**
+   * Which responsive twin carries the landmark ids. Only the ids move with the
+   * breakpoint — the accessibility tree is left to the CSS `display` split (see
+   * the layout comments below). Without this, `#primary-nav` / `#user-menu`
+   * resolve to the `display:none` desktop copy on narrow or zoomed viewports,
+   * so the native fragment jump behind each skip link (used before hydration
+   * attaches SkipNav's onClick, and by bookmarked `…#primary-nav` URLs) lands
+   * on nothing — the exact WCAG 2.4.1 failure the skip links exist to prevent.
+   */
   const isMdUp = useBreakpointValue({ base: false, md: true }) ?? false;
 
   useEffect(() => {
@@ -305,8 +319,11 @@ export default function DynamicCourseNav() {
       position="relative"
     >
       <NavigationProgressBar />
-      {/* Mobile Layout */}
-      <Box display={{ base: "block", md: "none" }} aria-hidden={isMdUp ? true : undefined}>
+      {/* Mobile Layout. The inactive responsive twin is removed from BOTH the tab order and the
+          accessibility tree by its breakpoint display:none — no aria-hidden needed. (A JS-derived
+          aria-hidden could disagree with the CSS breakpoint during hydration/resize and hide the
+          copy the user is actually seeing.) */}
+      <Box display={{ base: "block", md: "none" }}>
         <VStack gap={2} align="stretch">
           {/* Top row: Course picker, logo, course name, user menu */}
           <HStack justifyContent="space-between" alignItems="center">
@@ -321,7 +338,7 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <Box id={!isMdUp ? "user-menu" : undefined}>
+            <Box id={!isMdUp ? "user-menu" : undefined} data-landmark="user-menu">
               <UserMenu />
             </Box>
           </HStack>
@@ -330,6 +347,7 @@ export default function DynamicCourseNav() {
           <Box
             as="nav"
             id={!isMdUp ? "primary-nav" : undefined}
+            data-landmark="primary-nav"
             aria-label="Course navigation"
             overflowX="auto"
             overflowY="hidden"
@@ -431,7 +449,8 @@ export default function DynamicCourseNav() {
       </Box>
 
       {/* Desktop Layout */}
-      <Box display={{ base: "none", md: "block" }} aria-hidden={!isMdUp ? true : undefined}>
+      {/* Desktop Layout — see the mobile twin's comment for why there's no aria-hidden here. */}
+      <Box display={{ base: "none", md: "block" }}>
         <Box width="100%" pt="2">
           {/* Title row: course identity on the left, user-menu chips on the right.
               The chips wrap into stacked lines inside their right-hand block
@@ -449,11 +468,23 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <Box id={isMdUp ? "user-menu" : undefined} flex="1" minWidth={0}>
+            <Box id={isMdUp ? "user-menu" : undefined} data-landmark="user-menu" flex="1" minWidth={0}>
               <UserMenu />
             </Box>
           </Flex>
-          <HStack as="nav" id={isMdUp ? "primary-nav" : undefined} aria-label="Course navigation" width="100%" mt={2}>
+          <HStack
+            as="nav"
+            // The id follows the active breakpoint (see isMdUp above) so the skip link's native
+            // fragment jump lands on the rendered copy; focusLandmark uses data-landmark, which
+            // is on both twins, and prefers whichever one is visible.
+            id={isMdUp ? "primary-nav" : undefined}
+            data-landmark="primary-nav"
+            aria-label="Course navigation"
+            width="100%"
+            mt={2}
+            // WCAG 1.4.10: wrap instead of overflowing horizontally when zoomed/narrow.
+            flexWrap="wrap"
+          >
             {filteredLinks.map((link) => {
               if (link.submenu) {
                 return (
@@ -464,6 +495,9 @@ export default function DynamicCourseNav() {
                   >
                     <Menu.Root>
                       <Menu.Trigger asChild>
+                        {/* Must render a real <button> (WCAG 2.1.1/4.1.2): the previous
+                            Button-asChild-Flex chain produced a styled div that keyboard
+                            users could not focus or activate, so the submenu never opened. */}
                         <Button
                           aria-label={`${link.name} menu`}
                           colorPalette="gray"
@@ -471,14 +505,11 @@ export default function DynamicCourseNav() {
                           fontSize="sm"
                           pt="0"
                           variant="ghost"
-                          asChild
                         >
-                          <Flex align="center" role="group">
-                            <HStack>
-                              {React.createElement(link.icon)}
-                              {link.name}
-                            </HStack>
-                          </Flex>
+                          <HStack>
+                            {React.createElement(link.icon)}
+                            {link.name}
+                          </HStack>
                         </Button>
                       </Menu.Trigger>
                       <Portal>
@@ -521,7 +552,12 @@ export default function DynamicCourseNav() {
                         href={link.target || "#"}
                         aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
                       >
-                        <Flex align="center" role="group">
+                        {/* No role="group" here (WCAG 2.4.4 / 4.1.2): `group` does not support
+                            accessible-name-from-content, so wrapping the label in it left every
+                            desktop nav link with an EMPTY accessible name — screen readers
+                            announced them as bare "link". Nothing styles off it (no _groupHover
+                            in this file), so it was purely vestigial. */}
+                        <Flex align="center">
                           <HStack>
                             {React.createElement(link.icon)}
                             {link.name}

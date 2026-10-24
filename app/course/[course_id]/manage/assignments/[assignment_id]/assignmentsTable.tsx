@@ -63,6 +63,8 @@ import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
+import { describeBulkReleaseResult } from "@/lib/bulkReleaseMessage";
+import { groupBySubmissionId } from "@/lib/groupBySubmissionId";
 
 /**
  * "Grade anyway" action for a student/group with no active submission. Creates
@@ -903,7 +905,7 @@ export default function AssignmentsTable({
   const releaseSelectedSubmissionReviews = useCallback(async () => {
     setIsReleasingAll(true);
     try {
-      const { error } = await supabase.rpc("release_grading_reviews_for_submissions", {
+      const { data, error } = await supabase.rpc("release_grading_reviews_for_submissions", {
         p_assignment_id: Number(assignment_id),
         p_submission_ids: selectedSubmissionIds
       });
@@ -915,13 +917,13 @@ export default function AssignmentsTable({
       await tableController?.refetchAll();
       resetRowSelection();
 
-      toaster.success({
-        title: "Success",
-        description:
-          selectedCount === 1
-            ? "1 selected submission review released"
-            : `${selectedCount} selected submission reviews released`
-      });
+      // Report what the RPC actually changed. It touches only each submission's grading review
+      // (never the self-review or meta-grading rounds) and filters on `s.is_active` and on the
+      // review not already being released, so selecting 40 can legitimately release 12 — and the
+      // old toast claimed all 40 regardless.
+      const affected = typeof data === "number" ? data : 0;
+      const message = describeBulkReleaseResult({ affected, selectedCount, action: "released" });
+      toaster[message.status]({ title: message.title, description: message.description });
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("Error releasing grading reviews for selection:", error);
@@ -1007,7 +1009,7 @@ export default function AssignmentsTable({
                 }}
               >
                 {selectedCount === 0
-                  ? "Release selected submission reviews"
+                  ? "Release selected grading reviews"
                   : `Release ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
               </Button>
               <Button
@@ -1018,7 +1020,7 @@ export default function AssignmentsTable({
                 onClick={async () => {
                   setIsUnreleasingAll(true);
                   try {
-                    const { error } = await supabase.rpc("unrelease_grading_reviews_for_submissions", {
+                    const { data, error } = await supabase.rpc("unrelease_grading_reviews_for_submissions", {
                       p_assignment_id: Number(assignment_id),
                       p_submission_ids: selectedSubmissionIds
                     });
@@ -1029,13 +1031,15 @@ export default function AssignmentsTable({
 
                     await tableController?.refetchAll();
                     resetRowSelection();
-                    toaster.success({
-                      title: "Success",
-                      description:
-                        selectedCount === 1
-                          ? "1 selected submission review unreleased"
-                          : `${selectedCount} selected submission reviews unreleased`
+                    // Same as the release path: grading review only, and report the RPC's
+                    // ROW_COUNT rather than the selection size.
+                    const affected = typeof data === "number" ? data : 0;
+                    const message = describeBulkReleaseResult({
+                      affected,
+                      selectedCount,
+                      action: "unreleased"
                     });
+                    toaster[message.status]({ title: message.title, description: message.description });
                   } catch (error) {
                     // eslint-disable-next-line no-console
                     console.error("Error unreleasing grading reviews for selection:", error);
@@ -1050,7 +1054,7 @@ export default function AssignmentsTable({
                 }}
               >
                 {selectedCount === 0
-                  ? "Unrelease selected submission reviews"
+                  ? "Unrelease selected grading reviews"
                   : `Unrelease ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
               </Button>
             </HStack>
@@ -1065,7 +1069,7 @@ export default function AssignmentsTable({
             </DialogHeader>
             <DialogBody>
               <Text>
-                {selectedIncompleteCount} selected submission review{selectedIncompleteCount === 1 ? "" : "s"}{" "}
+                {selectedIncompleteCount} selected grading review{selectedIncompleteCount === 1 ? "" : "s"}{" "}
                 {selectedIncompleteCount === 1 ? "is" : "are"} incomplete. Releasing now will publish those grades
                 anyway.
               </Text>
@@ -1852,19 +1856,9 @@ async function exportGrades({
       }
     }
   }
-  const autograderTestResultsBySubmissionID = new Map<number, GraderResultTest[]>();
-  if (include_autograder_test_results) {
-    for (const autograderTestResult of autograder_test_results) {
-      if (autograderTestResult.submission_id === null) {
-        continue;
-      }
-      if (!autograderTestResultsBySubmissionID.has(autograderTestResult.submission_id)) {
-        autograderTestResultsBySubmissionID.set(autograderTestResult.submission_id, []);
-      } else {
-        autograderTestResultsBySubmissionID.get(autograderTestResult.submission_id)!.push(autograderTestResult);
-      }
-    }
-  }
+  const autograderTestResultsBySubmissionID = include_autograder_test_results
+    ? groupBySubmissionId(autograder_test_results)
+    : new Map<number, GraderResultTest[]>();
 
   const exportRows: ExportRow[] = [];
   for (const submission of latestSubmissionsWithGrades) {

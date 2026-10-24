@@ -30,6 +30,13 @@
 #   apps/pawtograder/aws-chime-<env>     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
 #                                        AWS_CHIME_EVENT_AUTH_TOKEN, AWS_CHIME_SQS_QUEUE_ARN
 #   apps/pawtograder/discord-<env>       DISCORD_APPLICATION_ID, DISCORD_BOT_TOKEN
+#                                        (mounted into BOTH pawtograder-edge-functions
+#                                        and pawtograder-web: the Next.js bot-install
+#                                        routes read the application id as the OAuth
+#                                        client_id and the bot token to confirm the
+#                                        bot is in the guild, so `discord` has to
+#                                        appear in webBundles as well as
+#                                        edgeFunctionsBundles.)
 #   apps/pawtograder/canvas-<env>        CANVAS_API_KEY, CANVAS_API_URL
 #   apps/pawtograder/sis-<env>           SIS_API_URL, SIS_AUTH_TOKEN
 #   apps/pawtograder/smtp-<env>          SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,

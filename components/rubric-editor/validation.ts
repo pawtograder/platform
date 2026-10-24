@@ -10,6 +10,14 @@ export type ValidationWarning = {
   message: string;
 };
 
+/**
+ * Shared wording for every negative-points error below, matching
+ * `NEGATIVE_POINTS_WARNING_MESSAGE` in `lib/rubric/pointsSanitize.ts` minus its
+ * "converted to the absolute value" clause: the GUI does not convert, it refuses.
+ */
+const NEGATIVE_POINTS_MESSAGE =
+  "Points cannot be negative. For deductions, set the criterion scoring mode to deduct-from-total or deduction-only instead of using negative points.";
+
 export function warningFor(warnings: ValidationWarning[], path: string): string | undefined {
   return warnings.find((w) => w.path === path)?.message;
 }
@@ -83,6 +91,17 @@ export function validateRubric(rubric: HydratedRubric): ValidationError[] {
       if (criteria.rubric_checks.length === 0) {
         errors.push({ path: `${critPath}.checks`, message: "Criteria must have at least one check." });
       }
+      // Deductions are stored positive and subtracted by the criterion's scoring mode
+      // (`is_deduction_only` negates the summed check points and floors them at
+      // -total_points; the default mode subtracts them from total_points), so total_points
+      // is a magnitude in every mode and a negative one inverts the sign the mode intends.
+      // Enforced in the DB by chk_rubric_criteria_total_points_non_negative.
+      if (criteria.total_points != null && criteria.total_points < 0) {
+        errors.push({
+          path: `${critPath}.total_points`,
+          message: NEGATIVE_POINTS_MESSAGE
+        });
+      }
       if (
         criteria.min_checks_per_submission != null &&
         criteria.max_checks_per_submission != null &&
@@ -108,6 +127,9 @@ export function validateRubric(rubric: HydratedRubric): ValidationError[] {
           }
           checkIdSeen.add(check.id);
         }
+        if (check.points != null && check.points < 0) {
+          errors.push({ path: `${checkPath}.points`, message: NEGATIVE_POINTS_MESSAGE });
+        }
         if (hasOptionsData(check.data)) {
           const options = check.data.options;
           if (options.length === 1) {
@@ -124,6 +146,11 @@ export function validateRubric(rubric: HydratedRubric): ValidationError[] {
               errors.push({
                 path: `${checkPath}.data.options[${oIdx}].points`,
                 message: "Option points are required."
+              });
+            } else if (opt.points < 0) {
+              errors.push({
+                path: `${checkPath}.data.options[${oIdx}].points`,
+                message: NEGATIVE_POINTS_MESSAGE
               });
             }
           });

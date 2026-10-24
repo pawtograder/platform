@@ -8,8 +8,7 @@ import { useParams } from "next/navigation";
 import useModalManager from "@/hooks/useModalManager";
 import FlashCardDecksTable from "./flashCardDecksTable";
 import CreateDeckModal from "./createDeckModal";
-import { Toaster } from "@/components/ui/toaster";
-import Link from "@/components/ui/link";
+import NextLink from "next/link";
 
 /**
  * This component displays the flashcard decks page.
@@ -40,7 +39,6 @@ export default function FlashcardDecksPage() {
 
   return (
     <>
-      <Toaster />
       <VStack align="stretch" w="100%" gap={6} p={6}>
         {/* Header Section */}
         <VStack align="stretch" gap={4}>
@@ -58,12 +56,12 @@ export default function FlashcardDecksPage() {
                 <FaPlus style={{ marginRight: "8px" }} />
                 Create New Deck
               </Button>
-              <Link href={`/course/${course_id}/manage/course/flashcard-decks/analytics`}>
-                <Button variant="outline">
+              <Button asChild variant="outline">
+                <NextLink href={`/course/${course_id}/manage/course/flashcard-decks/analytics`}>
                   <FaChartBar style={{ marginRight: "8px" }} />
                   View Analytics
-                </Button>
-              </Link>
+                </NextLink>
+              </Button>
             </HStack>
           </HStack>
         </VStack>

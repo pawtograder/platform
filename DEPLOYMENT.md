@@ -471,13 +471,13 @@ Signup confirmation, magic-link, and password-recovery mail. Configured on the
 **auth** service. In the Helm chart, enable `auth.smtp.enabled=true` and provide
 the `pawtograder-smtp` Secret:
 
-| Var                | Meaning                                                       |
-| ------------------ | ------------------------------------------------------------- |
-| `SMTP_HOST`        | SMTP server hostname.                                         |
-| `SMTP_PORT`        | Port (e.g. `587`).                                            |
-| `SMTP_USER`        | SMTP username.                                                |
-| `SMTP_PASS`        | SMTP password (**note: `SMTP_PASS`, not `SMTP_PASSWORD`**).   |
-| `SMTP_ADMIN_EMAIL` | The `From:` address (e.g. `noreply@pawtograder.example.edu`). |
+| Var                | Meaning                                                                         |
+| ------------------ | ------------------------------------------------------------------------------- |
+| `SMTP_HOST`        | SMTP server hostname.                                                           |
+| `SMTP_PORT`        | Port (e.g. `587`).                                                              |
+| `SMTP_USER`        | SMTP username.                                                                  |
+| `SMTP_PASS`        | SMTP password. The edge runtime reads this name too, so one Secret serves both. |
+| `SMTP_ADMIN_EMAIL` | The `From:` address (e.g. `noreply@pawtograder.example.edu`).                   |
 
 See the chart README ("Deploying staging" → SMTP) for the exact Secret/OpenBao
 shape.
@@ -487,16 +487,29 @@ shape.
 Help-request, regrade, and other in-app notification emails are sent by the
 `notification-queue-processor` Edge Function
 ([`supabase/functions/notification-queue-processor/index.ts`](./supabase/functions/notification-queue-processor/index.ts)).
-This uses the edge-functions `smtp` bundle (its own variable names):
+The simplest way to configure it is to mount the **same `pawtograder-smtp` Secret GoTrue uses**,
+by adding it to `edgeFunctions.envFromSecrets`. The function accepts both that Secret's variable
+names and the older edge-bundle names, so one Secret can serve both services:
 
-| Var             | Meaning                                                                    |
-| --------------- | -------------------------------------------------------------------------- |
-| `SMTP_HOST`     | SMTP server hostname. If unset/empty, notification email is skipped.       |
-| `SMTP_PORT`     | Port; defaults to `465` (TLS).                                             |
-| `SMTP_USER`     | SMTP username.                                                             |
-| `SMTP_PASSWORD` | SMTP password (**note: `SMTP_PASSWORD` here, vs `SMTP_PASS` for GoTrue**). |
-| `SMTP_FROM`     | `From:` address — sent as `Pawtograder <SMTP_FROM>`.                       |
-| `SMTP_REPLY_TO` | Default `Reply-To:` address.                                               |
+| Var             | Meaning                                                                                                                                                                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMAIL_ENABLED` | `true` to send. **Unset** infers from `SMTP_HOST` (the historical behavior). `true` with `SMTP_HOST` missing is a hard error — the function refuses and reports, rather than deferring the queue forever. `false` archives notifications without sending. |
+| `SMTP_HOST`     | SMTP server hostname.                                                                                                                                                                                                                                     |
+| `SMTP_PORT`     | Port; defaults to `465` (implicit TLS). `2525` selects STARTTLS (Postmark relay), `54325` local Inbucket.                                                                                                                                                 |
+| `SMTP_USER`     | SMTP username.                                                                                                                                                                                                                                            |
+| `SMTP_PASS`     | SMTP password. `SMTP_PASSWORD` is still accepted as a fallback for the legacy edge bundle.                                                                                                                                                                |
+| `SMTP_FROM`     | `From:` address — sent as `Pawtograder <SMTP_FROM>`. Falls back to `SMTP_ADMIN_EMAIL`, which is the name the `pawtograder-smtp` Secret actually carries.                                                                                                  |
+| `SMTP_REPLY_TO` | Default `Reply-To:` address. Optional.                                                                                                                                                                                                                    |
+
+> **Set `EMAIL_ENABLED=true` wherever email is meant to work.** Without it, a deployment that is
+> simply missing its SMTP configuration only defers: the processor finds no host, leaves the
+> messages queued, and reports one fingerprinted Sentry message. That keeps the backlog recoverable
+> once the config lands, but nothing fails. With `EMAIL_ENABLED=true` the same state throws, so a
+> missing `SMTP_HOST`, `SMTP_FROM` or `SMTP_PASS` stops the worker and pages instead of accumulating.
+> `EMAIL_ENABLED=false` is the only setting that discards queued email rather than deferring it.
+
+The older approach — populating a separate edge-functions `smtp` bundle — still works, but it
+requires keeping two copies of the same credentials in sync:
 
 ```sh
 scripts/setup-openbao-edge-functions.sh \
@@ -563,10 +576,45 @@ the chart's `auth.yaml`):
 
 **Web app** (`pawtograder-web` Secret / `.env.local`):
 
+> On Kubernetes, `pawtograder-web` is filled by the bundles named in
+> `secrets.externalSecret.webBundles`. `DISCORD_APPLICATION_ID` and
+> `DISCORD_BOT_TOKEN` live in the `discord` bundle, so that bundle has to be
+> listed under **`webBundles` as well as `edgeFunctionsBundles`** — the install
+> routes below are Next.js, not Edge Functions. With `webBundles: [web, llm]`
+> alone the install button answers 500 and the callback can never confirm a
+> guild.
+
 - `DISCORD_PUBLIC_KEY` — the application's public key; verifies signatures on the
   `/api/discord/interactions` endpoint. Hex-encoded.
 - `DISCORD_WEBHOOK_PUBLIC_KEY` — the webhook's public key; verifies ed25519
   signatures on `/api/discord/webhook`. Hex-encoded, with or without `0x`.
+- `DISCORD_APPLICATION_ID` — the application ID. Required by
+  `/api/discord/install`: it is the `client_id` on the authorize URL, so without
+  it the "Add Pawtograder to your Discord server" button 500s.
+- `DISCORD_BOT_TOKEN` — the bot token. Required by
+  `/api/discord/install/callback`, which calls `GET /guilds/{id}` with it to
+  confirm the bot is in the server _now_ before recording the claim. Without it
+  no installation can be confirmed and no server can be connected.
+- `DISCORD_OAUTH_CLIENT_ID` / `DISCORD_OAUTH_CLIENT_SECRET` — the application's
+  OAuth2 credentials (the client id is the same value as
+  `DISCORD_APPLICATION_ID`; the secret is its own credential and is **not** the
+  bot token). Required by `/api/discord/install/callback` to redeem the
+  authorization code.
+
+  This is the step that makes the claimed server trustworthy, so treat it as
+  required rather than optional. One bot token serves every course on the
+  deployment, so the `GET /guilds/{id}` check above confirms any server the bot
+  already sits in — which is every server any course has ever connected. Only
+  the authorization code ties the callback to the consent screen the instructor
+  actually completed; without these two set, the exchange cannot run and no
+  server can be connected.
+
+- (Optional) `DISCORD_INSTALL_STATE_SECRET` — HMAC key for the signed `state` on
+  the install round-trip. Falls back to `SUPABASE_SERVICE_ROLE_KEY`, which the
+  callback needs anyway; set this to rotate the two independently.
+- (Optional) `DISCORD_API_BASE_URL` — same mock seam as the Edge Functions read;
+  defaults to `https://discord.com/api/v10`. Set both sides to the same value or
+  they talk to different Discord hosts.
 
 **GoTrue** (account linking — "Connect Discord" uses Supabase's `discord` OAuth
 provider, the same mechanism as GitHub sign-in):
@@ -600,17 +648,32 @@ the Discord application's OAuth2 redirect.
    mentions.
 3. **Configure OAuth2** — copy the Client ID / Client Secret into
    `DISCORD_OAUTH_CLIENT_ID` / `DISCORD_OAUTH_CLIENT_SECRET`, and under
-   **Redirects** register GoTrue's callback (not an app route):
-   - Separate API host (default): `https://api.<your-domain>/auth/v1/callback`
-   - Path-based routing: `https://<your-domain>/auth/v1/callback`
-4. **Bot permissions** when inviting the bot to a server: Manage Channels, Send
-   Messages, Read Message History, Mention Everyone, Manage Roles, and
-   (optional) Use External Emojis / Add Reactions. Generate an invite via the
-   OAuth2 URL Generator, or:
+   **Redirects** register two URLs:
 
-   ```text
-   https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=268896336&scope=bot
-   ```
+   - GoTrue's callback, for account linking (not an app route):
+     - Separate API host (default): `https://api.<your-domain>/auth/v1/callback`
+     - Path-based routing: `https://<your-domain>/auth/v1/callback`
+   - The bot install callback, which _is_ an app route:
+     `https://<your-domain>/api/discord/install/callback` (local:
+     `http://localhost:3000/api/discord/install/callback`). Discord refuses the
+     authorize request outright if this is not registered, so the install button
+     fails on Discord's own screen rather than in Pawtograder.
+
+     The origin here is taken from `NEXT_PUBLIC_PAWTOGRADER_WEB_URL` (or
+     `VERCEL_PROJECT_PRODUCTION_URL` on Vercel), **not** from the inbound
+     request's `Host`/`X-Forwarded-Host`. So the value you register must match
+     that env var. Deriving it from request headers would both be unregisterable
+     in advance and let a caller-supplied `X-Forwarded-Host` redirect the flow to
+     another origin — see the comment on `redirectOrigin` in
+     `lib/discordInstall.ts`.
+
+4. **Bot permissions** are not configured by hand. The install flow builds the
+   authorize URL from `REQUIRED_BOT_PERMISSIONS` in
+   `supabase/functions/_shared/DiscordPermissions.ts` — View Channels, Manage
+   Roles, Manage Channels, Create Invite, Send Messages, Read Message History —
+   which is also the list the settings page shows and the list
+   `discord-check-bot-installation` audits. Administrator is deliberately not
+   requested. Change the constant, not the URL.
 
 5. **Configure the webhook** (for automatic role assignment) under the
    application's Webhooks section. Set the URL to:
@@ -624,10 +687,23 @@ the Discord application's OAuth2 redirect.
 
 1. **Link Discord account** (staff): on the course page, click "Connect Discord"
    to link via OAuth (lets the system @-mention you).
-2. **Configure the server**: at `/course/[course_id]/manage/discord`, enter your
-   Discord Server ID (right-click server → Copy Server ID; requires Developer
-   Mode), optionally a Channel Group ID, then save.
-3. **Enable Developer Mode** in Discord (Settings → Advanced) to copy IDs.
+2. **Connect the server**: at `/course/[course_id]/manage/discord`, press "Add
+   Pawtograder to your Discord server" and pick the server on Discord's consent
+   screen. There is no server-ID field: adding the bot requires Manage Server on
+   the guild you choose, which is what authorizes the course to use it, and the
+   callback confirms with the bot token that the bot is really there before
+   recording anything. One unarchived course per server — a guild another live
+   course holds is refused by name.
+3. **Fix what the panel reports.** A bot can be installed and still fail
+   everything. Missing permissions are named individually with a re-authorize
+   link. The other case is the role hierarchy: Discord refuses to assign a role
+   positioned at or above the bot's own highest role and reports it as error
+   `50013`, identical to lacking the permission entirely. The panel
+   shows both positions; the fix is Server Settings → Roles, drag **Pawtograder**
+   above the course's roles.
+4. **Optionally set a channel category** so the course's channels are created
+   under it. Enable Developer Mode in Discord (Settings → Advanced) to copy the
+   category ID. It is cleared automatically if the course moves servers.
 
 ### How it works
 

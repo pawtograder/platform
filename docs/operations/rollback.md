@@ -32,6 +32,28 @@ The migrations changed in a release are the `supabase/migrations/*.sql` files
 added in that release's diff. Read them before deciding — an "additive" release
 is only additive if **every** new migration is.
 
+### Known accepted deviation: `database_ram_metrics()`
+
+`20260827120000_drop_database_ram_metrics.sql` drops
+`public.database_ram_metrics()` in the same release that stopped calling it,
+which is exactly what ["Preventing the §C case"](#preventing-the-c-case) says not
+to do. It was accepted deliberately, because the blast radius is observability
+only — the function is read by nothing but the metrics scrape path, writes
+nothing, and no user-facing data is lost or becomes unreadable.
+
+Rolling the app back **past** that release leaves the function dropped
+(migrations are forward-only, and the migration that created it is already
+recorded as applied, so a rollback does not recreate it). The older metrics edge
+function then calls it on every scrape, gets a PostgREST 404, and logs plus
+Sentry-reports it roughly once a second across the functions pods. The
+buffer-cache, dead-tuple, connection-state and table-size series are lost until
+it is fixed. Nothing else degrades.
+
+Remedy is a **forward-fix** (§C option 1), not a restore: ship a migration
+recreating the function — its body is in
+`20260325000000_autovacuum_tuning.sql`. Restoring from backup here would trade
+real data for metrics.
+
 ---
 
 ## A. Plain app rollback (no schema change)

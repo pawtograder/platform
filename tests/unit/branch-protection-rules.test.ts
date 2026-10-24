@@ -7,6 +7,7 @@ import {
   DEFAULT_BRANCH_PROTECTION,
   buildBranchProtectionRules,
   diffBranchProtectionRules,
+  isBranchProtectionUnsupportedError,
   planBranchProtectionAction,
   requestsNoBranchProtection
 } from "@/supabase/functions/_shared/branchProtection";
@@ -174,6 +175,48 @@ describe("planBranchProtectionAction", () => {
     if (action.kind === "update") {
       expect(action.rules.map((r) => r.type).sort()).toEqual(["non_fast_forward", "pull_request"]);
     }
+  });
+});
+
+describe("isBranchProtectionUnsupportedError", () => {
+  it("recognises the free-org rulesets rejection GitHub returns from the list endpoint", () => {
+    // Verbatim from a handout-repo creation against a non-paid org.
+    const err = Object.assign(
+      new Error("Upgrade to GitHub Pro or make this repository public to enable this feature."),
+      {
+        status: 403
+      }
+    );
+    expect(isBranchProtectionUnsupportedError(err)).toBe(true);
+  });
+
+  it("reads the message off the response body and the errors array", () => {
+    expect(
+      isBranchProtectionUnsupportedError({
+        message: "Forbidden",
+        response: { data: { message: "Upgrade your GitHub plan to use this feature." } }
+      })
+    ).toBe(true);
+    expect(
+      isBranchProtectionUnsupportedError({
+        message: "Validation Failed",
+        response: { data: { errors: [{ message: "Upgrade your account to enable this feature." }] } }
+      })
+    ).toBe(true);
+    expect(
+      isBranchProtectionUnsupportedError({
+        message: "Validation Failed",
+        response: { data: { errors: ["Upgrade to GitHub Team to enable this feature."] } }
+      })
+    ).toBe(true);
+  });
+
+  it("does not swallow permission or transport failures", () => {
+    expect(isBranchProtectionUnsupportedError(new Error("Resource not accessible by integration"))).toBe(false);
+    expect(isBranchProtectionUnsupportedError(new Error("Bad credentials"))).toBe(false);
+    expect(isBranchProtectionUnsupportedError({ response: { data: { message: "Not Found" } } })).toBe(false);
+    expect(isBranchProtectionUnsupportedError(null)).toBe(false);
+    expect(isBranchProtectionUnsupportedError("upgrade to github pro")).toBe(false);
   });
 });
 

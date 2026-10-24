@@ -12,7 +12,7 @@ import {
   DialogTrigger
 } from "@/components/ui/dialog";
 import Link from "@/components/ui/link";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import useModalManager from "@/hooks/useModalManager";
 import { createClient } from "@/utils/supabase/client";
 import * as Sentry from "@sentry/nextjs";
@@ -338,8 +338,6 @@ export default function ReviewAssignmentsPage() {
 
   return (
     <Container maxW="container.xl" py={4}>
-      <Toaster />
-
       <Heading size="lg">Manage Review Assignments</Heading>
       <Separator mb={4} />
 

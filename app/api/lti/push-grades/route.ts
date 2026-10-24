@@ -13,11 +13,12 @@ import { ltiAdminClient } from "@/lib/lti/db";
 import { isCronAuthorized, isInstructorOfClass } from "@/lib/lti/auth";
 import { syncAssignmentGrades, drainGradeSyncQueue } from "@/lib/lti/grades";
 import * as Sentry from "@sentry/nextjs";
+import { withRouteMetrics } from "@/lib/routeMetrics";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
   let body: { drain?: boolean; class_id?: number; assignment_id?: number } = {};
   try {
     body = await request.json();
@@ -62,3 +63,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 }
+
+// web_http_* instrumentation. The `route` label is the hardcoded parameterized
+// pattern, never the request path — see lib/routeMetrics.ts.
+export const POST = withRouteMetrics("/api/lti/push-grades", postHandler);

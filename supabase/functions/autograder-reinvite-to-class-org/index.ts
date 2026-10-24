@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { reinviteToOrgTeam } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInCourse, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { course_id, user_id } = (await req.json()) as { course_id: number; user_id: string };
   scope?.setTag("function", "autograder-reinvite-to-class-org");

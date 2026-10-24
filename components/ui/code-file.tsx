@@ -65,6 +65,10 @@ const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
           size="sm"
           checked={useMonaco}
           disabled={isSaving}
+          // The plain view is the screen-reader-friendly rendering (every code
+          // line is regular readable text); Monaco's content is only exposed
+          // through caret navigation, which not all AT supports. Say so.
+          aria-label="New editor view. Turn off for a plain text code view that is easier to read with a screen reader."
           onCheckedChange={({ checked }) => void updatePreferences({ grading: { useMonacoEditor: checked } })}
         >
           New editor view

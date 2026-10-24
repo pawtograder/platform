@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { mcpTokensList, mcpTokensCreate, mcpTokensRevoke, MCPToken, MCPScope } from "@/lib/edgeFunctions";
 import { edgeFunctionUrl } from "@/lib/functionsUrl";
@@ -48,6 +48,9 @@ export default function MCPTokensMenu() {
   const [newTokenType, setNewTokenType] = useState<TokenType>("mcp");
   const [newlyCreatedToken, setNewlyCreatedToken] = useState<string | null>(null);
   const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null);
+  // Which token is mid-revoke. The row only disappears once the refetch lands, so without this the
+  // button stays live for the whole round trip and a second click fires a second DELETE.
+  const [revokingTokenId, setRevokingTokenId] = useState<string | null>(null);
 
   const fetchTokens = useCallback(async () => {
     setLoading(true);
@@ -111,6 +114,8 @@ export default function MCPTokensMenu() {
   };
 
   const revokeToken = async (tokenId: string) => {
+    if (revokingTokenId) return;
+    setRevokingTokenId(tokenId);
     try {
       const supabase = createClient();
       await mcpTokensRevoke({ token_id: tokenId }, supabase);
@@ -125,6 +130,8 @@ export default function MCPTokensMenu() {
         title: "Error revoking token",
         description: error instanceof Error ? error.message : "Unknown error"
       });
+    } finally {
+      setRevokingTokenId(null);
     }
   };
 
@@ -164,7 +171,6 @@ export default function MCPTokensMenu() {
 
   return (
     <>
-      <Toaster />
       <Dialog.Root size="lg" placement="center" open={open} onOpenChange={(e) => setOpen(e.open)}>
         <Dialog.Trigger asChild>
           <Button
@@ -313,6 +319,8 @@ export default function MCPTokensMenu() {
                                     size="sm"
                                     variant="ghost"
                                     colorPalette="red"
+                                    loading={revokingTokenId === token.token_id}
+                                    disabled={revokingTokenId !== null}
                                     onClick={() => revokeToken(token.token_id)}
                                   >
                                     <LuTrash2 />
@@ -332,15 +340,39 @@ export default function MCPTokensMenu() {
                       How to Use
                     </Text>
                     <Text fontSize="sm" color="fg.muted" mb={3}>
-                      MCP tokens are used with AI assistants (Claude Desktop, etc). CLI tokens are used with the
-                      Pawtograder CLI API.
+                      CLI tokens are used with the Pawtograder command-line tool. MCP tokens are used with AI assistants
+                      (Claude Desktop, etc). Both kinds of token start with <code>mcp_</code>.
+                    </Text>
+                    <Text fontSize="sm" fontWeight="semibold" mb={1}>
+                      Command-Line Tool:
+                    </Text>
+                    <Box
+                      mt={1}
+                      p={2}
+                      bg="bg.emphasized"
+                      borderRadius="sm"
+                      fontFamily="mono"
+                      fontSize="xs"
+                      whiteSpace="pre-wrap"
+                      overflowX="auto"
+                    >
+                      {`npm install -g @pawtograder/cli
+
+pawtograder login --url ${edgeFunctionUrl("cli")}
+
+pawtograder classes list`}
+                    </Box>
+                    <Text fontSize="sm" color="fg.muted" mt={2} mb={3}>
+                      {/* Prompting keeps the token out of shell history, so it is the form shown first. */}
+                      <code>login</code> prompts for the token and stores it in{" "}
+                      <code>~/.pawtograder/credentials.json</code>. For scripts and CI, pass it directly with{" "}
+                      <code>--token</code>. Run <code>pawtograder --help</code> for the full command list.
                     </Text>
                     <Text fontSize="sm" fontWeight="semibold" mb={1}>
                       MCP Client Configuration (Claude Desktop):
                     </Text>
                     <Box
                       mt={1}
-                      mb={3}
                       p={2}
                       bg="bg.emphasized"
                       borderRadius="sm"
@@ -359,24 +391,6 @@ export default function MCPTokensMenu() {
     }
   }
 }`}
-                    </Box>
-                    <Text fontSize="sm" fontWeight="semibold" mb={1}>
-                      CLI API Usage:
-                    </Text>
-                    <Box
-                      mt={1}
-                      p={2}
-                      bg="bg.emphasized"
-                      borderRadius="sm"
-                      fontFamily="mono"
-                      fontSize="xs"
-                      whiteSpace="pre-wrap"
-                      overflowX="auto"
-                    >
-                      {`curl -X POST ${edgeFunctionUrl("cli")} \\
-  -H "Authorization: Bearer mcp_YOUR_TOKEN_HERE" \\
-  -H "Content-Type: application/json" \\
-  -d '{"command": "classes.list", "params": {}}'`}
                     </Box>
                   </Box>
                 </VStack>

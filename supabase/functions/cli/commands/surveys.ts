@@ -6,6 +6,7 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveSurvey, resolveAssignment } from "../utils/resolvers.ts";
+import { assertUserCanAccessClass } from "../utils/auth.ts";
 import {
   copySurveyToClass,
   fetchLatestSurveysForClass,
@@ -16,7 +17,7 @@ import {
 import { CLICommandError } from "../errors.ts";
 import type { CLIResponse, SurveysCopyParams, AssignmentRow, SurveyRow } from "../types.ts";
 
-async function handleSurveysCopy(_ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
+async function handleSurveysCopy(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as SurveysCopyParams;
   const sourceClassId = p.source_class;
   const targetClassId = p.target_class;
@@ -36,6 +37,10 @@ async function handleSurveysCopy(_ctx: MCPAuthContext, params: Record<string, un
   const supabase = getAdminClient();
   const sourceClass = await resolveClass(supabase, sourceClassId);
   const targetClass = await resolveClass(supabase, targetClassId);
+  // Both sides: reading the source and writing the target each need access, or a
+  // grader in one class could copy content into a class they do not belong to.
+  await assertUserCanAccessClass(supabase, ctx.userId, sourceClass.id);
+  await assertUserCanAccessClass(supabase, ctx.userId, targetClass.id);
 
   if (sourceClass.id === targetClass.id) {
     throw new CLICommandError("Source and target classes must be different");

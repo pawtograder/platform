@@ -23,6 +23,8 @@ export default function SubmissionsView() {
 
     // Default landing tab: students land on the released grade summary if available; graders and
     // instructors (who work from the rubric sidebar) keep landing on autograder feedback / files.
+    // No-submission assignments never mount this route at all (the layout renders the grading UI
+    // directly and redirects to /grade on its own), so this only needs to handle every other mode.
     const queryString = searchParams.toString();
     const targetPage = !isGraderOrInstructor && released ? "grade" : hasGraderOutput ? "results" : "files";
     const redirectUrl = `/course/${course_id}/assignments/${assignment_id}/submissions/${submissions_id}/${targetPage}${

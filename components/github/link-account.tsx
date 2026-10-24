@@ -87,9 +87,10 @@ export default function LinkAccount() {
           {errorDescription}
         </Alert>
       )}
-      <HStack alignItems="flex-start">
-        <VStack alignItems="flex-start" gap="0">
-          <HStack>
+      {/* Wraps so the sign-in button reflows below the text at narrow widths (WCAG 1.4.10). */}
+      <HStack alignItems="flex-start" flexWrap="wrap">
+        <VStack alignItems="flex-start" gap="0" minW={0}>
+          <HStack flexWrap="wrap">
             <Icon size="xl" as={BsGithub} /> <Heading size="lg">Connect to GitHub to access assignments</Heading>
           </HStack>
           <Text fontSize="sm">

@@ -3,7 +3,7 @@
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { InputGroup } from "@/components/ui/input-group";
-import Link from "@/components/ui/link";
+import NextLink from "next/link";
 import { PageContainer } from "@/components/ui/page-container";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
@@ -327,22 +327,23 @@ export default function StudentSurveysPage() {
                       </VStack>
                     </HStack>
 
-                    <Link href={`/course/${course_id}/surveys/${survey.id}`}>
-                      <Button
-                        size="sm"
-                        colorPalette={survey.response_status === "completed" ? "gray" : "green"}
-                        variant="solid"
-                        _hover={{
-                          bg: survey.response_status === "completed" ? "gray.emphasized" : "green.emphasized"
-                        }}
-                      >
+                    <Button
+                      asChild
+                      size="sm"
+                      colorPalette={survey.response_status === "completed" ? "gray" : "green"}
+                      variant="solid"
+                      _hover={{
+                        bg: survey.response_status === "completed" ? "gray.emphasized" : "green.emphasized"
+                      }}
+                    >
+                      <NextLink href={`/course/${course_id}/surveys/${survey.id}`}>
                         {survey.response_status === "completed"
                           ? "View Submission"
                           : survey.response_status === "in_progress"
                             ? "Continue Survey"
                             : "Start Survey"}
-                      </Button>
-                    </Link>
+                      </NextLink>
+                    </Button>
                   </HStack>
                 </VStack>
               </Box>

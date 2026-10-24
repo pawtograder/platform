@@ -446,7 +446,7 @@ export async function updateClassSettings({
  * generateLink error as transient and retry with jitter; only surface the
  * error after all retries are exhausted.
  */
-async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supabase.auth.admin.generateLink> {
+export async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supabase.auth.admin.generateLink> {
   const delaysMs = [500, 1500, 4000];
   let lastErrMsg = "";
   for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
@@ -1559,6 +1559,105 @@ export async function insertOfficeHoursQueue({ class_id, name }: { class_id: num
     throw new Error(`Failed to create office hours queue: ${officeHoursQueueError.message}`);
   }
   return officeHoursQueueData;
+}
+
+/**
+ * Put a TA/instructor "on duty" on a help queue. The student-facing New
+ * Request button is disabled unless at least one queue has active staff
+ * (components/help-queue/office-hours-header.tsx), so seeded office-hours
+ * flows that must CREATE requests need this.
+ */
+export async function insertHelpQueueAssignment({
+  class_id,
+  help_queue_id,
+  ta_profile_id
+}: {
+  class_id: number;
+  help_queue_id: number;
+  ta_profile_id: string;
+}): Promise<void> {
+  const { error } = await supabase.from("help_queue_assignments").insert({
+    class_id,
+    help_queue_id,
+    ta_profile_id,
+    is_active: true,
+    started_at: new Date().toISOString(),
+    ended_at: null,
+    max_concurrent_students: 1
+  });
+  if (error) {
+    throw new Error(`Failed to assign staff to help queue: ${error.message}`);
+  }
+}
+
+/**
+ * Seed a help request directly in the DB (office-hours.test.tsx creates them
+ * through the UI; a11y evidence/agent seeding needs them pre-existing).
+ * Uses the class's auto-created "office-hours" queue unless `help_queue_id`
+ * is given, and links the student via help_request_students. Pass
+ * `active_staff_profile_id` to also put that user on duty so the New Request
+ * button is enabled for students.
+ */
+export async function insertHelpRequest({
+  class_id,
+  student_profile_id,
+  request,
+  help_queue_id,
+  status = "open",
+  active_staff_profile_id
+}: {
+  class_id: number;
+  student_profile_id: string;
+  request: string;
+  help_queue_id?: number;
+  status?: "open" | "in_progress" | "resolved" | "closed";
+  active_staff_profile_id?: string;
+}): Promise<{ id: number; help_queue_id: number }> {
+  let queueId = help_queue_id;
+  if (!queueId) {
+    const { data: queue, error: queueError } = await supabase
+      .from("help_queues")
+      .select("id")
+      .eq("class_id", class_id)
+      .eq("name", "office-hours")
+      .single();
+    if (queueError || !queue) {
+      throw new Error(`Failed to find office hours queue: ${queueError?.message ?? "not found"}`);
+    }
+    queueId = queue.id;
+  }
+
+  const { data: helpRequest, error: requestError } = await supabase
+    .from("help_requests")
+    .insert({
+      class_id,
+      help_queue: queueId,
+      request,
+      status,
+      created_by: student_profile_id,
+      is_private: false,
+      location_type: "remote"
+    })
+    .select("id")
+    .single();
+  if (requestError || !helpRequest) {
+    throw new Error(`Failed to create help request: ${requestError?.message ?? "no row"}`);
+  }
+
+  const { error: studentLinkError } = await supabase.from("help_request_students").insert({
+    class_id,
+    help_request_id: helpRequest.id,
+    profile_id: student_profile_id
+  });
+  if (studentLinkError) {
+    throw new Error(`Failed to link student to help request: ${studentLinkError.message}`);
+  }
+
+  if (active_staff_profile_id) {
+    await insertHelpQueueAssignment({ class_id, help_queue_id: queueId, ta_profile_id: active_staff_profile_id });
+  }
+
+  return { id: helpRequest.id, help_queue_id: queueId };
 }
 const assignmentIdx = {
   lab: 1,

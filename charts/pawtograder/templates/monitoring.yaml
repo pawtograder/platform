@@ -1,8 +1,12 @@
 {{- if .Values.monitoring.enabled -}}
 {{- /*
 Monitoring wiring. Emits Prometheus Operator CRs (ServiceMonitor) for every
-component that exposes /metrics, plus the postgres_exporter custom-queries
-ConfigMap consumed by the sidecar in postgres-statefulset.yaml.
+component that exposes /metrics.
+
+The postgres_exporter custom-queries ConfigMap deliberately does NOT live here —
+see postgres-exporter-queries.yaml. Nothing in THIS file is hashed into the
+Postgres primary's restart annotation, which is the point: adding a
+ServiceMonitor here must never roll the database.
 
 We do NOT deploy our own Prometheus or Grafana — the cluster's
 kube-prometheus-stack auto-discovers ServiceMonitors in any namespace and the
@@ -12,262 +16,18 @@ Each ServiceMonitor reuses the chart's selectorLabels so that even if a Service
 gets renamed, the operator still finds the right pod set.
 */ -}}
 ---
-# postgres_exporter — custom queries that surface supabase/pawtograder
-# semantics on top of the default pg_stat_database / pg_stat_user_tables
-# coverage. Keep query names stable: dashboards reference them.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-exporter") }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-exporter") | nindent 4 }}
-data:
-  queries.yaml: |
-    pg_replication_slots:
-      query: |
-        SELECT slot_name,
-               (active)::int AS active,
-               COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn), 0)::float AS lag_bytes
-        FROM pg_replication_slots
-      master: true
-      metrics:
-        - slot_name:
-            usage: "LABEL"
-            description: "Replication slot name"
-        - active:
-            usage: "GAUGE"
-            description: "1 if the slot is currently active, 0 otherwise"
-        - lag_bytes:
-            usage: "GAUGE"
-            description: "WAL bytes between current_wal_lsn and the slot's confirmed_flush_lsn"
-
-    # Streaming-standby health, from the PRIMARY side. The chart creates NO
-    # physical replication slot (see docs/operations/point-in-time-recovery.md),
-    # so pg_replication_slots is empty and its lag_bytes series never appears —
-    # standby lag must be read from pg_stat_replication instead. streaming_standbys
-    # drives PawtograderReplicaNotStreaming; max_replay_lag_bytes drives
-    # PawtograderReplicaLagHigh. Emitted as pawtograder_replication_*.
-    #
-    # Standby-safe: pg_current_wal_lsn() ERRORS in recovery and would 500 the
-    # whole /metrics endpoint on a standby. Today only the primary is scraped (the
-    # postgres-exporter Service selects component=postgres; the replica pod is
-    # component=postgres-replica and carries no exporter sidecar), so this runs on
-    # the primary and never in recovery — but the pg_is_in_recovery() guard makes
-    # it harmless even if an exporter is ever added to the replica: on a standby
-    # the CASE takes the THEN branch and the LSN subquery is never evaluated. The
-    # outer SELECT always returns exactly one row so the series is stable.
-    #
-    # PHYSICAL standbys only: pg_stat_replication has one row per WAL sender, which
-    # includes LOGICAL replication clients. This is a wal_level=logical Supabase
-    # stack, and Realtime streams via logical replication as user `supabase_admin`
-    # (realtime.yaml DB_USER) — counting those rows would let a live Realtime
-    # connection mask a dead physical standby, and skew the lag max. The physical
-    # standby authenticates as `supabase_replication_admin` (postgres-replica.yaml
-    # primary_conninfo / postgres-config.yaml), so filter on that role.
-    pawtograder_replication:
-      query: |
-        SELECT
-          (SELECT count(*) FROM pg_stat_replication
-             WHERE state = 'streaming' AND usename = 'supabase_replication_admin')::float
-            AS streaming_standbys,
-          COALESCE(
-            CASE WHEN pg_is_in_recovery() THEN 0
-                 ELSE (SELECT max(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn))
-                       FROM pg_stat_replication
-                       WHERE usename = 'supabase_replication_admin')
-            END, 0)::float AS max_replay_lag_bytes
-      master: true
-      metrics:
-        - streaming_standbys:
-            usage: "GAUGE"
-            description: "Physical standbys (supabase_replication_admin) in state=streaming per pg_stat_replication (primary side)"
-        - max_replay_lag_bytes:
-            usage: "GAUGE"
-            description: "Max WAL bytes between the primary's current LSN and any physical standby's replay_lsn (0 on a standby)"
-
-    # WAL-G continuous archiving health. With postgres.walg.enabled the primary
-    # runs archive_command=wal-g wal-push; if that keeps failing, unarchived WAL
-    # piles up in pg_wal and can fill the volume (write outage). last_attempt_failed
-    # drives the PawtograderWALArchiveFailing alert; wal_dir_bytes is for
-    # dashboards. Harmless when archiving is off (archiver counters stay 0).
-    # Query key = metric prefix, so metrics are pawtograder_wal_archiving_*.
-    pawtograder_wal_archiving:
-      query: |
-        SELECT
-          archived_count::float AS archived_count,
-          failed_count::float AS failed_count,
-          CASE
-            WHEN last_failed_time IS NOT NULL
-             AND (last_archived_time IS NULL OR last_failed_time > last_archived_time)
-            THEN 1 ELSE 0
-          END::float AS last_attempt_failed,
-          COALESCE((SELECT SUM(size) FROM pg_ls_waldir()), 0)::float AS wal_dir_bytes
-        FROM pg_stat_archiver
-      master: true
-      metrics:
-        - archived_count:
-            usage: "COUNTER"
-            description: "WAL segments successfully archived since stats reset"
-        - failed_count:
-            usage: "COUNTER"
-            description: "Failed archive attempts since stats reset"
-        - last_attempt_failed:
-            usage: "GAUGE"
-            description: "1 if the most recent archive_command attempt failed (last_failed_time newer than last_archived_time)"
-        - wal_dir_bytes:
-            usage: "GAUGE"
-            description: "Total bytes currently in pg_wal (unarchived WAL accumulates here when archiving fails)"
-
-    # Connection-budget saturation. Counts client backends against max_connections;
-    # PostgREST pools (rest.dbPool × replicas), supavisor, GoTrue, realtime,
-    # storage and this exporter all share the budget (postgres.config.max_connections,
-    # default 400). The backend_type filter matters: walsenders, autovacuum
-    # workers, and parallel workers draw from their own pools (max_wal_senders,
-    # autovacuum_max_workers, max_worker_processes), so counting them would
-    # inflate the ratio and page for saturation that isn't there. Drives the
-    # PawtograderPostgresConnections* alerts. master:true so auto-discovered
-    # per-database servers (PG_EXPORTER_AUTO_DISCOVER_DATABASES) don't re-export
-    # the cluster-wide count under different `server` labels.
-    pawtograder_db_connections:
-      query: |
-        SELECT (SELECT COUNT(*) FROM pg_stat_activity WHERE backend_type = 'client backend')::float AS used,
-               (SELECT setting::float FROM pg_settings WHERE name = 'max_connections') AS max,
-               (SELECT setting::float FROM pg_settings WHERE name = 'superuser_reserved_connections') AS reserved
-      master: true
-      metrics:
-        - used:
-            usage: "GAUGE"
-            description: "Current client backends across all databases (the connections max_connections governs)"
-        - max:
-            usage: "GAUGE"
-            description: "max_connections setting — the hard ceiling on total backends"
-        - reserved:
-            usage: "GAUGE"
-            description: "superuser_reserved_connections — slots reserved for superusers, shrinking the app-usable ceiling"
-
-    pg_stat_statements_top:
-      # Aggregate by queryid. pg_stat_statements holds one row PER
-      # (userid, dbid, toplevel, queryid), so selecting queryid + query text
-      # directly yields several rows with the same (queryid, query_preview)
-      # label set whenever a statement runs under more than one role/db. The
-      # exporter's client library rejects duplicate series with "collected
-      # before with the same name and label values" and returns HTTP 500 for
-      # the ENTIRE /metrics endpoint — taking down all postgres metrics. Summing
-      # per queryid collapses those rows to one unique series each; mean is
-      # recomputed as the weighted total/calls. Skip NULL queryids (untracked).
-      query: |
-        SELECT queryid::text,
-               LEFT(MIN(query), 80) AS query_preview,
-               SUM(calls) AS calls,
-               SUM(total_exec_time) AS total_exec_time,
-               SUM(total_exec_time) / NULLIF(SUM(calls), 0) AS mean_exec_time,
-               SUM(rows) AS rows
-        FROM pg_stat_statements
-        WHERE queryid IS NOT NULL
-        GROUP BY queryid
-        ORDER BY SUM(total_exec_time) DESC
-        LIMIT 20
-      metrics:
-        - queryid:
-            usage: "LABEL"
-            description: "pg_stat_statements query id"
-        - query_preview:
-            usage: "LABEL"
-            description: "First 80 chars of the normalized statement"
-        - calls:
-            usage: "COUNTER"
-            description: "Number of times the statement has been executed"
-        - total_exec_time:
-            usage: "COUNTER"
-            description: "Total time spent executing the statement, in ms"
-        - mean_exec_time:
-            usage: "GAUGE"
-            description: "Mean time per execution, in ms"
-        - rows:
-            usage: "COUNTER"
-            description: "Total rows touched by the statement"
-
-    pawtograder_classes:
-      query: |
-        SELECT COUNT(*) FILTER (WHERE NOT is_demo)::float AS real_classes,
-               COUNT(*) FILTER (WHERE is_demo)::float AS demo_classes,
-               COUNT(*)::float AS total_classes
-        FROM public.classes
-      metrics:
-        - real_classes:
-            usage: "GAUGE"
-            description: "Number of non-demo classes"
-        - demo_classes:
-            usage: "GAUGE"
-            description: "Number of demo classes (seeded fixtures)"
-        - total_classes:
-            usage: "GAUGE"
-            description: "Total class count"
-
-    pawtograder_active_submissions:
-      query: |
-        SELECT class_id::text,
-               COUNT(*)::float AS active_count
-        FROM public.submissions
-        WHERE is_active = true
-        GROUP BY class_id
-      metrics:
-        - class_id:
-            usage: "LABEL"
-            description: "Class ID"
-        - active_count:
-            usage: "GAUGE"
-            description: "Number of submissions currently marked is_active=true in this class"
-
-    pawtograder_help_queue_depth:
-      query: |
-        SELECT class_id::text,
-               COUNT(*) FILTER (WHERE status = 'open')::float AS open_count,
-               COUNT(*) FILTER (WHERE status = 'in_progress')::float AS in_progress_count
-        FROM public.help_requests
-        WHERE created_at > NOW() - INTERVAL '24 hours'
-        GROUP BY class_id
-      metrics:
-        - class_id:
-            usage: "LABEL"
-            description: "Class ID"
-        - open_count:
-            usage: "GAUGE"
-            description: "Help requests in open state in the last 24h"
-        - in_progress_count:
-            usage: "GAUGE"
-            description: "Help requests being actively handled in the last 24h"
-
-    # Note: autograder workflow business metrics (run counts by
-    # conclusion, queue/run duration percentiles, error tallies) are
-    # NOT surfaced here. They live in the web app's /api/metrics route
-    # (lib/metrics.ts → refreshWorkflowMetrics) so they can carry the
-    # same labels and naming conventions as other app-level signals.
-
-    pawtograder_table_sizes:
-      query: |
-        SELECT n.nspname || '.' || c.relname AS relation,
-               pg_total_relation_size(c.oid)::float AS total_bytes,
-               pg_relation_size(c.oid)::float AS heap_bytes
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind IN ('r', 'p')
-          AND n.nspname IN ('public', 'auth', 'storage', 'realtime')
-          AND pg_total_relation_size(c.oid) > 10485760
-        ORDER BY pg_total_relation_size(c.oid) DESC
-        LIMIT 30
-      metrics:
-        - relation:
-            usage: "LABEL"
-            description: "Schema-qualified table or partition name"
-        - total_bytes:
-            usage: "GAUGE"
-            description: "Total size including indexes and TOAST"
-        - heap_bytes:
-            usage: "GAUGE"
-            description: "Heap size only (no indexes)"
----
+{{- /*
+Both of the following are gated on postgres.enabled: the sidecar they front only
+exists inside the chart-managed Postgres StatefulSet. With postgres.enabled=false
+(externally managed database) this Service would select no pods and the
+ServiceMonitor would sit permanently "down" — masking the real exporter an
+operator supplies for the external DB. validations.yaml refuses that combination
+unless monitoring.externalPostgresExporter=true, and in that mode the operator
+brings their own ServiceMonitor. The queries.yaml ConfigMap above is NOT gated:
+it is still useful to mount into an external exporter to keep the metric names
+the dashboards and alert rules expect.
+*/ -}}
+{{- if .Values.postgres.enabled }}
 # Headless Service that fronts the postgres_exporter sidecar's :9187
 # inside the postgres pod. We can't add the metrics port to the existing
 # pawtograder-postgres Service because that Service is consumed as the
@@ -310,13 +70,111 @@ spec:
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+{{- end }}
 ---
-# ServiceMonitor: storage-api. /metrics on the http port. Toggleable via
-# monitoring.serviceMonitors.storage: storage-api only exposes /metrics on its
-# admin app (ADMIN_PORT) or in multitenant mode — a single-tenant deploy serving
-# only :5000 returns 404, so Prometheus would flag it perpetually down. Set the
-# toggle false there.
-{{- if dig "serviceMonitors" "storage" true .Values.monitoring }}
+{{- if and .Values.rest.enabled .Values.rest.adminServer.enabled (dig "serviceMonitors" "rest" true .Values.monitoring) }}
+# Headless Service fronting PostgREST's admin server, and its ServiceMonitor.
+#
+# A SEPARATE Service on purpose. The main pawtograder-rest Service is what Kong
+# routes the public /rest/v1 path to; adding the admin port there would put an
+# unauthenticated /metrics (plus /live and /ready) one Kong route change away
+# from the internet. Same reasoning as the storage-api ADMIN_PORT note below --
+# and unlike that case this one is safe to turn on, because PostgREST's admin
+# server serves only those three read-only endpoints.
+#
+# WHAT THIS BUYS: pgrst_schema_cache_loads_total is the pool-rebuild counter.
+# PostgREST rebuilds its pool and reloads the schema cache on any fatal
+# connection error, 503ing everything in flight, and until this target existed
+# the only trace was a log line. On Khoury prod that hid 225 rebuilds and 190
+# 503s in 24h behind a green dashboard. pgrst_db_pool_waiting /
+# pgrst_db_pool_available additionally distinguish "pool exhausted by load"
+# from "pool destroyed and rebuilt", which the 503s alone cannot.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "rest-admin") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "rest-admin") | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "rest") | nindent 4 }}
+  ports:
+    - name: admin
+      port: {{ .Values.rest.adminServer.port }}
+      targetPort: admin
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "rest-admin") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "rest-admin") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "rest-admin") | nindent 6 }}
+  endpoints:
+    - port: admin
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+{{- end }}
+---
+# ServiceMonitor: storage-api. /metrics on the http port.
+#
+# This comment used to say the opposite -- that /metrics lives only on the admin
+# app (ADMIN_PORT) or in multitenant mode, and that a single-tenant deploy on
+# :5000 necessarily 404s. That is backwards, and it cost this target 24h+ of
+# being DOWN in staging while the "expected" explanation sat right here. Read
+# off the dist bundle in supabase/storage-api:v1.48.26:
+#
+#   app.js         plugins.metrics({ enabledEndpoint: !isMultitenant, ... })
+#   plugins/metrics.js  if (prometheusMetricsEnabled) register(metricsEndpoint)
+#                       -> if (enabledEndpoint) fastify.get("/metrics", ...)
+#   config.js      prometheusMetricsEnabled = PROMETHEUS_METRICS_ENABLED === "true"
+#
+# So single-tenant is the mode where the MAIN app serves it; multitenant is
+# where it moves to the admin app. The 404 was PROMETHEUS_METRICS_ENABLED being
+# unset.
+#
+# But DO NOT set that flag on this image. It registers the route, and then the
+# first scrape kills the pod:
+#
+#   "Reply was already sent, did you forget to \"return reply\" in the
+#    \"/metrics\" (GET) route?"
+#   Error [ERR_HTTP_HEADERS_SENT]: Cannot write headers after they are sent
+#     -> uncaughtException -> PID 1 exits -> CrashLoopBackOff
+#
+# handleMetricsRequest writes the reply without returning it, so fastify's
+# onSend chain double-writes the head. Confirmed on staging 2026-09-04: setting
+# the flag crashlooped the storage tier on the ~30s scrape interval. The old
+# advice ("set the toggle false") was therefore right -- only its stated
+# mechanism was wrong, and a wrong mechanism is what made it look safe to
+# "correct".
+#
+# So monitoring.serviceMonitors.storage defaults to FALSE (values.yaml carries
+# the full note). Shipping the ServiceMonitor without the flag is not harmless
+# either: it is a permanently-DOWN target on a 404, which is what shipped
+# before, and a target that can never succeed trains everyone to ignore a DOWN
+# storage row.
+#
+# There is a second, independent reason never to enable it on the main app: that
+# port is PUBLICLY ROUTED. Kong's storage-v1 service maps /storage/v1/ to
+# storage:5000/ with strip_path: true and a cors plugin only, so /metrics would
+# answer at https://<api host>/storage/v1/metrics unauthenticated. Confirmed
+# against staging -- that URL reaches storage-api's own router.
+#
+# The route worth trying for real storage metrics is the ADMIN app on ADMIN_PORT
+# (5001), which registers the same handler behind a different hook chain and is
+# NOT behind the Kong storage route. That needs its own container port, Service
+# port and ServiceMonitor, and the admin app also exposes
+# tenant/migration/s3-credential routes -- a deliberate exposure decision, not a
+# monitoring.enabled side effect.
+{{- if dig "serviceMonitors" "storage" false .Values.monitoring }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -335,10 +193,25 @@ spec:
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 {{- end }}
 ---
-# ServiceMonitor: edge-functions. edge-runtime v1.74 serves Prometheus metrics
-# (deno_http_requests_total, pawtograder_*) at /metrics on the http port,
-# optionally gated by a Bearer token — the runtime enforces METRICS_TOKEN only
-# when that env value is set (metrics/index.ts: no token => open /metrics).
+# ServiceMonitor: edge-functions.
+#
+# The edge RUNTIME serves no Prometheus metrics of its own — it never has. An
+# earlier version of this comment claimed deno_http_* came from the runtime, and
+# the edge-functions dashboard was built on that claim, which is why it rendered
+# completely empty for its entire life. What actually happens:
+#
+#   * /metrics on the http port is demuxed like any other function path, to the
+#     `metrics` user worker (supabase/functions/metrics/index.ts), which emits
+#     the pawtograder_* queue and circuit-breaker series.
+#   * charts/pawtograder/images/edge-functions/main.ts then APPENDS its own
+#     pawtograder_edge_* series (per-function request counts, a pod-wide latency
+#     histogram, eszip-cache and user-worker gauges) to that response before
+#     returning it. Gated by edgeFunctions.metrics.enabled.
+#
+# METRICS_TOKEN is enforced by the user worker, not by the runtime and not by
+# the demuxer — which is exactly why the demuxer appends only to a 200. An
+# unauthorized scrape gets its 401 back with nothing added. With no token set,
+# /metrics is open (metrics/index.ts: no token => no auth).
 # The credential is `optional: true` so a deploy that DOESN'T set METRICS_TOKEN
 # (e.g. staging, where edge /metrics is intentionally unauthed) still scrapes:
 # without optional, the missing Secret key makes the Prometheus Operator reject
@@ -454,6 +327,48 @@ spec:
         credentials:
           name: {{ .Values.secrets.names.jwt }}
           key: SUPAVISOR_METRICS_BEARER
+{{- end }}
+{{- if and .Values.web.metricsLeader.enabled (dig "serviceMonitors" "metricsLeader" true .Values.monitoring) }}
+---
+# ServiceMonitor: the dedicated metrics-leader Deployment
+# (templates/web-metrics-leader.yaml). Same endpoint and same bearer credential
+# as the web ServiceMonitor below — it is the same image — but selected on
+# `component: metrics-leader`, which is the ONLY thing that separates the two
+# scrape targets.
+#
+# No metric relabeling here, deliberately. The workflow gauges are only ever
+# .set() on the pod that holds METRICS_WORKFLOW_REFRESH_LEADER, and a prom-client
+# labelled gauge that has never been .set() emits ZERO samples — so ordinary web
+# pods contribute nothing to a sum() over web_workflow_* by construction, and a
+# metricRelabelConfigs block dropping those families from the web job would be
+# dead weight. Worse, the obvious `web_workflow_.*` regex would also drop
+# web_workflow_metrics_refresh_errors_total, which is the one series that tells
+# you the leader is broken.
+#
+# The `interval` deliberately need not be fast: refreshWorkflowMetrics() is
+# throttled to web.metricsLeader.refreshIntervalSeconds app-side, so scraping
+# faster than that just re-reads gauges that have not moved.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "metrics-leader") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "metrics-leader") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "metrics-leader") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /api/metrics
+      interval: {{ .Values.web.metricsLeader.scrapeInterval | default .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.web.metricsLeader.scrapeTimeout | default .Values.monitoring.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.secrets.names.jwt }}
+          key: METRICS_SCRAPE_TOKEN
 {{- end }}
 ---
 # ServiceMonitor: web (Next.js /api/metrics). Static bearer; the app does

@@ -1,0 +1,125 @@
+-- Drop public.database_ram_metrics(). It has no callers left.
+--
+-- WHY IT EXISTED: the `metrics` edge function (supabase/functions/metrics/index.ts)
+-- called it on every Prometheus scrape to publish buffer-cache usage, connection
+-- counts, table sizes and dead-tuple counts.
+--
+-- WHY IT IS GONE: Prometheus scrapes every pod endpoint behind the functions
+-- Service, and prod pins the functions HPA at 32 replicas, so a 30s interval
+-- meant ~1.07 calls/sec of a function whose mean execution time was 360.6 ms.
+-- Over a 42-day pg_stat_statements window that was 3,036,749 calls and 77.7% of
+-- ALL database execution time — for GLOBAL database state that is byte-identical
+-- from every pod, so 31 of every 32 calls were waste. The cost is the
+-- pg_buffercache scan: one row per buffer descriptor, and shared_buffers = 4GB
+-- means 524,288 descriptors per call.
+--
+-- Those metrics now come from the postgres-exporter's custom queries
+-- (charts/pawtograder/templates/monitoring.yaml, the queries.yaml ConfigMap),
+-- which is scraped ONCE — one postgres pod, one endpoint.
+--
+-- METRIC COMPATIBILITY — four of six preserved exactly, two contracts CHANGED.
+-- (An earlier draft of this comment claimed all names and labels were preserved.
+-- That was wrong; corrected here, because an overstated compatibility claim in an
+-- ops log is worse than none.)
+--
+-- Preserved exactly, same metric name AND same label names:
+--   pawtograder_db_buffer_cache_bytes{relname}
+--   pawtograder_db_buffer_cache_total_used_bytes   (no labels)
+--   pawtograder_db_dead_tuples{relname}
+--   pawtograder_vacuum_alert{check,severity,table_name}
+--
+-- CHANGED — connections. This function emitted
+-- pawtograder_db_connections{state} (a per-state breakdown from
+-- pg_stat_activity). That series is GONE. The exporter's pre-existing
+-- pawtograder_db_connections block emits pawtograder_db_connections_used /
+-- _max / _reserved instead: a count of backend_type = 'client backend' against
+-- max_connections, with NO per-state dimension. It is the count max_connections
+-- actually governs and what the PawtograderPostgresConnections* alerts use, but
+-- it is not the same contract. If anything needs the state breakdown back, do
+-- NOT revive this function: postgres_exporter's built-in pg_stat_activity
+-- collector already publishes it as pg_stat_activity_count, labelled
+-- datname/state/usename/application_name/backend_type/wait_event_type/wait_event
+-- (verified in the pinned v0.18.0 metric map). It is on by default — the sidecar
+-- does not pass --disable-default-metrics — so the data is already being scraped.
+--
+-- CHANGED — table sizes. This function emitted
+-- pawtograder_db_table_total_bytes{relname} with a BARE table name. The
+-- exporter's pre-existing pawtograder_table_sizes block emits
+-- pawtograder_table_sizes_total_bytes / _heap_bytes, and BOTH the label name and
+-- its value format differ: the label is `relation`, not `relname`, and the value
+-- is schema-qualified (public.submissions, not submissions). Any query, panel or
+-- rule matching on relname= for table sizes must be rewritten to relation= with
+-- a schema prefix. The only consumer was
+-- docs/grafana-dashboard-vacuum-health.json, updated in the same PR.
+--
+-- =============================================================================
+-- ACCEPTED DEVIATION FROM THE EXPAND/CONTRACT RULE. READ BEFORE ROLLING BACK.
+-- =============================================================================
+-- docs/operations/rollback.md ("Preventing the §C case") says: never ship a
+-- destructive migration coupled to the same release that stops using the old
+-- shape — split it across two releases so a rollback target always exists.
+--
+-- This migration KNOWINGLY breaks that rule. It drops the function in the same
+-- release that stops calling it, so there is no rollback target: migrations are
+-- forward-only (charts/pawtograder/images/migrations/migrate.sh records each in
+-- supabase_migrations.schema_migrations and skips anything already applied), and
+-- the older migration that CREATES database_ram_metrics() is already recorded as
+-- applied, so a rollback does not recreate it.
+--
+-- Concretely, if the application image is rolled back past this release:
+--   the previous metrics edge function calls database_ram_metrics() on every
+--   scrape, gets a PostgREST 404, and logs + Sentry-reports it ~1.07 times a
+--   second (32 functions pods x 30s). The buffer-cache, dead-tuple,
+--   connection-state and table-size series are lost for the duration.
+--
+-- Judged acceptable because the blast radius is OBSERVABILITY ONLY. This
+-- function is read by nothing but the metrics scrape path — it writes nothing,
+-- no application query calls it, and no user-facing data is lost or becomes
+-- unreadable. That is a different class of risk from the schema drops the
+-- expand/contract rule exists to prevent.
+--
+-- REMEDY if a rollback happens: forward-fix, which is option 1 in
+-- rollback.md's own hierarchy — ship a migration recreating the function (its
+-- body is in 20260325000000_autovacuum_tuning.sql). Do NOT restore from backup
+-- for this; it would trade real data for metrics.
+--
+-- =============================================================================
+-- DO NOT DROP THE pg_buffercache EXTENSION. IT IS STILL REQUIRED.
+-- =============================================================================
+-- Two earlier migrations justify pg_buffercache by naming this function:
+--
+--   20260722000000_enable_pg_buffercache.sql       ("Enable pg_buffercache so
+--     public.database_ram_metrics() can report buffer-cache metrics...")
+--   20260722120000_ensure_pg_buffercache_in_public.sql  (pins the extension to
+--     `public` because public.database_ram_metrics() runs with
+--     `SET search_path = pg_catalog, public` and referenced pg_buffercache
+--     unqualified)
+--
+-- Both of those comments are now STALE: the function they point at no longer
+-- exists. Do not read that as "pg_buffercache is unused" and drop it. The
+-- extension is still read on every postgres-exporter scrape by two blocks in
+-- queries.yaml:
+--
+--   pawtograder_db_buffer_cache        -> pawtograder_db_buffer_cache_bytes
+--   pawtograder_db_buffer_cache_total  -> pawtograder_db_buffer_cache_total_used_bytes
+--
+-- It must ALSO stay in the `public` schema, for the same reason as before,
+-- restated for the new caller: those queries reference `public.pg_buffercache`
+-- schema-qualified rather than trusting the exporter connection's search_path.
+-- Relocating the extension breaks them, and a broken custom query in
+-- postgres_exporter drops that namespace and sets
+-- pg_exporter_last_scrape_error — the buffer-cache panels go blank silently.
+--
+-- vacuum_health_check() is deliberately NOT dropped here: it is still run every
+-- 15 minutes by the `vacuum-health-monitor` pg_cron job (added alongside this
+-- function in 20260325000000_autovacuum_tuning.sql), and it is now also wrapped
+-- by the exporter's pawtograder_vacuum block.
+--
+-- NOTE ON GENERATED TYPES: database_ram_metrics IS present in the checked-in
+-- Supabase types (utils/supabase/SupabaseTypes.d.ts and the
+-- supabase/functions/_shared copy). Those are generated artifacts, refreshed
+-- wholesale by `npm run client`; this repo does not hand-prune them in the
+-- migration that drops a function. Nothing calls it, so nothing breaks — the
+-- stale entry just disappears at the next regeneration.
+
+DROP FUNCTION IF EXISTS public.database_ram_metrics();

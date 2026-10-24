@@ -71,7 +71,7 @@ test.describe("Comment overlay interaction (Monaco grading viewer)", () => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await expect(page.locator(".monaco-editor").first()).toBeVisible();
 
     // Create a comment through the real path: apply a no-comment rubric check via the quick-apply

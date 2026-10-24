@@ -20,7 +20,8 @@
  * Behavior is preserved exactly from the autograder path:
  *   - identical path sanitization (getSafeRelativePath / normalizeFilenameWhitespace
  *     / sanitizeSegmentForSupabaseStorage / sanitizePathForSupabaseStorageObjectKey),
- *   - identical BINARY_EXTENSIONS / MIME_TYPES sets,
+ *   - identical BINARY_EXTENSIONS / MIME_TYPES sets, plus a content check
+ *     (`hasNulByte`) for files the extension set cannot classify,
  *   - identical per-file 50 MB cap and the two pre-unzip guards
  *     (MAX_SUBMISSION_ZIP_* / MAX_SUBMISSION_UNZIPPED_*),
  *   - identical binary storage-key shape and de-dup suffixing,
@@ -30,11 +31,15 @@
  * that match its `submissionFiles` glob set; PR/push-direct callers pass none
  * (ingest the whole head tree). `detectEmptyForAssignmentId` (optional) enables
  * the handout-hash empty-submission check and returns `isEmpty`.
+ *
+ * `emptyHashFilter` (optional) narrows only the EMPTY-CHECK hash, for callers that
+ * ingest the whole tree but must still compare against handout hashes computed
+ * over `submissionFiles` alone.
  */
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { Open as openZip } from "npm:unzipper";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { cloneRepository, END_TO_END_REPO_PREFIX, getRepoToCloneConsideringE2E } from "./GitHubWrapper.ts";
 import type { Database } from "./SupabaseTypes.d.ts";
@@ -49,6 +54,11 @@ const MAX_SUBMISSION_UNZIPPED_MB = Number(Deno.env.get("MAX_SUBMISSION_UNZIPPED_
 const MAX_SUBMISSION_ZIP_BYTES = MAX_SUBMISSION_ZIP_MB * 1024 * 1024;
 const MAX_SUBMISSION_UNZIPPED_BYTES = MAX_SUBMISSION_UNZIPPED_MB * 1024 * 1024;
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB per file
+/**
+ * The same limit in MB, exported so the student-facing rejection message cannot drift from
+ * the limit actually enforced here — it used to hardcode "50 MB" in the webhook.
+ */
+export const MAX_FILE_SIZE_MB = MAX_FILE_SIZE / (1024 * 1024);
 
 // Binary file detection by extension. (SVG excluded — text-based XML, stored
 // inline for markdown image resolution.)
@@ -136,6 +146,35 @@ function getFileExtension(name: string): string {
 
 function isBinaryFile(name: string): boolean {
   return BINARY_EXTENSIONS.has(getFileExtension(name));
+}
+
+/**
+ * A NUL byte anywhere in the file means the contents cannot be stored inline.
+ * PostgREST sends `submission_files.contents` as a JSON string, and Postgres
+ * refuses to convert a NUL escape in that JSON to `text` ("unsupported Unicode
+ * escape sequence", SQLSTATE 22P05) — which fails the insert and, via the
+ * rollback below, the entire submission.
+ *
+ * It is also the standard content heuristic for "not source code" (git uses the
+ * same signal), and it is the only classification we have for a file whose name
+ * carries no extension: a compiled `a.out` committed next to its `.c` is the
+ * case that motivated this. Such files now route to storage like any other
+ * binary instead of crashing ingestion.
+ *
+ * Scanning the whole buffer rather than git's 8000-byte prefix window costs one
+ * memchr and leaves no tail past which a NUL could still reach the insert.
+ */
+function hasNulByte(contents: Buffer): boolean {
+  return contents.indexOf(0) !== -1;
+}
+
+/**
+ * Full binary classification: known-binary extension, or NUL-bearing content.
+ * Callers that must decide before reading a file still use `isBinaryFile` alone
+ * (name-only), then apply this once the buffer is in hand.
+ */
+function isBinaryContent(name: string, contents: Buffer): boolean {
+  return isBinaryFile(name) || hasNulByte(contents);
 }
 
 function sha256Hex(buf: Uint8Array): string {
@@ -256,6 +295,26 @@ export type IngestScope = {
    * `isEmpty` is null.
    */
   detectEmptyForAssignmentId?: number;
+  /**
+   * Restricts which files feed the EMPTY-CHECK hash, without affecting which files
+   * are ingested and stored.
+   *
+   * `assignment_handout_file_hashes.combined_hash` is computed over the handout's
+   * configured `submissionFiles` only. A caller that ingests the whole tree (push
+   * direct, PR) therefore produces a hash over a different file set, which can
+   * never match the handout's — so emptiness would always read "not empty". Pass
+   * the same glob matcher the handout hashes use to make the two comparable while
+   * still storing every file for hand-grading.
+   *
+   * When omitted, the empty-check hash covers everything ingested (the autograder's
+   * case, where `fileFilter` has already narrowed ingestion to the same set).
+   *
+   * If the filter matches none of the ingested files there is nothing comparable, and
+   * `isEmpty` is reported as `false` rather than compared: the hash of the empty file set
+   * is a constant that the handout side records too whenever its own tree has no matching
+   * file, so comparing them would falsely report a match.
+   */
+  emptyHashFilter?: (relativePath: string) => boolean;
   scope?: Sentry.Scope;
 };
 
@@ -320,6 +379,13 @@ export function collectTextFilesFromZipBuffer(zipBuffer: Buffer): Promise<Record
       if (contents.length > MAX_FILE_SIZE) {
         throw new SubmissionFileTooLargeError(name, contents.length);
       }
+      // Extensionless binaries survive the name-only filter above, so re-check
+      // once the bytes are in hand. Two reasons to drop them here: `files` is
+      // written to the jsonb `pr_base_tree_cache.files`, which rejects a NUL for
+      // the same reason `submission_files.contents` does; and the head side of
+      // the diff now sends these to storage, so keeping one as pseudo-text would
+      // render the pair as a whole-file deletion.
+      if (hasNulByte(contents)) continue;
       out[name] = contents.toString("utf-8");
     }
     return out;
@@ -343,6 +409,7 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
     groupId,
     fileFilter,
     detectEmptyForAssignmentId,
+    emptyHashFilter,
     scope
   } = params;
 
@@ -395,7 +462,7 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
 
       file_hashes[name] = sha256Hex(contents);
 
-      if (isBinaryFile(name)) {
+      if (isBinaryContent(name, contents)) {
         const logicalPath = normalizeFilenameWhitespace(getSafeRelativePath(name));
         let storageRelPath = sanitizePathForSupabaseStorageObjectKey(logicalPath);
         if (usedBinaryStorageRelPaths.has(storageRelPath)) {
@@ -479,8 +546,25 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
 
   const combinedHash = combinedHashFromPerFileHexHashes(file_hashes);
 
+  // Hash used for the handout comparison. Narrowed to `emptyHashFilter` when the
+  // caller ingested more than the handout hashes cover, so the two are computed
+  // over the same file set (see the field's doc comment).
+  const narrowedHashes = emptyHashFilter
+    ? Object.fromEntries(Object.entries(file_hashes).filter(([name]) => emptyHashFilter(name)))
+    : file_hashes;
+  const emptyCheckHash = emptyHashFilter ? combinedHashFromPerFileHexHashes(narrowedHashes) : combinedHash;
+
   let isEmpty: boolean | null = null;
-  if (detectEmptyForAssignmentId !== undefined) {
+  // When the filter selects nothing, the narrowed hash is the hash of the empty set — a
+  // fixed constant that the handout side also records whenever ITS tree has no file
+  // matching those globs. Comparing them would report "identical to the handout" for a
+  // submission whose real content simply lives outside the glob set, and the caller may
+  // then delete it. There is nothing comparable here, so report "not empty".
+  const narrowedSetIsEmpty = emptyHashFilter !== undefined && Object.keys(narrowedHashes).length === 0;
+  if (detectEmptyForAssignmentId !== undefined && narrowedSetIsEmpty) {
+    scope?.setTag("empty_check_skipped", "no_files_matched_empty_hash_filter");
+    isEmpty = false;
+  } else if (detectEmptyForAssignmentId !== undefined) {
     // Empty submission detection: if the submitted files match ANY recorded
     // handout version for the assignment, mark the submission as empty.
     //
@@ -495,7 +579,7 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
         .from("assignment_handout_file_hashes")
         .select("id")
         .eq("assignment_id", detectEmptyForAssignmentId)
-        .eq("combined_hash", combinedHash)
+        .eq("combined_hash", emptyCheckHash)
         .limit(1)
         .maybeSingle();
       if (!matchError) {

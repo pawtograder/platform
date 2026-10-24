@@ -17,7 +17,12 @@ async function enterCourse(classId: number, router: ReturnType<typeof useRouter>
     // Mark this as an acting-as entry so the manage-area banner shows for impersonation only,
     // not for an admin who is a genuine instructor of the course.
     setActingAsAdminCookie(classId);
+    // The RPC just changed *this viewer's* role in the course, and the course layout gates on
+    // it, so the browser's cached payload for that route has to go. The refresh has to come
+    // *after* the push: dispatching a navigation discards whatever action is pending, so
+    // refresh-then-push would drop the refresh (see hooks/useRevalidateServerCaches.ts).
     router.push(`/course/${classId}/manage/assignments`);
+    router.refresh();
   } catch (err) {
     const description = err instanceof Error ? err.message : "Unknown error";
     toaster.error({ title: "Failed to enter course", description });

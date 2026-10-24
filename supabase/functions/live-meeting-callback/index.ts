@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import * as chimeUtils from "../_shared/ChimeWrapper.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const body = await req.json();

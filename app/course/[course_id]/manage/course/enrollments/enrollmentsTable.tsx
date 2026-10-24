@@ -4,10 +4,11 @@ import { Button } from "@/components/ui/button";
 import InlineAddTag, { TagAddForm } from "@/components/ui/inline-add-tag";
 import InlineRemoveTag from "@/components/ui/inline-remove-tag";
 import PersonTags from "@/components/ui/person-tags";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
-import { useClassSections, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import { useClassSections, useCourse, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import { useDiscordMembershipStatus, type DiscordMembershipState } from "@/hooks/useDiscordMembershipStatus";
 import useModalManager from "@/hooks/useModalManager";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import useTags from "@/hooks/useTags";
@@ -37,13 +38,25 @@ import {
   getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
-  useReactTable
+  useReactTable,
+  type Row
 } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FaEdit, FaLink, FaTrash, FaUserCog, FaClock, FaTimes, FaFileExport, FaGithub } from "react-icons/fa";
+import { useCallback, useEffect, useMemo, useRef, useState, type ElementType } from "react";
+import {
+  FaEdit,
+  FaLink,
+  FaTrash,
+  FaUserCog,
+  FaClock,
+  FaTimes,
+  FaFileExport,
+  FaGithub,
+  FaExclamationTriangle,
+  FaQuestionCircle
+} from "react-icons/fa";
 import { PiArrowBendLeftUpBold } from "react-icons/pi";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
@@ -75,6 +88,62 @@ type InvitationRow = Database["public"]["Tables"]["invitations"]["Row"] & { type
 // Combined type for table rows
 type EnrollmentTableRow = (UserRoleWithPrivateProfileAndUser & { type: "enrollment" }) | InvitationRow;
 
+type DiscordStatusLabel = "In server" | "Not in server" | "Cannot invite" | "Not linked" | "Not checked yet" | "N/A";
+
+const DISCORD_STATUS_PRESENTATION: Record<DiscordStatusLabel, { color: string; icon: ElementType }> = {
+  "In server": { color: "green.600", icon: CheckIcon },
+  // The bot can see the student is missing but cannot invite them; only a Discord admin can fix it.
+  "Cannot invite": { color: "red.600", icon: FaExclamationTriangle },
+  // Ordinary and self-resolving: the student has an invite and has not used it yet.
+  "Not in server": { color: "orange.600", icon: FaClock },
+  "Not linked": { color: "gray.fg", icon: FaTimes },
+  "Not checked yet": { color: "gray.400", icon: FaQuestionCircle },
+  // Rows Discord membership does not apply to: pending invitations, and dropped enrollments, which
+  // the status RPC excludes and no sync will ever revisit.
+  "N/A": { color: "gray.400", icon: FaQuestionCircle }
+};
+
+// Derived from the presentation map so the filter can never drift from the labels the column renders.
+// "N/A" is the value the column produces for a pending invitation row.
+const DISCORD_STATUS_FILTER_OPTIONS = [
+  ...Object.keys(DISCORD_STATUS_PRESENTATION).map((label) => ({ label, value: label }))
+];
+
+/**
+ * Where one student stands with the class's Discord server.
+ *
+ * A student with no recorded state is reported as unchecked rather than as present. The hourly sync
+ * records every outcome it observes, so silence means it has not looked yet — claiming they are in
+ * the server would be a guess, and the whole point of this column is that the previous behaviour
+ * (retry, dead-letter, tell nobody) left instructors guessing.
+ */
+function discordStatusLabel(
+  row: UserRoleWithPrivateProfileAndUser,
+  stateByUser: Map<string, DiscordMembershipState>
+): DiscordStatusLabel {
+  // Checked before anything else. The table deliberately keeps disabled enrollments and labels them
+  // Dropped, but get_discord_membership_status_for_class returns only active ones, so a dropped
+  // student with Discord still linked fell through to "Not checked yet" -- and stayed there, because
+  // both the hourly candidate query and the manual retry skip disabled roles. That reads as
+  // something an instructor should chase for somebody who has left the course.
+  if (row.disabled) {
+    return "N/A";
+  }
+  if (!row.users?.discord_id) {
+    return "Not linked";
+  }
+  switch (stateByUser.get(row.user_id)) {
+    case "cannot_invite":
+      return "Cannot invite";
+    case "not_joined":
+      return "Not in server";
+    case "in_guild":
+      return "In server";
+    default:
+      return "Not checked yet";
+  }
+}
+
 /**
  * Client component rendering the enrollments management table for a course.
  * Provides filtering, pagination, bulk tag add/remove, and per-user actions
@@ -86,6 +155,17 @@ export default function EnrollmentsTable() {
   const supabase = createClient();
   const labSections = useLabSections();
   const classSections = useClassSections();
+  const course = useCourse();
+  const discordServerConfigured = !!course?.discord_server_id;
+  const {
+    byUserId: discordStateByUser,
+    loading: discordStatusLoadingRaw,
+    error: discordStatusError
+  } = useDiscordMembershipStatus(discordServerConfigured ? Number(course_id) : undefined);
+  // A failed read is not a statement about the sync. Treating it as "still loading" keeps the column
+  // from asserting "Not checked yet" for the whole roster on the strength of an RPC that errored --
+  // which is what happens for any caller authorizeforclassgrader rejects, or on a transient failure.
+  const discordStatusUnknown = discordStatusLoadingRaw || discordStatusError !== null;
 
   const setSisSyncOptOut = useCallback(
     async (userRoleId: number, sis_sync_opt_out: boolean) => {
@@ -606,6 +686,55 @@ export default function EnrollmentsTable() {
           return values.includes(status);
         }
       },
+      // Only shown for classes that actually have a Discord server; everywhere else the column would
+      // be a full column of "N/A".
+      ...(discordServerConfigured
+        ? [
+            {
+              id: "discord_status",
+              header: "Discord Status",
+              accessorFn: (row: EnrollmentTableRow) =>
+                row.type === "invitation" ? "N/A" : discordStatusLabel(row, discordStateByUser),
+              cell: ({ row }: { row: Row<EnrollmentTableRow> }) => {
+                if (row.original.type === "invitation") {
+                  return (
+                    <Text color="gray.400" fontSize="sm">
+                      N/A
+                    </Text>
+                  );
+                }
+                if (discordStatusUnknown) {
+                  // The status has not arrived yet. Rendering the label now would say "Not checked
+                  // yet" for the whole roster, which is a claim about the sync rather than about the
+                  // fetch, and is exactly the guess this column exists to avoid.
+                  return (
+                    <Text color="gray.400" fontSize="sm">
+                      &hellip;
+                    </Text>
+                  );
+                }
+                const label = discordStatusLabel(row.original, discordStateByUser);
+                const { color, icon } = DISCORD_STATUS_PRESENTATION[label];
+                return (
+                  <Flex alignItems="center" gap={2}>
+                    <Icon as={icon} color={color} />
+                    <Text color={color} fontWeight="medium" fontSize="sm">
+                      {label}
+                    </Text>
+                  </Flex>
+                );
+              },
+              filterFn: (row: Row<EnrollmentTableRow>, id: string, filterValue: unknown) => {
+                if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+                const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+                if (row.original.type === "invitation") {
+                  return values.includes("N/A");
+                }
+                return values.includes(discordStatusLabel(row.original, discordStateByUser));
+              }
+            } satisfies ColumnDef<EnrollmentTableRow>
+          ]
+        : []),
       {
         id: "canvas_id",
         header: "SIS Link",
@@ -876,7 +1005,10 @@ export default function EnrollmentsTable() {
       cancelInvitation,
       classSections,
       labSections,
-      setSisSyncOptOut
+      setSisSyncOptOut,
+      discordServerConfigured,
+      discordStateByUser,
+      discordStatusUnknown
     ]
   );
 
@@ -906,7 +1038,14 @@ export default function EnrollmentsTable() {
     });
 
     return allRows;
-  }, [userRolesData, invitations]);
+    // discordStateByUser and discordStatusUnknown are dependencies even though nothing here reads
+    // them. TanStack memoizes the filtered row model on the identity of `data`, not on the column
+    // definitions, so when the membership RPC resolves (or refresh() replaces the map) the Discord
+    // Status filter kept selecting rows with the previous map: a student could render "In server"
+    // while still listed under a "Cannot invite" filter until some unrelated table state changed.
+    // Returning a new array identity is what invalidates that model.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userRolesData, invitations, discordStateByUser, discordStatusUnknown]);
 
   // Create local table using react-table
   const table = useReactTable({
@@ -972,6 +1111,7 @@ export default function EnrollmentsTable() {
       "Lab Section",
       "GitHub Username",
       "GitHub Org Status",
+      ...(discordServerConfigured ? ["Discord Status"] : []),
       "SIS User ID",
       "SIS Linked",
       "SIS Sync Opt Out",
@@ -1038,6 +1178,16 @@ export default function EnrollmentsTable() {
       const githubOrgStatus =
         original.type === "invitation" ? "N/A" : original.github_org_confirmed ? "Joined" : "Not joined";
 
+      // Get Discord status, matching the column exactly so a filtered roster and its export agree --
+      // including the unknown case. Exporting before the read resolves (or after it failed) would
+      // otherwise write "Not checked yet" for the whole roster, which is a claim about the sync.
+      const discordStatus =
+        original.type === "invitation"
+          ? "N/A"
+          : discordStatusUnknown
+            ? "Unknown"
+            : discordStatusLabel(original, discordStateByUser);
+
       // Get SIS User ID
       const sisUserId =
         original.type === "invitation"
@@ -1070,6 +1220,7 @@ export default function EnrollmentsTable() {
         labSection,
         githubUsername,
         githubOrgStatus,
+        ...(discordServerConfigured ? [discordStatus] : []),
         sisUserId,
         sisLinked,
         sisOptOut,
@@ -1093,7 +1244,16 @@ export default function EnrollmentsTable() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  }, [table, classSections, labSections, tagData, course_id]);
+  }, [
+    table,
+    classSections,
+    labSections,
+    tagData,
+    course_id,
+    discordServerConfigured,
+    discordStateByUser,
+    discordStatusUnknown
+  ]);
 
   return (
     <VStack align="start" w="100%">
@@ -1338,6 +1498,19 @@ export default function EnrollmentsTable() {
                                     { label: "N/A", value: "N/A" }
                                   ]}
                                   placeholder="Filter by GitHub org status..."
+                                />
+                              )}
+                              {header.id === "discord_status" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={DISCORD_STATUS_FILTER_OPTIONS}
+                                  placeholder="Filter by Discord status..."
                                 />
                               )}
                               {header.id === "tags" && (
@@ -1624,7 +1797,6 @@ export default function EnrollmentsTable() {
             </NativeSelect.Field>
           </NativeSelect.Root>
         </HStack>
-        <Toaster />
       </VStack>
       {editingUserId && (
         <Dialog.Root open={isEditProfileModalOpen} onOpenChange={(details) => !details.open && closeEditProfileModal()}>

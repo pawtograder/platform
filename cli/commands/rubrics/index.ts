@@ -12,6 +12,8 @@ import * as fs from "fs";
 import * as YAML from "yaml";
 import { apiCall } from "@/cli/utils/api";
 import { logger, handleError, CLIError } from "@/cli/utils/logger";
+import { addJsonOption, emitJson } from "@/cli/utils/output";
+import { assertFiniteNumbers } from "@/cli/utils/finiteNumbers";
 
 export const command = "rubrics <action>";
 export const describe = "Import and export rubrics in YML format";
@@ -33,6 +35,9 @@ interface YamlReferenceYml {
 }
 
 interface RubricCheckYml {
+  id?: number;
+  data?: unknown;
+  kpi_category?: string | null;
   name: string;
   description: string | null;
   ordinal: number;
@@ -50,6 +55,8 @@ interface RubricCheckYml {
 }
 
 interface RubricCriteriaYml {
+  id?: number;
+  data?: unknown;
   name: string;
   description: string | null;
   ordinal: number;
@@ -62,6 +69,10 @@ interface RubricCriteriaYml {
 }
 
 interface RubricPartYml {
+  id?: number;
+  data?: unknown;
+  is_individual_grading?: boolean;
+  is_assign_to_student?: boolean;
   name: string;
   description: string | null;
   ordinal: number;
@@ -69,6 +80,8 @@ interface RubricPartYml {
 }
 
 interface RubricYml {
+  hide_unless_assigned?: boolean;
+  _source?: Record<string, unknown>;
   name: string;
   description: string | null;
   cap_score_to_assignment_points: boolean;
@@ -83,19 +96,21 @@ export const builder = (yargs: Argv) => {
       "list",
       "List rubrics for an assignment",
       (yargs) => {
-        return yargs
-          .option("assignment", {
-            alias: "a",
-            describe: "Assignment ID or slug",
-            type: "string",
-            demandOption: true
-          })
-          .option("class", {
-            alias: "c",
-            describe: "Class ID, slug, or name",
-            type: "string",
-            demandOption: true
-          });
+        return addJsonOption(
+          yargs
+            .option("assignment", {
+              alias: "a",
+              describe: "Assignment ID or slug",
+              type: "string",
+              demandOption: true
+            })
+            .option("class", {
+              alias: "c",
+              describe: "Class ID, slug, or name",
+              type: "string",
+              demandOption: true
+            })
+        );
       },
       async (args) => {
         try {
@@ -103,6 +118,8 @@ export const builder = (yargs: Argv) => {
             class: args.class as string,
             assignment: args.assignment as string
           });
+
+          if (emitJson(args, data)) return;
 
           logger.step(`Rubrics for assignment: ${data.assignment.title}`);
           logger.blank();
@@ -152,6 +169,11 @@ export const builder = (yargs: Argv) => {
             alias: "o",
             describe: "Output file path (default: <assignment-slug>-<type>-rubric.yml)",
             type: "string"
+          })
+          .option("strip-ids", {
+            describe: "Omit database ids, so importing creates every row new (a template, not a round-trip)",
+            type: "boolean",
+            default: false
           });
       },
       async (args) => {
@@ -162,7 +184,8 @@ export const builder = (yargs: Argv) => {
           const data = await apiCall("rubrics.export", {
             class: args.class as string,
             assignment: args.assignment as string,
-            type: rubricType
+            type: rubricType,
+            strip_ids: args.stripIds as boolean
           });
 
           const rubricData = data.rubric as RubricYml;
@@ -233,7 +256,17 @@ export const builder = (yargs: Argv) => {
             default: "grading"
           })
           .option("dry-run", {
-            describe: "Show what would be imported without making changes",
+            describe: "Resolve and validate against the live rubric, and report what would change",
+            type: "boolean",
+            default: false
+          })
+          .option("verbose", {
+            describe: "Also print the parsed rubric tree",
+            type: "boolean",
+            default: false
+          })
+          .option("json", {
+            describe: "Emit the raw JSON response instead of a formatted plan",
             type: "boolean",
             default: false
           });
@@ -251,6 +284,7 @@ export const builder = (yargs: Argv) => {
           if (parsedDoc === null || typeof parsedDoc !== "object" || Array.isArray(parsedDoc)) {
             throw new CLIError("Invalid YML: empty or invalid document");
           }
+          assertFiniteNumbers(parsedDoc, "");
           const rubricYml = parsedDoc as RubricYml;
 
           // Validate structure
@@ -278,42 +312,66 @@ export const builder = (yargs: Argv) => {
             }
           }
 
-          logger.step(`Importing rubric for assignment: ${args.assignment}`);
-          logger.info(`Parsed rubric: ${rubricYml.name}`);
-          logger.info(`  Parts: ${partCount}`);
-          logger.info(`  Criteria: ${criteriaCount}`);
-          logger.info(`  Checks: ${checkCount}`);
+          // Suppressed under --json: `emitJson` requires that nothing else reaches
+          // stdout, and these lines land there (logger.info is console.log), so
+          // `rubrics import --json | jq` failed on the leading "📋 Importing rubric…".
+          const jsonMode = args.json === true;
+          if (!jsonMode) {
+            logger.step(`Importing rubric for assignment: ${args.assignment}`);
+            logger.info(`Parsed rubric: ${rubricYml.name}`);
+            logger.info(`  Parts: ${partCount}`);
+            logger.info(`  Criteria: ${criteriaCount}`);
+            logger.info(`  Checks: ${checkCount}`);
 
-          if (args.dryRun) {
-            logger.step("DRY RUN - No changes will be made");
-            logger.blank();
-            printRubricTree(rubricYml);
-            return;
+            if (args.verbose) {
+              logger.blank();
+              printRubricTree(rubricYml);
+            }
           }
 
-          // Send parsed rubric data to edge function
+          // The dry run goes to the server. It used to return here after printing the
+          // parsed file, which validated nothing the file did not already state — no
+          // enum checks, no reference resolution, and no idea what the write would
+          // actually change.
           const data = await apiCall("rubrics.import", {
             class: args.class as string,
             assignment: args.assignment as string,
             type: args.type as string,
             rubric: rubricYml,
-            dry_run: false
+            dry_run: args.dryRun === true
           });
 
-          logger.success("Rubric imported successfully");
-          logger.info(`  Rubric ID: ${data.rubric_id}`);
+          if (emitJson(args, data)) return;
+
+          if (data.dry_run) logger.step("DRY RUN - No changes will be made");
+
+          if (data.rebuilding_from_foreign_yaml) {
+            logger.blank();
+            logger.warning(
+              "This YAML carries ids from a different rubric, so every existing row will be replaced " +
+                "rather than updated. That is the cross-assignment copy workflow — re-export from this " +
+                "rubric if you meant to edit it in place."
+            );
+          }
+
+          printImportPlan(data.plan);
+
+          if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+            logger.blank();
+            for (const w of data.warnings) logger.warning(w);
+          }
+
+          logger.blank();
+          if (data.dry_run) {
+            logger.info("Nothing was changed. Re-run without --dry-run to apply.");
+            return;
+          }
+
+          logger.success(data.message);
+          logger.info(`  Rubric ID: ${data.target_rubric_id}`);
           logger.info(`  Parts: ${data.summary.parts}`);
           logger.info(`  Criteria: ${data.summary.criteria}`);
           logger.info(`  Checks: ${data.summary.checks}`);
-          if (typeof data.summary.references === "number") {
-            logger.info(`  References: ${data.summary.references}`);
-          }
-          if (Array.isArray(data.reference_warnings) && data.reference_warnings.length > 0) {
-            logger.info(`  Skipped references: ${data.reference_warnings.length}`);
-            for (const w of data.reference_warnings) {
-              logger.info(`    - ${w.check_path}: ${w.reason}`);
-            }
-          }
         } catch (error) {
           handleError(error);
         }
@@ -321,6 +379,108 @@ export const builder = (yargs: Argv) => {
     )
     .demandCommand(1, "You must specify an action");
 };
+
+/**
+ * Prints the import plan, deletions first: those are the only entries that can lose
+ * work, and a check that still has grading comments cannot be deleted at all.
+ */
+function printImportPlan(plan: {
+  parts: { insert: string[]; update: number[]; remove: Array<{ id: number; name: string }> };
+  criteria: { insert: string[]; update: number[]; remove: Array<{ id: number; name: string }> };
+  checks: {
+    insert: string[];
+    update: number[];
+    remove: Array<{ id: number; name: string }>;
+    points_changed: Array<{ id: number; name: string; from: number; to: number }>;
+  };
+  /** Optional: absent from a server that predates the criterion-scoring diff. */
+  criteria_scoring_changed?: Array<{ id: number; name: string }>;
+  /** Optional: absent from a server that predates the check-reparenting diff. */
+  checks_reparented?: Array<{ id: number; name: string }>;
+  /** Optional: absent from a server that predates the part grading-mode diff. */
+  parts_grading_mode_changed?: Array<{ id: number; name: string }>;
+  /** Optional: absent from a server that predates the criterion-reparenting diff. */
+  criteria_reparented?: Array<{ id: number; name: string }>;
+  foreign_ids: Array<{ level: string; id: number; name: string }>;
+  broad_change: boolean;
+}): void {
+  logger.blank();
+  logger.step("Plan");
+
+  const removals = [
+    ...plan.parts.remove.map((r) => `part '${r.name}'`),
+    ...plan.criteria.remove.map((r) => `criterion '${r.name}'`),
+    ...plan.checks.remove.map((r) => `check '${r.name}'`)
+  ];
+  if (removals.length > 0) {
+    logger.warning(`Removing ${removals.length} row(s):`);
+    for (const r of removals) logger.info(`  - ${r}`);
+  }
+
+  if (plan.checks.points_changed.length > 0) {
+    logger.warning(`Changing points on ${plan.checks.points_changed.length} check(s):`);
+    for (const c of plan.checks.points_changed) {
+      logger.info(`  - '${c.name}': ${c.from} -> ${c.to} (cascades to existing comments)`);
+    }
+  }
+
+  const scoringChanged = plan.criteria_scoring_changed ?? [];
+  if (scoringChanged.length > 0) {
+    logger.warning(`Changing scoring on ${scoringChanged.length} criteria (total_points/additive/deduction-only):`);
+    for (const c of scoringChanged) {
+      logger.info(`  - '${c.name}'`);
+    }
+  }
+
+  const reparented = plan.checks_reparented ?? [];
+  if (reparented.length > 0) {
+    logger.warning(`Moving ${reparented.length} check(s) under a different criterion (rescores them):`);
+    for (const c of reparented) {
+      logger.info(`  - '${c.name}'`);
+    }
+  }
+
+  const gradingModeChanged = plan.parts_grading_mode_changed ?? [];
+  if (gradingModeChanged.length > 0) {
+    logger.warning(
+      `Changing the grading mode on ${gradingModeChanged.length} part(s) ` +
+        "(individual / assign-to-student — recomputes every student total under them):"
+    );
+    for (const c of gradingModeChanged) {
+      logger.info(`  - '${c.name}'`);
+    }
+  }
+
+  const criteriaReparented = plan.criteria_reparented ?? [];
+  if (criteriaReparented.length > 0) {
+    logger.warning(
+      `Moving ${criteriaReparented.length} criteri${criteriaReparented.length === 1 ? "on" : "a"} ` +
+        "under a different part (can change how their points are split):"
+    );
+    for (const c of criteriaReparented) {
+      logger.info(`  - '${c.name}'`);
+    }
+  }
+
+  const inserts = plan.parts.insert.length + plan.criteria.insert.length + plan.checks.insert.length;
+  const updates = plan.parts.update.length + plan.criteria.update.length + plan.checks.update.length;
+  logger.info(`Creating: ${inserts} row(s)`);
+  logger.info(`Updating: ${updates} row(s)`);
+  if (
+    removals.length === 0 &&
+    inserts === 0 &&
+    plan.checks.points_changed.length === 0 &&
+    scoringChanged.length === 0 &&
+    reparented.length === 0 &&
+    gradingModeChanged.length === 0 &&
+    criteriaReparented.length === 0
+  ) {
+    logger.info("No structural changes.");
+  }
+  if (plan.broad_change) {
+    logger.info("Affected submission reviews will be recomputed.");
+  }
+}
 
 /**
  * Print rubric tree for dry-run preview

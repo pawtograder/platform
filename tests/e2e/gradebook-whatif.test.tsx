@@ -145,6 +145,31 @@ test.describe("Gradebook What-If", () => {
     await expect(averageAssignmentsCard.locator('input[type="number"]')).toHaveCount(0);
   });
 
+  test("what-if editing and group disclosure are keyboard operable (WCAG 2.1.1)", async ({ page }) => {
+    await gotoStudentGradebook(page);
+
+    // Group headers are real disclosure buttons: focusable, Enter toggles, state announced.
+    const groupToggle = page.getByRole("button", { name: /assignments\.\.\./i }).first();
+    await expect(groupToggle).toBeVisible();
+    const expandedBefore = await groupToggle.getAttribute("aria-expanded");
+    await groupToggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(groupToggle).toHaveAttribute("aria-expanded", expandedBefore === "true" ? "false" : "true");
+
+    // The what-if editor opens from an explicit button (not just the card click target),
+    // moves focus into the input, and Escape returns focus to the button that opened it.
+    const participationCard = getGradeCard(page, "Participation");
+    const editButton = participationCard.getByRole("button", { name: /edit hypothetical grade for participation/i });
+    await expect(editButton).toBeVisible();
+    await editButton.focus();
+    await page.keyboard.press("Enter");
+
+    const whatIfInput = participationCard.locator('input[type="number"]');
+    await expect(whatIfInput).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(editButton).toBeFocused();
+  });
+
   test("supports assignment-card simulation and cascades to final grade", async ({ page }) => {
     await gotoStudentGradebook(page);
 

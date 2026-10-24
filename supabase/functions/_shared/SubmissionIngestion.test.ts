@@ -9,7 +9,9 @@
  *     expected submission-scoped key, and its submission_files row references it,
  *   - the combined empty-hash matches an independent recomputation,
  *   - the fileFilter restricts ingestion,
- *   - empty detection flips isEmpty when the handout-hash table matches.
+ *   - empty detection flips isEmpty when the handout-hash table matches,
+ *   - a file whose name carries no extension is classified by its bytes: a
+ *     compiled executable goes to storage, a Makefile stays inline.
  *
  * Run from supabase/functions:  deno test _shared/SubmissionIngestion.test.ts
  * (it pulls npm:jszip + npm:unzipper from the global deno cache; no DB needed).
@@ -38,7 +40,7 @@ async function generateDummyPkcs8Pem(): Promise<string> {
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", await generateDummyPkcs8Pem());
 Deno.env.set("GITHUB_APP_ID", "1");
 
-const { ingestSubmissionFilesFromZip } = await import("./SubmissionIngestion.ts");
+const { ingestSubmissionFilesFromZip, collectTextFilesFromZipBuffer } = await import("./SubmissionIngestion.ts");
 
 // ---- helpers -------------------------------------------------------------
 
@@ -312,3 +314,252 @@ Deno.test(
     assertEquals(result.isEmpty, false);
   }
 );
+
+// emptyHashFilter (#895): the push-direct path stores the WHOLE repo so an
+// instructor can hand-grade it, but `assignment_handout_file_hashes` records only
+// the configured submissionFiles. Without narrowing the comparison, the two hashes
+// cover different file sets and an untouched starter push never reads as empty.
+Deno.test("ingestSubmissionFilesFromZip: emptyHashFilter narrows the empty-check hash to matching files", async () => {
+  // Whole tree = the graded file plus noise the handout hashes do not cover.
+  const zipBuffer = await buildZip({
+    "Main.java": TEXT_CONTENTS,
+    "README.md": "# instructions\n",
+    ".github/workflows/grade.yml.disabled": "on: workflow_dispatch\n"
+  });
+
+  // Handout hash covers ONLY Main.java, mirroring submissionFiles: ["**/*.java"].
+  const handoutHash = combinedHash({ "Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")) });
+  const { client, insertedFiles } = makeFakeSupabase({
+    handoutHashesByAssignment: new Map([[123, new Set([handoutHash])]])
+  });
+
+  const result = await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 1,
+    classId: 1,
+    profileId: "p",
+    groupId: null,
+    detectEmptyForAssignmentId: 123,
+    emptyHashFilter: (name) => name.endsWith(".java")
+  });
+
+  // Every file is still stored — the filter affects only the comparison.
+  assertEquals(insertedFiles.length, 3);
+  // combinedHash still reflects the whole tree, so it differs from the handout's.
+  assert(result.combinedHash !== handoutHash, "whole-tree hash should differ from the handout subset hash");
+  // ...but the narrowed comparison matches, so the push is correctly seen as empty.
+  assertEquals(result.isEmpty, true);
+});
+
+Deno.test(
+  "ingestSubmissionFilesFromZip: emptyHashFilter still reports non-empty when a graded file changed",
+  async () => {
+    const zipBuffer = await buildZip({
+      "Main.java": TEXT_CONTENTS + "\n// my work\n",
+      "README.md": "# instructions\n"
+    });
+
+    const handoutHash = combinedHash({ "Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")) });
+    const { client } = makeFakeSupabase({ handoutHashesByAssignment: new Map([[123, new Set([handoutHash])]]) });
+
+    const result = await ingestSubmissionFilesFromZip({
+      // deno-lint-ignore no-explicit-any
+      adminSupabase: client as any,
+      zipBuffer,
+      submissionId: 1,
+      classId: 1,
+      profileId: "p",
+      groupId: null,
+      detectEmptyForAssignmentId: 123,
+      emptyHashFilter: (name) => name.endsWith(".java")
+    });
+
+    assertEquals(result.isEmpty, false);
+  }
+);
+
+Deno.test("ingestSubmissionFilesFromZip: without emptyHashFilter the whole-tree hash is used (unchanged)", async () => {
+  const zipBuffer = await buildZip({ "Main.java": TEXT_CONTENTS, "README.md": "# instructions\n" });
+  // Recording only the Main.java subset must NOT match when nothing narrows the
+  // comparison — this is the pre-existing behavior the filter exists to fix.
+  const subsetHash = combinedHash({ "Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")) });
+  const { client } = makeFakeSupabase({ handoutHashesByAssignment: new Map([[123, new Set([subsetHash])]]) });
+
+  const result = await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 1,
+    classId: 1,
+    profileId: "p",
+    groupId: null,
+    detectEmptyForAssignmentId: 123
+  });
+
+  assertEquals(result.isEmpty, false);
+});
+
+// Regression: when the glob set matches NONE of the submitted files, the narrowed hash is
+// the hash of the empty set. The handout side records that same constant whenever its own
+// tree has no matching file, so a naive comparison reports "identical to the handout" and
+// the caller deletes a submission full of real work.
+Deno.test("ingestSubmissionFilesFromZip: an emptyHashFilter that matches nothing reports not-empty", async () => {
+  const zipBuffer = await buildZip({
+    "essay.md": "# a lot of real work\n",
+    "notes.txt": "more real work\n"
+  });
+  // The handout's recorded hash for globs that match nothing in its tree either.
+  const emptySetHash = combinedHash({});
+  const { client, insertedFiles } = makeFakeSupabase({
+    handoutHashesByAssignment: new Map([[123, new Set([emptySetHash])]])
+  });
+
+  const result = await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 1,
+    classId: 1,
+    profileId: "p",
+    groupId: null,
+    detectEmptyForAssignmentId: 123,
+    // Mirrors submissionFiles: ["**/*.java"] on a repo whose work is all markdown.
+    emptyHashFilter: (name) => name.endsWith(".java")
+  });
+
+  assertEquals(insertedFiles.length, 2);
+  assertEquals(result.isEmpty, false);
+});
+
+// Regression (prod): a student compiled `mystery.c` and committed the resulting
+// executable next to it. `mystery` has no extension, so extension-only detection
+// called it text and the ingester sent NUL-laden bytes to
+// `submission_files.contents`; Postgres rejected the JSON escape ("unsupported
+// Unicode escape sequence"), the rollback tore the submission down, and every
+// later push to that repo failed identically.
+const ELF_BYTES = new Uint8Array([
+  0x7f,
+  0x45,
+  0x4c,
+  0x46, // \x7fELF
+  0x02,
+  0x01,
+  0x01,
+  0x00, // 64-bit, little-endian, ELF v1, System V ABI
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x00, // padding — the NUL run that breaks the text insert
+  0x02,
+  0x00,
+  0x3e,
+  0x00 // ET_EXEC, EM_X86_64
+]);
+
+Deno.test("ingestSubmissionFilesFromZip: an extensionless binary goes to storage, not contents", async () => {
+  const zipBuffer = await buildZip({
+    "module-01/mystery.c": "int main(void) { return 0; }\n",
+    "module-01/mystery": ELF_BYTES
+  });
+  const { client, insertedFiles, storageUploads } = makeFakeSupabase();
+
+  const result = await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 42,
+    classId: 7,
+    profileId: "profile-abc",
+    groupId: null
+  });
+
+  assertEquals(insertedFiles.length, 2);
+
+  const binRow = insertedFiles.find((r) => r.name === "module-01/mystery");
+  assert(binRow, "the executable should still be ingested, as a binary");
+  assertEquals(binRow!.is_binary, true);
+  assertEquals(binRow!.contents, null);
+  // No extension to map, so the generic type.
+  assertEquals(binRow!.mime_type, "application/octet-stream");
+  assertEquals(binRow!.storage_key, "classes/7/profiles/profile-abc/submissions/42/files/module-01/mystery");
+  assertEquals(binRow!.file_size, ELF_BYTES.length);
+
+  assertEquals(storageUploads.length, 1);
+  assertEquals(storageUploads[0].key, "classes/7/profiles/profile-abc/submissions/42/files/module-01/mystery");
+  assertEquals(storageUploads[0].size, ELF_BYTES.length);
+
+  // The source next to it is unaffected.
+  const srcRow = insertedFiles.find((r) => r.name === "module-01/mystery.c");
+  assertEquals(srcRow!.is_binary, false);
+  assertEquals(srcRow!.contents, "int main(void) { return 0; }\n");
+
+  // The actual failure condition: nothing carrying a NUL reaches `contents`.
+  // PostgREST would serialize it as a NUL escape, which Postgres refuses to
+  // convert to text.
+  for (const row of insertedFiles) {
+    assert(!row.contents?.includes("\0"), `row ${row.name} must not carry a NUL in contents`);
+  }
+
+  // Hashing is over raw bytes and so is unchanged by the classification.
+  assertEquals(
+    result.combinedHash,
+    combinedHash({
+      "module-01/mystery.c": sha256Hex(Buffer.from("int main(void) { return 0; }\n", "utf-8")),
+      "module-01/mystery": sha256Hex(Buffer.from(ELF_BYTES))
+    })
+  );
+});
+
+// The other half of the contract: plenty of legitimate source files carry no
+// extension, and misrouting them to storage would drop them out of the code
+// viewer entirely. Only the bytes decide.
+Deno.test("ingestSubmissionFilesFromZip: extensionless TEXT files stay inline", async () => {
+  const makefile = "all:\n\tgcc -o mystery mystery.c\n";
+  const zipBuffer = await buildZip({ Makefile: makefile, LICENSE: "MIT\n" });
+  const { client, insertedFiles, storageUploads } = makeFakeSupabase();
+
+  await ingestSubmissionFilesFromZip({
+    // deno-lint-ignore no-explicit-any
+    adminSupabase: client as any,
+    zipBuffer,
+    submissionId: 1,
+    classId: 1,
+    profileId: "p",
+    groupId: null
+  });
+
+  assertEquals(storageUploads.length, 0);
+  assertEquals(insertedFiles.length, 2);
+  for (const row of insertedFiles) {
+    assertEquals(row.is_binary, false);
+    assertEquals(row.storage_key, undefined);
+  }
+  assertEquals(insertedFiles.find((r) => r.name === "Makefile")!.contents, makefile);
+});
+
+// The PR base-tree side of the same classification. Its output is written to the
+// jsonb `pr_base_tree_cache.files`, which rejects a NUL exactly as
+// `submission_files.contents` does — and the head side now routes these to
+// storage, so keeping one here as pseudo-text would render as a whole-file
+// deletion in the diff.
+Deno.test("collectTextFilesFromZipBuffer: skips extensionless binaries, keeps extensionless text", async () => {
+  const zipBuffer = await buildZip({
+    "module-01/mystery.c": "int main(void) { return 0; }\n",
+    "module-01/mystery": ELF_BYTES,
+    Makefile: "all:\n",
+    "assets/logo.png": PNG_BYTES
+  });
+
+  const files = await collectTextFilesFromZipBuffer(zipBuffer);
+
+  assertEquals(Object.keys(files).sort(), ["Makefile", "module-01/mystery.c"]);
+  for (const [name, contents] of Object.entries(files)) {
+    assert(!contents.includes("\0"), `${name} must not carry a NUL`);
+  }
+});

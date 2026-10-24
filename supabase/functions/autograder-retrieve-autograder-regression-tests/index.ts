@@ -2,8 +2,10 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-retrieve-autograder-regression-tests");
   const token = req.headers.get("Authorization");
@@ -13,9 +15,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const decoded = await validateOIDCToken(token);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
   scope?.setTag("repository", decoded.repository);
+  // One click from any event this request reports to the run that caused it.
+  attachWorkflowRunLink(scope, decoded);
   const { data, error } = await adminSupabase
     .from("autograder_regression_test_by_grader")
     .select("*")

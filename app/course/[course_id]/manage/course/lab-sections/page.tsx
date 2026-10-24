@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import useModalManager from "@/hooks/useModalManager";
@@ -54,7 +54,9 @@ interface CreateLabSectionData {
   name: string;
   day_of_week: DayOfWeek;
   start_time: string;
-  end_time?: string;
+  // Load-bearing, not cosmetic: lab-based assignment deadlines are measured from this time
+  // (calculate_effective_due_date), so it is required rather than optional.
+  end_time: string;
   lab_leader_ids: string[];
   meeting_location?: string;
   description?: string;
@@ -151,7 +153,9 @@ function CreateLabSectionModal({
         name: initialData.name,
         day_of_week: initialData.day_of_week,
         start_time: initialData.start_time,
-        end_time: initialData.end_time,
+        // Legacy and SIS-imported sections can have no end time; surface it as empty so the
+        // now-required field forces the instructor to supply one before saving.
+        end_time: initialData.end_time ?? "",
         lab_leader_ids: initialData.lab_leader_ids || [],
         meeting_location: initialData.meeting_location,
         description: initialData.description
@@ -187,7 +191,7 @@ function CreateLabSectionModal({
           name: data.name,
           day_of_week: data.day_of_week,
           start_time: data.start_time,
-          end_time: data.end_time || null,
+          end_time: data.end_time,
           meeting_location: data.meeting_location || null,
           description: data.description || null,
           class_id: Number(course_id),
@@ -328,6 +332,7 @@ function CreateLabSectionModal({
                       <Input
                         type="time"
                         {...register("end_time", {
+                          required: "End time is required",
                           validate: (value, formValues) => {
                             if (!value || !formValues.start_time) return true;
                             const startTime = new Date(`2000-01-01T${formValues.start_time}`);
@@ -336,6 +341,11 @@ function CreateLabSectionModal({
                           }
                         })}
                       />
+                      <Field.HelperText>
+                        Assignment deadlines that are set relative to lab are measured from this time. A section with no
+                        end time recorded — an older section, or one imported from the SIS with unparseable meeting
+                        times — is treated as ending at 11:59:59 PM on its meeting day.
+                      </Field.HelperText>
                       <Field.ErrorText>{errors.end_time?.message}</Field.ErrorText>
                     </Field.Root>
                   </HStack>
@@ -796,7 +806,7 @@ function LabSectionsTable() {
         name: labSection.name,
         day_of_week: labSection.day_of_week as DayOfWeek,
         start_time: labSection.start_time || "",
-        end_time: labSection.end_time || undefined,
+        end_time: labSection.end_time || "",
         lab_leader_ids: leaders?.map((l) => l.profile_id) || [],
         meeting_location: labSection.meeting_location || undefined,
         description: labSection.description || undefined,
@@ -1323,7 +1333,6 @@ export default function LabSectionsPage() {
   return (
     <Container maxW="6xl">
       <LabSectionsTable />
-      <Toaster />
     </Container>
   );
 }

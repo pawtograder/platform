@@ -4,6 +4,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { Open as openZip } from "npm:unzipper";
 import { assertUserIsInCourse, SecurityError, UserVisibleError } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -243,7 +244,8 @@ const getArtifactZip = async (
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   const artifactKey = `classes/${classId}/profiles/${profileId}/submissions/${submissionId}/${artifactId}`;

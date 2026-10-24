@@ -15,7 +15,8 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { getOctoKit, getRepo, getAppSlug, getOrgId } from "../_shared/GitHubWrapper.ts";
 import { UserVisibleError, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 type RequestBody = {
   repo: string;
@@ -47,6 +48,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CheckAp
     throw new SecurityError("Missing Authorization header");
   }
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: { headers: { Authorization: authHeader } }
   });
   const token = authHeader.replace("Bearer ", "");

@@ -104,6 +104,11 @@ export default function ShortcutsHelpDialog() {
                 <Row label="Focus per-page search (when present)" keys={<Kbd>s</Kbd>} />
                 <Row label="Focus per-page search (alternate)" keys={<Kbd>/</Kbd>} />
               </Box>
+              <Text fontSize="xs" color="fg.muted" mt="2">
+                Some browsers and screen readers reserve Alt combinations for their own menus. If a jump doesn&apos;t
+                fire, press <Kbd>Tab</Kbd> from the top of the page instead — the skip links reach the same landmarks in
+                every browser.
+              </Text>
             </Box>
 
             <Box>

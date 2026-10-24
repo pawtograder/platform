@@ -1,11 +1,12 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as Sentry from "npm:@sentry/deno";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 import { indexSubmission } from "../_shared/CodeSymbolIndexer.ts";
 import type { IndexSubmissionRequest, IndexSubmissionResponse } from "../_shared/FunctionTypes.d.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope): Promise<IndexSubmissionResponse> {
   scope?.setTag("function", "index-submission");
@@ -23,7 +24,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<IndexSu
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
   // Authorize: indexing is triggered server-side (ingestion / backfill, both service-role) or by an

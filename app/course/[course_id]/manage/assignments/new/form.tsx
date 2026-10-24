@@ -19,14 +19,16 @@ import {
 } from "@chakra-ui/react";
 import { Controller, FieldErrors, FieldValues } from "react-hook-form";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import Link from "@/components/ui/link";
+import { toaster } from "@/components/ui/toaster";
 import { summarizeInvalidFields } from "@/lib/assignmentFormErrors";
-import { appendTimezoneOffset } from "@/lib/utils";
+import { calculateLabBasedDueDate } from "@/lib/labDueDate";
+import { appendTimezoneOffset, parseZonedFormDate, toDateTimeLocalValue } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { addMinutes } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -34,8 +36,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { LuCheck } from "react-icons/lu";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
+import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import { useTableControllerTableValues } from "@/lib/TableController";
 
 /**
@@ -80,7 +83,12 @@ function Field({ orientation, ...props }: FieldProps) {
   );
 }
 
-// Helper function to calculate effective due date for a lab section
+// Helper function to calculate effective due date for a lab section.
+// Delegates to lib/labDueDate, the single implementation shared with useAssignmentDueDate,
+// CourseController.calculateEffectiveDueDate and calculate_effective_due_date -- so the deadline
+// this preview promises the instructor is the one students are actually held to. The previous
+// local copy built its timestamps with `new TZDate("<date>T<time>", tz)`, which parses a
+// timezone-less string as UTC and therefore previewed the wrong wall-clock time.
 function calculateLabSectionDueDate(
   labSection: LabSection,
   labSectionMeetings: LabSectionMeeting[],
@@ -88,35 +96,13 @@ function calculateLabSectionDueDate(
   minutesDueAfterLab: number,
   timezone: string
 ): Date | null {
-  // Find the most recent lab section meeting before the assignment's original due date
-  const relevantMeetings = labSectionMeetings
-    .filter((meeting) => {
-      if (meeting.lab_section_id !== labSection.id || meeting.cancelled) {
-        return false;
-      }
-
-      // Combine meeting date with lab section end time
-      const meetingEndTime = new TZDate(meeting.meeting_date + "T" + (labSection.end_time || "23:59:59"), timezone);
-
-      return meetingEndTime <= originalDueDate;
-    })
-    .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
-
-  if (relevantMeetings.length === 0) {
-    return null; // No lab meeting found before due date
-  }
-
-  // Get the most recent lab meeting
-  const mostRecentMeeting = relevantMeetings[0];
-
-  // Combine meeting date with lab section end time
-  const labMeetingEndTime = new TZDate(
-    mostRecentMeeting.meeting_date + "T" + (labSection.end_time || "23:59:59"),
-    timezone
-  );
-
-  // Add the minutes offset
-  return addMinutes(labMeetingEndTime, minutesDueAfterLab);
+  return calculateLabBasedDueDate({
+    meetings: labSectionMeetings.filter((meeting) => meeting.lab_section_id === labSection.id),
+    endTime: labSection.end_time,
+    timeZone: timezone,
+    assignmentDueDate: originalDueDate,
+    minutesDueAfterLab
+  });
 }
 
 function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
@@ -356,14 +342,7 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
                   control={control}
                   rules={{ required: false }}
                   render={({ field }) => {
-                    const hasATimezoneOffset =
-                      field.value &&
-                      (field.value.charAt(field.value.length - 6) === "+" ||
-                        field.value.charAt(field.value.length - 6) === "-");
-                    const localValue =
-                      field.value && hasATimezoneOffset
-                        ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                        : field.value;
+                    const localValue = toDateTimeLocalValue(field.value, timezone);
                     return (
                       <Input
                         type="datetime-local"
@@ -573,12 +552,7 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
                   control={control}
                   render={({ field }) => {
                     const raw = field.value as string | null | undefined;
-                    const hasATimezoneOffset =
-                      typeof raw === "string" &&
-                      raw.length >= 6 &&
-                      (raw.charAt(raw.length - 6) === "+" || raw.charAt(raw.length - 6) === "-");
-                    const localValue =
-                      raw && hasATimezoneOffset ? formatInTimeZone(raw, timezone, "yyyy-MM-dd'T'HH:mm") : (raw ?? "");
+                    const localValue = toDateTimeLocalValue(raw, timezone);
                     return (
                       <Input
                         type="datetime-local"
@@ -627,8 +601,32 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
     (a) => a.repo_mode !== "none" && a.repo_mode !== "no_submission"
   );
 
-  // Branch protection only makes sense when a repository is actually created.
-  const protectionDisabled = repoMode === "none" || repoMode === "no_submission";
+  // Branch protection only makes sense when a repository is actually created, and
+  // the same is true of the autograder: it runs as a GitHub Actions workflow inside
+  // the student repo, so there is nowhere for it to run without one.
+  const noRepoMode = repoMode === "none" || repoMode === "no_submission";
+  const protectionDisabled = noRepoMode;
+  // PR submissions are ingested by the PR webhook and never produce grader_results,
+  // so PR mode cannot have an autograder either. Both save paths coerce the persisted
+  // value; mirroring it here keeps the checkbox and the fork-agreement warning below
+  // agreeing with what will actually be written.
+  const autograderDisabled = noRepoMode || watch("submission_mode") === "pr";
+  // Shown as unchecked while a no-repo or PR mode is selected, WITHOUT writing the form
+  // value. Forcing the value to false in an effect was a one-way door: flipping repo_mode
+  // to 'none' and back left it false with the checkbox re-enabled and unchecked, silently
+  // turning a mode experiment into a repo-only assignment. Both save paths already coerce
+  // the persisted value, so display is all that is needed here.
+  const autograderChecked = !autograderDisabled && watch("has_autograder") !== false;
+  // fork-from-prior adopts the SOURCE assignment's handout repo and forks each
+  // student's source-assignment repo, so the two assignments share one handout
+  // and cannot disagree about the autograder. Surface the clash here rather than
+  // letting assignment-create-handout-repo reject the save.
+  const sourceAssignmentId = watch("source_assignment_id");
+  const selectedSource =
+    repoMode === "fork_from_prior_assignment" && sourceAssignmentId
+      ? eligibleSourceAssignments?.find((a) => a.id === Number(sourceAssignmentId))
+      : undefined;
+  const forkAutograderMismatch = !!selectedSource && (selectedSource.has_autograder !== false) !== autograderChecked;
 
   return (
     <CardRoot>
@@ -690,6 +688,57 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
             </Field>
           </Fieldset.Content>
         )}
+        <Box mt={3}>
+          <Text fontWeight="medium" mb={1} color={autograderDisabled ? "fg.subtle" : "fg.default"}>
+            Autograder
+          </Text>
+          <Text fontSize="sm" color="fg.muted" mb={3}>
+            {noRepoMode
+              ? "The autograder runs as a GitHub Actions workflow in the student repository, so it is unavailable for assignments with no repository."
+              : autograderDisabled
+                ? "Pull-request submissions are graded without GitHub Actions, so the autograder is unavailable in pull-request mode."
+                : "Whether student pushes are graded automatically by GitHub Actions."}
+          </Text>
+          <Fieldset.Content>
+            <Field
+              helperText={
+                autograderDisabled
+                  ? undefined
+                  : autograderChecked
+                    ? "Handout and student repositories include the grading workflow (.github/workflows/grade.yml), and a push with #submit in the commit message runs it."
+                    : "Handout and student repositories are created WITHOUT the grading workflow, so no GitHub Actions run and students never see a failing check. Every push to the student repository creates a submission for you to grade by hand — no #submit needed. A solution repository is still created for your reference solution and grading notes."
+              }
+            >
+              {forkAutograderMismatch && (
+                <Text fontSize="sm" color="fg.error" mb={2}>
+                  This assignment forks from &quot;{selectedSource?.title}&quot;, so both share that assignment&apos;s
+                  handout repository and must have the same autograder setting. &quot;{selectedSource?.title}&quot; has
+                  the autograder {selectedSource?.has_autograder === false ? "disabled" : "enabled"}
+                  {autograderDisabled
+                    ? ", and this assignment cannot have one in its current mode. Pick a different source assignment, or a repository configuration that gives this assignment its own handout."
+                    : ", so this assignment must too. Saving will fail until they match."}
+                </Text>
+              )}
+              <Controller
+                name="has_autograder"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={autograderChecked}
+                    disabled={autograderDisabled}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Enable autograder (GitHub Actions)</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+        </Box>
         <Box mt={3}>
           <Text fontWeight="medium" mb={1} color={protectionDisabled ? "fg.subtle" : "fg.default"}>
             Branch Protection
@@ -962,6 +1011,16 @@ export default function AssignmentForm({
     form.getValues("require_tokens_before_due_date") == true
   );
   const timezone = course.time_zone || "America/New_York";
+  // The class-wide allotment caps every per-assignment limit, so read it live: an instructor who
+  // fixes it in Course Settings and navigates back should see the warning below go away.
+  const classLateTokensPerStudent = useCourse().late_tokens_per_student;
+  const maxLateTokens = Number(watch("max_late_tokens") ?? 0);
+  // Read through the course controller, not `role.classes`: that role snapshot is fetched once per
+  // page load and has no realtime subscription, so an instructor who toggles the flag in Course
+  // Settings and soft-navigates here would keep seeing the pre-toggle helper text. `useCourse()`
+  // merges `classes` realtime updates. Both routes that render this form sit under
+  // `CourseControllerProvider` (LabDueDatePreview in this file already calls useCourseController).
+  const showSuggestedDueDate = useSuggestedDueDateEmphasisEnabled();
   const isEditing = !!form.getValues("id");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
@@ -1041,7 +1100,6 @@ export default function AssignmentForm({
 
   return (
     <div>
-      <Toaster />
       <form ref={formRef} onSubmit={handleSubmit(onSubmitWrapper, onInvalid)}>
         <Fieldset.Root>
           <VStack align="stretch" gap={6} w="100%">
@@ -1135,24 +1193,21 @@ export default function AssignmentForm({
                         required: "This is required",
                         validate: (value: string) => {
                           if (!value) return "This is required";
+                          const selected = parseZonedFormDate(value, timezone);
+                          // Report an unparseable value as such, rather than as "must be in the
+                          // future", which sends the instructor looking for the wrong problem.
+                          if (!selected) return "Enter a valid date and time";
                           // Only enforce future date requirement when creating new assignments
                           if (!isEditing) {
-                            const selected = new TZDate(value, timezone).getTime();
-                            const now = TZDate.tz(timezone).getTime();
-                            return selected > now || "Release date must be in the future";
+                            return (
+                              selected.getTime() > TZDate.tz(timezone).getTime() || "Release date must be in the future"
+                            );
                           }
                           return true;
                         }
                       }}
                       render={({ field }) => {
-                        const hasATimezoneOffset =
-                          field.value &&
-                          (field.value.charAt(field.value.length - 6) === "+" ||
-                            field.value.charAt(field.value.length - 6) === "-");
-                        const localValue =
-                          field.value && hasATimezoneOffset
-                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                            : field.value;
+                        const localValue = toDateTimeLocalValue(field.value, timezone);
                         return (
                           <Input
                             type="datetime-local"
@@ -1167,10 +1222,18 @@ export default function AssignmentForm({
                   </Field>
                 </Fieldset.Content>
                 <Fieldset.Content>
+                  {/* The field stays visible even when the course flag is off, so staff can set the
+                      date ahead of opting in and can still see and edit one an earlier term left
+                      behind. The helper text carries the flag state instead, so nobody sets a date
+                      expecting students to see it. */}
                   <Field
                     orientation="horizontal"
                     label="Suggested due date"
-                    helperText="Optional recommended target date shown to students. The Due Date below remains the hard deadline; students may resubmit freely until then."
+                    helperText={
+                      showSuggestedDueDate
+                        ? "Optional. Shown to students as the assignment's due date; the Due Date below is presented as the end of the resubmission window."
+                        : "Optional. Not shown to students - turn on the 'Suggested due dates' feature flag in Course Settings to display it."
+                    }
                     errorText={errors.suggested_due_date?.message?.toString()}
                     invalid={errors.suggested_due_date ? true : false}
                   >
@@ -1180,23 +1243,26 @@ export default function AssignmentForm({
                       rules={{
                         validate: (value: string) => {
                           if (!value) return true;
+                          // Both sides go through the course zone: in edit mode one field may
+                          // still hold an offset-carrying value from the database while the other
+                          // is a freshly-typed naive value, so a raw parse would compare apples
+                          // to oranges.
+                          const suggested = parseZonedFormDate(value, timezone);
+                          if (!suggested) return "Enter a valid date and time";
                           const dueDate = form.getValues("due_date");
-                          if (!dueDate) return true;
-                          const suggested = new TZDate(value, timezone).getTime();
-                          const due = new TZDate(dueDate, timezone).getTime();
-                          return suggested <= due || "Suggested due date must be on or before the due date";
+                          const due = parseZonedFormDate(dueDate, timezone);
+                          // Nothing to compare against yet; the due-date field reports its own
+                          // missing/invalid value.
+                          if (!due) return true;
+                          return (
+                            suggested.getTime() <= due.getTime() ||
+                            "Suggested due date must be on or before the due date"
+                          );
                         },
                         deps: ["due_date"]
                       }}
                       render={({ field }) => {
-                        const hasATimezoneOffset =
-                          field.value &&
-                          (field.value.charAt(field.value.length - 6) === "+" ||
-                            field.value.charAt(field.value.length - 6) === "-");
-                        const localValue =
-                          field.value && hasATimezoneOffset
-                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                            : field.value;
+                        const localValue = toDateTimeLocalValue(field.value, timezone);
                         return (
                           <Input
                             type="datetime-local"
@@ -1221,16 +1287,13 @@ export default function AssignmentForm({
                     <Controller
                       name="due_date"
                       control={control}
-                      rules={{ required: "This is required" }}
+                      // `deps` re-validates the listed fields when THIS one changes, so the
+                      // suggested-vs-due rule has to be re-run from here too: without it, moving
+                      // the due date earlier than an already-set suggested date passes client
+                      // validation and only trips the DB CHECK.
+                      rules={{ required: "This is required", deps: ["suggested_due_date"] }}
                       render={({ field }) => {
-                        const hasATimezoneOffset =
-                          field.value &&
-                          (field.value.charAt(field.value.length - 6) === "+" ||
-                            field.value.charAt(field.value.length - 6) === "-");
-                        const localValue =
-                          field.value && hasATimezoneOffset
-                            ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                            : field.value;
+                        const localValue = toDateTimeLocalValue(field.value, timezone);
                         return (
                           <Input
                             type="datetime-local"
@@ -1250,10 +1313,31 @@ export default function AssignmentForm({
               <CardHeader>
                 <CardTitle>Late submissions</CardTitle>
                 <Text fontSize="sm" color="fg.muted">
-                  How work submitted after the due date is handled — late tokens and ungraded late submissions.
+                  How work submitted after the due date is handled — late tokens and ungraded late submissions.{" "}
+                  <Link href="https://docs.pawtograder.com/staff/assignments/configuration#late-tokens" target="_blank">
+                    Read the documentation
+                  </Link>
+                  .
                 </Text>
               </CardHeader>
               <CardBody gap="5px">
+                {classLateTokensPerStudent === 0 && maxLateTokens > 0 && (
+                  <Alert status="warning" title="Students in this course have no late tokens" mb={2}>
+                    <Text>
+                      Late Tokens Per Student is set to 0 for this course, so students cannot use a late token on this
+                      assignment. Max late tokens only limits how many of their course-wide tokens a student may spend
+                      here; it does not give them any.
+                      {requireTokensBeforeDueDate
+                        ? ""
+                        : " Pushes after the deadline will be rejected instead of automatically applying a token."}{" "}
+                      Set the allotment under{" "}
+                      <Link href={`/course/${course.id}/manage/course/due-date-extensions`}>
+                        Course Settings → Due Date Extensions
+                      </Link>
+                      .
+                    </Text>
+                  </Alert>
+                )}
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"
@@ -1337,14 +1421,7 @@ export default function AssignmentForm({
                             control={control}
                             rules={{ required: false }}
                             render={({ field }) => {
-                              const hasATimezoneOffset =
-                                field.value &&
-                                (field.value.charAt(field.value.length - 6) === "+" ||
-                                  field.value.charAt(field.value.length - 6) === "-");
-                              const localValue =
-                                field.value && hasATimezoneOffset
-                                  ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
-                                  : field.value;
+                              const localValue = toDateTimeLocalValue(field.value, timezone);
                               return (
                                 <Input
                                   type="datetime-local"

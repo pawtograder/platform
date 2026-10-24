@@ -27,6 +27,8 @@ import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-sum
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
+import LinkDiscordAccount from "@/components/discord/link-account";
+import PendingInvites from "@/components/discord/pending-invites";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
@@ -36,7 +38,8 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
 import RegradeRequestsTable from "./RegradeRequestsTable";
-import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
+import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
 
 function SurveyDashboardCta({
   href,
@@ -107,6 +110,21 @@ export default async function StudentDashboard({
   const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
+  // Both halves are required: a server has to be configured, and the course has to have opted in.
+  // The flag defaults off, so a course that already had a server keeps the behaviour it had before
+  // this panel existed -- students saw no invitation, because there was no route to one.
+  const discordConfigured =
+    Boolean(course?.discord_server_id) && courseFeatureEnabled(course?.features, COURSE_FEATURES.DISCORD_STUDENT_JOIN);
+
+  // Resolved server-side (rather than via useCourseFeature) so the emphasized layout is in the
+  // first paint instead of flipping once the client course controller hydrates.
+  //
+  // Which assignments count as "upcoming" deliberately stays keyed to the hard deadline in
+  // fetchStudentDashboardBundle (`gte("due_date", now)`), even for emphasized courses: work past
+  // its suggested date is still submittable and still gradeable until the deadline, so dropping it
+  // from this list would hide the resubmission window the flag exists to highlight. The card shows
+  // both dates, so a passed suggested date is still legible.
+  const showSuggestedDueDate = courseFeatureEnabled(course?.features, COURSE_FEATURES.SUGGESTED_DUE_DATE);
 
   const nowMs = Date.now();
   const surveys = ((surveysRaw ?? []) as unknown as Survey[]).filter(
@@ -119,6 +137,13 @@ export default async function StudentDashboard({
   // fetchStudentDashboardBundle). Deriving them from the generated view type means a future
   // column rename/removal surfaces as a compile error rather than silently dropping a value
   // through the `as` cast below.
+  //
+  // `due_date` here is the FINAL per-student deadline -- the view selects
+  // calculate_final_due_date, so lab-section offsets AND due-date exceptions (extensions / late
+  // tokens) are already applied. It is what both the upcoming filter in
+  // fetchStudentDashboardBundle and the "Due" value rendered below run on, so this list now
+  // agrees with the assignment detail page and with submission enforcement. No client-side
+  // extension arithmetic belongs here.
   type StudentUpcomingAssignmentRow = Pick<
     Database["public"]["Views"]["assignments_with_effective_due_dates"]["Row"],
     "id" | "title" | "due_date" | "suggested_due_date"
@@ -174,6 +199,32 @@ export default async function StudentDashboard({
       </Heading>
       {identitiesResult.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
+      {/*
+       * The student's own outstanding Discord invite, alongside the GitHub equivalent above.
+       * PendingInvites has always supported this mode -- without showAll it filters to the signed-in
+       * user, and discord_invites_user_select grants exactly that row -- but it was only ever mounted
+       * on the staff-only manage/discord page. So the instructor alert saying "each has an invite
+       * waiting, no action is needed" was describing a link the student had no way to open. Renders
+       * nothing when there is no unused, unexpired invite.
+       *
+       * Gated on the DISCORD_STUDENT_JOIN feature and on the course having a Discord server. The
+       * feature gate is the point: joining a course Discord is opt-in per course, and this panel is
+       * the only place a student can reach their invitation. The server check also keeps the
+       * component's 30-second poll off dashboards that could never have anything to show.
+       *
+       * Also hidden when an instructor is viewing as a student. PendingInvites scopes itself with
+       * useAuthState(), not with the profile being viewed, so it would show the instructor their own
+       * invite under the student's dashboard -- which is not what "view as" is meant to show.
+       */}
+      {/*
+       * The link control comes first, because it is the step that unblocks everything below it. A
+       * student with no linked Discord account has no invite row -- every enqueuer requires
+       * users.discord_id -- so PendingInvites renders nothing and the dashboard used to be simply
+       * blank for them, with no way to proceed and nothing saying why. LinkDiscordAccount checks the
+       * same feature flag itself and renders nothing once an account is linked.
+       */}
+      {discordConfigured && !isViewingAsStudent && <LinkDiscordAccount />}
+      {discordConfigured && !isViewingAsStudent && <PendingInvites classId={course_id} />}
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
         {incompleteSurveysForBanner.length > 0 && (
@@ -318,7 +369,7 @@ export default async function StudentDashboard({
             let mostRecentSubmissionScoreAdvice = "In Progress";
             if (mostRecentSubmission) {
               if (mostRecentSubmission.grader_results) {
-                if (mostRecentSubmission.grader_results.errors) {
+                if (graderResultIndicatesFailure(mostRecentSubmission.grader_results.errors)) {
                   mostRecentSubmissionScoreAdvice = "Error";
                 } else {
                   mostRecentSubmissionScoreAdvice = `${mostRecentSubmission.grader_results?.score}/${mostRecentSubmission.grader_results?.max_score}`;
@@ -338,6 +389,7 @@ export default async function StudentDashboard({
                         {assignment.due_date ? (
                           <DueDateDisplay
                             suggestedDueDate={assignment.suggested_due_date}
+                            showSuggested={showSuggestedDueDate}
                             dueDate={assignment.due_date}
                             dateFormat="Pp"
                           />

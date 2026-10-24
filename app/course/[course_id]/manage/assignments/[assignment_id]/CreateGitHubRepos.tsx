@@ -1,6 +1,6 @@
 "use client";
 import { Button } from "@/components/ui/button";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { autograderCreateAssignmentRepos, EdgeFunctionError } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
@@ -20,7 +20,6 @@ export function CreateGitHubRepos({
   const disabled = (releaseDate && new Date(releaseDate) > new Date()) || false;
   return (
     <>
-      <Toaster />
       <Tooltip
         openDelay={disabled ? 0 : 1000}
         content={

@@ -259,7 +259,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
-    await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await visualScreenshot(page, "Self-Review Rubric completed", { stabilizeRubric: "Self-Review Rubric" });
     await assertStudentPageAccessible(page, "grading self-review completed");
@@ -271,7 +271,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
 
     await expect(page.getByLabel("Rubric: Self-Review Rubric")).toBeVisible();
     //Make sure that we get a very nice screenshot with a fully-loaded page
@@ -339,8 +339,17 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
     await visualScreenshot(page, "Instructor completes the grading review", { stabilizeRubric: "Grading Rubric" });
+    // "Complete" stays on this submission ("Complete and go to next" is the button that moves on).
     await page.getByRole("button", { name: "Complete", exact: true }).click();
-    await expect(page.getByText("Completed by")).toBeVisible();
+    await expect(async () => {
+      const { data } = await supabase
+        .from("submission_reviews")
+        .select("completed_at")
+        .eq("submission_id", submission_id!)
+        .eq("rubric_id", assignment!.grading_rubric_id!)
+        .not("completed_at", "is", null);
+      expect(data?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
 
     // Release selected submission reviews (select all in filtered view, then release)
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
@@ -388,13 +397,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     // Released submissions now default students to the Grade tab; switch to the autograder
     // detail (results) view that this test exercises.
-    await page.getByRole("button", { name: "Autograder Detail" }).click();
+    await page.getByRole("link", { name: "Autograder Detail" }).click();
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
     // Scan the results route here so axe also covers the autograder output view, the Pyret REPL
     // header (aria-controls), the Feedbot Textarea, and any Switch-rendered toggles.
     await expect(page).toHaveURL(/\/results(?:\?.*)?$/);
     await assertStudentPageAccessible(page, "grading results /results route");
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("link", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 
     const rubricSidebar = page.locator(`#rubric-${assignment!.grading_rubric_id}`);
@@ -686,6 +695,6 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review Assignment" }).first().click();
-    await page.getByRole("button", { name: "Mark Review Assignment as" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
   });
 });
