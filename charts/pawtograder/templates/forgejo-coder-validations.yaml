@@ -1,0 +1,206 @@
+{{- if or .Values.forgejo.enabled .Values.coder.enabled }}
+{{- if ne .Release.Name "pawtograder" }}
+{{- fail (printf "forgejo/coder: the release must be named pawtograder (got %q); their subchart values reference pawtograder-* Secrets and ConfigMaps." .Release.Name) }}
+{{- end }}
+{{- end }}
+
+{{- range $app := list "forgejo" "coder" }}
+{{- $v := index $.Values $app }}
+{{- $db := index $.Values (printf "%s-db" $app) }}
+{{- if $v.enabled }}
+{{- if not (has $v.database (list "own" "pawtograder")) }}
+{{- fail (printf "%s.database must be own or pawtograder, got %q" $app $v.database) }}
+{{- end }}
+{{- if and (eq $v.database "own") (not $db.enabled) }}
+{{- fail (printf "%s.database=own needs %s-db.enabled=true (or set %s.database=pawtograder to use this chart's Postgres)" $app $app $app) }}
+{{- end }}
+{{- if and (eq $v.database "pawtograder") (not $.Values.postgres.enabled) }}
+{{- fail (printf "%s.database=pawtograder needs postgres.enabled=true" $app) }}
+{{- end }}
+{{- end }}
+{{- if and $db.enabled (not (and $v.enabled (eq $v.database "own"))) }}
+{{- fail (printf "%s-db.enabled=true but nothing uses it: needs %s.enabled=true and %s.database=own" $app $app $app) }}
+{{- end }}
+{{- end }}
+
+{{- $subcharts := dict "forgejo" .Values.forgejo "forgejo-db" (index .Values "forgejo-db") "coder.coder" .Values.coder.coder "coder-db" (index .Values "coder-db") }}
+{{- $on := dict "forgejo" .Values.forgejo.enabled "forgejo-db" (index .Values "forgejo-db").enabled "coder.coder" .Values.coder.enabled "coder-db" (index .Values "coder-db").enabled }}
+{{- range $dim := list "nodeSelector" "tolerations" "affinity" }}
+{{- if get $.Values.global $dim }}
+{{- range $key, $v := $subcharts }}
+{{- if and (get $on $key) (not (get $v $dim)) }}
+{{- fail (printf "global.%s doesn't reach subcharts; set %s.%s too" $dim $key $dim) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if eq .Values.global.environment "production" }}
+{{- $classes := dict }}
+{{- if .Values.forgejo.enabled }}{{ $_ := set $classes "forgejo.persistence.storageClass" (dig "persistence" "storageClass" "" .Values.forgejo) }}{{ end }}
+{{- if (index .Values "forgejo-db").enabled }}{{ $_ := set $classes "forgejo-db.storage.className" (dig "storage" "className" "" (index .Values "forgejo-db")) }}{{ end }}
+{{- if (index .Values "coder-db").enabled }}{{ $_ := set $classes "coder-db.storage.className" (dig "storage" "className" "" (index .Values "coder-db")) }}{{ end }}
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}{{ $_ := set $classes "coderBootstrap.workspaces.storageClass" .Values.coderBootstrap.workspaces.storageClass }}{{ end }}
+{{- range $key, $class := $classes }}
+{{- if not $class }}
+{{- fail (printf "%s is empty: like postgres.persistence.storageClass, production must name a replicated storage class, not the cluster default (which may be node-local)" $key) }}
+{{- end }}
+{{- end }}
+{{- $tags := dict }}
+{{- if .Values.forgejo.enabled }}
+{{- with .Values.forgejo.image.fullOverride }}
+{{- $_ := set $tags "forgejo.image.fullOverride's tag" (ternary (last (splitList ":" .)) "" (contains ":" (last (splitList "/" .)))) }}
+{{- else }}
+{{- $_ := set $tags "forgejo.image.tag" (toString $.Values.forgejo.image.tag) }}
+{{- end }}
+{{- end }}
+{{- if (index .Values "forgejo-db").enabled }}{{ $_ := set $tags "forgejo-db.image.tag" (toString (index .Values "forgejo-db").image.tag) }}{{ end }}
+{{- if (index .Values "coder-db").enabled }}{{ $_ := set $tags "coder-db.image.tag" (toString (index .Values "coder-db").image.tag) }}{{ end }}
+{{- if .Values.coder.enabled }}{{ $_ := set $tags "coder.coder.image.tag" (toString .Values.coder.coder.image.tag) }}{{ end }}
+{{- if .Values.forgejoRunner.enabled }}{{ $_ := set $tags "forgejoRunner.image.tag" (toString .Values.forgejoRunner.image.tag) }}{{ end }}
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
+{{- $ws := .Values.coderBootstrap.workspaces.image }}
+{{- $_ := set $tags "coderBootstrap.workspaces.image's tag" (ternary (last (splitList ":" $ws)) "" (contains ":" (last (splitList "/" $ws)))) }}
+{{- end }}
+{{- range $key, $tag := $tags }}
+{{- if or (not $tag) (eq $tag "latest") (hasSuffix "-latest" $tag) }}
+{{- fail (printf "%s=%q: production deploys must pin an immutable tag, as for web/edgeFunctions/migrations/backup" $key $tag) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with .Values.global.imageRegistry }}
+{{- $reg := . }}
+{{- $refs := dict }}
+{{- if $.Values.forgejo.enabled }}
+{{- with $.Values.forgejo.image.fullOverride }}{{ $_ := set $refs "forgejo.image.fullOverride" . }}{{ else }}{{ $_ := set $refs "forgejo.image.registry" (printf "%s/" $.Values.forgejo.image.registry) }}{{ end }}
+{{- end }}
+{{- if (index $.Values "forgejo-db").enabled }}{{ $_ := set $refs "forgejo-db.image.registry" (printf "%s/" (index $.Values "forgejo-db").image.registry) }}{{ end }}
+{{- if (index $.Values "coder-db").enabled }}{{ $_ := set $refs "coder-db.image.registry" (printf "%s/" (index $.Values "coder-db").image.registry) }}{{ end }}
+{{- if $.Values.coder.enabled }}{{ $_ := set $refs "coder.coder.image.repo" $.Values.coder.coder.image.repo }}{{ end }}
+{{- if and $.Values.coder.enabled $.Values.coderBootstrap.enabled }}{{ $_ := set $refs "coderBootstrap.workspaces.image" $.Values.coderBootstrap.workspaces.image }}{{ end }}
+{{- if $.Values.forgejoRunner.enabled }}{{ $_ := set $refs "forgejoRunner.image.repository" $.Values.forgejoRunner.image.repository }}{{ end }}
+{{- range $key, $ref := $refs }}
+{{- if not (hasPrefix (printf "%s/" $reg) $ref) }}
+{{- fail (printf "global.imageRegistry=%s doesn't reach subcharts or full image references; point %s at it (got %q)" $reg $key $ref) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (index .Values "coder-db").enabled .Values.global.imagePullSecrets (not (index .Values "coder-db").imagePullSecrets) }}
+{{- fail "global.imagePullSecrets doesn't reach the coder-db subchart's pod; set coder-db.imagePullSecrets too" }}
+{{- end }}
+{{- range $key := list "forgejo-db" "coder-db" }}
+{{- $v := index $.Values $key }}
+{{- if and $v.enabled (not (dig "settings" "existingSecret" "" $v)) }}
+{{- fail (printf "%s.settings.existingSecret must name the superuser Secret: without it the subchart generates one called pawtograder-%s, which is the app role's Secret" $key $key) }}
+{{- end }}
+{{- end }}
+{{- if and .Values.coder.enabled (or .Values.coder.nameOverride .Values.coder.fullnameOverride) }}
+{{- fail "coder.nameOverride / fullnameOverride aren't supported: this chart's NetworkPolicies and bootstrap address coderd as coder" }}
+{{- end }}
+{{- range $key := list "forgejo" "forgejo-db" "coder-db" }}
+{{- $v := index $.Values $key }}
+{{- if and $v.enabled (or $v.nameOverride $v.fullnameOverride $v.namespaceOverride) }}
+{{- fail (printf "%s.nameOverride / fullnameOverride / namespaceOverride aren't supported: this chart addresses its Services as pawtograder-%s* in the release namespace" $key $key) }}
+{{- end }}
+{{- end }}
+{{- if and .Values.coder.enabled .Values.global.imagePullSecrets (not .Values.coder.coder.image.pullSecrets) }}
+{{- fail "global.imagePullSecrets doesn't reach the Coder subchart's pod; set coder.coder.image.pullSecrets too" }}
+{{- end }}
+{{- if .Values.coder.enabled }}
+{{- $img := .Values.coder.coder.image }}
+{{- $want := printf "%s:%s" $img.repo ($img.tag | default (printf "v%v" .Subcharts.coder.Chart.AppVersion)) }}
+{{- $init := dict }}
+{{- range .Values.coder.coder.initContainers }}{{ if eq .name "first-owner" }}{{ $init = . }}{{ end }}{{ end }}
+{{- if not $init }}
+{{- fail "coder.coder.initContainers must keep the chart's first-owner entry: without it, whoever reaches Coder first can create its owner" }}
+{{- end }}
+{{- if ne $init.image $want }}
+{{- fail (printf "coder.coder.initContainers first-owner image must match coder.coder.image (%s, got %s)" $want $init.image) }}
+{{- end }}
+{{- $policy := $img.pullPolicy | default "IfNotPresent" }}
+{{- if ne ($init.imagePullPolicy | default "IfNotPresent") $policy }}
+{{- fail (printf "coder.coder.initContainers first-owner imagePullPolicy must match coder.coder.image.pullPolicy (%s)" $policy) }}
+{{- end }}
+{{- end }}
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
+{{- $wsAffinity := include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml }}
+{{- if omit $wsAffinity "nodeAffinity" }}
+{{- fail "Coder workspaces take only nodeAffinity from coderBootstrap.workspaces.affinity / global.affinity; podAffinity and podAntiAffinity aren't passed to the template, so set coderBootstrap.workspaces.affinity (it overrides global's) to a nodeAffinity-only value" }}
+{{- end }}
+{{- $wildcardEnv := "" }}
+{{- range .Values.coder.coder.env }}{{ if eq .name "CODER_WILDCARD_ACCESS_URL" }}{{ $wildcardEnv = .value | default "" | trimPrefix "https://" | trimPrefix "http://" | trimSuffix "/" }}{{ end }}{{ end }}
+{{- $wildcardHost := .Values.coder.coder.ingress.wildcardHost | default "" }}
+{{- if not (and $wildcardHost $wildcardEnv) }}
+{{- fail "the pushed workspace template serves VS Code on a subdomain: set coder.coder.ingress.wildcardHost and CODER_WILDCARD_ACCESS_URL in coder.coder.env" }}
+{{- end }}
+{{- if ne $wildcardEnv $wildcardHost }}
+{{- fail (printf "CODER_WILDCARD_ACCESS_URL (%s) must name the same host as coder.coder.ingress.wildcardHost (%s), or app URLs have no route" $wildcardEnv $wildcardHost) }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.forgejo.enabled }}
+{{- if .Values.global.imagePullSecrets }}
+{{- fail "global.imagePullSecrets can't be combined with forgejo.enabled: the Forgejo subchart reads it as a list of names, this chart as a list of {name: ...}. Attach pull secrets to the ServiceAccount the pods use instead (serviceAccount.create=false runs them under the namespace's default one)." }}
+{{- end }}
+{{- $route := .Values.forgejo.httpRoute | default dict }}
+{{- if not (or .Values.forgejo.ingress.hosts (and $route.enabled $route.hostnames) .Values.forgejo.gitea.config.server.ROOT_URL .Values.forgejo.gitea.config.server.DOMAIN) }}
+{{- fail "forgejo.ingress.hosts must name Forgejo's host; ROOT_URL and the edge functions' FORGEJO_URL come from it" }}
+{{- end }}
+{{- $envNames := list }}
+{{- range .Values.forgejo.gitea.additionalConfigFromEnvs }}{{ $envNames = append $envNames .name }}{{ end }}
+{{- if not (has "FORGEJO__DATABASE__PASSWD" $envNames) }}
+{{- fail "forgejo.gitea.additionalConfigFromEnvs is missing FORGEJO__DATABASE__PASSWD; an overlay that sets the list must keep the chart's entry" }}
+{{- end }}
+{{- if has "FORGEJO__DATABASE__HOST" $envNames }}
+{{- fail "forgejo.gitea.additionalConfigFromEnvs sets FORGEJO__DATABASE__HOST, which overrides forgejo.gitea.config.database.HOST; drop it (the pawtograder-forgejo-database ConfigMap it used to read is gone)" }}
+{{- end }}
+{{- $want := include "pawtograder.appDatabase.endpoint" (dict "ctx" . "app" "forgejo") }}
+{{- if ne (toString .Values.forgejo.gitea.config.database.HOST) $want }}
+{{- fail (printf "forgejo.gitea.config.database.HOST must be %q for forgejo.database=%s (got %q)" $want .Values.forgejo.database (toString .Values.forgejo.gitea.config.database.HOST)) }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.forgejoRunner.enabled }}
+{{- if not .Values.forgejo.enabled }}
+{{- fail "forgejoRunner.enabled needs forgejo.enabled" }}
+{{- end }}
+{{- if not (and .Values.forgejoRunner.image.repository .Values.forgejoRunner.image.tag) }}
+{{- fail "forgejoRunner.image.repository and .tag are required (build images/forgejo-runner)" }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.coder.enabled }}
+{{- if not .Values.coder.coder.ingress.host }}
+{{- fail "coder.coder.ingress.host must name Coder's host" }}
+{{- end }}
+{{- $refs := list }}
+{{- range .Values.coder.coder.envFrom }}{{ $refs = append $refs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
+{{- range $want := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
+{{- if not (has $want $refs) }}
+{{- fail (printf "coder.coder.envFrom is missing %s; an overlay that sets the list must keep the chart's entries" $want) }}
+{{- end }}
+{{- end }}
+{{- $pgURL := "" }}
+{{- range .Values.coder.coder.env }}{{ if eq .name "CODER_PG_CONNECTION_URL" }}{{ $pgURL = .value | default "" }}{{ end }}{{ end }}
+{{- $pgWant := printf "postgres://coder@%s/coder" (include "pawtograder.appDatabase.endpoint" (dict "ctx" . "app" "coder")) }}
+{{- if not (or (eq $pgURL $pgWant) (hasPrefix (printf "%s?" $pgWant) $pgURL)) }}
+{{- fail (printf "coder.coder.env must set CODER_PG_CONNECTION_URL to %s?sslmode=disable for coder.database=%s (got %q); an overlay that sets the list must keep it" $pgWant .Values.coder.database $pgURL) }}
+{{- end }}
+{{- if .Values.coderBootstrap.enabled }}
+{{- $wsNS := .Values.coderBootstrap.workspaceNamespace | default .Release.Namespace }}
+{{- $sa := .Values.coder.coder.serviceAccount }}
+{{- $granted := list }}
+{{- range $sa.workspaceNamespaces }}{{ if and (kindIs "map" .) .workspacePerms }}{{ $granted = append $granted .name }}{{ end }}{{ end }}
+{{- if eq $wsNS .Release.Namespace }}
+{{- if not (or $sa.workspacePerms (has $wsNS $granted)) }}
+{{- fail (printf "workspaces go in %s (coderBootstrap.workspaceNamespace is empty), but coder.coder.serviceAccount.workspacePerms=false leaves coderd no Role there; set coderBootstrap.workspaceNamespace or keep workspacePerms" $wsNS) }}
+{{- end }}
+{{- else }}
+{{- if not (has $wsNS $granted) }}
+{{- fail (printf "coderBootstrap.workspaceNamespace=%s needs {name: %s, workspacePerms: true} in coder.coder.serviceAccount.workspaceNamespaces, or coderd can't create workspaces there" $wsNS $wsNS) }}
+{{- end }}
+{{- if $sa.workspacePerms }}
+{{- fail (printf "coderBootstrap.workspaceNamespace=%s moves workspaces out of %s; set coder.coder.serviceAccount.workspacePerms=false so coderd loses its Role over Pawtograder's pods there" $wsNS .Release.Namespace) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

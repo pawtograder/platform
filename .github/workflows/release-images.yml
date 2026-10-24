@@ -528,6 +528,9 @@ jobs:
         with:
           version: v3.14.4
 
+      - name: Fetch chart dependencies
+        run: charts/pawtograder/scripts/build-deps.sh
+
       - name: Lint chart
         run: helm lint charts/pawtograder
 
@@ -595,6 +598,9 @@ jobs:
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
+
+      - name: Fetch chart dependencies
+        run: charts/pawtograder/scripts/build-deps.sh
 
       - name: Write kubeconfig
         env:

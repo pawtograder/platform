@@ -63,6 +63,10 @@ if [ "$auto_yes" -ne 1 ]; then
   esac
 fi
 
+echo "==> fetching chart dependencies"
+"${CHART_DIR}/scripts/build-deps.sh" "$CHART_DIR"
+helm template "$RELEASE" "$CHART_DIR" -n "$NAMESPACE" -f "$VALUES_FILE" >/dev/null
+
 if ! kubectl get ns "$NAMESPACE" >/dev/null 2>&1; then
   echo "namespace ${NAMESPACE} does not exist; creating"
   kubectl create namespace "$NAMESPACE"

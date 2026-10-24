@@ -415,6 +415,10 @@ spec:
             - name: E2E_MOCK_GITHUB
               value: "true"
             {{- end }}
+            {{- if $ctx.Values.forgejo.enabled }}
+            - name: FORGEJO_URL
+              value: {{ include "pawtograder.forgejo.url" $ctx | quote }}
+            {{- end }}
             {{- with $ctx.Values.edgeFunctions.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

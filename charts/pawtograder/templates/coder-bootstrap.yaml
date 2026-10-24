@@ -1,0 +1,128 @@
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
+{{- $files := .Files.Glob "files/coder-templates/**" }}
+{{- $tag := .Values.coder.coder.image.tag | default (printf "v%v" .Subcharts.coder.Chart.AppVersion) }}
+{{- $pullSecrets := concat (.Values.global.imagePullSecrets | default list) (.Values.coder.coder.image.pullSecrets | default list) | uniq }}
+{{- $placement := dict "nodeSelector" (.Values.coderBootstrap.nodeSelector | default .Values.coder.coder.nodeSelector) "tolerations" (.Values.coderBootstrap.tolerations | default .Values.coder.coder.tolerations) "affinity" (.Values.coderBootstrap.affinity | default .Values.coder.coder.affinity) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "coder-templates") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder-templates") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  {{- range $path, $_ := $files }}
+  {{ trimPrefix "files/coder-templates/" $path | replace "/" "__" }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "coder-bootstrap") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder-bootstrap") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder-bootstrap") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.coderBootstrap) | nindent 6 }}
+      {{- with $pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.placement" (dict "ctx" . "component" $placement) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.coder.coder.image.repo }}:{{ $tag }}"
+          imagePullPolicy: {{ .Values.coder.coder.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - sh
+            - -ec
+            - |
+              url="http://coder.{{ .Release.Namespace }}.svc.cluster.local"
+              c() { curl --connect-timeout 10 --max-time 60 "$@"; }
+              until c -fsS -o /dev/null "$url/healthz"; do sleep 5; done
+              post() { c -fsS -X POST -H 'Content-Type: application/json' --data-binary @- "$url$1"; }
+              # Bodies go over stdin to keep the password out of the process list.
+              for v in "$ADMIN_EMAIL" "$ADMIN_USERNAME" "$ADMIN_PASSWORD"; do
+                case "$v" in *[[:cntrl:]]*) echo "{{ .Release.Name }}-coder-admin has a control character (trailing newline?)" >&2; exit 1 ;; esac
+              done
+              esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+              E="$(esc "$ADMIN_EMAIL")" P="$(esc "$ADMIN_PASSWORD")"
+              status=$(c -sS -o /dev/null -w '%{http_code}' "$url/api/v2/users/first")
+              [ "$status" = 200 ] || { echo "GET /api/v2/users/first returned $status, not 200: the first-owner init container should have created the owner" >&2; exit 1; }
+              login() { printf '{"email":"%s","password":"%s"}' "$E" "$P" \
+                | post /api/v2/users/login | sed -n 's/.*"session_token":"\([^"]*\)".*/\1/p'; }
+              CODER_SESSION_TOKEN="$(login || true)"
+              if [ -z "$CODER_SESSION_TOKEN" ]; then
+                echo "login as $ADMIN_EMAIL failed; resetting $ADMIN_USERNAME's password from {{ .Release.Name }}-coder-admin"
+                printf '%s\n%s\n' "$ADMIN_PASSWORD" "$ADMIN_PASSWORD" \
+                  | /opt/coder reset-password --postgres-url "$CODER_PG_CONNECTION_URL" "$ADMIN_USERNAME" >/dev/null
+                CODER_SESSION_TOKEN="$(login || true)"
+              fi
+              [ -n "$CODER_SESSION_TOKEN" ] || { echo "login as $ADMIN_EMAIL failed after a password reset; {{ .Release.Name }}-coder-admin's email and username must still be the first owner's (Coder can't change an email)" >&2; exit 1; }
+              export CODER_URL="$url" CODER_SESSION_TOKEN CODER_CONFIG_DIR=/tmp/coder
+              for dir in /templates/*/; do
+                name="$(basename "$dir")"
+                /opt/coder templates push "$name" --directory "$dir" --yes \
+                  --variable namespace={{ .Values.coderBootstrap.workspaceNamespace | default .Release.Namespace }} \
+                  --variable node_selector={{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml | toJson | squote }} \
+                  --variable tolerations={{ include "pawtograder.tolerations" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYamlArray | toJson | squote }} \
+                  --variable image={{ .Values.coderBootstrap.workspaces.image | squote }} \
+                  --variable image_pull_policy={{ .Values.coderBootstrap.workspaces.imagePullPolicy | default "IfNotPresent" }} \
+                  --variable image_pull_secrets={{ .Values.coderBootstrap.workspaces.imagePullSecrets | default list | toJson | squote }} \
+                  --variable home_storage_class={{ .Values.coderBootstrap.workspaces.storageClass | default "" | squote }} \
+                  --variable ephemeral_storage_limit={{ .Values.coderBootstrap.workspaces.ephemeralStorageLimit | default "4Gi" }} \
+                  --variable node_affinity={{ (include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml).nodeAffinity | default dict | toJson | squote }} \
+                  --message "chart {{ .Chart.Version }}"
+              done
+          env:
+            - name: ADMIN_EMAIL
+              valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-admin, key: email } }
+            - name: ADMIN_USERNAME
+              valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-admin, key: username } }
+            - name: ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-admin, key: password } }
+            {{- range .Values.coder.coder.env }}
+            {{- if eq .name "CODER_PG_CONNECTION_URL" }}
+            - name: CODER_PG_CONNECTION_URL
+              value: {{ .value | quote }}
+            {{- end }}
+            {{- end }}
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-coder-db, key: PGPASSWORD } }
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" . "component" .Values.coderBootstrap) | nindent 10 }}
+          resources:
+            {{- toYaml .Values.coderBootstrap.resources | nindent 12 }}
+          volumeMounts:
+            - { name: templates, mountPath: /templates, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: templates
+          configMap:
+            name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "coder-templates") }}
+            items:
+              {{- range $path, $_ := $files }}
+              {{- $rel := trimPrefix "files/coder-templates/" $path }}
+              - { key: {{ replace "/" "__" $rel }}, path: {{ $rel }} }
+              {{- end }}
+        - name: tmp
+          emptyDir: {}
+{{- end }}
