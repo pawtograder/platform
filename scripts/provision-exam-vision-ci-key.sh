@@ -52,6 +52,6 @@ Done. Recommended next step: cap spend in the console, since an API key cannot c
   * Quotas: https://console.cloud.google.com/apis/api/vision.googleapis.com/quotas?project=${PROJECT}
     and   https://console.cloud.google.com/apis/api/generativelanguage.googleapis.com/quotas?project=${PROJECT}
   * Budget alert: https://console.cloud.google.com/billing/budgets
-A run of the suite makes ~6 Vision calls and ~10 Gemini calls.
+A run of the suite makes ~7 Vision calls and ~12 Gemini calls.
 Then trigger a run:  gh workflow run exam-vision-e2e.yml --repo ${REPO} --ref <branch>
 EOF

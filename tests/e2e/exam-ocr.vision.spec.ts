@@ -34,6 +34,7 @@ const Q1_REGION: Rect = { x: 0.08, y: 0.36, width: 0.84, height: 0.14 };
 const Q2_REGION: Rect = { x: 0.08, y: 0.62, width: 0.84, height: 0.1 };
 
 type Filled = { sis: string; name: string; q1: string; q2: string };
+type Scan = (Filled & { profileId: string | null }) | { blank: true };
 
 function pct(n: number) {
   return `${(n * 100).toFixed(2)}%`;
@@ -42,6 +43,13 @@ function pct(n: number) {
 function box(r: Rect, label: string, value: string) {
   return `<div class="box" style="left:${pct(r.x)};top:${pct(r.y)};width:${pct(r.width)};height:${pct(r.height)}">
     <span class="label">${label}</span><span class="value">${value}</span></div>`;
+}
+
+/** A sheet of white paper: what a scanner produces for an unused page or a blank back. */
+async function renderBlankPage(page: Page): Promise<Buffer> {
+  await page.setViewportSize({ width: PAGE_W, height: PAGE_H });
+  await page.setContent(`<!doctype html><html><body style="margin:0;background:#fff"></body></html>`);
+  return await page.screenshot({ type: "png" });
 }
 
 /** Render one exam page (blank template when `filled` is omitted) to a PNG. */
@@ -183,7 +191,7 @@ test.describe("Exam OCR with Google Vision + Gemini", () => {
     });
     expect(syncErr).toBeNull();
 
-    const scans: (Filled & { profileId: string | null })[] = [
+    const scans: Scan[] = [
       {
         sis: String(aliceSis),
         name: "Alice Smith",
@@ -192,7 +200,10 @@ test.describe("Exam OCR with Google Vision + Gemini", () => {
         profileId: alice.private_profile_id
       },
       { sis: String(bobSis), name: "Bob Jones", q1: "Observer", q2: "42", profileId: bob.private_profile_id },
-      { sis: String(unknownSis), name: "Nobody Here", q1: "Singleton", q2: "13", profileId: null }
+      { sis: String(unknownSis), name: "Nobody Here", q1: "Singleton", q2: "13", profileId: null },
+      // Vision answers a blank page with an empty per-image response, not an error. The worker
+      // must record it as read with no text, not dead-letter it and stall the batch.
+      { blank: true }
     ];
 
     const { data: batch, error: batchErr } = await supabase
@@ -210,7 +221,8 @@ test.describe("Exam OCR with Google Vision + Gemini", () => {
     const batchId = batch!.id;
 
     for (let i = 0; i < scans.length; i++) {
-      const png = await renderExamPage(page, scans[i]);
+      const scan = scans[i];
+      const png = "blank" in scan ? await renderBlankPage(page) : await renderExamPage(page, scan);
       // A neutral object name: the fake provider reads identity from the path, and the real
       // one must not get the chance to.
       const path = `classes/${course.id}/exams/${examId}/batches/${batchId}/page-${i}.png`;
@@ -243,10 +255,16 @@ test.describe("Exam OCR with Google Vision + Gemini", () => {
     expect(pages).toHaveLength(scans.length);
     for (const p of pages ?? []) {
       const scan = scans[p.page_index];
+      const words = (p.ocr_data as { words?: unknown[] } | null)?.words ?? [];
+      if ("blank" in scan) {
+        expect(p.ocr_data).not.toBeNull();
+        expect(p.ocr_text ?? "").toBe("");
+        expect(words).toHaveLength(0);
+        continue;
+      }
       // Vision read the page, and returned word boxes for region cropping
       expect(p.ocr_text ?? "").toContain(scan.sis);
       expect(p.ocr_text ?? "").toMatch(/Midterm/i);
-      const words = (p.ocr_data as { words?: unknown[] } | null)?.words ?? [];
       expect(words.length).toBeGreaterThan(10);
     }
 
@@ -259,6 +277,11 @@ test.describe("Exam OCR with Google Vision + Gemini", () => {
     for (let i = 0; i < scans.length; i++) {
       const s = scanned![i];
       const want = scans[i];
+      if ("blank" in want) {
+        expect(s.matched_profile_id).toBeNull();
+        expect(s.match_status).toBe("unmatched");
+        continue;
+      }
       // Gemini read the identity regions
       expect(s.detected_sis_id?.replace(/\D/g, "")).toBe(want.sis);
       expect((s.detected_name ?? "").toLowerCase()).toContain(want.name.split(" ")[1].toLowerCase());
@@ -290,12 +313,13 @@ test.describe("Exam OCR with Google Vision + Gemini", () => {
     const q1Id = questions!.find((q) => q.label === "Q1")!.id;
     const q2Id = questions!.find((q) => q.label === "Q2")!.id;
 
-    for (const want of scans.filter((s) => s.profileId)) {
+    const matched = scans.filter((s): s is Filled & { profileId: string } => !("blank" in s) && s.profileId !== null);
+    for (const want of matched) {
       const { data: sub } = await supabase
         .from("submissions")
         .select("id")
         .eq("assignment_id", assignment.id)
-        .eq("profile_id", want.profileId!)
+        .eq("profile_id", want.profileId)
         .single();
       expect(sub).toBeTruthy();
       const { data: artifacts } = await supabase
