@@ -94,6 +94,24 @@ export default function EditAssignment() {
         // between modes. The form only DISABLES the branch-protection inputs for
         // no-repo modes, it doesn't reset their stored values — so without this
         // the constraint will reject the update.
+        // Non-code assessments are pinned to individual submissions, mirroring the create page.
+        // Only the create page had this coercion, and the shared form merely DISABLES the
+        // assignment-type selector when editing -- it still renders the group-configuration
+        // controls. So an existing quiz/exam/survey could be switched to groups here, and once
+        // students joined a group every assessment submission path (quiz_submit,
+        // exam_create_submission, the survey trigger) still inserts assignment_group_id NULL,
+        // which submissions_insert_hook_optimized rejects: submission, finalization and survey
+        // credit would all fail for exactly the students in groups.
+        const editedType = (values.assignment_type ?? refineCore.queryResult?.data?.data?.assignment_type) as
+          | string
+          | undefined;
+        if ((editedType ?? "code") !== "code") {
+          values.group_config = "individual";
+          values.min_group_size = null;
+          values.max_group_size = null;
+          values.allow_student_formed_groups = false;
+          values.group_formation_deadline = null;
+        }
         const isNoRepo = values.repo_mode === "none" || values.repo_mode === "no_submission";
         if (isNoRepo) {
           values.protect_block_force_push = false;
