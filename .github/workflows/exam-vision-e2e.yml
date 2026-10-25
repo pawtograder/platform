@@ -1,0 +1,193 @@
+name: Exam OCR E2E (Google Vision)
+
+# Runs tests/e2e/*.vision.spec.ts against the REAL Google Vision + Gemini APIs. The per-PR E2E
+# lane (deploy.yml) uses EXAM_VISION_PROVIDER=fake, which never sends a pixel to Google, so it
+# cannot catch a broken key, a changed response shape, or a retired Gemini model.
+#
+# Not on pull_request / pull_request_target: this job holds GOOGLE_API_KEY and runs the checked-out
+# code, so running it automatically on a PR head would hand the key to whoever wrote the PR (the
+# same reasoning as canvas-e2e.yml). The triggers below all run code that is already trusted:
+#   * workflow_dispatch -- a maintainer picks a branch (e.g. a PR's) under "Run workflow"
+#   * push to staging   -- only when the exam OCR path changed
+#   * weekly schedule   -- Google retires models and changes APIs without a commit on our side
+#
+# Secrets / variables:
+#   GOOGLE_API_KEY     (secret, required)  key restricted to the Vision and Generative Language
+#                                          APIs; provisioned by scripts/provision-exam-vision-ci-key.sh
+#   EXAM_GEMINI_MODEL  (variable, optional) overrides the model; unset tests the code's default,
+#                                          which is what a deployment without the override runs
+on:
+  workflow_dispatch:
+  push:
+    branches: [staging]
+    paths:
+      - supabase/functions/_shared/examVision.ts
+      - supabase/functions/_shared/ExamAsyncTypes.ts
+      - supabase/functions/exam-async-worker/**
+      - supabase/functions/exam-extract-template/**
+      - tests/e2e/*.vision.spec.ts
+      - playwright.vision.config.ts
+      - .github/workflows/exam-vision-e2e.yml
+  schedule:
+    # Mondays 09:17 UTC
+    - cron: "17 9 * * 1"
+
+concurrency:
+  # One at a time repo-wide: every run shares the key's quota.
+  group: exam-vision-e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  exam-vision-e2e:
+    runs-on: pawtograder-e2e
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      SUPABASE_PROJECT: pawtograder-vision-${{ github.run_id }}-${{ github.run_attempt }}
+      LOCAL_SUPABASE_URL: http://127.0.0.1:54321
+      # The standard local-dev demo keys (same literals as deploy.yml); they only authenticate to
+      # the throwaway stack this job starts.
+      LOCAL_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      LOCAL_SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      RUN_TMP: /tmp/exam-vision-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      # Before anything slow: a missing key would otherwise surface 10 minutes in as a worker
+      # error ("EXAM_VISION_PROVIDER='gemini' requires GOOGLE_API_KEY").
+      - name: Require GOOGLE_API_KEY
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "::error title=GOOGLE_API_KEY not set::Add the GOOGLE_API_KEY repository secret (scripts/provision-exam-vision-ci-key.sh creates and stores one)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.105.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The key is written to a 0600 file under RUN_TMP, outside the workspace, so no artifact
+      # upload below can pick it up. Values come in through env:, never interpolated into the
+      # script, so a stray character in a variable cannot inject shell.
+      - name: Write edge-function env
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          EXAM_GEMINI_MODEL: ${{ vars.EXAM_GEMINI_MODEL }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUN_TMP"
+          umask 077
+          {
+            echo "EXAM_VISION_PROVIDER=gemini"
+            echo "GOOGLE_API_KEY=${GOOGLE_API_KEY}"
+            if [ -n "$EXAM_GEMINI_MODEL" ]; then echo "EXAM_GEMINI_MODEL=${EXAM_GEMINI_MODEL}"; fi
+            # The suite is small; keep well under the default per-project quotas.
+            echo "EXAM_OCR_RPM=30"
+            echo "EXAM_GEMINI_RPM=30"
+            echo "EDGE_FUNCTION_SECRET=some-secret-value"
+          } > "$RUN_TMP/functions.env"
+          # TestingUtils loads .env.local; it gets the local stack's coordinates and no secrets.
+          cat > .env.local <<EOF
+          SUPABASE_URL=${LOCAL_SUPABASE_URL}
+          SUPABASE_ANON_KEY=${LOCAL_SUPABASE_ANON_KEY}
+          SUPABASE_SERVICE_ROLE_KEY=${LOCAL_SUPABASE_SERVICE_ROLE_KEY}
+          NEXT_PUBLIC_SUPABASE_URL=${LOCAL_SUPABASE_URL}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=${LOCAL_SUPABASE_ANON_KEY}
+          EDGE_FUNCTION_SECRET=some-secret-value
+          EOF
+
+      # Unique project_id per run so the CLI's containers and volumes cannot collide with another
+      # job's stack on the same runner (see deploy.yml).
+      - name: Pin supabase project_id per run
+        run: |
+          set -euo pipefail
+          sed -i.bak -E "s|^project_id = .*$|project_id = \"${SUPABASE_PROJECT}\"|" supabase/config.toml
+          grep "^project_id" supabase/config.toml
+
+      - name: Install Playwright (chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Start local Supabase
+        run: |
+          set -euo pipefail
+          # Same exclusions and retry as deploy.yml: analytics/vector are flaky to bring up
+          # healthy on the runners and nothing here uses them.
+          for attempt in 1 2 3; do
+            if npx supabase start -x analytics,vector; then exit 0; fi
+            echo "supabase start failed on attempt ${attempt}; resetting"
+            npx supabase stop --no-backup || true
+            sleep $((attempt * 5))
+          done
+          exit 1
+
+      - name: Serve Edge Functions
+        run: |
+          set -euo pipefail
+          nohup npx supabase functions serve --env-file "$RUN_TMP/functions.env" \
+            > "$RUN_TMP/edge-functions.log" 2>&1 &
+          echo $! > "$RUN_TMP/edge-functions.pid"
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:54321/functions/v1/ || true)
+            if [ -n "$code" ] && [ "$code" != "000" ]; then exit 0; fi
+            sleep 1
+          done
+          echo "Edge Functions never became reachable"
+          tail -n 200 "$RUN_TMP/edge-functions.log" || true
+          exit 1
+
+      - name: Run vision E2E suite
+        env:
+          SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.LOCAL_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
+          EXAM_VISION_PROVIDER: gemini
+        run: npm run test:e2e:vision
+
+      - name: Collect logs
+        if: always()
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          kill "$(cat "$RUN_TMP/edge-functions.pid" 2>/dev/null)" 2>/dev/null || true
+          mkdir -p server-logs
+          cp -f "$RUN_TMP/edge-functions.log" server-logs/ 2>/dev/null || true
+          for c in $(docker ps --filter "label=com.supabase.cli.project=${SUPABASE_PROJECT}" --format '{{.Names}}'); do
+            docker logs "$c" > "server-logs/${c}.log" 2>&1 || true
+          done
+          # Belt and braces: the provider sends the key in a header, never a URL, but scrub any
+          # occurrence before these files leave the runner as an artifact.
+          if [ -n "$GOOGLE_API_KEY" ]; then
+            grep -rlF -- "$GOOGLE_API_KEY" server-logs | xargs -r sed -i "s|${GOOGLE_API_KEY}|[REDACTED]|g"
+          fi
+          npx supabase stop --no-backup || true
+          rm -rf "$RUN_TMP"
+
+      - name: Upload server logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exam-vision-server-logs
+          path: server-logs/
+          retention-days: 14
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-vision
+          path: playwright-report-vision/
+          retention-days: 14

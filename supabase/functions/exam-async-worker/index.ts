@@ -162,11 +162,13 @@ async function processPage(admin: Admin, args: ProcessPageArgs): Promise<void> {
   const provider = getExamVisionProvider();
   const { data: page, error } = await admin
     .from("exam_scan_pages")
-    .select("id, image_path, width, height, ocr_text")
+    .select("id, image_path, width, height, ocr_data")
     .eq("id", args.scan_page_id)
     .single();
   if (error || !page) throw new Error(`scan page ${args.scan_page_id} not found`);
-  if (page.ocr_text) return; // idempotent — already OCR'd
+  // Idempotent: already OCR'd. Keyed on ocr_data (as the match step's completeness check is),
+  // not ocr_text, which is "" for a blank page and would re-send it to the provider every time.
+  if (page.ocr_data !== null) return;
 
   const bytes = await downloadImage(admin, "exam-scans", page.image_path);
   const img: PageImage = {

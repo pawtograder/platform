@@ -162,9 +162,11 @@ class GoogleVisionOcr {
         }
       ]
     };
-    const res = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${this.apiKey}`, {
+    // The key goes in x-goog-api-key, not ?key=: a URL ends up in fetch error messages, proxy
+    // logs and Sentry breadcrumbs, and the CI lane uploads the edge-function log as an artifact.
+    const res = await fetch("https://vision.googleapis.com/v1/images:annotate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
       body: JSON.stringify(body),
       // Bound the call so a stalled connection can't hang the worker indefinitely (it has no
       // other timeout); a timeout surfaces as a transient error and the message requeues.
@@ -188,13 +190,17 @@ class GoogleVisionOcr {
       }
       throw new Error(`Vision OCR failed for ${page.name}: ${message}`);
     }
-    const annotation = json?.responses?.[0]?.fullTextAnnotation;
-    // A response with neither an error nor an annotation is still not a legitimate empty page --
-    // a genuinely blank scan returns an annotation with empty text. Fail rather than record it
-    // as read.
-    if (!annotation) {
-      throw new Error(`Vision OCR returned no annotation for ${page.name}; refusing to record it as empty`);
+    const response = json?.responses?.[0];
+    // A body without a per-image response is malformed; fail rather than record the page as read.
+    if (!response || typeof response !== "object") {
+      throw new Error(`Vision OCR returned no response for ${page.name}; refusing to record it as empty`);
     }
+    // A per-image response with no error and no fullTextAnnotation is how Vision reports a page
+    // with no text: a blank 850x1100 white PNG returns `{"responses":[{}]}` (checked against the
+    // live API 2026-10-24). Treating that as a failure sent every blank page (scratch pages, blank
+    // backs) through retries into the DLQ, and the batch could never reach review.
+    const annotation = response.fullTextAnnotation;
+    if (!annotation) return { text: "", words: [] };
     const text: string = annotation?.text ?? "";
     const words: WordBox[] = [];
     const w = page.width || 1;
@@ -239,10 +245,11 @@ class GeminiVision {
   }
   private async generate(parts: unknown[]): Promise<string> {
     await this.limiter.wait();
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+    // Key in a header rather than the query string; see GoogleVisionOcr.ocrImage.
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
         generationConfig: { responseMimeType: "application/json", temperature: 0 }
@@ -384,7 +391,7 @@ function buildExamVisionProvider(): ExamVisionProvider {
         " (and optionally EXAM_OCR_API_KEY for a separate OCR key) to be set."
     );
   }
-  const model = Deno.env.get("EXAM_GEMINI_MODEL") ?? "gemini-2.0-flash";
+  const model = Deno.env.get("EXAM_GEMINI_MODEL") ?? "gemini-3.8-flash";
   const ocrRpm = parseInt(Deno.env.get("EXAM_OCR_RPM") ?? "60", 10);
   const geminiRpm = parseInt(Deno.env.get("EXAM_GEMINI_RPM") ?? "60", 10);
   return new CompositeExamVisionProvider(
