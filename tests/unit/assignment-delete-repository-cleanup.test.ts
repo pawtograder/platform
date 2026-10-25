@@ -6,6 +6,7 @@ import {
   ASYNC_ARCHIVE_REPO_THRESHOLD,
   buildAssignmentDeleteArchiveDebugId,
   collectGitHubRepoTargets,
+  parseDeletedGitHubRepositories,
   parseGitHubRepoFullName,
   selectGitHubCleanupStrategy
 } from "../../supabase/functions/assignment-delete/repositoryCleanup";
@@ -39,6 +40,18 @@ describe("assignment-delete repository cleanup helpers", () => {
       expect(parseGitHubRepoFullName("owner/")).toBeNull();
       expect(parseGitHubRepoFullName("/repo")).toBeNull();
       expect(parseGitHubRepoFullName("owner/repo/extra")).toBeNull();
+    });
+
+    it("trims ASCII spaces around the name and each part, like the SQL side", () => {
+      expect(parseGitHubRepoFullName("  Org / spaced-repo ")?.fullName).toBe("Org/spaced-repo");
+    });
+
+    it("rejects other whitespace and characters GitHub names cannot contain, instead of normalising them", () => {
+      expect(parseGitHubRepoFullName("Org /\trepo")).toBeNull();
+      expect(parseGitHubRepoFullName("Org/repo\n")).toBeNull();
+      expect(parseGitHubRepoFullName("\u00a0Org/repo")).toBeNull();
+      expect(parseGitHubRepoFullName("Org/my repo")).toBeNull();
+      expect(parseGitHubRepoFullName("Org/repo;rm")).toBeNull();
     });
   });
 
@@ -117,6 +130,40 @@ describe("assignment-delete repository cleanup helpers", () => {
           2
         )
       ).toBe("assignment-delete-449-student-3-repo-with-spaces");
+    });
+  });
+
+  describe("parseDeletedGitHubRepositories", () => {
+    it("turns the RPC's github_repositories into targets, in order", () => {
+      expect(
+        parseDeletedGitHubRepositories([
+          { kind: "student", full_name: "Org/student-1" },
+          { kind: "template", full_name: "Org/handout" },
+          { kind: "solution", full_name: "org/solution" }
+        ])
+      ).toEqual([
+        { kind: "student", fullName: "Org/student-1", org: "Org", repo: "student-1" },
+        { kind: "template", fullName: "Org/handout", org: "Org", repo: "handout" },
+        { kind: "solution", fullName: "org/solution", org: "org", repo: "solution" }
+      ]);
+    });
+
+    it("drops entries with an unknown kind or a malformed name rather than trusting them", () => {
+      expect(
+        parseDeletedGitHubRepositories([
+          { kind: "student", full_name: "not-a-repo" },
+          { kind: "student", full_name: "a/b/c" },
+          { kind: "fork", full_name: "Org/x" },
+          { kind: "student", full_name: 42 },
+          null,
+          { kind: "student", full_name: "Org/ok" }
+        ])
+      ).toEqual([{ kind: "student", fullName: "Org/ok", org: "Org", repo: "ok" }]);
+    });
+
+    it("returns no targets for a missing or non-array result (e.g. an RPC from before the field existed)", () => {
+      expect(parseDeletedGitHubRepositories(undefined)).toEqual([]);
+      expect(parseDeletedGitHubRepositories({ kind: "student", full_name: "Org/x" })).toEqual([]);
     });
   });
 });
