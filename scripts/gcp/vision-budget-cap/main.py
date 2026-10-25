@@ -1,14 +1,15 @@
-"""Disable the Cloud Vision API when its budget is exhausted.
+"""Disable the exam OCR APIs (Cloud Vision, Gemini) when their shared budget is exhausted.
 
-Cloud Vision bills after the fact and has no daily quota, so a budget alone only sends email.
-This function subscribes to the budget's Pub/Sub topic and, once the reported cost reaches the
-budget amount, disables vision.googleapis.com on the project. Every Vision call then fails (and
-the exam worker dead-letters), which is the point: the spend stops.
+Cloud Vision bills after the fact and has no daily quota, and Gemini is on postpay too, so a
+budget alone only sends email. This function subscribes to the budget's Pub/Sub topic and, once
+the reported cost reaches the budget amount, disables every service in CAPPED_SERVICES on the
+project. Every key in the project then fails (and the exam worker dead-letters), which is the
+point: the spend stops. All keys in the project draw on the one budget.
 
 Budget data lags actual usage by hours, so this is a near cap, not an exact one.
 
 Re-enable after raising the budget or at the start of the next month:
-    gcloud services enable vision.googleapis.com --project <project>
+    gcloud services enable vision.googleapis.com generativelanguage.googleapis.com --project <project>
 """
 
 import base64
@@ -21,8 +22,8 @@ import google.auth.transport.requests
 
 PROJECT_ID = os.environ["TARGET_PROJECT"]
 BUDGET_NAME = os.environ["BUDGET_DISPLAY_NAME"]
-SERVICE = "vision.googleapis.com"
-BASE = f"https://serviceusage.googleapis.com/v1/projects/{PROJECT_ID}/services/{SERVICE}"
+SERVICES = [s for s in os.environ["CAPPED_SERVICES"].split(";") if s]
+BASE = f"https://serviceusage.googleapis.com/v1/projects/{PROJECT_ID}/services"
 
 
 def _session():
@@ -38,7 +39,7 @@ def cap_vision(cloud_event):
     budget = float(payload.get("budgetAmount", 0))
 
     # The topic is ours, but check anyway: acting on some other budget's message would disable
-    # Vision for the wrong reason.
+    # the APIs for the wrong reason.
     if name != BUDGET_NAME:
         print(f"ignoring notification for budget {name!r}")
         return
@@ -47,17 +48,17 @@ def cap_vision(cloud_event):
         return
 
     session = _session()
-    state = session.get(BASE, timeout=30)
-    state.raise_for_status()
-    if state.json().get("state") == "DISABLED":
-        print(f"{name}: {cost:.2f} of {budget:.2f}; {SERVICE} already disabled")
-        return
-
-    # SKIP the recent-usage check: the API has usage by definition, which is why we are here.
-    resp = session.post(
-        f"{BASE}:disable",
-        json={"disableDependentServices": False, "checkIfServiceHasUsage": "SKIP"},
-        timeout=60,
-    )
-    resp.raise_for_status()
-    print(f"{name}: {cost:.2f} of {budget:.2f}; disabled {SERVICE} on {PROJECT_ID}")
+    for service in SERVICES:
+        state = session.get(f"{BASE}/{service}", timeout=30)
+        state.raise_for_status()
+        if state.json().get("state") == "DISABLED":
+            print(f"{name}: {cost:.2f} of {budget:.2f}; {service} already disabled")
+            continue
+        # SKIP the recent-usage check: the API has usage by definition, which is why we are here.
+        resp = session.post(
+            f"{BASE}/{service}:disable",
+            json={"disableDependentServices": False, "checkIfServiceHasUsage": "SKIP"},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        print(f"{name}: {cost:.2f} of {budget:.2f}; disabled {service} on {PROJECT_ID}")

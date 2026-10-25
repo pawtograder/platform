@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Near-hard monthly cap on Cloud Vision spend for one project.
+# Near-hard monthly cap on exam OCR spend (Cloud Vision + Gemini) for one project.
 #
-# Cloud Vision is postpaid and has only per-minute quotas, so nothing native stops a leaked key
-# from running up a bill. This wires a Vision-only budget to a Pub/Sub topic and a Cloud Run
-# function (main.py) that disables vision.googleapis.com once the budget is reached.
+# Cloud Vision is postpaid with only per-minute quotas, and Gemini is on postpay as well, so
+# nothing native stops a leaked key from running up a bill. This wires one budget covering both
+# APIs to a Pub/Sub topic and a Cloud Run function (main.py) that disables both once the budget
+# is reached. Every API key in the project (CI's, the students') draws on that one budget.
 #
 # Usage: scripts/gcp/vision-budget-cap/setup.sh <project-id> <billing-account-id> [monthly-usd]
 # Requires: gcloud authed as a project owner who is also billing admin on the account.
-# Idempotent: re-running redeploys the function and leaves existing resources alone.
+# Idempotent: re-running redeploys the function and brings the budget's name, services and
+# topic up to date (the amount is only set on creation; change it in the console).
 set -euo pipefail
 
 PROJECT="${1:?usage: $0 <project-id> <billing-account-id> [monthly-usd]}"
@@ -18,8 +20,11 @@ TOPIC=vision-budget-cap
 SA_NAME=vision-budget-cap
 SA="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 ROLE_ID=visionBudgetCap
-BUDGET_NAME="Cloud Vision cap (${PROJECT})"
-VISION_BILLING_SERVICE=services/C08E-37B9-80D3 # "Cloud Vision API" in the Cloud Billing catalog
+BUDGET_NAME="Exam OCR cap (${PROJECT})"
+OLD_BUDGET_NAME="Cloud Vision cap (${PROJECT})" # Vision-only predecessor; renamed in place
+# Cloud Billing catalog ids: "Cloud Vision API" and "Gemini API"
+BILLING_SERVICES=services/C08E-37B9-80D3,services/AEFD-7695-64FA
+CAPPED_SERVICES="vision.googleapis.com;generativelanguage.googleapis.com"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
 
@@ -39,7 +44,7 @@ gcloud iam roles describe "$ROLE_ID" --project "$PROJECT" >/dev/null 2>&1 ||
     --permissions serviceusage.services.get,serviceusage.services.disable
 gcloud iam service-accounts describe "$SA" --project "$PROJECT" >/dev/null 2>&1 ||
   gcloud iam service-accounts create "$SA_NAME" --project "$PROJECT" \
-    --display-name "Disables Cloud Vision when its budget is spent"
+    --display-name "Disables exam OCR APIs when their budget is spent"
 gcloud projects add-iam-policy-binding "$PROJECT" --condition=None \
   --member "serviceAccount:${SA}" --role "projects/${PROJECT}/roles/${ROLE_ID}" >/dev/null
 # Eventarc delivers the Pub/Sub message by invoking the function as this account.
@@ -54,20 +59,26 @@ gcloud iam service-accounts add-iam-policy-binding "$SA" --project "$PROJECT" \
 gcloud functions deploy vision-budget-cap --gen2 --project "$PROJECT" --region "$REGION" \
   --runtime python312 --source "$HERE" --entry-point cap_vision \
   --trigger-topic "$TOPIC" --service-account "$SA" --trigger-service-account "$SA" \
-  --set-env-vars "TARGET_PROJECT=${PROJECT},BUDGET_DISPLAY_NAME=${BUDGET_NAME}" \
+  --set-env-vars "TARGET_PROJECT=${PROJECT},BUDGET_DISPLAY_NAME=${BUDGET_NAME},CAPPED_SERVICES=${CAPPED_SERVICES}" \
   --memory 256Mi --max-instances 1 --timeout 120s --quiet
 
-if gcloud billing budgets list --billing-account "$BILLING" --billing-project "$PROJECT" \
-  --format='value(displayName)' | grep -qxF "$BUDGET_NAME"; then
-  echo "Budget '${BUDGET_NAME}' already exists; leaving it (edit the amount in the console)."
+EXISTING=$(gcloud billing budgets list --billing-account "$BILLING" --billing-project "$PROJECT" \
+  --format='csv[no-heading](name,displayName)' |
+  awk -F, -v a="$BUDGET_NAME" -v b="$OLD_BUDGET_NAME" '$2 == a || $2 == b { print $1; exit }')
+if [ -n "$EXISTING" ]; then
+  gcloud billing budgets update "$EXISTING" --billing-account "$BILLING" --billing-project "$PROJECT" \
+    --display-name "$BUDGET_NAME" \
+    --filter-projects "projects/${PROJECT}" \
+    --filter-services "$BILLING_SERVICES" \
+    --notifications-rule-pubsub-topic "projects/${PROJECT}/topics/${TOPIC}"
 else
   gcloud billing budgets create --billing-account "$BILLING" --billing-project "$PROJECT" \
     --display-name "$BUDGET_NAME" \
     --budget-amount "${AMOUNT}USD" \
     --filter-projects "projects/${PROJECT}" \
-    --filter-services "$VISION_BILLING_SERVICE" \
+    --filter-services "$BILLING_SERVICES" \
     --calendar-period month \
     --threshold-rule percent=0.5 --threshold-rule percent=0.9 --threshold-rule percent=1.0 \
     --notifications-rule-pubsub-topic "projects/${PROJECT}/topics/${TOPIC}"
 fi
-echo "Done: Vision on ${PROJECT} is disabled once this month's Vision spend reaches \$${AMOUNT}."
+echo "Done: Vision and Gemini on ${PROJECT} are disabled once this month's combined spend reaches the budget."
