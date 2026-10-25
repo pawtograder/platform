@@ -248,6 +248,12 @@ test.describe("Exam grading OCR pipeline", () => {
       const data = examArtifact!.data as { questions: { ocr_text: string }[] };
       expect(Array.isArray(data.questions)).toBe(true);
       expect(data.questions.length).toBeGreaterThanOrEqual(1);
+      // An artifact row existing is not the same as the region having matched anything. With
+      // the fake provider every answer region has words under it, so empty text here means the
+      // region math or the fixture placement regressed, not that the page was blank.
+      for (const q of data.questions) {
+        expect(q.ocr_text, `ocr_text for submission ${s.id}`).not.toBe("");
+      }
     }
 
     // negative: the unmatched exam was never turned into a submission

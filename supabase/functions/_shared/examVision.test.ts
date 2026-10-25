@@ -11,8 +11,8 @@
  *
  * Run from supabase/functions:  deno test _shared/examVision.test.ts
  */
-import { assertEquals } from "jsr:@std/assert@^1";
-import { wordsInRegion, type NormRect, type WordBox } from "./examVision.ts";
+import { assertEquals, assertNotEquals } from "jsr:@std/assert@^1";
+import { FakeExamVisionProvider, wordsInRegion, type NormRect, type WordBox } from "./examVision.ts";
 
 /** Quarter of the page, from (0.2, 0.2) to (0.6, 0.6). */
 const REGION: NormRect = { x: 0.2, y: 0.2, width: 0.4, height: 0.4 };
@@ -66,4 +66,34 @@ Deno.test("an empty word list returns empty text", () => {
 Deno.test("a region with no words in it returns empty text", () => {
   const words = [word("far", 0.9, 0.9), word("away", 0.05, 0.05)];
   assertEquals(wordsInRegion(words, REGION), "");
+});
+
+// The fake provider is the OCR backend every offline test runs against, so where it puts its
+// word boxes decides whether those tests exercise the region matcher at all.
+Deno.test("the fake provider puts words under a region like the e2e fixture's", async () => {
+  // tests/e2e/exam-grading.spec.ts places its answer region at y 0.3..0.5. The provider used to
+  // pin its two tokens at y 0.10 and 0.15, so that region matched nothing, ocr_text was always
+  // "" and an assertion that it is non-empty could never have passed.
+  const E2E_ANSWER_REGION: NormRect = { x: 0.1, y: 0.3, width: 0.8, height: 0.2 };
+  const { words } = await new FakeExamVisionProvider().ocrImage({
+    name: "exam__sis-12345__page-0.png",
+    bytes: new Uint8Array(),
+    width: 1224,
+    height: 1584
+  });
+  assertNotEquals(wordsInRegion(words, E2E_ANSWER_REGION), "");
+});
+
+Deno.test("the fake provider's words reach the whole page, not just the top", async () => {
+  const { words } = await new FakeExamVisionProvider().ocrImage({
+    name: "exam__sis-12345__page-0.png",
+    bytes: new Uint8Array(),
+    width: 1224,
+    height: 1584
+  });
+  // A band in each third of the page should contain something.
+  for (const y of [0.05, 0.4, 0.8]) {
+    const band: NormRect = { x: 0, y, width: 1, height: 0.1 };
+    assertNotEquals(wordsInRegion(words, band), "", `no words in the band at y=${y}`);
+  }
 });
