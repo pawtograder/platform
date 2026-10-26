@@ -63,6 +63,11 @@ describe("rubricCheckDataOrThrow", () => {
     const result = rubricCheckDataOrThrow(check);
     expect(result?.options).toEqual([]);
   });
+
+  it("keeps exam_question_id on a check without options", () => {
+    const check = makeCheck({ exam_question_id: 38 });
+    expect(rubricCheckDataOrThrow(check)).toEqual({ exam_question_id: 38 });
+  });
 });
 
 describe("YamlChecksToHydratedChecks — empty check list", () => {
