@@ -164,6 +164,28 @@ spec:
     - from:
         - namespaceSelector:
             {{- toYaml .Values.networkPolicy.ingressControllerNamespaceSelector | nindent 12 }}
+{{- if and .Values.monitoring.enabled .Values.forgejo.enabled (dig "gitea" "metrics" "enabled" false .Values.forgejo) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" . }}-apps-allow-monitoring
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: forgejo
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
+      ports:
+        - { protocol: TCP, port: {{ include "pawtograder.forgejo.containerPort" . }} }
+{{- end }}
 {{- if and .Values.forgejo.enabled .Values.forgejoRunner.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

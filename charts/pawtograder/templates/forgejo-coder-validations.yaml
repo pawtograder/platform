@@ -25,12 +25,23 @@
 
 {{- $subcharts := dict "forgejo" .Values.forgejo "forgejo-db" (index .Values "forgejo-db") "coder.coder" .Values.coder.coder "coder-db" (index .Values "coder-db") }}
 {{- $on := dict "forgejo" .Values.forgejo.enabled "forgejo-db" (index .Values "forgejo-db").enabled "coder.coder" .Values.coder.enabled "coder-db" (index .Values "coder-db").enabled }}
-{{- range $dim := list "nodeSelector" "tolerations" }}
-{{- if get $.Values.global $dim }}
+{{- /* This chart merges global placement into each component's, so every global entry must be in each subchart's. */}}
 {{- range $key, $v := $subcharts }}
-{{- if and (get $on $key) (not (get $v $dim)) }}
-{{- fail (printf "global.%s doesn't reach subcharts; set %s.%s too" $dim $key $dim) }}
+{{- if get $on $key }}
+{{- range $label, $value := ($.Values.global.nodeSelector | default dict) }}
+{{- if ne (toString (get ($v.nodeSelector | default dict) $label)) (toString $value) }}
+{{- fail (printf "global.nodeSelector doesn't reach subcharts; set %s.nodeSelector.%s=%v too" $key $label $value) }}
 {{- end }}
+{{- end }}
+{{- $have := list }}
+{{- range ($v.tolerations | default list) }}{{ $have = append $have (toJson .) }}{{ end }}
+{{- range ($.Values.global.tolerations | default list) }}
+{{- if not (has (toJson .) $have) }}
+{{- fail (printf "global.tolerations doesn't reach subcharts; add %s to %s.tolerations" (toJson .) $key) }}
+{{- end }}
+{{- end }}
+{{- if and $.Values.global.priorityClassName (not $v.priorityClassName) }}
+{{- fail (printf "global.priorityClassName doesn't reach subcharts; set %s.priorityClassName too" $key) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -50,9 +61,9 @@
 {{- fail "forgejo.persistence.enabled=false keeps Git repositories in an emptyDir; production needs a persistent volume" }}
 {{- end }}
 {{- $dataVolume := false }}
-{{- range .Values.forgejo.extraVolumes }}{{ if eq .name "data" }}{{ $dataVolume = true }}{{ end }}{{ end }}
+{{- range .Values.forgejo.extraVolumes }}{{ if and (eq .name "data") (dig "persistentVolumeClaim" "claimName" "" .) }}{{ $dataVolume = true }}{{ end }}{{ end }}
 {{- if and (eq (toString $p.mount) "false") (not $dataVolume) }}
-{{- fail "forgejo.persistence.mount=false needs a persistent extraVolumes entry named data; the Forgejo Deployment always mounts one" }}
+{{- fail "forgejo.persistence.mount=false needs an extraVolumes entry named data with persistentVolumeClaim.claimName; the Forgejo Deployment always mounts one, and any other source loses the repositories with the pod" }}
 {{- end }}
 {{- if ne (toString $p.create) "false" }}{{ $_ := set $classes "forgejo.persistence.storageClass" ($p.storageClass | default "") }}{{ end }}
 {{- end }}
@@ -179,7 +190,11 @@
 
 {{- if .Values.forgejo.enabled }}
 {{- if .Values.global.imagePullSecrets }}
-{{- fail "global.imagePullSecrets can't be combined with forgejo.enabled: the Forgejo subchart reads it as a list of names, this chart as a list of {name: ...}. Attach pull secrets to the ServiceAccount the pods use instead (serviceAccount.create=false runs them under the namespace's default one)." }}
+{{- fail "global.imagePullSecrets can't be combined with forgejo.enabled: the Forgejo subchart reads it as a list of names, this chart as a list of {name: ...}. Attach pull secrets to Forgejo's ServiceAccount with forgejo.serviceAccount.imagePullSecrets instead." }}
+{{- end }}
+{{- $fsa := .Values.forgejo.serviceAccount | default dict }}
+{{- if or (ne (toString $fsa.create) "true") (eq (toString $fsa.automountServiceAccountToken) "true") }}
+{{- fail "forgejo.serviceAccount must keep create=true and automountServiceAccountToken=false; otherwise the public Forgejo pod mounts a Kubernetes API token" }}
 {{- end }}
 {{- $route := .Values.forgejo.httpRoute | default dict }}
 {{- if not (or .Values.forgejo.ingress.hosts (and $route.enabled $route.hostnames) .Values.forgejo.gitea.config.server.ROOT_URL .Values.forgejo.gitea.config.server.DOMAIN) }}
@@ -190,8 +205,10 @@
 {{- if not (has "FORGEJO__DATABASE__PASSWD" $envNames) }}
 {{- fail "forgejo.gitea.additionalConfigFromEnvs is missing FORGEJO__DATABASE__PASSWD; an overlay that sets the list must keep the chart's entry" }}
 {{- end }}
-{{- if has "FORGEJO__DATABASE__HOST" $envNames }}
-{{- fail "forgejo.gitea.additionalConfigFromEnvs sets FORGEJO__DATABASE__HOST, which overrides forgejo.gitea.config.database.HOST; drop it (the pawtograder-forgejo-database ConfigMap it used to read is gone)" }}
+{{- range $k := list "HOST" "NAME" "USER" }}
+{{- if has (printf "FORGEJO__DATABASE__%s" $k) $envNames }}
+{{- fail (printf "forgejo.gitea.additionalConfigFromEnvs sets FORGEJO__DATABASE__%s, which overrides forgejo.gitea.config.database.%s; drop it, the app-databases Job provisions only the validated value" $k $k) }}
+{{- end }}
 {{- end }}
 {{- $want := include "pawtograder.appDatabase.endpoint" (dict "ctx" . "app" "forgejo") }}
 {{- if ne (toString .Values.forgejo.gitea.config.database.HOST) $want }}
@@ -210,6 +227,10 @@
 {{- end }}
 {{- if not (and .Values.forgejoRunner.image.repository .Values.forgejoRunner.image.tag) }}
 {{- fail "forgejoRunner.image.repository and .tag are required (build images/forgejo-runner)" }}
+{{- end }}
+{{- $protocol := dig "gitea" "config" "server" "PROTOCOL" "http" .Values.forgejo | toString }}
+{{- if ne $protocol "http" }}
+{{- fail (printf "forgejoRunner talks to Forgejo's Service over plain http, so forgejo.gitea.config.server.PROTOCOL must be http (got %s); terminate TLS at the ingress" $protocol) }}
 {{- end }}
 {{- end }}
 
@@ -251,6 +272,16 @@
 {{- end }}
 {{- if $sa.workspacePerms }}
 {{- fail (printf "coderBootstrap.workspaceNamespace=%s moves workspaces out of %s; set coder.coder.serviceAccount.workspacePerms=false so coderd loses its Role over Pawtograder's pods there" $wsNS .Release.Namespace) }}
+{{- end }}
+{{- /* Existing workspaces keep their home PVC, and so their pod, where they were created. */}}
+{{- if not (has .Release.Namespace $granted) }}
+{{- $left := 0 }}
+{{- range (lookup "v1" "PersistentVolumeClaim" .Release.Namespace "").items | default list }}
+{{- if eq (dig "metadata" "labels" "app.kubernetes.io/name" "" .) "coder-workspace" }}{{ $left = add1 $left }}{{ end }}
+{{- end }}
+{{- if $left }}
+{{- fail (printf "%d Coder workspace home volume(s) are still in %s, and coderd would lose its Role there; until they're deleted or migrated, also list {name: %s, workspacePerms: true} in coder.coder.serviceAccount.workspaceNamespaces" $left .Release.Namespace .Release.Namespace) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

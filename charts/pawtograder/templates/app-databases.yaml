@@ -48,6 +48,9 @@ spec:
       {{- with (include "pawtograder.placement" (dict "ctx" . "component" .Values.appDatabases) | trim) }}
       {{- . | nindent 6 }}
       {{- end }}
+      {{- with (include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.appDatabases) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       containers:
         {{- range $app := $apps }}
         - name: {{ $app }}

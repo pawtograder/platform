@@ -62,6 +62,12 @@ variable "home_storage_class" {
   default     = ""
 }
 
+variable "priority_class_name" {
+  type        = string
+  description = "PriorityClass for workspace pods; empty uses the cluster default."
+  default     = ""
+}
+
 variable "ephemeral_storage_limit" {
   type        = string
   description = "Cap on what a workspace writes outside its home volume (/tmp, the image layer)."
@@ -220,6 +226,7 @@ resource "kubernetes_pod_v1" "main" {
   spec {
     automount_service_account_token = false
     restart_policy                  = "Always"
+    priority_class_name             = var.priority_class_name == "" ? null : var.priority_class_name
     node_selector                   = merge(jsondecode(var.node_selector), { "kubernetes.io/arch" = var.arch })
 
     dynamic "image_pull_secrets" {

@@ -39,7 +39,10 @@
       (dict "name" "data" "emptyDir" (dict "sizeLimit" $r.workdirSizeLimit))
       (dict "name" "config" "configMap" (dict "name" $name))
       (dict "name" "token" "secret" (dict "secretName" "" "defaultMode" 256)))) }}
-{{- $_ := merge $jobPod.spec (include "pawtograder.placement" (dict "ctx" . "component" $r) | fromYaml) }}
+{{- $arch := dict "kubernetes.io/arch" ($r.arch | default "amd64") }}
+{{- $jobPlacement := dict "nodeSelector" (merge (deepCopy $arch) ($r.nodeSelector | default dict)) "tolerations" $r.tolerations "affinity" $r.affinity }}
+{{- $_ := merge $jobPod.spec (include "pawtograder.placement" (dict "ctx" . "component" $jobPlacement) | fromYaml) (include "pawtograder.priorityClassName" (dict "ctx" . "component" $r) | fromYaml) }}
+{{- $dispatcherPlacement := dict "nodeSelector" (merge (deepCopy $arch) ($r.dispatcher.nodeSelector | default dict)) "tolerations" $r.dispatcher.tolerations "affinity" $r.dispatcher.affinity }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -134,7 +137,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with (include "pawtograder.placement" (dict "ctx" . "component" $r.dispatcher) | trim) }}
+      {{- with (include "pawtograder.placement" (dict "ctx" . "component" $dispatcherPlacement) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      {{- with (include "pawtograder.priorityClassName" (dict "ctx" . "component" $r.dispatcher) | trim) }}
       {{- . | nindent 6 }}
       {{- end }}
       securityContext:

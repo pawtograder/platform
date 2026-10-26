@@ -2638,6 +2638,9 @@ forgejo:
     tag: "15.0.9"
   strategy:
     type: Recreate # RWO repo volume
+  serviceAccount:
+    create: true
+    automountServiceAccountToken: false
   podSecurityContext:
     fsGroup: 1000
     seccompProfile: { type: RuntimeDefault }
@@ -2729,6 +2732,7 @@ forgejoRunner:
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
+  arch: amd64 # pins job and dispatcher pods; images/forgejo-runner builds for linux/amd64
   imagePullSecrets: []
   capacity: 2
   labels:
@@ -2874,6 +2878,7 @@ coderBootstrap:
   workspaces:
     image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
     arch: amd64
+    priorityClassName: ""
     imagePullPolicy: IfNotPresent
     imagePullSecrets: [] # Secret names in the workspace namespace
     storageClass: ""

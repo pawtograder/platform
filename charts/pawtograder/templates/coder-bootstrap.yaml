@@ -48,6 +48,9 @@ spec:
       {{- with (include "pawtograder.placement" (dict "ctx" . "component" $placement) | trim) }}
       {{- . | nindent 6 }}
       {{- end }}
+      {{- with (include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.coderBootstrap) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       containers:
         - name: bootstrap
           image: "{{ .Values.coder.coder.image.repo }}:{{ $tag }}"
@@ -90,6 +93,7 @@ spec:
                   --variable image_pull_policy={{ .Values.coderBootstrap.workspaces.imagePullPolicy | default "IfNotPresent" }} \
                   --variable image_pull_secrets={{ .Values.coderBootstrap.workspaces.imagePullSecrets | default list | toJson | squote }} \
                   --variable home_storage_class={{ .Values.coderBootstrap.workspaces.storageClass | default "" | squote }} \
+                  --variable priority_class_name={{ .Values.coderBootstrap.workspaces.priorityClassName | default .Values.global.priorityClassName | default "" | squote }} \
                   --variable ephemeral_storage_limit={{ .Values.coderBootstrap.workspaces.ephemeralStorageLimit | default "4Gi" }} \
                   --variable node_affinity={{ (include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml).nodeAffinity | default dict | toJson | squote }} \
                   --message "chart {{ .Chart.Version }}"

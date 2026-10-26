@@ -9,11 +9,22 @@ SELECTOR="pawtograder.net/forgejo-job=$PREFIX"
 
 kube() { curl -sS --fail-with-body --connect-timeout 10 --max-time 60 --cacert "$SA/ca.crt" -H "Authorization: Bearer $(cat "$SA/token")" -H 'Content-Type: application/json' "$@"; }
 AUTH=/run/forgejo-auth
+# Forgejo applies a rotated admin password only when it restarts, so keep the last one that worked until it's refused.
+GOOD=/tmp/forgejo-credential
 fj() {
-  local auth
-  if [ -f "$AUTH/token" ]; then auth=(-H "Authorization: token $(cat "$AUTH/token")")
-  else auth=(-u "$(cat "$AUTH/username"):$(cat "$AUTH/password")"); fi
-  curl -sS --fail-with-body --connect-timeout 10 --max-time 60 "${auth[@]}" -H 'Content-Type: application/json' "$@"
+  local mounted cred hdr rc
+  if [ -f "$AUTH/token" ]; then
+    curl -sS --fail-with-body --connect-timeout 10 --max-time 60 -H "Authorization: token $(cat "$AUTH/token")" -H 'Content-Type: application/json' "$@"
+    return
+  fi
+  mounted="$(cat "$AUTH/username"):$(cat "$AUTH/password")"
+  cred=$(cat "$GOOD" 2>/dev/null); [ -n "$cred" ] || cred=$mounted
+  hdr=$(mktemp)
+  curl -sS --fail-with-body --connect-timeout 10 --max-time 60 -D "$hdr" -u "$cred" -H 'Content-Type: application/json' "$@"; rc=$?
+  if [ "$rc" = 0 ]; then (umask 077; printf '%s' "$cred" > "$GOOD")
+  elif [ "$cred" != "$mounted" ] && grep -q '^HTTP/[0-9.]* 401' "$hdr"; then rm -f "$GOOD"; echo "Forgejo refused the previous admin password; switching to the mounted one" >&2; fi
+  rm -f "$hdr"
+  return "$rc"
 }
 
 spawn() {
