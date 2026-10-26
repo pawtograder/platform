@@ -23,7 +23,6 @@ keywords:
   - autograder
 annotations:
   category: Application
-# Gitignored; run scripts/build-deps.sh before helm commands against a checkout.
 dependencies:
   - name: forgejo
     version: 17.1.7

@@ -132,7 +132,6 @@ resource "coder_agent" "main" {
   arch           = "amd64"
   startup_script = <<-EOT
     set -e
-    # An image with code-server baked in (needed without internet egress) skips the download.
     CS="$(command -v code-server || true)"
     if [ -z "$CS" ]; then
       CS="$HOME/.local/bin/code-server"

@@ -215,7 +215,7 @@ spec:
           {{- end }}
       ports:
         - { protocol: TCP, port: 8080 }
-        - { protocol: TCP, port: 8443 } # coder.coder.tls
+        - { protocol: TCP, port: 8443 }
 ---
 # No ingress: Coder then relays workspace traffic over the agent's outbound DERP connection instead of direct P2P.
 apiVersion: networking.k8s.io/v1
