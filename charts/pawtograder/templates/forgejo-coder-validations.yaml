@@ -107,6 +107,9 @@
 {{- fail (printf "%s.settings.existingSecret must name the superuser Secret: without it the subchart generates one called pawtograder-%s, which is the app role's Secret" $key $key) }}
 {{- end }}
 {{- end }}
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled (eq (toString (dig "service" "enable" true .Values.coder.coder)) "false") }}
+{{- fail "coder.coder.service.enable=false leaves coderBootstrap no coder Service to reach; keep the Service or set coderBootstrap.enabled=false" }}
+{{- end }}
 {{- if and .Values.coder.enabled (or .Values.coder.nameOverride .Values.coder.fullnameOverride) }}
 {{- fail "coder.nameOverride / fullnameOverride aren't supported: this chart's NetworkPolicies and bootstrap address coderd as coder" }}
 {{- end }}
