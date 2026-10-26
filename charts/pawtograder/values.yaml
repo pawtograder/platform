@@ -2732,7 +2732,7 @@ forgejoRunner:
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
-  arch: amd64 # pins job and dispatcher pods; images/forgejo-runner builds for linux/amd64
+  arch: amd64
   imagePullSecrets: []
   capacity: 2
   labels:

@@ -16,7 +16,6 @@ metadata:
 data:
   {{- range .Values.coder.coder.env }}
   {{- if eq .name "CODER_PG_CONNECTION_URL" }}
-  # For the first-owner init container; coderd itself takes it from coder.coder.env.
   CODER_PG_CONNECTION_URL: {{ .value | quote }}
   {{- end }}
   {{- end }}
