@@ -11,7 +11,7 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder-templates") | nindent 4 }}
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook": post-install,post-upgrade,post-rollback
     "helm.sh/hook-weight": "-1"
     "helm.sh/hook-delete-policy": before-hook-creation
 data:
@@ -28,7 +28,7 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder-bootstrap") | nindent 4 }}
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook": post-install,post-upgrade,post-rollback
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 2
