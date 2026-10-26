@@ -21,9 +21,12 @@ export type AssessmentQuestion = GeneratedQuestion & {
   grading_tolerance?: number | null;
 };
 
+export type ExamRubricStatus = "built" | "existing" | "no-rubric" | "failed";
+
 /**
- * Save an exam's question tree and regions, then build the grading rubric from them. Throws if the
- * save fails. A failed build doesn't undo the save, so it comes back as rubricError instead.
+ * Save an exam's question tree and regions. On the first save, also build the grading rubric from
+ * them. Later saves leave an existing rubric alone, since a rebuild resets its generated checks.
+ * Throws if the save fails. A failed build doesn't undo the save, so it comes back as rubricError.
  */
 export async function saveExamStructure(
   supabase: SupabaseClient<Database>,
@@ -33,19 +36,28 @@ export async function saveExamStructure(
     questions,
     regions
   }: { examId: number; gradingRubricId: number | null; questions: Json; regions: Json }
-): Promise<{ rubricBuilt: boolean; rubricError: string | null }> {
+): Promise<{ rubric: ExamRubricStatus; rubricError: string | null }> {
   const { error } = await supabase.rpc("exam_upsert_questions_and_regions", {
     p_exam_id: examId,
     p_questions: questions,
     p_regions: regions
   });
   if (error) throw error;
-  if (!gradingRubricId) return { rubricBuilt: false, rubricError: null };
+  if (!gradingRubricId) return { rubric: "no-rubric", rubricError: null };
+
+  const { count, error: countErr } = await supabase
+    .from("rubric_parts")
+    .select("id", { count: "exact", head: true })
+    .eq("rubric_id", gradingRubricId)
+    .not("data->exam_question_id", "is", null);
+  if (countErr) return { rubric: "failed", rubricError: countErr.message };
+  if (count) return { rubric: "existing", rubricError: null };
+
   const { error: syncErr } = await supabase.rpc("exam_sync_rubric_from_questions", {
     p_exam_id: examId,
     p_rubric_id: gradingRubricId
   });
-  return syncErr ? { rubricBuilt: false, rubricError: syncErr.message } : { rubricBuilt: true, rubricError: null };
+  return syncErr ? { rubric: "failed", rubricError: syncErr.message } : { rubric: "built", rubricError: null };
 }
 
 /**

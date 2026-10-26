@@ -285,7 +285,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
     setSaving(true);
     try {
       const supabase = createClient();
-      const { rubricBuilt, rubricError } = await saveExamStructure(supabase, {
+      const { rubric, rubricError } = await saveExamStructure(supabase, {
         examId,
         gradingRubricId,
         questions: questions.map((q) => ({
@@ -317,10 +317,17 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       // marked dirty between the save and the reload landing.
       setSavedSnapshot(snapshotOf(questions, regions));
       setReloadKey((k) => k + 1);
-      if (rubricError) {
-        toaster.warning({ title: "Saved, but the rubric wasn't rebuilt", description: rubricError });
+      if (rubric === "failed") {
+        toaster.warning({ title: "Saved, but the rubric wasn't built", description: rubricError });
+      } else if (rubric === "built") {
+        toaster.success({ title: "Saved exam structure and built the rubric" });
+      } else if (rubric === "existing") {
+        toaster.success({
+          title: "Saved exam structure",
+          description: 'To apply question changes to the rubric, click "Build rubric from exam".'
+        });
       } else {
-        toaster.success({ title: rubricBuilt ? "Saved exam structure and built the rubric" : "Saved exam structure" });
+        toaster.success({ title: "Saved exam structure" });
       }
     } catch (e) {
       toaster.error({ title: "Save failed", description: e instanceof Error ? e.message : String(e) });
