@@ -12,6 +12,7 @@ import {
   type PageImage,
   type WordBox
 } from "../_shared/examVision.ts";
+import { assertScanPathInScope, ScanPathRejectedError, type ScanScope } from "../_shared/examScanPath.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -155,6 +156,18 @@ function downloadImageCached(
   return pending;
 }
 
+// Which class, exam and batch a page's image_path must name (#1078). Taken from the batch row:
+// staff write image_path, and the page's own exam_id is not tied to its batch's exam.
+async function loadScanScope(admin: Admin, batchId: number): Promise<ScanScope> {
+  const { data, error } = await admin
+    .from("exam_scan_batches")
+    .select("id, class_id, exam_id")
+    .eq("id", batchId)
+    .single();
+  if (error || !data) throw new Error(`load scan batch ${batchId} failed: ${error?.message}`);
+  return { classId: data.class_id, examId: data.exam_id, batchId: data.id };
+}
+
 // ---------------------------------------------------------------------------
 // process_page: OCR one scan page
 // ---------------------------------------------------------------------------
@@ -162,7 +175,7 @@ async function processPage(admin: Admin, args: ProcessPageArgs): Promise<void> {
   const provider = getExamVisionProvider();
   const { data: page, error } = await admin
     .from("exam_scan_pages")
-    .select("id, image_path, width, height, ocr_data")
+    .select("id, batch_id, image_path, width, height, ocr_data")
     .eq("id", args.scan_page_id)
     .single();
   if (error || !page) throw new Error(`scan page ${args.scan_page_id} not found`);
@@ -170,6 +183,7 @@ async function processPage(admin: Admin, args: ProcessPageArgs): Promise<void> {
   // not ocr_text, which is "" for a blank page and would re-send it to the provider every time.
   if (page.ocr_data !== null) return;
 
+  assertScanPathInScope(page.image_path, await loadScanScope(admin, page.batch_id), `scan page ${page.id}`);
   const bytes = await downloadImage(admin, "exam-scans", page.image_path);
   const img: PageImage = {
     name: page.image_path,
@@ -277,7 +291,7 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   const provider = getExamVisionProvider();
   const { data: batch, error } = await admin
     .from("exam_scan_batches")
-    .select("id, exam_id, pages_per_exam")
+    .select("id, class_id, exam_id, pages_per_exam")
     .eq("id", args.batch_id)
     .single();
   if (error || !batch) throw new Error(`batch ${args.batch_id} not found`);
@@ -344,6 +358,9 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
         `re-scan the batch or correct pages-per-exam before processing`
     );
   }
+  // Check every page's image path before reading any of them for identity (#1078).
+  const scanScope: ScanScope = { classId: batch.class_id, examId: batch.exam_id, batchId: batch.id };
+  for (const p of pages) assertScanPathInScope(p.image_path, scanScope, `scan page ${p.id}`);
 
   // identity regions (kind name/student_id) defined on the template. A template may
   // define one of each; when both exist we read each independently (they can sit on
@@ -562,11 +579,11 @@ async function maybeCompleteBatch(admin: Admin, batchId: number): Promise<void> 
   }
 }
 
-async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Promise<void> {
+async function finalize(admin: Admin, classId: number, batchId: number, args: FinalizeArgs): Promise<void> {
   const provider = getExamVisionProvider();
   const { data: scanned, error } = await admin
     .from("exam_scanned_submissions")
-    .select("id, exam_id, batch_id, matched_profile_id, match_status, submission_id, finalized_at")
+    .select("id, class_id, exam_id, batch_id, matched_profile_id, match_status, submission_id, finalized_at")
     .eq("id", args.scanned_submission_id)
     .single();
   if (error || !scanned) throw new Error(`scanned submission ${args.scanned_submission_id} not found`);
@@ -586,6 +603,27 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
     return;
   }
   const profileId = scanned.matched_profile_id as string;
+
+  // Scan ownership is judged against the batch this message was enqueued for, whose class the
+  // enqueue RPC checked the caller against. The scanned row's own batch_id is staff-writable and
+  // not tied to its class, so a scope read from it could name another course's batch (#1078).
+  // The row, the batch and the copy destination (this class) must all be the same course.
+  if (scanned.batch_id !== batchId || scanned.class_id !== classId) {
+    throw new ScanPathRejectedError(
+      `scanned submission ${scanned.id} is no longer in batch ${batchId} of class ${classId}; refusing to read its scans`
+    );
+  }
+  const scanScope = await loadScanScope(admin, batchId);
+  if (scanScope.classId !== classId) {
+    throw new ScanPathRejectedError(`batch ${batchId} is not in class ${classId}; refusing to read its scans`);
+  }
+  // The row's exam_id is staff-writable too, and exam_create_submission takes the assignment from
+  // it: a row moved to another exam would file this batch's scans under that exam's assignment.
+  if (scanned.exam_id !== scanScope.examId) {
+    throw new ScanPathRejectedError(
+      `scanned submission ${scanned.id} names exam ${scanned.exam_id}, but batch ${batchId} is exam ${scanScope.examId}; refusing to read its scans`
+    );
+  }
 
   // Create the submission (fires submissions_after_insert_hook -> grading review).
   // exam_create_submission is idempotent: it returns the existing submission_id if the
@@ -616,6 +654,8 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
         `scanned submission ${scanned.id} has no scan pages; refusing to finalize an empty exam artifact`
       );
     }
+    // Check every page's image path before copying or structuring from any of them (#1078).
+    for (const p of pages) assertScanPathInScope(p.image_path, scanScope, `scan page ${p.id}`);
     const groupPages = pages;
 
     // Idempotent rebuild WITHOUT deleting existing rows: a blanket delete of the
@@ -770,12 +810,21 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
     } else if (env.method === "match") {
       await doMatch(admin, env, env.args);
     } else if (env.method === "finalize") {
-      await finalize(admin, env.class_id, env.args);
+      await finalize(admin, env.class_id, env.batch_id, env.args);
     } else {
       throw new Error(`unknown method ${(env as { method: string }).method}`);
     }
     await archive(admin, msg.msg_id);
   } catch (error) {
+    if (error instanceof ScanPathRejectedError) {
+      // A rejected scan path rejects again on every retry, so surface it on the batch now
+      // instead of after five retries.
+      Sentry.captureException(error, scope);
+      if (env.batch_id) await setBatchError(admin, env.batch_id, error.message);
+      await deadLetter(admin, env, msg.msg_id, error);
+      await archive(admin, msg.msg_id);
+      return;
+    }
     if (error instanceof ProviderRateLimitError) {
       // Rate limits are transient, but bound the retries (see MAX_RATE_LIMIT_RETRIES) so a
       // permanently-exhausted quota can't requeue forever.
