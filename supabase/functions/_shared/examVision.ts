@@ -57,6 +57,28 @@ export class ProviderRateLimitError extends Error {
   }
 }
 
+export type TransientFailureCategory = "server_error" | "timeout" | "aborted" | "network";
+
+/**
+ * Thrown when a provider request failed in transit or with a 5xx: the request may succeed if
+ * retried, so callers must not treat it as an unusable answer. The worker's dispatcher retries it
+ * on its normal backoff.
+ *
+ * The message is deliberately bounded to provider, category and status. It is persisted to the
+ * batch error and DLQ and sent to Sentry, so it must not carry response bodies or transport
+ * error text, either of which can reflect request material such as the API key.
+ */
+export class ProviderTransientError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly category: TransientFailureCategory,
+    readonly status?: number
+  ) {
+    super(`${provider} request failed: category=${category}${status === undefined ? "" : ` status=${status}`}`);
+    this.name = "ProviderTransientError";
+  }
+}
+
 /** Text of the words whose center falls inside `region` (reading order: top-to-bottom, left-to-right). */
 export function wordsInRegion(words: WordBox[], region: NormRect): string {
   const inside = words.filter((w) => {
@@ -239,15 +261,17 @@ class GeminiVision {
   constructor(
     private apiKey: string,
     private model: string,
-    rpm: number
+    rpm: number,
+    private baseUrl: string
   ) {
     this.limiter = new RateLimiter(rpmToInterval(rpm));
   }
   private async generate(parts: unknown[]): Promise<string> {
     await this.limiter.wait();
     // Key in a header rather than the query string; see GoogleVisionOcr.ocrImage.
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
-    const res = await fetch(url, {
+    // Build the request before sending it, so a malformed URL, header or body throws here as the
+    // programming error it is, and only a failure of the request itself reaches the catch below.
+    const request = new Request(`${this.baseUrl}/v1beta/models/${this.model}:generateContent`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
       body: JSON.stringify({
@@ -257,9 +281,33 @@ class GeminiVision {
       // Bound the call so a stalled connection can't hang the worker indefinitely.
       signal: AbortSignal.timeout(60000)
     });
+    let res: Response;
+    let body: string;
+    try {
+      res = await fetch(request);
+      // Read the body here too: a connection that resets, or a timeout that fires, after the
+      // headers arrive surfaces from the body read rather than from fetch.
+      body = await res.text();
+    } catch (err) {
+      // The request rejects with a TypeError when the connection fails or is reset, and with a
+      // TimeoutError/AbortError when the signal above fires. Those are worth retrying, unlike an
+      // unusable answer, so they must not reach structureAnswer's caller as a plain Error. Only
+      // the category is kept: transport error text embeds the URL and can echo request material.
+      if (err instanceof TypeError) throw new ProviderTransientError("gemini", "network");
+      if (err instanceof DOMException && err.name === "TimeoutError") {
+        throw new ProviderTransientError("gemini", "timeout");
+      }
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new ProviderTransientError("gemini", "aborted");
+      }
+      throw err;
+    }
     if (res.status === 429) throw new ProviderRateLimitError("Gemini rate limited", 60);
-    if (!res.ok) throw new Error(`Gemini failed: ${res.status} ${await res.text()}`);
-    const json = await res.json();
+    // No body: an error page can reflect request material (see ProviderTransientError).
+    if (res.status >= 500) throw new ProviderTransientError("gemini", "server_error", res.status);
+    if (!res.ok) throw new Error(`Gemini failed: ${res.status} ${body}`);
+    // Outside the catch: a body that is not JSON stays a SyntaxError, as before.
+    const json = JSON.parse(body);
     return json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
   }
   private imagePart(page: PageImage) {
@@ -394,8 +442,13 @@ function buildExamVisionProvider(): ExamVisionProvider {
   const model = Deno.env.get("EXAM_GEMINI_MODEL") ?? "gemini-3.8-flash";
   const ocrRpm = parseInt(Deno.env.get("EXAM_OCR_RPM") ?? "60", 10);
   const geminiRpm = parseInt(Deno.env.get("EXAM_GEMINI_RPM") ?? "60", 10);
+  // Override only to point Gemini at a local fault-injecting stand-in (tests/e2e/exam-provider-faults.spec.ts).
+  // An empty value (e.g. `EXAM_GEMINI_BASE_URL=` in an env file) means unset, not a relative URL.
+  const geminiBaseUrl = (
+    Deno.env.get("EXAM_GEMINI_BASE_URL")?.trim() || "https://generativelanguage.googleapis.com"
+  ).replace(/\/+$/, "");
   return new CompositeExamVisionProvider(
     new GoogleVisionOcr(ocrKey, ocrRpm),
-    new GeminiVision(geminiKey, model, geminiRpm)
+    new GeminiVision(geminiKey, model, geminiRpm, geminiBaseUrl)
   );
 }
