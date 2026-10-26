@@ -206,8 +206,9 @@ resource "kubernetes_pod_v1" "main" {
   count = data.coder_workspace.me.start_count
 
   metadata {
-    name      = local.name
-    namespace = var.namespace
+    name = local.name
+    # The home PVC keeps its original namespace, and a pod can only mount a claim in its own.
+    namespace = kubernetes_persistent_volume_claim_v1.home.metadata[0].namespace
     labels    = local.labels
   }
 
