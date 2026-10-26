@@ -7,6 +7,7 @@ import type { ExamAsyncEnvelope, FinalizeArgs, MatchArgs, ProcessPageArgs } from
 import {
   getExamVisionProvider,
   ProviderRateLimitError,
+  ProviderTransientError,
   wordsInRegion,
   type NormRect,
   type PageImage,
@@ -698,13 +699,16 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
           const structured = await provider.structureAnswer(answerType, img, rect, ocrText);
           structuredValue = structured.value;
         } catch (structureErr) {
-          // A bare catch also swallowed ProviderRateLimitError, so a rate limit or timeout was
-          // treated as "this answer cannot be structured": the raw OCR string was substituted,
-          // the artifact written, and finalized_at stamped -- permanently degrading a gradeable
-          // answer that the worker's own backoff would have recovered. Retryable provider
-          // failures now propagate to the dispatcher's rate-limit path; the fallback is reserved
-          // for genuinely unstructurable content (e.g. illegible handwriting).
-          if (structureErr instanceof ProviderRateLimitError) throw structureErr;
+          // A bare catch treated a rate limit, a 5xx, a timeout or a reset connection as "this
+          // answer cannot be structured": the raw OCR string was substituted, the artifact
+          // written, and finalized_at stamped -- permanently degrading a gradeable answer that
+          // the worker's own backoff would have recovered (#1077). Retryable provider failures
+          // propagate to the dispatcher (rate limits to its rate-limit path, the rest to its
+          // transient-error backoff); the fallback is reserved for genuinely unstructurable
+          // content (e.g. illegible handwriting).
+          if (structureErr instanceof ProviderRateLimitError || structureErr instanceof ProviderTransientError) {
+            throw structureErr;
+          }
           // fall back to raw OCR text on structuring failure
         }
       }
