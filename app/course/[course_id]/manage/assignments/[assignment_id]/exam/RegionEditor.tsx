@@ -1,6 +1,7 @@
 "use client";
 
 import { examExtractTemplate } from "@/lib/edgeFunctions";
+import { saveExamStructure } from "@/lib/exam/examClient";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
@@ -284,9 +285,10 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
     setSaving(true);
     try {
       const supabase = createClient();
-      const { error } = await supabase.rpc("exam_upsert_questions_and_regions", {
-        p_exam_id: examId,
-        p_questions: questions.map((q) => ({
+      const { rubricBuilt, rubricError } = await saveExamStructure(supabase, {
+        examId,
+        gradingRubricId,
+        questions: questions.map((q) => ({
           id: q.id ?? null,
           client_id: q.client_id,
           parent_client_id: q.parent_client_id,
@@ -300,7 +302,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
           correct_answer: q.correct_answer,
           grading_tolerance: q.grading_tolerance
         })),
-        p_regions: regions.map((r) => ({
+        regions: regions.map((r) => ({
           question_client_id: r.question_client_id,
           kind: r.kind,
           page_number: r.page_number,
@@ -310,19 +312,22 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
           height: r.height
         }))
       });
-      if (error) throw error;
       // Re-read the persisted tree so state carries the database ids (and the snapshot is taken
       // from what was actually stored). setSavedSnapshot here too so the editor is not briefly
       // marked dirty between the save and the reload landing.
       setSavedSnapshot(snapshotOf(questions, regions));
       setReloadKey((k) => k + 1);
-      toaster.success({ title: "Saved exam structure" });
+      if (rubricError) {
+        toaster.warning({ title: "Saved, but the rubric wasn't rebuilt", description: rubricError });
+      } else {
+        toaster.success({ title: rubricBuilt ? "Saved exam structure and built the rubric" : "Saved exam structure" });
+      }
     } catch (e) {
       toaster.error({ title: "Save failed", description: e instanceof Error ? e.message : String(e) });
     } finally {
       setSaving(false);
     }
-  }, [examId, questions, regions]);
+  }, [examId, gradingRubricId, questions, regions]);
 
   const autoExtract = useCallback(async () => {
     // Auto-extraction replaces the whole tree with proposed questions carrying id: null and no

@@ -22,6 +22,33 @@ export type AssessmentQuestion = GeneratedQuestion & {
 };
 
 /**
+ * Save an exam's question tree and regions, then build the grading rubric from them. Throws if the
+ * save fails. A failed build doesn't undo the save, so it comes back as rubricError instead.
+ */
+export async function saveExamStructure(
+  supabase: SupabaseClient<Database>,
+  {
+    examId,
+    gradingRubricId,
+    questions,
+    regions
+  }: { examId: number; gradingRubricId: number | null; questions: Json; regions: Json }
+): Promise<{ rubricBuilt: boolean; rubricError: string | null }> {
+  const { error } = await supabase.rpc("exam_upsert_questions_and_regions", {
+    p_exam_id: examId,
+    p_questions: questions,
+    p_regions: regions
+  });
+  if (error) throw error;
+  if (!gradingRubricId) return { rubricBuilt: false, rubricError: null };
+  const { error: syncErr } = await supabase.rpc("exam_sync_rubric_from_questions", {
+    p_exam_id: examId,
+    p_rubric_id: gradingRubricId
+  });
+  return syncErr ? { rubricBuilt: false, rubricError: syncErr.message } : { rubricBuilt: true, rubricError: null };
+}
+
+/**
  * Upload rasterized template pages to the exam-templates bucket and (re)create the
  * exam_template_pages rows. Shared by the upload-a-PDF and generate-a-PDF flows.
  */
