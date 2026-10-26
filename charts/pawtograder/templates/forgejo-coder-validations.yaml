@@ -25,12 +25,20 @@
 
 {{- $subcharts := dict "forgejo" .Values.forgejo "forgejo-db" (index .Values "forgejo-db") "coder.coder" .Values.coder.coder "coder-db" (index .Values "coder-db") }}
 {{- $on := dict "forgejo" .Values.forgejo.enabled "forgejo-db" (index .Values "forgejo-db").enabled "coder.coder" .Values.coder.enabled "coder-db" (index .Values "coder-db").enabled }}
-{{- range $dim := list "nodeSelector" "tolerations" "affinity" }}
+{{- range $dim := list "nodeSelector" "tolerations" }}
 {{- if get $.Values.global $dim }}
 {{- range $key, $v := $subcharts }}
 {{- if and (get $on $key) (not (get $v $dim)) }}
 {{- fail (printf "global.%s doesn't reach subcharts; set %s.%s too" $dim $key $dim) }}
 {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* Compared per key: Coder's chart ships its own podAntiAffinity, so mere presence proves nothing. */}}
+{{- range $kind, $want := (.Values.global.affinity | default dict) }}
+{{- range $key, $v := $subcharts }}
+{{- if and (get $on $key) (ne (toJson (dig $kind "" ($v.affinity | default dict))) (toJson $want)) }}
+{{- fail (printf "global.affinity.%s doesn't reach subcharts; set %s.affinity.%s to the same value" $kind $key $kind) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -90,7 +98,8 @@
 {{- $reg := . }}
 {{- $refs := dict }}
 {{- if $.Values.forgejo.enabled }}
-{{- with $.Values.forgejo.image.fullOverride }}{{ $_ := set $refs "forgejo.image.fullOverride" . }}{{ else }}{{ $_ := set $refs "forgejo.image.registry" (printf "%s/" $.Values.forgejo.image.registry) }}{{ end }}
+{{- /* Without fullOverride the Forgejo chart already prefers global.imageRegistry. */}}
+{{- with $.Values.forgejo.image.fullOverride }}{{ $_ := set $refs "forgejo.image.fullOverride" . }}{{ end }}
 {{- end }}
 {{- if (index $.Values "forgejo-db").enabled }}{{ $_ := set $refs "forgejo-db.image.registry" (printf "%s/" (index $.Values "forgejo-db").image.registry) }}{{ end }}
 {{- if (index $.Values "coder-db").enabled }}{{ $_ := set $refs "coder-db.image.registry" (printf "%s/" (index $.Values "coder-db").image.registry) }}{{ end }}
@@ -111,6 +120,15 @@
 {{- if and $v.enabled (not (dig "settings" "existingSecret" "" $v)) }}
 {{- fail (printf "%s.settings.existingSecret must name the superuser Secret: without it the subchart generates one called pawtograder-%s, which is the app role's Secret" $key $key) }}
 {{- end }}
+{{- if and $v.enabled ((($v.settings | default dict).superuser | default dict).value) }}
+{{- fail (printf "%s.settings.superuser.value is ignored once existingSecret is set (the subchart reads POSTGRES_USER from the Secret); use settings.superuser.secretKey" $key) }}
+{{- end }}
+{{- end }}
+{{- if and .Values.forgejoRunner.enabled (not .Values.forgejoRunner.dispatcher.tokenSecret) (not .Values.forgejo.gitea.admin.existingSecret) }}
+{{- fail "forgejoRunner needs forgejoRunner.dispatcher.tokenSecret or forgejo.gitea.admin.existingSecret for the dispatcher's credential" }}
+{{- end }}
+{{- if and .Values.forgejo.enabled (eq (toString .Values.forgejo.image.rootless) "false") }}
+{{- fail "forgejo.image.rootless=false isn't supported: the chart runs Forgejo as uid 1000 with all capabilities dropped, and the rootful init chowns /data" }}
 {{- end }}
 {{- if and .Values.coder.enabled .Values.coderBootstrap.enabled (eq (toString (dig "service" "enable" true .Values.coder.coder)) "false") }}
 {{- fail "coder.coder.service.enable=false leaves coderBootstrap no coder Service to reach; keep the Service or set coderBootstrap.enabled=false" }}
@@ -179,6 +197,11 @@
 {{- if ne (toString .Values.forgejo.gitea.config.database.HOST) $want }}
 {{- fail (printf "forgejo.gitea.config.database.HOST must be %q for forgejo.database=%s (got %q)" $want .Values.forgejo.database (toString .Values.forgejo.gitea.config.database.HOST)) }}
 {{- end }}
+{{- range $k := list "NAME" "USER" }}
+{{- if ne (toString (index $.Values.forgejo.gitea.config.database $k)) "forgejo" }}
+{{- fail (printf "forgejo.gitea.config.database.%s must stay forgejo: the app-databases Job provisions that role and database" $k) }}
+{{- end }}
+{{- end }}
 {{- end }}
 
 {{- if .Values.forgejoRunner.enabled }}
@@ -193,6 +216,12 @@
 {{- if .Values.coder.enabled }}
 {{- if not .Values.coder.coder.ingress.host }}
 {{- fail "coder.coder.ingress.host must name Coder's host" }}
+{{- end }}
+{{- $accessURL := "" }}
+{{- range .Values.coder.coder.env }}{{ if eq .name "CODER_ACCESS_URL" }}{{ $accessURL = .value | default "" }}{{ end }}{{ end }}
+{{- $accessHost := $accessURL | trimPrefix "https://" | trimPrefix "http://" | trimSuffix "/" }}
+{{- if ne $accessHost (toString .Values.coder.coder.ingress.host) }}
+{{- fail (printf "coder.coder.env must set CODER_ACCESS_URL to https://%s (got %q); otherwise Coder advertises its in-cluster Service URL" .Values.coder.coder.ingress.host $accessURL) }}
 {{- end }}
 {{- $refs := list }}
 {{- range .Values.coder.coder.envFrom }}{{ $refs = append $refs (.configMapRef | default .secretRef | default dict).name }}{{ end }}

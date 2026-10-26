@@ -38,6 +38,12 @@ variable "node_affinity" {
   default     = "{}"
 }
 
+variable "arch" {
+  type        = string
+  description = "CPU architecture of the workspace image and nodes (the agent binary must match)."
+  default     = "amd64"
+}
+
 variable "image_pull_policy" {
   type        = string
   description = "Pull policy for the workspace image."
@@ -129,7 +135,7 @@ locals {
 
 resource "coder_agent" "main" {
   os             = "linux"
-  arch           = "amd64"
+  arch           = var.arch
   startup_script = <<-EOT
     set -e
     CS="$(command -v code-server || true)"
@@ -214,7 +220,7 @@ resource "kubernetes_pod_v1" "main" {
   spec {
     automount_service_account_token = false
     restart_policy                  = "Always"
-    node_selector                   = jsondecode(var.node_selector)
+    node_selector                   = merge(jsondecode(var.node_selector), { "kubernetes.io/arch" = var.arch })
 
     dynamic "image_pull_secrets" {
       for_each = jsondecode(var.image_pull_secrets)

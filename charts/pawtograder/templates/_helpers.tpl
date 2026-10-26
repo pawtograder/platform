@@ -370,7 +370,7 @@ Internal service hostnames.
 {{- if eq (index .ctx.Values .app).database "pawtograder" -}}
 POSTGRES_PASSWORD
 {{- else -}}
-{{- dig "settings" "superuserPassword" "secretKey" "POSTGRES_PASSWORD" (index .ctx.Values (printf "%s-db" .app)) -}}
+{{- (((index .ctx.Values (printf "%s-db" .app)).settings | default dict).superuserPassword | default dict).secretKey | default "POSTGRES_PASSWORD" -}}
 {{- end -}}
 {{- end -}}
 

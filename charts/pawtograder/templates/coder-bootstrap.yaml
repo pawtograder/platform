@@ -2,7 +2,7 @@
 {{- $files := .Files.Glob "files/coder-templates/**" }}
 {{- $tag := .Values.coder.coder.image.tag | default (printf "v%v" .Subcharts.coder.Chart.AppVersion) }}
 {{- $pullSecrets := concat (.Values.global.imagePullSecrets | default list) (.Values.coder.coder.image.pullSecrets | default list) | uniq }}
-{{- $placement := dict "nodeSelector" (.Values.coderBootstrap.nodeSelector | default .Values.coder.coder.nodeSelector) "tolerations" (.Values.coderBootstrap.tolerations | default .Values.coder.coder.tolerations) "affinity" (.Values.coderBootstrap.affinity | default .Values.coder.coder.affinity) }}
+{{- $placement := dict "nodeSelector" (.Values.coderBootstrap.nodeSelector | default .Values.coder.coder.nodeSelector) "tolerations" (.Values.coderBootstrap.tolerations | default .Values.coder.coder.tolerations) "affinity" .Values.coderBootstrap.affinity }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -86,6 +86,7 @@ spec:
                   --variable node_selector={{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml | toJson | squote }} \
                   --variable tolerations={{ include "pawtograder.tolerations" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYamlArray | toJson | squote }} \
                   --variable image={{ .Values.coderBootstrap.workspaces.image | squote }} \
+                  --variable arch={{ .Values.coderBootstrap.workspaces.arch | default "amd64" }} \
                   --variable image_pull_policy={{ .Values.coderBootstrap.workspaces.imagePullPolicy | default "IfNotPresent" }} \
                   --variable image_pull_secrets={{ .Values.coderBootstrap.workspaces.imagePullSecrets | default list | toJson | squote }} \
                   --variable home_storage_class={{ .Values.coderBootstrap.workspaces.storageClass | default "" | squote }} \
