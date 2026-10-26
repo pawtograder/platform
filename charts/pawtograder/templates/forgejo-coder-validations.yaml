@@ -36,9 +36,23 @@
 {{- end }}
 {{- if eq .Values.global.environment "production" }}
 {{- $classes := dict }}
-{{- if .Values.forgejo.enabled }}{{ $_ := set $classes "forgejo.persistence.storageClass" (dig "persistence" "storageClass" "" .Values.forgejo) }}{{ end }}
-{{- if (index .Values "forgejo-db").enabled }}{{ $_ := set $classes "forgejo-db.storage.className" (dig "storage" "className" "" (index .Values "forgejo-db")) }}{{ end }}
-{{- if (index .Values "coder-db").enabled }}{{ $_ := set $classes "coder-db.storage.className" (dig "storage" "className" "" (index .Values "coder-db")) }}{{ end }}
+{{- if .Values.forgejo.enabled }}
+{{- $p := .Values.forgejo.persistence | default dict }}
+{{- if not $p.enabled }}
+{{- fail "forgejo.persistence.enabled=false keeps Git repositories in an emptyDir; production needs a persistent volume" }}
+{{- end }}
+{{- if ne (toString $p.create) "false" }}{{ $_ := set $classes "forgejo.persistence.storageClass" ($p.storageClass | default "") }}{{ end }}
+{{- end }}
+{{- range $db := list "forgejo-db" "coder-db" }}
+{{- $v := index $.Values $db }}
+{{- if $v.enabled }}
+{{- $s := $v.storage | default dict }}
+{{- if not (or $s.persistentVolumeClaimName $s.requestedSize) }}
+{{- fail (printf "%s.storage has neither requestedSize nor persistentVolumeClaimName, so the database is an emptyDir; production needs a persistent volume" $db) }}
+{{- end }}
+{{- if not $s.persistentVolumeClaimName }}{{ $_ := set $classes (printf "%s.storage.className" $db) ($s.className | default "") }}{{ end }}
+{{- end }}
+{{- end }}
 {{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}{{ $_ := set $classes "coderBootstrap.workspaces.storageClass" .Values.coderBootstrap.workspaces.storageClass }}{{ end }}
 {{- range $key, $class := $classes }}
 {{- if not $class }}
