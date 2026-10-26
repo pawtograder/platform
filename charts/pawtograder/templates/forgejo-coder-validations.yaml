@@ -41,6 +41,11 @@
 {{- if not $p.enabled }}
 {{- fail "forgejo.persistence.enabled=false keeps Git repositories in an emptyDir; production needs a persistent volume" }}
 {{- end }}
+{{- $dataVolume := false }}
+{{- range .Values.forgejo.extraVolumes }}{{ if eq .name "data" }}{{ $dataVolume = true }}{{ end }}{{ end }}
+{{- if and (eq (toString $p.mount) "false") (not $dataVolume) }}
+{{- fail "forgejo.persistence.mount=false needs a persistent extraVolumes entry named data; the Forgejo Deployment always mounts one" }}
+{{- end }}
 {{- if ne (toString $p.create) "false" }}{{ $_ := set $classes "forgejo.persistence.storageClass" ($p.storageClass | default "") }}{{ end }}
 {{- end }}
 {{- range $db := list "forgejo-db" "coder-db" }}
