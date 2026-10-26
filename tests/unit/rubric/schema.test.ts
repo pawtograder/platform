@@ -6,7 +6,11 @@ const checkData = schema.definitions.YmlRubricChecksType.properties.data;
 
 describe("RubricSchema.json — check data", () => {
   it("allows data with only exam_question_id", () => {
-    expect(checkData.properties.exam_question_id).toEqual({ type: "number" });
-    expect(checkData.required ?? []).not.toContain("options");
+    expect(checkData.anyOf ?? [checkData]).toContainEqual(
+      expect.objectContaining({
+        properties: { exam_question_id: { type: "number" } },
+        required: ["exam_question_id"]
+      })
+    );
   });
 });
