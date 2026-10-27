@@ -436,6 +436,18 @@ export type AssignmentCreateHandoutRepoResponse = {
 export type AssignmentCreateSolutionRepoRequest = {
   assignment_id: number;
   class_id: number;
+  /**
+   * Set by UNATTENDED callers (the reconciler, the repair script's sweep) to mean "only act if this
+   * assignment still has no grader repository at all".
+   *
+   * Without it, a caller that checked the pointer before a slow preceding step — the reconciler runs
+   * handout creation first, which takes minutes — hands over to this endpoint after an instructor
+   * may have chosen a custom grader repository, and the endpoint's own snapshot then reads that
+   * choice as a stale pointer and retires it. The endpoint cannot tell the difference on its own:
+   * for a human running a targeted repair, replacing a differently named pointer is exactly the
+   * intended behaviour.
+   */
+  expect_no_grader_repo?: boolean;
 };
 
 export type AssignmentCreateSolutionRepoResponse = {
