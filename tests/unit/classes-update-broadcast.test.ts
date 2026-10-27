@@ -5,6 +5,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import { RealtimeChannelManager } from "@/lib/RealtimeChannelManager";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 
@@ -26,7 +27,8 @@ function makeClient() {
     removeChannel: jest.fn(),
     auth: {
       getSession: jest.fn(async () => ({ data: { session: { access_token: "t" } }, error: null })),
-      getUser: jest.fn(async () => ({ data: { user: { id: "u" } }, error: null }))
+      getUser: jest.fn(async () => ({ data: { user: { id: "u" } }, error: null })),
+      onAuthStateChange: jest.fn(() => ({ data: { subscription: { unsubscribe: jest.fn() } } }))
     },
     realtime: { accessTokenValue: "t" },
     rpc: jest.fn(async () => ({ data: null, error: null }))
@@ -87,5 +89,52 @@ describe("RealtimeChannelManager.subscribeToClassesUpdate", () => {
     deliver({ type: "classes_update", class_id: 7, data: {}, timestamp: "t" });
 
     expect(callback).not.toHaveBeenCalled();
+  });
+});
+
+describe("RealtimeChannelManager shared channel teardown", () => {
+  let manager: RealtimeChannelManager;
+
+  beforeEach(() => {
+    manager = RealtimeChannelManager.getInstance();
+  });
+
+  afterEach(() => {
+    manager.cleanup();
+  });
+
+  it("keeps the channel open for other subscribers when one unsubscribes", async () => {
+    const { client, channel, deliver } = makeClient();
+    const classesCallback = jest.fn();
+    const otherCallback = jest.fn();
+
+    const unsubscribeClasses = await manager.subscribeToClassesUpdate(7, client, classesCallback);
+    await manager.subscribe("class:7:students", client, otherCallback, () => {});
+    unsubscribeClasses();
+
+    expect(channel.unsubscribe).not.toHaveBeenCalled();
+
+    deliver({ type: "table_change", table: "help_requests", class_id: 7, data: { id: 1 }, timestamp: "t" });
+    expect(otherCallback).toHaveBeenCalledTimes(1);
+    expect(classesCallback).not.toHaveBeenCalled();
+  });
+});
+
+describe("ClassRealTimeController classes_update handling", () => {
+  it("does not dispatch classes_update messages to table subscribers, but still dispatches other messages", async () => {
+    const { client } = makeClient();
+    const controller = new ClassRealTimeController({ client, classId: 7, profileId: "p", isStaff: true });
+    const wildcard = jest.fn();
+    controller.subscribe({}, wildcard);
+    const handle = (message: unknown) =>
+      (controller as unknown as { _handleBroadcastMessage(m: unknown): void })._handleBroadcastMessage(message);
+
+    handle({ type: "classes_update", class_id: 7, data: { id: 7 }, timestamp: "t" });
+    expect(wildcard).not.toHaveBeenCalled();
+
+    handle({ type: "table_change", table: "help_requests", class_id: 7, data: { id: 1 }, timestamp: "t" });
+    expect(wildcard).toHaveBeenCalledTimes(1);
+
+    controller.close();
   });
 });
