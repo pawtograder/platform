@@ -1,4 +1,4 @@
--- Proof harness for trigger_broadcast_classes_update (migration 20261026210000).
+-- Proof harness for trigger_broadcast_classes_update (migration 20261028130000).
 --
 -- Manual check, not run in CI. Run from the repo root against local Supabase. Everything
 -- happens in one transaction that ends in ROLLBACK, so it leaves no fixtures behind:
