@@ -21,6 +21,45 @@ export type AssessmentQuestion = GeneratedQuestion & {
   grading_tolerance?: number | null;
 };
 
+export type ExamRubricStatus = "built" | "existing" | "no-rubric" | "failed";
+
+/**
+ * Save an exam's question tree and regions, and build the grading rubric from them if the rubric is
+ * still empty. A rubric that has anything in it is left alone: a rebuild resets generated checks,
+ * and building into a hand-written rubric could count the same answers twice.
+ * Throws if the save fails. A failed build doesn't undo the save, so it comes back as rubricError.
+ */
+export async function saveExamStructure(
+  supabase: SupabaseClient<Database>,
+  {
+    examId,
+    gradingRubricId,
+    questions,
+    regions
+  }: { examId: number; gradingRubricId: number | null; questions: Json; regions: Json }
+): Promise<{ rubric: ExamRubricStatus; rubricError: string | null }> {
+  const { error } = await supabase.rpc("exam_upsert_questions_and_regions", {
+    p_exam_id: examId,
+    p_questions: questions,
+    p_regions: regions
+  });
+  if (error) throw error;
+  if (!gradingRubricId) return { rubric: "no-rubric", rubricError: null };
+
+  const { count, error: countErr } = await supabase
+    .from("rubric_parts")
+    .select("id", { count: "exact", head: true })
+    .eq("rubric_id", gradingRubricId);
+  if (countErr) return { rubric: "failed", rubricError: countErr.message };
+  if (count) return { rubric: "existing", rubricError: null };
+
+  const { error: syncErr } = await supabase.rpc("exam_sync_rubric_from_questions", {
+    p_exam_id: examId,
+    p_rubric_id: gradingRubricId
+  });
+  return syncErr ? { rubric: "failed", rubricError: syncErr.message } : { rubric: "built", rubricError: null };
+}
+
 /**
  * Upload rasterized template pages to the exam-templates bucket and (re)create the
  * exam_template_pages rows. Shared by the upload-a-PDF and generate-a-PDF flows.
