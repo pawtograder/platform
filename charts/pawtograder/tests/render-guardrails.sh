@@ -19,6 +19,8 @@
 set -uo pipefail
 
 CHART="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Staging's lint.yml, which pull_request_target runs, has no step that fetches the subcharts.
+"$CHART/scripts/build-deps.sh" --if-missing "$CHART" || { echo "FAIL could not fetch $CHART's subcharts" >&2; exit 1; }
 FAILED=0
 ERRFILE="$(mktemp)"
 OUTFILE="$(mktemp)"
