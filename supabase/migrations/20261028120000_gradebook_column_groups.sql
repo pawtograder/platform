@@ -332,7 +332,7 @@ REVOKE ALL ON FUNCTION public.gradebook_common_name_prefix(text[]) FROM PUBLIC, 
 -- Returns {
 --   "groups":  [{ "name", "column_ids": [..] }],          -- groups to create, in display order
 --   "null_sort_order_column_ids": [..],                   -- columns to renumber after the max
---   "changes": [{ "column_id", "slug", "reason", "before", "after" }]
+--   "changes": [{ "column_id", "slug", "reason", "before", "after", "before_size", "after_size" }]
 -- }
 -- where a change is any column whose header or set of header-mates differs from what the legacy
 -- heuristic renders today. Reasons:
@@ -501,7 +501,10 @@ BEGIN
         'slug', r.slug,
         'reason', v_reason,
         'before', v_before->>'name',
-        'after', v_after->>'name'
+        'after', v_after->>'name',
+        -- How many columns share the header (1 = no header), so a gap merge reads as a size change.
+        'before_size', COALESCE(jsonb_array_length(v_before->'ids'), 1),
+        'after_size', COALESCE(jsonb_array_length(v_after->'ids'), 1)
       ));
     END IF;
   END LOOP;

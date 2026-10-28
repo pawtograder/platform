@@ -2677,6 +2677,9 @@ export default function GradebookTable() {
   // Initialize all groups as collapsed by default, but preserve existing collapsed state
   // Collapse state is keyed by unit key, not display name: two groups that share a name no
   // longer collapse together.
+  // Collapse every group the first time groups appear; after that, keep what the user chose, so
+  // "Expand all" followed by a group being created or renamed doesn't collapse everything again.
+  const collapseInitializedRef = useRef(false);
   useEffect(() => {
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
@@ -2688,8 +2691,8 @@ export default function GradebookTable() {
         }
       });
 
-      // If no groups were previously collapsed, collapse all by default
-      if (newSet.size === 0 && collapsibleGroupKeys.length > 0) {
+      if (!collapseInitializedRef.current && collapsibleGroupKeys.length > 0) {
+        collapseInitializedRef.current = true;
         collapsibleGroupKeys.forEach((key) => newSet.add(key));
       }
 
@@ -3784,14 +3787,19 @@ export default function GradebookTable() {
                           display="flex"
                           alignItems="center"
                           justifyContent="center"
+                          overflow="hidden"
+                          px={1}
+                          title={seg.groupName}
                         >
-                          <HStack gap={2} justifyContent="center" alignItems="center" py={1}>
+                          {/* A collapsed group is one column wide: the label truncates and the menu keeps its size. */}
+                          <HStack gap={1} justifyContent="center" alignItems="center" py={1} minW={0} maxW="100%">
                             <Icon
                               as={collapsedGroups.has(seg.groupKey) ? LuChevronRight : LuChevronDown}
                               boxSize={3}
                               color="fg.muted"
+                              flexShrink={0}
                             />
-                            <Text fontWeight="bold" fontSize="sm" color="fg.muted" truncate>
+                            <Text fontWeight="bold" fontSize="sm" color="fg.muted" truncate minW={0}>
                               {seg.groupColumnsLen}{" "}
                               {seg.groupId != null
                                 ? seg.groupName

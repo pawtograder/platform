@@ -52,7 +52,9 @@ export function useColumnGroupActions() {
         toaster.error({ title: label, description: error.message });
         throw new Error(error.message);
       }
-      await refresh();
+      // Realtime already delivers the change; this refetch only closes the gap if a broadcast is
+      // missed, so callers (dialogs) don't wait on it.
+      void refresh().catch(() => {});
     },
     [refresh]
   );
@@ -244,7 +246,7 @@ export function GroupHeaderMenu({ groupKey, groupId, name }: { groupKey: string;
   const right = moveGroupInLayout(groupedColumns, groupKey, 1);
 
   return (
-    <Box onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+    <Box onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()} flexShrink={0}>
       <MenuRoot>
         <MenuTrigger asChild>
           <IconButton variant="ghost" size="2xs" aria-label={`Group options for ${name}`}>

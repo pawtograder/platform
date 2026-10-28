@@ -597,6 +597,9 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
   );
 
   // Initialize all groups as collapsed by default, but preserve existing collapsed state
+  // Collapse every group the first time groups appear; after that, keep what the user chose, so
+  // "Expand all" followed by a group being created or renamed doesn't collapse everything again.
+  const collapseInitializedRef = useRef(false);
   useEffect(() => {
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
@@ -608,8 +611,8 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
         }
       });
 
-      // If no groups were previously collapsed, collapse all by default
-      if (newSet.size === 0 && collapsibleGroupKeys.length > 0) {
+      if (!collapseInitializedRef.current && collapsibleGroupKeys.length > 0) {
+        collapseInitializedRef.current = true;
         collapsibleGroupKeys.forEach((key) => newSet.add(key));
       }
 

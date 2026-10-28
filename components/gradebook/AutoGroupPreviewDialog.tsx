@@ -15,14 +15,21 @@ export type AutoGroupPlan = {
     reason: "null-sort-order" | "membership" | "name";
     before: string | null;
     after: string | null;
+    before_size: number;
+    after_size: number;
   }[];
 };
 
 const REASON_LABEL: Record<AutoGroupPlan["changes"][number]["reason"], string> = {
   "null-sort-order": "had no position; moves to the end",
-  membership: "header-mates change",
+  membership: "joins a different set of columns",
   name: "header renamed"
 };
+
+/** "Quizzes (4)": the header and how many columns sit under it. */
+function headerLabel(name: string | null, size: number) {
+  return name == null ? "(no header)" : `${name} (${size})`;
+}
 
 /**
  * Shows what auto-grouping a gradebook would create, and every column whose header would differ
@@ -134,7 +141,7 @@ export function AutoGroupPreviewDialog({
                         <Table.Header>
                           <Table.Row>
                             <Table.ColumnHeader>Column</Table.ColumnHeader>
-                            <Table.ColumnHeader>Today</Table.ColumnHeader>
+                            <Table.ColumnHeader>Currently</Table.ColumnHeader>
                             <Table.ColumnHeader>After</Table.ColumnHeader>
                             <Table.ColumnHeader>Why</Table.ColumnHeader>
                           </Table.Row>
@@ -143,8 +150,8 @@ export function AutoGroupPreviewDialog({
                           {plan.changes.map((c) => (
                             <Table.Row key={c.column_id}>
                               <Table.Cell>{columnNames.get(c.column_id) ?? c.slug}</Table.Cell>
-                              <Table.Cell>{c.before ?? "(no header)"}</Table.Cell>
-                              <Table.Cell>{c.after ?? "(no header)"}</Table.Cell>
+                              <Table.Cell>{headerLabel(c.before, c.before_size)}</Table.Cell>
+                              <Table.Cell>{headerLabel(c.after, c.after_size)}</Table.Cell>
                               <Table.Cell>{REASON_LABEL[c.reason]}</Table.Cell>
                             </Table.Row>
                           ))}
