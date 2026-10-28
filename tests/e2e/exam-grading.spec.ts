@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { addDays } from "date-fns";
-import { createClass, createUserInClass, insertAssignment, setUserSisId, supabase } from "./TestingUtils";
+import { createClass, createUserInClass, insertAssignment, loginAsUser, setUserSisId, supabase } from "./TestingUtils";
 
 // A 1x1 transparent PNG — enough bytes for storage upload; the `fake` vision
 // provider derives identity/OCR from the object path, not the pixels.
@@ -24,7 +24,7 @@ async function runExamWorker(): Promise<void> {
 }
 
 test.describe("Exam grading OCR pipeline", () => {
-  test("template -> rubric -> scan -> OCR/match -> finalize -> grader artifact", async () => {
+  test("template -> rubric -> scan -> OCR/match -> finalize -> grader artifact", async ({ page }) => {
     test.setTimeout(120_000);
 
     // --- 1) class, instructor, two students with SIS ids ---
@@ -257,6 +257,28 @@ test.describe("Exam grading OCR pipeline", () => {
       .eq("id", unmatched!.id)
       .single();
     expect(stillUnmatched?.submission_id).toBeNull();
+
+    // --- 7b) a grader gives partial credit on an exam check, and the score follows ---
+    const grader = await createUserInClass({ role: "grader", class_id: course.id });
+    const graded = (submissions ?? [])[1]!;
+    await loginAsUser(page, grader, course);
+    await page.goto(`/course/${course.id}/assignments/${assignment.id}/submissions/${graded.id}/files`);
+    await page.getByRole("radio", { name: /3\s*Partial credit/ }).check({ force: true });
+    await page.getByRole("button", { name: "Add Check" }).click();
+    await expect
+      .poll(
+        async () => {
+          const { data } = await supabase
+            .from("submission_reviews")
+            .select("total_score, total_autograde_score")
+            .eq("id", graded.grading_review_id as number)
+            .single();
+          return Number(data?.total_score) - Number(data?.total_autograde_score);
+        },
+        { timeout: 30_000 }
+      )
+      .toBe(3);
+    await expect(page.getByText("Q1 3/5")).toBeVisible();
 
     // --- 8) crash-safety: re-finalizing a completed batch is a no-op ---
     const { data: reCountDone } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
