@@ -638,7 +638,14 @@ async function copySingleAssignment(
       self_review_rubric_id: null,
       meta_grading_rubric_id: null,
       template_repo: null,
-      student_repo_prefix: null
+      student_repo_prefix: null,
+      // Inserting an assignment queues its handout and solution repo creation server-side. The
+      // copy opts out either way: with --skip-repos it promises no GitHub calls, and otherwise it
+      // creates both repos itself below, synchronously, because it copies content into them
+      // straight afterwards. A queued job would race those calls, and a wrapper waiting on a
+      // worker that holds the claim can time out before createRepo (p50 ~280s) finishes. If a
+      // synchronous call fails, its row is marked failed and Retry queues the work server-side.
+      skip_repo_setup: true
     };
 
     const { data: newAssignmentInitial, error: assignmentError } = await supabase

@@ -1041,6 +1041,105 @@ export type Database = {
           }
         ];
       };
+      assignment_repo_setup: {
+        Row: {
+          assignment_id: number;
+          attempts: number;
+          claimed_by: string | null;
+          claimed_until: string | null;
+          class_id: number;
+          completed_at: string | null;
+          created_at: string;
+          failures: number;
+          id: number;
+          kind: Database["public"]["Enums"]["assignment_repo_kind"];
+          last_attempt_at: string | null;
+          last_error: string | null;
+          last_error_at: string | null;
+          log_id: number | null;
+          repo_full_name: string | null;
+          started_at: string | null;
+          state: Database["public"]["Enums"]["assignment_repo_setup_state"];
+          updated_at: string;
+        };
+        Insert: {
+          assignment_id: number;
+          attempts?: number;
+          claimed_by?: string | null;
+          claimed_until?: string | null;
+          class_id: number;
+          completed_at?: string | null;
+          created_at?: string;
+          failures?: number;
+          id?: never;
+          kind: Database["public"]["Enums"]["assignment_repo_kind"];
+          last_attempt_at?: string | null;
+          last_error?: string | null;
+          last_error_at?: string | null;
+          log_id?: number | null;
+          repo_full_name?: string | null;
+          started_at?: string | null;
+          state?: Database["public"]["Enums"]["assignment_repo_setup_state"];
+          updated_at?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          attempts?: number;
+          claimed_by?: string | null;
+          claimed_until?: string | null;
+          class_id?: number;
+          completed_at?: string | null;
+          created_at?: string;
+          failures?: number;
+          id?: never;
+          kind?: Database["public"]["Enums"]["assignment_repo_kind"];
+          last_attempt_at?: string | null;
+          last_error?: string | null;
+          last_error_at?: string | null;
+          log_id?: number | null;
+          repo_full_name?: string | null;
+          started_at?: string | null;
+          state?: Database["public"]["Enums"]["assignment_repo_setup_state"];
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "assignment_repo_setup_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_repo_setup_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_repo_setup_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_repo_setup_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "assignment_repo_setup_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignment_self_review_settings: {
         Row: {
           allow_early: boolean | null;
@@ -1116,6 +1215,7 @@ export type Database = {
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
           show_leaderboard: boolean;
+          skip_repo_setup: boolean;
           slug: string | null;
           source_assignment_id: number | null;
           student_repo_prefix: string | null;
@@ -1167,6 +1267,7 @@ export type Database = {
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
           show_leaderboard?: boolean;
+          skip_repo_setup?: boolean;
           slug?: string | null;
           source_assignment_id?: number | null;
           student_repo_prefix?: string | null;
@@ -1218,6 +1319,7 @@ export type Database = {
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;
           show_leaderboard?: boolean;
+          skip_repo_setup?: boolean;
           slug?: string | null;
           source_assignment_id?: number | null;
           student_repo_prefix?: string | null;
@@ -12259,6 +12361,21 @@ export type Database = {
         };
         Returns: number;
       };
+      assignment_repo_setup_jobs_dead_lettered: {
+        Args: never;
+        Returns: {
+          assignment_id: number;
+          dead_lettered_at: string;
+          kind: Database["public"]["Enums"]["assignment_repo_kind"];
+        }[];
+      };
+      assignment_repo_setup_jobs_in_flight: {
+        Args: never;
+        Returns: {
+          assignment_id: number;
+          kind: Database["public"]["Enums"]["assignment_repo_kind"];
+        }[];
+      };
       attach_no_repo_submission_files: {
         Args: { p_files: Json; p_submission_id: number };
         Returns: undefined;
@@ -12489,6 +12606,15 @@ export type Database = {
       };
       check_unified_realtime_authorization: {
         Args: { topic_text: string };
+        Returns: boolean;
+      };
+      claim_assignment_repo_setup: {
+        Args: {
+          p_assignment_id: number;
+          p_holder: string;
+          p_kind: Database["public"]["Enums"]["assignment_repo_kind"];
+          p_ttl_seconds?: number;
+        };
         Returns: boolean;
       };
       claim_discord_guild: {
@@ -12839,6 +12965,14 @@ export type Database = {
         Returns: boolean;
       };
       dual_active_invariants_version: { Args: never; Returns: number };
+      enqueue_assignment_repo_setup: {
+        Args: {
+          p_assignment_id: number;
+          p_debug_id?: string;
+          p_kind: Database["public"]["Enums"]["assignment_repo_kind"];
+        };
+        Returns: number;
+      };
       enqueue_autograder_reruns: {
         Args: {
           p_auto_promote?: boolean;
@@ -13027,6 +13161,10 @@ export type Database = {
       get_all_class_metrics: { Args: never; Returns: Json };
       get_assessment_export_pepper: { Args: never; Returns: string };
       get_assignment_llm_metrics: { Args: never; Returns: Json };
+      get_assignment_repo_setup_checks: {
+        Args: { p_assignment_id: number };
+        Returns: Json;
+      };
       get_assignments_for_student_dashboard: {
         Args: { p_class_id: number; p_student_profile_id: string };
         Returns: {
@@ -13792,6 +13930,17 @@ export type Database = {
         Args: { p_class_id?: number };
         Returns: number;
       };
+      metrics_assignment_repo_setup: {
+        Args: never;
+        Returns: {
+          at_risk: number;
+          class_id: string;
+          count: number;
+          kind: string;
+          oldest_seconds: number;
+          state: string;
+        }[];
+      };
       metrics_workflow_errors_by_category: {
         Args: { window_hours?: number };
         Returns: {
@@ -13941,6 +14090,10 @@ export type Database = {
         Args: { end_id: number; start_id: number };
         Returns: undefined;
       };
+      reconcile_assignment_repo_setup: {
+        Args: { p_stale_minutes?: number };
+        Returns: number;
+      };
       reconcile_stale_org_invitations: {
         Args: {
           p_max?: number;
@@ -13957,6 +14110,16 @@ export type Database = {
       reconcile_stuck_repo_creations: {
         Args: { p_stale_minutes?: number };
         Returns: number;
+      };
+      record_assignment_repo_setup_event: {
+        Args: {
+          p_assignment_id: number;
+          p_error?: string;
+          p_event: string;
+          p_kind: Database["public"]["Enums"]["assignment_repo_kind"];
+          p_repo_full_name?: string;
+        };
+        Returns: undefined;
       };
       record_discord_async_error: {
         Args: { p_error_data: Json; p_guild_id: string; p_method: string };
@@ -14059,6 +14222,13 @@ export type Database = {
           p_override: string;
         };
         Returns: string;
+      };
+      retry_assignment_repo_setup: {
+        Args: {
+          p_assignment_id: number;
+          p_kind: Database["public"]["Enums"]["assignment_repo_kind"];
+        };
+        Returns: number;
       };
       retry_repository_creation: {
         Args: { p_repository_id: number };
@@ -14357,12 +14527,14 @@ export type Database = {
       app_role: "admin" | "instructor" | "grader" | "student";
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
+      assignment_repo_kind: "handout" | "solution";
       assignment_repo_mode:
         | "none"
         | "template_only_staff"
         | "template_with_student_forks"
         | "fork_from_prior_assignment"
         | "no_submission";
+      assignment_repo_setup_state: "queued" | "in_progress" | "ready" | "failed" | "skipped";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
       discord_channel_type:
         | "general"
@@ -14406,7 +14578,9 @@ export type Database = {
         | "archive_repo_and_lock"
         | "rerun_autograder"
         | "sync_repo_to_handout"
-        | "fetch_repo_analytics";
+        | "fetch_repo_analytics"
+        | "setup_handout_repo"
+        | "setup_solution_repo";
       help_queue_type: "text" | "video" | "in_person";
       help_request_creation_notification: "all" | "only_active_queue" | "none";
       help_request_resolution_status: "self_solved" | "staff_helped" | "peer_helped" | "no_time" | "other";
@@ -14563,6 +14737,7 @@ export const Constants = {
       app_role: ["admin", "instructor", "grader", "student"],
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
+      assignment_repo_kind: ["handout", "solution"],
       assignment_repo_mode: [
         "none",
         "template_only_staff",
@@ -14570,6 +14745,7 @@ export const Constants = {
         "fork_from_prior_assignment",
         "no_submission"
       ],
+      assignment_repo_setup_state: ["queued", "in_progress", "ready", "failed", "skipped"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
       discord_channel_type: [
         "general",
@@ -14616,7 +14792,9 @@ export const Constants = {
         "archive_repo_and_lock",
         "rerun_autograder",
         "sync_repo_to_handout",
-        "fetch_repo_analytics"
+        "fetch_repo_analytics",
+        "setup_handout_repo",
+        "setup_solution_repo"
       ],
       help_queue_type: ["text", "video", "in_person"],
       help_request_creation_notification: ["all", "only_active_queue", "none"],

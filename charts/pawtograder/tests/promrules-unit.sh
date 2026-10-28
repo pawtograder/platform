@@ -197,6 +197,11 @@ render_rules "$WORK/rendered-rules-extreme.yaml" \
   --set "monitoring.prometheusRules.queueDrainMessagesPerMinute=$EXTREME_FLOOR" || exit 1
 cp "$TESTS/promrules-unit-extreme.yaml" "$WORK/promrules-unit-extreme.yaml"
 
+# The assignment repo setup alerts live in the leader-only block of
+# pawtograder.workflowmetrics, which the base render above does not include.
+render_rules "$WORK/rendered-rules-leader.yaml" --set web.workflowMetricsLeader=true || exit 1
+cp "$TESTS/promrules-unit-repo-setup.yaml" "$WORK/promrules-unit-repo-setup.yaml"
+
 echo "promtool: $PROMTOOL_MODE${RUNTIME:+ via $RUNTIME $PROMETHEUS_IMAGE}"
 echo
 
@@ -204,7 +209,8 @@ echo
 # they drift, no series matches any selector, every "must not fire" expectation
 # passes for the wrong reason, and the only tests that would notice are the ones
 # that expect an alert. Checked directly rather than left to the reader.
-for f in rendered-rules.yaml promrules-unit.yaml rendered-rules-extreme.yaml promrules-unit-extreme.yaml; do
+for f in rendered-rules.yaml promrules-unit.yaml rendered-rules-extreme.yaml promrules-unit-extreme.yaml \
+  rendered-rules-leader.yaml promrules-unit-repo-setup.yaml; do
   if ! grep -q "namespace=\"$NS\"" "$WORK/$f"; then
     echo "FAIL [namespace agreement]: $f has no namespace=\"$NS\" selector —"
     echo "       the fixtures and the rendered rules have drifted apart and the"
@@ -259,6 +265,17 @@ fi
 # A vacuous control is worse than a failing one, because it is quiet. So the
 # controls do not run at all unless the unmutated suite is known good.
 # ---------------------------------------------------------------------------
+echo
+echo "== the assignment repo setup alerts must behave as documented =="
+if promtool_run test rules promrules-unit-repo-setup.yaml; then
+  cat "$LOG"
+  echo "ok   [assignment repo setup alert behaviour]"
+else
+  echo "FAIL [assignment repo setup alert behaviour]"
+  sed 's/^/       /' "$LOG"
+  FAILED=1
+fi
+
 if [ "$FAILED" -ne 0 ]; then
   echo
   echo "ABORTING before the negative controls."
