@@ -26,6 +26,7 @@ import { memo, useMemo, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2, LuArrowUp, LuArrowDown, LuLink, LuX } from "react-icons/lu";
 import { ValidationError, ValidationWarning, warningFor } from "@/components/rubric-editor/validation";
 import { normalizePointValue } from "@/lib/rubric/pointsSanitize";
+import { keepExamQuestionId } from "@/lib/rubric/validate";
 import type { ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
 
 type CheckType = "checkbox" | "options" | "annotation";
@@ -185,12 +186,12 @@ export const CheckRow = memo(function CheckRow({
   const handleTypeChange = (next: CheckType) => {
     if (next === checkType) return;
     if (next === "checkbox") {
-      onChange({ ...check, is_annotation: false, data: null });
+      onChange({ ...check, is_annotation: false, data: keepExamQuestionId(check.data, null) });
     } else if (next === "options") {
       onChange({
         ...check,
         is_annotation: false,
-        data: {
+        data: keepExamQuestionId(check.data, {
           options:
             options.length >= 2
               ? options
@@ -198,13 +199,13 @@ export const CheckRow = memo(function CheckRow({
                   { label: "Option 1", points: check.points ?? 0 },
                   { label: "Option 2", points: 0 }
                 ]
-        }
+        })
       });
     } else {
       onChange({
         ...check,
         is_annotation: true,
-        data: null,
+        data: keepExamQuestionId(check.data, null),
         max_annotations: check.max_annotations ?? 1
       });
     }
@@ -217,17 +218,17 @@ export const CheckRow = memo(function CheckRow({
       resolvedPatch = { ...patch, points };
     }
     const next = options.map((opt, i) => (i === idx ? { ...opt, ...resolvedPatch } : opt));
-    onChange({ ...check, data: { options: next } });
+    onChange({ ...check, data: keepExamQuestionId(check.data, { options: next }) });
   };
 
   const handleAddOption = () => {
     const next = [...options, { label: `Option ${options.length + 1}`, points: 0 }];
-    onChange({ ...check, data: { options: next } });
+    onChange({ ...check, data: keepExamQuestionId(check.data, { options: next }) });
   };
 
   const handleRemoveOption = (idx: number) => {
     const next = options.filter((_, i) => i !== idx);
-    onChange({ ...check, data: { options: next } });
+    onChange({ ...check, data: keepExamQuestionId(check.data, { options: next }) });
   };
 
   const handleMoveOption = (idx: number, delta: number) => {
@@ -236,7 +237,7 @@ export const CheckRow = memo(function CheckRow({
     const next = options.slice();
     const [moved] = next.splice(idx, 1);
     next.splice(target, 0, moved);
-    onChange({ ...check, data: { options: next } });
+    onChange({ ...check, data: keepExamQuestionId(check.data, { options: next }) });
   };
 
   const headerSummary = useMemo(() => {

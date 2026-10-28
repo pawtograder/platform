@@ -1,4 +1,4 @@
-import { rubricCheckDataOrThrow } from "@/lib/rubric/validate";
+import { keepExamQuestionId, rubricCheckDataOrThrow } from "@/lib/rubric/validate";
 import { YamlChecksToHydratedChecks } from "@/lib/rubric/parse";
 import { YmlRubricChecksType } from "@/utils/supabase/DatabaseTypes";
 
@@ -67,6 +67,45 @@ describe("rubricCheckDataOrThrow", () => {
   it("keeps exam_question_id on a check without options", () => {
     const check = makeCheck({ exam_question_id: 38 });
     expect(rubricCheckDataOrThrow(check)).toEqual({ exam_question_id: 38 });
+  });
+
+  it.each([
+    ["without options", { exam_question_id: 38.5 }],
+    [
+      "with options",
+      {
+        exam_question_id: 38.5,
+        options: [
+          { label: "yes", points: 2 },
+          { label: "no", points: 0 }
+        ]
+      }
+    ]
+  ])("rejects an exam_question_id that isn't a whole number, %s", (_name, data) => {
+    expect(() => rubricCheckDataOrThrow(makeCheck(data))).toThrow(/whole number/);
+  });
+});
+
+describe("keepExamQuestionId", () => {
+  const options = [
+    { label: "Full credit", points: 2 },
+    { label: "No credit", points: 0 }
+  ];
+
+  it("carries the question id onto new options", () => {
+    expect(keepExamQuestionId({ exam_question_id: 38, options: [] }, { options })).toEqual({
+      exam_question_id: 38,
+      options
+    });
+  });
+
+  it("keeps just the question id when the new data is null", () => {
+    expect(keepExamQuestionId({ exam_question_id: 38 }, null)).toEqual({ exam_question_id: 38 });
+  });
+
+  it("leaves checks that aren't from an exam alone", () => {
+    expect(keepExamQuestionId({ options: [] }, { options })).toEqual({ options });
+    expect(keepExamQuestionId(null, null)).toBeNull();
   });
 });
 
