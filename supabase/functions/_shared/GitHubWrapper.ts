@@ -1272,17 +1272,55 @@ export async function deleteFileFromRepo(
   return { deleted: true, commit_sha: response.data.commit?.sha };
 }
 
-async function getJwks() {
-  const jwks = await fetch("https://token.actions.githubusercontent.com/.well-known/jwks");
-  const jwksData = await jwks.json();
-  return jwksData;
+export type JobTokenProvider = "github" | "forgejo";
+
+const GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com";
+
+/**
+ * Picks the provider and key set for a job token's `iss`. Keys are only ever fetched from a URL we
+ * configured, never one taken from the token. GitHub enterprises can use issuers under the GitHub
+ * host, and those share today's key set. A Forgejo instance is trusted only when FORGEJO_URL is set,
+ * and its Actions tokens use `<FORGEJO_URL>/api/actions` as the issuer. Forgejo signs with RS256
+ * unless its ID_TOKEN_SIGNING_ALGORITHM setting is changed, and any other algorithm fails here.
+ */
+function trustedJobTokenIssuer(
+  iss: string
+): { provider: JobTokenProvider; jwksUrl: string; audienceBase: string } | undefined {
+  if (iss === GITHUB_ACTIONS_ISSUER || iss.startsWith(`${GITHUB_ACTIONS_ISSUER}/`)) {
+    return {
+      provider: "github",
+      jwksUrl: `${GITHUB_ACTIONS_ISSUER}/.well-known/jwks`,
+      audienceBase: "https://github.com"
+    };
+  }
+  const forgejoUrl = Deno.env.get("FORGEJO_URL")?.replace(/\/+$/, "");
+  if (forgejoUrl && iss === `${forgejoUrl}/api/actions`) {
+    return { provider: "forgejo", jwksUrl: `${iss}/.well-known/keys`, audienceBase: forgejoUrl };
+  }
+  return undefined;
 }
 
-export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken> {
+/**
+ * Verifies an Actions job token from GitHub or the configured Forgejo instance. Repository names are
+ * only unique within one provider, so callers must also check that `provider` matches the provider
+ * of the class that owns `repository`.
+ *
+ * `aud` must be the provider's default, `<host>/<repository_owner>`. assignment-action calls
+ * `core.getIDToken()` without an audience, so existing grade.yml files send exactly that. Requiring it
+ * rejects a token the same job minted for another service (for example `sts.amazonaws.com`) if that
+ * service leaks it. A custom Pawtograder audience would need a new action release and a grade.yml
+ * change in every course, so it isn't required.
+ */
+export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken & { provider: JobTokenProvider }> {
   const decoded = decode(token);
   const { kid } = decoded[0] as { kid: string };
-  const jwks = await getJwks();
-  const publicKey = jwks.keys.find((key: any) => key.kid === kid);
+  const iss = (decoded[1] as { iss?: unknown } | null)?.iss;
+  const issuer = typeof iss === "string" ? trustedJobTokenIssuer(iss) : undefined;
+  if (!issuer) {
+    throw new SecurityError(`Untrusted OIDC token issuer: ${String(iss)}`);
+  }
+  const jwks = await (await fetch(issuer.jwksUrl)).json();
+  const publicKey = jwks.keys.find((key: { kid?: string }) => key.kid === kid);
   if (!publicKey) {
     throw new Error("No public key found");
   }
@@ -1296,10 +1334,15 @@ export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken>
     true,
     ["verify"]
   );
-  const verified = await verify(token, key, {
+  const verified = (await verify(token, key, {
     expLeeway: 3600 // 1 hour
-  });
-  return verified as GitHubOIDCToken;
+  })) as GitHubOIDCToken;
+  // Owner names are case-insensitive on both hosts.
+  const expectedAudience = `${issuer.audienceBase}/${verified.repository_owner}`.toLowerCase();
+  if (typeof verified.aud !== "string" || verified.aud.toLowerCase() !== expectedAudience) {
+    throw new SecurityError(`Unexpected OIDC token audience: ${String(verified.aud)}`);
+  }
+  return { ...verified, provider: issuer.provider };
 }
 
 // E2E testing constants and helper
@@ -1334,7 +1377,9 @@ const E2E_ENABLE = Deno.env.get("E2E_ENABLE") === "true";
  * SECURITY: E2E bypass is only enabled if both E2E_ENABLE=true and END_TO_END_SECRET
  * are explicitly set. This prevents accidental use in production.
  */
-export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHubOIDCToken> {
+export async function validateOIDCTokenOrAllowE2E(
+  token: string
+): Promise<GitHubOIDCToken & { provider: JobTokenProvider }> {
   const decoded = decode(token);
   const payload = decoded[1] as GitHubOIDCToken;
   if (payload.repository.startsWith(END_TO_END_REPO_PREFIX)) {
@@ -1366,7 +1411,8 @@ export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHub
     if (header.kid !== END_TO_END_SECRET) {
       throw new SecurityError("E2E repo provided, but secret is incorrect");
     }
-    return payload;
+    // E2E repos live in the GitHub playground org.
+    return { ...payload, provider: "github" };
   }
   return await validateOIDCToken(token);
 }
