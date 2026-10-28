@@ -16,7 +16,7 @@ mistakes in the seeded CS 4535 gradebook alone:
 - collapse state was keyed by display name, so two groups that shared a name collapsed together.
 
 In Fall 2026 every student in CS 4535 implemented first-class column groups independently, as a
-pull request that never merged. Those twelve designs, and a replay harness that ran each one against
+pull request that never merged. Those thirteen designs, and a replay harness that ran each one against
 the same seeded and constructed gradebooks, are the evidence behind each decision below. Credit is
 by GitHub handle and pull request number in `neu-cs4535/fa26-handout-hw1-onboarding`.
 
