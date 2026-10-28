@@ -1,6 +1,6 @@
 # ADR: Gradebook column groups and topics
 
-Status: accepted, October 2026. Groups ship first; topics follow in a second change.
+Status: accepted, October 2026. Groups ship first; topics follow in a second change that builds on them.
 
 ## Context
 
@@ -87,6 +87,72 @@ first version took names from the columns whenever they shared a prefix, which r
 "Participation" to "Participation Lecs" in one course; the rule now applies only when today's
 header misspells the word.
 
+## Decision: topics
+
+The second half of the bake-off asked what the gradebook should do for CS 2100, where every topic
+is assessed several times. Twelve proposals answered it. We checked them against CS 2100's own
+gradebooks in production (Fall 2025 through Fall 2026), which have exactly the shape the proposals
+assumed: 13 or 14 topics, two or three columns named "Attempt N: Topic" per topic, and a hand-written
+`topic_*` column per topic that takes the maximum of its attempts.
+
+**A topic is a second axis, not a kind of group.** A group is a partition, so it can express one of
+the two axes such a gradebook has, either the topic or the occasion (one quiz assesses several
+topics), but never both (DavidCzartoryski #4; rishidil #12 and wongcolin45 #14 made the same point).
+CS 2100 imports scores one quiz session at a time, so the session is the group, and the topic is
+stored separately: `gradebook_topics`, with `gradebook_columns.topic_id` and `attempt_number`.
+
+**The constraints make a broken topic impossible to express.** `topic_id` and `attempt_number` are
+set together, and the attempt number is positive (nourshoreibah #1). `UNIQUE (topic_id,
+attempt_number)` rules out two attempt 2s at one topic; five submissions converged on it
+(nourshoreibah #1, DavidCzartoryski #4, rishidil #12, adhirajpuri25 #13, wongcolin45 #14). The CS
+2100 Spring 2026 gradebook contains exactly that case: two "Attempt 2: Stakeholder-value Matrices"
+columns. A composite foreign key keeps a column's topic inside its own gradebook.
+
+**One topic per column.** whoisaldo #5, somshrivastava #10 and zhiruichengit #17 asked whether one
+assessment can measure several topics. In CS 2100 it cannot: each topic of a quiz session is its own
+column. Membership is therefore a column on `gradebook_columns`, not a table carrying a role.
+
+**A topic's standing is an ordinary computed column.** The topic points at it through
+`standing_column_id`, so standings use the one recalculation pipeline that every other column uses
+(nourshoreibah #1; wongcolin45 #14's `rollup_column_id`). `standing_rule` is either NULL, meaning
+the column keeps the instructor's own expression, or `best` or `latest`, in which case its expression
+is generated from the topic's attempts and regenerated whenever an attempt joins, leaves, or is
+renumbered (DavidCzartoryski #4).
+
+The generated expression exists because of two problems found in the same place. DavidCzartoryski #4
+showed that the expression functions treat a missing attempt differently (`max` skips it, `mean`
+counts it as 0), so two hand-written standings can disagree about the same attempt without anyone
+noticing. In production, seven third attempts in CS 2100 Spring 2026 (`3cce`, `3ci`, ...) did not
+match their topic's slug glob (`cce*`), so a hand-written `max` would have ignored them. The
+generated expression lists every attempt by slug. It follows nourshoreibah #1's defaults: excused
+attempts are excluded, missing attempts are skipped, and a topic with no eligible attempt has no
+score. Every CS 2100 term so far uses best-of, so `best` and `latest` are the only rules; cumulative
+credit (nourshoreibah #1) waits for a course that needs it.
+
+**The display collapses a topic to its standing.** In topic view, a topic is one unit drawn where its
+standing column sits; collapsed, it shows the standing, and expanded, the attempts in order
+(DavidCzartoryski #4, wongcolin45 #14, rishidil #12). A collapsed group shows the latest column
+anyone has a score in, which for a topic would be the most recent attempt and not each student's
+standing (wongcolin45 #14, AbhinavGonthina #6). Columns outside any topic keep the group layout, and
+the group view is a toggle away. Students see the same units in What-If.
+
+**Topics are suggested, never inferred silently.** Suggest topics treats a computed column whose
+inputs are only manual columns, read by nothing else, as a topic's standing, and those inputs as its
+attempts (DavidCzartoryski #4's inference). It takes attempt numbers from "Attempt N" names and
+proposes, by name, attempts that the standing does not read, which recovers the glob-missed third
+attempts. Nothing is written until the instructor confirms the proposed set, and a duplicate attempt
+blocks applying until one column is unchecked (nourshoreibah #1, wongcolin45 #14, whoisaldo #5).
+Applying keeps each standing's existing expression, so no grade changes. On CS 2100 Spring 2026 it
+proposes all 13 topics and all seven third attempts, and reports the duplicate attempt 2.
+
+**Topics are the `gradebook-topics` course feature**, rolled out like groups: disabled for existing
+classes, enabled by default for new ones. There is nothing to backfill.
+
+Deferred: topic membership carrying a role or spanning several topics (whoisaldo #5), cumulative
+credit and copying a confirmed setup into the next term (nourshoreibah #1), the transposed
+topic-by-attempt grid per student (nourshoreibah #1, adhirajpuri25 #13), and pagination for large
+rosters.
+
 ## Consequences
 
 - No existing gradebook changes until its instructor turns the feature on and confirms the preview.
@@ -99,6 +165,8 @@ header misspells the word.
 
 ## Down path
 
-`supabase/migrations/20261028120000_gradebook_column_groups.down.sql.txt`, run by hand. It drops
-the table before `group_id`, because the table's policy reads that column; two submissions' down
-scripts failed on that ordering.
+Run by hand, topics first:
+`supabase/migrations/20261028130000_gradebook_topics.down.sql.txt`, then
+`supabase/migrations/20261028120000_gradebook_column_groups.down.sql.txt`. Each drops its table
+before the `gradebook_columns` column that the table's policy reads; two submissions' down scripts
+failed on that ordering. Standing columns stay, keeping their last expression.
