@@ -8,20 +8,20 @@ type RpcCall = { fn: string; args: Record<string, unknown> };
 
 function mockSupabase({
   rpc: rpcImpl = () => ({ data: null, error: null }),
-  examParts = 0
-}: { rpc?: (call: RpcCall) => { data: unknown; error: unknown }; examParts?: number } = {}) {
+  rubricParts = 0
+}: { rpc?: (call: RpcCall) => { data: unknown; error: unknown }; rubricParts?: number } = {}) {
   const calls: RpcCall[] = [];
   const rpc = jest.fn(async (fn: string, args: Record<string, unknown>) => {
     const call = { fn, args };
     calls.push(call);
     return rpcImpl(call);
   });
-  // Stands in for the count of rubric_parts the sync generated for this exam.
+  // Stands in for the count of the grading rubric's parts.
   const query = {
     select: () => query,
     eq: () => query,
     not: () => query,
-    then: (resolve: (r: { count: number; error: null }) => void) => resolve({ count: examParts, error: null })
+    then: (resolve: (r: { count: number; error: null }) => void) => resolve({ count: rubricParts, error: null })
   };
   const from = jest.fn(() => query);
   return { client: { rpc, from } as unknown as Parameters<typeof saveExamStructure>[0], calls };
@@ -34,8 +34,8 @@ const structure = {
 };
 
 describe("saveExamStructure", () => {
-  it("builds the rubric on the first save", async () => {
-    const { client, calls } = mockSupabase({ examParts: 0 });
+  it("builds the rubric when it is still empty", async () => {
+    const { client, calls } = mockSupabase({ rubricParts: 0 });
     const result = await saveExamStructure(client, { ...structure, gradingRubricId: 42 });
 
     expect(calls.map((c) => c.fn)).toEqual(["exam_upsert_questions_and_regions", "exam_sync_rubric_from_questions"]);
@@ -43,8 +43,8 @@ describe("saveExamStructure", () => {
     expect(result).toEqual({ rubric: "built", rubricError: null });
   });
 
-  it("leaves a rubric that was already built alone", async () => {
-    const { client, calls } = mockSupabase({ examParts: 1 });
+  it("leaves a rubric that already has parts alone", async () => {
+    const { client, calls } = mockSupabase({ rubricParts: 1 });
     const result = await saveExamStructure(client, { ...structure, gradingRubricId: 42 });
 
     expect(calls.map((c) => c.fn)).toEqual(["exam_upsert_questions_and_regions"]);

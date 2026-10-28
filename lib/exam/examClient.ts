@@ -24,8 +24,9 @@ export type AssessmentQuestion = GeneratedQuestion & {
 export type ExamRubricStatus = "built" | "existing" | "no-rubric" | "failed";
 
 /**
- * Save an exam's question tree and regions. On the first save, also build the grading rubric from
- * them. Later saves leave an existing rubric alone, since a rebuild resets its generated checks.
+ * Save an exam's question tree and regions, and build the grading rubric from them if the rubric is
+ * still empty. A rubric that has anything in it is left alone: a rebuild resets generated checks,
+ * and building into a hand-written rubric could count the same answers twice.
  * Throws if the save fails. A failed build doesn't undo the save, so it comes back as rubricError.
  */
 export async function saveExamStructure(
@@ -48,8 +49,7 @@ export async function saveExamStructure(
   const { count, error: countErr } = await supabase
     .from("rubric_parts")
     .select("id", { count: "exact", head: true })
-    .eq("rubric_id", gradingRubricId)
-    .not("data->exam_question_id", "is", null);
+    .eq("rubric_id", gradingRubricId);
   if (countErr) return { rubric: "failed", rubricError: countErr.message };
   if (count) return { rubric: "existing", rubricError: null };
 
