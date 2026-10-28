@@ -950,6 +950,7 @@ export type GradebookColumnWithEntries = Omit<_GradebookColumnWithEntries, "depe
 };
 export type Gradebook = Database["public"]["Tables"]["gradebooks"]["Row"];
 export type GradebookColumn = Database["public"]["Tables"]["gradebook_columns"]["Row"];
+export type GradebookColumnGroup = Database["public"]["Tables"]["gradebook_column_groups"]["Row"];
 export type GradebookColumnStudent = Database["public"]["Tables"]["gradebook_column_students"]["Row"];
 
 /**

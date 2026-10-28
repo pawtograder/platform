@@ -38,6 +38,7 @@ import {
 import {
   createClass,
   createUserInClass,
+  autoGroupClassGradebook,
   supabase,
   TEST_HANDOUT_REPO,
   type TestingUser
@@ -1709,6 +1710,7 @@ export class DatabaseSeeder {
 
       // Create gradebook columns
       await this.createGradebookColumns(config, class_id, students, assignments);
+      await autoGroupClassGradebook(class_id);
 
       // Create help requests if configured
       if (config.helpRequestConfig) {

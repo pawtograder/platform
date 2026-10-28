@@ -43,6 +43,7 @@ type StudentGrade = {
 // call spins forever and OOMs the worker rather than failing.
 let column: GradebookColumn;
 let columns: GradebookColumn[];
+const noGroups: never[] = [];
 let studentGrade: StudentGrade | undefined;
 let submissionStatus: { status: string };
 let controller: { columns: GradebookColumn[]; getRendererForColumn: () => (...args: unknown[]) => string };
@@ -54,11 +55,18 @@ let whatIfController: {
 
 jest.mock("@/hooks/useGradebook", () => ({
   useGradebookColumns: () => columns,
+  useGradebookColumnGroups: () => noGroups,
   useGradebookColumn: () => column,
   useGradebookColumnStudent: () => studentGrade,
   useGradebookController: () => controller,
   useLinkToAssignment: () => null,
   useSubmissionIDForColumn: () => submissionStatus
+}));
+
+// These tests exercise the slug-prefix grouping, i.e. a course with stored column groups off.
+jest.mock("@/hooks/useCourseFeatures", () => ({
+  useCourseFeature: () => false,
+  useGradebookWhatIfFeatureEnabled: () => true
 }));
 
 jest.mock("@/hooks/useGradebookWhatIf", () => ({

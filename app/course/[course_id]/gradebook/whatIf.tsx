@@ -2,9 +2,12 @@ import Markdown from "@/components/ui/markdown";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useGradebookWhatIfFeatureEnabled } from "@/hooks/useCourseFeatures";
+import { useCourseFeature, useGradebookWhatIfFeatureEnabled } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { databaseLayout, isHeaderGroup, legacySlugLayout } from "@/lib/gradebookColumnGroups";
 import {
   useGradebookColumn,
+  useGradebookColumnGroups,
   useGradebookColumns,
   useGradebookColumnStudent,
   useGradebookController,
@@ -474,11 +477,14 @@ function GradebookCard({
 }
 function GroupHeader({
   groupName,
+  isStoredGroup,
   columnCount,
   isCollapsed,
   onToggle
 }: {
   groupName: string;
+  /** Stored group names render verbatim; legacy (slug-guessed) names are singular and pluralized here. */
+  isStoredGroup: boolean;
   columnCount: number;
   isCollapsed: boolean;
   onToggle: () => void;
@@ -514,7 +520,8 @@ function GroupHeader({
             <HStack as="span" gap={2}>
               <Icon as={isCollapsed ? LuChevronRight : LuChevronDown} boxSize={4} color="fg.muted" aria-hidden="true" />
               <Text as="span" fontWeight="bold" fontSize="sm" color="fg.muted">
-                {columnCount} {pluralize(groupName.charAt(0).toUpperCase() + groupName.slice(1))}...
+                {columnCount}{" "}
+                {isStoredGroup ? groupName : pluralize(groupName.charAt(0).toUpperCase() + groupName.slice(1))}...
               </Text>
             </HStack>
           </HStack>
@@ -573,108 +580,50 @@ function CollapsedGroupColumn({
 
 export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_id: string; whatIfEnabled: boolean }) {
   const columns = useGradebookColumns();
+  const columnGroupsEnabled = useCourseFeature(COURSE_FEATURES.GRADEBOOK_COLUMN_GROUPS, true);
+  const columnGroups = useGradebookColumnGroups();
 
-  // State for collapsible groups - use base group name as key for stability
+  // Collapse state keyed by unit key, so two groups that share a name collapse independently.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  // Sort columns by sort order
-  const sortedColumns = useMemo(() => {
-    const cols = [...columns];
-    cols.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-    return cols;
-  }, [columns]);
-
-  // Group gradebook columns by slug prefix, with special handling for assignment sub-groups
-  const groupedColumns = useMemo(() => {
-    const groups: Record<string, { groupName: string; columns: GradebookColumn[] }> = {};
-
-    let currentGroupKey = "";
-    let currentGroupIndex = 0;
-    let lastSortOrder = -1;
-
-    sortedColumns.forEach((col) => {
-      const slugParts = col.slug.split("-");
-      let baseGroupName: string;
-
-      // Special handling for assignment columns
-      if (slugParts[0] === "assignment" && slugParts.length >= 3) {
-        // For assignment-assignment-*, assignment-lab-*, etc., use "assignment-{type}" as the base group
-        baseGroupName = `${slugParts[0]}-${slugParts[1]}`;
-      } else {
-        // For all other columns, use the first part as the base group
-        baseGroupName = slugParts[0] || "other";
-      }
-
-      // Check if this column is contiguous with the previous one
-      const currentSortOrder = col.sort_order ?? 0;
-      const isContiguous = lastSortOrder === -1 || currentSortOrder === lastSortOrder + 1;
-
-      // If not contiguous or different prefix, start a new group
-      if (!isContiguous || baseGroupName !== currentGroupKey) {
-        currentGroupKey = baseGroupName;
-        currentGroupIndex++;
-      }
-
-      const groupKey = `${baseGroupName}-${currentGroupIndex}`;
-
-      if (!groups[groupKey]) {
-        // Format group name for display
-        let displayName: string;
-        if (baseGroupName === "other") {
-          displayName = "Other";
-        } else if (baseGroupName.startsWith("assignment-")) {
-          // For assignment sub-groups, capitalize and format nicely
-          const subType = baseGroupName.split("-")[1];
-          displayName = `${subType.charAt(0).toUpperCase() + subType.slice(1)}`;
-        } else {
-          displayName = baseGroupName.charAt(0).toUpperCase() + baseGroupName.slice(1);
-        }
-
-        groups[groupKey] = {
-          groupName: displayName,
-          columns: []
-        };
-      }
-
-      groups[groupKey].columns.push(col);
-      lastSortOrder = currentSortOrder;
-    });
-
-    return groups;
-  }, [sortedColumns]);
+  // Stored groups when the course has them on; otherwise the legacy slug-prefix heuristic.
+  const groupedColumns = useMemo(
+    () => (columnGroupsEnabled ? databaseLayout(columns, columnGroups) : legacySlugLayout(columns)),
+    [columns, columnGroups, columnGroupsEnabled]
+  );
+  const collapsibleGroupKeys = useMemo(
+    () => Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1),
+    [groupedColumns]
+  );
 
   // Initialize all groups as collapsed by default, but preserve existing collapsed state
   useEffect(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
-
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
 
       // Preserve existing collapsed state for groups that still exist
-      baseGroupNames.forEach((baseGroupName) => {
-        if (prev.has(baseGroupName)) {
-          newSet.add(baseGroupName);
+      collapsibleGroupKeys.forEach((key) => {
+        if (prev.has(key)) {
+          newSet.add(key);
         }
       });
 
       // If no groups were previously collapsed, collapse all by default
-      if (newSet.size === 0 && baseGroupNames.length > 0) {
-        baseGroupNames.forEach((baseGroupName) => newSet.add(baseGroupName));
+      if (newSet.size === 0 && collapsibleGroupKeys.length > 0) {
+        collapsibleGroupKeys.forEach((key) => newSet.add(key));
       }
 
       return newSet;
     });
-  }, [groupedColumns]);
+  }, [collapsibleGroupKeys]);
 
-  // Toggle group collapse/expand using base group name
-  const toggleGroup = useCallback((baseGroupName: string) => {
+  const toggleGroup = useCallback((groupKey: string) => {
     setCollapsedGroups((prev) => {
       const newSet = new Set(prev);
-      if (newSet.has(baseGroupName)) {
-        newSet.delete(baseGroupName);
+      if (newSet.has(groupKey)) {
+        newSet.delete(groupKey);
       } else {
-        newSet.add(baseGroupName);
+        newSet.add(groupKey);
       }
       return newSet;
     });
@@ -687,17 +636,15 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
 
   // Collapse all groups
   const collapseAll = useCallback(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
-    setCollapsedGroups(new Set(baseGroupNames));
-  }, [groupedColumns]);
+    setCollapsedGroups(new Set(collapsibleGroupKeys));
+  }, [collapsibleGroupKeys]);
 
   // Build the rendered items
   const renderedItems = useMemo(() => {
     const items: JSX.Element[] = [];
 
     Object.entries(groupedColumns).forEach(([groupKey, group]) => {
-      if (group.columns.length === 1) {
+      if (!isHeaderGroup(group)) {
         // Single column - no need for group header
         const column = group.columns[0];
         items.push(
@@ -709,17 +656,18 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
           />
         );
       } else {
-        // Multiple columns - handle collapsed state using base group name
-        const isCollapsed = collapsedGroups.has(group.groupName);
+        // Header group; a one-column group has nothing to collapse.
+        const isCollapsed = group.columns.length > 1 && collapsedGroups.has(groupKey);
 
         // Add group header
         items.push(
           <GroupHeader
             key={`header-${groupKey}`}
             groupName={group.groupName}
+            isStoredGroup={group.groupId != null}
             columnCount={group.columns.length}
             isCollapsed={isCollapsed}
-            onToggle={() => toggleGroup(group.groupName)}
+            onToggle={() => toggleGroup(groupKey)}
           />
         );
 
@@ -761,7 +709,7 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
         </Text>
       )}
       {/* Expand/Collapse All Buttons */}
-      {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
+      {collapsibleGroupKeys.length > 0 && (
         <HStack gap={2} justifyContent="flex-end" w="100%" px={2} py={2}>
           <Button variant="ghost" size="sm" onClick={expandAll} colorPalette="blue">
             <Icon as={LuChevronDown} mr={2} /> Expand All

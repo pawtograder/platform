@@ -26,12 +26,14 @@ const STUDENT_ID = "student-profile-1";
 // Stable references — see the note in gradebook-score-cell-a11y.test.tsx: an
 // unstable `useGradebookColumns()` return spins `WhatIf`'s grouping effect.
 let columns: GradebookColumn[];
+const noGroups: never[] = [];
 let byId: Map<number, GradebookColumn>;
 let controller: { columns: GradebookColumn[]; getRendererForColumn: () => (...args: unknown[]) => string };
 let whatIfController: { setWhatIfGrade: () => void; clearGrade: () => void; getIncompleteValues: () => undefined };
 
 jest.mock("@/hooks/useGradebook", () => ({
   useGradebookColumns: () => columns,
+  useGradebookColumnGroups: () => noGroups,
   useGradebookColumn: (id: number) => byId.get(id),
   useGradebookColumnStudent: () => ({
     score: 50,
@@ -44,6 +46,12 @@ jest.mock("@/hooks/useGradebook", () => ({
   useGradebookController: () => controller,
   useLinkToAssignment: () => null,
   useSubmissionIDForColumn: () => ({ status: "found" })
+}));
+
+// These tests exercise the slug-prefix grouping, i.e. a course with stored column groups off.
+jest.mock("@/hooks/useCourseFeatures", () => ({
+  useCourseFeature: () => false,
+  useGradebookWhatIfFeatureEnabled: () => true
 }));
 
 jest.mock("@/hooks/useGradebookWhatIf", () => ({
