@@ -32,7 +32,8 @@ function query(data: unknown, overrides: object = {}) {
 }
 // Execute actual function bodies with database/GitHub mocks, no copied filtering logic.
 test.each(["github-user-sync", "autograder-create-repos-for-student"])("%s scopes fan-outs", async (file) => {
-  for (const mode of ["mixed", "unprovisioned", "forgejo-only"]) {
+  // "no-assignments" is a GitHub class before its first assignment, which must still get its org invite.
+  for (const mode of ["mixed", "unprovisioned", "forgejo-only", "no-assignments"]) {
     const repo = (provider: string, kind: string) => ({
       id: `${provider}-${kind}`,
       repository: `org/${provider}-${kind}`,
@@ -55,7 +56,8 @@ test.each(["github-user-sync", "autograder-create-repos-for-student"])("%s scope
           slug: "course",
           github_org: "org",
           time_zone: "UTC",
-          assignments: { git_provider: mode === "forgejo-only" ? "forgejo" : "github" }
+          assignments:
+            mode === "no-assignments" ? [] : [{ git_provider: mode === "forgejo-only" ? "forgejo" : "github" }]
         },
         profiles: {
           repositories: [repo("github", "individual"), repo("forgejo", "individual")],

@@ -182,15 +182,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     };
   }
 
-  const handoutFullName = `${handoutRepoOrg}/${handoutRepoName}`;
-  const { error: reservationError } = await adminSupabase.rpc("reserve_github_staff_repo", {
-    p_assignment_id: assignment_id,
-    p_class_id: class_id,
-    p_repository: handoutFullName,
-    p_is_grader: false
-  });
-  if (reservationError) throw new UserVisibleError(reservationError.message, 400);
-
   // The protect_* columns configure STUDENT repos. The staff handout repo must
   // never require pull requests / approving reviews — that would block
   // instructors pushing handout updates — so only carry force-push protection
@@ -229,6 +220,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // fail (there is no autograder to report to), showing students a red X. Strip
   // it here, after the repo exists — GitHub's create-from-template API copies the
   // whole tree, so there is no way to exclude it up front.
+  const handoutFullName = `${handoutRepoOrg}/${handoutRepoName}`;
   let strippedHandoutSha: string | undefined;
   if (assignment.has_autograder === false) {
     const { deleted, commit_sha } = await deleteFileFromRepo(
@@ -238,8 +230,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       scope
     );
     // Keep this sha: it is the FINAL handout commit, and it is created before
-    // the final pointer/SHA update below. A webhook may race this request,
-    // so resolve the final SHA here too instead of potentially leaving
+    // template_repo exists in the DB below. So the template-repo push webhook for it
+    // finds no assignment to attribute it to and records nothing — leaving
     // latest_template_sha null, which gives student syncs no target revision. We
     // persist it ourselves rather than relying on that delivery.
     strippedHandoutSha = commit_sha;
@@ -256,9 +248,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   } else {
     // An AUTOGRADED handout needs the pointer just as much, and nothing else was setting it.
     //
-    // The reasoning above applies whether or not grade.yml is stripped: repo creation does not
-    // guarantee a push webhook. Before this explicit head lookup, a missing delivery left
-    // `latest_template_sha` NULL for the whole life of a
+    // The reasoning above applies whether or not grade.yml is stripped: every commit in this repo
+    // predates the `template_repo` write below, so the template-repo push webhook has no
+    // assignment to attribute it to and `latest_template_sha` stayed NULL for the whole life of a
     // freshly created autograded assignment. That silently disabled the handout-hash seeding this
     // flow now depends on — the call at the end of this function, the one in
     // assignment-create-solution-repo, and the one in github-repo-configure-webhook all key off
@@ -276,9 +268,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     }
   }
 
-  // The reservation above freezes the provider before GitHub creation. Keep it
-  // on failure so retries reuse the same name. Finalize the pointer's SHA after
-  // creation and permission sync. For pr-mode the handout IS the upstream repo
+  // Only persist the template_repo pointer after GitHub creation + permission
+  // sync succeed, so a partial failure does not leave the assignment pointing
+  // at a repo that does not exist. For pr-mode the handout IS the upstream repo
   // (students fork it and PR back to it), so point upstream_repo at the same
   // repo here — the github-repo-webhook PR ingestion matches upstream_repo
   // against the repo a PR targets, and handout == upstream must never drift.
@@ -289,6 +281,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // autograder-create-submission then rejects as a "workflow sha mismatch" on the
   // first real student run, and which the has_autograder backfill reads as "the
   // autograder was never wired up".
+  //
+  // The reservation checks the assignment is still on GitHub and freezes its provider in one
+  // locked transaction. If it was switched to Forgejo during creation, this fails and the new
+  // GitHub repo stays unreferenced.
+  const { error: reservationError } = await adminSupabase.rpc("reserve_github_staff_repo", {
+    p_assignment_id: assignment_id,
+    p_class_id: class_id,
+    p_repository: handoutFullName,
+    p_is_grader: false
+  });
+  if (reservationError) throw new UserVisibleError(reservationError.message, 400);
   const { error: pointerError } = await adminSupabase
     .from("assignments")
     .update({
