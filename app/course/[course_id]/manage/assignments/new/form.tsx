@@ -1151,6 +1151,40 @@ export default function AssignmentForm({
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"
+                    label="Repository host"
+                    helperText="Where student repositories live. Forgejo repositories are on the course's own git server, so students need no GitHub account. This can't change once student repositories exist."
+                  >
+                    <NativeSelectRoot>
+                      <NativeSelectField {...register("git_provider")}>
+                        <option value="github">GitHub</option>
+                        <option value="forgejo">Forgejo + Coder workspace</option>
+                      </NativeSelectField>
+                    </NativeSelectRoot>
+                  </Field>
+                </Fieldset.Content>
+                {watch("git_provider") === "forgejo" && (
+                  <Fieldset.Content>
+                    <Field
+                      orientation="horizontal"
+                      label="Forgejo handout repository"
+                      helperText="The template repository on Forgejo that each student's repository is copied from, as owner/name."
+                      errorText={errors.template_repo?.message?.toString()}
+                      invalid={!!errors.template_repo}
+                      required={true}
+                    >
+                      <Input
+                        placeholder="org/handout"
+                        {...register("template_repo", {
+                          required: "A Forgejo assignment needs a handout repository",
+                          pattern: { value: /^[^/\s]+\/[^/\s]+$/, message: "Use the form owner/name" }
+                        })}
+                      />
+                    </Field>
+                  </Fieldset.Content>
+                )}
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
                     label="Points possible"
                     errorText={errors.total_points?.message?.toString()}
                     invalid={!!errors.total_points}

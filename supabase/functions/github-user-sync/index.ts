@@ -282,6 +282,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     // TypeScript twin of that path, so a student pressing "Fix GitHub" must not manufacture repos
     // the instructor has archived.
     .is("archived_at", null)
+    .eq("git_provider", "github")
     .not("template_repo", "is", "null")
     .not("template_repo", "eq", "")
     .lte("release_date", TZDate.tz(classes[0].classes.time_zone!).toISOString())
