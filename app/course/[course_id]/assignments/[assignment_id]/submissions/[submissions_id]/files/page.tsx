@@ -1060,12 +1060,32 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
   }
 }
 
+/**
+ * Whether this artifact is backed by a file in the `submission-artifacts` bucket.
+ *
+ * `plaintext`, `markdown`, `zip` and `png` all describe a stored file, and RenderedArtifact
+ * downloads it to render. `exam_v1` does not: `finalize` in the exam worker inserts the
+ * submission_artifacts row and there is no code path anywhere that uploads a file for one.
+ * Everything a grader sees comes from `artifact.data` plus the page images, which
+ * ExamSubmissionRenderer signs itself out of the separate `submission-files` bucket.
+ *
+ * Signing a key that cannot exist is what made every finalized exam render
+ * "Error downloading artifact: Object not found" instead of the answer crops (#1076).
+ */
+function artifactHasStoredFile(artifact: SubmissionArtifact): boolean {
+  return (artifact.data as { format?: string } | null)?.format !== "exam_v1";
+}
+
 function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
   // Load the artifact data from supabase
   const [downloadLink, setDownloadLink] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const hasStoredFile = artifactHasStoredFile(artifact);
   useEffect(() => {
+    // Nothing to sign for a data-backed artifact, and asking would fail. downloadLink stays
+    // null, which the render path below already handles: the Download link is conditional.
+    if (!hasStoredFile) return;
     let isMounted = true;
     async function loadArtifact() {
       const client = createClient();
@@ -1083,7 +1103,7 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
     return () => {
       isMounted = false;
     };
-  }, [artifactKey]);
+  }, [artifactKey, hasStoredFile]);
   if (downloadError) {
     return <Text color="fg.error">{downloadError}</Text>;
   }
