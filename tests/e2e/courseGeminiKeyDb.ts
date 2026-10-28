@@ -248,7 +248,7 @@ export type FaultPoint =
  * tests are unaffected, runs `fn`, and always removes it. Test-only: the schema is created and
  * dropped here and nothing in the product references it.
  */
-export async function withFault<T>(classId: number, point: FaultPoint, fn: () => Promise<T>): Promise<T> {
+export async function withFault<T>(classId: number, point: FaultPoint, fn: () => PromiseLike<T>): Promise<T> {
   const schema = `byok_test_fault_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
   const timing =
     point === "after_vault_create"
