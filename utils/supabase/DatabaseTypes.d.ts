@@ -67,6 +67,14 @@ export type ActiveSubmissionsWithGradesForAssignment =
     assignment_group_id?: number | null;
     /** Present on `submissions_with_grades_for_assignment_nice`: instructor-created placeholder stub. */
     is_placeholder?: boolean | null;
+    /**
+     * Present on `submissions_with_grades_for_assignment_nice`: the active submission's code-walk
+     * reviews. The count is 0 and the booleans are null when there are none; with several code-walk
+     * rubrics, a boolean is true only when it holds for all of them.
+     */
+    code_walk_review_count?: number | null;
+    code_walk_completed?: boolean | null;
+    code_walk_released?: boolean | null;
   };
 export type ActiveSubmissionsWithRegressionTestResults =
   Database["public"]["Views"]["submissions_with_grades_for_assignment_and_regression_test"]["Row"] & {

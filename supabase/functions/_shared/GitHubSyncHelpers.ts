@@ -2740,7 +2740,17 @@ export async function syncRepositoryToHandout(params: {
     console.log("Waiting for inner sync limiter to be available", org);
     return await createContentLimiter.schedule(async () => {
       // Wrap the sync operation in the rate limiter
-      console.log("syncRepositoryToHandout", params);
+      // Named fields only: `params` carries `adminSupabase`, and logging the client prints the
+      // service_role key (its `supabaseKey` and the Authorization/apikey headers) into the logs.
+      console.log("syncRepositoryToHandout", {
+        repositoryFullName: params.repositoryFullName,
+        templateRepo: params.templateRepo,
+        fromSha: params.fromSha,
+        toSha: params.toSha,
+        syncedRepoSha: params.syncedRepoSha,
+        autoMerge: params.autoMerge,
+        diffStrategy: params.diffStrategy
+      });
       const {
         repositoryFullName,
         templateRepo,
