@@ -905,7 +905,8 @@ export class RealtimeChannelManager {
   async subscribeToClassesUpdate(
     courseId: number,
     client: SupabaseClient<Database>,
-    callback: (updatedCourse: ClassesRealtimeUpdate) => void
+    callback: (updatedCourse: ClassesRealtimeUpdate) => void,
+    statusCallback: (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => void
   ): Promise<() => void> {
     return this.subscribe(
       `class:${courseId}:students`,
@@ -917,7 +918,7 @@ export class RealtimeChannelManager {
         }
         callback(raw.data as ClassesRealtimeUpdate);
       },
-      () => {}
+      statusCallback
     );
   }
 
