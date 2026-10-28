@@ -69,17 +69,38 @@ spec:
                     chmod +x /usr/local/bin/mc
                   fi
                   mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
+                  # Newest dump under daily/, falling back to the bucket root
+                  # where chart <= 0.3.27 wrote them (drop the fallback once
+                  # backup.retention.legacyRootDays has emptied the root).
                   # Timestamped names sort lexicographically == chronologically.
-                  LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1)
+                  # The fallback is only for an EMPTY daily/: a FAILED listing
+                  # is fatal, or a denied or flaky daily/ would quietly check
+                  # an old root dump and pass. `|| true` covers only the grep,
+                  # which fails under pipefail when no name matches.
+                  newest() {
+                    local out
+                    out=$(mc ls "s3/${S3_BUCKET}/$1") || return 1
+                    printf '%s\n' "$out" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true
+                  }
+                  DIR=daily/
+                  if ! LATEST=$(newest daily/); then
+                    echo "[verify] FATAL: could not list s3/${S3_BUCKET}/daily/"; exit 1
+                  fi
                   if [ -z "$LATEST" ]; then
-                    echo "[verify] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET} — backups are not landing"
+                    DIR=""
+                    if ! LATEST=$(newest ""); then
+                      echo "[verify] FATAL: could not list s3/${S3_BUCKET}/"; exit 1
+                    fi
+                  fi
+                  if [ -z "$LATEST" ]; then
+                    echo "[verify] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}/daily/ or the bucket root — backups are not landing"
                     exit 1
                   fi
-                  echo "[verify] newest backup: $LATEST"
+                  echo "[verify] newest backup: ${DIR}${LATEST}"
                   # /scratch, not /tmp — this download is the same ~7 GB
                   # as the dump itself, and on the container writable layer it
                   # was pushing nodes into DiskPressure. See backup.yaml.
-                  mc cp "s3/${S3_BUCKET}/${LATEST}" /scratch/latest.dump
+                  mc cp "s3/${S3_BUCKET}/${DIR}${LATEST}" /scratch/latest.dump
                   # TOC must parse and contain a sane number of entries.
                   ENTRIES=$(pg_restore --list /scratch/latest.dump | grep -c '^[0-9]' || true)
                   echo "[verify] pg_restore --list OK: ${ENTRIES} TOC entries, $(stat -c%s /scratch/latest.dump) bytes"

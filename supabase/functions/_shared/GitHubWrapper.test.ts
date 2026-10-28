@@ -33,6 +33,7 @@ const {
   isValidRepoFullName,
   classifyRepoPresence,
   listCollaboratorsOrThrowMissing,
+  MissingInstallationError,
   NonRetryableGitHubError,
   NonRetryableRepoError,
   planPendingInvitation,
@@ -1254,4 +1255,26 @@ Deno.test("resolveTeamIds: an unreadable team throws, so no partial invitation i
     }
   });
   await assertRejects(() => resolveTeamIds(octokit, "rt-org-2", ["b-staff"]));
+});
+
+/**
+ * MissingInstallationError exists so callers can tell "the App is not installed on this org" — a
+ * configuration state identical on every call — apart from a transient failure, and report it once
+ * per org instead of once per request. Reporting it per request was 2990 events for a single org.
+ */
+Deno.test("MissingInstallationError: carries the org and keeps the original message", () => {
+  const e = new MissingInstallationError(
+    "Resolve ref failed: No octokit found for pawtograder/assignment-action",
+    "pawtograder"
+  );
+  assertEquals(e.org, "pawtograder");
+  assertEquals(e.name, "MissingInstallationError");
+  // The message is unchanged from the plain Error it replaces, so anything matching on text still works.
+  assertEquals(e.message, "Resolve ref failed: No octokit found for pawtograder/assignment-action");
+});
+
+Deno.test("MissingInstallationError: is an Error, so existing catch-alls keep handling it", () => {
+  const e = new MissingInstallationError("No octokit found for acme/thing", "acme");
+  assertEquals(e instanceof Error, true);
+  assertEquals(e instanceof MissingInstallationError, true);
 });

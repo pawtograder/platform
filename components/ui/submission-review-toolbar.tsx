@@ -29,7 +29,7 @@ import {
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsStudent } from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembersLoadState } from "@/hooks/useCourseController";
 import {
   useAllCommentsForReview,
@@ -47,7 +47,7 @@ import {
   useSetActiveSubmissionReviewId,
   useSetIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
-import { useNextIncompleteReviewUrl } from "@/hooks/useNextIncompleteReview";
+import { useSubmissionNavigation } from "@/hooks/useNextIncompleteReview";
 import {
   computeRubricGradingCompletion,
   gradeTargetsForSubmission,
@@ -229,6 +229,63 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
 }
 
 /**
+ * What happens after a review is saved as complete. Graders get both "Complete" (stay here) and
+ * "Complete and go to next": one grading a whole submission at a time, or wanting to look back over
+ * what they just finished, must not be pushed off the page. Students (who complete self-reviews with
+ * these same buttons) only ever stay.
+ */
+function useAfterCompletion(completingSubmissionReviewId?: number) {
+  const router = useRouter();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const { nextUrl, isReviewMode } = useSubmissionNavigation({ completingSubmissionReviewId });
+  const canGoToNext = isGraderOrInstructor && Boolean(nextUrl);
+  const afterCompletion = useCallback(
+    (goToNext: boolean) => {
+      if (!isGraderOrInstructor) return;
+      if (nextUrl) {
+        if (goToNext) router.push(nextUrl);
+      } else if (isReviewMode) {
+        toaster.success({
+          title: "All of your assigned reviews are complete",
+          description: "There are no more incomplete reviews assigned to you on this assignment."
+        });
+      }
+    },
+    [isGraderOrInstructor, isReviewMode, nextUrl, router]
+  );
+  return { canGoToNext, afterCompletion };
+}
+
+/** "Complete" and, when there is somewhere to go, "Complete and go to next" side by side. */
+function CompleteButtons({
+  canGoToNext,
+  isLoading,
+  onComplete
+}: {
+  canGoToNext: boolean;
+  isLoading: boolean;
+  onComplete: (goToNext: boolean) => void;
+}) {
+  return (
+    <HStack gap={2} w="100%" flexWrap="wrap">
+      <Button
+        variant={canGoToNext ? "outline" : "solid"}
+        colorPalette="green"
+        loading={isLoading}
+        onClick={() => onComplete(false)}
+      >
+        Complete
+      </Button>
+      {canGoToNext && (
+        <Button variant="solid" colorPalette="green" loading={isLoading} onClick={() => onComplete(true)}>
+          Complete and go to next
+        </Button>
+      )}
+    </HStack>
+  );
+}
+
+/**
  * Dialog content for completing a review assignment.
  */
 function CompleteReviewAssignmentDialog({
@@ -237,11 +294,17 @@ function CompleteReviewAssignmentDialog({
   missing_required_criteria,
   isReleased,
   isLoading,
-  setIsLoading
+  setIsLoading,
+  canGoToNext,
+  onCompleted
 }: {
   reviewAssignment: {
     id: number;
   };
+  /** Offer "Complete and go to next" alongside "Complete". */
+  canGoToNext: boolean;
+  /** Runs after the review assignment is saved as complete, with the button the grader chose. */
+  onCompleted?: (goToNext: boolean) => void;
   missing_required_checks: {
     id: number;
     name: string;
@@ -313,11 +376,10 @@ function CompleteReviewAssignmentDialog({
             </Text>
           )}
           {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
-            <Button
-              variant="solid"
-              colorPalette="green"
-              loading={isLoading}
-              onClick={async () => {
+            <CompleteButtons
+              canGoToNext={canGoToNext}
+              isLoading={isLoading}
+              onComplete={async (goToNext) => {
                 try {
                   setIsLoading(true);
                   if (isReleased) {
@@ -336,6 +398,7 @@ function CompleteReviewAssignmentDialog({
                     title: "Review assignment marked as complete",
                     description: "Your review assignment has been marked as complete."
                   });
+                  onCompleted?.(goToNext);
                 } catch (error) {
                   console.error("Error marking review assignment as complete", error);
                   // Extract error message from Supabase error
@@ -351,9 +414,7 @@ function CompleteReviewAssignmentDialog({
                   setIsLoading(false);
                 }
               }}
-            >
-              Mark Review Assignment as Complete
-            </Button>
+            />
           )}
         </VStack>
       </Popover.Body>
@@ -373,6 +434,7 @@ export function CompleteReviewAssignmentButton() {
     useMissingRubricChecksForReviewAssignment(activeReviewAssignmentId);
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
+  const { canGoToNext, afterCompletion } = useAfterCompletion();
 
   // gradeTargetsBlocked added for the same reason as CompleteReviewButton: the missing_* checks
   // below are always arrays and so never gated anything.
@@ -416,6 +478,8 @@ export function CompleteReviewAssignmentButton() {
           isReleased={Boolean(activeSubmissionReview?.released)}
           isLoading={isLoading}
           setIsLoading={setIsLoading}
+          canGoToNext={canGoToNext}
+          onCompleted={afterCompletion}
         />
       </Popover.Positioner>
     </Popover.Root>
@@ -440,11 +504,10 @@ export function CompleteReviewButton() {
   } = useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
-  const router = useRouter();
-  const nextIncompleteUrl = useNextIncompleteReviewUrl();
+  const { canGoToNext, afterCompletion } = useAfterCompletion(activeSubmissionReview?.id);
 
   const markComplete = useCallback(
-    async (advanceAfter: boolean) => {
+    async (goToNext: boolean) => {
       if (!activeSubmissionReview) {
         toaster.error({
           title: "Error marking review as complete",
@@ -471,9 +534,7 @@ export function CompleteReviewButton() {
           description: "Your review has been marked as complete."
         });
 
-        if (advanceAfter && nextIncompleteUrl) {
-          router.push(nextIncompleteUrl);
-        }
+        afterCompletion(goToNext);
       } catch (error) {
         console.error("Error marking review as complete", error);
         toaster.error({
@@ -484,7 +545,7 @@ export function CompleteReviewButton() {
         setIsLoading(false);
       }
     },
-    [activeSubmissionReview, nextIncompleteUrl, private_profile_id, router, submissionController.submission_reviews]
+    [activeSubmissionReview, afterCompletion, private_profile_id, submissionController.submission_reviews]
   );
 
   // The old guard tested the truthiness of `missing_*`, which are always arrays from a useMemo, so
@@ -584,31 +645,16 @@ export function CompleteReviewButton() {
               )}
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
                 <Text>
-                  All checks have been applied. Use Complete + Next to save and open the next pending review when one is
-                  available.
+                  All required checks have been applied.
+                  {canGoToNext ? " Complete and go to next opens your next review on this tab." : ""}
                 </Text>
               )}
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
-                <HStack gap={2} w="100%" flexWrap="wrap">
-                  <Button
-                    variant="solid"
-                    colorPalette="green"
-                    loading={isLoading}
-                    onClick={() => void markComplete(false)}
-                  >
-                    Complete
-                  </Button>
-                  {nextIncompleteUrl && (
-                    <Button
-                      variant="solid"
-                      colorPalette="green"
-                      loading={isLoading}
-                      onClick={() => void markComplete(true)}
-                    >
-                      Complete + Next
-                    </Button>
-                  )}
-                </HStack>
+                <CompleteButtons
+                  canGoToNext={canGoToNext}
+                  isLoading={isLoading}
+                  onComplete={(goToNext) => void markComplete(goToNext)}
+                />
               )}
             </VStack>
           </Popover.Body>

@@ -24,6 +24,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { FaPlus } from "react-icons/fa";
 import * as YAML from "yaml";
+import { configureMonacoWorkers } from "@/lib/monacoWorkers";
 
 // Supabase types
 type FlashcardDeckInsert = Database["public"]["Tables"]["flashcard_decks"]["Insert"];
@@ -131,18 +132,7 @@ export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDe
 
   // Handle Monaco Editor setup
   const handleEditorWillMount = useCallback((monaco: Monaco) => {
-    window.MonacoEnvironment = {
-      getWorker(_moduleId, label) {
-        switch (label) {
-          case "editorWorkerService":
-            return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
-          case "yaml":
-            return new Worker(new URL("monaco-yaml/yaml.worker", import.meta.url));
-          default:
-            throw new Error(`Unknown label ${label}`);
-        }
-      }
-    };
+    configureMonacoWorkers();
 
     configureMonacoYaml(monaco, {
       enableSchemaRequest: false,

@@ -16,8 +16,10 @@ import {
   validateOIDCTokenOrAllowE2E,
   END_TO_END_REPO_PREFIX,
   SecondaryRateLimitError,
-  PrimaryRateLimitError
+  PrimaryRateLimitError,
+  MissingInstallationError
 } from "../_shared/GitHubWrapper.ts";
+import { createRedis, type RedisClient } from "../_shared/Redis.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
@@ -33,6 +35,54 @@ import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
 
 const RESET_WINDOW_MS = 60_000;
+
+/**
+ * How long one "the GitHub App is not installed on <org>" report suppresses the next for that org.
+ *
+ * A day. The condition is a configuration state, not an incident: it is identical on every
+ * submission until somebody installs the App, so one report per org per day says everything a
+ * hundred would, and the issue stays visible (and re-raises daily) until it is actually fixed.
+ */
+const MISSING_INSTALLATION_REPORT_TTL_MS = 24 * 60 * 60 * 1000;
+
+let missingInstallationRedis: RedisClient | null | undefined;
+
+/**
+ * Claim the right to report this org's missing installation, once per
+ * {@link MISSING_INSTALLATION_REPORT_TTL_MS}.
+ *
+ * Redis, NOT module-level state. prod runs the edge runtime with `policy: per_request`
+ * (values-prod.yaml), so every submission gets a fresh isolate and anything module-scoped is empty
+ * on arrival — a `Set` here would suppress nothing and the per-submission flood this exists to stop
+ * would continue unchanged. charts/pawtograder/values.yaml spells this out next to the policy knob:
+ * isolate-local state cannot be used for cross-request coordination, use a Redis lease. Same
+ * `set(..., { px, nx: true })` primitive workerRun.ts uses for its poll-loop lease.
+ *
+ * Returns false when Redis is unreachable or unconfigured, i.e. fail CLOSED: a missing installation
+ * is non-fatal and permanent, so dropping the report costs a log line we also emit, whereas failing
+ * open restores a 2990-event flood precisely when Redis — and therefore everything else — is
+ * already unhappy.
+ */
+async function claimMissingInstallationReport(org: string): Promise<boolean> {
+  if (missingInstallationRedis === undefined) {
+    missingInstallationRedis = createRedis();
+  }
+  const redis = missingInstallationRedis;
+  if (!redis) return false;
+
+  try {
+    const claimed = await redis.set(`pawtograder:missing-installation-reported:${org}`, "1", {
+      px: MISSING_INSTALLATION_REPORT_TTL_MS,
+      nx: true
+    });
+    return !!claimed;
+  } catch (e) {
+    // Never let the bookkeeping break grading: this runs inside the catch of a failure that is
+    // already non-fatal.
+    console.warn(`[autograder-submit-feedback] could not claim missing-installation report for ${org}:`, e);
+    return false;
+  }
+}
 
 function detectRateLimitType(error: unknown): {
   type: "secondary" | "primary" | "extreme" | null;
@@ -663,6 +713,35 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
             Sentry.captureException(e, errorScope);
           });
           console.warn(`GitHub rate limit (${rt.type}) hit during resolveRef for action SHA`);
+        } else if (e instanceof MissingInstallationError) {
+          // The App is not installed on the org that owns the action repository. Grading is not
+          // blocked — action_sha stays undefined and the flow below continues — and the outcome is
+          // identical on every submission until somebody installs it, so reporting per submission
+          // produced 2990 events for one org and told us nothing the first event had not.
+          //
+          // Report once per org per day instead, claimed through Redis. NOT module-level state:
+          // prod runs `policy: per_request`, so every submission is a fresh isolate and an
+          // in-process guard would suppress nothing at all. See claimMissingInstallationReport.
+          if (await claimMissingInstallationReport(e.org)) {
+            Sentry.withScope((errorScope) => {
+              errorScope.setFingerprint(["github-app-not-installed", e.org]);
+              errorScope.setTag("github_org", e.org);
+              errorScope.setTag("github_api_method", "resolveRef");
+              errorScope.setLevel("warning");
+              errorScope.setContext("missing_installation", {
+                org: e.org,
+                action_repository: requestBody.action_repository,
+                action_ref: requestBody.action_ref,
+                impact: "action_sha is not recorded on grader results for this org; grading still runs",
+                remedy: `Install the Pawtograder GitHub App on the "${e.org}" organization`
+              });
+              Sentry.captureException(e, errorScope);
+            });
+          }
+          console.warn(
+            `[autograder-submit-feedback] GitHub App is not installed on "${e.org}" — ` +
+              `cannot resolve ${requestBody.action_repository}@${requestBody.action_ref}, continuing without action_sha`
+          );
         } else {
           Sentry.captureException(e, scope);
         }
