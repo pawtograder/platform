@@ -127,6 +127,21 @@ ALTER TABLE public.user_roles
 
 CREATE INDEX idx_user_roles_class_role_id ON public.user_roles (class_role_id);
 
+-- Placeholder default, so generated types make class_role_id optional on INSERT: the trigger
+-- below always replaces it, and NOT NULL is checked after BEFORE triggers run. plpgsql so the
+-- planner can't fold it into a NULL constant, which Postgres would not store as a default.
+CREATE OR REPLACE FUNCTION public.user_roles_class_role_id_placeholder()
+RETURNS bigint
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN NULL;
+END;
+$$;
+
+ALTER TABLE public.user_roles
+  ALTER COLUMN class_role_id SET DEFAULT public.user_roles_class_role_id_placeholder();
+
 -- Fill class_role_id from the class's default role. On UPDATE, a user still on the default
 -- role for their old app_role follows the new app_role; a custom role is kept.
 CREATE OR REPLACE FUNCTION public.user_roles_set_default_class_role()
