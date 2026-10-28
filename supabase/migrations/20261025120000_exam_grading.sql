@@ -599,6 +599,37 @@ grant execute on function public.exam_upsert_questions_and_regions(bigint, jsonb
 -- Scaffold / link rubric_parts -> rubric_criteria -> rubric_checks from the exam's
 -- 3-level question tree, writing the back-reference {exam_question_id} into each
 -- component's data jsonb. Idempotent (matches on data->>'exam_question_id').
+-- Data for a generated exam check: the link back to its question, plus partial-credit options from
+-- the question's points down to 0. Whole points up to 20; larger questions step so there are about
+-- 20 options. A question under 1 point gets no options, since a check can't have just one.
+create or replace function public.exam_generated_check_data(p_question_id bigint, p_points numeric)
+returns jsonb
+language sql
+immutable
+set search_path = ''
+as $$
+  select case
+    when p_points is null or p_points < 1 then jsonb_build_object('exam_question_id', p_question_id)
+    else jsonb_build_object(
+      'exam_question_id', p_question_id,
+      'options', (
+        select jsonb_agg(
+                 jsonb_build_object(
+                   'label', case when pts = p_points then 'Full credit' when pts = 0 then 'No credit' else 'Partial credit' end,
+                   'points', pts)
+                 order by pts desc)
+        from (
+          select p_points - s.i * ceil(p_points / 20.0) as pts
+            from generate_series(0, floor(p_points / ceil(p_points / 20.0))::int) as s(i)
+          union
+          select 0
+        ) steps
+      )
+    )
+  end;
+$$;
+revoke all on function public.exam_generated_check_data(bigint, numeric) from public;
+
 create or replace function public.exam_sync_rubric_from_questions(
   p_exam_id bigint,
   p_rubric_id bigint
@@ -675,6 +706,15 @@ begin
         and q.id = (c.data->>'exam_question_id')::bigint
         and q.exam_id = p_exam_id
         and c.points is distinct from coalesce(q.points, 0);
+    -- Same for the partial-credit options, so they never go past the question's points.
+    update public.rubric_checks c
+      set data = public.exam_generated_check_data(q.id, q.points)
+      from public.exam_questions q
+      where c.rubric_id = p_rubric_id
+        and c.data ? 'exam_question_id'
+        and q.id = (c.data->>'exam_question_id')::bigint
+        and q.exam_id = p_exam_id
+        and c.data is distinct from public.exam_generated_check_data(q.id, q.points);
   end if;
 
   -- Drop generated LEAF rows for questions that have since GAINED children. The leaf branches
@@ -814,7 +854,7 @@ begin
         insert into public.rubric_checks
           (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, data)
         values (v_class_id, v_assignment_id, p_rubric_id, v_crit_id, coalesce(r1.label, 'Check'), r1.prompt, r1.ordinal,
-                coalesce(r1.points, 0), false, false, jsonb_build_object('exam_question_id', r1.id));
+                coalesce(r1.points, 0), false, false, public.exam_generated_check_data(r1.id, r1.points));
       end if;
       select count(*), coalesce(sum(points), 0)
         into v_check_count, v_check_points
@@ -859,7 +899,7 @@ begin
           insert into public.rubric_checks
             (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, data)
           values (v_class_id, v_assignment_id, p_rubric_id, v_crit_id, coalesce(r2.label, 'Check'), r2.prompt, r2.ordinal,
-                  coalesce(r2.points, 0), false, false, jsonb_build_object('exam_question_id', r2.id));
+                  coalesce(r2.points, 0), false, false, public.exam_generated_check_data(r2.id, r2.points));
         end if;
       end if;
 
@@ -874,7 +914,7 @@ begin
           insert into public.rubric_checks
             (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, data)
           values (v_class_id, v_assignment_id, p_rubric_id, v_crit_id, coalesce(r3.label,'Check'), r3.prompt, r3.ordinal,
-                  coalesce(r3.points, 0), false, false, jsonb_build_object('exam_question_id', r3.id));
+                  coalesce(r3.points, 0), false, false, public.exam_generated_check_data(r3.id, r3.points));
         end if;
       end loop;
 
