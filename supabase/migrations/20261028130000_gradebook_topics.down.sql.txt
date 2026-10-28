@@ -1,0 +1,29 @@
+-- Down path for 20261028130000_gradebook_topics.sql. Not applied by the Supabase CLI; run by
+-- hand with psql --single-transaction. Run it before the column-groups down path.
+--
+-- Standing columns are ordinary computed columns and stay, with whatever expression they have:
+-- a generated standing keeps its last generated expression and becomes the instructor's own.
+
+DROP TRIGGER IF EXISTS gradebook_columns_regenerate_topic_standing ON public.gradebook_columns;
+DROP TRIGGER IF EXISTS gradebook_topics_clear_attempts ON public.gradebook_topics;
+DROP TRIGGER IF EXISTS broadcast_gradebook_topics_unified ON public.gradebook_topics;
+
+DROP FUNCTION IF EXISTS public.gradebook_topics_apply_suggestion(bigint, jsonb);
+DROP FUNCTION IF EXISTS public.gradebook_topics_suggest(bigint);
+DROP FUNCTION IF EXISTS public.gradebook_common_prefix_length(text, text);
+DROP FUNCTION IF EXISTS public.gradebook_topic_set_standing(bigint, bigint, text);
+DROP FUNCTION IF EXISTS public.gradebook_columns_set_topic(bigint, bigint, integer);
+DROP FUNCTION IF EXISTS public.gradebook_topic_create(bigint, text);
+DROP FUNCTION IF EXISTS public.gradebook_columns_regenerate_topic_standing();
+DROP FUNCTION IF EXISTS public.gradebook_topic_regenerate_standing(bigint);
+DROP FUNCTION IF EXISTS public.gradebook_topic_standing_expression(bigint);
+DROP FUNCTION IF EXISTS public.gradebook_topics_clear_attempts();
+
+-- The topics table's policy reads gradebook_columns.topic_id, so the table goes first.
+ALTER TABLE public.gradebook_columns DROP CONSTRAINT IF EXISTS gradebook_columns_topic_fkey;
+ALTER TABLE public.gradebook_columns DROP CONSTRAINT IF EXISTS gradebook_columns_topic_attempt_key;
+ALTER TABLE public.gradebook_columns DROP CONSTRAINT IF EXISTS gradebook_columns_topic_attempt_check;
+DROP TABLE IF EXISTS public.gradebook_topics;
+ALTER TABLE public.gradebook_columns DROP COLUMN IF EXISTS attempt_number;
+ALTER TABLE public.gradebook_columns DROP COLUMN IF EXISTS topic_id;
+ALTER TABLE public.gradebook_columns DROP CONSTRAINT IF EXISTS gradebook_columns_id_gradebook_id_key;
