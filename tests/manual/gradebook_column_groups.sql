@@ -15,6 +15,11 @@
 BEGIN;
 
 \echo '=== down path, then up again (also re-runs the feature-flag backfill on existing classes) ==='
+-- Topics build on groups, so their down path runs first when they are applied.
+SELECT to_regclass('public.gradebook_topics') IS NOT NULL AS has_topics \gset
+\if :has_topics
+\i supabase/migrations/20261028130000_gradebook_topics.down.sql.txt
+\endif
 \i supabase/migrations/20261028120000_gradebook_column_groups.down.sql.txt
 DO $$ BEGIN
   IF to_regclass('public.gradebook_column_groups') IS NOT NULL THEN RAISE EXCEPTION 'down left the table'; END IF;
@@ -29,6 +34,22 @@ SELECT c.id AS class_id, c.gradebook_id,
   (SELECT user_id FROM user_roles WHERE class_id = c.id AND role = 'student' ORDER BY id LIMIT 1) AS student
 FROM classes c WHERE c.name LIKE 'CS 4535%' ORDER BY c.id DESC LIMIT 1;
 GRANT SELECT ON t TO authenticated;
+
+-- Pin the seeded layout this file expects, whatever earlier use did to it: sort_order 0..n-1 in
+-- display order, with the hole the seed leaves where quiz-3 was deleted (after quiz-2).
+DO $$
+DECLARE v_gb bigint := (SELECT gradebook_id FROM t);
+BEGIN
+  PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gb, 'true', true);
+  WITH o AS (
+    SELECT id, slug, (row_number() OVER (ORDER BY sort_order NULLS LAST, id) - 1)::integer AS rn
+    FROM gradebook_columns WHERE gradebook_id = v_gb
+  )
+  UPDATE gradebook_columns gc
+  SET sort_order = o.rn + CASE WHEN o.rn > (SELECT rn FROM o WHERE slug = 'quiz-2') THEN 1 ELSE 0 END
+  FROM o WHERE gc.id = o.id;
+  PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gb, 'false', true);
+END $$;
 
 -- A second class with its own gradebook and columns, for the cross-course checks.
 CREATE TEMP TABLE t_other AS SELECT NULL::bigint AS class_id, NULL::bigint AS gradebook_id, NULL::bigint AS col_a, NULL::bigint AS col_b;
