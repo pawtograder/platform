@@ -53,7 +53,24 @@ export function parseGeminiKeyStatus(data: unknown): GeminiKeyStatus | null {
   return { setup_enabled: d.setup_enabled, configured: d.configured };
 }
 
-export function successText(outcome: unknown): string {
+export type GeminiKeyOutcome = "saved" | "replaced" | "removed" | "already_absent";
+
+const OUTCOMES_BY_KIND: Record<"save" | "remove", readonly GeminiKeyOutcome[]> = {
+  save: ["saved", "replaced"],
+  remove: ["removed", "already_absent"]
+};
+
+/**
+ * Returns the mutation's outcome only when it is one the requested operation can produce. Anything
+ * else (missing body, unknown or mismatched outcome) returns null: the client can't tell what happened.
+ */
+export function parseGeminiKeyOutcome(kind: "save" | "remove", data: unknown): GeminiKeyOutcome | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const outcome = (data as Record<string, unknown>).outcome;
+  return OUTCOMES_BY_KIND[kind].find((o) => o === outcome) ?? null;
+}
+
+export function successText(outcome: GeminiKeyOutcome): string {
   switch (outcome) {
     case "saved":
       return "Key saved. It has not been checked with Google, and saving it does not turn on AI grading.";
@@ -63,8 +80,6 @@ export function successText(outcome: unknown): string {
       return "Key removed from Pawtograder. This does not revoke the key at Google.";
     case "already_absent":
       return "No key was stored, so there was nothing to remove.";
-    default:
-      return "Done.";
   }
 }
 

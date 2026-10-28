@@ -194,6 +194,34 @@ test.describe("Course Settings: Gemini API key (#1126)", () => {
     await expectStatus(page, "Enabled", "Not configured");
   });
 
+  test("a committed save with an unrecognized response body is not shown as a success", async ({ page }) => {
+    await setCourseFeature(course.id, GEMINI_KEY_FEATURE, true);
+    await loginAsUser(page, instructor, course);
+    await openKeyPage(page, course.id);
+
+    let committedStatus = -1;
+    await page.route(SET_RPC, async (route: Route) => {
+      // Let the request commit, then hand the browser a 2xx body the client doesn't recognize. The
+      // real body is not read or forwarded.
+      const response = await route.fetch();
+      committedStatus = response.status();
+      await route.fulfill({ status: 200, json: { outcome: "unexpected" } });
+    });
+    const s1 = syntheticKey();
+    await page.getByTestId("gemini-key-input").fill(s1);
+    await page.getByTestId("gemini-key-save").click();
+
+    await expect(page.getByTestId("gemini-key-notice")).toContainText(
+      "couldn't confirm whether the change was applied"
+    );
+    expect(committedStatus, "backend answered 200 (committed)").toBe(200);
+    expect(await storedKeyEquals(course.id, s1), "the save did commit").toBe(true);
+    await expect(page.getByTestId("gemini-key-notice")).not.toContainText("Key saved");
+    await expect(page.getByTestId("gemini-key-notice")).not.toContainText("Done.");
+    await expectStatus(page, "Enabled", "Configured (not validated)");
+    await expectInputCleared(page);
+  });
+
   test("backend rejections show fixed messages and keep the stored key", async ({ page }) => {
     await setCourseFeature(course.id, GEMINI_KEY_FEATURE, true);
     await loginAsUser(page, instructor, course);

@@ -7,6 +7,7 @@ import {
   classifyGeminiKeyError,
   GEMINI_KEY_FAILURE_TEXT,
   isBlankGeminiKey,
+  parseGeminiKeyOutcome,
   parseGeminiKeyStatus,
   successText
 } from "@/lib/courseGeminiKey";
@@ -31,7 +32,7 @@ describe("classifyGeminiKeyError", () => {
   });
 
   it("never claims success or names a key in failure text", () => {
-    const successes = ["saved", "replaced", "removed", "already_absent"].map(successText);
+    const successes = (["saved", "replaced", "removed", "already_absent"] as const).map(successText);
     for (const text of Object.values(GEMINI_KEY_FAILURE_TEXT)) {
       expect(successes).not.toContain(text);
       expect(text).not.toMatch(/^Key (saved|replaced|removed)/);
@@ -49,6 +50,39 @@ describe("parseGeminiKeyStatus", () => {
     expect(parseGeminiKeyStatus({ setup_enabled: "true", configured: false })).toBeNull();
     expect(parseGeminiKeyStatus(null)).toBeNull();
     expect(parseGeminiKeyStatus({ configured: true })).toBeNull();
+  });
+});
+
+describe("parseGeminiKeyOutcome", () => {
+  it.each([
+    ["save", "saved"],
+    ["save", "replaced"],
+    ["remove", "removed"],
+    ["remove", "already_absent"]
+  ] as const)("accepts %s → %s", (kind, outcome) => {
+    expect(parseGeminiKeyOutcome(kind, { setup_enabled: true, configured: true, outcome })).toBe(outcome);
+  });
+
+  it("rejects an outcome the operation can't produce", () => {
+    expect(parseGeminiKeyOutcome("save", { outcome: "removed" })).toBeNull();
+    expect(parseGeminiKeyOutcome("save", { outcome: "already_absent" })).toBeNull();
+    expect(parseGeminiKeyOutcome("remove", { outcome: "saved" })).toBeNull();
+    expect(parseGeminiKeyOutcome("remove", { outcome: "replaced" })).toBeNull();
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a bare string", "saved"],
+    ["an array", [{ outcome: "saved" }]],
+    ["an empty object", {}],
+    ["a null outcome", { outcome: null }],
+    ["a numeric outcome", { outcome: 1 }],
+    ["a differently cased outcome", { outcome: "Saved" }],
+    ["an unknown outcome", { outcome: "done" }]
+  ])("treats %s as unrecognized", (_label, data) => {
+    expect(parseGeminiKeyOutcome("save", data)).toBeNull();
+    expect(parseGeminiKeyOutcome("remove", data)).toBeNull();
   });
 });
 

@@ -10,6 +10,7 @@ import {
   classifyGeminiKeyError,
   GEMINI_KEY_FAILURE_TEXT,
   isBlankGeminiKey,
+  parseGeminiKeyOutcome,
   parseGeminiKeyStatus,
   successText,
   type GeminiKeyStatus
@@ -112,8 +113,13 @@ function GeminiKeyPanel({ courseId }: { courseId: number }) {
           await finish({ tone: failure === "unknown" ? "warning" : "error", text: GEMINI_KEY_FAILURE_TEXT[failure] });
           return;
         }
-        const outcome = (res.data as { outcome?: unknown } | null)?.outcome;
-        await finish({ tone: "success", text: successText(outcome) });
+        // A success response the client can't interpret is not shown as success.
+        const outcome = parseGeminiKeyOutcome(kind, res.data);
+        await finish(
+          outcome
+            ? { tone: "success", text: successText(outcome) }
+            : { tone: "warning", text: GEMINI_KEY_FAILURE_TEXT.unknown }
+        );
       } catch {
         // A throw means no usable response: the outcome is unknown.
         await finish({ tone: "warning", text: GEMINI_KEY_FAILURE_TEXT.unknown });
