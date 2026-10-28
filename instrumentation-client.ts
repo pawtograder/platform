@@ -40,7 +40,12 @@ Sentry.init({
     process.env.VERCEL_GIT_COMMIT_SHA ??
     process.env.NEXT_PUBLIC_GIT_COMMIT_SHA ??
     process.env.npm_package_version,
-  environment: process.env.SENTRY_ENVIRONMENT ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV,
+  // Only NEXT_PUBLIC_* reaches the browser bundle; SENTRY_ENVIRONMENT is kept for local builds that set it.
+  environment:
+    process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT ||
+    process.env.SENTRY_ENVIRONMENT ||
+    process.env.VERCEL_ENV ||
+    process.env.NODE_ENV,
   integrations: [], // bugsink does not support any integrations
   tracesSampleRate: 0,
   sendClientReports: false,
