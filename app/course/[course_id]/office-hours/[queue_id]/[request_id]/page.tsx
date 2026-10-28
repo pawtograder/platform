@@ -92,15 +92,21 @@ export default function RequestDetailPage() {
   );
   const hiddenFromMasquerade = isMasking && rawRequest != null && !filterHelpRequest(rawRequest, memberProfileIds);
 
+  // queueRequests drops resolved and closed requests, and userRequests needs this user's
+  // help_request_students row, so a resolved or closed request can match neither and the page
+  // would spin forever (#1080). Fall back to the cached row, unless view-as hides it from this
+  // student.
+  const shownRequest = request ?? (hiddenFromMasquerade ? undefined : (rawRequest ?? undefined));
+
   // Calculate position in queue for active requests
   const position = useMemo(() => {
-    if (!request || (request.status !== "open" && request.status !== "in_progress")) {
+    if (!shownRequest || (shownRequest.status !== "open" && shownRequest.status !== "in_progress")) {
       return 0;
     }
-    return queueRequests.findIndex((r) => r.id === request.id) + 1;
-  }, [request, queueRequests]);
+    return queueRequests.findIndex((r) => r.id === shownRequest.id) + 1;
+  }, [shownRequest, queueRequests]);
 
-  if (!request) {
+  if (!shownRequest) {
     if (hiddenFromMasquerade) {
       return (
         <Flex justify="center" align="center" py={12}>
@@ -142,7 +148,7 @@ export default function RequestDetailPage() {
         />
       </Box>
       <Box flex={{ lg: 8 }} minW={0}>
-        <CurrentRequest request={request} position={position} />
+        <CurrentRequest request={shownRequest} position={position} />
       </Box>
     </Flex>
   );

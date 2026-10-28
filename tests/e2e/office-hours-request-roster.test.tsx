@@ -5,6 +5,7 @@ import {
   createClass,
   createUsersInClass,
   insertHelpQueueAssignment,
+  insertHelpRequest,
   loginAsUser,
   supabase,
   TestingUser
@@ -113,5 +114,20 @@ test.describe("Office hours request roster", () => {
     } finally {
       await taContext.close();
     }
+  });
+
+  test("A student who is not on a resolved public request can open it", async ({ page }) => {
+    // The page used to look up the request only in this user's requests and the queue's open
+    // requests, so a resolved request from someone else matched neither and the page spun forever.
+    const { id: requestId } = await insertHelpRequest({
+      class_id: course.id,
+      student_profile_id: student!.private_profile_id,
+      request: "Roster check: already resolved",
+      help_queue_id: queueId,
+      status: "resolved"
+    });
+    await loginAsUser(page, otherStudent!, course);
+    await page.goto(`/course/${course.id}/office-hours/${queueId}/${requestId}`);
+    await expect(page.getByText(HISTORICAL_CHAT_TEXT)).toBeVisible();
   });
 });
