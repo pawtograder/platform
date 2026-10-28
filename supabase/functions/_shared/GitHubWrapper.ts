@@ -1302,8 +1302,9 @@ function trustedJobTokenIssuer(
 
 /**
  * Verifies an Actions job token from GitHub or the configured Forgejo instance. Repository names are
- * only unique within one provider, so callers must also check that `provider` matches the provider
- * of the class that owns `repository`.
+ * only unique within one provider, so a token is rejected unless its provider is in `allowedProviders`.
+ * A caller that allows Forgejo must also check that `provider` matches the provider of the repository
+ * named by `repository`.
  *
  * `aud` must be the provider's default, `<host>/<repository_owner>`. assignment-action calls
  * `core.getIDToken()` without an audience, so existing grade.yml files send exactly that. Requiring it
@@ -1311,13 +1312,19 @@ function trustedJobTokenIssuer(
  * service leaks it. A custom Pawtograder audience would need a new action release and a grade.yml
  * change in every course, so it isn't required.
  */
-export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken & { provider: JobTokenProvider }> {
+export async function validateOIDCToken(
+  token: string,
+  allowedProviders: readonly JobTokenProvider[] = ["github"]
+): Promise<GitHubOIDCToken & { provider: JobTokenProvider }> {
   const decoded = decode(token);
   const { kid } = decoded[0] as { kid: string };
   const iss = (decoded[1] as { iss?: unknown } | null)?.iss;
   const issuer = typeof iss === "string" ? trustedJobTokenIssuer(iss) : undefined;
   if (!issuer) {
     throw new SecurityError(`Untrusted OIDC token issuer: ${String(iss)}`);
+  }
+  if (!allowedProviders.includes(issuer.provider)) {
+    throw new SecurityError(`OIDC token provider not accepted here: ${issuer.provider}`);
   }
   const jwks = await (await fetch(issuer.jwksUrl)).json();
   const publicKey = jwks.keys.find((key: { kid?: string }) => key.kid === kid);
@@ -1378,7 +1385,8 @@ const E2E_ENABLE = Deno.env.get("E2E_ENABLE") === "true";
  * are explicitly set. This prevents accidental use in production.
  */
 export async function validateOIDCTokenOrAllowE2E(
-  token: string
+  token: string,
+  allowedProviders: readonly JobTokenProvider[] = ["github"]
 ): Promise<GitHubOIDCToken & { provider: JobTokenProvider }> {
   const decoded = decode(token);
   const payload = decoded[1] as GitHubOIDCToken;
@@ -1414,7 +1422,7 @@ export async function validateOIDCTokenOrAllowE2E(
     // E2E repos live in the GitHub playground org.
     return { ...payload, provider: "github" };
   }
-  return await validateOIDCToken(token);
+  return await validateOIDCToken(token, allowedProviders);
 }
 
 export async function getRepos(org: string, scope?: Sentry.Scope) {

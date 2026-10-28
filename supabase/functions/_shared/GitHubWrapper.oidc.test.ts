@@ -10,6 +10,8 @@ import { create, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 // GitHubWrapper builds a GitHub App at import time, which needs a non-empty private key.
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
 const { validateOIDCToken } = await import("./GitHubWrapper.ts");
+// Callers accept only GitHub unless they opt in; the Forgejo cases below opt in.
+const validateEither = (token: string) => validateOIDCToken(token, ["github", "forgejo"]);
 
 const GITHUB_JWKS_URL = "https://token.actions.githubusercontent.com/.well-known/jwks";
 const FORGEJO_URL = "https://git.example.edu";
@@ -123,7 +125,7 @@ Deno.test("validateOIDCToken: Forgejo token verifies when FORGEJO_URL is set -> 
   // A trailing slash, as an operator might write it, must not change the issuer we expect.
   await withForgejoUrl(`${FORGEJO_URL}/`, () =>
     withJwks({ [FORGEJO_JWKS_URL]: [key] }, async (fetched) => {
-      const claims = await validateOIDCToken(await sign(key, forgejoClaims));
+      const claims = await validateEither(await sign(key, forgejoClaims));
       assertEquals(claims.provider, "forgejo");
       assertEquals(claims.actor, "pawtograder");
       assertEquals(claims.workflow_ref, forgejoClaims.workflow_ref);
@@ -166,7 +168,7 @@ Deno.test("validateOIDCToken: Forgejo issuer with a kid that isn't in Forgejo's 
   const attacker = await signingKey("attacker-kid");
   await withForgejoUrl(FORGEJO_URL, () =>
     withJwks({ [FORGEJO_JWKS_URL]: [published] }, async () => {
-      await assertRejects(() => sign(attacker, forgejoClaims).then(validateOIDCToken), Error, "No public key found");
+      await assertRejects(() => sign(attacker, forgejoClaims).then(validateEither), Error, "No public key found");
     })
   );
 });
@@ -176,11 +178,7 @@ Deno.test("validateOIDCToken: Forgejo issuer signed by a different key under a p
   const attacker = await signingKey("fj-1");
   await withForgejoUrl(FORGEJO_URL, () =>
     withJwks({ [FORGEJO_JWKS_URL]: [published] }, async () => {
-      await assertRejects(
-        () => sign(attacker, forgejoClaims).then(validateOIDCToken),
-        Error,
-        "signature does not match"
-      );
+      await assertRejects(() => sign(attacker, forgejoClaims).then(validateEither), Error, "signature does not match");
     })
   );
 });
@@ -200,7 +198,7 @@ Deno.test("validateOIDCToken: a token claiming Forgejo's issuer but signed by Gi
   const githubKey = await signingKey("gh-1");
   await withForgejoUrl(FORGEJO_URL, () =>
     withJwks({ [GITHUB_JWKS_URL]: [githubKey], [FORGEJO_JWKS_URL]: [forgejoKey] }, async () => {
-      await assertRejects(() => sign(githubKey, forgejoClaims).then(validateOIDCToken), Error, "No public key found");
+      await assertRejects(() => sign(githubKey, forgejoClaims).then(validateEither), Error, "No public key found");
     })
   );
 });
@@ -256,7 +254,7 @@ Deno.test("validateOIDCToken: Forgejo token with GitHub's audience for the same 
   await withForgejoUrl(FORGEJO_URL, () =>
     withJwks({ [FORGEJO_JWKS_URL]: [key] }, async () => {
       await assertSecurityError(
-        () => sign(key, { ...forgejoClaims, aud: "https://github.com/demo-class" }).then(validateOIDCToken),
+        () => sign(key, { ...forgejoClaims, aud: "https://github.com/demo-class" }).then(validateEither),
         "Unexpected OIDC token audience"
       );
     })
@@ -270,3 +268,19 @@ Deno.test("validateOIDCToken: owner case differences in the audience are accepte
     assertEquals(claims.provider, "github");
   });
 });
+
+Deno.test(
+  "validateOIDCToken: a Forgejo token is rejected by default even with FORGEJO_URL set, before any fetch",
+  async () => {
+    const key = await signingKey("fj-1");
+    await withForgejoUrl(FORGEJO_URL, () =>
+      withJwks({ [FORGEJO_JWKS_URL]: [key] }, async (fetched) => {
+        await assertSecurityError(
+          () => sign(key, forgejoClaims).then(validateOIDCToken),
+          "OIDC token provider not accepted here"
+        );
+        assertEquals(fetched, []);
+      })
+    );
+  }
+);
