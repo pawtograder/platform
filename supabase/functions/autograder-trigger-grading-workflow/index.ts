@@ -127,7 +127,8 @@ export async function handleRequest(
   req: Request,
   scope: Sentry.Scope
 ): Promise<{ message: string; repository_check_run_id: number }> {
-  const { repository, sha, class_id } = (await req.json()) as AutograderTriggerGradingWorkflowRequest;
+  const { repository, sha, class_id, stage_only } = (await req.json()) as AutograderTriggerGradingWorkflowRequest;
+  const stageOnly = stage_only === true;
   if (!repository || typeof repository !== "string" || !repository.includes("/")) {
     throw new SecurityError("Invalid repository");
   }
@@ -146,6 +147,11 @@ export async function handleRequest(
     class_id,
     req.headers.get("Authorization") || ""
   );
+  // A deadline-regrade preview changes what an instructor-only review can
+  // promote, so graders may trigger ordinary grading but not previews.
+  if (stageOnly && enrollment.role !== "instructor") {
+    throw new SecurityError("Only instructors can grade deadline-regrade previews");
+  }
   const { data: repoData, error: repoError } = await supabase
     .from("repositories")
     .select("*")
@@ -181,14 +187,55 @@ export async function handleRequest(
     );
   }
 
-  const checkRun = await upsertManualCheckRun({
-    adminSupabase,
-    repoData,
-    commit,
-    triggeredBy: enrollment.private_profile_id
-  });
+  // Reserve the pending candidate FIRST, before anything is written for this
+  // request: the reservation authorizes the preview (it rejects a stage_only
+  // request with no pending candidate in an open review) and marks the
+  // candidate grading. Reserving before upsertManualCheckRun means a rejected
+  // preview never leaves the sha-wide triggered_by set with no dispatched run
+  // to consume it. The run itself is dispatched on
+  // refs/tags/pawtograder-preview/<sha>, which is how
+  // autograder-create-submission knows to stage it.
+  let reservation: { candidate_id: number; generation: number } | null = null;
+  if (stageOnly) {
+    const { data: reserved, error: reserveError } = await adminSupabase.rpc("regrade_reserve_preview_run", {
+      p_repository_id: repoData.id,
+      p_sha: commit.sha
+    });
+    if (reserveError) {
+      throw new UserVisibleError(`Could not start a regrade preview: ${reserveError.message}`);
+    }
+    reservation = reserved as unknown as { candidate_id: number; generation: number };
+  }
 
-  await triggerWorkflow(repository, commit.sha, "grade.yml", scope);
+  let checkRun: RepositoryCheckRunRow;
+  try {
+    checkRun = await upsertManualCheckRun({
+      adminSupabase,
+      repoData,
+      commit,
+      triggeredBy: enrollment.private_profile_id
+    });
+    await triggerWorkflow(
+      repository,
+      commit.sha,
+      "grade.yml",
+      scope,
+      stageOnly ? "pawtograder-preview" : "pawtograder-submit"
+    );
+  } catch (dispatchError) {
+    // Nothing was dispatched, so put the candidate back to ungraded.
+    // Only this request's reservation: another instructor's may be in flight.
+    if (reservation !== null) {
+      const { error: releaseError } = await adminSupabase.rpc("regrade_release_preview_run", {
+        p_candidate_id: reservation.candidate_id,
+        p_generation: reservation.generation
+      });
+      if (releaseError) {
+        scope?.setTag("preview_release_error", releaseError.message);
+      }
+    }
+    throw dispatchError;
+  }
 
   const triggeredAt = new Date().toISOString();
   const { data: latestCheckRun, error: latestCheckRunError } = await adminSupabase
