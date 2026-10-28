@@ -367,13 +367,16 @@ jobs:
       # deploy.yml after a production build, which is now behind the trust
       # gate and so does not run at all for an untrusted PR. This is the
       # cheap guard that catches the regression before the expensive one.
+      # course-gemini-key pins the client's reading of the #1126 key RPCs and
+      # that the TS flag reader agrees with the database's strict reader.
       - name: Run Jest unit tests
         run: |
           npx jest --runInBand \
             tests/unit/async-worker-tuning.test.ts \
             tests/unit/create-repo-step-timings.test.ts \
             tests/unit/repo-not-ready-plan.test.ts \
-            tests/unit/prom-client-bundle.test.ts
+            tests/unit/prom-client-bundle.test.ts \
+            tests/unit/course-gemini-key.test.ts
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
   # dangerous production values combination (e2e bypasses, plaintext/
