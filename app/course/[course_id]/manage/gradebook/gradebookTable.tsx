@@ -22,6 +22,7 @@ import {
   useGradebookColumnGrades,
   useGradebookColumnGroups,
   useGradebookColumns,
+  useGradebookTopics,
   useGradebookController,
   useGradebookRefetchStatus,
   useIsGradebookDataReady,
@@ -106,8 +107,10 @@ import {
   LuFile,
   LuGripVertical,
   LuGroup,
+  LuLayers,
   LuLayoutGrid,
   LuPencil,
+  LuSparkles,
   LuTrash,
   LuX
 } from "react-icons/lu";
@@ -130,10 +133,20 @@ import {
 } from "./columnGroupControls";
 import { AutoGroupPreviewDialog } from "@/components/gradebook/AutoGroupPreviewDialog";
 import {
+  ColumnTopicDialog,
+  STANDING_RULE_LABEL,
+  SuggestTopicsDialog,
+  TopicHeaderMenu,
+  TopicsContext,
+  useTopicsContext
+} from "./topicControls";
+import {
+  collapsedColumnFor,
   columnUnitKeys,
   databaseLayout,
   isHeaderGroup,
   legacySlugLayout,
+  topicLayout,
   type GroupedColumns
 } from "@/lib/gradebookColumnGroups";
 import { useCourseFeature } from "@/hooks/useCourseFeatures";
@@ -249,6 +262,8 @@ type GradebookGroupedColumnRef = {
   name: GradebookColumn["name"];
   max_score: GradebookColumn["max_score"];
   group_id: GradebookColumn["group_id"];
+  topic_id: GradebookColumn["topic_id"];
+  attempt_number: GradebookColumn["attempt_number"];
 };
 
 /** Build left-to-right "units": each is a block of DB column ids. Collapsed groups = one unit (whole group). */
@@ -271,7 +286,7 @@ function buildVisibleReorderUnits(args: {
       continue;
     }
     if (collapsedGroups.has(key)) {
-      const best = findBestColumnToShow(group.columns);
+      const best = collapsedColumnFor(group, findBestColumnToShow);
       if (colId !== best.id) continue;
       units.push(group.columns.map((c) => c.id));
     } else {
@@ -1751,6 +1766,8 @@ function GradebookColumnHeader({
   const [isMovingLeft, setIsMovingLeft] = useState(false);
   const [isMovingRight, setIsMovingRight] = useState(false);
   const [isChoosingGroup, setIsChoosingGroup] = useState(false);
+  const [isChoosingTopic, setIsChoosingTopic] = useState(false);
+  const { enabled: topicsEnabled } = useTopicsContext();
   const groupAwareMove = useGroupAwareColumnMove(column_id);
   const columnGroupActions = useColumnGroupActions();
   const [isReleasing, setIsReleasing] = useState(false);
@@ -1985,6 +2002,15 @@ function GradebookColumnHeader({
 
   return (
     <VStack gap={0} alignItems="stretch" w="100%" minH="48px" height="100%">
+      {isChoosingTopic && (
+        <ColumnTopicDialog
+          columnId={column_id}
+          columnName={column.name}
+          currentTopicId={column.topic_id}
+          currentAttempt={column.attempt_number}
+          onClose={() => setIsChoosingTopic(false)}
+        />
+      )}
       {isChoosingGroup && (
         <MoveToGroupDialog
           columnId={column_id}
@@ -2075,6 +2101,12 @@ function GradebookColumnHeader({
                 <Icon as={LuPencil} boxSize={3} mr={2} />
                 Edit Column
               </MenuItem>
+              {topicsEnabled && (
+                <MenuItem value="topic" onClick={() => setIsChoosingTopic(true)}>
+                  <Icon as={LuLayers} boxSize={3} mr={2} />
+                  Topic…
+                </MenuItem>
+              )}
               {groupAwareMove.enabled && (
                 <MenuItem value="group" onClick={() => setIsChoosingGroup(true)}>
                   <Icon as={LuGroup} boxSize={3} mr={2} />
@@ -2545,6 +2577,12 @@ export default function GradebookTable() {
   const gradebookColumns = useGradebookColumns();
   const columnGroupsEnabled = useCourseFeature(COURSE_FEATURES.GRADEBOOK_COLUMN_GROUPS, true);
   const columnGroups = useGradebookColumnGroups();
+  const topicsEnabled = useCourseFeature(COURSE_FEATURES.GRADEBOOK_TOPICS, true);
+  const topics = useGradebookTopics();
+  // Topic view (one unit per topic) vs. the group view. Defaults on once the gradebook has topics.
+  const [topicViewPreferred, setTopicViewPreferred] = useState(true);
+  const topicView = topicsEnabled && topics.length > 0 && topicViewPreferred;
+  const [isSuggestTopicsOpen, setIsSuggestTopicsOpen] = useState(false);
   const [gradebookDataEpoch, setGradebookDataEpoch] = useState(0);
   useEffect(() => {
     return gradebookController.table.subscribeToData(() => {
@@ -2648,19 +2686,35 @@ export default function GradebookTable() {
     sort_order: col.sort_order,
     name: col.name,
     max_score: col.max_score,
-    group_id: col.group_id
+    group_id: col.group_id,
+    topic_id: col.topic_id,
+    attempt_number: col.attempt_number
   }));
   columnsForGrouping.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   const cachedColumnsKey = JSON.stringify(columnsForGrouping);
   const cachedGroupsKey = JSON.stringify(columnGroups.map((g) => ({ id: g.id, name: g.name })));
-  // Stored groups when the course has them on; otherwise the legacy slug-prefix heuristic.
-  const groupedColumns = useMemo(() => {
+  const cachedTopicsKey = JSON.stringify(
+    topics.map((t) => ({
+      id: t.id,
+      name: t.name,
+      standing_column_id: t.standing_column_id,
+      standing_rule: t.standing_rule
+    }))
+  );
+  // Stored groups when the course has them on; otherwise the legacy slug-prefix heuristic. This is
+  // the layout that column order and moves are about.
+  const groupLayout = useMemo(() => {
     const columns = JSON.parse(cachedColumnsKey) as GradebookGroupedColumnRef[];
     if (columnGroupsEnabled) {
       return databaseLayout(columns, JSON.parse(cachedGroupsKey) as { id: number; name: string }[]);
     }
     return legacySlugLayout(columns);
   }, [cachedColumnsKey, cachedGroupsKey, columnGroupsEnabled]);
+  // What the table draws: in topic view each topic is one unit; otherwise the group layout.
+  const groupedColumns = useMemo(
+    () => (topicView ? topicLayout(groupLayout, JSON.parse(cachedTopicsKey)) : groupLayout),
+    [topicView, groupLayout, cachedTopicsKey]
+  );
   const unitKeyByColumnId = useMemo(() => columnUnitKeys(groupedColumns), [groupedColumns]);
   /** Keys of groups with more than one column: the ones that can collapse. */
   const collapsibleGroupKeys = useMemo(
@@ -2668,9 +2722,11 @@ export default function GradebookTable() {
     [groupedColumns]
   );
   const columnGroupsContextValue = useMemo(
-    () => ({ enabled: columnGroupsEnabled, groups: columnGroups, groupedColumns }),
-    [columnGroupsEnabled, columnGroups, groupedColumns]
+    () => ({ enabled: columnGroupsEnabled, groups: columnGroups, groupedColumns: groupLayout }),
+    [columnGroupsEnabled, columnGroups, groupLayout]
   );
+  const topicsContextValue = useMemo(() => ({ enabled: topicsEnabled, topics }), [topicsEnabled, topics]);
+  const topicsById = useMemo(() => new Map(topics.map((t) => [t.id, t])), [topics]);
   const columnGroupActions = useColumnGroupActions();
   const [isAutoGroupOpen, setIsAutoGroupOpen] = useState(false);
 
@@ -2977,7 +3033,7 @@ export default function GradebookTable() {
       } else {
         // Header group - handle collapsed state by unit key
         const isCollapsed = collapsedGroups.has(groupKey);
-        const columnsToShow = isCollapsed ? [findBestColumnToShow(group.columns)] : group.columns;
+        const columnsToShow = isCollapsed ? [collapsedColumnFor(group, findBestColumnToShow)] : group.columns;
 
         columnsToShow.forEach((col) => {
           cols.push({
@@ -3085,9 +3141,9 @@ export default function GradebookTable() {
   const fullGradeColumnIdsOrdered = useMemo(
     () =>
       columnGroupsEnabled
-        ? Object.values(groupedColumns).flatMap((g) => g.columns.map((c) => c.id))
+        ? Object.values(groupLayout).flatMap((g) => g.columns.map((c) => c.id))
         : [...gradebookColumns].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).map((c) => c.id),
-    [columnGroupsEnabled, groupedColumns, gradebookColumns]
+    [columnGroupsEnabled, groupLayout, gradebookColumns]
   );
 
   const supabaseForGradebook = useMemo(() => createClient(), []);
@@ -3128,6 +3184,12 @@ export default function GradebookTable() {
       setActiveDragColumnId(null);
       setActiveDropGapIndex(null);
       if (!isInstructor) return;
+      if (topicView) {
+        // Topic units mix columns from different groups, so a drop position here has no single
+        // meaning for column order.
+        toaster.create({ title: "Switch to the group view to reorder columns", type: "info" });
+        return;
+      }
 
       const overId = over?.id;
       if (overId == null || typeof overId !== "string" || !overId.startsWith(GRADEBOOK_GAP_PREFIX)) return;
@@ -3166,7 +3228,7 @@ export default function GradebookTable() {
         setIsReorderingColumns(false);
       }
     },
-    [isInstructor, visibleReorderUnits, fullGradeColumnIdsOrdered, supabaseForGradebook, gradebookController]
+    [isInstructor, topicView, visibleReorderUnits, fullGradeColumnIdsOrdered, supabaseForGradebook, gradebookController]
   );
 
   const dragOverlayColumn = useMemo(() => {
@@ -3319,6 +3381,8 @@ export default function GradebookTable() {
       groupKey: string;
       groupName: string;
       groupId: number | null;
+      topicId: number | null;
+      standingRule: string | null;
       isCollapsed: boolean;
       groupColumnsLen: number;
     };
@@ -3338,7 +3402,7 @@ export default function GradebookTable() {
       const groupColumns = group.columns;
       const isFirstInGroup = groupColumns[0].id === columnId;
       const isCollapsed = collapsedGroups.has(groupKey);
-      const bestCol = findBestColumnToShow(groupColumns);
+      const bestCol = collapsedColumnFor(group, findBestColumnToShow);
       const isVisibleWhenCollapsed = isCollapsed && columnId === bestCol.id;
 
       if (isFirstInGroup || isVisibleWhenCollapsed) {
@@ -3354,6 +3418,8 @@ export default function GradebookTable() {
           groupKey,
           groupName: group.groupName,
           groupId: group.groupId,
+          topicId: group.topicId ?? null,
+          standingRule: group.standingRule ?? null,
           isCollapsed,
           groupColumnsLen: groupColumns.length
         });
@@ -3373,7 +3439,7 @@ export default function GradebookTable() {
         const groupKey = unitKeyByColumnId.get(columnId);
         const group = groupKey ? groupedColumns[groupKey] : undefined;
         if (groupKey && group && isHeaderGroup(group) && collapsedGroups.has(groupKey)) {
-          return columnId === findBestColumnToShow(group.columns).id;
+          return columnId === collapsedColumnFor(group, findBestColumnToShow).id;
         }
       }
       return true;
@@ -3572,6 +3638,7 @@ export default function GradebookTable() {
 
   const gradebookTableBody = (
     <VStack align="stretch" w="100%" gap={0} position="relative">
+      <SuggestTopicsDialog open={isSuggestTopicsOpen} onClose={() => setIsSuggestTopicsOpen(false)} />
       <AutoGroupPreviewDialog
         open={isAutoGroupOpen}
         gradebookId={gradebookController.gradebook_id}
@@ -3702,18 +3769,19 @@ export default function GradebookTable() {
                           backgroundColor: "var(--chakra-colors-bg-subtle)"
                         }}
                       >
-                        {colIdx === 0 && (collapsibleGroupKeys.length > 0 || columnGroupsEnabled) && (
+                        {colIdx === 0 && (collapsibleGroupKeys.length > 0 || topics.length > 0) && (
                           <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
-                            {columnGroupsEnabled && isInstructor && (
-                              <WrappedTooltip content="Auto-group ungrouped columns">
+                            {topicsEnabled && topics.length > 0 && (
+                              <WrappedTooltip content={topicView ? "Show groups" : "Show topics"}>
                                 <IconButton
-                                  variant="ghost"
+                                  variant={topicView ? "subtle" : "ghost"}
                                   size="sm"
-                                  onClick={() => setIsAutoGroupOpen(true)}
+                                  onClick={() => setTopicViewPreferred(!topicView)}
                                   colorPalette="blue"
-                                  aria-label="Auto-group ungrouped columns"
+                                  aria-label={topicView ? "Show groups" : "Show topics"}
+                                  aria-pressed={topicView}
                                 >
-                                  <Icon as={LuGroup} boxSize={3} />
+                                  <Icon as={LuLayers} boxSize={3} />
                                 </IconButton>
                               </WrappedTooltip>
                             )}
@@ -3801,14 +3869,19 @@ export default function GradebookTable() {
                               flexShrink={0}
                             />
                             <Text fontWeight="bold" fontSize="sm" color="fg.muted" truncate minW={0}>
-                              {seg.groupColumnsLen}{" "}
-                              {seg.groupId != null
-                                ? seg.groupName
-                                : pluralize(seg.groupName.charAt(0).toUpperCase() + seg.groupName.slice(1))}
-                              ...
+                              {seg.topicId != null
+                                ? `${seg.groupName}${seg.standingRule ? ` (${STANDING_RULE_LABEL[seg.standingRule] ?? seg.standingRule})` : ""}`
+                                : `${seg.groupColumnsLen} ${
+                                    seg.groupId != null
+                                      ? seg.groupName
+                                      : pluralize(seg.groupName.charAt(0).toUpperCase() + seg.groupName.slice(1))
+                                  }...`}
                             </Text>
                             {seg.groupId != null && isInstructor && (
                               <GroupHeaderMenu groupKey={seg.groupKey} groupId={seg.groupId} name={seg.groupName} />
+                            )}
+                            {seg.topicId != null && isInstructor && topicsById.get(seg.topicId) && (
+                              <TopicHeaderMenu topic={topicsById.get(seg.topicId)!} />
                             )}
                           </HStack>
                         </Box>
@@ -4051,6 +4124,16 @@ export default function GradebookTable() {
                 </PopoverBody>
               </PopoverContent>
             </PopoverRoot>
+            {columnGroupsEnabled && (
+              <Button variant="outline" size="sm" onClick={() => setIsAutoGroupOpen(true)}>
+                <Icon as={LuGroup} mr={2} /> Auto-group Columns
+              </Button>
+            )}
+            {topicsEnabled && (
+              <Button variant="outline" size="sm" onClick={() => setIsSuggestTopicsOpen(true)}>
+                <Icon as={LuSparkles} mr={2} /> Suggest Topics
+              </Button>
+            )}
             <ImportGradebookColumn />
             <AddColumnDialog />
           </HStack>
@@ -4060,6 +4143,8 @@ export default function GradebookTable() {
   );
 
   return (
-    <ColumnGroupsContext.Provider value={columnGroupsContextValue}>{gradebookTableBody}</ColumnGroupsContext.Provider>
+    <ColumnGroupsContext.Provider value={columnGroupsContextValue}>
+      <TopicsContext.Provider value={topicsContextValue}>{gradebookTableBody}</TopicsContext.Provider>
+    </ColumnGroupsContext.Provider>
   );
 }

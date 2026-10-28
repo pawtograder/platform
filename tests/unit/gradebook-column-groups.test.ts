@@ -6,6 +6,8 @@ import {
   legacySlugLayout,
   moveColumnInLayout,
   moveGroupInLayout,
+  collapsedColumnFor,
+  topicLayout,
   type LayoutColumn
 } from "@/lib/gradebookColumnGroups";
 
@@ -170,5 +172,63 @@ describe("moving", () => {
     expect(moveGroupInLayout(grouped, "group:10", 1)).toEqual([1, 4, 2, 3]);
     expect(moveGroupInLayout(grouped, "group:10", -1)).toEqual([2, 3, 1, 4]);
     expect(moveGroupInLayout(grouped, "missing", 1)).toBeNull();
+  });
+});
+
+describe("topicLayout", () => {
+  // Two quiz sessions (groups) covering two topics, CS 2100 style, plus an unrelated homework.
+  const cols: LayoutColumn[] = [
+    { id: 1, sort_order: 0, slug: "s1-git", name: "Attempt 1: Git", group_id: 100, topic_id: 7, attempt_number: 1 },
+    {
+      id: 2,
+      sort_order: 1,
+      slug: "s1-fd",
+      name: "Attempt 1: Functions",
+      group_id: 100,
+      topic_id: 8,
+      attempt_number: 1
+    },
+    {
+      id: 3,
+      sort_order: 2,
+      slug: "s2-fd",
+      name: "Attempt 2: Functions",
+      group_id: 101,
+      topic_id: 8,
+      attempt_number: 2
+    },
+    { id: 4, sort_order: 3, slug: "s2-git", name: "Attempt 2: Git", group_id: 101, topic_id: 7, attempt_number: 2 },
+    { id: 5, sort_order: 4, slug: "topic_git", name: "Git standing" },
+    { id: 6, sort_order: 5, slug: "hw1", name: "HW1" }
+  ];
+  const groups = [
+    { id: 100, name: "Quiz 9/22" },
+    { id: 101, name: "Quiz 10/15" }
+  ];
+  const topics = [
+    { id: 7, name: "Git", standing_column_id: 5, standing_rule: "best" },
+    { id: 8, name: "Functions", standing_column_id: null, standing_rule: null },
+    { id: 9, name: "Empty", standing_column_id: null, standing_rule: null }
+  ];
+
+  it("puts each topic at its standing (or first attempt), standing first, attempts in order", () => {
+    const grouped = topicLayout(databaseLayout(cols, groups), topics);
+    expect(Object.keys(grouped)).toEqual(["topic:8", "topic:7", "col:6"]);
+    expect(grouped["topic:7"].columns.map((c) => c.id)).toEqual([5, 1, 4]);
+    expect(grouped["topic:8"].columns.map((c) => c.id)).toEqual([2, 3]);
+    expect(isHeaderGroup(grouped["topic:7"])).toBe(true);
+  });
+
+  it("keeps the rest of a group when topics take some of its columns", () => {
+    const grouped = topicLayout(databaseLayout(cols, groups), [topics[0]]);
+    expect(grouped["group:100"].columns.map((c) => c.id)).toEqual([2]);
+    expect(grouped["group:101"].columns.map((c) => c.id)).toEqual([3]);
+  });
+
+  it("collapses a topic to its standing, and a group to the fallback", () => {
+    const grouped = topicLayout(databaseLayout(cols, groups), topics);
+    const last = (c: LayoutColumn[]) => c[c.length - 1];
+    expect(collapsedColumnFor(grouped["topic:7"], last).id).toBe(5);
+    expect(collapsedColumnFor(grouped["topic:8"], last).id).toBe(3);
   });
 });

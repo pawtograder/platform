@@ -365,10 +365,14 @@ BEGIN
       v_n := v_n + 1;
       v_slug := 'topic-' || p_topic_id || '-standing-' || v_n;
     END LOOP;
-    INSERT INTO public.gradebook_columns (class_id, gradebook_id, name, slug, max_score, score_expression, dependencies)
+    -- Placed right after the topic's last attempt (the sort-order trigger shifts the rest), then
+    -- compacted so it never lands inside a group.
+    INSERT INTO public.gradebook_columns (class_id, gradebook_id, name, slug, max_score, score_expression, dependencies, sort_order)
     VALUES (v_topic.class_id, v_topic.gradebook_id, v_topic.name || ' (' || p_rule || ')', v_slug,
-            COALESCE(v_max, 100), 'null', '{"gradebook_columns": []}'::jsonb)
+            COALESCE(v_max, 100), 'null', '{"gradebook_columns": []}'::jsonb,
+            (SELECT max(sort_order) + 1 FROM public.gradebook_columns WHERE topic_id = p_topic_id))
     RETURNING id INTO v_standing;
+    PERFORM public.gradebook_columns_compact_groups(v_topic.gradebook_id);
   END IF;
 
   UPDATE public.gradebook_topics

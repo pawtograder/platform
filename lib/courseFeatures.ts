@@ -159,6 +159,18 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: false,
     switchLabel: "Use stored gradebook column groups",
     ariaLabel: "Enable stored gradebook column groups for this course"
+  },
+  {
+    name: COURSE_FEATURES.GRADEBOOK_TOPICS,
+    title: "Gradebook topics",
+    description:
+      "For courses that assess each topic more than once. Mark gradebook columns as attempts at a topic and choose a standing column for each topic; the gradebook can then show one column per topic that expands to its attempts. Suggest topics proposes them from your existing columns and changes nothing until you confirm. Turning this off hides the topic view; your topics are kept.",
+    // Like column groups: new courses start with it on (it changes nothing until topics exist);
+    // courses that existed before have it written as disabled.
+    defaultWhenMissing: true,
+    navAffectsStaff: false,
+    switchLabel: "Use gradebook topics",
+    ariaLabel: "Enable gradebook topics for this course"
   }
 ];
 

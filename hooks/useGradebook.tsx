@@ -10,6 +10,7 @@ import {
   Assignment,
   GradebookColumn,
   GradebookColumnGroup,
+  GradebookTopic,
   GradebookColumnDependencies,
   GradebookColumnStudent
 } from "@/utils/supabase/DatabaseTypes";
@@ -148,6 +149,20 @@ export function useGradebookColumnGroups() {
   }, [gradebookController]);
 
   return groups;
+}
+
+/** Topics for this gradebook, as visible to the current user. */
+export function useGradebookTopics() {
+  const gradebookController = useGradebookController();
+  const [topics, setTopics] = useState<GradebookTopic[]>(() => gradebookController.gradebook_topics.rows);
+
+  useEffect(() => {
+    return gradebookController.gradebook_topics.list((data) => {
+      setTopics(data);
+    }).unsubscribe;
+  }, [gradebookController]);
+
+  return topics;
 }
 
 /**
@@ -1418,10 +1433,12 @@ export class GradebookController {
   readonly gradebook_columns: TableController<"gradebook_columns">;
   /** Stored column groups (read only when the course has the gradebook-column-groups feature). */
   readonly gradebook_column_groups: TableController<"gradebook_column_groups">;
+  /** Topics (read only when the course has the gradebook-topics feature). */
+  readonly gradebook_topics: TableController<"gradebook_topics">;
   readonly table: GradebookCellController;
   readonly assignments_table: TableController<"assignments">;
 
-  readonly readyPromise: Promise<[void, void, void, void, void]>;
+  readonly readyPromise: Promise<[void, void, void, void, void, void]>;
 
   public studentSubmissions: Map<string, Database["public"]["Views"]["active_submissions_for_class"]["Row"][]> =
     new Map();
@@ -1469,11 +1486,24 @@ export class GradebookController {
       query: client.from("gradebook_column_groups").select("*").eq("gradebook_id", gradebook_id),
       classRealTimeController
     });
+    this.gradebook_topics = new TableController({
+      client,
+      table: "gradebook_topics",
+      query: client.from("gradebook_topics").select("*").eq("gradebook_id", gradebook_id),
+      classRealTimeController
+    });
     // A student only receives a group row once one of its columns is visible to them (RLS), and
     // gets an id-only broadcast for it. A column arriving with a group id we don't hold means the
     // group just became visible (or was created): fetch it.
     const { unsubscribe: missingGroupUnsubscribe } = this.gradebook_columns.list((cols) => {
-      this._refetchMissingGroups(cols);
+      this._refetchMissing(
+        this.gradebook_column_groups,
+        cols.map((c) => c.group_id)
+      );
+      this._refetchMissing(
+        this.gradebook_topics,
+        cols.map((c) => c.topic_id)
+      );
     });
     this._unsubscribes.push(missingGroupUnsubscribe);
 
@@ -1502,6 +1532,7 @@ export class GradebookController {
       this.gradebook_row.readyPromise,
       this.gradebook_columns.readyPromise,
       this.gradebook_column_groups.readyPromise,
+      this.gradebook_topics.readyPromise,
       this.table.readyPromise,
       this.assignments_table.readyPromise
     ]);
@@ -1510,25 +1541,31 @@ export class GradebookController {
     this._setupRefetchTracking();
   }
 
-  private _requestedGroupIds = new Set<number>();
+  private _requestedIds = new Map<string, Set<number>>();
 
-  private _refetchMissingGroups(columns: GradebookColumn[]) {
-    if (!this.gradebook_column_groups) return;
-    const known = new Set(this.gradebook_column_groups.rows.map((g) => g.id));
+  /** Fetch rows that columns reference but this controller doesn't hold (a group or topic that just became visible). */
+  private _refetchMissing(
+    controller: TableController<"gradebook_column_groups"> | TableController<"gradebook_topics">,
+    referencedIds: (number | null)[]
+  ) {
+    if (!controller) return;
+    const requested = this._requestedIds.get(controller.table) ?? new Set<number>();
+    this._requestedIds.set(controller.table, requested);
+    const known = new Set(controller.rows.map((r) => r.id));
     const missing = [
-      ...new Set(columns.map((c) => c.group_id).filter((id): id is number => id != null && !known.has(id)))
-    ].filter((id) => !this._requestedGroupIds.has(id));
+      ...new Set(referencedIds.filter((id): id is number => id != null && !known.has(id) && !requested.has(id)))
+    ];
     if (missing.length === 0) return;
-    missing.forEach((id) => this._requestedGroupIds.add(id));
-    void this.gradebook_column_groups.readyPromise
+    missing.forEach((id) => requested.add(id));
+    void controller.readyPromise
       .then(() => {
-        const stillMissing = missing.filter((id) => !this.gradebook_column_groups.rows.some((g) => g.id === id));
-        if (stillMissing.length > 0) return this.gradebook_column_groups.refetchByIds(stillMissing);
+        const stillMissing = missing.filter((id) => !controller.rows.some((r) => r.id === id));
+        if (stillMissing.length > 0) return controller.refetchByIds(stillMissing);
       })
       .catch(() => {
         // Not visible to this user yet; a later column change retries.
       })
-      .finally(() => missing.forEach((id) => this._requestedGroupIds.delete(id)));
+      .finally(() => missing.forEach((id) => requested.delete(id)));
   }
 
   private fullRenderExpressionForColumn(column: GradebookColumn): string {
@@ -1587,6 +1624,7 @@ export class GradebookController {
     this.gradebook_row.close();
     this.gradebook_columns.close();
     this.gradebook_column_groups.close();
+    this.gradebook_topics.close();
     this.table.close();
     this.assignments_table.close();
     this._unsubscribes.forEach((unsubscribe) => unsubscribe());

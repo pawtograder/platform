@@ -19,15 +19,29 @@ export type LayoutColumn = {
   sort_order: number | null;
   name: string;
   group_id?: number | null;
+  topic_id?: number | null;
+  attempt_number?: number | null;
 };
 
 export type LayoutGroup = { id: number; name: string };
 
+export type LayoutTopic = {
+  id: number;
+  name: string;
+  standing_column_id: number | null;
+  standing_rule: string | null;
+};
+
 export type GroupedColumnsEntry<C> = {
   /** Header text. Legacy names are singular and pluralized at render time; stored names render verbatim. */
   groupName: string;
-  /** Stored group id, or null for a legacy run / a plain column. */
+  /** Stored group id, or null for a legacy run / a plain column / a topic. */
   groupId: number | null;
+  /** Set for a topic unit: its columns are the standing (if any) followed by the attempts in order. */
+  topicId?: number;
+  /** The topic's standing column, shown when the unit is collapsed. */
+  standingColumnId?: number | null;
+  standingRule?: string | null;
   columns: C[];
 };
 
@@ -43,9 +57,68 @@ export function compareColumnOrder(a: LayoutColumn, b: LayoutColumn): number {
   return a.id - b.id;
 }
 
-/** True when the unit renders a group header: any stored group (even of one), or a legacy run of two or more. */
+/** True when the unit renders a group header: any stored group or topic (even of one), or a legacy run of two or more. */
 export function isHeaderGroup<C>(entry: GroupedColumnsEntry<C>): boolean {
-  return entry.groupId != null || entry.columns.length > 1;
+  return entry.groupId != null || entry.topicId != null || entry.columns.length > 1;
+}
+
+/**
+ * Topic view: each topic becomes one unit, placed where its standing column sits (or its first
+ * attempt, without a standing), holding the standing and then the attempts in attempt order.
+ * Every other column keeps the unit it has in `base` (the group layout), minus the columns the
+ * topics took. Topics the caller can't see, or with no visible column, are left out.
+ */
+export function topicLayout<C extends LayoutColumn>(
+  base: GroupedColumns<C>,
+  topics: readonly LayoutTopic[]
+): GroupedColumns<C> {
+  const columns = Object.values(base).flatMap((e) => e.columns);
+  const byId = new Map(columns.map((c) => [c.id, c]));
+  const topicUnits = new Map<number, GroupedColumnsEntry<C>>();
+  const anchorOf = new Map<number, number>(); // column id that marks where the topic is drawn
+  for (const topic of topics) {
+    const attempts = columns
+      .filter((c) => c.topic_id === topic.id)
+      .sort((a, b) => (a.attempt_number ?? 0) - (b.attempt_number ?? 0) || a.id - b.id);
+    const standing = topic.standing_column_id != null ? byId.get(topic.standing_column_id) : undefined;
+    const members = standing ? [standing, ...attempts.filter((a) => a.id !== standing.id)] : attempts;
+    if (members.length === 0) continue;
+    topicUnits.set(topic.id, {
+      groupName: topic.name,
+      groupId: null,
+      topicId: topic.id,
+      standingColumnId: standing?.id ?? null,
+      standingRule: topic.standing_rule,
+      columns: members
+    });
+    anchorOf.set(topic.id, (standing ?? attempts[0]).id);
+  }
+  const taken = new Set([...topicUnits.values()].flatMap((u) => u.columns.map((c) => c.id)));
+  const anchorTopic = new Map([...anchorOf].map(([topicId, colId]) => [colId, topicId]));
+
+  const result: GroupedColumns<C> = {};
+  for (const [key, entry] of Object.entries(base)) {
+    for (const col of entry.columns) {
+      const topicId = anchorTopic.get(col.id);
+      if (topicId != null) result[`topic:${topicId}`] = topicUnits.get(topicId)!;
+    }
+    const rest = entry.columns.filter((c) => !taken.has(c.id));
+    if (rest.length === 0) continue;
+    result[key] = rest.length === entry.columns.length ? entry : { ...entry, columns: rest };
+  }
+  return result;
+}
+
+/** The column a collapsed unit shows: a topic's standing when it has one, else `fallback`. */
+export function collapsedColumnFor<C extends LayoutColumn>(
+  entry: GroupedColumnsEntry<C>,
+  fallback: (columns: C[]) => C
+): C {
+  if (entry.standingColumnId != null) {
+    const standing = entry.columns.find((c) => c.id === entry.standingColumnId);
+    if (standing) return standing;
+  }
+  return fallback(entry.columns);
 }
 
 /**

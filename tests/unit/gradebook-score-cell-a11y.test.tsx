@@ -56,6 +56,7 @@ let whatIfController: {
 jest.mock("@/hooks/useGradebook", () => ({
   useGradebookColumns: () => columns,
   useGradebookColumnGroups: () => noGroups,
+  useGradebookTopics: () => noGroups,
   useGradebookColumn: () => column,
   useGradebookColumnStudent: () => studentGrade,
   useGradebookController: () => controller,

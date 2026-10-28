@@ -59,6 +59,7 @@ const TABLES_WITH_UPDATED_AT = new Set<TablesThatHaveAnIDField>([
   "gradebook_column_students",
   "gradebook_columns",
   "gradebook_column_groups",
+  "gradebook_topics",
   "help_queue_assignments",
   "help_queues",
   "help_request_feedback",
@@ -127,6 +128,7 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   discussion_topics: ["staff", "students"],
   gradebook_columns: ["staff", "students"],
   gradebook_column_groups: ["staff", "students"], // Students get id-only messages and refetch through RLS
+  gradebook_topics: ["staff", "students"], // Same as gradebook_column_groups
   gradebook_column_students: ["staff", "user"], // Also to individual users when not private
   help_queue_assignments: ["help_queue"],
   help_queues: ["help_queue"],

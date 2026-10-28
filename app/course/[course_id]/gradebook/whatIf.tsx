@@ -4,11 +4,12 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseFeature, useGradebookWhatIfFeatureEnabled } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
-import { databaseLayout, isHeaderGroup, legacySlugLayout } from "@/lib/gradebookColumnGroups";
+import { databaseLayout, isHeaderGroup, legacySlugLayout, topicLayout } from "@/lib/gradebookColumnGroups";
 import {
   useGradebookColumn,
   useGradebookColumnGroups,
   useGradebookColumns,
+  useGradebookTopics,
   useGradebookColumnStudent,
   useGradebookController,
   useLinkToAssignment,
@@ -582,15 +583,18 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
   const columns = useGradebookColumns();
   const columnGroupsEnabled = useCourseFeature(COURSE_FEATURES.GRADEBOOK_COLUMN_GROUPS, true);
   const columnGroups = useGradebookColumnGroups();
+  const topicsEnabled = useCourseFeature(COURSE_FEATURES.GRADEBOOK_TOPICS, true);
+  const topics = useGradebookTopics();
 
   // Collapse state keyed by unit key, so two groups that share a name collapse independently.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  // Stored groups when the course has them on; otherwise the legacy slug-prefix heuristic.
-  const groupedColumns = useMemo(
-    () => (columnGroupsEnabled ? databaseLayout(columns, columnGroups) : legacySlugLayout(columns)),
-    [columns, columnGroups, columnGroupsEnabled]
-  );
+  // Stored groups when the course has them on; otherwise the legacy slug-prefix heuristic. With
+  // topics on, each topic is one unit that collapses to its standing.
+  const groupedColumns = useMemo(() => {
+    const base = columnGroupsEnabled ? databaseLayout(columns, columnGroups) : legacySlugLayout(columns);
+    return topicsEnabled && topics.length > 0 ? topicLayout(base, topics) : base;
+  }, [columns, columnGroups, columnGroupsEnabled, topics, topicsEnabled]);
   const collapsibleGroupKeys = useMemo(
     () => Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1),
     [groupedColumns]
@@ -667,7 +671,7 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
           <GroupHeader
             key={`header-${groupKey}`}
             groupName={group.groupName}
-            isStoredGroup={group.groupId != null}
+            isStoredGroup={group.groupId != null || group.topicId != null}
             columnCount={group.columns.length}
             isCollapsed={isCollapsed}
             onToggle={() => toggleGroup(groupKey)}
@@ -687,6 +691,19 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
               />
             );
           });
+        } else if (group.standingColumnId != null) {
+          // A collapsed topic shows its standing.
+          const standing = group.columns.find((c) => c.id === group.standingColumnId)!;
+          items.push(
+            <GradebookCard
+              key={`collapsed-${groupKey}`}
+              column={standing}
+              private_profile_id={private_profile_id}
+              isCollapsedGroupItem={true}
+              whatIfEnabled={whatIfEnabled}
+              headingLevel={3}
+            />
+          );
         } else {
           // Show the appropriate column when collapsed (first if no grades, last if grades exist)
           items.push(
