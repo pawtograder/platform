@@ -59,7 +59,9 @@ export function useTopicActions() {
         toaster.error({ title: label, description: error.message });
         throw new Error(error.message);
       }
-      await refresh();
+      // Realtime already delivers the change; this refetch only closes the gap if a broadcast is
+      // missed, so callers (dialogs) don't wait on it.
+      void refresh().catch(() => {});
       return data;
     },
     [refresh]
@@ -214,7 +216,7 @@ export function TopicHeaderMenu({ topic }: { topic: GradebookTopic }) {
     actions.setStanding(topic.id, topic.standing_column_id, rule).catch(() => {});
 
   return (
-    <Box onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+    <Box onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()} flexShrink={0}>
       <MenuRoot>
         <MenuTrigger asChild>
           <IconButton variant="ghost" size="2xs" aria-label={`Topic options for ${topic.name}`}>
@@ -288,6 +290,13 @@ type Suggestion = {
   }[];
   conflicts: { topic: string; attempt_number: number; column_ids: number[] }[];
 };
+
+/** "Attempt 2: Git" stays as is; a column whose name doesn't say its attempt gets "Attempt 2 · HW quiz". */
+function attemptLabel(attemptNumber: number, name: string) {
+  return new RegExp(`^\\s*attempt\\s+${attemptNumber}\\b`, "i").test(name)
+    ? name
+    : `Attempt ${attemptNumber} · ${name}`;
+}
 
 const SOURCE_LABEL: Record<Suggestion["topics"][number]["attempts"][number]["source"], string> = {
   name: "from its name",
@@ -428,9 +437,7 @@ export function SuggestTopicsDialog({ open, onClose }: { open: boolean; onClose:
                               disabled={excludedTopics.has(i)}
                               onCheckedChange={() => toggle(excludedColumns, a.column_id, setExcludedColumns)}
                             >
-                              <Text fontSize="sm">
-                                Attempt {a.attempt_number}: {columnName(a.column_id)}
-                              </Text>
+                              <Text fontSize="sm">{attemptLabel(a.attempt_number, columnName(a.column_id))}</Text>
                             </Checkbox>
                             {a.source !== "name" && (
                               <Text fontSize="xs" color="fg.muted">
