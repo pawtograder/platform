@@ -1,0 +1,51 @@
+-- Down path for 20261028120000_gradebook_column_groups.sql. Not applied by the Supabase CLI
+-- (wrong extension); run by hand with psql --single-transaction if the feature has to come out.
+--
+-- Grades are never touched by the up migration. What is lost: the groups themselves and the
+-- sort_order renumbering done by compaction or by auto-group's NULL sort_order fix (columns keep
+-- their current order; only the values were renumbered).
+
+DROP TRIGGER IF EXISTS gradebook_columns_delete_empty_group ON public.gradebook_columns;
+DROP TRIGGER IF EXISTS broadcast_gradebook_column_groups_unified ON public.gradebook_column_groups;
+
+DROP FUNCTION IF EXISTS public.gradebook_enable_column_groups(bigint);
+DROP FUNCTION IF EXISTS public.gradebook_columns_auto_group(bigint);
+DROP FUNCTION IF EXISTS public.gradebook_columns_auto_group_preview(bigint);
+DROP FUNCTION IF EXISTS public.gradebook_column_group_create(bigint, text, bigint[]);
+DROP FUNCTION IF EXISTS public.gradebook_columns_set_group(bigint[], bigint);
+DROP FUNCTION IF EXISTS public.gradebook_require_instructor(bigint);
+
+DROP FUNCTION IF EXISTS public.gradebook_columns_reorder(bigint[]);
+ALTER FUNCTION public.gradebook_columns_reorder_inner(bigint[]) RENAME TO gradebook_columns_reorder;
+REVOKE ALL ON FUNCTION public.gradebook_columns_reorder(bigint[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.gradebook_columns_reorder(bigint[]) TO authenticated, service_role;
+
+DROP FUNCTION IF EXISTS public.gradebook_auto_layout(bigint);
+ALTER FUNCTION public.gradebook_auto_layout_inner(bigint) RENAME TO gradebook_auto_layout;
+REVOKE ALL ON FUNCTION public.gradebook_auto_layout(bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.gradebook_auto_layout(bigint) TO authenticated, service_role;
+
+DROP FUNCTION IF EXISTS public.gradebook_columns_compact_groups(bigint);
+DROP FUNCTION IF EXISTS public.gradebook_columns_auto_group_plan(bigint);
+DROP FUNCTION IF EXISTS public.gradebook_common_name_prefix(text[]);
+DROP FUNCTION IF EXISTS public.gradebook_pluralize(text);
+DROP FUNCTION IF EXISTS public.gradebook_column_family_display_name(text);
+DROP FUNCTION IF EXISTS public.gradebook_column_slug_family(text);
+DROP FUNCTION IF EXISTS public.gradebook_columns_delete_empty_group();
+DROP FUNCTION IF EXISTS public.broadcast_gradebook_column_groups_change();
+
+-- The groups table goes first: its SELECT policy reads gradebook_columns.group_id, so dropping
+-- the column first fails ("other objects depend on it").
+ALTER TABLE public.gradebook_columns DROP CONSTRAINT IF EXISTS gradebook_columns_group_fkey;
+DROP TABLE IF EXISTS public.gradebook_column_groups;
+ALTER TABLE public.gradebook_columns DROP COLUMN IF EXISTS group_id;
+ALTER TABLE public.gradebooks DROP CONSTRAINT IF EXISTS gradebooks_id_class_id_key;
+
+UPDATE public.classes
+SET features = (
+  SELECT COALESCE(jsonb_agg(e), '[]'::jsonb)
+  FROM jsonb_array_elements(features) e
+  WHERE e->>'name' NOT IN ('gradebook-column-groups', 'gradebook-topics')
+)
+WHERE jsonb_typeof(features) = 'array'
+  AND features @> ANY (ARRAY['[{"name":"gradebook-column-groups"}]', '[{"name":"gradebook-topics"}]']::jsonb[]);
