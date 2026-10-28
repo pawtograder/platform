@@ -17,6 +17,9 @@
  * Leaves the created class and related rows in the database (use db reset or manual cleanup).
  */
 import { createClass, insertAssignment, supabase } from "@/tests/e2e/TestingUtils";
+// Imported, not copied. A local copy of this string passes against a reverted worker, which is
+// what the first version of this test did -- it checked PostgREST, not finalize.
+import { FINALIZE_ANSWER_REGION_SELECT } from "../../supabase/functions/exam-async-worker/finalizeQueries";
 
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -36,10 +39,6 @@ function throwIfSetError(error: { message: string } | null, context: string): vo
     throw new Error(`${context}: ${error.message}`);
   }
 }
-
-/** The select string finalize uses. Keep in sync with exam-async-worker/index.ts. */
-const FINALIZE_REGION_SELECT =
-  "exam_question_id, page_number, x, y, width, height, exam_questions!exam_question_regions_question_exam_fkey(answer_type)";
 
 describeIntegration("issue #1075: finalize's answer-region embed is unambiguous", () => {
   test("the region query returns rows and the question's answer_type, instead of PGRST201", async () => {
@@ -71,7 +70,7 @@ describeIntegration("issue #1075: finalize's answer-region embed is unambiguous"
     // "Could not embed because more than one relationship was found".
     const { data: regions, error: regionsErr } = await supabase
       .from("exam_question_regions")
-      .select(FINALIZE_REGION_SELECT)
+      .select(FINALIZE_ANSWER_REGION_SELECT)
       .eq("exam_id", examId as number)
       .eq("kind", "answer")
       .not("exam_question_id", "is", null);

@@ -4,6 +4,7 @@ import * as Sentry from "npm:@sentry/deno";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import type { Json } from "../_shared/SupabaseTypes.d.ts";
 import type { ExamAsyncEnvelope, FinalizeArgs, MatchArgs, ProcessPageArgs } from "../_shared/ExamAsyncTypes.ts";
+import { FINALIZE_ANSWER_REGION_SELECT } from "./finalizeQueries.ts";
 import {
   getExamVisionProvider,
   ProviderRateLimitError,
@@ -666,9 +667,7 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
     // answer questions: for each answer region, OCR text from the right page's words ∩ region
     const { data: regions, error: regionsErr } = await admin
       .from("exam_question_regions")
-      .select(
-        "exam_question_id, page_number, x, y, width, height, exam_questions!exam_question_regions_question_exam_fkey(answer_type)"
-      )
+      .select(FINALIZE_ANSWER_REGION_SELECT)
       .eq("exam_id", scanned.exam_id)
       .eq("kind", "answer")
       .not("exam_question_id", "is", null);
