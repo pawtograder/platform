@@ -25,7 +25,11 @@ for c in kubectl curl jq; do command -v "$c" >/dev/null || { echo "missing $c" >
 service_key="$(kubectl -n "$NAMESPACE" get secret "$JWT_SECRET_NAME" -o jsonpath='{.data.SERVICE_ROLE_KEY}' | base64 -d)"
 [ -n "$service_key" ] || { echo "no SERVICE_ROLE_KEY in $NAMESPACE/$JWT_SECRET_NAME" >&2; exit 1; }
 auth="$api_url/auth/v1"
-gotrue() { curl -fsS -H "apikey: $service_key" -H "Authorization: Bearer $service_key" -H 'Content-Type: application/json' "$@"; }
+# Credentials go through builtins and pipes, never argv, so `ps` on a shared host can't read them.
+gotrue() {
+  curl -fsS -H @<(printf 'apikey: %s\nAuthorization: Bearer %s\n' "$service_key" "$service_key") \
+    -H 'Content-Type: application/json' "$@"
+}
 
 curl -fsS -o /dev/null "$auth/.well-known/openid-configuration" || {
   echo "$auth/.well-known/openid-configuration is not reachable without an apikey." >&2
@@ -43,9 +47,11 @@ revoke() { for id in $1; do gotrue -X DELETE -o /dev/null "$auth/admin/oauth/cli
 
 apply_secret() {
   local name="$1"; shift
-  local args=()
-  for kv in "$@"; do args+=(--from-literal="$kv"); done
-  kubectl -n "$NAMESPACE" create secret generic "$name" "${args[@]}" --dry-run=client -o yaml \
+  local data="" kv
+  for kv in "$@"; do
+    data+="${data:+,}\"${kv%%=*}\":\"$(printf %s "${kv#*=}" | base64 | tr -d '\n')\""
+  done
+  printf '{"apiVersion":"v1","kind":"Secret","type":"Opaque","metadata":{"name":"%s"},"data":{%s}}' "$name" "$data" \
     | kubectl -n "$NAMESPACE" apply -f - >/dev/null
   echo "  wrote $NAMESPACE/$name"
 }
