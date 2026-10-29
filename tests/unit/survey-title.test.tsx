@@ -6,7 +6,7 @@
  * the database title, so the opened survey disagreed with the list. Both renderers take
  * the database title as a `title` prop, and it wins over the JSON title.
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import SurveyComponent from "@/components/Survey";
 import ViewSurveyResponse from "@/components/ViewSurveyResponse";
 
@@ -54,6 +54,24 @@ describe("survey title (issue #1002)", () => {
     render(<SurveyComponent surveyJson={builderJson()} />);
 
     expect(screen.getByRole("heading", { name: JSON_TITLE })).toBeInTheDocument();
+  });
+
+  it("SurveyComponent renaming the survey mid-answer keeps the answers and focus", () => {
+    // An instructor renaming the survey reaches an open student page as a realtime
+    // update with a new `title`. Rebuilding the model for it would throw away the
+    // answers typed so far, the page position and the focused field.
+    const json = builderJson();
+    const { rerender } = render(<SurveyComponent surveyJson={json} title={DB_TITLE} />);
+    const input = screen.getByRole("textbox", { name: "Question 1" }) as HTMLInputElement;
+    input.focus();
+    fireEvent.change(input, { target: { value: "Going well" } });
+
+    rerender(<SurveyComponent surveyJson={json} title="Week 3 Check-in (revised)" />);
+
+    expect(screen.getByRole("heading", { level: 1, name: "Week 3 Check-in (revised)" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Question 1" })).toHaveValue("Going well");
+    expect(screen.getByRole("textbox", { name: "Question 1" })).toBe(input);
+    expect(document.activeElement).toBe(input);
   });
 
   it("ViewSurveyResponse shows the database title instead of the JSON title", () => {
