@@ -89,7 +89,7 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   if (action === "signin") {
     return signInWithEmailAction(email as string, password as string, redirectPath);
   } else if (action === "signup") {
-    return signUpWithEmailAction(email as string, password as string);
+    return signUpWithEmailAction(email as string, password as string, redirectPath);
   } else if (action === "reset-password") {
     return resetPasswordAction(email as string);
   }
@@ -117,9 +117,10 @@ export const signInWithEmailAction = async (email: string, password: string, red
     return redirect(redirectPath ?? "/course");
   }
 };
-export const signUpWithEmailAction = async (email: string, password: string) => {
+export const signUpWithEmailAction = async (email: string, password: string, redirectPath?: string) => {
+  const params: Record<string, string> = redirectPath ? { redirect: redirectPath } : {};
   if (!isSignupsEnabled()) {
-    return encodedRedirect("error", "/sign-in", "Signups are currently disabled");
+    return encodedRedirect("error", "/sign-in", "Signups are currently disabled", params);
   }
 
   const supabase = await createClient();
@@ -131,17 +132,18 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
     }
   });
   if (error) {
-    return encodedRedirect("error", "/sign-in", error.message);
+    return encodedRedirect("error", "/sign-in", error.message, params);
   }
   if (!data.user?.confirmed_at) {
     return encodedRedirect(
       "success",
       "/sign-in",
-      "Account created successfully, but must be confirmed. Please check your email for a confirmation link."
+      "Account created successfully, but must be confirmed. Please check your email for a confirmation link.",
+      params
     );
   }
   if (data.user) {
-    return redirect("/course");
+    return redirect(redirectPath ?? "/course");
   }
 };
 /**

@@ -71,6 +71,8 @@ export NEXT_PUBLIC_SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
 export NEXT_PUBLIC_PAWTOGRADER_WEB_URL="$PAW_BASE_URL"
 export SB_ISSUER="$SUPABASE_URL/auth/v1"
 wait_for "$SB_ISSUER/.well-known/openid-configuration" 30 "OIDC discovery"
+# Migrations only create audit partitions for a fixed window; a retained stack can be past it.
+docker exec supabase_db_pawtograder-sso-e2e psql -U postgres -d postgres -qc "SELECT public.audit_maintain_partitions();" >/dev/null
 # TestingUtils falls back to .env.local, which would seed the developer's own database.
 [ "${ONLY:-}" = "1" ] && exec npx playwright test --config playwright.forgejo-coder.config.ts "$@"
 
@@ -125,8 +127,8 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
   fi
   if [ "${SKIP_BUILD:-}" != "1" ]; then
     # NEXT_PUBLIC_* is inlined at build time, so build after exporting the lane's URLs.
-    if pgrep -f "$REPO/node_modules/.bin/next dev" >/dev/null; then
-      echo "ERROR: a next dev server is running and shares .next. Stop it, or set SKIP_BUILD=1."; exit 1
+    if pgrep -f "$REPO/node_modules/.bin/next (dev|start)" >/dev/null; then
+      echo "ERROR: a next server from this checkout is running and uses .next. Stop it, or set SKIP_BUILD=1."; exit 1
     fi
     log "Building Pawtograder"
     rm -rf "$REPO/.next"
