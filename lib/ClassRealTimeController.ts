@@ -375,8 +375,12 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
         ? ({ ...(message as BroadcastMessage), type: "table_change" } as BroadcastMessage)
         : message;
 
-    // Skip system and channel lifecycle messages
-    if (normalized.type === "system" || normalized.type === "channel_created") {
+    // Skip system, channel lifecycle, and classes_update messages (routed by RealtimeChannelManager.subscribeToClassesUpdate)
+    if (
+      normalized.type === "system" ||
+      normalized.type === "channel_created" ||
+      (normalized.type as string) === "classes_update"
+    ) {
       return;
     }
 
@@ -409,7 +413,7 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
 
   /**
    * Subscribe to UPDATE events on this controller's course row in `public.classes`.
-   * Uses postgres_changes (classes has no broadcast trigger); managed by RealtimeChannelManager.
+   * Delivered as classes_update broadcasts on the students topic; managed by RealtimeChannelManager.
    */
   subscribeToClassesUpdate(callback: (updatedCourse: ClassesRealtimeUpdate) => void): () => void {
     if (this._closed) {
@@ -419,13 +423,17 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
     let unsubscribe: (() => void) | undefined;
     let cancelled = false;
 
-    void this._channelManager.subscribeToClassesUpdate(this._classId, this._client, callback).then((unsub) => {
-      if (cancelled) {
-        unsub();
-      } else {
-        unsubscribe = unsub;
-      }
-    });
+    void this._channelManager
+      .subscribeToClassesUpdate(this._classId, this._client, callback, async (channel, status, err) => {
+        await this._handleSubscriptionStateEvent(channel, status, err);
+      })
+      .then((unsub) => {
+        if (cancelled) {
+          unsub();
+        } else {
+          unsubscribe = unsub;
+        }
+      });
 
     return () => {
       cancelled = true;
