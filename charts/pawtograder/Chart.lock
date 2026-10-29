@@ -1,0 +1,15 @@
+dependencies:
+- name: forgejo
+  repository: oci://ghcr.io/pawtograder/mirror/charts
+  version: 17.1.7
+- name: coder
+  repository: oci://ghcr.io/pawtograder/mirror/charts
+  version: 2.37.3
+- name: postgres
+  repository: oci://ghcr.io/pawtograder/mirror/charts
+  version: 1.6.8
+- name: postgres
+  repository: oci://ghcr.io/pawtograder/mirror/charts
+  version: 1.6.8
+digest: sha256:8a547c0314bfa598c7c9869e63e705455325d66de1c352c4edb30ad3703b0821
+generated: "2026-10-19T11:09:18.596233-04:00"

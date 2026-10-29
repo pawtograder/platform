@@ -23,3 +23,23 @@ keywords:
   - autograder
 annotations:
   category: Application
+# Fetched into charts/ (gitignored) from Chart.lock by scripts/build-deps.sh; run it before helm commands against a checkout.
+dependencies:
+  - name: forgejo
+    version: 17.1.7
+    repository: oci://ghcr.io/pawtograder/mirror/charts
+    condition: forgejo.enabled
+  - name: coder
+    version: 2.37.3
+    repository: oci://ghcr.io/pawtograder/mirror/charts
+    condition: coder.enabled
+  - name: postgres
+    alias: forgejo-db
+    version: 1.6.8
+    repository: oci://ghcr.io/pawtograder/mirror/charts
+    condition: forgejo-db.enabled
+  - name: postgres
+    alias: coder-db
+    version: 1.6.8
+    repository: oci://ghcr.io/pawtograder/mirror/charts
+    condition: coder-db.enabled

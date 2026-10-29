@@ -2651,3 +2651,180 @@ tests:
     resources:
       requests: { cpu: "10m", memory: "16Mi" }
       limits:   { cpu: "100m", memory: "64Mi" }
+
+forgejo:
+  enabled: false
+  database: pawtograder
+  # Mirrored by .github/workflows/mirror-third-party.yml; a new tag goes in .github/mirror.yaml first.
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/forgejo/forgejo
+    tag: "15.0.9"
+  strategy:
+    type: Recreate # RWO repo volume
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 2Gi } # 1Gi OOMKilled finishing a job's log upload
+  initContainers:
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+  persistence:
+    enabled: true
+    size: 20Gi
+  # The chart's test pod sets no resources, so limit-tracking quotas reject it.
+  test:
+    enabled: false
+  ingress:
+    enabled: true
+    className: nginx
+    hosts: []
+  gitea:
+    admin:
+      existingSecret: pawtograder-forgejo-admin
+      passwordMode: keepUpdated
+    # An overlay that sets this list must keep these two entries.
+    additionalConfigFromEnvs:
+      - name: FORGEJO__DATABASE__HOST
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-database, key: host }
+      - name: FORGEJO__DATABASE__PASSWD
+        valueFrom:
+          secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+    config:
+      server:
+        DISABLE_SSH: true # Ingress-only clusters serve git over HTTPS
+        START_SSH_SERVER: false
+        LFS_START_SERVER: true
+      database:
+        DB_TYPE: postgres
+        NAME: forgejo
+        USER: forgejo
+        SSL_MODE: disable
+      service:
+        DISABLE_REGISTRATION: true
+      actions:
+        ENABLED: true
+        DEFAULT_ACTIONS_URL: https://github.com
+      session:
+        PROVIDER: db
+      cache:
+        ADAPTER: memory
+      queue:
+        TYPE: level
+      indexer:
+        ISSUE_INDEXER_TYPE: bleve
+        REPO_INDEXER_ENABLED: false
+
+forgejo-db:
+  enabled: false
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/postgres
+    tag: "18.6"
+  settings:
+    existingSecret: pawtograder-forgejo-db-superuser
+    superuserPassword:
+      secretKey: POSTGRES_PASSWORD
+  storage:
+    requestedSize: 5Gi
+    keepPvc: true
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+forgejoRunner:
+  enabled: false
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  capacity: 2 # job pods at once
+  labels:
+    - ubuntu-latest:host
+    - ubuntu-24.04:host
+    - ubuntu-22.04:host
+  jobTimeout: 1h
+  podDeadlineSeconds: 4200
+  pollInterval: 5
+  workdirSizeLimit: 20Gi
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "2", memory: 4Gi }
+  dispatcher:
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { cpu: 200m, memory: 128Mi }
+  # Needs a CNI that enforces NetworkPolicy.
+  networkPolicy:
+    enabled: true
+    privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+    extraEgress: []
+
+coder:
+  enabled: false
+  database: pawtograder
+  coder:
+    image:
+      repo: ghcr.io/pawtograder/mirror/coder/coder
+      tag: v2.37.3
+    env: []
+    envFrom:
+      - configMapRef: { name: pawtograder-coder-env }
+      - secretRef: { name: pawtograder-coder-db }
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+    service:
+      type: ClusterIP
+    ingress:
+      enable: true
+      className: nginx
+      host: ""
+      wildcardHost: ""
+    serviceAccount:
+      workspacePerms: true
+      enableDeployments: true
+
+coder-db:
+  enabled: false
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/postgres
+    tag: "18.6"
+  settings:
+    existingSecret: pawtograder-coder-db-superuser
+    superuserPassword:
+      secretKey: POSTGRES_PASSWORD
+  storage:
+    requestedSize: 5Gi
+    keepPvc: true
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+forgejoCoderSecrets:
+  externalSecret:
+    enabled: false
+    forgejoPath: ""
+    coderPath: ""
+    storeName: openbao
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+
+coderBootstrap:
+  enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+appDatabases:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }
