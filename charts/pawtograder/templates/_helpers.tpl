@@ -364,10 +364,11 @@ or baseBackup.keepBackups when that is unset. Refuses anything below 1, which
 {{- if or (kindIs "invalid" $raw) (eq (toString $raw) "") -}}
 {{- $raw = .Values.postgres.walg.baseBackup.keepBackups | default 8 -}}
 {{- end -}}
-{{- /* Whole-number syntax before `int`, which would truncate 4.9 to 4 and turn
-     `true` into 1, then pass the >= 1 check with a count nobody wrote. A YAML
-     4 arrives as a float64 and renders "4", so it still matches. */ -}}
-{{- if not (regexMatch "^[0-9]+$" (toString $raw)) -}}
+{{- /* Whole-number syntax before `int`, which would truncate 4.9 to 4, turn
+     `true` into 1, and read "010" as octal 8, each then passing the >= 1
+     check with a count nobody wrote. So no leading zero (which also rules out
+     0). A YAML 4 arrives as a float64 and renders "4", so it still matches. */ -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString $raw)) -}}
 {{- fail (printf "postgres.walg.retention.keepBackups must be an integer >= 1 (got %v) — a fraction or boolean would be truncated to a count nobody set, and `wal-g delete retain FULL 0` deletes every base backup and all WAL." $raw) -}}
 {{- end -}}
 {{- $keep := int $raw -}}

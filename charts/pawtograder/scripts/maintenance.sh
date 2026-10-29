@@ -146,17 +146,21 @@ k() { kubectl -n "$NAMESPACE" "$@"; }
 # oldest backup it keeps, so a partial run leaves orphaned old objects, never a
 # hole in what is retained.
 RETENTION_WAIT_SECONDS="${RETENTION_WAIT_SECONDS:-120}"
+# Every Job of the CronJob that is not yet terminal. Not `.status.active > 0`:
+# between a failed pod and its retry (backoffLimit 1) a Job has no active pod
+# but will still start another prune. Only a Complete or Failed condition ends it.
 inflight_retention_jobs() {
   local json
   json="$(k get jobs -o json)" || return 1
   jq -r --arg cj "${RELEASE}-walg-retention" '
     .items[]
     | select(any(.metadata.ownerReferences[]?; .kind == "CronJob" and .name == $cj))
-    | select((.status.active // 0) > 0)
+    | select(any(.status.conditions[]?; (.type == "Complete" or .type == "Failed") and .status == "True") | not)
     | .metadata.name' <<<"$json"
 }
 stop_inflight_retention() {
-  k get cronjob "${RELEASE}-walg-retention" >/dev/null 2>&1 || return 0
+  # present: an API or RBAC error dies instead of reading as "no CronJob".
+  present cronjob "${RELEASE}-walg-retention" || return 0
   local jobs waited=0
   jobs="$(inflight_retention_jobs)" || die "could not list Jobs to check for an in-flight walg-retention prune; the fence is NOT complete. Retry."
   [ -n "$jobs" ] || return 0
@@ -949,6 +953,13 @@ cmd_recheck() {
   done < <(jq -r '.data.cronjobs_suspend // ""' "$tmp/state.json")
   if [ ${#live[@]} -gt 0 ]; then
     die "write CronJob(s) not suspended inside the window: ${live[*]}. NOT safe to bounce; suspend them (kubectl patch cronjob <name> --type=merge -p '{\"spec\":{\"suspend\":true}}') and recheck."
+  fi
+  # A `down` that died while waiting on a prune leaves the Job running, and
+  # nothing above would notice it.
+  if present cronjob "${RELEASE}-walg-retention"; then
+    local rjobs
+    rjobs="$(inflight_retention_jobs)" || die "could not list Jobs to check for an in-flight walg-retention prune; not re-checking."
+    [ -z "$rjobs" ] || die "walg-retention prune still in flight (${rjobs//$'\n'/ }): it is deleting base backups and WAL. NOT safe to bounce. Wait for it or delete it (kubectl delete job <name>), then recheck."
   fi
   local active
   active="$(psql_ro "SELECT 'MARK:' || count(*) FROM cron.job WHERE active;")"
