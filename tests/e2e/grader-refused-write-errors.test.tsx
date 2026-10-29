@@ -87,6 +87,10 @@ test.describe("Grader writes refused by RLS surface an error", () => {
     // ...and the false success the bug produced is gone.
     await expect(page.getByText("Assignment Updated")).toHaveCount(0);
 
+    // After a reload the page still shows the original assignment — nothing was persisted.
+    await page.reload();
+    await expect(page.getByLabel("Title", { exact: false }).first()).toHaveValue(assignment.title);
+
     // The database agrees nothing changed.
     const { data: after } = await supabase
       .from("assignments")
