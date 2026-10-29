@@ -10,6 +10,7 @@ import { createCs2100StyleGradebook, waitForGradebookRecalculation } from "./gra
 import {
   GRADEBOOK_VIEWPORT,
   headerUnits,
+  openColumnMenu,
   openInstructorGradebook,
   tableRegion,
   waitForToastsGone,
@@ -123,6 +124,45 @@ test.describe("Gradebook topics (CS 2100-style course)", () => {
     await waitForVirtualizerIdle(page);
     // Topics never change group membership.
     expect(await headerUnits(page)).toEqual(["4 Quiz 9/22...", "6 Quiz 10/15..."]);
+  });
+
+  test("every instructor surface for topics", async ({ page }) => {
+    await loginAsUser(page, fixture.instructor, fixture.course);
+    await page.goto(`/course/${fixture.course.id}/manage/course/feature-flags`);
+    await visualScreenshot(page, "gradebook-topics-feature-flag-card", {
+      element: page.locator(".chakra-card__root").filter({ hasText: "Gradebook topics" })
+    });
+
+    await openInstructorGradebook(page, fixture.course.id);
+    await tableRegion(page).getByRole("button", { name: "Expand all groups" }).click();
+    await waitForVirtualizerIdle(page);
+
+    // The column menu carries Topic… next to Group….
+    await openColumnMenu(page, "HW1");
+    await expect(page.getByRole("menuitem", { name: "Topic…" })).toBeVisible();
+    await visualScreenshot(page, "gradebook-topics-column-menu");
+
+    // Topic… for a column: an existing topic and an attempt number (blank = the next one).
+    await page.getByRole("menuitem", { name: "Topic…" }).click();
+    const topicDialog = page.getByRole("dialog", { name: /Topic for .HW1./ });
+    await topicDialog.getByLabel("Topic").selectOption({ label: "Git" });
+    await expect(topicDialog.getByLabel("Attempt number")).toBeVisible();
+    await visualScreenshot(page, "gradebook-topics-column-topic-dialog", { element: topicDialog });
+    await topicDialog.getByLabel("Topic").selectOption("new");
+    await topicDialog.getByLabel("New topic name").fill("Recursion");
+    await visualScreenshot(page, "gradebook-topics-column-new-topic-dialog", { element: topicDialog });
+    await topicDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(topicDialog).toBeHidden();
+
+    // The topic header menu: standing rule, rename, delete.
+    await tableRegion(page).getByRole("button", { name: "Topic options for Git" }).click();
+    await expect(page.getByRole("menuitem", { name: "Standing: keep the column's own expression" })).toBeDisabled();
+    await visualScreenshot(page, "gradebook-topics-topic-menu");
+    await page.getByRole("menuitem", { name: "Rename topic" }).click();
+    const renameDialog = page.getByRole("dialog", { name: "Rename topic" });
+    await renameDialog.getByLabel("Topic name").fill("Version control");
+    await visualScreenshot(page, "gradebook-topics-rename-dialog", { element: renameDialog });
+    await renameDialog.getByRole("button", { name: "Cancel" }).click();
   });
 
   test("students see one card per topic, expandable to their attempts", async ({ page }) => {
