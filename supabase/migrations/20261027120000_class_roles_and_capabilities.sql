@@ -114,11 +114,16 @@ SELECT public.seed_default_class_roles(id) FROM public.classes;
 
 ALTER TABLE public.user_roles ADD COLUMN class_role_id bigint;
 
+-- Pause the realtime broadcast while backfilling, so staff channels don't get one event per member.
+ALTER TABLE public.user_roles DISABLE TRIGGER broadcast_user_roles_realtime;
+
 UPDATE public.user_roles ur
 SET class_role_id = cr.id
 FROM public.class_roles cr
 WHERE cr.class_id = ur.class_id
   AND cr.default_for = ur.role;
+
+ALTER TABLE public.user_roles ENABLE TRIGGER broadcast_user_roles_realtime;
 
 ALTER TABLE public.user_roles
   ALTER COLUMN class_role_id SET NOT NULL,
@@ -126,21 +131,6 @@ ALTER TABLE public.user_roles
     FOREIGN KEY (class_role_id, class_id) REFERENCES public.class_roles (id, class_id);
 
 CREATE INDEX idx_user_roles_class_role_id ON public.user_roles (class_role_id);
-
--- Placeholder default, so generated types make class_role_id optional on INSERT: the trigger
--- below always replaces it, and NOT NULL is checked after BEFORE triggers run. plpgsql so the
--- planner can't fold it into a NULL constant, which Postgres would not store as a default.
-CREATE OR REPLACE FUNCTION public.user_roles_class_role_id_placeholder()
-RETURNS bigint
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  RETURN NULL;
-END;
-$$;
-
-ALTER TABLE public.user_roles
-  ALTER COLUMN class_role_id SET DEFAULT public.user_roles_class_role_id_placeholder();
 
 -- Fill class_role_id from the class's default role. On UPDATE, a user still on the default
 -- role for their old app_role follows the new app_role; a custom role is kept.

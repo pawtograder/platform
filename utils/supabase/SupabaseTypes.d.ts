@@ -14436,7 +14436,6 @@ export type Database = {
         Args: { p_help_request_id: number; p_user_id?: string };
         Returns: boolean;
       };
-      user_roles_class_role_id_placeholder: { Args: never; Returns: number };
       vacuum_health_check: {
         Args: never;
         Returns: {

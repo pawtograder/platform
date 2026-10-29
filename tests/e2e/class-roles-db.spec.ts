@@ -152,17 +152,34 @@ test.describe("class roles and capabilities", () => {
     const { data: own, error } = await member.from("class_roles").select("id").eq("class_id", classA.id);
     expect(error).toBeNull();
     expect(own ?? [], "a member must read their class's roles").toHaveLength(DEFAULT_ROLES.length);
-
-    const outsider = await createAuthenticatedClient(instructorB);
-    const { data: foreign } = await outsider.from("class_roles").select("id").eq("class_id", classA.id);
-    expect(foreign ?? [], "another class's staff must not read these roles").toHaveLength(0);
-    const { data: foreignCaps } = await outsider
+    const { data: ownCaps, error: ownCapsError } = await member
       .from("role_capabilities")
       .select("role_id")
       .in(
         "role_id",
         rolesA.map((r) => r.id)
       );
+    expect(ownCapsError).toBeNull();
+    expect(ownCaps ?? [], "a member must read their class's capability mappings").toHaveLength(
+      SEEDED_CAPABILITIES.length
+    );
+
+    // RLS hides rows instead of raising, so check the error first: a null result from an error must not pass.
+    const outsider = await createAuthenticatedClient(instructorB);
+    const { data: foreign, error: foreignError } = await outsider
+      .from("class_roles")
+      .select("id")
+      .eq("class_id", classA.id);
+    expect(foreignError).toBeNull();
+    expect(foreign ?? [], "another class's staff must not read these roles").toHaveLength(0);
+    const { data: foreignCaps, error: foreignCapsError } = await outsider
+      .from("role_capabilities")
+      .select("role_id")
+      .in(
+        "role_id",
+        rolesA.map((r) => r.id)
+      );
+    expect(foreignCapsError).toBeNull();
     expect(foreignCaps ?? []).toHaveLength(0);
   });
 });
