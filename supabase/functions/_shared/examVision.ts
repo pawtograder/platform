@@ -112,12 +112,20 @@ export class FakeExamVisionProvider implements ExamVisionProvider {
   ocrImage(page: PageImage): Promise<{ text: string; words: WordBox[] }> {
     const sis = page.name.match(/sis-([A-Za-z0-9]+)/)?.[1] ?? "unknown";
     const text = `OCR(${page.name}) sis-${sis}`;
-    // place one word box per token spread down the page so region math has something to bite on
+    // One word box per band, tiling the tokens down the page.
+    //
+    // This read as "spread down the page", but `text` is only ever two tokens, so every page
+    // put its words at y 0.10 and 0.15 and nowhere else. wordsInRegion keeps a word when its
+    // centre is inside the region, so any answer region below roughly y 0.17 matched nothing
+    // and ocr_text came back "" -- including the one in exam-grading.spec.ts, which sits at
+    // y 0.3..0.5. Tiling means a region anywhere on the page has words to match, which is what
+    // a fake OCR backend owes the tests that depend on it.
     const tokens = text.split(/\s+/);
-    const words: WordBox[] = tokens.map((t, i) => ({
-      text: t,
+    const BAND_COUNT = 18; // y = 0.05 .. 0.90, one band every 0.05
+    const words: WordBox[] = Array.from({ length: BAND_COUNT }, (_, band) => ({
+      text: tokens[band % tokens.length],
       x: 0.1,
-      y: 0.1 + ((i * 0.05) % 0.8),
+      y: 0.05 + band * 0.05,
       width: 0.3,
       height: 0.03
     }));
