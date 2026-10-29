@@ -539,6 +539,18 @@ assert_refused "walg-retention keepBackups=0 is refused" "must be an integer >= 
   "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=0
 assert_refused "walg-retention keepBackups non-integer is refused" "must be an integer >= 1" \
   "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=abc
+# `int` would truncate these to 4 and 1 and pass the >= 1 check.
+assert_refused "walg-retention keepBackups fraction is refused" "must be an integer >= 1" \
+  "${WALG_ON[@]}" --set-json postgres.walg.retention.keepBackups=4.9
+assert_refused "walg-retention keepBackups boolean is refused" "must be an integer >= 1" \
+  "${WALG_ON[@]}" --set-json postgres.walg.retention.keepBackups=true
+assert_rendered_contains "walg-retention orders by sentinel time" \
+  templates/walg-retention.yaml 'FULL "${KEEP}" --use-sentinel-time' "${WALG_ON[@]}"
+assert_rendered_contains "walg-retention inherits postgres tolerations" \
+  templates/walg-retention.yaml "key: dedicated-db" "${WALG_ON[@]}" \
+  --set 'postgres.tolerations[0].key=dedicated-db' --set 'postgres.tolerations[0].operator=Exists'
+assert_rendered_contains "walg-retention inherits global nodeSelector" \
+  templates/walg-retention.yaml "pool: s3" "${WALG_ON[@]}" --set global.nodeSelector.pool=s3
 # The point of the CronJob: changing retention must not touch the primary's pod
 # template, or the StatefulSet restarts Postgres.
 sts_a="$(helm template t "$CHART" "${BASE[@]}" "${WALG_ON[@]}" --show-only templates/postgres-statefulset.yaml 2>/dev/null)"

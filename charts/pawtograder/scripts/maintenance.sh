@@ -138,6 +138,45 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required tool not found: $1"; }
 # ----------------------------------------------------------------------------
 k() { kubectl -n "$NAMESPACE" "$@"; }
 
+# Suspending a CronJob does not stop a Job it already started, and a running
+# walg-retention Job is deleting base backups and WAL. A window may be a PITR
+# restore, so it must not still be pruning when the fence reports complete. A
+# prune takes seconds: wait up to RETENTION_WAIT_SECONDS, then delete the Job.
+# Stopping a prune midway is safe: it only removes objects older than the
+# oldest backup it keeps, so a partial run leaves orphaned old objects, never a
+# hole in what is retained.
+RETENTION_WAIT_SECONDS="${RETENTION_WAIT_SECONDS:-120}"
+inflight_retention_jobs() {
+  local json
+  json="$(k get jobs -o json)" || return 1
+  jq -r --arg cj "${RELEASE}-walg-retention" '
+    .items[]
+    | select(any(.metadata.ownerReferences[]?; .kind == "CronJob" and .name == $cj))
+    | select((.status.active // 0) > 0)
+    | .metadata.name' <<<"$json"
+}
+stop_inflight_retention() {
+  k get cronjob "${RELEASE}-walg-retention" >/dev/null 2>&1 || return 0
+  local jobs waited=0
+  jobs="$(inflight_retention_jobs)" || die "could not list Jobs to check for an in-flight walg-retention prune; the fence is NOT complete. Retry."
+  [ -n "$jobs" ] || return 0
+  if $DRY_RUN; then
+    log "[dry-run] would wait up to ${RETENTION_WAIT_SECONDS}s for walg-retention Job(s) ${jobs//$'\n'/ }, then delete them"
+    return 0
+  fi
+  log "walg-retention prune in flight (${jobs//$'\n'/ }); waiting up to ${RETENTION_WAIT_SECONDS}s"
+  while [ -n "$jobs" ] && [ "$waited" -lt "$RETENTION_WAIT_SECONDS" ]; do
+    sleep 5; waited=$((waited + 5))
+    jobs="$(inflight_retention_jobs)" || die "could not list Jobs while waiting on walg-retention; the fence is NOT complete. Retry."
+  done
+  if [ -n "$jobs" ]; then
+    warn "walg-retention still running after ${RETENTION_WAIT_SECONDS}s; deleting ${jobs//$'\n'/ }"
+    local j
+    for j in $jobs; do run k delete job "$j" --wait=true --cascade=foreground; done
+  fi
+  ok "no walg-retention prune in flight"
+}
+
 # Read-only SQL (tuples-only). Runs even under --dry-run (no side effects).
 psql_ro() {
   # `|| true`: a read must never abort the caller (status/gates handle empties).
@@ -533,6 +572,7 @@ cmd_down() {
     fi
   done
   ok "CronJobs suspended"
+  stop_inflight_retention
 
   # 4. AUTHORITATIVE GATE: block until every fenced writer/channel/functions
   #    deployment has 0 running pods. Zero writer pods — NOT an empty queue — is

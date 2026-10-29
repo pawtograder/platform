@@ -78,7 +78,12 @@ spec:
                   # wal-g prints one "will be deleted" line per object (thousands
                   # per pruned day of WAL); count them instead of logging each.
                   # pipefail carries a wal-g failure through the awk.
-                  wal-g delete retain FULL "${KEEP}" --confirm 2>&1 \
+                  # --use-sentinel-time: order by each backup's recorded start
+                  # time, not by the timeline/LSN in its name. After a timeline
+                  # reset (pg_upgrade, or a new cluster on this prefix) name
+                  # order stops matching age, and `retain` would delete newer
+                  # backups while keeping older ones.
+                  wal-g delete retain FULL "${KEEP}" --use-sentinel-time --confirm 2>&1 \
                     | awk '/will be deleted/ { n++; next } { print } END { print "[walg-retention] objects deleted: " n+0 }'
                   echo "[walg-retention] retained:"
                   wal-g backup-list 2>&1
@@ -86,4 +91,15 @@ spec:
                 {{- include "pawtograder.walg.env" . | nindent 16 }}
               resources:
                 {{- toYaml .Values.postgres.walg.retention.resources | nindent 16 }}
+          {{- /* Postgres placement, as the migrations Job does: on a cluster
+               with tainted workers, the global and postgres settings are what
+               let a pod schedule at all. */}}
+          {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.postgres)) }}
+          nodeSelector:
+            {{- . | nindent 12 }}
+          {{- end }}
+          {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.postgres)) }}
+          tolerations:
+            {{- . | nindent 12 }}
+          {{- end }}
 {{- end }}
