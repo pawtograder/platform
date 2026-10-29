@@ -1076,7 +1076,7 @@ function artifactHasStoredFile(artifact: SubmissionArtifact): boolean {
   return (artifact.data as { format?: string } | null)?.format !== "exam_v1";
 }
 
-function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
+export function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
   // Load the artifact data from supabase
   const [downloadLink, setDownloadLink] = useState<string | null>(null);
