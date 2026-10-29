@@ -63,6 +63,14 @@ import { LuChevronDown, LuChevronRight, LuExternalLink } from "react-icons/lu";
  *
  * @returns The JSX element representing the score cell, including optional expression rendering, max score, a What If editor, and an instructor override indicator when applicable.
  */
+
+/**
+ * Two decimal places, the same as the instructor gradebook's default render (`round(score, 2)`),
+ * so a computed average reads 85.33 rather than 85.33333333333333.
+ */
+function roundScoreForDisplay(score: number): number {
+  return Math.round(score * 100) / 100;
+}
 function WhatIfScoreCell({
   column,
   private_profile_id,
@@ -147,7 +155,7 @@ function WhatIfScoreCell({
   let scoreToShow: string | number = "N/A";
   let hasNumericScore = false;
   if (score !== null && score !== undefined) {
-    scoreToShow = score;
+    scoreToShow = roundScoreForDisplay(score);
     hasNumericScore = true;
   } else if (submissionStatus.status === "no-submission") {
     scoreToShow = "Not Submitted";
@@ -161,7 +169,7 @@ function WhatIfScoreCell({
     scoreToShow = "In Progress";
   }
   if (isShowingWhatIf) {
-    scoreToShow = whatIfVal?.what_if ?? 0;
+    scoreToShow = roundScoreForDisplay(whatIfVal?.what_if ?? 0);
     hasNumericScore = true;
   }
   const showMaxScore = hasNumericScore && column.max_score != null;

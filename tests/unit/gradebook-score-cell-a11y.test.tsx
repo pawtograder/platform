@@ -155,6 +155,19 @@ describe("gradebook score cell", () => {
     });
   });
 
+  describe("a computed score with a long fraction", () => {
+    beforeEach(() => {
+      studentGrade = makeGrade({ score: 85.33333333333333, released: true });
+      submissionStatus = { status: "found" };
+    });
+
+    it("shows two decimal places, like the instructor gradebook", () => {
+      const { container } = renderGradebook();
+      expect(container.querySelector('[aria-hidden="true"]')!.textContent).toBe("85.33/100");
+      expect(screen.getByText("85.33 of 100 points")).toBeInTheDocument();
+    });
+  });
+
   describe("submitted but not yet graded", () => {
     beforeEach(() => {
       submissionStatus = { status: "found" };
