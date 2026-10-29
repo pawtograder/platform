@@ -14042,7 +14042,9 @@ export type Database = {
           p_assignment_id: number;
           p_class_id: number;
           p_is_grader: boolean;
+          p_latest_template_sha?: string;
           p_repository: string;
+          p_upstream_repo?: string;
         };
         Returns: undefined;
       };

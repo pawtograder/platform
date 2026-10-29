@@ -93,8 +93,10 @@ CREATE TRIGGER repositories_validate_git_provider
 REVOKE ALL ON FUNCTION public.assignments_validate_git_provider() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.repositories_validate_git_provider() FROM PUBLIC, anon, authenticated;
 
--- Reserve before external creation. Failed requests retain the name for an idempotent retry.
-CREATE FUNCTION public.reserve_github_staff_repo( p_assignment_id bigint, p_class_id bigint, p_repository text, p_is_grader boolean
+-- Grader setup reserves before external creation, so a failed request keeps the name for a retry.
+-- Handout setup calls this after creation and writes its SHA and PR target in the same statement.
+CREATE FUNCTION public.reserve_github_staff_repo( p_assignment_id bigint, p_class_id bigint, p_repository text, p_is_grader boolean,
+  p_latest_template_sha text DEFAULT NULL, p_upstream_repo text DEFAULT NULL
 ) RETURNS void LANGUAGE plpgsql SET search_path = public AS $$
 DECLARE v_provider text;
 BEGIN
@@ -109,12 +111,14 @@ BEGIN
     UPDATE public.autograder SET grader_repo = p_repository WHERE id = p_assignment_id;
     IF NOT FOUND THEN RAISE EXCEPTION 'Autograder not found'; END IF;
   ELSE
-    UPDATE public.assignments SET template_repo = p_repository WHERE id = p_assignment_id;
+    UPDATE public.assignments SET template_repo = p_repository,
+      latest_template_sha = coalesce(p_latest_template_sha, latest_template_sha),
+      upstream_repo = coalesce(p_upstream_repo, upstream_repo) WHERE id = p_assignment_id;
   END IF;
 END;
 $$;
-REVOKE ALL ON FUNCTION public.reserve_github_staff_repo(bigint, bigint, text, boolean) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.reserve_github_staff_repo(bigint, bigint, text, boolean) TO service_role;
+REVOKE ALL ON FUNCTION public.reserve_github_staff_repo(bigint, bigint, text, boolean, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reserve_github_staff_repo(bigint, bigint, text, boolean, text, text) TO service_role;
 
 -- Keep the existing function identities and grants. The GitHub bodies below are unchanged
 -- except for provider guards. No separately callable, unguarded RPCs are introduced.

@@ -101,6 +101,25 @@ for (const kind of ["student", "handout", "grader"]) {
     expect(result.error?.message).toContain("after repositories exist");
   });
 }
+test("handout reservation writes its SHA and PR target with the pointer", async () => {
+  const f = await fixture("github");
+  const args = { p_assignment_id: f.assignment.id, p_class_id: f.course.id, p_is_grader: false };
+  const fields = "template_repo,latest_template_sha,upstream_repo";
+  const read = () => ok(supabase.from("assignments").select(fields).eq("id", f.assignment.id).single());
+  const h = "e2e-ignore/h";
+  await ok(
+    supabase.rpc("reserve_github_staff_repo", {
+      ...args,
+      p_repository: h,
+      p_latest_template_sha: "a1",
+      p_upstream_repo: h
+    })
+  );
+  expect(await read()).toEqual({ template_repo: h, latest_template_sha: "a1", upstream_repo: h });
+  // Null arguments keep the stored SHA and PR target.
+  await ok(supabase.rpc("reserve_github_staff_repo", { ...args, p_repository: "e2e-ignore/h2" }));
+  expect(await read()).toEqual({ template_repo: "e2e-ignore/h2", latest_template_sha: "a1", upstream_repo: h });
+});
 test("a repository must match its assignment on insert and update", async () => {
   const f = await fixture("forgejo");
   expect((await repository(f)).error?.code).toBe("23514");
