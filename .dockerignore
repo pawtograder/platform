@@ -1,6 +1,7 @@
 node_modules
 .next
 .next-sso-e2e
+tests/e2e/sso/.forgejo-coder-e2e.json
 .git
 .env*
 playwright-report
