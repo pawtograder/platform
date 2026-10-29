@@ -19,6 +19,7 @@
 set -uo pipefail
 
 CHART="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+"$CHART/scripts/build-deps.sh" --if-missing "$CHART" || { echo "FAIL could not fetch $CHART's subcharts" >&2; exit 1; }
 FAILED=0
 ERRFILE="$(mktemp)"
 OUTFILE="$(mktemp)"
@@ -309,6 +310,13 @@ assert_web_render_unchanged() {
   mkdir -p "$tmp/base"
   if ! git -C "$repo" archive "$WEB_RENDER_BASE_REF" charts/pawtograder | tar -x -C "$tmp/base" 2>/dev/null; then
     echo "skip [$label]: could not export the chart at $WEB_RENDER_BASE_REF"
+    rm -rf "$tmp"
+    return
+  fi
+  # git archive leaves out the gitignored subcharts; fetch the base's own pins.
+  if ! "$CHART/scripts/build-deps.sh" "$base_chart"; then
+    echo "FAIL [$label]: could not fetch the chart's dependencies at $WEB_RENDER_BASE_REF"
+    FAILED=1
     rm -rf "$tmp"
     return
   fi

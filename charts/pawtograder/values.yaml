@@ -2651,3 +2651,270 @@ tests:
     resources:
       requests: { cpu: "10m", memory: "16Mi" }
       limits:   { cpu: "100m", memory: "64Mi" }
+
+forgejo:
+  enabled: false
+  database: pawtograder
+  # Mirrored by .github/workflows/mirror-third-party.yml; a new tag goes in .github/mirror.yaml first.
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/forgejo/forgejo
+    tag: "15.0.9"
+  strategy:
+    type: Recreate # RWO repo volume
+  serviceAccount:
+    create: true
+    automountServiceAccountToken: false
+  podSecurityContext:
+    fsGroup: 1000
+    seccompProfile: { type: RuntimeDefault }
+  # The subchart's documented rootless set, without SYS_CHROOT (SSH is off); applies to its init containers too.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities: { drop: [ALL] }
+    privileged: false
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 2Gi } # 1Gi OOMKilled finishing a job's log upload
+  initContainers:
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+  persistence:
+    enabled: true
+    size: 20Gi
+  # The chart's test pod sets no resources, so limit-tracking quotas reject it.
+  test:
+    enabled: false
+  ingress:
+    enabled: true
+    className: nginx
+    hosts: []
+  gitea:
+    admin:
+      existingSecret: pawtograder-forgejo-admin
+      passwordMode: keepUpdated
+    additionalConfigFromEnvs:
+      - name: FORGEJO__DATABASE__PASSWD
+        valueFrom:
+          secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+    config:
+      server:
+        DISABLE_SSH: true
+        START_SSH_SERVER: false
+        LFS_START_SERVER: true
+      database:
+        DB_TYPE: postgres
+        # Set here, not via env, so a change rolls Forgejo via the config checksum.
+        HOST: pawtograder-postgres:5432
+        NAME: forgejo
+        USER: forgejo
+        SSL_MODE: disable
+      service:
+        DISABLE_REGISTRATION: true
+      actions:
+        ENABLED: true
+        DEFAULT_ACTIONS_URL: https://github.com
+      session:
+        PROVIDER: db
+      cache:
+        ADAPTER: memory
+      queue:
+        TYPE: level
+      indexer:
+        ISSUE_INDEXER_TYPE: bleve
+        REPO_INDEXER_ENABLED: false
+
+forgejo-db:
+  enabled: false
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/postgres
+    tag: "18.6"
+  podSecurityContext:
+    seccompProfile: { type: RuntimeDefault }
+  settings:
+    existingSecret: pawtograder-forgejo-db-superuser
+    superuserPassword:
+      secretKey: POSTGRES_PASSWORD
+  storage:
+    requestedSize: 5Gi
+    keepPvc: true
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+forgejoRunner:
+  enabled: false
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  arch: amd64
+  imagePullSecrets: []
+  capacity: 2
+  labels:
+    - ubuntu-latest:host
+    - ubuntu-24.04:host
+    - ubuntu-22.04:host
+  jobTimeout: 1h
+  podDeadlineSeconds: 4200
+  pendingTimeoutSeconds: 900
+  pollInterval: 5
+  workdirSizeLimit: 20Gi
+  resources:
+    requests: { cpu: "1", memory: 2Gi, ephemeral-storage: 1Gi }
+    limits: { cpu: "2", memory: 4Gi, ephemeral-storage: 24Gi }
+  dispatcher:
+    # Secret with a write:admin `token`; empty falls back to the admin password, which breaks under 2FA.
+    tokenSecret: ""
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { cpu: 200m, memory: 128Mi }
+  # Needs a CNI that enforces NetworkPolicy.
+  networkPolicy:
+    enabled: true
+    privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+    extraEgress: []
+
+coder:
+  enabled: false
+  database: pawtograder
+  coder:
+    image:
+      repo: ghcr.io/pawtograder/mirror/coder/coder
+      tag: v2.37.3
+    env:
+      - name: CODER_PG_CONNECTION_URL
+        value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
+    envFrom:
+      - configMapRef: { name: pawtograder-coder-env }
+      - secretRef: { name: pawtograder-coder-db }
+    # Whoever reaches a coderd with no users becomes owner; this creates ours on 127.0.0.1 before coderd serves.
+    initContainers:
+      - name: first-owner
+        image: ghcr.io/pawtograder/mirror/coder/coder:v2.37.3
+        imagePullPolicy: IfNotPresent
+        command:
+          - sh
+          - -ec
+          - |
+            for v in "$ADMIN_EMAIL" "$ADMIN_USERNAME" "$ADMIN_PASSWORD"; do
+              case "$v" in *[[:cntrl:]]*) echo "pawtograder-coder-admin has a control character (trailing newline?)" >&2; exit 1 ;; esac
+            done
+            /opt/coder server >/tmp/first-owner.log 2>&1 &
+            pid=$!
+            url=http://127.0.0.1:3000
+            c() { curl --connect-timeout 5 --max-time 30 "$@"; }
+            deadline=$(( $(date +%s) + 600 ))
+            until c -fsS -o /dev/null "$url/healthz"; do
+              kill -0 "$pid" 2>/dev/null || { cat /tmp/first-owner.log >&2; exit 1; }
+              [ "$(date +%s)" -lt "$deadline" ] || { echo "coderd not healthy after 10m" >&2; tail -50 /tmp/first-owner.log >&2; exit 1; }
+              sleep 2
+            done
+            # Coder answers 200 once a user exists and 404 before; anything else is an error, not "no user".
+            status=$(c -sS -o /dev/null -w '%{http_code}' "$url/api/v2/users/first")
+            if [ "$status" = 200 ]; then
+              echo "first user exists"
+            elif [ "$status" != 404 ]; then
+              echo "GET /api/v2/users/first returned $status" >&2; exit 1
+            else
+              esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+              printf '{"email":"%s","username":"%s","password":"%s","trial":false}' \
+                "$(esc "$ADMIN_EMAIL")" "$(esc "$ADMIN_USERNAME")" "$(esc "$ADMIN_PASSWORD")" \
+                | c -fsS -o /dev/null -X POST -H 'Content-Type: application/json' --data-binary @- "$url/api/v2/users/first"
+              echo "created first owner $ADMIN_USERNAME"
+            fi
+            kill "$pid"
+            wait "$pid" 2>/dev/null || true
+        env:
+          - { name: CODER_HTTP_ADDRESS, value: "127.0.0.1:3000" }
+          - { name: CODER_ACCESS_URL, value: "http://127.0.0.1:3000" }
+          - { name: CODER_PROVISIONER_DAEMONS, value: "0" }
+          - { name: CODER_CACHE_DIRECTORY, value: /tmp/coder-cache }
+          - name: ADMIN_EMAIL
+            valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: email } }
+          - name: ADMIN_USERNAME
+            valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: username } }
+          - name: ADMIN_PASSWORD
+            valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: password } }
+        envFrom:
+          - configMapRef: { name: pawtograder-coder-env }
+          - secretRef: { name: pawtograder-coder-db }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: [ALL] }
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile: { type: RuntimeDefault }
+        resources:
+          requests: { cpu: 250m, memory: 512Mi }
+          limits: { cpu: "1", memory: 1Gi }
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+    # Merged into the subchart's defaults (non-root uid 1000, RuntimeDefault seccomp, no privilege escalation).
+    securityContext:
+      capabilities: { drop: [ALL] }
+    service:
+      type: ClusterIP
+    ingress:
+      enable: true
+      className: nginx
+      host: ""
+      wildcardHost: ""
+    serviceAccount:
+      workspacePerms: true
+      enableDeployments: true
+
+coder-db:
+  enabled: false
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/postgres
+    tag: "18.6"
+  podSecurityContext:
+    seccompProfile: { type: RuntimeDefault }
+  settings:
+    existingSecret: pawtograder-coder-db-superuser
+    superuserPassword:
+      secretKey: POSTGRES_PASSWORD
+  storage:
+    requestedSize: 5Gi
+    keepPvc: true
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+coderBootstrap:
+  enabled: true
+  workspaceNamespace: ""
+  workspaces:
+    image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
+    arch: amd64
+    priorityClassName: ""
+    imagePullPolicy: IfNotPresent
+    imagePullSecrets: [] # Secret names in the workspace namespace
+    storageClass: ""
+    ephemeralStorageLimit: 4Gi
+    networkPolicy:
+      privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      extraEgress: []
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+appDatabases:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }
