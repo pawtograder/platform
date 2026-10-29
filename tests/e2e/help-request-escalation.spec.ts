@@ -155,7 +155,7 @@ test.describe("office hours escalation", () => {
       .toEqual({ status: "in_progress", assignee: taB.private_profile_id, escalation_count: 1 });
   });
 
-  test("End ticket closes for good with no check-in", async ({ browser }) => {
+  test("End ticket after Resolve withdraws the check-in and closes for good", async ({ browser }) => {
     const ended = await insertHelpRequest({
       class_id: course.id,
       student_profile_id: student.private_profile_id,
@@ -165,6 +165,11 @@ test.describe("office hours escalation", () => {
 
     const taPage = await newSession(browser, taA);
     await taPage.goto(`/course/${course.id}/manage/office-hours/request/${ended.id}`);
+    // Resolve first: End ticket must stay available while the student's check-in is pending,
+    // so staff can withdraw it.
+    await taPage.getByRole("button", { name: "Resolve" }).click();
+    await taPage.getByRole("button", { name: "Confirm action" }).click();
+    await expect(taPage.getByText("The student will be asked whether their problem got fixed.")).toBeVisible();
     await taPage.getByRole("button", { name: "End ticket" }).click();
     await taPage.getByRole("button", { name: "Confirm action" }).click();
     await expect(taPage.getByText("This ticket is closed and can't be escalated again.")).toBeVisible();

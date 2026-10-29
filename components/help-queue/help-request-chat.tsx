@@ -1354,9 +1354,10 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                 />
               )}
 
-            {/* End ticket: final, no check-in and no further escalation */}
+            {/* End ticket: final, no check-in and no further escalation. Not gated on readOnly,
+                which is true once resolved: ending a resolved ticket withdraws a pending check-in. */}
             {isInstructorOrGrader &&
-              !readOnly &&
+              !isViewingAsStudent &&
               request &&
               (request.status === "open" || request.status === "in_progress" || isCheckInPending(request)) && (
                 <PopConfirm

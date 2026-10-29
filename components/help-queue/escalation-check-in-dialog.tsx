@@ -48,7 +48,13 @@ function CheckInForStudent({ profileId, classId }: { profileId: string; classId:
 
   const pending = useMemo(() => {
     const mine = new Set(helpRequestStudents.filter((s) => s.profile_id === profileId).map((s) => s.help_request_id));
-    return helpRequests.find((r) => mine.has(r.id) && isCheckInPending(r, now)) ?? null;
+    // Soonest-expiring first, so one check-in can't hold the dialog while another lapses unseen.
+    return (
+      helpRequests
+        .filter((r) => mine.has(r.id) && isCheckInPending(r, now))
+        .sort((a, b) => new Date(a.check_in_expires_at!).getTime() - new Date(b.check_in_expires_at!).getTime())[0] ??
+      null
+    );
   }, [helpRequests, helpRequestStudents, profileId, now]);
 
   return (

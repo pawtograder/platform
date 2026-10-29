@@ -183,6 +183,11 @@ test.describe("help request escalation RPCs", () => {
     ).not.toBeNull();
     await studentClient.from("help_requests").update({ status: "open" }).eq("id", id);
     expect((await row(id)).status).toBe("closed");
+
+    // Staff can't undo it with a direct update either.
+    const staffReopen = await taClient.from("help_requests").update({ status: "open" }).eq("id", id);
+    expect(staffReopen.error).not.toBeNull();
+    expect((await row(id)).status).toBe("closed");
   });
 
   test("End ticket withdraws a pending check-in", async () => {

@@ -286,7 +286,10 @@ export class OfficeHoursController {
         client: this._client,
         table: "help_request_escalations",
         query: this._client.from("help_request_escalations").select("*").eq("class_id", this.classId),
-        additionalRealTimeControllers: [this.officeHoursRealTimeController]
+        additionalRealTimeControllers: [this.officeHoursRealTimeController],
+        // No updated_at column, so reconnects would otherwise skip the refetch and lose any
+        // escalation broadcast while the staff channel was down.
+        enableAutoRefetch: true
       });
     }
     return this._helpRequestEscalations;

@@ -182,8 +182,10 @@ FOR EACH ROW EXECUTE FUNCTION public.broadcast_help_request_staff_data_change();
 -- Column guard: students cannot reopen a ticket or touch escalation state
 -- ---------------------------------------------------------------------------
 --
--- Same function as 20261014120000_help_request_write_rls_hardening.sql, plus two
--- checks for non-staff callers:
+-- Same function as 20261014120000_help_request_write_rls_hardening.sql, plus:
+--   * a closed ticket (staff "End ticket") keeps its status for every user-JWT caller,
+--     staff included, so End ticket stays final; service-role tooling is still trusted;
+-- and two checks for non-staff callers:
 --   * escalation_count, last_escalated_at and check_in_expires_at change only
 --     through the RPCs in this migration;
 --   * status may only move from open/in_progress to resolved (a student resolving
@@ -204,7 +206,16 @@ BEGIN
   END IF;
 
   -- Callers without a user JWT (service role, cron, admin edge functions) are trusted.
-  IF auth.uid() IS NULL OR public.authorizeforhelprequeststaff(OLD.class_id) THEN
+  IF auth.uid() IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  IF OLD.status = 'closed' AND NEW.status IS DISTINCT FROM OLD.status THEN
+    RAISE EXCEPTION 'help request % was ended and cannot be reopened', OLD.id
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF public.authorizeforhelprequeststaff(OLD.class_id) THEN
     RETURN NEW;
   END IF;
 
