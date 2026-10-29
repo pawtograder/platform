@@ -680,12 +680,6 @@ auth:
     enabled: true
     uri: pg-functions://postgres/public/custom_access_token_hook
 
-  # Pawtograder as an OAuth 2.1 / OIDC provider, so Forgejo and Coder can offer
-  # "Sign in with Pawtograder". GoTrue sends the browser to the web app's
-  # consent page at authorizationPath. Also opens the OIDC endpoints third-party
-  # apps call without an apikey (discovery, JWKS, authorize, token, userinfo) in
-  # Kong. Clients are registered by an admin, never dynamically: see
-  # scripts/setup-sso-clients.sh.
   oauthServer:
     enabled: false
     authorizationPath: /oauth/consent
@@ -2797,10 +2791,6 @@ forgejoRunner:
 coder:
   enabled: false
   database: pawtograder
-  # "Sign in with Pawtograder" (needs auth.oauthServer.enabled). Sets the
-  # CODER_OIDC_* settings in pawtograder-coder-env; CODER_OIDC_CLIENT_ID and
-  # CODER_OIDC_CLIENT_SECRET come from the pawtograder-coder-oidc Secret, which
-  # scripts/setup-sso-clients.sh writes. Coder leaves OIDC off until it exists.
   oidc:
     enabled: false
     signInText: Sign in with Pawtograder

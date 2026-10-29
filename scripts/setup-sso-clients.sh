@@ -1,28 +1,6 @@
 #!/usr/bin/env bash
-# Register Forgejo and Coder as OAuth 2.1 / OIDC clients of Pawtograder, so
-# they can offer "Sign in with Pawtograder", and store their credentials in the
-# Secrets the chart reads:
-#
-#   pawtograder-forgejo-oauth  key, secret                         (forgejo.gitea.oauth[].existingSecret)
-#   pawtograder-coder-oidc     CODER_OIDC_CLIENT_ID, _CLIENT_SECRET (coder.coder.envFrom)
-#
-# Re-running replaces both clients (GoTrue only returns a secret at creation)
-# and restarts Forgejo and Coder so they pick up the new credentials.
-#
-# Order on a release that doesn't have SSO yet:
-#   1. Deploy with auth.oauthServer.enabled=true (and coder.oidc.enabled=true;
-#      its Secret is optional).
-#   2. Run this script.
-#   3. Deploy with forgejo.gitea.oauth set. Forgejo's init container reads
-#      pawtograder-forgejo-oauth, so it has to exist first.
-#
-# Usage:
-#   scripts/setup-sso-clients.sh --api-url https://api.example.com \
-#     --forgejo-url https://git.example.com --coder-url https://coder.example.com
-#
-# Env: NAMESPACE (default pawtograder), RELEASE (default pawtograder),
-#      JWT_SECRET_NAME (default pawtograder-jwt), FORGEJO_SOURCE_NAME (default pawtograder).
-# Requires: kubectl, curl, jq.
+# Usage: setup-sso-clients.sh --api-url URL --forgejo-url URL --coder-url URL (env: NAMESPACE, RELEASE, JWT_SECRET_NAME, FORGEJO_SOURCE_NAME)
+# Run after deploying auth.oauthServer.enabled=true and before setting forgejo.gitea.oauth (Forgejo's init container needs the Secret).
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-pawtograder}"
@@ -55,7 +33,7 @@ curl -fsS -o /dev/null "$auth/.well-known/openid-configuration" || {
 
 existing="$(gotrue "$auth/admin/oauth/clients?per_page=1000")"
 
-# register <client_name> <redirect_uri>: prints the created client JSON
+# GoTrue only returns a client secret at creation, so replace rather than reuse.
 register() {
   local ids
   ids="$(echo "$existing" | jq -r --arg n "$1" '(.clients // .)[] | select(.client_name == $n) | .client_id')"
@@ -64,7 +42,7 @@ register() {
     -d "$(jq -n --arg n "$1" --arg r "$2" '{client_name: $n, redirect_uris: [$r], client_type: "confidential"}')"
 }
 
-apply_secret() { # name key=value...
+apply_secret() {
   local name="$1"; shift
   local args=()
   for kv in "$@"; do args+=(--from-literal="$kv"); done

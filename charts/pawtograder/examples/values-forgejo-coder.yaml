@@ -1,5 +1,4 @@
-# Pre-create the Secrets listed in README "Forgejo and Coder", and run
-# scripts/setup-sso-clients.sh once Pawtograder is up for "Sign in with Pawtograder".
+# Pre-create the Secrets listed in README "Forgejo and Coder"; run scripts/setup-sso-clients.sh once Pawtograder is up.
 
 auth:
   oauthServer:
@@ -18,10 +17,6 @@ forgejo:
       - secretName: example-wildcard-tls
         hosts: [git.example.com]
   gitea:
-    # "Sign in with Pawtograder". The init container adds or updates this login
-    # source before Forgejo starts. key/secret come from the Secret that
-    # scripts/setup-sso-clients.sh writes. The discovery URL is
-    # <pawtograder.api.url>/auth/v1/.well-known/openid-configuration.
     oauth:
       - name: pawtograder
         provider: openidConnect
@@ -39,8 +34,6 @@ forgejo:
         valueFrom:
           secretKeyRef: { name: pawtograder-s3, key: AWS_SECRET_ACCESS_KEY }
     config:
-      # Registration stays off (chart default); OAuth sign-in still creates the
-      # account, since only ENABLE_AUTO_REGISTRATION gates that.
       oauth2_client:
         ENABLE_AUTO_REGISTRATION: true
         USERNAME: email
