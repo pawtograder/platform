@@ -73,6 +73,11 @@ export SB_ISSUER="$SUPABASE_URL/auth/v1"
 wait_for "$SB_ISSUER/.well-known/openid-configuration" 30 "OIDC discovery"
 # Migrations only create audit partitions for a fixed window; a retained stack can be past it.
 docker exec supabase_db_pawtograder-sso-e2e psql -U postgres -d postgres -qc "SELECT public.audit_maintain_partitions();" >/dev/null
+WANT_MIGRATION="$(ls "$REPO/supabase/migrations" | sort | tail -1 | cut -d_ -f1)"
+HAVE_MIGRATION="$(docker exec supabase_db_pawtograder-sso-e2e psql -U postgres -d postgres -tAc "SELECT max(version) FROM supabase_migrations.schema_migrations")"
+if [ "$HAVE_MIGRATION" != "$WANT_MIGRATION" ]; then
+  echo "ERROR: the retained Supabase is at migration $HAVE_MIGRATION, the checkout at $WANT_MIGRATION. Re-run without SKIP_SUPABASE/ONLY."; exit 1
+fi
 # TestingUtils falls back to .env.local, which would seed the developer's own database.
 [ "${ONLY:-}" = "1" ] && exec npx playwright test --config playwright.forgejo-coder.config.ts "$@"
 
