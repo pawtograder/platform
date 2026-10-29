@@ -3578,6 +3578,7 @@ export default function GradebookTable() {
         title="Auto-group ungrouped columns"
         confirmLabel="Create groups"
         compareWithLegacy={false}
+        requireGroups
         onConfirm={columnGroupActions.autoGroup}
         onClose={() => setIsAutoGroupOpen(false)}
       />

@@ -43,8 +43,11 @@ export function AutoGroupPreviewDialog({
   confirmLabel,
   onConfirm,
   onClose,
-  compareWithLegacy = true
+  compareWithLegacy = true,
+  requireGroups = false
 }: {
+  /** Disable confirming when the plan creates nothing (auto-group would be a no-op; enabling the feature is not). */
+  requireGroups?: boolean;
   open: boolean;
   /** List columns whose header differs from the slug-guessed groups (true when the course still shows those). */
   compareWithLegacy?: boolean;
@@ -168,7 +171,12 @@ export function AutoGroupPreviewDialog({
               <Button variant="outline" onClick={onClose} disabled={isSaving}>
                 Cancel
               </Button>
-              <Button colorPalette="green" onClick={confirm} loading={isSaving} disabled={!plan}>
+              <Button
+                colorPalette="green"
+                onClick={confirm}
+                loading={isSaving}
+                disabled={!plan || (requireGroups && plan.groups.length === 0)}
+              >
                 {confirmLabel}
               </Button>
             </Dialog.Footer>

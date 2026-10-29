@@ -58,6 +58,9 @@ test.describe("Gradebook column groups (existing course)", () => {
   test("turning groups on previews every change, then stores the groups", async ({ page }) => {
     await loginAsUser(page, fixture.instructor, fixture.course);
     await page.goto(`/course/${fixture.course.id}/manage/course/feature-flags`);
+    await visualScreenshot(page, "gradebook-groups-feature-flag-card", {
+      element: page.locator(".chakra-card__root").filter({ hasText: "Gradebook column groups" })
+    });
     await page.getByText("Use stored gradebook column groups").click();
 
     const dialog = page.getByRole("dialog", { name: "Turn on gradebook column groups" });
@@ -152,6 +155,73 @@ test.describe("Gradebook column groups (existing course)", () => {
     await waitForToastsGone(page);
     await scrollTableHome(page);
     await visualScreenshot(page, "gradebook-groups-after-edits");
+  });
+
+  test("every instructor surface for columns and groups", async ({ page }) => {
+    await loginAsUser(page, fixture.instructor, fixture.course);
+    await openInstructorGradebook(page, fixture.course.id);
+    await tableRegion(page).getByRole("button", { name: "Expand all groups" }).click();
+    await waitForVirtualizerIdle(page);
+
+    // The column menu: Group…, and Move Left/Right that stay inside the group (Quiz 1 is first).
+    await openColumnMenu(page, "Quiz 1");
+    await expect(page.getByRole("menuitem", { name: "Move Left", exact: true })).toBeDisabled();
+    await expect(page.getByRole("menuitem", { name: "Move Right", exact: true })).toBeEnabled();
+    await visualScreenshot(page, "gradebook-groups-column-menu");
+
+    // Group… for a column: existing groups, or a new one by name.
+    await page.getByRole("menuitem", { name: "Group…" }).click();
+    const groupDialog = page.getByRole("dialog", { name: /Group for .Quiz 1./ });
+    await expect(groupDialog.getByLabel("Group")).toHaveValue(/\d+/);
+    await groupDialog.getByLabel("Group").selectOption("new");
+    await groupDialog.getByLabel("New group name").fill("Quiz retakes");
+    await visualScreenshot(page, "gradebook-groups-column-group-dialog", { element: groupDialog });
+    await groupDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(groupDialog).toBeHidden();
+
+    // The group header menu, and the rename and delete dialogs it opens.
+    await tableRegion(page).getByRole("button", { name: "Group options for Quizzes" }).click();
+    await expect(page.getByRole("menuitem", { name: "Move group left" })).toBeEnabled();
+    await visualScreenshot(page, "gradebook-groups-group-menu");
+    await page.getByRole("menuitem", { name: "Rename group" }).click();
+    const renameDialog = page.getByRole("dialog", { name: "Rename group" });
+    await renameDialog.getByLabel("Group name").fill("Weekly quizzes");
+    await visualScreenshot(page, "gradebook-groups-rename-dialog", { element: renameDialog });
+    await renameDialog.getByRole("button", { name: "Cancel" }).click();
+
+    await tableRegion(page).getByRole("button", { name: "Group options for Quizzes" }).click();
+    await page.getByRole("menuitem", { name: "Delete group" }).click();
+    const deleteDialog = page.getByRole("dialog", { name: /Delete group .Quizzes./ });
+    await visualScreenshot(page, "gradebook-groups-delete-dialog", { element: deleteDialog });
+    await deleteDialog.getByRole("button", { name: "Cancel" }).click();
+
+    // Add Column and Edit Column, each with the Group picker.
+    await page.getByRole("button", { name: "Add Column" }).click();
+    const addDialog = page.getByRole("dialog", { name: "Add Column" });
+    await addDialog.locator("#name").fill("Quiz 6");
+    await addDialog.locator("#maxScore").fill("10");
+    await addDialog.locator("#slug").fill("quiz-6");
+    await addDialog.locator("#columnGroup").selectOption({ label: "Quizzes" });
+    await visualScreenshot(page, "gradebook-groups-add-column-dialog", { element: addDialog });
+    await addDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(addDialog).toBeHidden();
+
+    await openColumnMenu(page, "Attendance");
+    await page.getByRole("menuitem", { name: "Edit Column" }).click();
+    const editDialog = page.getByRole("dialog", { name: /Edit Column/ });
+    await expect(editDialog.locator("#columnGroup")).toHaveValue("none");
+    await visualScreenshot(page, "gradebook-groups-edit-column-dialog", { element: editDialog });
+    await editDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(editDialog).toBeHidden();
+
+    // Auto-group from the action bar, once groups are on: only what is still ungrouped.
+    await page.getByRole("button", { name: "Auto-group Columns" }).click();
+    const autoDialog = page.getByRole("dialog", { name: "Auto-group ungrouped columns" });
+    // Everything groupable is grouped already, so there is nothing to confirm.
+    await expect(autoDialog.getByText(/No columns would be grouped/)).toBeVisible();
+    await expect(autoDialog.getByRole("button", { name: "Create groups" })).toBeDisabled();
+    await visualScreenshot(page, "gradebook-groups-auto-group-dialog", { element: autoDialog });
+    await autoDialog.getByRole("button", { name: "Cancel" }).click();
   });
 
   test("students see stored group names, and never a group of hidden columns", async ({ page }) => {
