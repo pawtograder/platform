@@ -695,7 +695,7 @@ Pawtograder can be the identity provider for Forgejo and Coder, through Supabase
 Clients are registered by an admin; dynamic registration stays off. To turn this on for a release:
 
 1. Deploy with `auth.oauthServer.enabled: true` and `coder.oidc.enabled: true`.
-2. Run `scripts/setup-sso-clients.sh --api-url <api url> --forgejo-url <forgejo url> --coder-url <coder url>`. It registers both clients, writes the two Secrets and restarts Forgejo and Coder. Re-running it replaces the clients.
+2. Run `scripts/setup-sso-clients.sh --api-url <api url> --forgejo-url <forgejo url> --coder-url <coder url>`. It registers both clients, writes the two Secrets and restarts Forgejo and Coder. Re-running it replaces the clients: it revokes an app's old client only after that app has rolled out with the new one.
 3. Deploy with `forgejo.gitea.oauth` set. Forgejo's init container needs `pawtograder-forgejo-oauth`, so it has to exist before this step.
 
 `DISABLE_REGISTRATION: true` doesn't block these sign-ins: Forgejo gates OAuth auto-registration only on `ENABLE_AUTO_REGISTRATION`. GoTrue requires PKCE on every authorization request. Forgejo and Coder both send it, but a Forgejo login source added with `forgejo admin auth add-oauth` against a running server sends no PKCE on its first sign-in. The subchart's init container adds the source before Forgejo starts, so this chart avoids that.
