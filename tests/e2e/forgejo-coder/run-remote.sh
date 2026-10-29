@@ -20,7 +20,6 @@ done
   grep '^#' "$0" | sed 's/^# \?//'; exit 2; }
 
 OUT_JSON=tests/e2e/sso/.forgejo-coder-e2e.json
-# It holds the release's admin passwords.
 trap 'rm -f "$OUT_JSON"' EXIT
 umask 077
 rm -f "$OUT_JSON"

@@ -1,4 +1,3 @@
-/** CW-04: sign in to Forgejo and Coder with Pawtograder; run via tests/e2e/forgejo-coder/run-e2e.sh. */
 import { test, expect, type Browser, type Page } from "@playwright/test";
 import fs from "fs";
 import path from "path";

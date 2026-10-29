@@ -45,7 +45,6 @@ export default async function OAuthConsent(props: { searchParams: Promise<Search
     data: { session }
   } = await supabase.auth.getSession();
   if (!claims?.claims || !session) {
-    // Keep the authorization_id through sign-in so the user lands back here afterwards.
     redirect(`/sign-in?redirect=${encodeURIComponent(consentPath)}`);
   }
 

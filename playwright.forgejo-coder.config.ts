@@ -1,6 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
 
-/** CW-04 Forgejo/Coder SSO lane; needs the stack from tests/e2e/forgejo-coder/run-e2e.sh. */
 export default defineConfig({
   testDir: "./tests/e2e/sso",
   testMatch: ["**/*.forgejo-coder.spec.ts"],
