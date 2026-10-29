@@ -85,7 +85,11 @@ function safeRedirectPath(value: string | null): string | undefined {
   if (!value || !value.startsWith("/")) return undefined;
   if ([...value].some((c) => c === "\\" || c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)) return undefined;
   const base = "http://pawtograder.invalid";
-  return new URL(value, base).origin === base ? value : undefined;
+  try {
+    return new URL(value, base).origin === base ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export const signInOrSignUpWithEmailAction = async (data: FormData) => {
