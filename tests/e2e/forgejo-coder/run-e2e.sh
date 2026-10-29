@@ -15,6 +15,7 @@ PAW_BASE_URL="http://127.0.0.1:${PAW_PORT}"
 FORGEJO_BASE_URL="http://127.0.0.1:${FORGEJO_PORT}"
 CODER_BASE_URL="http://127.0.0.1:${CODER_PORT}"
 export FORGEJO_AUTH_SOURCE_NAME=pawtograder
+[ "${ONLY:-}" = "1" ] && { KEEP_UP=1; SKIP_SUPABASE=1; }
 
 # Outside the repo, or test runners pick up the copied supabase/functions *.test.ts.
 WORK="${SSO_E2E_WORKDIR:-${TMPDIR:-/tmp}/pawtograder-sso-e2e}"
@@ -70,6 +71,8 @@ export NEXT_PUBLIC_SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
 export NEXT_PUBLIC_PAWTOGRADER_WEB_URL="$PAW_BASE_URL"
 export SB_ISSUER="$SUPABASE_URL/auth/v1"
 wait_for "$SB_ISSUER/.well-known/openid-configuration" 30 "OIDC discovery"
+# TestingUtils falls back to .env.local, which would seed the developer's own database.
+[ "${ONLY:-}" = "1" ] && exec npx playwright test --config playwright.forgejo-coder.config.ts "$@"
 
 log "Registering Forgejo and Coder as OAuth clients"
 CLIENTS="$(FORGEJO_BASE_URL="$FORGEJO_BASE_URL" CODER_BASE_URL="$CODER_BASE_URL" npx tsx tests/e2e/sso/register-oauth-clients.ts)"

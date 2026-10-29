@@ -11,7 +11,7 @@ Owner: @nourshoreibah.
 ```bash
 npm run test:e2e:forgejo-coder        # boot everything, run the suite, tear down
 KEEP_UP=1 npm run test:e2e:forgejo-coder   # leave the stack up afterwards
-npm run test:e2e:forgejo-coder:only   # re-run the spec against a stack that is already up
+npm run test:e2e:forgejo-coder:only   # re-run the spec against a KEEP_UP stack (uses its Supabase keys, not .env.local)
 ```
 
 Re-run faster with `SKIP_SUPABASE=1`, `SKIP_APPS=1`, `SKIP_BUILD=1` (reuse `.next`) or `SKIP_TOOL=1`. Extra arguments go to
