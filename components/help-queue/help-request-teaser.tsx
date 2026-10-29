@@ -7,6 +7,7 @@ import { formatRelative } from "date-fns";
 import { BsCameraVideo, BsChatText, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
 import Markdown from "@/components/ui/markdown";
 import excerpt from "@stefanprobst/remark-excerpt";
+import { EscalationBadge } from "./escalation-badge";
 
 // Module-stable references — see `components/ui/markdown.tsx`. Inline
 // `components` / `remarkPlugins` literals would force `react-markdown`
@@ -40,6 +41,9 @@ interface MessageData {
   queue?: HelpQueue;
   isVideoLive?: boolean;
   created_by?: string;
+  escalationCount?: number;
+  /** Latest escalation note; the teaser is only used in staff views. */
+  escalationNote?: string;
 }
 
 interface Props {
@@ -62,7 +66,16 @@ const getQueueIcon = (type: string) => {
 };
 
 export const HelpRequestTeaser = (props: Props) => {
-  const { updatedAt, message, students = [], queue, isVideoLive = false, created_by } = props.data;
+  const {
+    updatedAt,
+    message,
+    students = [],
+    queue,
+    isVideoLive = false,
+    created_by,
+    escalationCount = 0,
+    escalationNote
+  } = props.data;
   const { selected } = props;
 
   // Use created_by as fallback when students array is empty
@@ -169,7 +182,9 @@ export const HelpRequestTeaser = (props: Props) => {
       py="3"
       _hover={{ bg: "bg.muted" }}
       rounded="md"
-      bg={selected ? "bg.muted" : ""}
+      bg={selected ? "bg.muted" : escalationCount > 0 ? "purple.subtle" : ""}
+      borderStartWidth={escalationCount > 0 ? "4px" : "0px"}
+      borderStartColor="purple.solid"
       role="listitem"
       aria-label={`${message}`}
     >
@@ -191,6 +206,7 @@ export const HelpRequestTeaser = (props: Props) => {
             {renderStudentsDisplay()}
           </Box>
           <HStack spaceX="2">
+            <EscalationBadge escalationCount={escalationCount} size="xs" />
             {isVideoLive && (
               <Badge colorPalette="green" variant="solid" size="xs">
                 <Icon as={BsPersonVideo2} fontSize="xs" />
@@ -204,6 +220,11 @@ export const HelpRequestTeaser = (props: Props) => {
             {message}
           </Markdown>
         </Box>
+        {escalationNote && (
+          <Text truncate color="purple.fg">
+            Still unresolved: {escalationNote}
+          </Text>
+        )}
       </Stack>
     </HStack>
   );

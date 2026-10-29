@@ -10,6 +10,7 @@ import { Box, HStack, Text, Badge, Separator } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
 import { FaChevronLeft, FaChevronRight } from "react-icons/fa";
+import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
 
 interface HelpRequestSidebarProps {
   requestId: number;
@@ -94,8 +95,8 @@ export function HelpRequestSidebar({
     // Sort working by oldest first
     working.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
-    // Sort open by oldest first
-    open.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    // Sort open in queue order: escalated first, then oldest first
+    open.sort(compareHelpRequestQueueOrder);
 
     // Sort resolved by newest first
     resolved.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());

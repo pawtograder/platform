@@ -11,6 +11,8 @@ import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { BsCameraVideo, BsChatText, BsGeoAlt, BsPersonCheck, BsPersonDash } from "react-icons/bs";
 import Markdown from "@/components/ui/markdown";
 import excerpt from "@stefanprobst/remark-excerpt";
+import { isEscalated } from "@/lib/helpRequestEscalation";
+import { EscalationBadge } from "./escalation-badge";
 
 // Module-stable references — see `components/ui/markdown.tsx` for why
 // `<Markdown>` props need stable identity (memoized internal `unified()`
@@ -54,15 +56,34 @@ interface RequestRowProps {
   queue?: HelpQueue;
   students?: string[];
   variant?: "default" | "compact";
+  /** Latest escalation note. Staff-only data: pass it only from staff views. */
+  escalationNote?: string;
 }
 
-export function RequestRow({ request, href, selected, queue, students = [], variant = "default" }: RequestRowProps) {
+export function RequestRow({
+  request,
+  href,
+  selected,
+  queue,
+  students = [],
+  variant = "default",
+  escalationNote
+}: RequestRowProps) {
   // Use created_by as fallback when students array is empty
   const effectiveStudents = students.length > 0 ? students : request.created_by ? [request.created_by] : [];
   const student1Profile = useUserProfile(effectiveStudents[0] || null);
   const student2Profile = useUserProfile(effectiveStudents[1] || null);
   const student3Profile = useUserProfile(effectiveStudents[2] || null);
   const assigneeProfile = useUserProfile(request.assignee || null);
+
+  const escalated = isEscalated(request);
+  const rowBg = selected
+    ? "bg.muted"
+    : escalated && request.status === "open"
+      ? "purple.subtle"
+      : request.status === "open"
+        ? "bg.info"
+        : "bg";
 
   const statusColor = useMemo(() => {
     switch (request.status) {
@@ -167,7 +188,9 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
             py="2"
             borderBottomWidth="1px"
             borderColor="border.muted"
-            bg={selected ? "bg.muted" : request.status === "open" ? "bg.info" : "bg"}
+            bg={rowBg}
+            borderStartWidth={escalated ? "4px" : "0px"}
+            borderStartColor="purple.solid"
             _hover={{ bg: "bg.subtle" }}
           >
             <Stack spaceY="1">
@@ -175,6 +198,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
                 <Box pt="0.5">{renderStudentsAvatars()}</Box>
                 <Stack spaceY="0.5" flex="1" minW={0}>
                   <HStack gap="1.5" minW={0} wrap="wrap">
+                    <EscalationBadge escalationCount={request.escalation_count} size="xs" />
                     {queue && (
                       <Badge colorPalette={getQueueTypeColor(queue.queue_type)} variant="surface" size="xs">
                         <Icon as={getQueueIcon(queue.queue_type)} fontSize="xs" />
@@ -221,13 +245,16 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
           borderBottomWidth="1px"
           borderColor="border.muted"
           align="flex-start"
-          bg={selected ? "bg.muted" : request.status === "open" ? "bg.info" : "bg"}
+          bg={rowBg}
+          borderStartWidth={escalated ? "4px" : "0px"}
+          borderStartColor="purple.solid"
           _hover={{ bg: "bg.subtle" }}
         >
           <Box pt="1">{renderStudentsAvatars()}</Box>
 
           <Stack spaceY="1" flex="1" minW={0}>
             <HStack gap="2" minW={0} wrap="wrap">
+              <EscalationBadge escalationCount={request.escalation_count} />
               {queue && (
                 <Badge colorPalette={getQueueTypeColor(queue.queue_type)} variant="subtle" flexShrink={0}>
                   {queue.name}
@@ -262,6 +289,11 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
                 {request.request}
               </Markdown>
             </Box>
+            {escalationNote && (
+              <Text truncate fontSize="sm" color="purple.fg">
+                Still unresolved: {escalationNote}
+              </Text>
+            )}
           </Stack>
         </HStack>
       </Link>

@@ -459,6 +459,14 @@ export type HelpRequestModeration = GetResult<
   "*"
 >;
 
+export type HelpRequestEscalation = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_escalations"]["Row"],
+  "help_request_escalations",
+  Database["public"]["Tables"]["help_request_escalations"]["Relationships"],
+  "*"
+>;
+
 export type HelpRequestFeedback = GetResult<
   Database["public"],
   Database["public"]["Tables"]["help_request_feedback"]["Row"],

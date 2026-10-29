@@ -7,6 +7,7 @@ import { useParams, usePathname, useRouter, useSearchParams } from "next/navigat
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BsArrowLeft,
+  BsArrowUpCircle,
   BsBoxArrowUpRight,
   BsCheck,
   BsCheckCircle,
@@ -22,7 +23,8 @@ import {
   BsShield,
   BsStar,
   BsTrash,
-  BsXCircle
+  BsXCircle,
+  BsXOctagon
 } from "react-icons/bs";
 import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/modals/createKarmaEntryModal";
 import CreateModerationActionModal from "@/app/course/[course_id]/manage/office-hours/modals/createModerationActionModal";
@@ -39,6 +41,11 @@ import HelpRequestResolutionModal from "./help-request-resolution-modal";
 import type { HelpRequestResolutionStatus } from "@/utils/supabase/DatabaseTypes";
 import VideoCallControls from "./video-call-controls";
 import WorkSessionHistory from "./work-session-history";
+import { EscalationBadge } from "./escalation-badge";
+import { StaffEscalateDialog } from "./escalate-dialog";
+import { EscalationHistory } from "./escalation-history";
+import { useHelpRequestEscalationActions } from "@/hooks/useHelpRequestEscalationActions";
+import { isCheckInPending } from "@/lib/helpRequestEscalation";
 
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
@@ -1088,6 +1095,8 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
   const karmaModal = useModalManager();
   const feedbackModal = useModalManager<{ action: "resolve" | "close" }>();
   const resolutionModal = useModalManager();
+  const { escalate, finish } = useHelpRequestEscalationActions();
+  const [escalateOpen, setEscalateOpen] = useState(false);
 
   // Generate title based on number of students - memoized to prevent recalculation
   const requestTitle = useMemo(() => {
@@ -1168,14 +1177,23 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       return;
     }
 
-    // For instructors/graders, resolve directly
-    await helpRequests.update(request_id, {
-      resolved_by: private_profile_id,
-      resolved_at: new Date().toISOString(),
-      status: "resolved"
-    });
-    await logActivityForAllStudents("request_resolved", "Request resolved by instructor");
-  }, [helpRequests, request_id, private_profile_id, logActivityForAllStudents, isStudent, resolutionModal]);
+    // For instructors/graders, resolve and give the student a chance to say it wasn't fixed
+    if (await finish(request_id, false)) {
+      toaster.success({
+        title: "Help request resolved",
+        description: "The student will be asked whether their problem got fixed."
+      });
+    }
+  }, [request_id, isStudent, resolutionModal, finish]);
+
+  const endTicket = useCallback(async () => {
+    if (await finish(request_id, true)) {
+      toaster.success({
+        title: "Ticket ended",
+        description: "This ticket is closed and can't be escalated again."
+      });
+    }
+  }, [request_id, finish]);
 
   /**
    * Open feedback modal for closed/resolved requests without existing feedback from the currently-logged in student
@@ -1265,6 +1283,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
               {requestTitle}
             </Text>
             {request && <HelpRequestStatusBadge status={request.status} />}
+            {request && <EscalationBadge escalationCount={request.escalation_count} size="xs" />}
             {request?.is_private && (
               <Badge colorPalette="purple" size="xs" variant="outline">
                 Private
@@ -1297,6 +1316,20 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
               <HelpRequestAssignment request={request} />
             )}
 
+            {/* Escalate: only the staff member currently helping */}
+            {isInstructorOrGrader &&
+              !readOnly &&
+              request &&
+              request.status === "in_progress" &&
+              request.assignee === private_profile_id && (
+                <Tooltip content="Hand off to another TA with a note, ahead of normal requests" showArrow>
+                  <Button size="xs" colorPalette="purple" onClick={() => setEscalateOpen(true)}>
+                    <Icon as={BsArrowUpCircle} />
+                    Escalate
+                  </Button>
+                </Tooltip>
+              )}
+
             {/* Resolve */}
             {!readOnly &&
               canAccessRequestControls &&
@@ -1312,8 +1345,31 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                     </Button>
                   }
                   confirmHeader="Resolve Request"
-                  confirmText="Are you sure you want to resolve this request?"
+                  confirmText={
+                    isInstructorOrGrader
+                      ? "The student will be asked whether their problem got fixed, and can escalate if it wasn't."
+                      : "Are you sure you want to resolve this request?"
+                  }
                   onConfirm={resolveRequest}
+                />
+              )}
+
+            {/* End ticket: final, no check-in and no further escalation */}
+            {isInstructorOrGrader &&
+              !readOnly &&
+              request &&
+              (request.status === "open" || request.status === "in_progress" || isCheckInPending(request)) && (
+                <PopConfirm
+                  triggerLabel="End ticket"
+                  trigger={
+                    <Button size="xs" colorPalette="red" variant="solid">
+                      <Icon as={BsXOctagon} />
+                      End ticket
+                    </Button>
+                  }
+                  confirmHeader="End ticket"
+                  confirmText="This closes the ticket for good. The student won't be asked to check in and can't escalate it."
+                  onConfirm={endTicket}
                 />
               )}
 
@@ -1384,6 +1440,13 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
           </HStack>
         </Flex>
 
+        {/* Escalation history (staff only): context for whoever picks up an escalated ticket */}
+        {isInstructorOrGrader && request && request.escalation_count > 0 && (
+          <Box mt={2}>
+            <EscalationHistory request={request} />
+          </Box>
+        )}
+
         {/* Collapsible Details Row - Students, Code Refs, Work Sessions */}
         <Accordion.Root collapsible size="sm">
           <Accordion.Item value="details" borderWidth={0}>
@@ -1453,6 +1516,23 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       {/* Modals */}
       {isInstructorOrGrader && (
         <>
+          {request && (
+            <StaffEscalateDialog
+              isOpen={escalateOpen}
+              studentLabel={requestTitle}
+              onClose={() => setEscalateOpen(false)}
+              onEscalate={async (note) => {
+                const ok = await escalate(request.id, note);
+                if (ok) {
+                  toaster.success({
+                    title: "Request escalated",
+                    description: "It's back in the queue ahead of normal requests for every TA."
+                  });
+                }
+                return ok;
+              }}
+            />
+          )}
           <CreateModerationActionModal
             isOpen={moderationModal.isOpen}
             onClose={moderationModal.closeModal}

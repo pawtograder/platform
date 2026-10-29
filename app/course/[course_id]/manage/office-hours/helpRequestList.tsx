@@ -10,7 +10,14 @@ import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useState, useMemo } from "react";
 import { BsClipboardCheckFill, BsCheckCircle, BsXCircle, BsChatText } from "react-icons/bs";
-import { useHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import {
+  useHelpRequests,
+  useHelpQueues,
+  useHelpRequestStudents,
+  useHelpRequestEscalations
+} from "@/hooks/useOfficeHoursRealtime";
+import { latestEscalationNoteByRequest } from "@/lib/helpRequestEscalation";
+import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
 
 /**
  * Enhanced help request with queue information and multiple students
@@ -33,6 +40,11 @@ export default function HelpRequestList() {
   // Use individual hooks for additional data
   const helpQueues = useHelpQueues();
   const realtimeHelpRequestStudents = useHelpRequestStudents();
+  const helpRequestEscalations = useHelpRequestEscalations();
+  const latestEscalationNotes = useMemo(
+    () => latestEscalationNoteByRequest(helpRequestEscalations),
+    [helpRequestEscalations]
+  );
   const officeHoursLoading = false; // Individual hooks don't expose loading state
 
   // Create a mapping of help request ID to student profile IDs
@@ -111,7 +123,7 @@ export default function HelpRequestList() {
           students
         };
       })
-      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); // oldest first
+      .sort(compareHelpRequestQueueOrder); // escalated first, then oldest first
   }, [allHelpRequests, queueMap, requestStudentsMap]);
 
   // Show loading state while data is being fetched
@@ -177,7 +189,9 @@ export default function HelpRequestList() {
                         students: request.students,
                         queue: request.queue,
                         isVideoLive: request.is_video_live,
-                        created_by: request.created_by ?? undefined
+                        created_by: request.created_by ?? undefined,
+                        escalationCount: request.escalation_count,
+                        escalationNote: latestEscalationNotes.get(request.id)
                       }}
                       selected={activeRequestID === request.id}
                     />
@@ -210,7 +224,9 @@ export default function HelpRequestList() {
                         students: request.students,
                         queue: request.queue,
                         isVideoLive: request.is_video_live,
-                        created_by: request.created_by ?? undefined
+                        created_by: request.created_by ?? undefined,
+                        escalationCount: request.escalation_count,
+                        escalationNote: latestEscalationNotes.get(request.id)
                       }}
                       selected={activeRequestID === request.id}
                     />
@@ -244,7 +260,9 @@ export default function HelpRequestList() {
                         students: request.students,
                         queue: request.queue,
                         isVideoLive: request.is_video_live,
-                        created_by: request.created_by ?? undefined
+                        created_by: request.created_by ?? undefined,
+                        escalationCount: request.escalation_count,
+                        escalationNote: latestEscalationNotes.get(request.id)
                       }}
                       selected={activeRequestID === request.id}
                     />
@@ -278,7 +296,9 @@ export default function HelpRequestList() {
                         students: request.students,
                         queue: request.queue,
                         isVideoLive: request.is_video_live,
-                        created_by: request.created_by ?? undefined
+                        created_by: request.created_by ?? undefined,
+                        escalationCount: request.escalation_count,
+                        escalationNote: latestEscalationNotes.get(request.id)
                       }}
                       selected={activeRequestID === request.id}
                     />
