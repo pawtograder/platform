@@ -470,12 +470,7 @@ export default function SubmissionSurveyPanel({ submissionId }: { submissionId: 
                     ) : status === "not_started" || row.response == null ? (
                       <NotStartedCard row={row} isOwnRow={row.profile_id === viewerProfileId} />
                     ) : (
-                      <ViewSurveyResponse
-                        surveyJson={selected.json}
-                        title={selected.title}
-                        responseData={row.response}
-                        readOnly
-                      />
+                      <ViewSurveyResponse surveyJson={selected.json} responseData={row.response} readOnly />
                     ))}
                 </Accordion.ItemBody>
               </Accordion.ItemContent>

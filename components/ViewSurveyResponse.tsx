@@ -10,8 +10,6 @@ import type { Survey as SurveyType, SurveyResponseWithProfile } from "@/types/su
 
 interface ViewSurveyResponseProps {
   surveyJson: SurveyType["json"];
-  /** The survey's database title. Shown instead of any title inside `surveyJson`. */
-  title?: string;
   responseData: SurveyResponseWithProfile["response"];
   readOnly?: boolean;
   onComplete?: (sender: Model, options: unknown) => void;
@@ -20,7 +18,6 @@ interface ViewSurveyResponseProps {
 
 export default function ViewSurveyResponse({
   surveyJson,
-  title,
   responseData,
   readOnly = true,
   onComplete,
@@ -46,11 +43,11 @@ export default function ViewSurveyResponse({
   // member on the submission survey tab makes the difference visible.
   const survey = useMemo(() => {
     const model = new Model(surveyJson);
-    // Same rule as components/Survey.tsx: the database title wins over the JSON's
-    // (issue #1002). Callers already show it as a heading, so the tag stays a <div>.
-    if (title) {
-      model.title = title;
-    }
+    // Every caller shows the survey's database title as its own heading, so the
+    // renderer shows none: a second copy repeated it once per response, and the JSON
+    // title is often the builder's "Survey Name" placeholder (issue #1002). SurveyJS
+    // shows the description only alongside the title, so it is hidden too.
+    model.showTitle = false;
 
     // Apply SurveyJS theme based on color mode
     model.applyTheme(colorMode === "dark" ? DefaultDark : DefaultLight);
@@ -70,7 +67,7 @@ export default function ViewSurveyResponse({
     model.onValueChanged.add((sender, options) => onValueChangedRef.current?.(sender, options));
 
     return model;
-  }, [surveyJson, title, responseData, colorMode, readOnly]);
+  }, [surveyJson, responseData, colorMode, readOnly]);
 
   return <Survey model={survey} />;
 }
