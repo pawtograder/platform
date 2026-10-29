@@ -16,7 +16,8 @@ import {
   Accordion,
   Textarea,
   Switch,
-  Stack
+  Stack,
+  Field
 } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { LuChevronUp, LuChevronDown, LuTrash2 } from "react-icons/lu";
@@ -25,6 +26,7 @@ import type { BuilderSurvey, BuilderElement, ElementType } from "./SurveyBuilder
 import { PASSTHROUGH_TYPE, passthroughSourceType } from "./SurveyBuilderDataTypes";
 import { makeEmptySurvey, nextChoiceValue } from "./factories";
 import { toJSON, fromJSON, fromJSONString, toJSONString } from "./serde";
+import { findDuplicateQuestionNames, formatDuplicateQuestionNames } from "./questionNames";
 
 import {
   addPage as addPageOp,
@@ -54,6 +56,18 @@ const normalizeJSON = (raw?: unknown) => {
   } catch {
     return String(raw);
   }
+};
+
+/**
+ * The first `question_N` no question in the survey uses yet. Numbering per page, as this used
+ * to, gave the first question of every page the name `question_1`, and those questions then
+ * shared one answer (#1005).
+ */
+const nextQuestionName = (survey: BuilderSurvey) => {
+  const taken = new Set(survey.pages.flatMap((p) => p.elements.map((el) => (el.name ?? "").trim())));
+  let n = survey.pages.reduce((sum, p) => sum + p.elements.length, 0) + 1;
+  while (taken.has(`question_${n}`)) n += 1;
+  return `question_${n}`;
 };
 
 const isPlainEmptyObject = (v: unknown) =>
@@ -120,6 +134,19 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
     lastEmittedJSONRef.current = normalizeJSON(json);
     onChange(json);
   }, [survey, onChange]);
+
+  // Question names used more than once in the survey's own scope. Answers are saved under the
+  // name, so these questions would share one answer; the form refuses to publish until fixed.
+  const duplicateNames = useMemo(() => findDuplicateQuestionNames(toJSON(survey)), [survey]);
+  const duplicatesByName = useMemo(
+    () =>
+      new Map(
+        duplicateNames
+          .filter((d) => d.locations.every((loc) => loc.dynamicPanel === undefined))
+          .map((d) => [d.name, d] as const)
+      ),
+    [duplicateNames]
+  );
 
   // Open all accordions by default on page switch
   useEffect(() => {
@@ -188,15 +215,16 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
 
   const currentPageId = currentPage?.id;
 
-  function addElementToCurrentPage(type: ElementType, nameHint?: string) {
+  function addElementToCurrentPage(type: ElementType) {
     if (!currentPageId) return;
     setSurvey((prev) => {
+      const nameHint = nextQuestionName(prev);
       const next = addElementToPageOp(prev, currentPageId, type, nameHint);
       const page = next.pages.find((p) => p.id === currentPageId)!;
       const added = page.elements.at(-1);
       if (added) {
         setOpenItems((ids) => Array.from(new Set([...ids, added.id])));
-        const safeName = nameHint ?? added.name ?? `${type}_${page.elements.length}`;
+        const safeName = nameHint;
         const withName = updateElementOp(next, currentPageId, added.id, "name", safeName);
         const withTitle = updateElementOp(withName, currentPageId, added.id, "title", safeName);
         return withTitle;
@@ -353,6 +381,29 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
           </Text>
         </Flex>
 
+        {/* Always mounted, so screen readers announce a duplicate name when it appears. */}
+        <Box role="status" aria-live="polite" aria-atomic="true">
+          {duplicateNames.length > 0 && (
+            <Box
+              mb="4"
+              p="3"
+              borderWidth="1px"
+              borderColor="border.error"
+              bg="bg.error"
+              color="fg.error"
+              rounded="md"
+              data-testid="survey-builder-duplicate-names"
+            >
+              <Text fontWeight="semibold">Two questions can&apos;t share a name</Text>
+              <Text fontSize="sm">{formatDuplicateQuestionNames(duplicateNames)}</Text>
+              <Text fontSize="sm" mt="1">
+                You can keep editing and save the survey as a draft, but it can&apos;t be published until every question
+                has its own name.
+              </Text>
+            </Box>
+          )}
+        </Box>
+
         {/* Page editor box */}
         {currentPage && (
           <Flex direction="column" borderWidth="1px" borderRadius="md" p="3" gap="3" overflow="hidden">
@@ -381,11 +432,17 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                     const atTop = idxEl === 0;
                     const atBottom = idxEl === elements.length - 1;
                     const label = elementLabel(el);
+                    const duplicate = duplicatesByName.get((el.name ?? "").trim());
 
                     return (
                       <Accordion.Item key={el.id} value={el.id}>
                         <Accordion.ItemTrigger>
                           <Span flex="1">{el.title?.trim() || `${label} Question`}</Span>
+                          {duplicate && (
+                            <Badge colorPalette="red" variant="solid" mr="2">
+                              Duplicate name
+                            </Badge>
+                          )}
                           <Badge variant="subtle" mr="2">
                             {label}
                           </Badge>
@@ -488,18 +545,21 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                                 </Box>
                               ) : (
                                 <>
-                                  {/* Question name */}
-                                  <Box>
-                                    <Text fontSize="sm" color="gray.600" mb="1">
+                                  {/* Question name: also the key its answers are saved under */}
+                                  <Field.Root invalid={!!duplicate}>
+                                    <Field.Label fontSize="sm" color="gray.600" mb="1">
                                       Question name
-                                    </Text>
+                                    </Field.Label>
                                     <Input
                                       size="sm"
                                       value={el.name ?? ""}
                                       onChange={(e) => updateQuestionName(el.id, e.target.value)}
                                       placeholder={`${label} question`}
                                     />
-                                  </Box>
+                                    {duplicate && (
+                                      <Field.ErrorText>{formatDuplicateQuestionNames([duplicate])}</Field.ErrorText>
+                                    )}
+                                  </Field.Root>
 
                                   {/* Description */}
                                   <Box>
@@ -785,46 +845,22 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
               pb="2"
               borderTopWidth="1px"
             >
-              <Button
-                size="sm"
-                type="button"
-                onClick={() => addElementToCurrentPage("text", `question_${elements.length + 1}`)}
-              >
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("text")}>
                 + Short Text
               </Button>
-              <Button
-                size="sm"
-                type="button"
-                onClick={() => addElementToCurrentPage("comment", `question_${elements.length + 1}`)}
-              >
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("comment")}>
                 + Long Text
               </Button>
-              <Button
-                size="sm"
-                type="button"
-                onClick={() => addElementToCurrentPage("radiogroup", `question_${elements.length + 1}`)}
-              >
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("radiogroup")}>
                 + Single Choice
               </Button>
-              <Button
-                size="sm"
-                type="button"
-                onClick={() => addElementToCurrentPage("checkbox", `question_${elements.length + 1}`)}
-              >
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("checkbox")}>
                 + Checkboxes
               </Button>
-              <Button
-                size="sm"
-                type="button"
-                onClick={() => addElementToCurrentPage("boolean", `question_${elements.length + 1}`)}
-              >
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("boolean")}>
                 + Yes / No
               </Button>
-              <Button
-                size="sm"
-                type="button"
-                onClick={() => addElementToCurrentPage("rating", `question_${elements.length + 1}`)}
-              >
+              <Button size="sm" type="button" onClick={() => addElementToCurrentPage("rating")}>
                 + Rating
               </Button>
             </HStack>

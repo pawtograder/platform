@@ -2,6 +2,7 @@
 
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { duplicateQuestionNamesMessage } from "@/components/survey/questionNames";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
@@ -131,6 +132,13 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
           });
           return;
         }
+      }
+
+      // Two questions with one name share one answer (#1005); the database refuses these too.
+      const duplicateNames = duplicateQuestionNamesMessage(survey.json);
+      if (duplicateNames) {
+        toaster.create({ title: "Cannot Publish Survey", description: duplicateNames, type: "error" });
+        return;
       }
 
       // Show loading toast

@@ -5,6 +5,7 @@ import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useForm } from "@refinedev/react-hook-form";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
+import { publishBlockedByDuplicateNames } from "@/components/survey/questionNames";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
 import SurveyForm from "../../new/form";
@@ -342,6 +343,18 @@ export default function EditSurveyPage() {
           }
         }
 
+        // Two questions with one name share one answer (#1005); the database refuses these too.
+        // A survey that was already published with them may keep its questions unchanged.
+        const duplicateNames = publishBlockedByDuplicateNames({
+          json: values.json,
+          status: values.status,
+          publishedJson: surveyData?.status === "published" ? surveyData.json : undefined
+        });
+        if (duplicateNames) {
+          toaster.create({ title: "Cannot Publish Survey", description: duplicateNames, type: "error" });
+          return;
+        }
+
         // Validate student assignments
         if (!values.assigned_to_all && (!values.assigned_students || values.assigned_students.length === 0)) {
           toaster.create({
@@ -393,6 +406,13 @@ export default function EditSurveyPage() {
             .eq("id", rawSurveyId)
             .select("id, survey_id")
             .single();
+
+          // The database refused to publish (or keep published) a survey whose questions share
+          // a name. Saving it as a draft instead, as below, would unpublish a live survey, so
+          // report the refusal and leave the survey as it was.
+          if (error?.code === "23514" && error.details?.includes("surveys_reject_duplicate_question_names")) {
+            throw new Error(error.message);
+          }
 
           if (error || !data) {
             // If database error, try to save as draft with error flag
@@ -506,7 +526,7 @@ export default function EditSurveyPage() {
       }
       await update();
     },
-    [course_id, trackEvent, rawSurveyId, convertDueDateToISO, revalidateServerCaches]
+    [course_id, trackEvent, rawSurveyId, convertDueDateToISO, revalidateServerCaches, surveyData]
   );
 
   if (isLoading) {
@@ -537,6 +557,7 @@ export default function EditSurveyPage() {
         saveDraftOnly={saveDraftOnly}
         isEdit={true}
         privateProfileId={private_profile_id}
+        publishedJson={surveyData.status === "published" ? surveyData.json : undefined}
       />
     </Box>
   );
