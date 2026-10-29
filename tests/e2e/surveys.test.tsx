@@ -695,6 +695,74 @@ test.describe("Surveys Page", () => {
     expect(autoFocused, "no form control is auto-focused when the survey opens").toBe(false);
   });
 
+  test("survey shows its database title, not the JSON title (#1002)", async ({ page }) => {
+    // The visual builder writes a placeholder "Survey Name" title into the JSON. The
+    // database title is the one instructors set and the survey list shows, so every
+    // rendered view of the survey must use it instead.
+    const dbTitle = "Week 3 Check-in";
+    const jsonTitle = "Survey Name";
+    const surveyJson = {
+      title: jsonTitle,
+      pages: [
+        {
+          name: "page1",
+          elements: [{ type: "text", name: "q1", title: "Question 1" }]
+        }
+      ]
+    };
+
+    const published = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: dbTitle,
+      status: "published",
+      json: surveyJson
+    });
+    const draft = await seedSurvey<{ id: string }>(course, instructor, {
+      title: dbTitle,
+      status: "draft",
+      json: surveyJson
+    });
+    const { data: response, error: respError } = await supabase
+      .from("survey_responses")
+      .insert({
+        survey_id: published.id,
+        profile_id: studentA.private_profile_id,
+        response: { q1: "Going well" },
+        is_submitted: true,
+        submitted_at: new Date().toISOString()
+      })
+      .select("id")
+      .single();
+    if (respError || !response) {
+      throw new Error(`Failed to seed survey response: ${respError?.message}`);
+    }
+
+    // Student survey page
+    await loginAsUser(page, studentA, course);
+    await page.goto(`/course/${course.id}/surveys/${published.id}`);
+    const studentSurvey = page.locator(".sd-root-modern");
+    await expect(studentSurvey.getByRole("textbox", { name: "Question 1" })).toBeVisible();
+    await expect(studentSurvey.getByRole("heading", { level: 1, name: dbTitle })).toBeVisible();
+    await expect(page.getByText(jsonTitle)).toHaveCount(0);
+
+    // Instructor's Student Preview from the survey form
+    await page.context().clearCookies();
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/${draft.id}/edit`);
+    await page.getByRole("button", { name: "Preview as Student" }).click();
+    const preview = page.getByRole("dialog");
+    await expect(preview.getByRole("textbox", { name: "Question 1" })).toBeVisible();
+    await expect(preview.locator(".sd-root-modern").getByRole("heading", { name: dbTitle })).toBeVisible();
+    await expect(preview.getByText(jsonTitle)).toHaveCount(0);
+    await page.getByRole("button", { name: "Close Preview" }).click();
+
+    // Instructor's view of a single response
+    await page.goto(`/course/${course.id}/manage/surveys/${published.survey_id}/responses/${response.id}`);
+    const responseView = page.locator(".sd-root-modern");
+    await expect(responseView.getByRole("textbox", { name: "Question 1" })).toHaveValue("Going well");
+    await expect(responseView.getByText(dbTitle)).toBeVisible();
+    await expect(page.getByText(jsonTitle)).toHaveCount(0);
+  });
+
   test("instructor can apply filters on responses", async ({ page }) => {
     const surveyJson = {
       pages: [
