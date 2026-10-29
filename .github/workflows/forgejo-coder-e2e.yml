@@ -1,0 +1,79 @@
+name: Forgejo/Coder SSO E2E
+
+# Opt-in lane: stands up Pawtograder (isolated local Supabase with the OAuth 2.1
+# server on), Forgejo and Coder, and walks "sign in with Pawtograder" end to
+# end (CW-04). Not part of the per-PR E2E run.
+#
+# Manual dispatch only, for the same reason as canvas-e2e.yml: it runs the
+# branch's code with repo secrets, so it must not auto-run on PRs. A maintainer
+# runs it via "Run workflow", selecting the PR's branch as the ref.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: forgejo-coder-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  forgejo-coder-e2e:
+    runs-on: pawtograder-e2e
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Same CLI as deploy.yml: it bundles the GoTrue whose OAuth server the
+      # suite exercises.
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.105.0
+
+      - name: Ensure docker compose v2
+        run: |
+          if ! docker compose version >/dev/null 2>&1; then
+            mkdir -p "$HOME/.docker/cli-plugins"
+            curl -fsSL "https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-$(uname -m)" \
+              -o "$HOME/.docker/cli-plugins/docker-compose"
+            chmod +x "$HOME/.docker/cli-plugins/docker-compose"
+          fi
+          docker compose version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright (chromium)
+        run: npx playwright install --with-deps chromium
+
+      # run-e2e.sh boots Supabase + Forgejo + Coder + Pawtograder, registers the
+      # OAuth clients, then runs playwright.forgejo-coder.config.ts. Single
+      # source of truth shared with local runs (`npm run test:e2e:forgejo-coder`).
+      - name: Run Forgejo/Coder SSO E2E suite
+        run: npm run test:e2e:forgejo-coder
+
+      - name: Collect app logs
+        if: ${{ failure() }}
+        run: |
+          mkdir -p tests/e2e/forgejo-coder/.logs
+          for s in forgejo coder; do
+            docker logs "pawtograder-sso-e2e-$s-1" > "tests/e2e/forgejo-coder/.logs/$s.log" 2>&1 || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report-forgejo-coder
+          path: |
+            playwright-report-forgejo-coder/
+            tests/e2e/forgejo-coder/.logs/
+          retention-days: 30

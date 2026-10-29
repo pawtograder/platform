@@ -15,8 +15,10 @@ export default defineConfig({
   testDir: "./tests/e2e",
   /* The Canvas LTI 1.3 suite is heavy (boots a full Canvas LMS) and runs in its
      own selectively-triggered CI lane via playwright.canvas.config.ts. Keep it
-     out of the default/per-PR E2E run. */
-  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts"],
+     out of the default/per-PR E2E run. The Forgejo/Coder sign-in suite
+     (tests/e2e/sso, playwright.forgejo-coder.config.ts) likewise needs its own
+     stack. */
+  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts", "**/sso/**", "**/*.forgejo-coder.spec.ts"],
   /* One-time gate before any worker spawns: probe PostgREST until its
      schema cache is loaded. Deployed previews don't admit traffic until
      this finishes, so test setup never races a partial cache. See
