@@ -19,6 +19,16 @@ Playwright (`run-e2e.sh --grep Coder`). It works on macOS (Docker Desktop) and o
 `pawtograder-e2e` runner. In CI, run `.github/workflows/forgejo-coder-e2e.yml` with "Run workflow"
 on the branch.
 
+To run the same spec against a deployed release (the chart's `auth.oauthServer`, `coder.oidc` and
+`forgejo.gitea.oauth` on, `scripts/setup-sso-clients.sh` run), use `run-remote.sh` with `kubectl`
+access to its namespace. It creates `e2e-ignore-*` classes and users in that release's database:
+
+```bash
+tests/e2e/forgejo-coder/run-remote.sh --namespace cs4535-workspaces \
+  --app-url https://app.workspaces.cs4535.ripley.cloud --api-url https://app-api.workspaces.cs4535.ripley.cloud \
+  --forgejo-url https://git.workspaces.cs4535.ripley.cloud --coder-url https://coder.workspaces.cs4535.ripley.cloud
+```
+
 ## What run-e2e.sh does
 
 1. Starts its own Supabase from a copy of `supabase/` in `SSO_E2E_WORKDIR` (default
