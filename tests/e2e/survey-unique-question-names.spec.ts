@@ -72,7 +72,11 @@ test.describe("survey builder: duplicate question names", () => {
     await page.getByText("Published — visible to students").click();
     await expect(page.getByText("Two questions share a name. Rename one under Survey Questions")).toBeVisible();
     await page.getByRole("button", { name: "Publish Survey" }).click();
-    await expect(page.getByText("Cannot Publish Survey").first()).toBeVisible();
+    // The e2e fixture hides the toaster (data-visual-test="removed") to keep screenshots stable,
+    // so the toast is in the page but never visible here.
+    const refusal = page.locator('[data-scope="toast"][data-part="root"]').filter({ hasText: "Cannot Publish Survey" });
+    await expect(refusal.first()).toBeAttached();
+    await expect(refusal.first()).toContainText(message);
     expect(await surveysTitled(title), "nothing was saved").toHaveLength(0);
 
     // Saving a draft is allowed, so work in progress is not lost.
