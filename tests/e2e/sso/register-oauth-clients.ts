@@ -1,21 +1,4 @@
-/**
- * Register Forgejo and Coder as OAuth 2.1 / OIDC clients of Pawtograder (Supabase Auth's OAuth
- * server), so they can offer "Sign in with Pawtograder".
- *
- * Standalone (run via tsx). Talks to GoTrue's admin REST API directly: the installed supabase-js
- * predates `auth.admin.oauth.*`. Re-runs delete and re-create the clients, because GoTrue only
- * returns a client secret at creation.
- *
- * Prints KEY=VALUE lines for run-e2e.sh.
- *
- * Required env:
- *   SUPABASE_URL                 e.g. http://127.0.0.1:56321
- *   SUPABASE_SERVICE_ROLE_KEY    local service-role key (npx supabase status)
- *   FORGEJO_BASE_URL             e.g. http://127.0.0.1:3100
- *   CODER_BASE_URL               e.g. http://127.0.0.1:7080
- * Optional:
- *   FORGEJO_AUTH_SOURCE_NAME     Forgejo login source name, part of its callback path (default "pawtograder")
- */
+// Raw GoTrue admin REST (supabase-js predates `auth.admin.oauth.*`); clients are re-created because GoTrue returns the secret only at creation.
 
 function need(name: string): string {
   const v = process.env[name];

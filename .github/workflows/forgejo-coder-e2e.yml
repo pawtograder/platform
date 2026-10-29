@@ -1,12 +1,6 @@
 name: Forgejo/Coder SSO E2E
 
-# Opt-in lane: stands up Pawtograder (isolated local Supabase with the OAuth 2.1
-# server on), Forgejo and Coder, and walks "sign in with Pawtograder" end to
-# end (CW-04). Not part of the per-PR E2E run.
-#
-# Manual dispatch only, for the same reason as canvas-e2e.yml: it runs the
-# branch's code with repo secrets, so it must not auto-run on PRs. A maintainer
-# runs it via "Run workflow", selecting the PR's branch as the ref.
+# Manual dispatch only: it runs the branch's code with repo secrets.
 on:
   workflow_dispatch:
 
@@ -33,8 +27,7 @@ jobs:
         with:
           node-version: 22
 
-      # Same CLI as deploy.yml: it bundles the GoTrue whose OAuth server the
-      # suite exercises.
+      # Keep in sync with deploy.yml: the CLI pins the GoTrue under test.
       - uses: supabase/setup-cli@v1
         with:
           version: 2.105.0
@@ -55,9 +48,6 @@ jobs:
       - name: Install Playwright (chromium)
         run: npx playwright install --with-deps chromium
 
-      # run-e2e.sh boots Supabase + Forgejo + Coder + Pawtograder, registers the
-      # OAuth clients, then runs playwright.forgejo-coder.config.ts. Single
-      # source of truth shared with local runs (`npm run test:e2e:forgejo-coder`).
       - name: Run Forgejo/Coder SSO E2E suite
         run: npm run test:e2e:forgejo-coder
 

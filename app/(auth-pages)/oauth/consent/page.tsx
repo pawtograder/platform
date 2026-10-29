@@ -67,7 +67,6 @@ export default async function OAuthConsent(props: { searchParams: Promise<Search
     );
   }
 
-  // The user already approved this client for these scopes.
   if (isAutoApproved(details)) {
     redirect(details.redirect_url);
   }

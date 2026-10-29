@@ -1,14 +1,6 @@
 import "server-only";
 
-/**
- * Pawtograder as an OAuth 2.1 / OIDC identity provider (Supabase Auth's OAuth server).
- *
- * Forgejo and Coder send the browser to GoTrue's `/oauth/authorize`, which redirects to our
- * consent page with an `authorization_id`. The consent page reads the request and records the
- * user's decision through these endpoints, called as the signed-in user.
- *
- * The installed supabase-js predates `auth.oauth.*`, so this talks to GoTrue's REST API directly.
- */
+// The installed supabase-js predates `auth.oauth.*`, so this calls GoTrue's REST API directly.
 
 export type OAuthAuthorizationDetails = {
   authorization_id: string;
@@ -18,7 +10,6 @@ export type OAuthAuthorizationDetails = {
   scope: string;
 };
 
-/** The user already consented to this client and scopes: GoTrue hands back the redirect directly. */
 export type OAuthAutoApproved = { redirect_url: string };
 
 export class OAuthServerError extends Error {

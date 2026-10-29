@@ -1,22 +1,4 @@
-/**
- * End-to-end "sign in to Forgejo and Coder with Pawtograder" (CW-04).
- *
- * Pawtograder is the OAuth 2.1 / OIDC identity provider (Supabase Auth's OAuth server plus the
- * consent page at /oauth/consent). Forgejo signs in through its "pawtograder" login source and
- * creates the account on first sign-in; Coder through CODER_OIDC_*.
- *
- * Journeys:
- *   1. Forgejo, already signed in to Pawtograder: consent, then a Forgejo account bound to the login source.
- *   2. Forgejo, cold start: no Pawtograder session, so sign in first and come back to consent.
- *   3. Forgejo, deny: no Forgejo account is created.
- *   4. Forgejo, repeat sign-in: no second consent, same account.
- *   5. Coder, already signed in to Pawtograder.
- *   6. Coder, cold start and deny.
- *   7. An authorize request with an unregistered redirect_uri is refused by Pawtograder.
- *
- * Prereqs are stood up by tests/e2e/forgejo-coder/run-e2e.sh (config written to
- * tests/e2e/sso/.forgejo-coder-e2e.json). This spec runs only under playwright.forgejo-coder.config.ts.
- */
+/** CW-04: sign in to Forgejo and Coder with Pawtograder; run via tests/e2e/forgejo-coder/run-e2e.sh. */
 import { test, expect, type Browser, type Page } from "@playwright/test";
 import fs from "fs";
 import path from "path";
@@ -44,7 +26,7 @@ type CoderUser = { id: string; username: string; email: string; login_type: stri
 const forgejoAdminAuth =
   "Basic " + Buffer.from(`${cfg.forgejo.admin.username}:${cfg.forgejo.admin.password}`).toString("base64");
 
-/** Forgejo accounts bound to the Pawtograder login source for this Pawtograder user (login_name = sub). */
+// Forgejo stores the OIDC `sub` as login_name.
 async function forgejoUsersFor(user: TestingUser): Promise<ForgejoUser[]> {
   const params = new URLSearchParams({ source_id: String(cfg.forgejo.authSourceId), login_name: user.user_id });
   const res = await fetch(`${cfg.forgejoBaseUrl}/api/v1/admin/users?${params}`, {
@@ -73,7 +55,6 @@ async function coderUsersWithEmail(email: string): Promise<CoderUser[]> {
   return users.filter((u) => u.email === email);
 }
 
-/** The Pawtograder consent screen for a client, as reached from an app's sign-in button. */
 async function expectConsentFor(page: Page, clientName: string, user: TestingUser) {
   await page.waitForURL(`${cfg.pawtograderBaseUrl}/oauth/consent?**`);
   await expect(page.getByRole("heading", { name: new RegExp(`${clientName} wants to use your`) })).toBeVisible();
@@ -147,7 +128,6 @@ test.describe("Forgejo", () => {
     const page = await newPage(browser);
 
     await startForgejoSignIn(page);
-    // No Pawtograder session: consent sends the user to sign in, carrying the authorization request.
     await signInToPawtograderForm(page, user);
     await expectConsentFor(page, "Forgejo", user);
     await page.getByRole("button", { name: "Authorize" }).click();
@@ -181,7 +161,6 @@ test.describe("Forgejo", () => {
     await loginAsUser(page, user);
     await startForgejoSignIn(page);
 
-    // Already approved in journey 1: GoTrue auto-approves and consent forwards straight back.
     await page.waitForURL(`${cfg.forgejoBaseUrl}/**`);
     await expect(page.getByRole("heading", { name: /wants to use your/ })).toHaveCount(0);
 

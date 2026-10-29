@@ -26,6 +26,5 @@ export async function decideOAuthConsentAction(formData: FormData) {
     const message = e instanceof OAuthServerError ? e.message : "Could not record your decision";
     return encodedRedirect("error", "/oauth/consent", message, { authorization_id: authorizationId });
   }
-  // GoTrue returns the client's registered redirect_uri with either `code` or `error=access_denied`.
   return redirect(redirectUrl);
 }

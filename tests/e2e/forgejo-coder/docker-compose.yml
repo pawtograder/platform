@@ -1,20 +1,7 @@
-# Forgejo + Coder for the "sign in with Pawtograder" (CW-04) end-to-end lane.
-# Orchestrated by run-e2e.sh; see README.md.
-#
-# Networking: OIDC needs ONE issuer URL that both the browser and these
-# containers' back-channel calls (discovery, token, JWKS, userinfo) can reach,
-# because the ID token's `iss` must match it exactly. The issuer is the lane's
-# local Supabase at http://127.0.0.1:${SB_API_PORT}/auth/v1. Forgejo and Coder
-# share the `loopback` container's network namespace, where socat listens on
-# 127.0.0.1:${SB_API_PORT} and forwards to the host, so 127.0.0.1 means the
-# same thing inside the containers as it does in the browser. This works the
-# same on Docker Desktop and on the Linux CI runner (host-gateway).
-#
-# Images and settings follow charts/pawtograder (#1059): the GHCR mirror tags,
-# Forgejo self-registration off, Coder's GitHub provider off.
 name: pawtograder-sso-e2e
 
 services:
+  # OIDC `iss` must match for browser and containers, so Forgejo/Coder share this netns where 127.0.0.1:${SB_API_PORT} forwards to the host.
   loopback:
     image: alpine/socat:1.8.0.3
     command:
@@ -38,9 +25,7 @@ services:
       FORGEJO__server__ROOT_URL: "http://127.0.0.1:${FORGEJO_PORT:-3100}/"
       FORGEJO__server__DISABLE_SSH: "true"
       FORGEJO__server__START_SSH_SERVER: "false"
-      # Same as the chart: nobody self-registers. OAuth auto-registration is
-      # gated only by ENABLE_AUTO_REGISTRATION (not by DISABLE_REGISTRATION),
-      # so accounts are created on first sign-in through the Pawtograder source.
+      # DISABLE_REGISTRATION does not gate OAuth auto-registration.
       FORGEJO__service__DISABLE_REGISTRATION: "true"
       FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION: "true"
       FORGEJO__oauth2_client__USERNAME: email

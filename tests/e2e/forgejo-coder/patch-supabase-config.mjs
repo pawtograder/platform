@@ -1,9 +1,3 @@
-// Rewrites a copied supabase/config.toml so the lane's Supabase runs as its own
-// project next to a developer's stack: its own project_id (container names),
-// every host port shifted by SB_PORT_OFFSET, and site_url pointing at the
-// lane's Next server, which is where GoTrue sends the browser for OAuth consent.
-//
-// usage: node patch-supabase-config.mjs <config.toml> <offset> <site_url>
 import fs from "node:fs";
 
 const [file, offsetArg, siteUrl] = process.argv.slice(2);
