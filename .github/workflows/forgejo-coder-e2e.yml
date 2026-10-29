@@ -51,14 +51,6 @@ jobs:
       - name: Run Forgejo/Coder SSO E2E suite
         run: npm run test:e2e:forgejo-coder
 
-      - name: Collect app logs
-        if: ${{ failure() }}
-        run: |
-          mkdir -p tests/e2e/forgejo-coder/.logs
-          for s in forgejo coder; do
-            docker logs "pawtograder-sso-e2e-$s-1" > "tests/e2e/forgejo-coder/.logs/$s.log" 2>&1 || true
-          done
-
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:

@@ -162,6 +162,7 @@ test.describe("Forgejo", () => {
     await startForgejoSignIn(page);
 
     await page.waitForURL(`${cfg.forgejoBaseUrl}/**`);
+    await expect(page.locator(".user-menu, [aria-label='Profile and settings…']").first()).toBeAttached();
     await expect(page.getByRole("heading", { name: /wants to use your/ })).toHaveCount(0);
 
     const after = await forgejoUsersFor(user);

@@ -14,7 +14,7 @@ KEEP_UP=1 npm run test:e2e:forgejo-coder   # leave the stack up afterwards
 npm run test:e2e:forgejo-coder:only   # re-run the spec against a stack that is already up
 ```
 
-Re-run faster with `SKIP_SUPABASE=1`, `SKIP_APPS=1` or `SKIP_TOOL=1`. Extra arguments go to
+Re-run faster with `SKIP_SUPABASE=1`, `SKIP_APPS=1`, `SKIP_BUILD=1` (reuse `.next`) or `SKIP_TOOL=1`. Extra arguments go to
 Playwright (`run-e2e.sh --grep Coder`). It works on macOS (Docker Desktop) and on the Linux
 `pawtograder-e2e` runner. In CI, run `.github/workflows/forgejo-coder-e2e.yml` with "Run workflow"
 on the branch.
@@ -38,7 +38,7 @@ tests/e2e/forgejo-coder/run-remote.sh --namespace cs4535-workspaces \
 2. Registers Forgejo and Coder as OAuth clients (`tests/e2e/sso/register-oauth-clients.ts`).
 3. Starts Forgejo and Coder (`docker-compose.yml`), creates the Forgejo admin and the `pawtograder`
    login source, and creates Coder's first owner.
-4. Starts Pawtograder with `next dev` on `PAW_PORT` (default 3300).
+4. Builds Pawtograder and serves it with `next start` on `PAW_PORT` (default 3300).
 5. Writes `tests/e2e/sso/.forgejo-coder-e2e.json` and runs `playwright.forgejo-coder.config.ts`.
 
 | Service     | Browser URL                    |

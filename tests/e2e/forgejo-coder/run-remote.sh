@@ -19,6 +19,12 @@ done
 [ -n "$NS" ] && [ -n "$APP" ] && [ -n "$API" ] && [ -n "$FJ" ] && [ -n "$CODER" ] || {
   grep '^#' "$0" | sed 's/^# \?//'; exit 2; }
 
+OUT_JSON=tests/e2e/sso/.forgejo-coder-e2e.json
+# It holds the release's admin passwords.
+trap 'rm -f "$OUT_JSON"' EXIT
+umask 077
+rm -f "$OUT_JSON"
+
 secret() { kubectl -n "$NS" get secret "$1" -o jsonpath="{.data.$2}" | base64 -d; }
 
 export SUPABASE_URL="$API" NEXT_PUBLIC_SUPABASE_URL="$API" PAW_BASE_URL="$APP" NEXT_PUBLIC_PAWTOGRADER_WEB_URL="$APP"
@@ -36,6 +42,6 @@ jq -n --arg app "$APP" --arg fj "$FJ" --arg coder "$CODER" --arg iss "$API/auth/
   --arg ce "$(secret pawtograder-coder-admin email)" --arg cp "$(secret pawtograder-coder-admin password)" \
   '{pawtograderBaseUrl: $app, forgejoBaseUrl: $fj, coderBaseUrl: $coder, issuer: $iss,
     forgejo: {authSourceName: "pawtograder", authSourceId: $sid, clientId: $fjcid, admin: {username: $fju, password: $fjp}},
-    coder: {clientId: $ccid, admin: {email: $ce, password: $cp}}}' > tests/e2e/sso/.forgejo-coder-e2e.json
+    coder: {clientId: $ccid, admin: {email: $ce, password: $cp}}}' > "$OUT_JSON"
 
 npx playwright test --config playwright.forgejo-coder.config.ts "$@"

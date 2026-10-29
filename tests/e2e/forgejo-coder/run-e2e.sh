@@ -42,6 +42,7 @@ TOOL_PID=""
 cleanup() {
   if [ "${KEEP_UP:-}" != "1" ]; then
     [ -n "$TOOL_PID" ] && kill "$TOOL_PID" 2>/dev/null || true
+    for s in forgejo coder; do $COMPOSE logs --no-color "$s" >"$LOGS/$s.log" 2>&1 || true; done
     $COMPOSE down -v >/dev/null 2>&1 || true
     [ "${SKIP_SUPABASE:-}" = "1" ] || $SB stop --no-backup >/dev/null 2>&1 || true
   fi
@@ -54,6 +55,9 @@ if [ "${SKIP_SUPABASE:-}" != "1" ]; then
   cp -R "$REPO/supabase" "$WORK/supabase"
   rm -rf "$WORK/supabase/.temp" "$WORK/supabase/.branches"
   node "$HERE/patch-supabase-config.mjs" "$WORK/supabase/config.toml" "$SB_PORT_OFFSET" "$PAW_BASE_URL"
+  # A KEEP_UP or cancelled run leaves the project's volumes, and start would restore that stale schema.
+  $SB stop --no-backup >/dev/null 2>&1 || true
+  docker volume ls -q --filter label=com.supabase.cli.project=pawtograder-sso-e2e | xargs -r docker volume rm >/dev/null
   # logflare/vector fail their health check on the e2e runner.
   $SB start -x logflare,vector,studio,imgproxy,edge-runtime
 fi
@@ -76,10 +80,13 @@ export CODER_OIDC_CLIENT_ID="$(getc CODER_OIDC_CLIENT_ID)"
 export CODER_OIDC_CLIENT_SECRET="$(getc CODER_OIDC_CLIENT_SECRET)"
 [ -n "$FORGEJO_OIDC_CLIENT_ID" ] && [ -n "$CODER_OIDC_CLIENT_ID" ] || { echo "ERROR: client registration failed"; echo "$CLIENTS"; exit 1; }
 
+# Recreate so Coder picks up the re-minted OIDC client, even when SKIP_APPS keeps Forgejo.
 if [ "${SKIP_APPS:-}" != "1" ]; then
   log "Starting Forgejo and Coder"
-  # Recreate so Coder picks up the re-minted OIDC client.
   $COMPOSE up -d --force-recreate
+else
+  log "Restarting Coder with the re-minted OIDC client"
+  $COMPOSE up -d --force-recreate --no-deps coder
 fi
 wait_for "$FORGEJO_BASE_URL/api/v1/version" 60 "Forgejo"
 wait_for "$CODER_BASE_URL/healthz" 60 "Coder"
@@ -112,12 +119,15 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
   if port_in_use "$PAW_PORT"; then
     echo "ERROR: port $PAW_PORT is in use. Stop whatever holds it or set PAW_PORT."; exit 1
   fi
+  if [ "${SKIP_BUILD:-}" != "1" ]; then
+    # NEXT_PUBLIC_* is inlined at build time, so build after exporting the lane's URLs.
+    log "Building Pawtograder"
+    npm run build >"$LOGS/build.log" 2>&1 || { tail -40 "$LOGS/build.log"; exit 1; }
+  fi
   log "Starting Pawtograder on $PAW_BASE_URL"
-  npx next dev -H 127.0.0.1 -p "$PAW_PORT" >"$LOGS/next.log" 2>&1 &
+  npx next start -H 127.0.0.1 -p "$PAW_PORT" >"$LOGS/next.log" 2>&1 &
   TOOL_PID=$!
-  # next dev's first compile of sign-in and consent is slow.
-  wait_for "$PAW_BASE_URL/sign-in" 120 "Pawtograder" || { tail -40 "$LOGS/next.log"; exit 1; }
-  curl -fsS -o /dev/null "$PAW_BASE_URL/oauth/consent" || true
+  wait_for "$PAW_BASE_URL/sign-in" 60 "Pawtograder" || { tail -40 "$LOGS/next.log"; exit 1; }
 fi
 
 log "Writing $OUT_JSON"
