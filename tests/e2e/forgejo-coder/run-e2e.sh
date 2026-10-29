@@ -125,6 +125,9 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
   fi
   if [ "${SKIP_BUILD:-}" != "1" ]; then
     # NEXT_PUBLIC_* is inlined at build time, so build after exporting the lane's URLs.
+    if pgrep -f "$REPO/node_modules/.bin/next dev" >/dev/null; then
+      echo "ERROR: a next dev server is running and shares .next. Stop it, or set SKIP_BUILD=1."; exit 1
+    fi
     log "Building Pawtograder"
     rm -rf "$REPO/.next"
     npm run build >"$LOGS/build.log" 2>&1 || { tail -40 "$LOGS/build.log"; exit 1; }
