@@ -126,6 +126,7 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
   if [ "${SKIP_BUILD:-}" != "1" ]; then
     # NEXT_PUBLIC_* is inlined at build time, so build after exporting the lane's URLs.
     log "Building Pawtograder"
+    rm -rf "$REPO/.next"
     npm run build >"$LOGS/build.log" 2>&1 || { tail -40 "$LOGS/build.log"; exit 1; }
   fi
   log "Starting Pawtograder on $PAW_BASE_URL"
