@@ -397,7 +397,12 @@ BEGIN
      SET status = CASE WHEN p_end_ticket THEN 'closed'::public.help_request_status ELSE 'resolved'::public.help_request_status END,
          resolved_by = coalesce(CASE WHEN v_request.status = 'resolved' THEN resolved_by END, v_caller),
          resolved_at = coalesce(CASE WHEN v_request.status = 'resolved' THEN resolved_at END, now()),
-         check_in_expires_at = CASE WHEN p_end_ticket THEN NULL ELSE now() + interval '10 minutes' END
+         -- Only a ticket someone was helping gets a check-in. Resolving an unclaimed ticket
+         -- must not hand the student an escalation they never earned by being helped.
+         check_in_expires_at = CASE
+           WHEN p_end_ticket OR v_request.status <> 'in_progress' THEN NULL
+           ELSE now() + interval '10 minutes'
+         END
    WHERE id = v_request.id;
 
   PERFORM public.log_help_request_activity(

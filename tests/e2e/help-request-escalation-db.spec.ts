@@ -159,6 +159,20 @@ test.describe("help request escalation RPCs", () => {
     ).not.toBeNull();
   });
 
+  test("resolving a ticket nobody picked up opens no check-in", async () => {
+    const id = await freshRequest("open");
+    expect(
+      (await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: false })).error
+    ).toBeNull();
+    const r = await row(id);
+    expect(r.status).toBe("resolved");
+    expect(r.check_in_expires_at).toBeNull();
+    expect(
+      (await studentClient.rpc("answer_help_request_check_in", { p_help_request_id: id, p_fixed: false, p_note: "n" }))
+        .error
+    ).not.toBeNull();
+  });
+
   test("'fixed' clears the check-in and leaves the ticket resolved", async () => {
     const id = await freshRequest();
     await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: false });

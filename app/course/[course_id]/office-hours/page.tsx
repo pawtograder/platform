@@ -27,6 +27,7 @@ import {
   DialogTitle,
   DialogCloseTrigger
 } from "@/components/ui/dialog";
+import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
 
 export default function OfficeHoursPage() {
   const { course_id } = useParams();
@@ -121,7 +122,7 @@ export default function OfficeHoursPage() {
   // Get requests for selected queue
   const selectedQueueRequests = useMemo(() => {
     if (!selectedQueueId) return [];
-    return activeHelpRequests.filter((r) => r.help_queue === selectedQueueId);
+    return activeHelpRequests.filter((r) => r.help_queue === selectedQueueId).sort(compareHelpRequestQueueOrder);
   }, [activeHelpRequests, selectedQueueId]);
 
   // Get all requests where user is creator or participant (for My Requests view)

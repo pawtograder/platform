@@ -1177,14 +1177,17 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       return;
     }
 
-    // For instructors/graders, resolve and give the student a chance to say it wasn't fixed
+    // For instructors/graders, resolve; a ticket someone was helping gives the student a check-in
+    const wasBeingHelped = request?.status === "in_progress";
     if (await finish(request_id, false)) {
       toaster.success({
         title: "Help request resolved",
-        description: "The student will be asked whether their problem got fixed."
+        description: wasBeingHelped
+          ? "The student will be asked whether their problem got fixed."
+          : "This request was never picked up, so the student won't be asked to check in."
       });
     }
-  }, [request_id, isStudent, resolutionModal, finish]);
+  }, [request_id, request?.status, isStudent, resolutionModal, finish]);
 
   const endTicket = useCallback(async () => {
     if (await finish(request_id, true)) {
@@ -1346,9 +1349,11 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                   }
                   confirmHeader="Resolve Request"
                   confirmText={
-                    isInstructorOrGrader
-                      ? "The student will be asked whether their problem got fixed, and can escalate if it wasn't."
-                      : "Are you sure you want to resolve this request?"
+                    !isInstructorOrGrader
+                      ? "Are you sure you want to resolve this request?"
+                      : request.status === "in_progress"
+                        ? "The student will be asked whether their problem got fixed, and can escalate if it wasn't."
+                        : "Nobody has picked this request up yet, so the student won't get a check-in."
                   }
                   onConfirm={resolveRequest}
                 />
