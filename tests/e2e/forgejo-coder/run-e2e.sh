@@ -41,7 +41,7 @@ mkdir -p "$LOGS" "$WORK"
 TOOL_PID=""
 cleanup() {
   if [ "${KEEP_UP:-}" != "1" ]; then
-    [ -n "$TOOL_PID" ] && kill "$TOOL_PID" 2>/dev/null || true
+    [ -n "$TOOL_PID" ] && kill -- "-$TOOL_PID" 2>/dev/null || true
     for s in forgejo coder; do $COMPOSE logs --no-color "$s" >"$LOGS/$s.log" 2>&1 || true; done
     $COMPOSE down -v >/dev/null 2>&1 || true
     [ "${SKIP_SUPABASE:-}" = "1" ] || $SB stop --no-backup >/dev/null 2>&1 || true
@@ -57,7 +57,7 @@ if [ "${SKIP_SUPABASE:-}" != "1" ]; then
   node "$HERE/patch-supabase-config.mjs" "$WORK/supabase/config.toml" "$SB_PORT_OFFSET" "$PAW_BASE_URL"
   # A KEEP_UP or cancelled run leaves the project's volumes, and start would restore that stale schema.
   $SB stop --no-backup >/dev/null 2>&1 || true
-  docker volume ls -q --filter label=com.supabase.cli.project=pawtograder-sso-e2e | xargs -r docker volume rm >/dev/null
+  for v in $(docker volume ls -q --filter label=com.supabase.cli.project=pawtograder-sso-e2e); do docker volume rm "$v" >/dev/null; done
   # logflare/vector fail their health check on the e2e runner.
   $SB start -x logflare,vector,studio,imgproxy,edge-runtime
 fi
@@ -125,8 +125,11 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
     npm run build >"$LOGS/build.log" 2>&1 || { tail -40 "$LOGS/build.log"; exit 1; }
   fi
   log "Starting Pawtograder on $PAW_BASE_URL"
+  # Own process group, so cleanup also stops the next server npx spawns.
+  set -m
   npx next start -H 127.0.0.1 -p "$PAW_PORT" >"$LOGS/next.log" 2>&1 &
   TOOL_PID=$!
+  set +m
   wait_for "$PAW_BASE_URL/sign-in" 60 "Pawtograder" || { tail -40 "$LOGS/next.log"; exit 1; }
 fi
 
