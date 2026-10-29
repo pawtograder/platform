@@ -584,6 +584,19 @@ export default function HelpRequestForm({
             // stall router.push if the REST round-trip is slow.
             controller.loadMessagesForHelpRequest(createdHelpRequestId);
 
+            // The RPC also inserted the request's help_request_students rows, but their
+            // broadcast goes to help_request:<id>, which nobody has joined yet, so
+            // safe_broadcast drops it. Without those rows the request page shows 0 students
+            // and no Resolve button (#1003), and spins once the request is resolved (#1080).
+            // Pull them in ourselves. Not awaited, for the same router.push reason as above;
+            // the request is already saved, so a failed refresh is not an error here.
+            void supabase
+              .from("help_request_students")
+              .select("id")
+              .eq("help_request_id", createdHelpRequestId)
+              .then(({ data }) => controller.helpRequestStudents.refetchByIds((data ?? []).map((row) => row.id)))
+              .then(undefined, () => {});
+
             navigated = true;
             router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequestId}`);
           } catch (error) {
