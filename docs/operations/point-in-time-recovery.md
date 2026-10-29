@@ -433,10 +433,10 @@ asserts row count, cleans up — no orphan scratch DB or volume.
   StatefulSet restarts Postgres. The `walg-retention` CronJob does the same
   prune from its own pod, so its count changes without a restart. Keep it at or
   below `baseBackup.keepBackups`; above that, the sidecar's prune still deletes
-  down to its own count. Unset, it inherits `baseBackup.keepBackups`. A one-off
-  prune by hand (from the `base-backup` container) is `wal-g delete retain FULL
-  <n>` to preview and `... --confirm` to delete; follow it with `wal-g
-  wal-verify integrity`.
+  down to its own count. Unset, it inherits `baseBackup.keepBackups`. To prune
+  once by hand, run these from the `base-backup` container:
+  `wal-g delete retain FULL N` previews, adding `--confirm` deletes, and
+  `wal-g wal-verify integrity` checks the WAL chain afterwards.
 - **No physical replication slot for the standby.** The chart creates none, so
   the primary never retains WAL on the standby's behalf. A standby that lags past
   the WAL still in the primary's `pg_wal` falls back to `wal-g wal-fetch` from the
