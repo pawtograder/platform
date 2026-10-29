@@ -80,20 +80,20 @@ export const signInWithMagicLinkAction = async (formData: FormData) => {
   return redirect("/course");
 };
 
+// Browsers drop tabs/newlines and read `\` as `/`, so `/\t/evil.test` or `/\evil.test` would leave the origin.
+function safeRedirectPath(value: string | null): string | undefined {
+  if (!value || !value.startsWith("/")) return undefined;
+  if ([...value].some((c) => c === "\\" || c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)) return undefined;
+  const base = "http://pawtograder.invalid";
+  return new URL(value, base).origin === base ? value : undefined;
+}
+
 export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const action = data.get("action");
   const email = data.get("email");
   const password = data.get("password");
   const redirectParam = data.get("redirect") as string | null;
-  // Same-origin path only; `//host` and backslash variants resolve off-origin (see app/auth/callback/route.ts).
-  const redirectPath =
-    redirectParam &&
-    redirectParam.startsWith("/") &&
-    !redirectParam.startsWith("//") &&
-    !redirectParam.startsWith("/\\") &&
-    !redirectParam.includes("\\")
-      ? redirectParam
-      : undefined;
+  const redirectPath = safeRedirectPath(redirectParam);
   if (action === "signin") {
     return signInWithEmailAction(email as string, password as string, redirectPath);
   } else if (action === "signup") {

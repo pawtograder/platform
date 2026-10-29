@@ -73,10 +73,10 @@ export SB_ISSUER="$SUPABASE_URL/auth/v1"
 wait_for "$SB_ISSUER/.well-known/openid-configuration" 30 "OIDC discovery"
 # Migrations only create audit partitions for a fixed window; a retained stack can be past it.
 docker exec supabase_db_pawtograder-sso-e2e psql -U postgres -d postgres -qc "SELECT public.audit_maintain_partitions();" >/dev/null
-WANT_MIGRATION="$(ls "$REPO/supabase/migrations" | sort | tail -1 | cut -d_ -f1)"
-HAVE_MIGRATION="$(docker exec supabase_db_pawtograder-sso-e2e psql -U postgres -d postgres -tAc "SELECT max(version) FROM supabase_migrations.schema_migrations")"
-if [ "$HAVE_MIGRATION" != "$WANT_MIGRATION" ]; then
-  echo "ERROR: the retained Supabase is at migration $HAVE_MIGRATION, the checkout at $WANT_MIGRATION. Re-run without SKIP_SUPABASE/ONLY."; exit 1
+WANT_MIGRATIONS="$(ls "$REPO/supabase/migrations" | grep '\.sql$' | cut -d_ -f1 | sort)"
+HAVE_MIGRATIONS="$(docker exec supabase_db_pawtograder-sso-e2e psql -U postgres -d postgres -tAc "SELECT version FROM supabase_migrations.schema_migrations ORDER BY 1")"
+if [ "$HAVE_MIGRATIONS" != "$WANT_MIGRATIONS" ]; then
+  echo "ERROR: the retained Supabase's migrations differ from the checkout's. Re-run without SKIP_SUPABASE/ONLY."; exit 1
 fi
 # TestingUtils falls back to .env.local, which would seed the developer's own database.
 [ "${ONLY:-}" = "1" ] && exec npx playwright test --config playwright.forgejo-coder.config.ts "$@"
@@ -130,13 +130,12 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
   if port_in_use "$PAW_PORT"; then
     echo "ERROR: port $PAW_PORT is in use. Stop whatever holds it or set PAW_PORT."; exit 1
   fi
+  # Own build dir, so a dev or prod server from this checkout keeps its .next.
+  export NEXT_DIST_DIR=.next-sso-e2e
   if [ "${SKIP_BUILD:-}" != "1" ]; then
     # NEXT_PUBLIC_* is inlined at build time, so build after exporting the lane's URLs.
-    if pgrep -f "$REPO/node_modules/.bin/next (dev|start)" >/dev/null; then
-      echo "ERROR: a next server from this checkout is running and uses .next. Stop it, or set SKIP_BUILD=1."; exit 1
-    fi
     log "Building Pawtograder"
-    rm -rf "$REPO/.next"
+    rm -rf "${REPO:?}/$NEXT_DIST_DIR"
     npm run build >"$LOGS/build.log" 2>&1 || { tail -40 "$LOGS/build.log"; exit 1; }
   fi
   log "Starting Pawtograder on $PAW_BASE_URL"

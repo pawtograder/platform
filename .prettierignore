@@ -21,6 +21,7 @@ bun.lock
 
 # next.js
 /.next/
+/.next-sso-e2e/
 /out/
 
 # production
