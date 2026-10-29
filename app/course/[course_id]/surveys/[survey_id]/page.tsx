@@ -228,8 +228,9 @@ export default function SurveyTakingPage() {
 
       setIsSubmitting(true);
       isSubmittingRef.current = true;
-      // Cancel any pending autosave and wait out any in-flight one so the
-      // submit upsert is guaranteed to be the last write.
+      // Cancel any pending autosave and wait out the in-flight chain so the
+      // submit upsert is guaranteed to be the last write. Saves still queued in
+      // the chain see isSubmittingRef and skip.
       if (autosaveTimerRef.current) {
         clearTimeout(autosaveTimerRef.current);
         autosaveTimerRef.current = null;
@@ -288,10 +289,21 @@ export default function SurveyTakingPage() {
         autosaveTimerRef.current = null;
         flushAutosaveRef.current = null;
         if (isSubmittingRef.current) return;
-        const inFlight = saveResponseToDb(surveyData, false).catch((error) => {
-          console.error("Error auto-saving response:", error);
-          // Don't show error toast for auto-save failures to avoid spam
-        });
+        // Chained on the previous save so writes reach the server in the order they were made:
+        // a slow older upsert landing after a newer one would put the older answers back.
+        // autosaveInFlightRef is the tail of the chain, which is what Complete waits on.
+        const inFlight = (autosaveInFlightRef.current ?? Promise.resolve())
+          .then(() => {
+            // Rechecked when the save's turn comes: Complete may have started, or the response
+            // may have been submitted, while this one waited behind a slow save.
+            if (isSubmittingRef.current) return;
+            if (!shouldAutosaveResponse({ loadedState: responseStateRef.current, allowResponseEditing })) return;
+            return saveResponseToDb(surveyData, false);
+          })
+          .catch((error) => {
+            console.error("Error auto-saving response:", error);
+            // Don't show error toast for auto-save failures to avoid spam
+          });
         autosaveInFlightRef.current = inFlight;
         void inFlight.finally(() => {
           if (autosaveInFlightRef.current === inFlight) autosaveInFlightRef.current = null;
