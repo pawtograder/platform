@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Model, ValueChangedEvent } from "survey-core";
 import { Survey, PopupSurvey } from "survey-react-ui";
 import { useColorMode } from "@/components/ui/color-mode";
@@ -45,12 +45,6 @@ export default function SurveyComponent({
 
   const survey = useMemo(() => {
     const model = new Model(JSON.parse(surveyJsonKey));
-    // The database title is the one instructors set and the survey list shows.
-    // The JSON title is often the visual builder's "Survey Name" placeholder
-    // (issue #1002). The model holds its own copy, so the stored JSON is untouched.
-    if (title) {
-      model.title = title;
-    }
     // Accessibility tuning (WCAG 1.3.2 Meaningful Sequence + 1.3.1 Info &
     // Relationships): SurveyJS defaults auto-focus the first answer, which
     // causes VoiceOver to read the choice list before the question prompt.
@@ -81,7 +75,20 @@ export default function SurveyComponent({
       }
     });
     return model;
-  }, [surveyJsonKey, title]);
+  }, [surveyJsonKey]);
+
+  // The database title is the one instructors set and the survey list shows.
+  // The JSON title is often the visual builder's "Survey Name" placeholder
+  // (issue #1002). The model holds its own copy, so the stored JSON is untouched.
+  // A rename arrives as a realtime update while a student may be mid-answer, so it
+  // updates the existing model instead of rebuilding it (which would discard the
+  // answers, page and focus). A layout effect sets it before the first paint, so
+  // the JSON title never flashes.
+  useLayoutEffect(() => {
+    if (title) {
+      survey.title = title;
+    }
+  }, [survey, title]);
 
   useEffect(() => {
     if (colorMode === "dark") {
