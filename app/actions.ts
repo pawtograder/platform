@@ -85,7 +85,15 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const email = data.get("email");
   const password = data.get("password");
   const redirectParam = data.get("redirect") as string | null;
-  const redirectPath = redirectParam && redirectParam.startsWith("/") ? redirectParam : undefined;
+  // Same-origin path only; `//host` and backslash variants resolve off-origin (see app/auth/callback/route.ts).
+  const redirectPath =
+    redirectParam &&
+    redirectParam.startsWith("/") &&
+    !redirectParam.startsWith("//") &&
+    !redirectParam.startsWith("/\\") &&
+    !redirectParam.includes("\\")
+      ? redirectParam
+      : undefined;
   if (action === "signin") {
     return signInWithEmailAction(email as string, password as string, redirectPath);
   } else if (action === "signup") {
