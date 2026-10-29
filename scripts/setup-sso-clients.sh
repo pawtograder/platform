@@ -33,8 +33,7 @@ curl -fsS -o /dev/null "$auth/.well-known/openid-configuration" || {
 
 existing="$(gotrue "$auth/admin/oauth/clients?per_page=1000")"
 
-# GoTrue only returns a client secret at creation, so each run registers a new client.
-# The old ones are revoked only after the app has rolled out with the new one.
+# GoTrue returns a client secret only at creation, so register a new client and revoke old ones after rollout.
 old_ids() { echo "$existing" | jq -r --arg n "$1" '(.clients // .)[] | select(.client_name == $n) | .client_id'; }
 create_client() {
   gotrue -X POST "$auth/admin/oauth/clients" \
