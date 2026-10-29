@@ -4,6 +4,22 @@
 {{- end }}
 {{- end }}
 
+{{- if and .Values.coder.enabled .Values.coder.oidc.enabled (not .Values.auth.oauthServer.enabled) }}
+{{- fail "coder.oidc.enabled signs in through Pawtograder's OAuth server; set auth.oauthServer.enabled=true" }}
+{{- end }}
+{{- if and .Values.forgejo.enabled .Values.forgejo.gitea.oauth }}
+{{- if not .Values.auth.oauthServer.enabled }}
+{{- fail "forgejo.gitea.oauth is set but auth.oauthServer.enabled=false; the Pawtograder login source has no provider to sign in with" }}
+{{- end }}
+{{- /* Subchart values aren't templated, so the URL is spelled out per install; catch drift from the issuer. */}}
+{{- $discovery := printf "%s/auth/v1/.well-known/openid-configuration" (include "pawtograder.api.url" .) }}
+{{- range .Values.forgejo.gitea.oauth }}
+{{- if and (eq .name "pawtograder") (ne .autoDiscoverUrl $discovery) }}
+{{- fail (printf "forgejo.gitea.oauth[pawtograder].autoDiscoverUrl must be %s (got %q)" $discovery .autoDiscoverUrl) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- range $app := list "forgejo" "coder" }}
 {{- $v := index $.Values $app }}
 {{- $db := index $.Values (printf "%s-db" $app) }}

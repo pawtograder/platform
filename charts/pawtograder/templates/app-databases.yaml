@@ -22,6 +22,14 @@ data:
   CODER_TELEMETRY_ENABLE: "false"
   CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE: "false"
   CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS: "false"
+  {{- if .Values.coder.oidc.enabled }}
+  # "Sign in with Pawtograder". The client ID and secret come from the
+  # coder.oidc.existingSecret, written by scripts/setup-sso-clients.sh.
+  CODER_OIDC_ISSUER_URL: "{{ include "pawtograder.api.url" . }}/auth/v1"
+  CODER_OIDC_SCOPES: "openid,profile,email"
+  CODER_OIDC_ALLOW_SIGNUPS: "true"
+  CODER_OIDC_SIGN_IN_TEXT: {{ .Values.coder.oidc.signInText | quote }}
+  {{- end }}
 ---
 {{- end }}
 # Not a hook: a pre-install hook would run before the Postgres servers exist.

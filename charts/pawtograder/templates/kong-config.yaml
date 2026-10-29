@@ -63,6 +63,35 @@ data:
               - /auth/v1/authorize
         plugins:
           - name: cors
+      {{- if .Values.auth.oauthServer.enabled }}
+      # OAuth 2.1 / OIDC endpoints that Forgejo, Coder and the browser call
+      # without an apikey. GoTrue authenticates them itself (client
+      # credentials + PKCE, or the bearer token for userinfo). The consent API
+      # (/oauth/authorizations) stays behind key-auth below, so the oauth paths
+      # are exact-match regexes: a plain /auth/v1/oauth/authorize prefix would
+      # also capture /auth/v1/oauth/authorizations/*. Under _format_version 2.1
+      # Kong adds the `~` to these itself.
+      - name: auth-v1-open-well-known
+        url: http://{{ include "pawtograder.auth.host" . }}:{{ .Values.auth.service.port }}/.well-known/
+        routes:
+          - name: auth-v1-open-well-known
+            strip_path: true
+            paths:
+              - /auth/v1/.well-known/
+        plugins:
+          - name: cors
+      {{- range $endpoint := list "authorize" "token" "userinfo" }}
+      - name: auth-v1-open-oauth-{{ $endpoint }}
+        url: http://{{ include "pawtograder.auth.host" $ }}:{{ $.Values.auth.service.port }}/oauth/{{ $endpoint }}
+        routes:
+          - name: auth-v1-open-oauth-{{ $endpoint }}
+            strip_path: true
+            paths:
+              - /auth/v1/oauth/{{ $endpoint }}$
+        plugins:
+          - name: cors
+      {{- end }}
+      {{- end }}
       - name: auth-v1
         _comment: "GoTrue: /auth/v1/* -> http://auth:9999/*"
         url: http://{{ include "pawtograder.auth.host" . }}:{{ .Values.auth.service.port }}/

@@ -680,6 +680,17 @@ auth:
     enabled: true
     uri: pg-functions://postgres/public/custom_access_token_hook
 
+  # Pawtograder as an OAuth 2.1 / OIDC provider, so Forgejo and Coder can offer
+  # "Sign in with Pawtograder". GoTrue sends the browser to the web app's
+  # consent page at authorizationPath. Also opens the OIDC endpoints third-party
+  # apps call without an apikey (discovery, JWKS, authorize, token, userinfo) in
+  # Kong. Clients are registered by an admin, never dynamically: see
+  # scripts/setup-sso-clients.sh.
+  oauthServer:
+    enabled: false
+    authorizationPath: /oauth/consent
+    allowDynamicRegistration: false
+
   # External OAuth providers. Credentials live in the `web` secret (the chart
   # passes them through to GoTrue via env). Set enabled=true per provider.
   external:
@@ -2786,6 +2797,13 @@ forgejoRunner:
 coder:
   enabled: false
   database: pawtograder
+  # "Sign in with Pawtograder" (needs auth.oauthServer.enabled). Sets the
+  # CODER_OIDC_* settings in pawtograder-coder-env; CODER_OIDC_CLIENT_ID and
+  # CODER_OIDC_CLIENT_SECRET come from the pawtograder-coder-oidc Secret, which
+  # scripts/setup-sso-clients.sh writes. Coder leaves OIDC off until it exists.
+  oidc:
+    enabled: false
+    signInText: Sign in with Pawtograder
   coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder
@@ -2796,6 +2814,7 @@ coder:
     envFrom:
       - configMapRef: { name: pawtograder-coder-env }
       - secretRef: { name: pawtograder-coder-db }
+      - secretRef: { name: pawtograder-coder-oidc, optional: true }
     # Whoever reaches a coderd with no users becomes owner; this creates ours on 127.0.0.1 before coderd serves.
     initContainers:
       - name: first-owner
