@@ -1,4 +1,5 @@
 import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
+import type { Page, Request } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
@@ -683,6 +684,104 @@ test.describe("Surveys Page", () => {
       await expect(page.getByRole("textbox", { name: "Question 1" })).toHaveValue("Answer before reload");
     });
   }
+
+  // Each debounced autosave is its own upsert. Holding the first one back makes a later write
+  // reach the server before it; the writes must still land in the order the student made them.
+  const holdFirstResponseWrite = async (page: Page, holdMs: number) => {
+    const writesInServerOrder: { is_submitted: boolean; q1?: string }[] = [];
+    let writesSeen = 0;
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      writesSeen += 1;
+      if (writesSeen === 1) await new Promise((resolve) => setTimeout(resolve, holdMs));
+      const body = route.request().postDataJSON() as { is_submitted: boolean; response: { q1?: string } };
+      writesInServerOrder.push({ is_submitted: body.is_submitted, q1: body.response.q1 });
+      await route.continue();
+    });
+    return writesInServerOrder;
+  };
+  const isResponseWrite = (request: Request) =>
+    request.method() === "POST" && request.url().includes("/rest/v1/survey_responses");
+
+  test("a slow autosave does not overwrite a newer answer", async ({ page }) => {
+    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: "Slow Autosave Survey",
+      status: "published",
+      json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
+    });
+
+    await loginAsUser(page, studentA, course);
+    await holdFirstResponseWrite(page, 4000);
+    let finishedWrites = 0;
+    page.on("requestfinished", (request) => {
+      if (isResponseWrite(request)) finishedWrites += 1;
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    const firstWrite = page.waitForRequest(isResponseWrite);
+    await input.fill("Older answer");
+    await firstWrite;
+    await input.fill("Newer answer");
+
+    await expect.poll(() => finishedWrites, { timeout: 15_000 }).toBe(2);
+    const { data, error } = await supabase
+      .from("survey_responses")
+      .select("response, is_submitted")
+      .eq("survey_id", survey.id)
+      .eq("profile_id", studentA.private_profile_id)
+      .single();
+    if (error) throw new Error(error.message);
+    expect({ q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted }).toEqual({
+      q1: "Newer answer",
+      is_submitted: false
+    });
+
+    await page.reload();
+    await expect(page.getByRole("textbox", { name: "Question 1" })).toHaveValue("Newer answer");
+  });
+
+  test("no draft autosave reaches the server after Complete", async ({ page }) => {
+    // Editing on, so RLS lets a late draft write through to the survey_response_no_unsubmit
+    // trigger, which refuses it. The submission survives either way; the client must not send it.
+    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: "Complete Behind Autosave Survey",
+      status: "published",
+      allow_response_editing: true,
+      json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
+    });
+
+    await loginAsUser(page, studentA, course);
+    const writesInServerOrder = await holdFirstResponseWrite(page, 4000);
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    const firstWrite = page.waitForRequest(isResponseWrite);
+    await input.fill("Older answer");
+    await firstWrite;
+    await input.fill("Final answer");
+    // Past the 1 s debounce, so the second autosave has been queued before Complete.
+    await page.waitForTimeout(1500);
+    await page.getByRole("button", { name: "Complete" }).click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+
+    // Outlast the held write, so a draft queued behind it has had its chance to go out.
+    await page.waitForTimeout(4000);
+    const { data, error } = await supabase
+      .from("survey_responses")
+      .select("response, is_submitted")
+      .eq("survey_id", survey.id)
+      .eq("profile_id", studentA.private_profile_id)
+      .single();
+    if (error) throw new Error(error.message);
+    expect({ q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted }).toEqual({
+      q1: "Final answer",
+      is_submitted: true
+    });
+    const lastSubmit = writesInServerOrder.findLastIndex((write) => write.is_submitted);
+    expect(lastSubmit).toBeGreaterThanOrEqual(0);
+    expect(writesInServerOrder.slice(lastSubmit + 1)).toEqual([]);
+  });
 
   test("survey questions read before their answer options (WCAG 1.3.2)", async ({ page }) => {
     // SurveyJS renders its own DOM (axe-excluded), so probe the emitted markup directly:
