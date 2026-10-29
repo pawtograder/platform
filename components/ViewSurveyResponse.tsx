@@ -10,6 +10,8 @@ import type { Survey as SurveyType, SurveyResponseWithProfile } from "@/types/su
 
 interface ViewSurveyResponseProps {
   surveyJson: SurveyType["json"];
+  /** The survey's database title. Shown instead of any title inside `surveyJson`. */
+  title?: string;
   responseData: SurveyResponseWithProfile["response"];
   readOnly?: boolean;
   onComplete?: (sender: Model, options: unknown) => void;
@@ -18,6 +20,7 @@ interface ViewSurveyResponseProps {
 
 export default function ViewSurveyResponse({
   surveyJson,
+  title,
   responseData,
   readOnly = true,
   onComplete,
@@ -43,6 +46,11 @@ export default function ViewSurveyResponse({
   // member on the submission survey tab makes the difference visible.
   const survey = useMemo(() => {
     const model = new Model(surveyJson);
+    // Same rule as components/Survey.tsx: the database title wins over the JSON's
+    // (issue #1002). Callers already show it as a heading, so the tag stays a <div>.
+    if (title) {
+      model.title = title;
+    }
 
     // Apply SurveyJS theme based on color mode
     model.applyTheme(colorMode === "dark" ? DefaultDark : DefaultLight);
@@ -62,7 +70,7 @@ export default function ViewSurveyResponse({
     model.onValueChanged.add((sender, options) => onValueChangedRef.current?.(sender, options));
 
     return model;
-  }, [surveyJson, responseData, colorMode, readOnly]);
+  }, [surveyJson, title, responseData, colorMode, readOnly]);
 
   return <Survey model={survey} />;
 }

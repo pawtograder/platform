@@ -85,7 +85,7 @@ export function SurveyPreviewModal({ isOpen, onClose, surveyJson, surveyTitle }:
             </VStack>
           ) : parsedJson ? (
             <Box className="survey-preview-container">
-              <SurveyComponent surveyJson={parsedJson} isPopup={false} readOnly={false} />
+              <SurveyComponent surveyJson={parsedJson} title={surveyTitle} isPopup={false} readOnly={false} />
             </Box>
           ) : (
             <Box textAlign="center" py={8}>

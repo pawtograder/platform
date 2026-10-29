@@ -10,6 +10,8 @@ import { Json } from "@/utils/supabase/SupabaseTypes";
 
 interface SurveyComponentProps {
   surveyJson: Json;
+  /** The survey's database title. Shown instead of any title inside `surveyJson`. */
+  title?: string;
   isPopup?: boolean;
   isExpanded?: boolean;
   onComplete?: (survey: Model) => void;
@@ -20,6 +22,7 @@ interface SurveyComponentProps {
 
 export default function SurveyComponent({
   surveyJson,
+  title,
   isPopup = false,
   isExpanded = true,
   onComplete,
@@ -42,6 +45,12 @@ export default function SurveyComponent({
 
   const survey = useMemo(() => {
     const model = new Model(JSON.parse(surveyJsonKey));
+    // The database title is the one instructors set and the survey list shows.
+    // The JSON title is often the visual builder's "Survey Name" placeholder
+    // (issue #1002). The model holds its own copy, so the stored JSON is untouched.
+    if (title) {
+      model.title = title;
+    }
     // Accessibility tuning (WCAG 1.3.2 Meaningful Sequence + 1.3.1 Info &
     // Relationships): SurveyJS defaults auto-focus the first answer, which
     // causes VoiceOver to read the choice list before the question prompt.
@@ -62,13 +71,17 @@ export default function SurveyComponent({
     // SurveyJS renders titles as <div> by default (settings.titleTags.question);
     // onGetTitleTagName is the supported per-survey override. (A plain
     // `questionTitleTagName` assignment is NOT a SurveyJS API and does nothing.)
+    // The survey title is the h1 the question h2s sit under: the survey page
+    // has no other top-level heading.
     model.onGetTitleTagName.add((_sender, options) => {
       if ((options.element as { isQuestion?: boolean }).isQuestion) {
         options.tagName = "h2";
+      } else if (options.element === model) {
+        options.tagName = "h1";
       }
     });
     return model;
-  }, [surveyJsonKey]);
+  }, [surveyJsonKey, title]);
 
   useEffect(() => {
     if (colorMode === "dark") {

@@ -326,6 +326,7 @@ export default function IndividualResponsePage() {
             <Box>
               <ViewSurveyResponse
                 surveyJson={survey.json}
+                title={survey.title}
                 responseData={response.response}
                 readOnly={true}
                 onComplete={() => {}} // No-op for display mode
