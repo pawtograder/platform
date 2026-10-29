@@ -15,7 +15,7 @@ const FORBIDDEN_PALETTE_BG_WITH_WHITE =
 const eslintConfig = [
   // design-sync inputs are tooling artifacts (esbuild-compiled, never imported by
   // the app, regenerated each sync, intentionally full of `any`/mock shims).
-  { ignores: [".design-sync/**"] },
+  { ignores: [".design-sync/**", ".next-sso-e2e/**"] },
   ...compat.config({ extends: ["next/core-web-vitals", "next/typescript", "prettier"] }),
   {
     linterOptions: { reportUnusedDisableDirectives: "warn" },

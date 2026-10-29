@@ -1,0 +1,68 @@
+name: pawtograder-sso-e2e
+
+services:
+  # OIDC `iss` must match for browser and containers, so Forgejo/Coder share this netns where 127.0.0.1:${SB_API_PORT} forwards to the host.
+  loopback:
+    image: alpine/socat:1.8.0.3
+    command:
+      - "TCP-LISTEN:${SB_API_PORT:?},fork,reuseaddr,bind=127.0.0.1"
+      - "TCP:host.docker.internal:${SB_API_PORT:?}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${FORGEJO_PORT:-3100}:${FORGEJO_PORT:-3100}"
+      - "127.0.0.1:${CODER_PORT:-7080}:${CODER_PORT:-7080}"
+
+  forgejo:
+    image: ghcr.io/pawtograder/mirror/forgejo/forgejo:15.0.9-rootless
+    network_mode: service:loopback
+    depends_on: [loopback]
+    environment:
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__server__HTTP_PORT: "${FORGEJO_PORT:-3100}"
+      FORGEJO__server__DOMAIN: 127.0.0.1
+      FORGEJO__server__ROOT_URL: "http://127.0.0.1:${FORGEJO_PORT:-3100}/"
+      FORGEJO__server__DISABLE_SSH: "true"
+      FORGEJO__server__START_SSH_SERVER: "false"
+      # DISABLE_REGISTRATION does not gate OAuth auto-registration.
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION: "true"
+      FORGEJO__oauth2_client__USERNAME: email
+      FORGEJO__oauth2_client__ACCOUNT_LINKING: disabled
+      FORGEJO__oauth2_client__OPENID_CONNECT_SCOPES: "email profile"
+      FORGEJO__log__LEVEL: Info
+
+  coder-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: coder
+      POSTGRES_PASSWORD: coder
+      POSTGRES_DB: coder
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coder"]
+      interval: 2s
+      retries: 30
+
+  coder:
+    image: ghcr.io/pawtograder/mirror/coder/coder:v2.37.3
+    network_mode: service:loopback
+    depends_on:
+      loopback:
+        condition: service_started
+      coder-db:
+        condition: service_healthy
+    environment:
+      CODER_HTTP_ADDRESS: "0.0.0.0:${CODER_PORT:-7080}"
+      CODER_ACCESS_URL: "http://127.0.0.1:${CODER_PORT:-7080}"
+      CODER_PG_CONNECTION_URL: "postgresql://coder:coder@coder-db:5432/coder?sslmode=disable"
+      CODER_TELEMETRY_ENABLE: "false"
+      CODER_UPDATE_CHECK: "false"
+      CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE: "false"
+      CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS: "false"
+      CODER_OIDC_ISSUER_URL: "${SB_ISSUER:?}"
+      CODER_OIDC_CLIENT_ID: "${CODER_OIDC_CLIENT_ID:?}"
+      CODER_OIDC_CLIENT_SECRET: "${CODER_OIDC_CLIENT_SECRET:?}"
+      CODER_OIDC_ALLOW_SIGNUPS: "true"
+      CODER_OIDC_SCOPES: "openid,profile,email"
+      CODER_OIDC_SIGN_IN_TEXT: "Sign in with Pawtograder"

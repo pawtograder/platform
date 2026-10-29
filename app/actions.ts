@@ -80,16 +80,28 @@ export const signInWithMagicLinkAction = async (formData: FormData) => {
   return redirect("/course");
 };
 
+// Browsers drop tabs/newlines and read `\` as `/`, so `/\t/evil.test` or `/\evil.test` would leave the origin.
+function safeRedirectPath(value: string | null): string | undefined {
+  if (!value || !value.startsWith("/")) return undefined;
+  if ([...value].some((c) => c === "\\" || c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)) return undefined;
+  const base = "http://pawtograder.invalid";
+  try {
+    return new URL(value, base).origin === base ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const action = data.get("action");
   const email = data.get("email");
   const password = data.get("password");
   const redirectParam = data.get("redirect") as string | null;
-  const redirectPath = redirectParam && redirectParam.startsWith("/") ? redirectParam : undefined;
+  const redirectPath = safeRedirectPath(redirectParam);
   if (action === "signin") {
     return signInWithEmailAction(email as string, password as string, redirectPath);
   } else if (action === "signup") {
-    return signUpWithEmailAction(email as string, password as string);
+    return signUpWithEmailAction(email as string, password as string, redirectPath);
   } else if (action === "reset-password") {
     return resetPasswordAction(email as string);
   }
@@ -117,9 +129,10 @@ export const signInWithEmailAction = async (email: string, password: string, red
     return redirect(redirectPath ?? "/course");
   }
 };
-export const signUpWithEmailAction = async (email: string, password: string) => {
+export const signUpWithEmailAction = async (email: string, password: string, redirectPath?: string) => {
+  const params: Record<string, string> = redirectPath ? { redirect: redirectPath } : {};
   if (!isSignupsEnabled()) {
-    return encodedRedirect("error", "/sign-in", "Signups are currently disabled");
+    return encodedRedirect("error", "/sign-in", "Signups are currently disabled", params);
   }
 
   const supabase = await createClient();
@@ -131,17 +144,18 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
     }
   });
   if (error) {
-    return encodedRedirect("error", "/sign-in", error.message);
+    return encodedRedirect("error", "/sign-in", error.message, params);
   }
   if (!data.user?.confirmed_at) {
     return encodedRedirect(
       "success",
       "/sign-in",
-      "Account created successfully, but must be confirmed. Please check your email for a confirmation link."
+      "Account created successfully, but must be confirmed. Please check your email for a confirmation link.",
+      params
     );
   }
   if (data.user) {
-    return redirect("/course");
+    return redirect(redirectPath ?? "/course");
   }
 };
 /**

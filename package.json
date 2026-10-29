@@ -21,6 +21,8 @@
     "test:e2e:local": "cross-env BASE_URL=http://localhost:3000 npx playwright test",
     "test:e2e:canvas": "tests/e2e/canvas/run-e2e.sh",
     "test:e2e:canvas:only": "npx playwright test --config playwright.canvas.config.ts",
+    "test:e2e:forgejo-coder": "tests/e2e/forgejo-coder/run-e2e.sh",
+    "test:e2e:forgejo-coder:only": "ONLY=1 tests/e2e/forgejo-coder/run-e2e.sh",
     "test:k6:build": "webpack --config webpack.k6.config.js",
     "test:k6:submissions-api": "npm run test:k6:build && k6 run dist/k6-tests/submissions-api.js -e SUPABASE_URL=$SUPABASE_URL -e SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY -e END_TO_END_SECRET=$END_TO_END_SECRET ",
     "test:k6:write-storm": "npm run test:k6:build && k6 run dist/k6-tests/submissions-write-storm.js -e SUPABASE_URL=$SUPABASE_URL -e SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY -e SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY -e END_TO_END_SECRET=$END_TO_END_SECRET",
