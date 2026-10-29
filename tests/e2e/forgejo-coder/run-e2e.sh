@@ -89,6 +89,7 @@ if [ "${SKIP_APPS:-}" != "1" ]; then
   $COMPOSE up -d --force-recreate
 else
   log "Restarting Coder with the re-minted OIDC client"
+  $COMPOSE up -d
   $COMPOSE up -d --force-recreate --no-deps coder
 fi
 wait_for "$FORGEJO_BASE_URL/api/v1/version" 60 "Forgejo"
