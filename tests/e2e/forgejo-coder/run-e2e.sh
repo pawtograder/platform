@@ -113,6 +113,9 @@ AUTH_ARGS=(--name "$FORGEJO_AUTH_SOURCE_NAME" --provider openidConnect
 SOURCE_ID="$($FJ auth list | awk -v n="$FORGEJO_AUTH_SOURCE_NAME" '$2==n {print $1}')"
 if [ -n "$SOURCE_ID" ]; then
   $FJ auth update-oauth --id "$SOURCE_ID" "${AUTH_ARGS[@]}"
+  # A running Forgejo keeps the provider it loaded at start, with the deleted client ID.
+  $COMPOSE restart forgejo >/dev/null
+  wait_for "$FORGEJO_BASE_URL/api/v1/version" 60 "Forgejo"
 else
   $FJ auth add-oauth "${AUTH_ARGS[@]}"
   SOURCE_ID="$($FJ auth list | awk -v n="$FORGEJO_AUTH_SOURCE_NAME" '$2==n {print $1}')"
@@ -132,11 +135,14 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
   fi
   # Own build dir, so a dev or prod server from this checkout keeps its .next.
   export NEXT_DIST_DIR=.next-sso-e2e
-  if [ "${SKIP_BUILD:-}" != "1" ]; then
-    # NEXT_PUBLIC_* is inlined at build time, so build after exporting the lane's URLs.
+  # NEXT_PUBLIC_* is inlined at build time, so SKIP_BUILD reuses a build only if they match.
+  BUILD_STAMP="$REPO/$NEXT_DIST_DIR/.sso-e2e-public-env"
+  PUBLIC_ENV="$(env | grep '^NEXT_PUBLIC_' | sort)"
+  if [ "${SKIP_BUILD:-}" != "1" ] || [ "$(cat "$BUILD_STAMP" 2>/dev/null)" != "$PUBLIC_ENV" ]; then
     log "Building Pawtograder"
     rm -rf "${REPO:?}/$NEXT_DIST_DIR"
     npm run build >"$LOGS/build.log" 2>&1 || { tail -40 "$LOGS/build.log"; exit 1; }
+    echo "$PUBLIC_ENV" >"$BUILD_STAMP"
   fi
   log "Starting Pawtograder on $PAW_BASE_URL"
   # Own process group, so cleanup also stops the next server npx spawns.

@@ -14,7 +14,7 @@ KEEP_UP=1 npm run test:e2e:forgejo-coder   # leave the stack up afterwards
 npm run test:e2e:forgejo-coder:only   # re-run the spec against a KEEP_UP stack (uses its Supabase keys, not .env.local)
 ```
 
-Re-run faster with `SKIP_SUPABASE=1`, `SKIP_APPS=1`, `SKIP_BUILD=1` (reuse `.next-sso-e2e`) or `SKIP_TOOL=1`. Extra arguments go to
+Re-run faster with `SKIP_SUPABASE=1`, `SKIP_APPS=1`, `SKIP_BUILD=1` (reuse `.next-sso-e2e` if its `NEXT_PUBLIC_*` values still match) or `SKIP_TOOL=1`. Extra arguments go to
 Playwright (`run-e2e.sh --grep Coder`). It works on macOS (Docker Desktop) and on the Linux
 `pawtograder-e2e` runner. In CI, run `.github/workflows/forgejo-coder-e2e.yml` with "Run workflow"
 on the branch.
