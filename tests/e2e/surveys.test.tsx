@@ -425,6 +425,17 @@ test.describe("Surveys Page", () => {
     expect(Array.isArray(parsed.pages[0].elements)).toBe(true);
   });
 
+  test("response editing checkbox is labelled and described", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+
+    const checkbox = page.getByRole("checkbox", { name: "Let students edit their responses after submitting" });
+    await expect(checkbox).not.toBeChecked();
+    await expect(checkbox).toHaveAccessibleDescription(
+      "When off, a student's first submission is final. Answers in progress auto-save either way."
+    );
+  });
+
   test("publishing a draft survey updates status", async ({ page }) => {
     const draftTitle = "Draft To Publish";
     const draftSurvey = await seedSurvey<{ id: string }>(course, instructor, {
