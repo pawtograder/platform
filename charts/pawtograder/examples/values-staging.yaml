@@ -383,6 +383,14 @@ redis:
 
 # ----- Object storage: external S3 (Ceph at s3.talos.ripley.cloud) ----------
 storage:
+  # Staging trial of the CVE-2026-111497 (Node2Shell / HTTP2Shell) fix: the
+  # chart default v1.48.26 ships Node 24.14.1 with the vulnerable Brotli
+  # decoder; v1.84.23 is the first release on Node 24.22.1. No BREAKING
+  # sections in 1.49–1.84 and no new required env vars, but storage-api runs
+  # its own (forward-only) storage-schema migrations on boot. Promote to the
+  # chart default once staging has run clean on it.
+  image:
+    tag: "v1.84.23"
   backend: s3
   s3:
     endpoint: https://s3.talos.ripley.cloud
