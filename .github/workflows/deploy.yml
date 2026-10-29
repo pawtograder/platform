@@ -275,6 +275,17 @@ jobs:
           ENABLE_SIGNUPS=true
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001
           E2E_ENABLE=true
+          # Explicit, because getExamVisionProvider fails closed on an unset value: it used
+          # to default to 'fake', which meant a real deployment silently produced placeholder
+          # OCR that reported success. The exam e2e suites need the offline provider, and this
+          # lane must never reach Google -- the real provider is exercised by exam-vision-e2e.yml,
+          # which supplies GOOGLE_API_KEY and its own env file.
+          #
+          # This has to live on the default branch: the lane runs under pull_request_target, so
+          # the workflow executed for a PR is the base branch's copy, not the PR's. The same line
+          # on #814's branch never ran, and every exam batch stalled at 'ocr' because the worker
+          # threw before OCR'ing a page.
+          EXAM_VISION_PROVIDER=fake
           # E2E_ENABLE only opens the edge functions' auth bypass. The GitHub
           # bypass is a separate flag: without it, isE2ERun still falls through
           # to cloneRepository -> getOctoKit and issues a real GitHub request,
