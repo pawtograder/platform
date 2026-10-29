@@ -680,6 +680,11 @@ auth:
     enabled: true
     uri: pg-functions://postgres/public/custom_access_token_hook
 
+  oauthServer:
+    enabled: false
+    authorizationPath: /oauth/consent
+    allowDynamicRegistration: false
+
   # External OAuth providers. Credentials live in the `web` secret (the chart
   # passes them through to GoTrue via env). Set enabled=true per provider.
   external:
@@ -2786,6 +2791,9 @@ forgejoRunner:
 coder:
   enabled: false
   database: pawtograder
+  oidc:
+    enabled: false
+    signInText: Sign in with Pawtograder
   coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder
@@ -2796,6 +2804,7 @@ coder:
     envFrom:
       - configMapRef: { name: pawtograder-coder-env }
       - secretRef: { name: pawtograder-coder-db }
+      - secretRef: { name: pawtograder-coder-oidc, optional: true }
     # Whoever reaches a coderd with no users becomes owner; this creates ours on 127.0.0.1 before coderd serves.
     initContainers:
       - name: first-owner

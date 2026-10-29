@@ -153,6 +153,14 @@ spec:
             - name: GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI
               value: {{ .Values.auth.customAccessTokenHook.uri | quote }}
             {{- end }}
+            {{- if .Values.auth.oauthServer.enabled }}
+            - name: GOTRUE_OAUTH_SERVER_ENABLED
+              value: "true"
+            - name: GOTRUE_OAUTH_SERVER_AUTHORIZATION_PATH
+              value: {{ .Values.auth.oauthServer.authorizationPath | quote }}
+            - name: GOTRUE_OAUTH_SERVER_ALLOW_DYNAMIC_REGISTRATION
+              value: {{ .Values.auth.oauthServer.allowDynamicRegistration | quote }}
+            {{- end }}
             {{- if .Values.auth.external.github.enabled }}
             - name: GOTRUE_EXTERNAL_GITHUB_ENABLED
               value: "true"

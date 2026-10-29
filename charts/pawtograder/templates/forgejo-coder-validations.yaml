@@ -4,6 +4,24 @@
 {{- end }}
 {{- end }}
 
+{{- if and .Values.coder.enabled .Values.coder.oidc.enabled (not .Values.auth.oauthServer.enabled) }}
+{{- fail "coder.oidc.enabled signs in through Pawtograder's OAuth server; set auth.oauthServer.enabled=true" }}
+{{- end }}
+{{- if .Values.forgejo.enabled }}
+{{- /* Subchart values aren't templated, so the URL is spelled out per install; catch drift from the issuer. */}}
+{{- $discovery := printf "%s/auth/v1/.well-known/openid-configuration" (include "pawtograder.api.url" .) }}
+{{- range .Values.forgejo.gitea.oauth }}
+{{- if eq .name "pawtograder" }}
+{{- if not $.Values.auth.oauthServer.enabled }}
+{{- fail "forgejo.gitea.oauth[pawtograder] is set but auth.oauthServer.enabled=false; the Pawtograder login source has no provider to sign in with" }}
+{{- end }}
+{{- if ne .autoDiscoverUrl $discovery }}
+{{- fail (printf "forgejo.gitea.oauth[pawtograder].autoDiscoverUrl must be %s (got %q)" $discovery .autoDiscoverUrl) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- range $app := list "forgejo" "coder" }}
 {{- $v := index $.Values $app }}
 {{- $db := index $.Values (printf "%s-db" $app) }}
@@ -245,7 +263,9 @@
 {{- end }}
 {{- $refs := list }}
 {{- range .Values.coder.coder.envFrom }}{{ $refs = append $refs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
-{{- range $want := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
+{{- $wantRefs := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
+{{- if .Values.coder.oidc.enabled }}{{ $wantRefs = append $wantRefs (printf "%s-coder-oidc" .Release.Name) }}{{ end }}
+{{- range $want := $wantRefs }}
 {{- if not (has $want $refs) }}
 {{- fail (printf "coder.coder.envFrom is missing %s; an overlay that sets the list must keep the chart's entries" $want) }}
 {{- end }}

@@ -1,4 +1,8 @@
-# Pre-create the Secrets listed in README "Forgejo and Coder".
+# Pre-create the Secrets listed in README "Forgejo and Coder"; run scripts/setup-sso-clients.sh once Pawtograder is up.
+
+auth:
+  oauthServer:
+    enabled: true
 
 forgejo:
   enabled: true
@@ -13,6 +17,12 @@ forgejo:
       - secretName: example-wildcard-tls
         hosts: [git.example.com]
   gitea:
+    oauth:
+      - name: pawtograder
+        provider: openidConnect
+        existingSecret: pawtograder-forgejo-oauth
+        autoDiscoverUrl: https://api.pawtograder.example.com/auth/v1/.well-known/openid-configuration
+        scopes: email profile
     additionalConfigFromEnvs:
       - name: FORGEJO__DATABASE__PASSWD
         valueFrom:
@@ -24,6 +34,10 @@ forgejo:
         valueFrom:
           secretKeyRef: { name: pawtograder-s3, key: AWS_SECRET_ACCESS_KEY }
     config:
+      oauth2_client:
+        ENABLE_AUTO_REGISTRATION: true
+        USERNAME: email
+        ACCOUNT_LINKING: disabled
       storage:
         STORAGE_TYPE: minio
         MINIO_ENDPOINT: s3.example.com
@@ -42,6 +56,8 @@ forgejoRunner:
 coder:
   enabled: true
   database: pawtograder
+  oidc:
+    enabled: true
   coder:
     env:
       - name: CODER_PG_CONNECTION_URL
