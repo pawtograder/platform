@@ -74,12 +74,14 @@ describe("survey title (issue #1002)", () => {
     expect(document.activeElement).toBe(input);
   });
 
-  it("ViewSurveyResponse shows the database title instead of the JSON title", () => {
+  it("ViewSurveyResponse leaves the survey title to its caller's heading", () => {
+    // Both callers (the response page and the submission Survey panel) already show the
+    // database title as a heading. A title inside the renderer repeated it, once per
+    // expanded response in the panel, and showed the JSON's "Survey Name" otherwise.
     const json = builderJson();
-    render(<ViewSurveyResponse surveyJson={json} responseData={{ q1: "Going well" }} title={DB_TITLE} />);
+    render(<ViewSurveyResponse surveyJson={json} responseData={{ q1: "Going well" }} />);
 
-    // Its callers already show the title as a heading, so this one stays plain text.
-    expect(screen.getByText(DB_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Question 1" })).toHaveValue("Going well");
     expect(screen.queryByText(JSON_TITLE)).not.toBeInTheDocument();
     expect(json.title).toBe(JSON_TITLE);
   });

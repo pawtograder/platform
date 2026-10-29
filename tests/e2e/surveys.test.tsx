@@ -755,11 +755,13 @@ test.describe("Surveys Page", () => {
     await expect(preview.getByText(jsonTitle)).toHaveCount(0);
     await page.getByRole("button", { name: "Close Preview" }).click();
 
-    // Instructor's view of a single response
+    // Instructor's view of a single response: the page heading names the survey,
+    // and the rendered response does not repeat it.
     await page.goto(`/course/${course.id}/manage/surveys/${published.survey_id}/responses/${response.id}`);
     const responseView = page.locator(".sd-root-modern");
     await expect(responseView.getByRole("textbox", { name: "Question 1" })).toHaveValue("Going well");
-    await expect(responseView.getByText(dbTitle)).toBeVisible();
+    await expect(page.getByRole("heading", { name: dbTitle })).toBeVisible();
+    await expect(responseView.getByText(dbTitle)).toHaveCount(0);
     await expect(page.getByText(jsonTitle)).toHaveCount(0);
   });
 
