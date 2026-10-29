@@ -56,6 +56,17 @@ describe("survey title (issue #1002)", () => {
     expect(screen.getByRole("heading", { name: JSON_TITLE })).toBeInTheDocument();
   });
 
+  it("SurveyComponent shows the title as plain text where the caller has the heading", () => {
+    // The Student Preview dialog's own h2 already names the survey. The preview still
+    // shows the title the way students see it, but an h1 inside the dialog would sit
+    // above the dialog's heading in the outline.
+    render(<SurveyComponent surveyJson={builderJson()} title={DB_TITLE} titleTag="div" />);
+
+    expect(screen.getByText(DB_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: DB_TITLE })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Question 1" })).toBeInTheDocument();
+  });
+
   it("SurveyComponent renaming the survey mid-answer keeps the answers and focus", () => {
     // An instructor renaming the survey reaches an open student page as a realtime
     // update with a new `title`. Rebuilding the model for it would throw away the

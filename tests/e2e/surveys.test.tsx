@@ -751,7 +751,11 @@ test.describe("Surveys Page", () => {
     await page.getByRole("button", { name: "Preview as Student" }).click();
     const preview = page.getByRole("dialog");
     await expect(preview.getByRole("textbox", { name: "Question 1" })).toBeVisible();
-    await expect(preview.locator(".sd-root-modern").getByRole("heading", { name: dbTitle })).toBeVisible();
+    // The dialog's heading names the survey; the preview below shows the title as the
+    // student sees it, without a second (out-of-order h1) heading.
+    await expect(preview.getByRole("heading", { name: `Survey Preview: ${dbTitle}` })).toBeVisible();
+    await expect(preview.locator(".sd-root-modern").getByText(dbTitle)).toBeVisible();
+    await expect(preview.getByRole("heading", { level: 1 })).toHaveCount(0);
     await expect(preview.getByText(jsonTitle)).toHaveCount(0);
     await page.getByRole("button", { name: "Close Preview" }).click();
 
