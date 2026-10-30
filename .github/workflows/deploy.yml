@@ -549,6 +549,23 @@ jobs:
       - name: Check function grants
         run: npm run check:function-grants
 
+      # The course credential specs (tests/e2e/course-gemini-key-*.spec.ts) connect as postgres to
+      # compare stored Vault values and inject faults, and refuse any database that does not carry a
+      # disposable-database marker. Mark this job's fresh database and export its identity; only the
+      # marker's sha256 leaves this step.
+      - name: Mark the disposable database for privileged credential tests
+        run: |
+          marker="$(openssl rand -hex 32)"
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -v ON_ERROR_STOP=1 -X -q -U postgres -d postgres \
+            -v marker="$marker" <<'SQL'
+          SELECT vault.create_secret(:'marker', 'byok-disposable-db-marker', 'CI disposable database marker');
+          SQL
+          {
+            echo "BYOK_TEST_DB_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+            echo "BYOK_TEST_DB_FINGERPRINT=$(printf '%s' "$marker" | sha256sum | cut -d' ' -f1)"
+            echo "BYOK_TEST_DB_EXPECTED_PORT=54322"
+          } >> "$GITHUB_ENV"
+
       - name: Serve Edge Functions
         run: |
           set -euo pipefail
