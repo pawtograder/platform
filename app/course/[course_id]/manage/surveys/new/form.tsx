@@ -699,7 +699,8 @@ export default function SurveyForm({
                             <Text color="fg">Let students edit their responses after submitting</Text>
                           </HStack>
                           <Text fontSize="sm" color="fg.subtle" pl="8">
-                            When on, changes auto-save. When off, a student&apos;s first submission is final.
+                            When off, a student&apos;s first submission is final. Answers in progress auto-save either
+                            way.
                           </Text>
                         </VStack>
                       )}
