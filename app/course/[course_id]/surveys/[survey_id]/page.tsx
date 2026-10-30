@@ -409,6 +409,7 @@ export default function SurveyTakingPage() {
         <Box w="100%" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
           <SurveyComponent
             surveyJson={survey.json}
+            title={survey.title}
             initialData={existingResponse?.response}
             readOnly={isReadOnly || isSubmitting}
             onComplete={handleSurveyComplete}

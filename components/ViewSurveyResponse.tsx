@@ -43,6 +43,11 @@ export default function ViewSurveyResponse({
   // member on the submission survey tab makes the difference visible.
   const survey = useMemo(() => {
     const model = new Model(surveyJson);
+    // Every caller shows the survey's database title as its own heading, so the
+    // renderer shows none: a second copy repeated it once per response, and the JSON
+    // title is often the builder's "Survey Name" placeholder (issue #1002). SurveyJS
+    // shows the description only alongside the title, so it is hidden too.
+    model.showTitle = false;
 
     // Apply SurveyJS theme based on color mode
     model.applyTheme(colorMode === "dark" ? DefaultDark : DefaultLight);

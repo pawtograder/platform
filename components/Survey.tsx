@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Model, ValueChangedEvent } from "survey-core";
 import { Survey, PopupSurvey } from "survey-react-ui";
 import { useColorMode } from "@/components/ui/color-mode";
@@ -10,6 +10,14 @@ import { Json } from "@/utils/supabase/SupabaseTypes";
 
 interface SurveyComponentProps {
   surveyJson: Json;
+  /** The survey's database title. Shown instead of any title inside `surveyJson`. */
+  title?: string;
+  /**
+   * Tag for the survey title. "h1" (the default) makes it the page heading, as on the
+   * student survey page. Pass "div" where the surrounding UI already has the heading,
+   * such as a dialog title, so the survey title shows as text without a second heading.
+   */
+  titleTag?: "h1" | "div";
   isPopup?: boolean;
   isExpanded?: boolean;
   onComplete?: (survey: Model) => void;
@@ -20,6 +28,8 @@ interface SurveyComponentProps {
 
 export default function SurveyComponent({
   surveyJson,
+  title,
+  titleTag = "h1",
   isPopup = false,
   isExpanded = true,
   onComplete,
@@ -62,13 +72,30 @@ export default function SurveyComponent({
     // SurveyJS renders titles as <div> by default (settings.titleTags.question);
     // onGetTitleTagName is the supported per-survey override. (A plain
     // `questionTitleTagName` assignment is NOT a SurveyJS API and does nothing.)
+    // By default the survey title is the h1 the question h2s sit under: the student
+    // survey page has no other top-level heading. `titleTag` opts out (see the prop).
     model.onGetTitleTagName.add((_sender, options) => {
       if ((options.element as { isQuestion?: boolean }).isQuestion) {
         options.tagName = "h2";
+      } else if (options.element === model) {
+        options.tagName = titleTag;
       }
     });
     return model;
-  }, [surveyJsonKey]);
+  }, [surveyJsonKey, titleTag]);
+
+  // The database title is the one instructors set and the survey list shows.
+  // The JSON title is often the visual builder's "Survey Name" placeholder
+  // (issue #1002). The model holds its own copy, so the stored JSON is untouched.
+  // A rename arrives as a realtime update while a student may be mid-answer, so it
+  // updates the existing model instead of rebuilding it (which would discard the
+  // answers, page and focus). A layout effect sets it before the first paint, so
+  // the JSON title never flashes.
+  useLayoutEffect(() => {
+    if (title) {
+      survey.title = title;
+    }
+  }, [survey, title]);
 
   useEffect(() => {
     if (colorMode === "dark") {

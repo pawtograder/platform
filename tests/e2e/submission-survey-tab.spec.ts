@@ -93,6 +93,10 @@ test.describe("Submission survey tab", () => {
     await expect(panel, "the not-started member gets an explicit card, not a blank form").toContainText(
       /has not started/i
     );
+    // The panel heading names the survey. The expanded responses must not repeat it, once each.
+    for (const title of Object.values(SURVEY_TITLES)) {
+      await expect(panel.locator(".sd-root-modern").getByText(title, { exact: true })).toHaveCount(0);
+    }
   });
 
   test("a student sees only their own response, never a teammate's", async ({ page }) => {
