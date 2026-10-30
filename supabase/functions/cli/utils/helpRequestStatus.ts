@@ -115,8 +115,12 @@ export const CHECK_IN_WINDOW_MINUTES = 10;
 export function checkInExpiresAtForClose(
   targetStatus: HelpRequestStatus,
   previousStatus: HelpRequestStatus,
-  now: Date
+  now: Date,
+  existingCheckInExpiresAt: string | null = null
 ): string | null {
+  // A forced correction to an already-resolved ticket (notes, resolution status) keeps whatever
+  // check-in it has; only closing it, like End ticket, withdraws the student's option.
+  if (targetStatus === "resolved" && previousStatus === "resolved") return existingCheckInExpiresAt;
   if (targetStatus !== "resolved" || previousStatus !== "in_progress") return null;
   return new Date(now.getTime() + CHECK_IN_WINDOW_MINUTES * 60_000).toISOString();
 }

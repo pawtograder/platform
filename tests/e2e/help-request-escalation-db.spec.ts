@@ -228,11 +228,14 @@ test.describe("help request escalation RPCs", () => {
     expect((await row(id)).status).toBe("resolved");
   });
 
-  test("End ticket refuses a ticket with a live video call", async () => {
+  test("Resolve and End ticket both refuse a ticket with a live video call", async () => {
     const id = await freshRequest();
     await supabase.from("help_requests").update({ is_video_live: true }).eq("id", id);
     expect(
       (await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: true })).error
+    ).not.toBeNull();
+    expect(
+      (await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: false })).error
     ).not.toBeNull();
     expect((await row(id)).status).toBe("in_progress");
   });

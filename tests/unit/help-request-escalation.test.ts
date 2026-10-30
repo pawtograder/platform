@@ -81,9 +81,39 @@ describe("totalQueueWaitMs", () => {
     );
   });
 
+  it("counts the wait after Stop helping put the ticket back in line", () => {
+    // Picked up 10-14, Stop helping, picked up again at 20, escalated at 25, picked up at 31.
+    const sessions = [
+      { started_at: at(10), ended_at: at(14) },
+      { started_at: at(20), ended_at: at(25) },
+      { started_at: at(31), ended_at: null }
+    ];
+    const escalations = [{ created_at: at(25) }];
+    expect(totalQueueWaitMs({ created_at: at(0), status: "in_progress" }, sessions, escalations, T0)).toBe(
+      (10 + 6 + 6) * MINUTE
+    );
+  });
+
+  it("counts a current wait that began with Stop helping", () => {
+    const sessions = [{ started_at: at(10), ended_at: at(14) }];
+    expect(totalQueueWaitMs({ created_at: at(0), status: "open" }, sessions, [], T0 + 20 * MINUTE)).toBe(
+      (10 + 6) * MINUTE
+    );
+  });
+
+  it("does not count time after a Resolve that nobody escalated", () => {
+    const sessions = [{ started_at: at(10), ended_at: at(14) }];
+    expect(totalQueueWaitMs({ created_at: at(0), status: "resolved" }, sessions, [], T0 + 60 * MINUTE)).toBe(
+      10 * MINUTE
+    );
+  });
+
   it("does not count the check-in window between Resolve and a student escalation", () => {
     // Picked up at 10, resolved at 20, student escalated at 28, picked up again at 30.
-    const sessions = [{ started_at: at(10) }, { started_at: at(30) }];
+    const sessions = [
+      { started_at: at(10), ended_at: at(20) },
+      { started_at: at(30), ended_at: null }
+    ];
     const escalations = [{ created_at: at(28) }];
     expect(totalQueueWaitMs({ created_at: at(0), status: "in_progress" }, sessions, escalations, T0)).toBe(12 * MINUTE);
   });

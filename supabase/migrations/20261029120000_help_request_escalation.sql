@@ -390,10 +390,11 @@ BEGIN
     RAISE EXCEPTION 'help request % is already finished', p_help_request_id USING ERRCODE = '22023';
   END IF;
 
-  -- Same refusal as the CLI close: once a ticket is closed, video-call-controls disables both
-  -- Join and End Call, so ending it mid-call would strand the meeting with no way to tear it down.
-  IF p_end_ticket AND v_request.is_video_live THEN
-    RAISE EXCEPTION 'end the video call before ending help request %', p_help_request_id USING ERRCODE = '22023';
+  -- Same refusal as the CLI close: once a ticket is resolved or closed, video-call-controls
+  -- disables both Join and End Call, so finishing it mid-call would strand the meeting with no way
+  -- to tear it down.
+  IF v_request.is_video_live THEN
+    RAISE EXCEPTION 'end the video call before finishing help request %', p_help_request_id USING ERRCODE = '22023';
   END IF;
 
   v_caller := public.help_request_caller_profile(v_request.class_id);

@@ -264,7 +264,7 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
 
   const { data: existing, error: fetchError } = await supabase
     .from("help_requests")
-    .select("id, class_id, status, is_video_live, resolved_at")
+    .select("id, class_id, status, is_video_live, resolved_at, check_in_expires_at")
     .eq("id", id)
     .maybeSingle();
 
@@ -315,7 +315,7 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
     resolved_by: resolvedBy,
     resolved_at: resolvedAtForClose(wasAlreadyTerminal, existing.resolved_at, now.toISOString()),
     // Same rule as the office-hours Resolve / End ticket buttons (finish_help_request).
-    check_in_expires_at: checkInExpiresAtForClose(targetStatus, existing.status, now)
+    check_in_expires_at: checkInExpiresAtForClose(targetStatus, existing.status, now, existing.check_in_expires_at)
   };
   if (resolutionStatus) update.resolution_status = resolutionStatus;
   if (p.notes !== undefined) update.resolution_notes = p.notes ?? null;

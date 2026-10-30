@@ -165,4 +165,10 @@ describe("checkInExpiresAtForClose", () => {
   ] as const)("opens no check-in when %s", (_label, target, previous) => {
     expect(checkInExpiresAtForClose(target, previous, now)).toBeNull();
   });
+
+  it("keeps a pending check-in on a forced correction of a resolved ticket", () => {
+    const pending = "2026-10-29T18:05:00.000Z";
+    expect(checkInExpiresAtForClose("resolved", "resolved", now, pending)).toBe(pending);
+    expect(checkInExpiresAtForClose("closed", "resolved", now, pending)).toBeNull();
+  });
 });

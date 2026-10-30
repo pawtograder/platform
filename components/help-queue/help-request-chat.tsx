@@ -1333,12 +1333,20 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                 </Tooltip>
               )}
 
-            {/* Resolve */}
+            {/* Resolve. Staff can't resolve mid-call: a resolved ticket disables End Call. */}
             {!readOnly &&
               canAccessRequestControls &&
               request &&
               request.status !== "resolved" &&
-              request.status !== "closed" && (
+              request.status !== "closed" &&
+              (isInstructorOrGrader && request.is_video_live ? (
+                <Tooltip content="End the video call first: a resolved ticket can't end its call" showArrow>
+                  <Button size="xs" colorPalette="blue" variant="outline" disabled>
+                    <Icon as={BsCheck} />
+                    Resolve
+                  </Button>
+                </Tooltip>
+              ) : (
                 <PopConfirm
                   triggerLabel="Resolve"
                   trigger={
@@ -1357,7 +1365,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                   }
                   onConfirm={resolveRequest}
                 />
-              )}
+              ))}
 
             {/* End ticket: final, no check-in and no further escalation. Not gated on readOnly,
                 which is true once resolved: ending a resolved ticket withdraws a pending check-in. */}

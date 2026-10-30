@@ -39,21 +39,37 @@ export function isCheckInPending(
 }
 
 /**
- * Time spent waiting in line, summed across pickups. The ticket starts waiting when it is
- * created and again after each escalation; each wait ends at the next work session start. Time
- * between staff Resolve and a student's escalation is not counted: the ticket was not in line.
+ * Time spent waiting in line, summed across pickups. The ticket enters the line when it is
+ * created, after each escalation, and whenever a work session ends with the ticket going straight
+ * back to the queue (Stop helping, or a reassignment). Each wait ends at the next work session
+ * start. A session that ends in Resolve is not a wait unless the student then escalates, and the
+ * escalation, not the Resolve, starts that wait: the check-in window is not time in line.
  */
 export function totalQueueWaitMs(
   request: { created_at: string; status: string },
-  workSessions: { started_at: string }[],
+  workSessions: { started_at: string; ended_at?: string | null }[],
   escalations: { created_at: string }[],
   now: number = Date.now()
 ): number {
-  const starts = workSessions.map((s) => new Date(s.started_at).getTime()).sort((a, b) => a - b);
-  const waitStarts = [request.created_at, ...escalations.map((e) => e.created_at)]
-    .map((t) => new Date(t).getTime())
-    .sort((a, b) => a - b);
+  const time = (t: string) => new Date(t).getTime();
+  const sessions = workSessions
+    .map((s) => ({ start: time(s.started_at), end: s.ended_at ? time(s.ended_at) : null }))
+    .sort((a, b) => a.start - b.start);
+  const escalatedAt = escalations.map((e) => time(e.created_at)).sort((a, b) => a - b);
 
+  const waitStarts = [time(request.created_at), ...escalatedAt];
+  sessions.forEach((session, i) => {
+    if (session.end === null) return;
+    const end = session.end;
+    const nextStart = sessions[i + 1]?.start ?? null;
+    const escalatedBeforeNextPickup = escalatedAt.some((t) => t >= end && (nextStart === null || t <= nextStart));
+    if (escalatedBeforeNextPickup) return;
+    const isLastAndBackInLine = nextStart === null && request.status === "open";
+    if (nextStart !== null || isLastAndBackInLine) waitStarts.push(end);
+  });
+  waitStarts.sort((a, b) => a - b);
+
+  const starts = sessions.map((s) => s.start);
   return waitStarts.reduce((total, waitStart, i) => {
     const nextWaitStart = waitStarts[i + 1] ?? Infinity;
     const pickup = starts.find((s) => s >= waitStart && s <= nextWaitStart);
