@@ -4,13 +4,18 @@ import { RequestRow } from "@/components/help-queue/request-row";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useHelpQueues, useStudentVisibleHelpRequests, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import {
+  useHelpQueues,
+  useHelpRequestEscalations,
+  useStudentVisibleHelpRequests,
+  useHelpRequestStudents
+} from "@/hooks/useOfficeHoursRealtime";
 import { useHelpRequestUnreadCount } from "@/hooks/useHelpRequestUnreadCount";
 import { Box, HStack, Text, Badge, Separator } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
 import { FaChevronLeft, FaChevronRight } from "react-icons/fa";
-import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
+import { compareHelpRequestQueueOrder, latestEscalationNoteByRequest } from "@/lib/helpRequestEscalation";
 
 interface HelpRequestSidebarProps {
   requestId: number;
@@ -103,6 +108,13 @@ export function HelpRequestSidebar({
 
     return { workingRequests: working, openRequests: open, resolvedRequests: resolved };
   }, [requestsForSidebar, isManageMode, private_profile_id]);
+
+  // Escalation notes are staff-only data: only load them in the staff (manage) sidebar.
+  const helpRequestEscalations = useHelpRequestEscalations(isManageMode);
+  const latestEscalationNotes = useMemo(
+    () => latestEscalationNoteByRequest(helpRequestEscalations),
+    [helpRequestEscalations]
+  );
 
   // Create mapping of request ID to student profile IDs
   const requestStudentsMap = useMemo(() => {
@@ -258,6 +270,7 @@ export function HelpRequestSidebar({
                     queue={queue}
                     students={students}
                     variant="compact"
+                    escalationNote={latestEscalationNotes.get(request.id)}
                   />
                   {isAssignedToMe && <UnreadBadge requestId={request.id} isAssignedToMe={isAssignedToMe} />}
                 </Box>
@@ -312,6 +325,7 @@ export function HelpRequestSidebar({
                   queue={queue}
                   students={students}
                   variant="compact"
+                  escalationNote={latestEscalationNotes.get(request.id)}
                 />
                 {isAssignedToMe && <UnreadBadge requestId={request.id} isAssignedToMe={isAssignedToMe} />}
               </Box>
@@ -362,6 +376,7 @@ export function HelpRequestSidebar({
                     queue={queue}
                     students={students}
                     variant="compact"
+                    escalationNote={latestEscalationNotes.get(request.id)}
                   />
                   {isAssignedToMe && <UnreadBadge requestId={request.id} isAssignedToMe={isAssignedToMe} />}
                 </Box>

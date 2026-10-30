@@ -1091,7 +1091,11 @@ export default class TableController<
   /**
    * Refetch multiple rows by their IDs using IN queries with batching
    */
-  private async _refetchRowsByIds(ids: IDType[]): Promise<Map<IDType, ResultOne>> {
+  /**
+   * @param queriedIds when given, receives every id whose batch query succeeded, so a caller can
+   * tell "no longer visible" (queried, absent) apart from "query failed" (not queried).
+   */
+  private async _refetchRowsByIds(ids: IDType[], queriedIds?: Set<IDType>): Promise<Map<IDType, ResultOne>> {
     const results = new Map<IDType, ResultOne>();
     const batchSize = 100;
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
@@ -1108,6 +1112,7 @@ export default class TableController<
           continue;
         }
 
+        for (const id of batch) queriedIds?.add(id);
         if (data) {
           for (const row of data) {
             const typedRow = row as unknown as ResultOne;
@@ -2144,7 +2149,16 @@ export default class TableController<
     // Batch refetch for messages without data and await completion
     if (idsToRefetch.length > 0) {
       try {
-        const refetchedRows = await this._refetchRowsByIds(idsToRefetch);
+        const queriedIds = new Set<IDType>();
+        const refetchedRows = await this._refetchRowsByIds(idsToRefetch, queriedIds);
+        // A successful refetch that returns nothing means the row is no longer visible to this
+        // user (e.g. a public help request made private, which non-participants receive as an
+        // ID-only payload). Failed batches are not in queriedIds, so errors never evict.
+        for (const id of queriedIds) {
+          if (!refetchedRows.has(id) && this._rows.some((r) => (r as ResultOne & { id: IDType }).id === id)) {
+            this._removeRow(id);
+          }
+        }
         for (const [id, row] of refetchedRows) {
           const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
           const matchesFilter = this._matchesRealtimeFilter(row as unknown as Record<string, unknown>);

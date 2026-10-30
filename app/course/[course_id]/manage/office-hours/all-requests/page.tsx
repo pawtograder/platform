@@ -17,6 +17,7 @@ import {
   type SortDirection
 } from "@/components/help-queue/request-list-controls";
 import { useStudentRoster } from "@/hooks/useCourseController";
+import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
 
 export default function AllRequestsPage() {
   const searchParams = useSearchParams();
@@ -118,8 +119,8 @@ export default function AllRequestsPage() {
       }
     });
 
-    // Sort open requests: oldest first
-    open.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    // Sort open requests in queue order: escalated first, then oldest first
+    open.sort(compareHelpRequestQueueOrder);
 
     // Sort resolved requests: newest first (or oldest first if sortDirection is oldest-first)
     if (sortDirection === "oldest-first") {

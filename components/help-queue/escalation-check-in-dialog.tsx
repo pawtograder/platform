@@ -59,7 +59,8 @@ function CheckInForStudent({ profileId, classId }: { profileId: string; classId:
 
   return (
     <>
-      {pending && (
+      {/* One dialog at a time: the next check-in waits until the feedback prompt closes. */}
+      {pending && feedbackRequestId === null && (
         <CheckInDialog
           key={pending.id}
           requestId={pending.id}

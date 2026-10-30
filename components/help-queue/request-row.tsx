@@ -219,6 +219,11 @@ export function RequestRow({
                       </Badge>
                     )}
                   </HStack>
+                  {escalationNote && (
+                    <Text truncate fontSize="xs" color="purple.fg">
+                      Still unresolved: {escalationNote}
+                    </Text>
+                  )}
                   <HStack gap="2" fontSize="xs" color="fg.muted" wrap="wrap">
                     {renderStudentsDisplay()}
                     <Text>•</Text>
