@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import {
   useHelpQueues,
   useHelpQueueAssignments,
+  useHelpRequestEscalations,
   useHelpRequests,
   useHelpRequestStudents
 } from "@/hooks/useOfficeHoursRealtime";
@@ -17,6 +18,7 @@ import {
   type SortDirection
 } from "@/components/help-queue/request-list-controls";
 import { useStudentRoster } from "@/hooks/useCourseController";
+import { compareHelpRequestQueueOrder, latestEscalationNoteByRequest } from "@/lib/helpRequestEscalation";
 
 export default function AllRequestsPage() {
   const searchParams = useSearchParams();
@@ -34,6 +36,11 @@ export default function AllRequestsPage() {
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();
   const allHelpRequests = useHelpRequests();
+  const helpRequestEscalations = useHelpRequestEscalations();
+  const latestEscalationNotes = useMemo(
+    () => latestEscalationNoteByRequest(helpRequestEscalations),
+    [helpRequestEscalations]
+  );
   const helpRequestStudents = useHelpRequestStudents();
 
   // Group active assignments by queue
@@ -118,8 +125,8 @@ export default function AllRequestsPage() {
       }
     });
 
-    // Sort open requests: oldest first
-    open.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    // Sort open requests in queue order: escalated first, then oldest first
+    open.sort(compareHelpRequestQueueOrder);
 
     // Sort resolved requests: newest first (or oldest first if sortDirection is oldest-first)
     if (sortDirection === "oldest-first") {
@@ -223,6 +230,7 @@ export default function AllRequestsPage() {
                           href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
                           queue={queue}
                           students={students}
+                          escalationNote={latestEscalationNotes.get(request.id)}
                         />
                       );
                     })
@@ -258,6 +266,7 @@ export default function AllRequestsPage() {
                             href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
                             queue={queue}
                             students={students}
+                            escalationNote={latestEscalationNotes.get(request.id)}
                           />
                         );
                       })}

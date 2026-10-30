@@ -9,6 +9,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useRouter, useParams } from "next/navigation";
 import Markdown from "@/components/ui/markdown";
+import { EscalationBadge } from "@/components/help-queue/escalation-badge";
 
 /**
  * Office hours UI component prop types
@@ -20,6 +21,8 @@ export type HelpRequestHistoryProps = {
   requestCollaborators?: Map<number, Array<{ profile_id: string; class_id: number }>>;
   userRequestIds?: number[];
   sortOrder?: "oldest" | "newest";
+  /** Render `requests` in the order given (the live queue passes them in queue order). */
+  preserveOrder?: boolean;
 };
 
 /**
@@ -84,7 +87,8 @@ export default function HelpRequestHistory({
   readOnly = true,
   requestCollaborators,
   userRequestIds = [],
-  sortOrder = "oldest"
+  sortOrder = "oldest",
+  preserveOrder = false
 }: HelpRequestHistoryProps) {
   const [expandedRequest, setExpandedRequest] = useState<number | null>(null);
   const router = useRouter();
@@ -129,94 +133,97 @@ export default function HelpRequestHistory({
         {`Help Requests (${requests.length})`}
       </Text>
       <Stack spaceY={4} role="list" aria-label="Help requests">
-        {requests
-          .sort((a, b) => {
-            // Sort by resolved_at if available, otherwise by created_at
-            const dateA = new Date(a.resolved_at || a.created_at).getTime();
-            const dateB = new Date(b.resolved_at || b.created_at).getTime();
-            return sortOrder === "newest" ? dateB - dateA : dateA - dateB;
-          })
-          .map((request) => (
-            <Card.Root
-              key={request.id}
-              variant="outline"
-              w="full"
-              cursor="pointer"
-              role="listitem"
-              aria-label={`Help request ${request.id}`}
-              _hover={{ borderColor: "border.emphasized" }}
-              onClick={(e) => expandOnly(e, request.id)}
-            >
-              <Card.Body>
-                <HStack
-                  justify="space-between"
-                  align="start"
-                  gap={{ base: 3, md: 0 }}
-                  flexWrap={{ base: "wrap", md: "nowrap" }}
-                >
-                  <Box flex="1" minW={0}>
-                    <Markdown>{request.request}</Markdown>
-                    <HStack mt={2} gap={2} wrap="wrap">
-                      <Badge
-                        colorPalette={
-                          request.status === "resolved"
-                            ? "green"
-                            : request.status === "in_progress"
-                              ? "orange"
-                              : request.status === "closed"
-                                ? "gray"
-                                : "blue"
-                        }
-                        size="sm"
-                      >
-                        {request.status}
+        {(preserveOrder
+          ? requests
+          : // Copy before sorting: callers pass memoized arrays they also read from
+            [...requests].sort((a, b) => {
+              // Sort by resolved_at if available, otherwise by created_at
+              const dateA = new Date(a.resolved_at || a.created_at).getTime();
+              const dateB = new Date(b.resolved_at || b.created_at).getTime();
+              return sortOrder === "newest" ? dateB - dateA : dateA - dateB;
+            })
+        ).map((request) => (
+          <Card.Root
+            key={request.id}
+            variant="outline"
+            w="full"
+            cursor="pointer"
+            role="listitem"
+            aria-label={`Help request ${request.id}`}
+            _hover={{ borderColor: "border.emphasized" }}
+            onClick={(e) => expandOnly(e, request.id)}
+          >
+            <Card.Body>
+              <HStack
+                justify="space-between"
+                align="start"
+                gap={{ base: 3, md: 0 }}
+                flexWrap={{ base: "wrap", md: "nowrap" }}
+              >
+                <Box flex="1" minW={0}>
+                  <Markdown>{request.request}</Markdown>
+                  <HStack mt={2} gap={2} wrap="wrap">
+                    <EscalationBadge escalationCount={request.escalation_count} />
+                    <Badge
+                      colorPalette={
+                        request.status === "resolved"
+                          ? "green"
+                          : request.status === "in_progress"
+                            ? "orange"
+                            : request.status === "closed"
+                              ? "gray"
+                              : "blue"
+                      }
+                      size="sm"
+                    >
+                      {request.status}
+                    </Badge>
+                    <RequestAssignmentStatus request={request} />
+                    <RequestCollaborators requestId={request.id} collaborators={requestCollaborators} />
+                    {request.location_type && (
+                      <Badge colorPalette="blue" size="sm">
+                        {request.location_type}
                       </Badge>
-                      <RequestAssignmentStatus request={request} />
-                      <RequestCollaborators requestId={request.id} collaborators={requestCollaborators} />
-                      {request.location_type && (
-                        <Badge colorPalette="blue" size="sm">
-                          {request.location_type}
-                        </Badge>
-                      )}
-                      {(showPrivacyIndicator || request.is_private) && request.is_private && (
-                        <Badge colorPalette="orange" size="sm">
-                          private
-                        </Badge>
-                      )}
-                    </HStack>
-                  </Box>
-                  <Stack align={{ base: "start", md: "end" }} spaceY={1} minW={{ base: "full", md: "auto" }}>
-                    <Text fontSize="xs">
-                      {formatDistanceToNow(new Date(request.resolved_at || request.created_at), { addSuffix: true })}
-                    </Text>
-                    <HStack gap={2} wrap="wrap" justify={{ base: "flex-start", md: "flex-end" }}>
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        colorPalette="blue"
-                        onClick={(e) => handleCreateFollowup(e, request.id)}
-                        title="Create a follow-up request"
-                        visibility={readOnly && userRequestIds.includes(request.id) ? "visible" : "hidden"}
-                      >
-                        <Icon as={BsReply} mr={1} />
-                        Follow-Up
-                      </Button>
-                      <Button size="xs" variant="ghost" onClick={(e) => toggleExpanded(e, request.id)}>
-                        {expandedRequest === request.id ? "Hide" : "View"} Chat
-                        <Icon as={expandedRequest === request.id ? BsChevronUp : BsChevronDown} ml={1} />
-                      </Button>
-                    </HStack>
-                  </Stack>
-                </HStack>
+                    )}
+                    {(showPrivacyIndicator || request.is_private) && request.is_private && (
+                      <Badge colorPalette="orange" size="sm">
+                        private
+                      </Badge>
+                    )}
+                  </HStack>
+                </Box>
+                <Stack align={{ base: "start", md: "end" }} spaceY={1} minW={{ base: "full", md: "auto" }}>
+                  <Text fontSize="xs">
+                    {formatDistanceToNow(new Date(request.resolved_at || request.created_at), { addSuffix: true })}
+                  </Text>
+                  <HStack gap={2} wrap="wrap" justify={{ base: "flex-start", md: "flex-end" }}>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      colorPalette="blue"
+                      onClick={(e) => handleCreateFollowup(e, request.id)}
+                      title="Create a follow-up request"
+                      visibility={readOnly && userRequestIds.includes(request.id) ? "visible" : "hidden"}
+                    >
+                      <Icon as={BsReply} mr={1} />
+                      Follow-Up
+                    </Button>
+                    <Button size="xs" variant="ghost" onClick={(e) => toggleExpanded(e, request.id)}>
+                      {expandedRequest === request.id ? "Hide" : "View"} Chat
+                      <Icon as={expandedRequest === request.id ? BsChevronUp : BsChevronDown} ml={1} />
+                    </Button>
+                  </HStack>
+                </Stack>
+              </HStack>
 
-                {expandedRequest === request.id && (
-                  <Box mt={4} pt={4} borderTopWidth="1px">
-                    <HelpRequestChat request_id={request.id} />
-                  </Box>
-                )}
-              </Card.Body>
-            </Card.Root>
-          ))}
+              {expandedRequest === request.id && (
+                <Box mt={4} pt={4} borderTopWidth="1px">
+                  <HelpRequestChat request_id={request.id} />
+                </Box>
+              )}
+            </Card.Body>
+          </Card.Root>
+        ))}
       </Stack>
     </Stack>
   );

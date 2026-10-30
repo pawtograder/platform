@@ -102,3 +102,25 @@ export function participantsNeedingActivity(
   }
   return out;
 }
+
+/** Minutes a student has to answer "Did your problem get fixed?"; matches finish_help_request. */
+export const CHECK_IN_WINDOW_MINUTES = 10;
+
+/**
+ * `check_in_expires_at` for a CLI close, following finish_help_request
+ * (20261029120000_help_request_escalation.sql): resolving a ticket someone was
+ * helping opens the student's check-in, so they can escalate if it wasn't fixed.
+ * Closing (staff "End ticket"), or resolving a ticket nobody picked up, does not.
+ */
+export function checkInExpiresAtForClose(
+  targetStatus: HelpRequestStatus,
+  previousStatus: HelpRequestStatus,
+  now: Date,
+  existingCheckInExpiresAt: string | null = null
+): string | null {
+  // A forced correction to an already-resolved ticket (notes, resolution status) keeps whatever
+  // check-in it has; only closing it, like End ticket, withdraws the student's option.
+  if (targetStatus === "resolved" && previousStatus === "resolved") return existingCheckInExpiresAt;
+  if (targetStatus !== "resolved" || previousStatus !== "in_progress") return null;
+  return new Date(now.getTime() + CHECK_IN_WINDOW_MINUTES * 60_000).toISOString();
+}

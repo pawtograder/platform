@@ -13,6 +13,7 @@ import { assertUserCanAccessClass, assertUserIsClassInstructor, getCallerPrivate
 import {
   HELP_REQUEST_RESOLUTION_STATUSES,
   TERMINAL_HELP_REQUEST_STATUSES,
+  checkInExpiresAtForClose,
   parseStatusFilter,
   participantsNeedingActivity,
   resolvedAtForClose
@@ -263,7 +264,7 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
 
   const { data: existing, error: fetchError } = await supabase
     .from("help_requests")
-    .select("id, class_id, status, is_video_live, resolved_at")
+    .select("id, class_id, status, is_video_live, resolved_at, check_in_expires_at")
     .eq("id", id)
     .maybeSingle();
 
@@ -308,10 +309,13 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
 
   const resolvedBy = await getCallerPrivateProfileId(supabase, ctx.userId, existing.class_id);
 
+  const now = new Date();
   const update: Database["public"]["Tables"]["help_requests"]["Update"] = {
     status: targetStatus,
     resolved_by: resolvedBy,
-    resolved_at: resolvedAtForClose(wasAlreadyTerminal, existing.resolved_at, new Date().toISOString())
+    resolved_at: resolvedAtForClose(wasAlreadyTerminal, existing.resolved_at, now.toISOString()),
+    // Same rule as the office-hours Resolve / End ticket buttons (finish_help_request).
+    check_in_expires_at: checkInExpiresAtForClose(targetStatus, existing.status, now, existing.check_in_expires_at)
   };
   if (resolutionStatus) update.resolution_status = resolutionStatus;
   if (p.notes !== undefined) update.resolution_notes = p.notes ?? null;
