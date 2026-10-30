@@ -1,7 +1,7 @@
 -- Protect the capability tables (#1010, step 2).
 --
 -- Step 1 (20261027120000_class_roles_and_capabilities.sql) made the tables read-only for users.
--- This lets holders of manage_roles (today: instructors) customize TA access, and nothing else:
+-- This lets holders of manage_roles (today: instructors) customize grader access, and nothing else:
 --   * class_roles        create, rename and delete custom roles (default_for IS NULL). The four
 --                        default roles are fixed: only migrations change them;
 --   * role_capabilities  add and remove capabilities on custom roles, except manage_roles, which
@@ -13,6 +13,10 @@
 -- resets class_role_id when app_role or class_id changes: access follows the role. Who may move a
 -- grader between roles stays with the existing instructor-only user_roles UPDATE policy
 -- (20250507213522_add_rls_for_user_roles.sql).
+--
+-- Custom roles build on the default grader role and can only add to it: a grader on "Head TA"
+-- holds the default grader role's capabilities plus Head TA's. user_class_capabilities() is the one
+-- place that applies this rule. No tables change for it.
 --
 -- The manage_roles check can't use step 1's inline shape here: it reads role_capabilities, and
 -- role_capabilities' own policies read class_roles, so Postgres stops with "infinite recursion
@@ -44,25 +48,43 @@ GRANT INSERT (class_id, name) ON public.class_roles TO authenticated;
 REVOKE UPDATE ON public.role_capabilities FROM anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- The classes where the current user holds a capability
+-- The capabilities the current user holds
 -- ---------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION public.user_class_ids_with_capability(p_capability text)
-RETURNS SETOF bigint
+-- The one place that decides what a user can do. In each class, a user holds their class role's
+-- capabilities plus those of the class's default role for their app_role. For instructors,
+-- students and admins that is the same role. A grader on a custom role ("Head TA") holds the
+-- default grader role's capabilities plus the custom role's extras, so a custom role can only add:
+-- a capability a migration adds to the default grader role reaches every grader.
+-- The useCapability RPC (step 3) must read this function too, so the UI and RLS agree.
+CREATE OR REPLACE FUNCTION public.user_class_capabilities()
+RETURNS TABLE (class_id bigint, capability text)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT up.class_id
+  SELECT DISTINCT up.class_id, rc.capability
   FROM public.user_privileges up
-  JOIN public.role_capabilities rc ON rc.role_id = up.class_role_id
-  WHERE up.user_id = (SELECT auth.uid())
-    AND rc.capability = p_capability;
+  JOIN public.class_roles base ON base.class_id = up.class_id AND base.default_for = up.role
+  JOIN public.role_capabilities rc ON rc.role_id IN (up.class_role_id, base.id)
+  WHERE up.user_id = (SELECT auth.uid());
 $$;
 
--- Policies run as the caller, so authenticated needs EXECUTE. It only reveals the caller's own
+-- For policies: `class_id IN (SELECT public.user_class_ids_with_capability('...'))`.
+CREATE OR REPLACE FUNCTION public.user_class_ids_with_capability(p_capability text)
+RETURNS SETOF bigint
+LANGUAGE sql
+STABLE
+SET search_path = public
+AS $$
+  SELECT ucc.class_id FROM public.user_class_capabilities() ucc WHERE ucc.capability = p_capability;
+$$;
+
+-- Policies run as the caller, so authenticated needs EXECUTE. Both only reveal the caller's own
 -- capabilities.
+REVOKE ALL ON FUNCTION public.user_class_capabilities() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.user_class_capabilities() TO authenticated;
 REVOKE ALL ON FUNCTION public.user_class_ids_with_capability(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.user_class_ids_with_capability(text) TO authenticated;
 

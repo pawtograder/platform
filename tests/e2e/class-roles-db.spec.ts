@@ -528,3 +528,97 @@ test.describe("custom class roles", () => {
     expect((await userRole(grader)).class_role_id).toBe(customId);
   });
 });
+
+test.describe("custom roles build on the default grader role", () => {
+  let classE: Awaited<ReturnType<typeof createClass>>;
+  let instructorE: TestingUser;
+  let studentE: TestingUser;
+  let plainGrader: TestingUser;
+  let headTa: TestingUser;
+  let headTaRoleId: number;
+
+  async function holds(user: TestingUser, capability: string) {
+    const client = await createAuthenticatedClient(user);
+    const { data, error } = await client.rpc("user_class_ids_with_capability", { p_capability: capability });
+    expect(error).toBeNull();
+    return (data ?? []).includes(classE.id);
+  }
+
+  // Changes the class's default roles directly, as a migration would: the default grader role gains
+  // publish_groups and the default instructor role loses it, so a grader-base capability is visible
+  // on its own.
+  test.beforeAll(async () => {
+    classE = await createClass({ name: "E2E Grader Base E" });
+    instructorE = await createUserInClass({ role: "instructor", class_id: classE.id });
+    studentE = await createUserInClass({ role: "student", class_id: classE.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: classE.id });
+    headTa = await createUserInClass({ role: "grader", class_id: classE.id });
+    const roles = await defaultRoles(classE.id);
+    const defaultFor = (app_role: string) => roles.find((r) => r.default_for === app_role)!.id;
+
+    expect(
+      (await supabase.from("role_capabilities").insert({ role_id: defaultFor("grader"), capability: "publish_groups" }))
+        .error
+    ).toBeNull();
+    expect(
+      (
+        await supabase
+          .from("role_capabilities")
+          .delete()
+          .eq("role_id", defaultFor("instructor"))
+          .eq("capability", "publish_groups")
+      ).error
+    ).toBeNull();
+
+    const { data: headTaRole, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classE.id, name: "Head TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    headTaRoleId = headTaRole!.id;
+    expect(
+      (
+        await supabase
+          .from("role_capabilities")
+          .insert({ role_id: headTaRoleId, capability: "manage_review_assignments" })
+      ).error
+    ).toBeNull();
+    const row = await userRole(headTa);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: headTaRoleId }).eq("id", row.id)).error
+    ).toBeNull();
+  });
+
+  test("a grader on a custom role holds its extras", async () => {
+    expect(await holds(headTa, "manage_review_assignments"), "Head TA's extra").toBe(true);
+    expect(await holds(plainGrader, "manage_review_assignments"), "not on the default grader role").toBe(false);
+  });
+
+  test("a capability on the default grader role reaches graders on custom roles", async () => {
+    expect(await holds(plainGrader, "publish_groups")).toBe(true);
+    expect(await holds(headTa, "publish_groups"), "a custom role builds on the grader base").toBe(true);
+  });
+
+  test("students and instructors gain nothing from the grader base", async () => {
+    expect(await holds(studentE, "publish_groups")).toBe(false);
+    expect(await holds(instructorE, "publish_groups")).toBe(false);
+    expect(await holds(instructorE, "manage_roles"), "the instructor keeps their own role's capabilities").toBe(true);
+  });
+
+  test("removing a capability from a custom role keeps it when the grader base has it", async () => {
+    const instructor = await createAuthenticatedClient(instructorE);
+    expect(
+      (await instructor.from("role_capabilities").insert({ role_id: headTaRoleId, capability: "publish_groups" })).error
+    ).toBeNull();
+    const { data: removed, error } = await instructor
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", headTaRoleId)
+      .eq("capability", "publish_groups")
+      .select("capability");
+    expect(error).toBeNull();
+    expect(removed).toHaveLength(1);
+    expect(await holds(headTa, "publish_groups"), "a custom role can only add").toBe(true);
+  });
+});
