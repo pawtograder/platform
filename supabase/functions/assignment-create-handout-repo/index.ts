@@ -47,6 +47,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!assignment) {
     throw new UserVisibleError("Assignment not found", 400);
   }
+  if (assignment.git_provider !== "github") {
+    throw new UserVisibleError("This assignment uses Forgejo. GitHub repository setup is unavailable.", 400);
+  }
   if (!assignment.classes.slug) {
     throw new UserVisibleError("Class does not have a slug", 400);
   }
@@ -278,19 +281,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // autograder-create-submission then rejects as a "workflow sha mismatch" on the
   // first real student run, and which the has_autograder backfill reads as "the
   // autograder was never wired up".
-  const { error: pointerError } = await adminSupabase
-    .from("assignments")
-    .update({
-      template_repo: handoutFullName,
-      ...(strippedHandoutSha ? { latest_template_sha: strippedHandoutSha } : {}),
-      ...(assignment.submission_mode === "pr" ? { upstream_repo: handoutFullName } : {})
-    })
-    .eq("id", assignment_id);
+  //
+  // The reservation checks the assignment is still on GitHub and freezes its provider in one
+  // locked transaction, writing all three pointer fields in the same statement. If it was
+  // switched to Forgejo during creation, this fails and the new GitHub repo stays unreferenced.
+  const { error: pointerError } = await adminSupabase.rpc("reserve_github_staff_repo", {
+    p_assignment_id: assignment_id,
+    p_class_id: class_id,
+    p_repository: handoutFullName,
+    p_is_grader: false,
+    p_latest_template_sha: strippedHandoutSha || undefined,
+    p_upstream_repo: assignment.submission_mode === "pr" ? handoutFullName : undefined
+  });
   if (pointerError) {
     // Reporting success here would leave the handout repo created but unreferenced:
     // nothing points at it, and a retry cannot recover latest_template_sha because
     // grade.yml is already gone (deleteFileFromRepo then reports nothing deleted).
     Sentry.captureException(pointerError, scope);
+    if (pointerError.code === "23514") throw new UserVisibleError(pointerError.message, 400);
     throw pointerError;
   }
 

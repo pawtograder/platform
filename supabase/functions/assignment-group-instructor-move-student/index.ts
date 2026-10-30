@@ -23,6 +23,17 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
+  const { data: forgejoGroups, error: providerError } = await adminSupabase
+    .from("assignment_groups")
+    .select("id, assignments!inner(git_provider)")
+    .in(
+      "id",
+      [old_assignment_group_id, new_assignment_group_id].filter((id): id is number => id != null)
+    )
+    .eq("assignments.git_provider", "forgejo");
+  if (providerError) throw providerError;
+  if (forgejoGroups.length) throw new IllegalArgumentError("Moving Forgejo group members is not supported yet");
+
   if (old_assignment_group_id !== null) {
     //Remove student from current group
     const { data: currentGroup } = await supabase
@@ -66,8 +77,7 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
         .eq("assignment_group_id", old_assignment_group_id);
       const oldGroupRepo = currentGroup.assignment_groups!.repositories[0];
       if (oldGroupRepo) {
-        const parts = oldGroupRepo.repository.split("/");
-        const repoName = parts.length > 1 ? parts[1] : parts[0];
+        const repoName = oldGroupRepo.repository;
         if (repoName) {
           await enqueueGithubArchiveRepo(class_id, currentGroup.classes!.github_org!, repoName);
         }
