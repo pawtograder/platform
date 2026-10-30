@@ -215,6 +215,28 @@ test.describe("help request escalation RPCs", () => {
     ).not.toBeNull();
   });
 
+  test("End ticket refuses a resolved ticket whose check-in has lapsed", async () => {
+    const id = await freshRequest();
+    await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: false });
+    await supabase
+      .from("help_requests")
+      .update({ check_in_expires_at: new Date(Date.now() - 60_000).toISOString() })
+      .eq("id", id);
+    expect(
+      (await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: true })).error
+    ).not.toBeNull();
+    expect((await row(id)).status).toBe("resolved");
+  });
+
+  test("End ticket refuses a ticket with a live video call", async () => {
+    const id = await freshRequest();
+    await supabase.from("help_requests").update({ is_video_live: true }).eq("id", id);
+    expect(
+      (await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: true })).error
+    ).not.toBeNull();
+    expect((await row(id)).status).toBe("in_progress");
+  });
+
   test("an expired check-in is refused", async () => {
     const id = await freshRequest();
     await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: false });

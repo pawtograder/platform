@@ -385,8 +385,15 @@ BEGIN
   -- Resolve applies to active tickets. End ticket also applies to a resolved ticket whose
   -- check-in is still pending, so staff can withdraw the student's option to escalate.
   IF NOT (v_request.status IN ('open', 'in_progress')
-          OR (p_end_ticket AND v_request.status = 'resolved')) THEN
+          OR (p_end_ticket AND v_request.status = 'resolved'
+              AND v_request.check_in_expires_at > now())) THEN
     RAISE EXCEPTION 'help request % is already finished', p_help_request_id USING ERRCODE = '22023';
+  END IF;
+
+  -- Same refusal as the CLI close: once a ticket is closed, video-call-controls disables both
+  -- Join and End Call, so ending it mid-call would strand the meeting with no way to tear it down.
+  IF p_end_ticket AND v_request.is_video_live THEN
+    RAISE EXCEPTION 'end the video call before ending help request %', p_help_request_id USING ERRCODE = '22023';
   END IF;
 
   v_caller := public.help_request_caller_profile(v_request.class_id);

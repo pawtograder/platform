@@ -220,7 +220,7 @@ export const HelpRequestTeaser = (props: Props) => {
             {message}
           </Markdown>
         </Box>
-        {escalationNote && (
+        {escalationNote && !props.data.isResolved && (
           <Text truncate color="purple.fg">
             Still unresolved: {escalationNote}
           </Text>

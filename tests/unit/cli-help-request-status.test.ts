@@ -18,7 +18,9 @@ import {
   TERMINAL_HELP_REQUEST_STATUSES,
   HELP_REQUEST_RESOLUTION_STATUSES,
   participantsNeedingActivity,
-  resolvedAtForClose
+  resolvedAtForClose,
+  checkInExpiresAtForClose,
+  CHECK_IN_WINDOW_MINUTES
 } from "../../supabase/functions/cli/utils/helpRequestStatus";
 
 describe("parseStatusFilter", () => {
@@ -142,5 +144,25 @@ describe("participantsNeedingActivity", () => {
 
   it("preserves participant order", () => {
     expect(participantsNeedingActivity([C, A, B], [A])).toEqual([C, B]);
+  });
+});
+
+describe("checkInExpiresAtForClose", () => {
+  // Mirrors finish_help_request, so a CLI resolve gives the student the same
+  // "Did your problem get fixed?" check-in as the office-hours Resolve button.
+  const now = new Date(Date.UTC(2026, 9, 29, 18, 0, 0));
+
+  it("opens the check-in when resolving a ticket someone was helping", () => {
+    expect(checkInExpiresAtForClose("resolved", "in_progress", now)).toBe(
+      new Date(now.getTime() + CHECK_IN_WINDOW_MINUTES * 60_000).toISOString()
+    );
+  });
+
+  it.each([
+    ["closing (End ticket)", "closed", "in_progress"],
+    ["resolving a ticket nobody picked up", "resolved", "open"],
+    ["re-resolving a finished ticket", "resolved", "resolved"]
+  ] as const)("opens no check-in when %s", (_label, target, previous) => {
+    expect(checkInExpiresAtForClose(target, previous, now)).toBeNull();
   });
 });

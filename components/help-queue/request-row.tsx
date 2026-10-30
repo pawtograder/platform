@@ -77,6 +77,8 @@ export function RequestRow({
   const assigneeProfile = useUserProfile(request.assignee || null);
 
   const escalated = isEscalated(request);
+  // The note says what is *still* unresolved, so it only makes sense on a ticket that is still active.
+  const isActive = request.status === "open" || request.status === "in_progress";
   const rowBg = selected
     ? "bg.muted"
     : escalated && request.status === "open"
@@ -219,7 +221,7 @@ export function RequestRow({
                       </Badge>
                     )}
                   </HStack>
-                  {escalationNote && (
+                  {escalationNote && isActive && (
                     <Text truncate fontSize="xs" color="purple.fg">
                       Still unresolved: {escalationNote}
                     </Text>
@@ -294,7 +296,7 @@ export function RequestRow({
                 {request.request}
               </Markdown>
             </Box>
-            {escalationNote && (
+            {escalationNote && isActive && (
               <Text truncate fontSize="sm" color="purple.fg">
                 Still unresolved: {escalationNote}
               </Text>

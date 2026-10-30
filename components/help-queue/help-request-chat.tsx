@@ -1364,7 +1364,15 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
             {isInstructorOrGrader &&
               !isViewingAsStudent &&
               request &&
-              (request.status === "open" || request.status === "in_progress" || isCheckInPending(request)) && (
+              (request.status === "open" || request.status === "in_progress" || isCheckInPending(request)) &&
+              (request.is_video_live ? (
+                <Tooltip content="End the video call first: a closed ticket can't end its call" showArrow>
+                  <Button size="xs" colorPalette="red" variant="solid" disabled>
+                    <Icon as={BsXOctagon} />
+                    End ticket
+                  </Button>
+                </Tooltip>
+              ) : (
                 <PopConfirm
                   triggerLabel="End ticket"
                   trigger={
@@ -1377,7 +1385,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                   confirmText="This closes the ticket for good. The student won't be asked to check in and can't escalate it."
                   onConfirm={endTicket}
                 />
-              )}
+              ))}
 
             {/* Feedback for resolved — the one affordance keyed on readOnly being true, so it
                 needs an explicit masking guard now that view-as also sets readOnly. */}
